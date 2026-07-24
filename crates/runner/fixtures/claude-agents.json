@@ -1,0 +1,40 @@
+[
+  {
+    "cwd": "C:\\Users\\alice\\source\\payments-api",
+    "kind": "interactive",
+    "startedAt": 1784941200000,
+    "sessionId": "claude-working",
+    "name": "payments-api-a1",
+    "state": "working",
+    "pid": 4012,
+    "status": "running"
+  },
+  {
+    "cwd": "C:\\Users\\alice\\source\\checkout-web",
+    "kind": "background",
+    "startedAt": 1784941300000,
+    "id": "job-42",
+    "sessionId": "claude-permission",
+    "name": "checkout-web-b2",
+    "state": "blocked",
+    "pid": 4120,
+    "status": "waiting",
+    "waitingFor": "permission prompt"
+  },
+  {
+    "cwd": "C:\\Users\\alice\\source\\mobile-app",
+    "kind": "background",
+    "startedAt": 1784941400000,
+    "sessionId": "claude-input",
+    "state": "blocked",
+    "pid": 4199,
+    "waitingFor": "input needed"
+  },
+  {
+    "cwd": "C:\\Users\\alice\\source\\docs",
+    "kind": "background",
+    "startedAt": 1784940000000,
+    "sessionId": "claude-done",
+    "state": "done"
+  }
+]

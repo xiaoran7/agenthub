@@ -1,0 +1,244 @@
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+pub const SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentType {
+    ClaudeCode,
+    Codex,
+}
+
+impl AgentType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude_code",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Presence {
+    Live,
+    Persisted,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ActivityStatus {
+    Working,
+    WaitingInput,
+    WaitingPermission,
+    Idle,
+    Completed,
+    Failed,
+    Stopped,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Confidence {
+    Unknown,
+    Inferred,
+    Observed,
+    Authoritative,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationSource {
+    ClaudeAgentsJson,
+    ClaudeHook,
+    CodexAppServer,
+    CodexHook,
+    ProcessProbe,
+    LocalHistory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitingReason {
+    UserInput,
+    Permission,
+    Sandbox,
+    Worker,
+    Dialog,
+    McpElicitation,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRef {
+    pub display_name: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionState {
+    pub presence: Presence,
+    pub activity_status: ActivityStatus,
+    pub raw_status: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub raw_status_detail: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_reason: Option<WaitingReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionObservation {
+    pub schema_version: u16,
+    pub event_id: Uuid,
+    pub device_id: String,
+    pub agent_type: AgentType,
+    pub agent_session_id: String,
+    pub project: ProjectRef,
+    pub state: SessionState,
+    pub source: ObservationSource,
+    pub confidence: Confidence,
+    pub observed_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservationMeta {
+    pub device_id: String,
+    pub observed_at: DateTime<Utc>,
+}
+
+impl ObservationMeta {
+    pub fn now(device_id: impl Into<String>) -> Self {
+        Self {
+            device_id: device_id.into(),
+            observed_at: Utc::now(),
+        }
+    }
+}
+
+impl SessionObservation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        meta: &ObservationMeta,
+        agent_type: AgentType,
+        agent_session_id: impl Into<String>,
+        project: ProjectRef,
+        state: SessionState,
+        source: ObservationSource,
+        confidence: Confidence,
+    ) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            event_id: Uuid::new_v4(),
+            device_id: meta.device_id.clone(),
+            agent_type,
+            agent_session_id: agent_session_id.into(),
+            project,
+            state,
+            source,
+            confidence,
+            observed_at: meta.observed_at,
+            started_at: None,
+            last_activity_at: Some(meta.observed_at),
+            display_name: None,
+        }
+    }
+
+    pub fn session_key(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.agent_type.as_str(),
+            self.device_id,
+            self.agent_session_id
+        )
+    }
+}
+
+pub fn merge_observations(
+    previous: &SessionObservation,
+    incoming: &SessionObservation,
+) -> SessionObservation {
+    if incoming.observed_at < previous.observed_at {
+        return previous.clone();
+    }
+
+    if incoming.observed_at == previous.observed_at && incoming.confidence < previous.confidence {
+        return previous.clone();
+    }
+
+    let mut merged = incoming.clone();
+    if incoming.state.activity_status == ActivityStatus::Unknown {
+        merged.state.activity_status = previous.state.activity_status;
+    }
+    if incoming.started_at.is_none() {
+        merged.started_at = previous.started_at;
+    }
+    if incoming.display_name.is_none() {
+        merged.display_name = previous.display_name.clone();
+    }
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    fn observation(status: ActivityStatus, confidence: Confidence) -> SessionObservation {
+        let meta = ObservationMeta {
+            device_id: "device-1".into(),
+            observed_at: Utc.timestamp_opt(100, 0).unwrap(),
+        };
+        SessionObservation::new(
+            &meta,
+            AgentType::Codex,
+            "session-1",
+            ProjectRef {
+                display_name: "project".into(),
+                fingerprint: "fingerprint".into(),
+            },
+            SessionState {
+                presence: Presence::Live,
+                activity_status: status,
+                raw_status: "raw".into(),
+                raw_status_detail: BTreeMap::new(),
+                waiting_reason: None,
+            },
+            ObservationSource::CodexAppServer,
+            confidence,
+        )
+    }
+
+    #[test]
+    fn unknown_activity_preserves_previous_activity() {
+        let previous = observation(ActivityStatus::Working, Confidence::Authoritative);
+        let mut incoming = observation(ActivityStatus::Unknown, Confidence::Observed);
+        incoming.observed_at += chrono::Duration::seconds(1);
+
+        let merged = merge_observations(&previous, &incoming);
+        assert_eq!(merged.state.activity_status, ActivityStatus::Working);
+        assert_eq!(merged.state.presence, incoming.state.presence);
+    }
+
+    #[test]
+    fn older_observation_cannot_replace_newer_state() {
+        let mut previous = observation(ActivityStatus::Completed, Confidence::Observed);
+        previous.observed_at += chrono::Duration::seconds(10);
+        let incoming = observation(ActivityStatus::Working, Confidence::Authoritative);
+
+        let merged = merge_observations(&previous, &incoming);
+        assert_eq!(merged.state.activity_status, ActivityStatus::Completed);
+    }
+}

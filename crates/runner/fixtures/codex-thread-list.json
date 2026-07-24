@@ -1,0 +1,32 @@
+{
+  "id": 20,
+  "result": {
+    "data": [
+      {
+        "id": "codex-active",
+        "cwd": "C:\\Users\\alice\\source\\payments-api",
+        "name": "Fix checkout race",
+        "createdAt": 1784941200,
+        "updatedAt": 1784941500,
+        "recencyAt": 1784941490,
+        "source": "cli",
+        "status": {
+          "type": "active",
+          "activeFlags": []
+        },
+        "preview": "PRIVATE_CODEX_PREVIEW_MARKER"
+      },
+      {
+        "id": "codex-not-loaded",
+        "cwd": "C:\\Users\\alice\\source\\archived-tool",
+        "createdAt": 1784000000,
+        "updatedAt": 1784000500,
+        "source": "cli",
+        "status": {
+          "type": "notLoaded"
+        }
+      }
+    ],
+    "nextCursor": null
+  }
+}

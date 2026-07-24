@@ -1,0 +1,12 @@
+{
+  "method": "item/commandExecution/requestApproval",
+  "id": 61,
+  "params": {
+    "threadId": "codex-active",
+    "turnId": "turn-123",
+    "itemId": "item-123",
+    "cwd": "C:\\Users\\alice\\source\\payments-api",
+    "command": "publish --api-key TOP_SECRET_MARKER",
+    "reason": "PRIVATE_APPROVAL_REASON_MARKER"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "session_id": "codex-active",
+  "turn_id": "turn-123",
+  "cwd": "C:\\Users\\alice\\source\\payments-api",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "PRIVATE_ASSISTANT_MESSAGE_MARKER"
+}
