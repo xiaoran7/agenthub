@@ -13,6 +13,10 @@
   HMAC 脱敏、SQLite Outbox、Session 快照和 Fixture 隐私契约测试。
 - 增加 `collect-once` 命令，可调用 Claude `agents --json` 或通过 Codex
   app-server `thread/list` 采集一次 Session 元数据。
+- 增加 `run` 常驻采集命令：Claude/Codex Adapter 可独立或同时运行，根据活动状态
+  使用 2/10 秒自适应轮询，失败时指数退避到最多 60 秒，并支持 `Ctrl-C` 协作式退出。
+- 增加 SQLite Adapter 健康状态和 `outbox health` 诊断命令；失败只记录固定安全
+  错误码，不保存可执行路径或原始系统错误。
 
 ### Fixed
 
@@ -21,6 +25,8 @@
 - Codex `active + waitingOnApproval` 不再误报为“正在工作”，统一映射为
   `WAITING_PERMISSION`。
 - Outbox 诊断命令不再错误要求项目指纹密钥。
+- 持续轮询检测到 Session 快照没有变化时不再重复生成 Outbox 事件，避免空闲状态下
+  本地队列持续增长。
 
 ### Security
 

@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
+ctrlc.workspace = true
 hex.workspace = true
 hmac.workspace = true
 rusqlite.workspace = true

@@ -163,6 +163,20 @@ impl SessionObservation {
             self.agent_session_id
         )
     }
+
+    pub fn has_same_snapshot_payload(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.device_id == other.device_id
+            && self.agent_type == other.agent_type
+            && self.agent_session_id == other.agent_session_id
+            && self.project == other.project
+            && self.state == other.state
+            && self.source == other.source
+            && self.confidence == other.confidence
+            && self.started_at == other.started_at
+            && self.last_activity_at == other.last_activity_at
+            && self.display_name == other.display_name
+    }
 }
 
 pub fn merge_observations(

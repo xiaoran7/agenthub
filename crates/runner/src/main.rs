@@ -2,6 +2,11 @@ use std::{
     env, fs,
     io::{self, Read},
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use agent_platform_runner::{
@@ -10,9 +15,10 @@ use agent_platform_runner::{
         codex::{self, CodexThreadContext},
     },
     collectors::{CodexAppServer, collect_claude_agents},
-    domain::{ObservationMeta, SessionObservation},
+    domain::{AgentType, ObservationMeta, SessionObservation},
     outbox::Outbox,
     privacy::ProjectRedactor,
+    runtime::{ClaudeSessionSource, CodexSessionSource, PollPolicy, RunnerRuntime, SessionSource},
 };
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -61,6 +67,33 @@ enum Command {
         #[arg(long, default_value_t = 100, help = "Maximum Codex threads to request")]
         limit: u32,
     },
+    Run {
+        #[arg(value_enum, default_value_t = AgentSelection::All)]
+        agent: AgentSelection,
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long, help = "Override the Claude executable path")]
+        claude_binary: Option<PathBuf>,
+        #[arg(long, help = "Override the Codex executable path")]
+        codex_binary: Option<PathBuf>,
+        #[arg(long, help = "Include completed Claude sessions")]
+        include_completed: bool,
+        #[arg(long, default_value_t = 100)]
+        codex_limit: u32,
+        #[arg(long, default_value_t = 2)]
+        active_interval_seconds: u64,
+        #[arg(long, default_value_t = 10)]
+        idle_interval_seconds: u64,
+        #[arg(long, default_value_t = 2)]
+        failure_initial_seconds: u64,
+        #[arg(long, default_value_t = 60)]
+        failure_max_seconds: u64,
+        #[arg(
+            long,
+            help = "Stop after this many adapter attempts; intended for diagnostics and tests"
+        )]
+        max_attempts: Option<u64>,
+    },
     Outbox {
         #[command(subcommand)]
         command: OutboxCommand,
@@ -80,6 +113,23 @@ enum InputFormat {
 enum Agent {
     Claude,
     Codex,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum AgentSelection {
+    All,
+    Claude,
+    Codex,
+}
+
+impl std::fmt::Display for AgentSelection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::All => "all",
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        })
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -103,6 +153,10 @@ enum OutboxCommand {
         device_id: String,
         #[arg(long)]
         through: i64,
+    },
+    Health {
+        #[arg(long)]
+        db: PathBuf,
     },
 }
 
@@ -174,6 +228,60 @@ fn main() -> Result<()> {
                 })
             );
         }
+        Command::Run {
+            agent,
+            db,
+            claude_binary,
+            codex_binary,
+            include_completed,
+            codex_limit,
+            active_interval_seconds,
+            idle_interval_seconds,
+            failure_initial_seconds,
+            failure_max_seconds,
+            max_attempts,
+        } => {
+            let redactor = load_redactor(&fingerprint_key_env)?;
+            let policy = PollPolicy {
+                active_interval: nonzero_duration("active interval", active_interval_seconds)?,
+                idle_interval: nonzero_duration("idle interval", idle_interval_seconds)?,
+                failure_initial: nonzero_duration(
+                    "initial failure backoff",
+                    failure_initial_seconds,
+                )?,
+                failure_max: nonzero_duration("maximum failure backoff", failure_max_seconds)?,
+            };
+            if policy.failure_initial > policy.failure_max {
+                bail!("initial failure backoff cannot exceed maximum failure backoff");
+            }
+            if max_attempts == Some(0) {
+                bail!("max attempts must be greater than zero");
+            }
+
+            let mut sources: Vec<Box<dyn SessionSource>> = Vec::new();
+            if matches!(agent, AgentSelection::All | AgentSelection::Claude) {
+                sources.push(Box::new(ClaudeSessionSource::new(
+                    claude_binary.unwrap_or_else(|| PathBuf::from("claude")),
+                    include_completed,
+                )));
+            }
+            if matches!(agent, AgentSelection::All | AgentSelection::Codex) {
+                sources.push(Box::new(CodexSessionSource::new(
+                    codex_binary.unwrap_or_else(|| PathBuf::from("codex")),
+                    codex_limit,
+                )));
+            }
+
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_on_signal = Arc::clone(&stop);
+            ctrlc::set_handler(move || {
+                stop_on_signal.store(true, Ordering::Relaxed);
+            })
+            .context("failed to install Ctrl-C handler")?;
+            let mut runtime =
+                RunnerRuntime::new(device_id, redactor, Outbox::open(db)?, policy, sources);
+            runtime.run(stop, max_attempts)?;
+        }
         Command::Outbox { command } => match command {
             OutboxCommand::Stats { db } => {
                 let outbox = Outbox::open(db)?;
@@ -199,10 +307,27 @@ fn main() -> Result<()> {
                 let removed = outbox.acknowledge_through(&device_id, through)?;
                 println!("{}", serde_json::json!({ "acknowledged": removed }));
             }
+            OutboxCommand::Health { db } => {
+                let outbox = Outbox::open(db)?;
+                let mut health = Vec::new();
+                for agent_type in [AgentType::ClaudeCode, AgentType::Codex] {
+                    if let Some(adapter_health) = outbox.adapter_health(agent_type)? {
+                        health.push(adapter_health);
+                    }
+                }
+                println!("{}", serde_json::to_string_pretty(&health)?);
+            }
         },
     }
 
     Ok(())
+}
+
+fn nonzero_duration(name: &str, seconds: u64) -> Result<Duration> {
+    if seconds == 0 {
+        bail!("{name} must be greater than zero");
+    }
+    Ok(Duration::from_secs(seconds))
 }
 
 fn load_redactor(environment_variable: &str) -> Result<ProjectRedactor> {

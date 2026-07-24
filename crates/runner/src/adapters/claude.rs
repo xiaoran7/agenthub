@@ -113,6 +113,7 @@ fn normalize_agent_entry(
     observation.started_at = entry
         .started_at
         .and_then(DateTime::<Utc>::from_timestamp_millis);
+    observation.last_activity_at = None;
     Ok(observation)
 }
 

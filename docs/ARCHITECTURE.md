@@ -76,8 +76,19 @@ flowchart LR
 - 检测 Agent 是否安装。
 - 获取 Agent 版本。
 - 启动、停止和重启适配器。
-- 对崩溃使用带抖动的指数退避。
+- 对失败使用指数退避；云端多设备同步接入时再增加抖动。
 - 不允许适配器读取无关目录。
+
+当前 Runner 已实现：
+
+- Claude 与 Codex 独立持续采集源。
+- 活动 Session 2 秒、空闲 10 秒的自适应轮询。
+- 失败从 2 秒指数退避到最多 60 秒。
+- `Ctrl-C` 协作式退出和诊断用最大尝试次数。
+- 适配器健康状态写入 SQLite，只保存固定安全错误码。
+- 状态快照无变化时不生成重复 Outbox 事件。
+
+尚未实现采集子进程/协议响应强制超时与 Codex 实时通知订阅。
 
 #### Claude Adapter
 
@@ -126,6 +137,7 @@ session_key = agent_type + device_id + agent_session_id
 - 最近一次 Session 快照
 - 事件序列号
 - 适配器游标
+- 适配器健康状态和退避信息
 - 设备绑定信息
 - 用户允许保存的项目别名
 
@@ -364,7 +376,7 @@ MVP 默认 `task_summary = null`。
 
 ### Runner
 
-- Rust + Tokio
+- Rust；当前采集调度使用标准线程，接入网络同步时再评估 Tokio
 - SQLite
 - serde / JSON Schema 校验
 - OS 原生服务：
@@ -424,10 +436,10 @@ Agent-Platform/
 ### Milestone 1：本地 Runner
 
 - 设备身份
-- 两个 Agent Adapter
-- 状态标准化器
-- SQLite Outbox
-- 本地诊断命令
+- 两个 Agent Adapter（已完成一次性与持续采集；实时订阅待完成）
+- 状态标准化器（已完成）
+- SQLite Outbox（已完成）
+- 本地诊断命令（已完成基础统计、待发送事件和 Adapter 健康状态）
 
 ### Milestone 2：云端同步
 

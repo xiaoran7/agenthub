@@ -51,6 +51,26 @@ pub enum CollectorError {
     },
 }
 
+impl CollectorError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Start { source, .. } => match source.kind() {
+                std::io::ErrorKind::NotFound => "executable_not_found",
+                std::io::ErrorKind::PermissionDenied => "permission_denied",
+                _ => "process_start_failed",
+            },
+            Self::Exit { .. } => "process_exit_failed",
+            Self::Io { .. } => "protocol_io_failed",
+            Self::MissingStdio { .. } => "protocol_stdio_missing",
+            Self::InvalidJson { .. } => "protocol_invalid_json",
+            Self::InvalidUtf8 { .. } => "process_invalid_utf8",
+            Self::ProtocolLineTooLarge { .. } => "protocol_line_too_large",
+            Self::UnexpectedEof { .. } => "protocol_unexpected_eof",
+            Self::Protocol { .. } => "protocol_error",
+        }
+    }
+}
+
 pub fn collect_claude_agents(
     binary: impl AsRef<Path>,
     include_completed: bool,

@@ -27,3 +27,6 @@
 ## 开发
 
 - [Runner 开发说明](crates/runner/README.md)
+
+当前 Runner 已支持 Claude/Codex 一次性和持续采集、状态标准化、隐私脱敏、
+SQLite Outbox、Adapter 退避与健康诊断。云端同步和 Web/PWA 尚未开始。

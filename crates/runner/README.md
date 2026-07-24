@@ -8,6 +8,8 @@
 - Codex 生命周期 Hook 标准化
 - Claude CLI 一次性 Session 采集
 - Codex app-server stdio 握手与一次性 Thread 采集
+- Claude/Codex 持续采集、活动/空闲自适应间隔与失败指数退避
+- 适配器健康状态持久化和安全诊断错误码
 - 工作目录显示名与 HMAC 指纹脱敏
 - SQLite Outbox、事件顺序、幂等和 Session 快照
 - Fixture 驱动的隐私回归测试
@@ -58,13 +60,45 @@ cargo run -p agent-platform-runner -- `
 如 CLI 不在 `PATH` 中，可通过 `--binary` 传入可执行文件路径。Claude 可使用
 `--include-completed` 同时读取已完成的 Session。
 
+持续运行两个 Adapter：
+
+```powershell
+cargo run -p agent-platform-runner -- `
+  --device-id local-dev `
+  run all `
+  --db runner.db
+```
+
+默认有活动 Session 时每 2 秒采集，无活动时每 10 秒采集；失败后按
+2、4、8……秒退避，最长 60 秒。可以通过 `--active-interval-seconds`、
+`--idle-interval-seconds`、`--failure-initial-seconds` 和
+`--failure-max-seconds` 调整。`Ctrl-C` 会请求 Runner 安全退出。
+
+只运行一个 Adapter：
+
+```powershell
+cargo run -p agent-platform-runner -- `
+  --device-id local-dev `
+  run codex `
+  --db runner.db `
+  --codex-binary C:\Tools\codex.exe
+```
+
+诊断或测试时可使用 `--max-attempts N` 自动停止。这个数字表示 Adapter 尝试次数；
+`run all --max-attempts 2` 通常会让 Claude 和 Codex 各尝试一次。
+
 查看 Outbox：
 
 ```powershell
 cargo run -p agent-platform-runner -- outbox stats --db runner.db
 cargo run -p agent-platform-runner -- `
   outbox pending --db runner.db --device-id local-dev
+cargo run -p agent-platform-runner -- outbox health --db runner.db
 ```
+
+健康状态只保存 `executable_not_found`、`permission_denied`、
+`protocol_invalid_json` 等固定错误码，不保存可执行文件路径或原始系统错误文本。
+状态未变化的轮询不会重复写入 Outbox。
 
 ## 安全约束
 
@@ -81,7 +115,8 @@ Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化
 
 ## 尚未接入
 
-- Claude/Codex 持续轮询与实时订阅
+- Codex app-server 实时通知订阅
+- 采集子进程与协议响应的强制超时
 - Hook 插件安装器
 - 云端 WebSocket 同步
 - OS 原生服务安装

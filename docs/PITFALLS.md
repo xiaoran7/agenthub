@@ -31,3 +31,14 @@
 - **解决方式**：删除文件尾额外空白行后重新暂存，再执行 `git diff --cached --check`。
 - **如何避免**：把 `git diff --cached --check` 固定放在 commit 前，并分别处理
   whitespace error 与行尾转换 warning。
+
+## 2026-07-25 PowerShell 将正常 stderr 日志包装成 `NativeCommandError`
+
+- **现象**：持续 Runner 烟雾测试把 `2>&1` 赋值给变量时，JSON 轮询日志前出现
+  `cargo : ... NativeCommandError`，但进程退出码仍是 0，健康状态也正确落库。
+- **根因**：Runner 按守护进程惯例把运行日志写到 stderr；Windows PowerShell 在捕获
+  原生命令 stderr 时会把每行包装为 ErrorRecord，这不表示子进程执行失败。
+- **解决方式**：自动化同时检查 `$LASTEXITCODE` 和 JSON 内容，不用 ErrorRecord 的
+  外观替代退出码判断。
+- **如何避免**：命令级测试若需要机器读取日志，优先分别捕获 stdout/stderr；以后接入
+  正式日志协议时为诊断输出提供明确的 JSONL 文件或结构化日志目标。

@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use crate::domain::{SessionObservation, merge_observations};
+use crate::domain::{AgentType, SessionObservation, merge_observations};
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -11,6 +12,8 @@ pub enum OutboxError {
     Sqlite(#[from] rusqlite::Error),
     #[error("observation serialization error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid persisted timestamp: {0}")]
+    Timestamp(#[from] chrono::ParseError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +26,17 @@ pub struct OutboxRecord {
 pub struct OutboxStats {
     pub pending_events: u64,
     pub session_snapshots: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterHealth {
+    pub agent_type: AgentType,
+    pub status: String,
+    pub consecutive_failures: u32,
+    pub last_attempt_at: DateTime<Utc>,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub next_attempt_at: DateTime<Utc>,
+    pub last_error_code: Option<String>,
 }
 
 pub struct Outbox {
@@ -86,6 +100,16 @@ impl Outbox {
 
             CREATE INDEX IF NOT EXISTS idx_snapshots_device
                 ON session_snapshots(device_id);
+
+            CREATE TABLE IF NOT EXISTS adapter_health (
+                agent_type TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                consecutive_failures INTEGER NOT NULL,
+                last_attempt_at TEXT NOT NULL,
+                last_success_at TEXT,
+                next_attempt_at TEXT NOT NULL,
+                last_error_code TEXT
+            );
             "#,
         )?;
         Ok(())
@@ -180,6 +204,19 @@ impl Outbox {
         Ok(next_sequence)
     }
 
+    pub fn enqueue_if_changed(
+        &mut self,
+        observation: &SessionObservation,
+    ) -> Result<Option<i64>, OutboxError> {
+        if let Some(previous) = self.snapshot(&observation.session_key())? {
+            let merged = merge_observations(&previous, observation);
+            if previous.has_same_snapshot_payload(&merged) {
+                return Ok(None);
+            }
+        }
+        self.enqueue(observation).map(Some)
+    }
+
     pub fn pending(&self, device_id: &str, limit: usize) -> Result<Vec<OutboxRecord>, OutboxError> {
         let mut statement = self.connection.prepare(
             r#"
@@ -245,6 +282,118 @@ impl Outbox {
             pending_events,
             session_snapshots,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_adapter_health(
+        &self,
+        agent_type: AgentType,
+        attempted_at: DateTime<Utc>,
+        succeeded: bool,
+        consecutive_failures: u32,
+        next_attempt_at: DateTime<Utc>,
+        error_code: Option<&str>,
+    ) -> Result<(), OutboxError> {
+        let status = if succeeded { "healthy" } else { "backoff" };
+        let last_success_at = succeeded.then(|| attempted_at.to_rfc3339());
+        self.connection.execute(
+            r#"
+            INSERT INTO adapter_health(
+                agent_type,
+                status,
+                consecutive_failures,
+                last_attempt_at,
+                last_success_at,
+                next_attempt_at,
+                last_error_code
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(agent_type) DO UPDATE SET
+                status = excluded.status,
+                consecutive_failures = excluded.consecutive_failures,
+                last_attempt_at = excluded.last_attempt_at,
+                last_success_at = COALESCE(
+                    excluded.last_success_at,
+                    adapter_health.last_success_at
+                ),
+                next_attempt_at = excluded.next_attempt_at,
+                last_error_code = excluded.last_error_code
+            "#,
+            params![
+                agent_type.as_str(),
+                status,
+                consecutive_failures,
+                attempted_at.to_rfc3339(),
+                last_success_at,
+                next_attempt_at.to_rfc3339(),
+                error_code,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn adapter_health(
+        &self,
+        agent_type: AgentType,
+    ) -> Result<Option<AdapterHealth>, OutboxError> {
+        self.connection
+            .query_row(
+                r#"
+                SELECT
+                    status,
+                    consecutive_failures,
+                    last_attempt_at,
+                    last_success_at,
+                    next_attempt_at,
+                    last_error_code
+                FROM adapter_health
+                WHERE agent_type = ?1
+                "#,
+                [agent_type.as_str()],
+                |row| {
+                    let consecutive_failures = row.get::<_, u32>(1)?;
+                    let last_attempt_at = row.get::<_, String>(2)?;
+                    let last_success_at = row.get::<_, Option<String>>(3)?;
+                    let next_attempt_at = row.get::<_, String>(4)?;
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        consecutive_failures,
+                        last_attempt_at,
+                        last_success_at,
+                        next_attempt_at,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(
+                |(
+                    status,
+                    consecutive_failures,
+                    last_attempt_at,
+                    last_success_at,
+                    next_attempt_at,
+                    last_error_code,
+                )|
+                 -> Result<AdapterHealth, chrono::ParseError> {
+                    Ok(AdapterHealth {
+                        agent_type,
+                        status,
+                        consecutive_failures,
+                        last_attempt_at: DateTime::parse_from_rfc3339(&last_attempt_at)?
+                            .with_timezone(&Utc),
+                        last_success_at: last_success_at
+                            .map(|value| DateTime::parse_from_rfc3339(&value))
+                            .transpose()?
+                            .map(|value| value.with_timezone(&Utc)),
+                        next_attempt_at: DateTime::parse_from_rfc3339(&next_attempt_at)?
+                            .with_timezone(&Utc),
+                        last_error_code,
+                    })
+                },
+            )
+            .transpose()
+            .map_err(Into::into)
     }
 }
 
@@ -340,5 +489,52 @@ mod tests {
                 session_snapshots: 0
             }
         );
+    }
+
+    #[test]
+    fn adapter_health_preserves_last_success_across_failures() {
+        let outbox = Outbox::open_in_memory().unwrap();
+        let attempted_at = Utc::now();
+        let next_attempt_at = attempted_at + Duration::seconds(10);
+        outbox
+            .record_adapter_health(
+                AgentType::Codex,
+                attempted_at,
+                true,
+                0,
+                next_attempt_at,
+                None,
+            )
+            .unwrap();
+        let failed_at = attempted_at + Duration::seconds(10);
+        outbox
+            .record_adapter_health(
+                AgentType::Codex,
+                failed_at,
+                false,
+                1,
+                failed_at + Duration::seconds(2),
+                Some("permission_denied"),
+            )
+            .unwrap();
+
+        let health = outbox.adapter_health(AgentType::Codex).unwrap().unwrap();
+        assert_eq!(health.status, "backoff");
+        assert_eq!(health.consecutive_failures, 1);
+        assert_eq!(health.last_success_at, Some(attempted_at));
+        assert_eq!(health.last_error_code.as_deref(), Some("permission_denied"));
+    }
+
+    #[test]
+    fn unchanged_poll_observation_does_not_grow_outbox() {
+        let mut outbox = Outbox::open_in_memory().unwrap();
+        let first = observation(ActivityStatus::Working);
+        let mut repeated = first.clone();
+        repeated.event_id = uuid::Uuid::new_v4();
+        repeated.observed_at += Duration::seconds(2);
+
+        assert_eq!(outbox.enqueue_if_changed(&first).unwrap(), Some(1));
+        assert_eq!(outbox.enqueue_if_changed(&repeated).unwrap(), None);
+        assert_eq!(outbox.stats().unwrap().pending_events, 1);
     }
 }
