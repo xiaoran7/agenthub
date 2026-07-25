@@ -47,8 +47,6 @@ pub struct SyncSessionPayload {
     pub started_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,7 +91,6 @@ impl SyncEvent {
                 state: observation.state,
                 started_at: observation.started_at,
                 last_activity_at: observation.last_activity_at,
-                display_name: observation.display_name,
             },
         }
     }
@@ -374,5 +371,15 @@ mod tests {
 
         let batch = prepare_sync_batch(&outbox, &identity, 10).unwrap().unwrap();
         assert!(!serde_json::to_string(&batch).unwrap().contains(private_key));
+    }
+
+    #[test]
+    fn typescript_generated_protocol_vector_verifies_in_rust() {
+        let batch: SyncBatch = serde_json::from_str(include_str!(
+            "../../../packages/contracts/fixtures/sync-batch-v1.json"
+        ))
+        .unwrap();
+
+        batch.verify().unwrap();
     }
 }

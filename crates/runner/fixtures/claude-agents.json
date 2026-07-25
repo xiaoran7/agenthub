@@ -4,7 +4,7 @@
     "kind": "interactive",
     "startedAt": 1784941200000,
     "sessionId": "claude-working",
-    "name": "payments-api-a1",
+    "name": "PRIVATE_CLAUDE_NAME_MARKER",
     "state": "working",
     "pid": 4012,
     "status": "running"
@@ -15,7 +15,7 @@
     "startedAt": 1784941300000,
     "id": "job-42",
     "sessionId": "claude-permission",
-    "name": "checkout-web-b2",
+    "name": "PRIVATE_CLAUDE_NAME_MARKER",
     "state": "blocked",
     "pid": 4120,
     "status": "waiting",

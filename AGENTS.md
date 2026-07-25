@@ -9,6 +9,8 @@
 2. 按关键词检查 [docs/PITFALLS.md](docs/PITFALLS.md)，避免重复踩坑。
 3. 执行 `git status --short`，确认现有工作区改动的归属。
 4. Rust 改动前运行一次 `cargo test --workspace`，记住测试基数。
+5. TypeScript 改动前运行 `npm.cmd test` 和 `npm.cmd run typecheck`；Windows
+   PowerShell 必须调用 `npm.cmd`，不要调用会被执行策略拦截的 `npm.ps1`。
 
 ## 二、工作红线
 
@@ -41,6 +43,14 @@
    cargo test --workspace
    cargo clippy --workspace --all-targets -- -D warnings
    cargo fmt --all --check
+   ```
+
+   TypeScript 变更同时要求：
+
+   ```bash
+   npm.cmd test
+   npm.cmd run typecheck
+   npm.cmd run format:check
    ```
 
 4. 不在仓库中留下临时数据库、日志、真实 Session 样本或一次性脚本。

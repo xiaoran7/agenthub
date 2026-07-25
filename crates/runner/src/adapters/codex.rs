@@ -31,23 +31,12 @@ pub struct CodexThreadContext {
 #[derive(Debug, Clone)]
 struct ThreadMetadata {
     cwd: String,
-    display_name: Option<String>,
 }
 
 impl CodexThreadContext {
-    pub fn remember(
-        &mut self,
-        thread_id: impl Into<String>,
-        cwd: impl Into<String>,
-        display_name: Option<String>,
-    ) {
-        self.threads.insert(
-            thread_id.into(),
-            ThreadMetadata {
-                cwd: cwd.into(),
-                display_name,
-            },
-        );
+    pub fn remember(&mut self, thread_id: impl Into<String>, cwd: impl Into<String>) {
+        self.threads
+            .insert(thread_id.into(), ThreadMetadata { cwd: cwd.into() });
     }
 
     fn get(&self, thread_id: &str) -> Option<&ThreadMetadata> {
@@ -74,17 +63,13 @@ pub fn normalize_app_server_message(
         .map(str::to_owned)
         .or_else(|| context.get(thread_id).map(|entry| entry.cwd.clone()))
         .unwrap_or_default();
-    let display_name = context
-        .get(thread_id)
-        .and_then(|entry| entry.display_name.clone());
-
     if !cwd.is_empty() {
-        context.remember(thread_id, &cwd, display_name.clone());
+        context.remember(thread_id, &cwd);
     }
 
     let (presence, activity_status, waiting_reason, raw_status) =
         map_app_server_event(method, &value);
-    let mut observation = SessionObservation::new(
+    let observation = SessionObservation::new(
         meta,
         AgentType::Codex,
         thread_id,
@@ -106,7 +91,6 @@ pub fn normalize_app_server_message(
         ObservationSource::CodexAppServer,
         Confidence::Authoritative,
     );
-    observation.display_name = display_name;
     Ok(Some(observation))
 }
 
@@ -254,19 +238,13 @@ pub fn normalize_thread_list_result(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
-            let display_name = thread
-                .get("name")
-                .or_else(|| thread.get("title"))
-                .and_then(Value::as_str)
-                .filter(|name| name.len() <= 120)
-                .map(str::to_owned);
             let status_value = thread.get("status").unwrap_or(&Value::Null);
             let status = status_value
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("notLoaded");
             let (presence, activity_status, waiting_reason) = map_thread_status(status_value);
-            context.remember(&thread_id, &cwd, display_name.clone());
+            context.remember(&thread_id, &cwd);
 
             let mut observation = SessionObservation::new(
                 meta,
@@ -293,7 +271,6 @@ pub fn normalize_thread_list_result(
                     Confidence::Authoritative
                 },
             );
-            observation.display_name = display_name;
             observation.started_at = thread
                 .get("createdAt")
                 .and_then(Value::as_i64)

@@ -5,7 +5,7 @@
       {
         "id": "codex-active",
         "cwd": "C:\\Users\\alice\\source\\payments-api",
-        "name": "Fix checkout race",
+        "name": "PRIVATE_CODEX_TITLE_MARKER",
         "createdAt": 1784941200,
         "updatedAt": 1784941500,
         "recencyAt": 1784941490,

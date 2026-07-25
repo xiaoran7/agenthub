@@ -36,8 +36,6 @@ struct ClaudeAgentEntry {
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
     state: Option<String>,
     #[serde(default)]
     pid: Option<u32>,
@@ -109,7 +107,6 @@ fn normalize_agent_entry(
         ObservationSource::ClaudeAgentsJson,
         confidence,
     );
-    observation.display_name = entry.name;
     observation.started_at = entry
         .started_at
         .and_then(DateTime::<Utc>::from_timestamp_millis);

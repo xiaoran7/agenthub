@@ -149,6 +149,7 @@ cargo run -p agent-platform-runner -- `
 标准化输出禁止包含：
 
 - Prompt 与 Assistant 消息
+- 未经明确授权的 Agent 名称、Thread 标题和任务摘要
 - Shell 命令正文
 - 工具输入与输出
 - 完整工作目录

@@ -35,6 +35,8 @@ fn assert_no_sensitive_payload(observation: &SessionObservation) {
         "TOP_SECRET_MARKER",
         "PRIVATE_PROMPT_MARKER",
         "PRIVATE_CODEX_PREVIEW_MARKER",
+        "PRIVATE_CODEX_TITLE_MARKER",
+        "PRIVATE_CLAUDE_NAME_MARKER",
         "PRIVATE_APPROVAL_REASON_MARKER",
         "PRIVATE_ASSISTANT_MESSAGE_MARKER",
         "Users\\\\alice",

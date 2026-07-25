@@ -54,3 +54,13 @@
   Job 中的完整进程树，再等待进程和读取线程回收。
 - **如何避免**：所有带管道和超时的外部命令测试都要让脚本再派生一个持有管道的后代，
   不能只测试单进程 `sleep`；Unix 实现时也应使用进程组而不是只发送单 PID 信号。
+
+## 2026-07-25 PowerShell 执行策略拦截 `npm.ps1`
+
+- **现象**：Node 可正常执行，但直接运行 `npm --version` 报告 `npm.ps1 cannot be
+  loaded because running scripts is disabled`。
+- **根因**：PowerShell 命令解析优先选中了 Node 安装目录中的 `npm.ps1` 包装脚本，
+  当前系统执行策略禁止该脚本；npm 本身和对应的 Windows 命令文件并未损坏。
+- **解决方式**：仓库命令和自动化在 Windows 上显式调用 `npm.cmd`。
+- **如何避免**：工具链探测要分别检查 `node --version` 与 `npm.cmd --version`；
+  不要为了运行 npm 全局放宽 PowerShell 执行策略。

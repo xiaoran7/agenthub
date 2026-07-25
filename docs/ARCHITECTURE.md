@@ -180,6 +180,14 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
 - 处理心跳、快照和增量事件。
 - 为每个设备限制连接数和事件速率。
 
+当前已实现开发期 HTTP 协议入口：
+
+- 一次性绑定码将设备公钥关联到用户；同一设备重试幂等，绑定码不能转给其他设备。
+- 批次进入存储前执行深层字段白名单、协议/Schema 版本、设备 ID、公钥、连续序列和
+  Ed25519 签名校验。
+- `x-user-id` 仅用于模拟已认证读请求，不是生产认证方案。
+- 默认只监听 `127.0.0.1`；尚未实现 TLS WebSocket、心跳、速率限制和正式鉴权。
+
 建议：
 
 - 心跳间隔：15 秒。
@@ -218,6 +226,11 @@ Runner 使用带 `protocol_version`、`batch_id`、设备公钥、首末序列�
 - 服务器记录接收时间，但不替换设备观察时间。
 - 快照与增量事件均可重放。
 
+当前 `InMemoryGatewayStore` 会在修改状态前验证整个批次；按 `event_id` 幂等、按
+`device_id + sequence` 检测冲突，并拒绝新增序列间隙。Session 快照按观察时间、
+置信度和设备序列合并。它是 PostgreSQL Adapter 的契约替身，不提供持久性或多实例
+并发保证。
+
 ### 4.3 Storage
 
 MVP 使用 PostgreSQL：
@@ -246,6 +259,10 @@ Pub/Sub。MVP 不必一开始维护两套基础设施。
 - 获取 Session 状态事件
 
 实时接口只推送元数据变化，不推送 transcript。
+
+当前已实现 `GET /v1/devices` 和 `GET /v1/sessions`，Session 可按设备、Presence 和
+Activity Status 过滤。设备在线状态按最近批次接收时间和 45 秒阈值计算；心跳尚未
+接入，因此无新事件的设备会按阈值离线。
 
 ## 5. 状态数据模型
 
@@ -410,8 +427,8 @@ MVP 默认 `task_summary = null`。
 
 ### Cloud API
 
-- TypeScript
-- Fastify
+- TypeScript 7
+- Fastify 5
 - PostgreSQL
 - WebSocket
 - OpenAPI + JSON Schema
@@ -465,11 +482,11 @@ Agent-Platform/
 
 ### Milestone 2：云端同步
 
-- 设备绑定
-- WebSocket Gateway
-- 心跳与离线判断
-- 幂等事件写入（已完成 Runner 签名批次和有界确认契约）
-- Session 查询 API
+- 设备绑定（已完成开发期一次性绑定码与公钥登记）
+- WebSocket Gateway（已完成 HTTP 协议入口，WebSocket 待接入）
+- 心跳与离线判断（已完成接收时间阈值，独立心跳待接入）
+- 幂等事件写入（已完成 Runner 契约与内存存储，PostgreSQL 待接入）
+- Session 查询 API（已完成开发期设备和 Session 读接口）
 
 ### Milestone 3：响应式 Web / PWA
 

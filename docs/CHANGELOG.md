@@ -25,6 +25,10 @@
   并可通过全局 `--identity` 同时提供设备 ID 与项目指纹密钥。
 - 增加版本化同步批次协议及 `sync prepare`、`sync verify`、`sync ack` 诊断命令；
   批次包含固定白名单事件、单调序列、设备公钥和签名。
+- 建立 npm workspace、共享 TypeScript 协议包和 Fastify Gateway API；支持开发期
+  一次性设备绑定、签名批次验收、内存幂等写入、设备列表和 Session 过滤查询。
+- 增加 Node 生成、Rust 验证的协议版本 1 跨语言签名 Fixture，并将 Rust、Node、
+  TypeScript 与 Prettier 检查纳入仓库质量门。
 
 ### Fixed
 
@@ -48,3 +52,7 @@
   不包含私钥，篡改事件或批次元数据会导致签名校验失败。
 - 同步确认必须匹配协议版本、设备和批次，且不得越过实际发送的序列范围，避免误删
   尚未发送的 Outbox 事件。
+- Gateway 对每一层同步对象执行字段白名单，拒绝未知字段、未知 Schema、控制字符、
+  非法时间、重复事件 ID、序列间隙、篡改签名和未注册设备。
+- Claude Agent 名称和 Codex Thread 标题不再进入标准化事件；同步线协议移除
+  Session `display_name`，防止默认上传可能来源于用户任务文本的标题。

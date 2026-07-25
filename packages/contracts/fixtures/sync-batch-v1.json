@@ -1,0 +1,37 @@
+{
+  "protocol_version": 1,
+  "batch_id": "123e4567-e89b-42d3-a456-426614174000",
+  "device_id": "dev_56475aa75463474c0285df5dbf2bcab7",
+  "public_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+  "created_at": "2026-07-25T00:00:00Z",
+  "first_sequence": 1,
+  "last_sequence": 1,
+  "events": [
+    {
+      "sequence": 1,
+      "event_id": "123e4567-e89b-42d3-a456-426614174001",
+      "schema_version": 1,
+      "device_id": "dev_56475aa75463474c0285df5dbf2bcab7",
+      "agent_type": "codex",
+      "agent_session_id": "contract-session",
+      "event_type": "session_observed",
+      "observed_at": "2026-07-25T00:00:00Z",
+      "source": "codex_app_server",
+      "confidence": "authoritative",
+      "adapter_version": "0.1.0",
+      "payload": {
+        "project": {
+          "display_name": "contract-project",
+          "fingerprint": "6c1f11bd12bd9b596bbad5091a198fd1b1b210002b86cd155b52b4b9b586e891"
+        },
+        "state": {
+          "presence": "LIVE",
+          "activity_status": "WORKING",
+          "raw_status": "active"
+        },
+        "last_activity_at": "2026-07-25T00:00:00Z"
+      }
+    }
+  ],
+  "signature": "100bb4bb67da094b42f23c08e3797a1d46e0cc64eb6ea7bf559e3ac86e7587143f9ad910dd142ab692b45fddfeafadc94a4fc1a45a45f9e4ceaf0833cffd3c06"
+}

@@ -28,7 +28,20 @@
 ## 开发
 
 - [Runner 开发说明](crates/runner/README.md)
+- [Gateway API 开发说明](services/api/README.md)
+- [共享同步契约](packages/contracts/README.md)
 
 当前 Runner 已支持 Claude/Codex 一次性和持续采集、状态标准化、隐私脱敏、
 SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签名同步批次。
-真实云端传输和 Web/PWA 尚未开始。
+云端已具备开发期设备绑定、签名批次验收、内存幂等写入与只读 Session 查询。
+PostgreSQL、生产认证、真实网络同步和 Web/PWA 尚未接入。
+
+Rust 与 TypeScript 全量检查：
+
+```powershell
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+npm.cmd test
+npm.cmd run typecheck
+npm.cmd run format:check
+```
