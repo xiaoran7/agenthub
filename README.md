@@ -20,6 +20,7 @@
 - [产品需求文档](docs/PRD.md)
 - [技术可行性报告](docs/TECHNICAL_FEASIBILITY.md)
 - [MVP 系统架构](docs/ARCHITECTURE.md)
+- [设备同步协议](docs/SYNC_PROTOCOL.md)
 - [变更日志](docs/CHANGELOG.md)
 - [设计取舍](docs/MISC.md)
 - [踩坑集](docs/PITFALLS.md)
@@ -29,4 +30,5 @@
 - [Runner 开发说明](crates/runner/README.md)
 
 当前 Runner 已支持 Claude/Codex 一次性和持续采集、状态标准化、隐私脱敏、
-SQLite Outbox、Adapter 退避与健康诊断。云端同步和 Web/PWA 尚未开始。
+SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签名同步批次。
+真实云端传输和 Web/PWA 尚未开始。

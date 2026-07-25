@@ -66,10 +66,15 @@ flowchart LR
 
 #### Device Identity
 
-- 首次运行生成设备密钥。
+- 首次运行生成 Ed25519 设备密钥，设备 ID 由公钥 SHA-256 摘要的前 128 位派生。
+- 私钥仅保存在本地身份文件，创建时禁止覆盖；Unix 新文件权限为 `0600`。
+- 设备身份同时派生项目目录 HMAC 指纹密钥，避免手工配置两套不一致身份。
 - 通过一次性绑定码与用户账号绑定。
-- 云端仅保存设备公钥或设备凭据摘要。
+- 云端仅保存设备公钥；同步批次由设备私钥签名。
 - 支持用户从云端撤销设备。
+
+当前已实现本地身份的创建、加载、完整性校验和公开信息展示。Windows 文件沿用父目录
+ACL，主动 ACL 加固、系统密钥库托管、绑定与撤销尚未实现。
 
 #### Adapter Supervisor
 
@@ -150,6 +155,11 @@ session_key = agent_type + device_id + agent_session_id
 
 网络断开时继续写入 Outbox；恢复连接后按序重放。成功确认后清理已发送事件。
 
+当前已实现协议级同步闭环：从 Outbox 生成最多 1000 个事件的 Ed25519 签名批次，
+验证批次完整性，并仅在确认的设备、批次和序列均匹配实际发送范围时清理事件。重复
+确认返回零删除量。具体线格式见 [SYNC_PROTOCOL.md](SYNC_PROTOCOL.md)。TLS WebSocket
+传输、断线重试和在途批次持久化仍属于 Milestone 2。
+
 ### 3.2 本地 IPC
 
 Hooks 不直接访问云端。推荐：
@@ -195,11 +205,16 @@ schema_version
 adapter_version
 ```
 
+Runner 使用带 `protocol_version`、`batch_id`、设备公钥、首末序列和签名的批次封装
+上述事件。签名覆盖批次元数据和全部事件；网关必须先验证“公钥派生的设备 ID”与签名，
+再进行事件白名单校验。
+
 写入规则：
 
 - `event_id` 幂等。
 - 同一设备的 `sequence` 单调递增。
 - 云端拒绝不在白名单中的字段。
+- 确认序列不得超过该批次实际发送的 `last_sequence`。
 - 服务器记录接收时间，但不替换设备观察时间。
 - 快照与增量事件均可重放。
 
@@ -442,7 +457,7 @@ Agent-Platform/
 
 ### Milestone 1：本地 Runner
 
-- 设备身份
+- 设备身份（已完成本地生成、校验和签名；绑定、撤销与密钥库待完成）
 - 两个 Agent Adapter（已完成一次性与持续采集；实时订阅待完成）
 - 状态标准化器（已完成）
 - SQLite Outbox（已完成）
@@ -453,7 +468,7 @@ Agent-Platform/
 - 设备绑定
 - WebSocket Gateway
 - 心跳与离线判断
-- 幂等事件写入
+- 幂等事件写入（已完成 Runner 签名批次和有界确认契约）
 - Session 查询 API
 
 ### Milestone 3：响应式 Web / PWA

@@ -14,6 +14,7 @@
 - 适配器健康状态持久化和安全诊断错误码
 - 工作目录显示名与 HMAC 指纹脱敏
 - SQLite Outbox、事件顺序、幂等和 Session 快照
+- Ed25519 本地设备身份、签名同步批次和有界确认
 - Fixture 驱动的隐私回归测试
 
 ## 开发命令
@@ -25,11 +26,24 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+初始化设备身份：
+
+```powershell
+cargo run -p agent-platform-runner -- `
+  device init `
+  --identity runner-identity.json
+```
+
+身份文件包含设备私钥，必须保存在仅当前用户可读的目录中，不得提交到 Git、上传或
+与其他设备共用。重复初始化不会覆盖已有文件。后续命令传入全局
+`--identity runner-identity.json` 后，会自动使用该设备 ID，并由设备私钥派生项目
+指纹密钥；也可以设置 `AGENT_PLATFORM_IDENTITY`。
+
 标准化 Claude Agent 列表 Fixture：
 
 ```powershell
 cargo run -p agent-platform-runner -- `
-  --device-id local-dev `
+  --identity runner-identity.json `
   normalize claude-agents `
   --input crates/runner/fixtures/claude-agents.json
 ```
@@ -48,7 +62,7 @@ Get-Content -Raw crates/runner/fixtures/claude-hook-permission.json |
 
 ```powershell
 cargo run -p agent-platform-runner -- `
-  --device-id local-dev `
+  --identity runner-identity.json `
   collect-once claude `
   --db runner.db
 
@@ -67,7 +81,7 @@ cargo run -p agent-platform-runner -- `
 
 ```powershell
 cargo run -p agent-platform-runner -- `
-  --device-id local-dev `
+  --identity runner-identity.json `
   run all `
   --db runner.db
 ```
@@ -111,6 +125,25 @@ cargo run -p agent-platform-runner -- outbox health --db runner.db
 `protocol_invalid_json` 等固定错误码，不保存可执行文件路径或原始系统错误文本。
 状态未变化的轮询不会重复写入 Outbox。
 
+准备并验证签名同步批次：
+
+```powershell
+cargo run -p agent-platform-runner -- `
+  sync prepare `
+  --identity runner-identity.json `
+  --db runner.db `
+  --limit 100
+
+cargo run -p agent-platform-runner -- `
+  sync verify `
+  --batch batch.json
+```
+
+`sync prepare` 只输出白名单 Session 元数据，不输出设备私钥。服务端确认写入文件后，
+可用 `sync ack --db runner.db --batch batch.json --acknowledgement ack.json`
+清理已确认事件。确认的设备、批次和序列必须落在实际发送范围内；重复确认是幂等的。
+协议字段和签名规则见 [SYNC_PROTOCOL.md](../../docs/SYNC_PROTOCOL.md)。
+
 ## 安全约束
 
 标准化输出禁止包含：
@@ -128,7 +161,8 @@ Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化
 
 - Codex 跨客户端实时通知覆盖验证与缺失事件补偿
 - Hook 插件安装器
-- 云端 WebSocket 同步
+- 云端设备绑定与 WebSocket 传输
+- Windows 身份文件 ACL 主动加固和系统密钥库接入
 - OS 原生服务安装
 
 这些功能将在核心协议与隐私测试稳定后逐步接入。

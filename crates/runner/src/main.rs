@@ -15,10 +15,12 @@ use agent_platform_runner::{
         codex::{self, CodexThreadContext},
     },
     collectors::{CodexAppServer, collect_claude_agents_with_timeout},
+    device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
     outbox::Outbox,
     privacy::ProjectRedactor,
     runtime::{ClaudeSessionSource, CodexSessionSource, PollPolicy, RunnerRuntime, SessionSource},
+    sync::{SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
 };
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -29,6 +31,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 struct Cli {
     #[arg(long, env = "AGENT_PLATFORM_DEVICE_ID", default_value = "local-dev")]
     device_id: String,
+
+    #[arg(
+        long,
+        env = "AGENT_PLATFORM_IDENTITY",
+        help = "Use a persisted device identity for the device ID and project fingerprint key"
+    )]
+    identity: Option<PathBuf>,
 
     #[arg(
         long,
@@ -102,6 +111,14 @@ enum Command {
         #[command(subcommand)]
         command: OutboxCommand,
     },
+    Device {
+        #[command(subcommand)]
+        command: DeviceCommand,
+    },
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommand,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -164,14 +181,60 @@ enum OutboxCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum DeviceCommand {
+    Init {
+        #[arg(long)]
+        identity: PathBuf,
+    },
+    Show {
+        #[arg(long)]
+        identity: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SyncCommand {
+    Prepare {
+        #[arg(long)]
+        identity: PathBuf,
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    Verify {
+        #[arg(long)]
+        batch: PathBuf,
+    },
+    Ack {
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long)]
+        batch: PathBuf,
+        #[arg(long)]
+        acknowledgement: PathBuf,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let device_id = cli.device_id;
+    let runtime_identity = cli
+        .identity
+        .as_ref()
+        .map(|path| {
+            DeviceIdentity::load(path).with_context(|| format!("failed to load {}", path.display()))
+        })
+        .transpose()?;
+    let device_id = runtime_identity
+        .as_ref()
+        .map(|identity| identity.device_id().to_owned())
+        .unwrap_or(cli.device_id);
     let fingerprint_key_env = cli.fingerprint_key_env;
 
     match cli.command {
         Command::Normalize { format, input } => {
-            let redactor = load_redactor(&fingerprint_key_env)?;
+            let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
             let meta = ObservationMeta::now(&device_id);
             let input = fs::read_to_string(&input)
                 .with_context(|| format!("failed to read {}", input.display()))?;
@@ -179,7 +242,7 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&observations)?);
         }
         Command::IngestHook { agent, db } => {
-            let redactor = load_redactor(&fingerprint_key_env)?;
+            let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
             let meta = ObservationMeta::now(&device_id);
             let mut input = String::new();
             io::stdin().read_to_string(&mut input)?;
@@ -206,7 +269,7 @@ fn main() -> Result<()> {
             limit,
             timeout_seconds,
         } => {
-            let redactor = load_redactor(&fingerprint_key_env)?;
+            let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
             let meta = ObservationMeta::now(&device_id);
             let timeout = nonzero_duration("collector timeout", timeout_seconds)?;
             let observations = match agent {
@@ -250,7 +313,7 @@ fn main() -> Result<()> {
             collector_timeout_seconds,
             max_attempts,
         } => {
-            let redactor = load_redactor(&fingerprint_key_env)?;
+            let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
             let policy = PollPolicy {
                 active_interval: nonzero_duration("active interval", active_interval_seconds)?,
                 idle_interval: nonzero_duration("idle interval", idle_interval_seconds)?,
@@ -331,9 +394,70 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&health)?);
             }
         },
+        Command::Device { command } => match command {
+            DeviceCommand::Init { identity } => {
+                let device_identity = DeviceIdentity::generate();
+                device_identity
+                    .save_new(&identity)
+                    .with_context(|| format!("failed to create {}", identity.display()))?;
+                println!("{}", serde_json::to_string_pretty(&device_identity.info())?);
+            }
+            DeviceCommand::Show { identity } => {
+                let device_identity = DeviceIdentity::load(&identity)
+                    .with_context(|| format!("failed to load {}", identity.display()))?;
+                println!("{}", serde_json::to_string_pretty(&device_identity.info())?);
+            }
+        },
+        Command::Sync { command } => match command {
+            SyncCommand::Prepare {
+                identity,
+                db,
+                limit,
+            } => {
+                let device_identity = DeviceIdentity::load(&identity)
+                    .with_context(|| format!("failed to load {}", identity.display()))?;
+                let outbox = Outbox::open(db)?;
+                if let Some(batch) = prepare_sync_batch(&outbox, &device_identity, limit)? {
+                    println!("{}", serde_json::to_string_pretty(&batch)?);
+                } else {
+                    println!("{}", serde_json::json!({ "pending": 0 }));
+                }
+            }
+            SyncCommand::Verify { batch } => {
+                let batch: SyncBatch = read_json_file(&batch)?;
+                batch.verify()?;
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "valid": true,
+                        "device_id": batch.device_id,
+                        "batch_id": batch.batch_id,
+                        "first_sequence": batch.first_sequence,
+                        "last_sequence": batch.last_sequence
+                    })
+                );
+            }
+            SyncCommand::Ack {
+                db,
+                batch,
+                acknowledgement,
+            } => {
+                let batch: SyncBatch = read_json_file(&batch)?;
+                let acknowledgement: SyncAck = read_json_file(&acknowledgement)?;
+                let mut outbox = Outbox::open(db)?;
+                let removed = apply_sync_ack(&mut outbox, &batch, &acknowledgement)?;
+                println!("{}", serde_json::json!({ "acknowledged": removed }));
+            }
+        },
     }
 
     Ok(())
+}
+
+fn read_json_file<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&contents).with_context(|| format!("invalid JSON in {}", path.display()))
 }
 
 fn nonzero_duration(name: &str, seconds: u64) -> Result<Duration> {
@@ -343,7 +467,13 @@ fn nonzero_duration(name: &str, seconds: u64) -> Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
-fn load_redactor(environment_variable: &str) -> Result<ProjectRedactor> {
+fn load_redactor(
+    environment_variable: &str,
+    identity: Option<&DeviceIdentity>,
+) -> Result<ProjectRedactor> {
+    if let Some(identity) = identity {
+        return Ok(ProjectRedactor::new(identity.fingerprint_key())?);
+    }
     let key = env::var(environment_variable).with_context(|| {
         format!("missing fingerprint key environment variable {environment_variable}")
     })?;
