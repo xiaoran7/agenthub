@@ -64,3 +64,12 @@
 - **解决方式**：仓库命令和自动化在 Windows 上显式调用 `npm.cmd`。
 - **如何避免**：工具链探测要分别检查 `node --version` 与 `npm.cmd --version`；
   不要为了运行 npm 全局放宽 PowerShell 执行策略。
+
+## 2026-07-25 本机缺少 PostgreSQL 与容器运行时
+
+- **现象**：PostgreSQL Store 的类型检查和内存契约测试可执行，但找不到 `psql`、
+  PostgreSQL Windows 服务、Docker 或 Podman，无法在本机启动真实数据库。
+- **处理方式**：集成测试要求显式设置 `AGENT_PLATFORM_TEST_DATABASE_URL`，并在
+  专用数据库下创建随机 Schema；没有连接串时报告 `SKIP`，不把跳过写成数据库通过。
+- **如何避免**：CI 增加 PostgreSQL Service Container，并把该环境变量指向专用测试
+  数据库；开发机不要为了单次验证静默安装系统服务或把测试指向生产数据库。

@@ -33,6 +33,10 @@
   批次、校验 Gateway 确认并清理已确认 Outbox 事件。
 - 增加可配置全局超时、稳定网络错误分类和 Gateway URL 安全校验；支持 HTTPS 远程
   地址，并为本地开发保留回环 HTTP。
+- 增加 PostgreSQL Gateway Store、版本化 SQL 迁移和 `migrate` 命令；设备登记、
+  事件幂等写入、序列水位、Session 快照与查询可跨服务重启持久化。
+- 增加环境门控的 PostgreSQL 集成测试，在随机测试 Schema 中验证迁移幂等、批次
+  重放、用户隔离和重连后的持久化查询。
 
 ### Fixed
 
@@ -62,3 +66,5 @@
   Session `display_name`，防止默认上传可能来源于用户任务文本的标题。
 - Runner 拒绝向非回环明文 HTTP 地址同步，也拒绝包含凭据、查询或片段的 Gateway
   URL；网络错误与服务端错误正文不会写入本地状态或用于清理 Outbox。
+- PostgreSQL 批次接收以设备行锁和单事务保护，任何事件冲突、序列间隙或写入失败均
+  整批回滚；迁移记录 SHA-256 并拒绝同版本 SQL 漂移。

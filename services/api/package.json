@@ -4,13 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "migrate": "tsx src/migrate.ts",
     "start": "tsx src/server.ts",
     "test": "tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@agent-platform/contracts": "*",
-    "fastify": "5.10.0"
+    "fastify": "5.10.0",
+    "postgres": "3.4.9"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

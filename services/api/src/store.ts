@@ -30,16 +30,24 @@ export interface SessionFilters {
   presence?: Presence;
 }
 
+export interface DeviceRegistrationResult {
+  device: RegisteredDevice;
+  created: boolean;
+}
+
 export interface GatewayStore {
-  findDevice(deviceId: string): RegisteredDevice | undefined;
   registerDevice(
     ownerId: string,
     deviceId: string,
     publicKey: string,
-  ): RegisteredDevice;
-  ingestBatch(batch: SyncBatch): number;
-  listDevices(ownerId: string): DeviceView[];
-  listSessions(ownerId: string, filters: SessionFilters): StoredSession[];
+  ): Promise<DeviceRegistrationResult>;
+  ingestBatch(batch: SyncBatch): Promise<number>;
+  listDevices(ownerId: string): Promise<DeviceView[]>;
+  listSessions(
+    ownerId: string,
+    filters: SessionFilters,
+  ): Promise<StoredSession[]>;
+  close?(): Promise<void>;
 }
 
 export class GatewayStoreError extends Error {
@@ -96,15 +104,11 @@ export class InMemoryGatewayStore implements GatewayStore {
     this.#now = now;
   }
 
-  findDevice(deviceId: string): RegisteredDevice | undefined {
-    return this.#devices.get(deviceId);
-  }
-
-  registerDevice(
+  async registerDevice(
     ownerId: string,
     deviceId: string,
     publicKey: string,
-  ): RegisteredDevice {
+  ): Promise<DeviceRegistrationResult> {
     const existing = this.#devices.get(deviceId);
     if (existing !== undefined) {
       if (existing.public_key !== publicKey || existing.owner_id !== ownerId) {
@@ -113,7 +117,7 @@ export class InMemoryGatewayStore implements GatewayStore {
           "device is already registered with different credentials",
         );
       }
-      return existing;
+      return { device: existing, created: false };
     }
     const now = this.#now().toISOString();
     const device = {
@@ -124,10 +128,10 @@ export class InMemoryGatewayStore implements GatewayStore {
       last_seen_at: now,
     };
     this.#devices.set(deviceId, device);
-    return device;
+    return { device, created: true };
   }
 
-  ingestBatch(batch: SyncBatch): number {
+  async ingestBatch(batch: SyncBatch): Promise<number> {
     const device = this.#devices.get(batch.device_id);
     if (device === undefined) {
       throw new GatewayStoreError(
@@ -194,7 +198,7 @@ export class InMemoryGatewayStore implements GatewayStore {
     return newEvents.length;
   }
 
-  listDevices(ownerId: string): DeviceView[] {
+  async listDevices(ownerId: string): Promise<DeviceView[]> {
     const offlineBefore = this.#now().getTime() - 45_000;
     return [...this.#devices.values()]
       .filter((device) => device.owner_id === ownerId)
@@ -207,7 +211,10 @@ export class InMemoryGatewayStore implements GatewayStore {
       }));
   }
 
-  listSessions(ownerId: string, filters: SessionFilters): StoredSession[] {
+  async listSessions(
+    ownerId: string,
+    filters: SessionFilters,
+  ): Promise<StoredSession[]> {
     const ownedDevices = new Set(
       [...this.#devices.values()]
         .filter((device) => device.owner_id === ownerId)

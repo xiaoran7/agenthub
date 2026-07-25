@@ -230,10 +230,11 @@ Runner 使用带 `protocol_version`、`batch_id`、设备公钥、首末序列�
 - 服务器记录接收时间，但不替换设备观察时间。
 - 快照与增量事件均可重放。
 
-当前 `InMemoryGatewayStore` 会在修改状态前验证整个批次；按 `event_id` 幂等、按
-`device_id + sequence` 检测冲突，并拒绝新增序列间隙。Session 快照按观察时间、
-置信度和设备序列合并。它是 PostgreSQL Adapter 的契约替身，不提供持久性或多实例
-并发保证。
+`InMemoryGatewayStore` 和 `PostgresGatewayStore` 共用异步存储契约：按 `event_id`
+幂等、按 `device_id + sequence` 检测冲突，并拒绝新增序列间隙；Session 快照按
+观察时间、置信度和设备序列合并。内存实现用于快速协议测试，不提供持久性。
+PostgreSQL 实现按设备行锁串行化批次，在一个事务内完成冲突检查、事件写入、快照
+合并、水位和最后在线时间更新；失败时整体回滚。
 
 ### 4.3 Storage
 
@@ -246,6 +247,18 @@ MVP 使用 PostgreSQL：
 - `sessions`
 - `session_status_events`
 - `device_connections`
+
+当前首版迁移已实现：
+
+- `agent_platform_devices`
+- `agent_platform_events`
+- `agent_platform_sessions`
+- `agent_platform_schema_migrations`
+
+事件原文只保存已经通过 Contracts 白名单验证的 `SyncEvent` JSONB；Presence 和
+Activity Status 额外保留受约束列用于筛选。迁移使用事务级 advisory lock 防止多个
+实例同时执行，并记录 SQL SHA-256 防止同版本迁移被静默改写。开发期绑定码仍在进程
+内，用户、凭据轮换、连接心跳等表随正式认证与实时通道实现。
 
 实时广播可以先使用 PostgreSQL `LISTEN/NOTIFY`，达到单机瓶颈后再引入 Redis
 Pub/Sub。MVP 不必一开始维护两套基础设施。
@@ -489,7 +502,7 @@ Agent-Platform/
 - 设备绑定（已完成开发期一次性绑定码、公钥登记和 Runner 出站调用）
 - WebSocket Gateway（已完成 Runner→Gateway HTTP 批次闭环，WebSocket 待接入）
 - 心跳与离线判断（已完成接收时间阈值，独立心跳待接入）
-- 幂等事件写入（已完成 Runner 上传/确认与内存存储，PostgreSQL 待接入）
+- 幂等事件写入（已完成 Runner 上传/确认、内存与 PostgreSQL 事务存储）
 - Session 查询 API（已完成开发期设备和 Session 读接口）
 
 ### Milestone 3：响应式 Web / PWA

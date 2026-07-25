@@ -181,7 +181,7 @@ test("a signed sequence gap is rejected atomically", async () => {
   });
   assert.equal(response.statusCode, 409);
   assert.equal(response.json().error, "sequence_gap");
-  assert.equal(store.listSessions("user-1", {}).length, 1);
+  assert.equal((await store.listSessions("user-1", {})).length, 1);
   await app.close();
 });
 

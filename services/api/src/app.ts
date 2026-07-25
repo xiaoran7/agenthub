@@ -25,7 +25,7 @@ export interface GatewayAppOptions {
 export function createGatewayApp(
   options: GatewayAppOptions = {},
 ): FastifyInstance {
-  const store = options.store ?? new InMemoryGatewayStore();
+  const store: GatewayStore = options.store ?? new InMemoryGatewayStore();
   const bindingCodes =
     options.bindingCodes ??
     new OneTimeBindingCodes(new Map([["local-development", "local-user"]]));
@@ -78,15 +78,14 @@ export function createGatewayApp(
       registration.binding_code,
       registration.device_id,
     );
-    const existing = store.findDevice(registration.device_id);
-    const device = store.registerDevice(
+    const result = await store.registerDevice(
       ownerId,
       registration.device_id,
       registration.public_key,
     );
-    return reply.status(existing === undefined ? 201 : 200).send({
-      device_id: device.device_id,
-      owner_id: device.owner_id,
+    return reply.status(result.created ? 201 : 200).send({
+      device_id: result.device.device_id,
+      owner_id: result.device.owner_id,
       registered: true,
     });
   });
@@ -94,7 +93,7 @@ export function createGatewayApp(
   app.post("/v1/sync/batches", async (request, reply) => {
     const batch = parseSyncBatch(request.body);
     verifySyncBatch(batch);
-    store.ingestBatch(batch);
+    await store.ingestBatch(batch);
     return reply.status(200).send({
       protocol_version: batch.protocol_version,
       batch_id: batch.batch_id,
@@ -105,7 +104,7 @@ export function createGatewayApp(
 
   app.get("/v1/devices", async (request, reply) => {
     const ownerId = developmentOwner(request.headers["x-user-id"]);
-    return reply.send({ devices: store.listDevices(ownerId) });
+    return reply.send({ devices: await store.listDevices(ownerId) });
   });
 
   app.get("/v1/sessions", async (request, reply) => {
@@ -142,9 +141,15 @@ export function createGatewayApp(
       }
       filters.presence = query.presence;
     }
-    const sessions = store.listSessions(ownerId, filters);
+    const sessions = await store.listSessions(ownerId, filters);
     return reply.send({ sessions });
   });
+
+  if (store.close !== undefined) {
+    app.addHook("onClose", async () => {
+      await store.close?.();
+    });
+  }
 
   return app;
 }

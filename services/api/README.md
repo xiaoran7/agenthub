@@ -28,6 +28,21 @@ npm.cmd start --workspace @agent-platform/api
 默认只监听 `127.0.0.1:3001`。可通过 `HOST` 和 `PORT` 调整；对外部署前必须接入 TLS
 终止、正式认证、速率限制和持久化存储。
 
+默认 Store 保存在进程内。设置 PostgreSQL 连接串后，Gateway 会在启动时串行执行
+待处理迁移，并使用事务 Store：
+
+```powershell
+$env:AGENT_PLATFORM_DATABASE_URL = 'postgresql://agent_platform:password@127.0.0.1:5432/agent_platform'
+
+npm.cmd run migrate --workspace @agent-platform/api
+npm.cmd start --workspace @agent-platform/api
+```
+
+`migrate` 可用于部署阶段单独执行迁移；服务启动仍会幂等检查迁移版本和 SHA-256，
+历史迁移内容与数据库记录不一致时拒绝启动。当前持久化 `devices`、不可变事件流和
+Session 快照；批次写入会锁定设备行，在一个事务内完成事件幂等检查、连续序列验证、
+快照合并和设备水位更新。
+
 另开一个终端后，可直接用 Runner 完成真实 HTTP 同步闭环：
 
 ```powershell
@@ -51,10 +66,17 @@ npm.cmd run typecheck --workspace @agent-platform/api
 npm.cmd test --workspace @agent-platform/api
 ```
 
+PostgreSQL 集成测试默认显式跳过。对专用测试数据库设置以下变量后会为每次测试创建
+随机 Schema，并在结束时删除该 Schema：
+
+```powershell
+$env:AGENT_PLATFORM_TEST_DATABASE_URL = 'postgresql://agent_platform:password@127.0.0.1:5432/agent_platform_test'
+npm.cmd test --workspace @agent-platform/api
+```
+
 ## 尚未实现
 
-- PostgreSQL 事务存储和迁移
 - 用户登录与正式访问令牌
-- 绑定码生成、过期、撤销和设备密钥轮换
+- 绑定码持久化、生成、过期、撤销和设备密钥轮换
 - WebSocket 心跳与实时推送
 - 多实例并发、速率限制与审计日志
