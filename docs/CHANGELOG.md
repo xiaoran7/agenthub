@@ -29,6 +29,10 @@
   一次性设备绑定、签名批次验收、内存幂等写入、设备列表和 Session 过滤查询。
 - 增加 Node 生成、Rust 验证的协议版本 1 跨语言签名 Fixture，并将 Rust、Node、
   TypeScript 与 Prettier 检查纳入仓库质量门。
+- 增加 Runner `device bind` 和 `sync push`：可直接登记设备公钥、上传有界签名
+  批次、校验 Gateway 确认并清理已确认 Outbox 事件。
+- 增加可配置全局超时、稳定网络错误分类和 Gateway URL 安全校验；支持 HTTPS 远程
+  地址，并为本地开发保留回环 HTTP。
 
 ### Fixed
 
@@ -56,3 +60,5 @@
   非法时间、重复事件 ID、序列间隙、篡改签名和未注册设备。
 - Claude Agent 名称和 Codex Thread 标题不再进入标准化事件；同步线协议移除
   Session `display_name`，防止默认上传可能来源于用户任务文本的标题。
+- Runner 拒绝向非回环明文 HTTP 地址同步，也拒绝包含凭据、查询或片段的 Gateway
+  URL；网络错误与服务端错误正文不会写入本地状态或用于清理 Outbox。

@@ -17,6 +17,7 @@ use agent_platform_runner::{
     collectors::{CodexAppServer, collect_claude_agents_with_timeout},
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
+    gateway::{GatewayClient, push_outbox},
     outbox::Outbox,
     privacy::ProjectRedactor,
     runtime::{ClaudeSessionSource, CodexSessionSource, PollPolicy, RunnerRuntime, SessionSource},
@@ -191,6 +192,20 @@ enum DeviceCommand {
         #[arg(long)]
         identity: PathBuf,
     },
+    Bind {
+        #[arg(long)]
+        identity: PathBuf,
+        #[arg(long, env = "AGENT_PLATFORM_GATEWAY_URL")]
+        server: String,
+        #[arg(
+            long,
+            env = "AGENT_PLATFORM_BINDING_CODE",
+            help = "One-time binding code; prefer AGENT_PLATFORM_BINDING_CODE to avoid shell history"
+        )]
+        binding_code: String,
+        #[arg(long, default_value_t = 15)]
+        timeout_seconds: u64,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -214,6 +229,20 @@ enum SyncCommand {
         batch: PathBuf,
         #[arg(long)]
         acknowledgement: PathBuf,
+    },
+    Push {
+        #[arg(long)]
+        identity: PathBuf,
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long, env = "AGENT_PLATFORM_GATEWAY_URL")]
+        server: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long, default_value_t = 1)]
+        max_batches: usize,
+        #[arg(long, default_value_t = 15)]
+        timeout_seconds: u64,
     },
 }
 
@@ -407,6 +436,24 @@ fn main() -> Result<()> {
                     .with_context(|| format!("failed to load {}", identity.display()))?;
                 println!("{}", serde_json::to_string_pretty(&device_identity.info())?);
             }
+            DeviceCommand::Bind {
+                identity,
+                server,
+                binding_code,
+                timeout_seconds,
+            } => {
+                let device_identity = DeviceIdentity::load(&identity)
+                    .with_context(|| format!("failed to load {}", identity.display()))?;
+                let client = GatewayClient::new(
+                    &server,
+                    nonzero_duration("gateway timeout", timeout_seconds)?,
+                )
+                .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                let binding = client
+                    .bind(&device_identity, &binding_code)
+                    .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                println!("{}", serde_json::to_string_pretty(&binding)?);
+            }
         },
         Command::Sync { command } => match command {
             SyncCommand::Prepare {
@@ -447,6 +494,27 @@ fn main() -> Result<()> {
                 let mut outbox = Outbox::open(db)?;
                 let removed = apply_sync_ack(&mut outbox, &batch, &acknowledgement)?;
                 println!("{}", serde_json::json!({ "acknowledged": removed }));
+            }
+            SyncCommand::Push {
+                identity,
+                db,
+                server,
+                limit,
+                max_batches,
+                timeout_seconds,
+            } => {
+                let device_identity = DeviceIdentity::load(&identity)
+                    .with_context(|| format!("failed to load {}", identity.display()))?;
+                let client = GatewayClient::new(
+                    &server,
+                    nonzero_duration("gateway timeout", timeout_seconds)?,
+                )
+                .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                let mut outbox = Outbox::open(db)?;
+                let summary =
+                    push_outbox(&client, &mut outbox, &device_identity, limit, max_batches)
+                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                println!("{}", serde_json::to_string_pretty(&summary)?);
             }
         },
     }

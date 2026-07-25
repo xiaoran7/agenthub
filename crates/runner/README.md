@@ -144,6 +144,29 @@ cargo run -p agent-platform-runner -- `
 清理已确认事件。确认的设备、批次和序列必须落在实际发送范围内；重复确认是幂等的。
 协议字段和签名规则见 [SYNC_PROTOCOL.md](../../docs/SYNC_PROTOCOL.md)。
 
+连接开发期 Gateway：
+
+```powershell
+$env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
+$env:AGENT_PLATFORM_BINDING_CODE = 'local-code'
+
+cargo run -p agent-platform-runner -- `
+  device bind `
+  --identity runner-identity.json
+
+cargo run -p agent-platform-runner -- `
+  sync push `
+  --identity runner-identity.json `
+  --db runner.db `
+  --limit 100 `
+  --max-batches 10
+```
+
+绑定码建议通过环境变量提供，避免进入 Shell 历史。`sync push` 每次只处理有界数量的
+批次；Gateway 返回的确认通过本地校验后才会删除 Outbox 事件。网络失败、超时或无效
+响应不会清理未确认事件。远程 Gateway 地址必须使用 HTTPS，明文 HTTP 只允许
+`localhost`、IPv4 或 IPv6 回环地址用于本地开发。
+
 ## 安全约束
 
 标准化输出禁止包含：
@@ -162,7 +185,7 @@ Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化
 
 - Codex 跨客户端实时通知覆盖验证与缺失事件补偿
 - Hook 插件安装器
-- 云端设备绑定与 WebSocket 传输
+- 正式账号设备绑定、撤销、密钥轮换与 WebSocket 传输
 - Windows 身份文件 ACL 主动加固和系统密钥库接入
 - OS 原生服务安装
 

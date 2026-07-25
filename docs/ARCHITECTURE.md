@@ -29,7 +29,7 @@ flowchart LR
         OA["Codex Adapter"]
         N["状态标准化器"]
         DB["本地 SQLite Outbox"]
-        Sync["TLS WebSocket 同步客户端"]
+        Sync["HTTPS 批次同步客户端 / 后续 WebSocket"]
 
         Claude -->|"agents --json / Hooks"| CA
         Codex -->|"app-server stdio / Hooks"| OA
@@ -73,8 +73,9 @@ flowchart LR
 - 云端仅保存设备公钥；同步批次由设备私钥签名。
 - 支持用户从云端撤销设备。
 
-当前已实现本地身份的创建、加载、完整性校验和公开信息展示。Windows 文件沿用父目录
-ACL，主动 ACL 加固、系统密钥库托管、绑定与撤销尚未实现。
+当前已实现本地身份的创建、加载、完整性校验、公开信息展示，以及通过开发期一次性
+绑定码将公钥登记到 Gateway。Windows 文件沿用父目录 ACL，主动 ACL 加固、系统密钥
+库托管、正式账号绑定、撤销与轮换尚未实现。
 
 #### Adapter Supervisor
 
@@ -155,10 +156,12 @@ session_key = agent_type + device_id + agent_session_id
 
 网络断开时继续写入 Outbox；恢复连接后按序重放。成功确认后清理已发送事件。
 
-当前已实现协议级同步闭环：从 Outbox 生成最多 1000 个事件的 Ed25519 签名批次，
-验证批次完整性，并仅在确认的设备、批次和序列均匹配实际发送范围时清理事件。重复
-确认返回零删除量。具体线格式见 [SYNC_PROTOCOL.md](SYNC_PROTOCOL.md)。TLS WebSocket
-传输、断线重试和在途批次持久化仍属于 Milestone 2。
+当前已实现 HTTP 同步闭环：从 Outbox 生成最多 1000 个事件的 Ed25519 签名批次，
+通过主动出站请求上传，并仅在确认的设备、批次和序列均匹配实际发送范围时清理事件。
+每次推送的批次和单批事件数均有上限；网络失败或无效响应保留未确认事件。远程服务
+强制 HTTPS，本地开发允许回环 HTTP。具体线格式见
+[SYNC_PROTOCOL.md](SYNC_PROTOCOL.md)。自动重试、在途批次持久化、心跳和 WebSocket
+低延迟通道仍属于 Milestone 2。
 
 ### 3.2 本地 IPC
 
@@ -186,6 +189,7 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
 - 批次进入存储前执行深层字段白名单、协议/Schema 版本、设备 ID、公钥、连续序列和
   Ed25519 签名校验。
 - `x-user-id` 仅用于模拟已认证读请求，不是生产认证方案。
+- Runner 已可调用登记与批次接口，并验证有界确认后清理 Outbox。
 - 默认只监听 `127.0.0.1`；尚未实现 TLS WebSocket、心跳、速率限制和正式鉴权。
 
 建议：
@@ -474,7 +478,7 @@ Agent-Platform/
 
 ### Milestone 1：本地 Runner
 
-- 设备身份（已完成本地生成、校验和签名；绑定、撤销与密钥库待完成）
+- 设备身份（已完成本地生成、校验、签名和开发期绑定；撤销与密钥库待完成）
 - 两个 Agent Adapter（已完成一次性与持续采集；实时订阅待完成）
 - 状态标准化器（已完成）
 - SQLite Outbox（已完成）
@@ -482,10 +486,10 @@ Agent-Platform/
 
 ### Milestone 2：云端同步
 
-- 设备绑定（已完成开发期一次性绑定码与公钥登记）
-- WebSocket Gateway（已完成 HTTP 协议入口，WebSocket 待接入）
+- 设备绑定（已完成开发期一次性绑定码、公钥登记和 Runner 出站调用）
+- WebSocket Gateway（已完成 Runner→Gateway HTTP 批次闭环，WebSocket 待接入）
 - 心跳与离线判断（已完成接收时间阈值，独立心跳待接入）
-- 幂等事件写入（已完成 Runner 契约与内存存储，PostgreSQL 待接入）
+- 幂等事件写入（已完成 Runner 上传/确认与内存存储，PostgreSQL 待接入）
 - Session 查询 API（已完成开发期设备和 Session 读接口）
 
 ### Milestone 3：响应式 Web / PWA
