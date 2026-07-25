@@ -1,13 +1,19 @@
 use std::{
-    io::{BufRead, BufReader, BufWriter, Write},
+    collections::VecDeque,
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError},
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use serde_json::{Value, json};
 use thiserror::Error;
 
 const MAX_PROTOCOL_LINE_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(15);
+const CHILD_WAIT_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Error)]
 pub enum CollectorError {
@@ -41,6 +47,12 @@ pub enum CollectorError {
     },
     #[error("{program} protocol line exceeded {limit} bytes")]
     ProtocolLineTooLarge { program: String, limit: usize },
+    #[error("{program} output exceeded {limit} bytes")]
+    OutputTooLarge { program: String, limit: usize },
+    #[error("{program} did not respond within {timeout_ms} ms")]
+    Timeout { program: String, timeout_ms: u128 },
+    #[error("{program} output reader stopped unexpectedly")]
+    ReaderStopped { program: String },
     #[error("{program} closed stdout before responding to request {request_id}")]
     UnexpectedEof { program: String, request_id: u64 },
     #[error("{program} returned protocol error {code}: {message}")]
@@ -65,6 +77,9 @@ impl CollectorError {
             Self::InvalidJson { .. } => "protocol_invalid_json",
             Self::InvalidUtf8 { .. } => "process_invalid_utf8",
             Self::ProtocolLineTooLarge { .. } => "protocol_line_too_large",
+            Self::OutputTooLarge { .. } => "process_output_too_large",
+            Self::Timeout { .. } => "collector_timeout",
+            Self::ReaderStopped { .. } => "collector_reader_stopped",
             Self::UnexpectedEof { .. } => "protocol_unexpected_eof",
             Self::Protocol { .. } => "protocol_error",
         }
@@ -75,41 +90,136 @@ pub fn collect_claude_agents(
     binary: impl AsRef<Path>,
     include_completed: bool,
 ) -> Result<String, CollectorError> {
+    collect_claude_agents_with_timeout(binary, include_completed, DEFAULT_COLLECTOR_TIMEOUT)
+}
+
+pub fn collect_claude_agents_with_timeout(
+    binary: impl AsRef<Path>,
+    include_completed: bool,
+    timeout: Duration,
+) -> Result<String, CollectorError> {
     let binary = binary.as_ref();
+    let program = binary.display().to_string();
     let mut command = Command::new(binary);
     command.args(["agents", "--json"]);
     if include_completed {
         command.arg("--all");
     }
     command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
     command.stderr(Stdio::null());
 
-    let output = command.output().map_err(|source| CollectorError::Start {
-        program: binary.display().to_string(),
+    let mut child = command.spawn().map_err(|source| CollectorError::Start {
+        program: program.clone(),
         source,
     })?;
-    if !output.status.success() {
-        return Err(CollectorError::Exit {
-            program: binary.display().to_string(),
-            status: output.status.to_string(),
+    let job = ChildJob::attach(&child).map_err(|source| {
+        let _ = child.kill();
+        let _ = child.wait();
+        CollectorError::Io {
+            program: program.clone(),
+            source,
+        }
+    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| CollectorError::MissingStdio {
+            program: program.clone(),
+        })?;
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take((MAX_PROTOCOL_LINE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let status = match wait_for_child(&mut child, &program, timeout) {
+        Ok(status) => status,
+        Err(error) => {
+            drop(job);
+            let _ = reader.join();
+            return Err(error);
+        }
+    };
+    let output = reader
+        .join()
+        .map_err(|_| CollectorError::ReaderStopped {
+            program: program.clone(),
+        })?
+        .map_err(|source| CollectorError::Io {
+            program: program.clone(),
+            source,
+        })?;
+    if output.len() > MAX_PROTOCOL_LINE_BYTES {
+        return Err(CollectorError::OutputTooLarge {
+            program,
+            limit: MAX_PROTOCOL_LINE_BYTES,
         });
     }
-    String::from_utf8(output.stdout).map_err(|source| CollectorError::InvalidUtf8 {
-        program: binary.display().to_string(),
-        source,
-    })
+    if !status.success() {
+        return Err(CollectorError::Exit {
+            program,
+            status: status.to_string(),
+        });
+    }
+    String::from_utf8(output).map_err(|source| CollectorError::InvalidUtf8 { program, source })
+}
+
+fn wait_for_child(
+    child: &mut Child,
+    program: &str,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, CollectorError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CollectorError::Timeout {
+                program: program.to_owned(),
+                timeout_ms: timeout.as_millis(),
+            });
+        }
+        thread::sleep(CHILD_WAIT_INTERVAL);
+    }
+}
+
+enum ProtocolRead {
+    Message(Value),
+    InvalidJson(serde_json::Error),
+    LineTooLarge,
+    Io(std::io::Error),
+    Eof,
 }
 
 pub struct CodexAppServer {
     program: String,
     child: Child,
     stdin: BufWriter<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
+    receiver: Receiver<ProtocolRead>,
+    reader: Option<JoinHandle<()>>,
+    pending_messages: VecDeque<Value>,
     next_request_id: u64,
+    response_timeout: Duration,
+    job: Option<ChildJob>,
 }
 
 impl CodexAppServer {
     pub fn start(binary: impl AsRef<Path>) -> Result<Self, CollectorError> {
+        Self::start_with_timeout(binary, DEFAULT_COLLECTOR_TIMEOUT)
+    }
+
+    pub fn start_with_timeout(
+        binary: impl AsRef<Path>,
+        response_timeout: Duration,
+    ) -> Result<Self, CollectorError> {
         let binary = binary.as_ref();
         let program = binary.display().to_string();
         let mut child = Command::new(binary)
@@ -122,6 +232,14 @@ impl CodexAppServer {
                 program: program.clone(),
                 source,
             })?;
+        let job = ChildJob::attach(&child).map_err(|source| {
+            let _ = child.kill();
+            let _ = child.wait();
+            CollectorError::Io {
+                program: program.clone(),
+                source,
+            }
+        })?;
         let stdin = child
             .stdin
             .take()
@@ -134,12 +252,18 @@ impl CodexAppServer {
             .ok_or_else(|| CollectorError::MissingStdio {
                 program: program.clone(),
             })?;
+        let (sender, receiver) = mpsc::channel();
+        let reader = thread::spawn(move || read_protocol(stdout, sender));
         let mut server = Self {
             program,
             child,
             stdin: BufWriter::new(stdin),
-            stdout: BufReader::new(stdout),
+            receiver,
+            reader: Some(reader),
+            pending_messages: VecDeque::new(),
             next_request_id: 1,
+            response_timeout,
+            job: Some(job),
         };
         server.initialize()?;
         Ok(server)
@@ -157,9 +281,23 @@ impl CodexAppServer {
                 "capabilities": {
                     "experimentalApi": false,
                     "optOutNotificationMethods": [
+                        "thread/started",
+                        "thread/name/updated",
+                        "thread/tokenUsage/updated",
+                        "turn/diff/updated",
+                        "turn/plan/updated",
+                        "item/started",
+                        "item/completed",
                         "item/agentMessage/delta",
+                        "item/plan/delta",
                         "item/reasoning/textDelta",
-                        "item/reasoning/summaryTextDelta"
+                        "item/reasoning/summaryTextDelta",
+                        "item/reasoning/summaryPartAdded",
+                        "item/commandExecution/outputDelta",
+                        "item/fileChange/outputDelta",
+                        "warning",
+                        "configWarning",
+                        "error"
                     ]
                 }
             }),
@@ -203,9 +341,18 @@ impl CodexAppServer {
             "params": params
         }))?;
 
+        let deadline = Instant::now() + self.response_timeout;
         loop {
-            let message = self.read_message(request_id)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(CollectorError::Timeout {
+                    program: self.program.clone(),
+                    timeout_ms: self.response_timeout.as_millis(),
+                });
+            }
+            let message = self.read_message(request_id, remaining)?;
             if message.get("id").and_then(Value::as_u64) != Some(request_id) {
+                self.pending_messages.push_back(message);
                 continue;
             }
             if let Some(error) = message.get("error") {
@@ -243,31 +390,76 @@ impl CodexAppServer {
             })
     }
 
-    fn read_message(&mut self, request_id: u64) -> Result<Value, CollectorError> {
-        let mut line = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut line)
-            .map_err(|source| CollectorError::Io {
+    pub fn drain_messages(&mut self) -> Result<Vec<Value>, CollectorError> {
+        let mut messages: Vec<Value> = self.pending_messages.drain(..).collect();
+        loop {
+            match self.receiver.try_recv() {
+                Ok(ProtocolRead::Message(message)) => messages.push(message),
+                Ok(ProtocolRead::InvalidJson(source)) => {
+                    return Err(CollectorError::InvalidJson {
+                        program: self.program.clone(),
+                        source,
+                    });
+                }
+                Ok(ProtocolRead::LineTooLarge) => {
+                    return Err(CollectorError::ProtocolLineTooLarge {
+                        program: self.program.clone(),
+                        limit: MAX_PROTOCOL_LINE_BYTES,
+                    });
+                }
+                Ok(ProtocolRead::Io(source)) => {
+                    return Err(CollectorError::Io {
+                        program: self.program.clone(),
+                        source,
+                    });
+                }
+                Ok(ProtocolRead::Eof) => {
+                    return Err(CollectorError::UnexpectedEof {
+                        program: self.program.clone(),
+                        request_id: self.next_request_id,
+                    });
+                }
+                Err(TryRecvError::Empty) => return Ok(messages),
+                Err(TryRecvError::Disconnected) => {
+                    return Err(CollectorError::ReaderStopped {
+                        program: self.program.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn read_message(
+        &mut self,
+        request_id: u64,
+        timeout: Duration,
+    ) -> Result<Value, CollectorError> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(ProtocolRead::Message(message)) => Ok(message),
+            Ok(ProtocolRead::InvalidJson(source)) => Err(CollectorError::InvalidJson {
                 program: self.program.clone(),
                 source,
-            })?;
-        if read == 0 {
-            return Err(CollectorError::UnexpectedEof {
-                program: self.program.clone(),
-                request_id,
-            });
-        }
-        if line.len() > MAX_PROTOCOL_LINE_BYTES {
-            return Err(CollectorError::ProtocolLineTooLarge {
+            }),
+            Ok(ProtocolRead::LineTooLarge) => Err(CollectorError::ProtocolLineTooLarge {
                 program: self.program.clone(),
                 limit: MAX_PROTOCOL_LINE_BYTES,
-            });
+            }),
+            Ok(ProtocolRead::Io(source)) => Err(CollectorError::Io {
+                program: self.program.clone(),
+                source,
+            }),
+            Ok(ProtocolRead::Eof) => Err(CollectorError::UnexpectedEof {
+                program: self.program.clone(),
+                request_id,
+            }),
+            Err(RecvTimeoutError::Timeout) => Err(CollectorError::Timeout {
+                program: self.program.clone(),
+                timeout_ms: timeout.as_millis(),
+            }),
+            Err(RecvTimeoutError::Disconnected) => Err(CollectorError::ReaderStopped {
+                program: self.program.clone(),
+            }),
         }
-        serde_json::from_str(&line).map_err(|source| CollectorError::InvalidJson {
-            program: self.program.clone(),
-            source,
-        })
     }
 }
 
@@ -275,6 +467,114 @@ impl Drop for CodexAppServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        self.job.take();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+fn read_protocol(stdout: impl Read, sender: mpsc::Sender<ProtocolRead>) {
+    let mut reader = BufReader::new(stdout);
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                let _ = sender.send(ProtocolRead::Eof);
+                return;
+            }
+            Ok(_) if line.len() > MAX_PROTOCOL_LINE_BYTES => {
+                let _ = sender.send(ProtocolRead::LineTooLarge);
+                return;
+            }
+            Ok(_) => match serde_json::from_str(&line) {
+                Ok(message) => {
+                    if sender.send(ProtocolRead::Message(message)).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(ProtocolRead::InvalidJson(error));
+                    return;
+                }
+            },
+            Err(error) => {
+                let _ = sender.send(ProtocolRead::Io(error));
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+struct ChildJob(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl ChildJob {
+    fn attach(child: &Child) -> std::io::Result<Self> {
+        use std::{
+            ffi::c_void,
+            mem::{size_of, zeroed},
+            os::windows::io::AsRawHandle,
+            ptr,
+        };
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            },
+        };
+
+        // SAFETY: All pointers refer to initialized local data for the duration of each
+        // call. Every successful job handle is owned by ChildJob and closed once.
+        unsafe {
+            let handle = CreateJobObjectW(ptr::null(), ptr::null());
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+            information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&raw const information).cast::<c_void>(),
+                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                    .expect("job information size fits u32"),
+            ) == 0
+            {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(handle);
+                return Err(error);
+            }
+            if AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) == 0 {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(handle);
+                return Err(error);
+            }
+            Ok(Self(handle))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ChildJob {
+    fn drop(&mut self) {
+        // SAFETY: The handle is created and exclusively owned by this ChildJob.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct ChildJob;
+
+#[cfg(not(windows))]
+impl ChildJob {
+    fn attach(_child: &Child) -> std::io::Result<Self> {
+        Ok(Self)
     }
 }
 
@@ -308,11 +608,96 @@ impl Default for CollectorBinaries {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, io::Cursor};
+
     use super::*;
+
+    fn sleeping_script() -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+
+        #[cfg(windows)]
+        let script = {
+            let path = directory.path().join("claude.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\npowershell -NoProfile -Command \"Start-Sleep -Seconds 5\"\r\n",
+            )
+            .unwrap();
+            path
+        };
+
+        #[cfg(unix)]
+        let script = {
+            use std::os::unix::fs::PermissionsExt;
+
+            let path = directory.path().join("claude");
+            fs::write(&path, "#!/bin/sh\nsleep 5\n").unwrap();
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&path, permissions).unwrap();
+            path
+        };
+        (directory, script)
+    }
 
     #[test]
     fn sanitizes_protocol_error_messages() {
         let input = "bad\0message\nwith control";
         assert_eq!(sanitize_protocol_message(input), "badmessagewith control");
+    }
+
+    #[test]
+    fn protocol_reader_delivers_messages_without_blocking_the_request_thread() {
+        let input = Cursor::new(
+            br#"{"method":"thread/status/changed","params":{"threadId":"thr-1"}}
+{"id":7,"result":{"data":[]}}
+"#,
+        );
+        let (sender, receiver) = mpsc::channel();
+        let reader = thread::spawn(move || read_protocol(input, sender));
+
+        let first = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        let second = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        let eof = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        reader.join().unwrap();
+
+        assert!(matches!(
+            first,
+            ProtocolRead::Message(value)
+                if value.get("method").and_then(Value::as_str)
+                    == Some("thread/status/changed")
+        ));
+        assert!(matches!(
+            second,
+            ProtocolRead::Message(value)
+                if value.get("id").and_then(Value::as_u64) == Some(7)
+        ));
+        assert!(matches!(eof, ProtocolRead::Eof));
+    }
+
+    #[test]
+    fn claude_collector_kills_a_hung_process_at_the_deadline() {
+        let (_directory, script) = sleeping_script();
+
+        let started = Instant::now();
+        let error = collect_claude_agents_with_timeout(script, false, Duration::from_millis(100))
+            .unwrap_err();
+
+        assert_eq!(error.code(), "collector_timeout");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn codex_handshake_kills_a_silent_process_at_the_deadline() {
+        let (_directory, script) = sleeping_script();
+        let started = Instant::now();
+        let result = CodexAppServer::start_with_timeout(script, Duration::from_millis(100));
+        let error = match result {
+            Ok(_) => panic!("silent fake app-server unexpectedly initialized"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), "collector_timeout");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

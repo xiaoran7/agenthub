@@ -31,6 +31,19 @@
   置信度和 Agent 提供的活动时间。
 - **Codex app-server 在连续轮询间复用。** 每轮重新握手成本高且会制造短命进程；
   Runner 保持一个 stdio app-server，协议失败后丢弃并在下一次退避到期时重建。
-- **本轮没有假装解决超时。** Claude 子进程输出和 Codex stdio 响应当前仍可能阻塞；
-  强制超时需要同时处理管道排空、杀子进程和读取线程回收，必须作为独立可靠性任务配
-  故障注入测试，不能只在外层加一个计时判断。
+- **超时覆盖进程树和读取线程的完整生命周期。** 单纯在外层计时不能解除被后代进程
+  持有的 stdout 管道；实现必须在截止时间到达时终止完整进程树，等待直接子进程退出，
+  再回收读取线程。Claude 静默命令和 Codex 静默握手均有故障注入测试。
+
+## 2026-07-25 Codex 被动通知取舍
+
+- **不为获取通知而启动或恢复用户 Thread。** Codex 官方只保证当前 app-server
+  连接启动或恢复 Thread 后的 Turn/Item 通知，但 `thread/start`、`thread/resume`
+  会让监控端参与 Session 生命周期，超出第一阶段只读边界。因此 Runner 只处理连接
+  自然收到的通知，并以 `thread/list`、`thread/loaded/list` 轮询兜底。
+- **在协议入口退出内容型通知。** 初始化的 `optOutNotificationMethods` 覆盖消息、
+  推理、计划、Diff、命令输出和完整 Item 等载荷；审批、用户输入和状态通知仍可用于
+  元数据判断，进入 Outbox 前继续经过字段白名单。
+- **真实覆盖率是待验证事实，不是实现假设。** 当前开发机的 Codex WindowsApps
+  二进制不可执行，Fixture 已验证解析、覆盖优先级和隐私边界，但跨客户端 Thread
+  是否向独立 app-server 广播全部状态通知要留到真实 CLI 验证。

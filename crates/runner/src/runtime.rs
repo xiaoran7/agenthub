@@ -17,7 +17,10 @@ use crate::{
         claude::{self, ClaudeAdapterError},
         codex::{self, CodexAdapterError, CodexThreadContext},
     },
-    collectors::{CodexAppServer, CollectorError, collect_claude_agents},
+    collectors::{
+        CodexAppServer, CollectorError, DEFAULT_COLLECTOR_TIMEOUT,
+        collect_claude_agents_with_timeout,
+    },
     domain::{ActivityStatus, AgentType, ObservationMeta, Presence, SessionObservation},
     outbox::{Outbox, OutboxError},
     privacy::ProjectRedactor,
@@ -61,13 +64,23 @@ pub trait SessionSource {
 pub struct ClaudeSessionSource {
     binary: PathBuf,
     include_completed: bool,
+    timeout: Duration,
 }
 
 impl ClaudeSessionSource {
     pub fn new(binary: impl AsRef<Path>, include_completed: bool) -> Self {
+        Self::new_with_timeout(binary, include_completed, DEFAULT_COLLECTOR_TIMEOUT)
+    }
+
+    pub fn new_with_timeout(
+        binary: impl AsRef<Path>,
+        include_completed: bool,
+        timeout: Duration,
+    ) -> Self {
         Self {
             binary: binary.as_ref().to_owned(),
             include_completed,
+            timeout,
         }
     }
 }
@@ -82,7 +95,8 @@ impl SessionSource for ClaudeSessionSource {
         meta: &ObservationMeta,
         redactor: &ProjectRedactor,
     ) -> Result<Vec<SessionObservation>, SourceError> {
-        let payload = collect_claude_agents(&self.binary, self.include_completed)?;
+        let payload =
+            collect_claude_agents_with_timeout(&self.binary, self.include_completed, self.timeout)?;
         Ok(claude::normalize_agents_json(&payload, meta, redactor)?)
     }
 }
@@ -92,27 +106,40 @@ pub struct CodexSessionSource {
     limit: u32,
     server: Option<CodexAppServer>,
     context: CodexThreadContext,
+    timeout: Duration,
 }
 
 impl CodexSessionSource {
     pub fn new(binary: impl AsRef<Path>, limit: u32) -> Self {
+        Self::new_with_timeout(binary, limit, DEFAULT_COLLECTOR_TIMEOUT)
+    }
+
+    pub fn new_with_timeout(binary: impl AsRef<Path>, limit: u32, timeout: Duration) -> Self {
         Self {
             binary: binary.as_ref().to_owned(),
             limit,
             server: None,
             context: CodexThreadContext::default(),
+            timeout,
         }
     }
 
-    fn collect_result(&mut self) -> Result<serde_json::Value, CollectorError> {
+    fn collect_result(
+        &mut self,
+    ) -> Result<(serde_json::Value, Vec<serde_json::Value>), CollectorError> {
         if self.server.is_none() {
-            self.server = Some(CodexAppServer::start(&self.binary)?);
+            self.server = Some(CodexAppServer::start_with_timeout(
+                &self.binary,
+                self.timeout,
+            )?);
         }
-        let result = self
+        let server = self
             .server
             .as_mut()
-            .expect("Codex app-server was initialized")
-            .list_threads(self.limit);
+            .expect("Codex app-server was initialized");
+        let result = server
+            .list_threads(self.limit)
+            .and_then(|result| server.drain_messages().map(|messages| (result, messages)));
         if result.is_err() {
             self.server = None;
         }
@@ -130,14 +157,29 @@ impl SessionSource for CodexSessionSource {
         meta: &ObservationMeta,
         redactor: &ProjectRedactor,
     ) -> Result<Vec<SessionObservation>, SourceError> {
-        let payload = serde_json::to_string(&self.collect_result()?)?;
-        Ok(codex::normalize_thread_list_result(
-            &payload,
-            meta,
-            redactor,
-            &mut self.context,
-        )?)
+        let (result, messages) = self.collect_result()?;
+        normalize_codex_collection(&result, messages, meta, redactor, &mut self.context)
     }
+}
+
+fn normalize_codex_collection(
+    result: &serde_json::Value,
+    messages: Vec<serde_json::Value>,
+    meta: &ObservationMeta,
+    redactor: &ProjectRedactor,
+    context: &mut CodexThreadContext,
+) -> Result<Vec<SessionObservation>, SourceError> {
+    let payload = serde_json::to_string(result)?;
+    let mut observations = codex::normalize_thread_list_result(&payload, meta, redactor, context)?;
+    for message in messages {
+        let payload = serde_json::to_string(&message)?;
+        if let Some(observation) =
+            codex::normalize_app_server_message(&payload, meta, redactor, context)?
+        {
+            observations.push(observation);
+        }
+    }
+    Ok(observations)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -488,5 +530,39 @@ mod tests {
                 .unwrap();
         assert!(!serialized.contains("secret-path"));
         assert!(!serialized.contains("private operating system message"));
+    }
+
+    #[test]
+    fn codex_passive_messages_override_polled_status_without_leaking_content() {
+        let response: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/codex-thread-list.json")).unwrap();
+        let result = response.get("result").unwrap();
+        let approval =
+            serde_json::from_str(include_str!("../fixtures/codex-approval.json")).unwrap();
+        let meta = ObservationMeta::now("device-1");
+        let mut context = CodexThreadContext::default();
+
+        let observations = normalize_codex_collection(
+            result,
+            vec![approval],
+            &meta,
+            &ProjectRedactor::new(b"secret").unwrap(),
+            &mut context,
+        )
+        .unwrap();
+
+        let latest = observations
+            .iter()
+            .rev()
+            .find(|observation| observation.agent_session_id == "codex-active")
+            .unwrap();
+        assert_eq!(
+            latest.state.activity_status,
+            ActivityStatus::WaitingPermission
+        );
+        let serialized = serde_json::to_string(&observations).unwrap();
+        assert!(!serialized.contains("TOP_SECRET_MARKER"));
+        assert!(!serialized.contains("PRIVATE_APPROVAL_REASON_MARKER"));
+        assert!(!serialized.contains("PRIVATE_CODEX_PREVIEW_MARKER"));
     }
 }

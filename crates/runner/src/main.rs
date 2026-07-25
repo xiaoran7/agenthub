@@ -14,7 +14,7 @@ use agent_platform_runner::{
         claude,
         codex::{self, CodexThreadContext},
     },
-    collectors::{CodexAppServer, collect_claude_agents},
+    collectors::{CodexAppServer, collect_claude_agents_with_timeout},
     domain::{AgentType, ObservationMeta, SessionObservation},
     outbox::Outbox,
     privacy::ProjectRedactor,
@@ -66,6 +66,8 @@ enum Command {
         include_completed: bool,
         #[arg(long, default_value_t = 100, help = "Maximum Codex threads to request")]
         limit: u32,
+        #[arg(long, default_value_t = 15)]
+        timeout_seconds: u64,
     },
     Run {
         #[arg(value_enum, default_value_t = AgentSelection::All)]
@@ -88,6 +90,8 @@ enum Command {
         failure_initial_seconds: u64,
         #[arg(long, default_value_t = 60)]
         failure_max_seconds: u64,
+        #[arg(long, default_value_t = 15)]
+        collector_timeout_seconds: u64,
         #[arg(
             long,
             help = "Stop after this many adapter attempts; intended for diagnostics and tests"
@@ -200,18 +204,22 @@ fn main() -> Result<()> {
             binary,
             include_completed,
             limit,
+            timeout_seconds,
         } => {
             let redactor = load_redactor(&fingerprint_key_env)?;
             let meta = ObservationMeta::now(&device_id);
+            let timeout = nonzero_duration("collector timeout", timeout_seconds)?;
             let observations = match agent {
                 Agent::Claude => {
                     let binary = binary.unwrap_or_else(|| PathBuf::from("claude"));
-                    let payload = collect_claude_agents(binary, include_completed)?;
+                    let payload =
+                        collect_claude_agents_with_timeout(binary, include_completed, timeout)?;
                     claude::normalize_agents_json(&payload, &meta, &redactor)?
                 }
                 Agent::Codex => {
                     let binary = binary.unwrap_or_else(|| PathBuf::from("codex"));
-                    let result = CodexAppServer::start(binary)?.list_threads(limit)?;
+                    let result =
+                        CodexAppServer::start_with_timeout(binary, timeout)?.list_threads(limit)?;
                     let payload = serde_json::to_string(&result)?;
                     let mut context = CodexThreadContext::default();
                     codex::normalize_thread_list_result(&payload, &meta, &redactor, &mut context)?
@@ -239,6 +247,7 @@ fn main() -> Result<()> {
             idle_interval_seconds,
             failure_initial_seconds,
             failure_max_seconds,
+            collector_timeout_seconds,
             max_attempts,
         } => {
             let redactor = load_redactor(&fingerprint_key_env)?;
@@ -257,18 +266,22 @@ fn main() -> Result<()> {
             if max_attempts == Some(0) {
                 bail!("max attempts must be greater than zero");
             }
+            let collector_timeout =
+                nonzero_duration("collector timeout", collector_timeout_seconds)?;
 
             let mut sources: Vec<Box<dyn SessionSource>> = Vec::new();
             if matches!(agent, AgentSelection::All | AgentSelection::Claude) {
-                sources.push(Box::new(ClaudeSessionSource::new(
+                sources.push(Box::new(ClaudeSessionSource::new_with_timeout(
                     claude_binary.unwrap_or_else(|| PathBuf::from("claude")),
                     include_completed,
+                    collector_timeout,
                 )));
             }
             if matches!(agent, AgentSelection::All | AgentSelection::Codex) {
-                sources.push(Box::new(CodexSessionSource::new(
+                sources.push(Box::new(CodexSessionSource::new_with_timeout(
                     codex_binary.unwrap_or_else(|| PathBuf::from("codex")),
                     codex_limit,
+                    collector_timeout,
                 )));
             }
 

@@ -87,8 +87,11 @@ flowchart LR
 - `Ctrl-C` 协作式退出和诊断用最大尝试次数。
 - 适配器健康状态写入 SQLite，只保存固定安全错误码。
 - 状态快照无变化时不生成重复 Outbox 事件。
+- 所有采集子进程和协议请求默认 15 秒强制超时。
+- Windows 使用 Job Object 管理采集子进程树，超时或退出时关闭所有后代进程。
+- Codex 被动通知与 `thread/list`、`thread/loaded/list` 轮询结果合并。
 
-尚未实现采集子进程/协议响应强制超时与 Codex 实时通知订阅。
+尚未完成 Codex 跨客户端实时通知覆盖的真实 CLI 验证；轮询仍是权威兜底。
 
 #### Claude Adapter
 
@@ -113,9 +116,13 @@ flowchart LR
 2. 使用 `thread/list` 获取持久化 Thread 元数据。
 3. 使用 `thread/loaded/list` 和状态通知观察 Runner app-server 中的活动 Thread。
 4. 接收 Agent-Platform Codex Hook 的本地事件。
-5. 订阅 Turn、Item、审批和用户输入事件。
+5. 被动处理当前连接收到的 Turn、审批和用户输入事件。
 
 Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket transport。
+为保持第一阶段只读，Runner 不调用 `thread/start` 或 `thread/resume` 来获取通知。
+初始化时显式退出消息、推理、计划、Diff、命令输出等内容型通知，只保留状态判断所需
+的元数据事件。官方只保证连接启动或恢复 Thread 后的 Turn/Item 通知，因此当前连接
+对其他客户端 Thread 的实时覆盖不能先验保证，必须由轮询兜底并在真实 CLI 上验证。
 
 #### Normalizer
 

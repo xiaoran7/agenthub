@@ -17,6 +17,10 @@
   使用 2/10 秒自适应轮询，失败时指数退避到最多 60 秒，并支持 `Ctrl-C` 协作式退出。
 - 增加 SQLite Adapter 健康状态和 `outbox health` 诊断命令；失败只记录固定安全
   错误码，不保存可执行路径或原始系统错误。
+- 为一次性与持续采集增加可配置的强制超时；Windows 使用 Job Object 在超时或退出时
+  终止完整采集进程树。
+- Codex app-server 改为后台读取协议消息，被动合并状态、Turn、审批和用户输入通知，
+  同时保留 `thread/list` 与 `thread/loaded/list` 轮询兜底。
 
 ### Fixed
 
@@ -27,8 +31,12 @@
 - Outbox 诊断命令不再错误要求项目指纹密钥。
 - 持续轮询检测到 Session 快照没有变化时不再重复生成 Outbox 事件，避免空闲状态下
   本地队列持续增长。
+- Claude CLI 或 Codex app-server 卡住时不再无限阻塞采集线程；协议读取线程和管道会
+  在子进程树终止后可靠回收。
 
 ### Security
 
 - 标准化层只输出固定元数据白名单；测试夹具中的 Prompt、命令、预览、完整路径和
   敏感标记不得进入事件或 Outbox。
+- Codex 初始化显式退出消息、推理、计划、Diff、命令输出等内容型通知，被动事件合并
+  只允许标准化后的 Session 元数据进入 Outbox。
