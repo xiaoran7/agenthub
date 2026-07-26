@@ -16,6 +16,16 @@ pub enum OutboxError {
     Timestamp(#[from] chrono::ParseError),
 }
 
+impl OutboxError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Sqlite(_) => "outbox_sqlite_failed",
+            Self::Json(_) => "outbox_serialization_failed",
+            Self::Timestamp(_) => "outbox_timestamp_invalid",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutboxRecord {
     pub sequence: i64,
@@ -59,6 +69,10 @@ impl Outbox {
     }
 
     fn initialize(&self) -> Result<(), OutboxError> {
+        // The run daemon and hook ingest processes share this database; wait
+        // for a writer to finish instead of failing on the first SQLITE_BUSY.
+        self.connection
+            .busy_timeout(std::time::Duration::from_secs(5))?;
         self.connection.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
@@ -150,21 +164,11 @@ impl Outbox {
             "#,
             params![observation.device_id, next_sequence],
         )?;
-        let event_payload = serde_json::to_string(observation)?;
-        transaction.execute(
-            r#"
-            INSERT INTO outbox_events(event_id, device_id, sequence, observed_at, payload)
-            VALUES (?1, ?2, ?3, ?4, ?5)
-            "#,
-            params![
-                event_id,
-                observation.device_id,
-                next_sequence,
-                observation.observed_at.to_rfc3339(),
-                event_payload
-            ],
-        )?;
 
+        // Merge with the previous snapshot before persisting so the synced
+        // event stream carries the same preserved state as the local snapshot
+        // (for example a Codex notLoaded probe keeps the last known activity
+        // instead of erasing it in the cloud view).
         let session_key = observation.session_key();
         let previous = transaction
             .query_row(
@@ -180,6 +184,27 @@ impl Outbox {
             .map(|previous| merge_observations(previous, observation))
             .unwrap_or_else(|| observation.clone());
         let snapshot_payload = serde_json::to_string(&snapshot)?;
+        // The event keeps this observation's identity and time; only the
+        // session state fields come from the merge. Reusing the merged
+        // snapshot verbatim could smuggle the previous event's ID into a new
+        // sequence when an out-of-order observation arrives.
+        let mut event_observation = snapshot.clone();
+        event_observation.event_id = observation.event_id;
+        event_observation.observed_at = observation.observed_at;
+        let event_payload = serde_json::to_string(&event_observation)?;
+        transaction.execute(
+            r#"
+            INSERT INTO outbox_events(event_id, device_id, sequence, observed_at, payload)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                event_id,
+                event_observation.device_id,
+                next_sequence,
+                event_observation.observed_at.to_rfc3339(),
+                event_payload
+            ],
+        )?;
         transaction.execute(
             r#"
             INSERT INTO session_snapshots(
@@ -477,6 +502,29 @@ mod tests {
         let snapshot = outbox.snapshot(&first.session_key()).unwrap().unwrap();
         assert_eq!(snapshot.state.activity_status, ActivityStatus::Working);
         assert_eq!(snapshot.state.presence, Presence::Persisted);
+    }
+
+    #[test]
+    fn enqueued_events_carry_the_merged_state_with_their_own_identity() {
+        let mut outbox = Outbox::open_in_memory().unwrap();
+        let first = observation(ActivityStatus::Working);
+        let mut second = observation(ActivityStatus::Unknown);
+        second.observed_at = first.observed_at + Duration::seconds(1);
+        second.state.presence = Presence::Unknown;
+
+        outbox.enqueue(&first).unwrap();
+        outbox.enqueue(&second).unwrap();
+
+        let pending = outbox.pending("device-1", 10).unwrap();
+        assert_eq!(pending.len(), 2);
+        // The synced event stream preserves the last known activity exactly
+        // like the local snapshot, so the cloud view cannot regress to
+        // UNKNOWN while the local view still shows Working.
+        let uploaded = &pending[1].observation;
+        assert_eq!(uploaded.event_id, second.event_id);
+        assert_eq!(uploaded.observed_at, second.observed_at);
+        assert_eq!(uploaded.state.activity_status, ActivityStatus::Working);
+        assert_eq!(uploaded.state.presence, Presence::Unknown);
     }
 
     #[test]

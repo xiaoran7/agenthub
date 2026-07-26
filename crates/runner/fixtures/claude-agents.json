@@ -36,5 +36,12 @@
     "startedAt": 1784940000000,
     "sessionId": "claude-done",
     "state": "done"
+  },
+  {
+    "cwd": "C:\\Users\\alice\\source\\unidentified",
+    "kind": "background",
+    "startedAt": 1784940100000,
+    "state": "working",
+    "name": "PRIVATE_CLAUDE_NAME_MARKER"
   }
 ]

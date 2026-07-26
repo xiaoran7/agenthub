@@ -108,6 +108,7 @@ pub fn collect_claude_agents_with_timeout(
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::null());
+    configure_process_group(&mut command);
 
     let mut child = command.spawn().map_err(|source| CollectorError::Start {
         program: program.clone(),
@@ -142,6 +143,10 @@ pub fn collect_claude_agents_with_timeout(
             return Err(error);
         }
     };
+    // The direct child has exited, but descendants it spawned can still hold
+    // the stdout write end. Close the job before joining the reader so the
+    // remaining process tree is terminated and the reader always sees EOF.
+    drop(job);
     let output = reader
         .join()
         .map_err(|_| CollectorError::ReaderStopped {
@@ -222,16 +227,17 @@ impl CodexAppServer {
     ) -> Result<Self, CollectorError> {
         let binary = binary.as_ref();
         let program = binary.display().to_string();
-        let mut child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .args(["app-server", "--listen", "stdio://"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|source| CollectorError::Start {
-                program: program.clone(),
-                source,
-            })?;
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        let mut child = command.spawn().map_err(|source| CollectorError::Start {
+            program: program.clone(),
+            source,
+        })?;
         let job = ChildJob::attach(&child).map_err(|source| {
             let _ = child.kill();
             let _ = child.wait();
@@ -351,7 +357,12 @@ impl CodexAppServer {
                 });
             }
             let message = self.read_message(request_id, remaining)?;
-            if message.get("id").and_then(Value::as_u64) != Some(request_id) {
+            // Server-to-client requests and notifications carry a `method` and
+            // use an id namespace independent from ours; a colliding numeric id
+            // must not be mistaken for the response to this request.
+            if message.get("method").is_some()
+                || message.get("id").and_then(Value::as_u64) != Some(request_id)
+            {
                 self.pending_messages.push_back(message);
                 continue;
             }
@@ -477,17 +488,16 @@ impl Drop for CodexAppServer {
 fn read_protocol(stdout: impl Read, sender: mpsc::Sender<ProtocolRead>) {
     let mut reader = BufReader::new(stdout);
     loop {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
+        match read_bounded_line(&mut reader) {
+            BoundedLine::Eof => {
                 let _ = sender.send(ProtocolRead::Eof);
                 return;
             }
-            Ok(_) if line.len() > MAX_PROTOCOL_LINE_BYTES => {
+            BoundedLine::TooLarge => {
                 let _ = sender.send(ProtocolRead::LineTooLarge);
                 return;
             }
-            Ok(_) => match serde_json::from_str(&line) {
+            BoundedLine::Line(line) => match serde_json::from_str(&line) {
                 Ok(message) => {
                     if sender.send(ProtocolRead::Message(message)).is_err() {
                         return;
@@ -498,11 +508,60 @@ fn read_protocol(stdout: impl Read, sender: mpsc::Sender<ProtocolRead>) {
                     return;
                 }
             },
-            Err(error) => {
+            BoundedLine::Io(error) => {
                 let _ = sender.send(ProtocolRead::Io(error));
                 return;
             }
         }
+    }
+}
+
+enum BoundedLine {
+    Line(String),
+    TooLarge,
+    Eof,
+    Io(std::io::Error),
+}
+
+/// Read one newline-terminated line while enforcing the size limit during the
+/// read. `read_line` would buffer an arbitrarily long line before any length
+/// check could run, letting a misbehaving child exhaust memory.
+fn read_bounded_line(reader: &mut impl BufRead) -> BoundedLine {
+    let mut line = Vec::new();
+    loop {
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return BoundedLine::Io(error),
+        };
+        if buffer.is_empty() {
+            if line.is_empty() {
+                return BoundedLine::Eof;
+            }
+            return finish_line(line);
+        }
+        let (take, found_newline) = match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(position) => (position + 1, true),
+            None => (buffer.len(), false),
+        };
+        if line.len() + take > MAX_PROTOCOL_LINE_BYTES {
+            return BoundedLine::TooLarge;
+        }
+        line.extend_from_slice(&buffer[..take]);
+        reader.consume(take);
+        if found_newline {
+            return finish_line(line);
+        }
+    }
+}
+
+fn finish_line(line: Vec<u8>) -> BoundedLine {
+    match String::from_utf8(line) {
+        Ok(line) => BoundedLine::Line(line),
+        Err(error) => BoundedLine::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            error.utf8_error(),
+        )),
     }
 }
 
@@ -568,13 +627,47 @@ impl Drop for ChildJob {
     }
 }
 
+/// Place the child in its own process group on Unix so the whole tree can be
+/// signalled at teardown; the Windows equivalent is the Job Object.
+fn configure_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        command.process_group(0);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = command;
+    }
+}
+
 #[cfg(not(windows))]
-struct ChildJob;
+struct ChildJob {
+    process_group: i32,
+}
 
 #[cfg(not(windows))]
 impl ChildJob {
-    fn attach(_child: &Child) -> std::io::Result<Self> {
-        Ok(Self)
+    fn attach(child: &Child) -> std::io::Result<Self> {
+        // `configure_process_group` made the child a process-group leader, so
+        // its PID doubles as the process-group ID.
+        Ok(Self {
+            process_group: i32::try_from(child.id())
+                .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?,
+        })
+    }
+}
+
+#[cfg(not(windows))]
+impl Drop for ChildJob {
+    fn drop(&mut self) {
+        // SAFETY: kill(2) with a negative PID signals the process group the
+        // runner created for this collector child; it never signals our own
+        // group because the child was spawned as a group leader.
+        unsafe {
+            libc::kill(-self.process_group, libc::SIGKILL);
+        }
     }
 }
 
@@ -673,6 +766,38 @@ mod tests {
                 if value.get("id").and_then(Value::as_u64) == Some(7)
         ));
         assert!(matches!(eof, ProtocolRead::Eof));
+    }
+
+    #[test]
+    fn bounded_line_reader_stops_oversized_lines_without_buffering_them() {
+        struct EndlessBytes;
+
+        impl std::io::Read for EndlessBytes {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                buffer.fill(b'a');
+                Ok(buffer.len())
+            }
+        }
+
+        let mut reader = BufReader::new(EndlessBytes);
+        assert!(matches!(
+            read_bounded_line(&mut reader),
+            BoundedLine::TooLarge
+        ));
+    }
+
+    #[test]
+    fn bounded_line_reader_returns_lines_and_eof() {
+        let mut reader = BufReader::new(Cursor::new(b"{\"id\":1}\ntrailing".to_vec()));
+        assert!(matches!(
+            read_bounded_line(&mut reader),
+            BoundedLine::Line(line) if line == "{\"id\":1}\n"
+        ));
+        assert!(matches!(
+            read_bounded_line(&mut reader),
+            BoundedLine::Line(line) if line == "trailing"
+        ));
+        assert!(matches!(read_bounded_line(&mut reader), BoundedLine::Eof));
     }
 
     #[test]

@@ -108,6 +108,7 @@ export interface DeviceRegistration {
   binding_code: string;
   device_id: string;
   public_key: string;
+  signature: string;
 }
 
 export class ContractError extends Error {
@@ -122,11 +123,12 @@ export class ContractError extends Error {
 
 export function parseDeviceRegistration(value: unknown): DeviceRegistration {
   const object = expectObject(value, "device registration");
-  expectKeys(object, ["binding_code", "device_id", "public_key"]);
+  expectKeys(object, ["binding_code", "device_id", "public_key", "signature"]);
   const registration = {
     binding_code: expectString(object.binding_code, "binding_code", 128),
     device_id: expectDeviceId(object.device_id),
     public_key: expectHex(object.public_key, "public_key", 64),
+    signature: expectHex(object.signature, "signature", 128),
   };
   if (
     deviceIdForPublicKey(registration.public_key) !== registration.device_id
@@ -134,6 +136,28 @@ export function parseDeviceRegistration(value: unknown): DeviceRegistration {
     throw new ContractError(
       "device_id_mismatch",
       "device ID does not match public key",
+    );
+  }
+  // Proof of possession: without it, anyone could register a public key they
+  // observed in transit and bind another user's device to their own account.
+  const signingBytes = Buffer.from(
+    JSON.stringify({
+      binding_code: registration.binding_code,
+      device_id: registration.device_id,
+      public_key: registration.public_key,
+    }),
+    "utf8",
+  );
+  if (
+    !verifyEd25519(
+      registration.public_key,
+      signingBytes,
+      registration.signature,
+    )
+  ) {
+    throw new ContractError(
+      "invalid_signature",
+      "registration signature is invalid",
     );
   }
   return registration;
@@ -218,22 +242,39 @@ export function verifySyncBatch(batch: SyncBatch): void {
       "device ID does not match public key",
     );
   }
-  const publicKey = createPublicKey({
-    key: Buffer.concat([
-      Buffer.from("302a300506032b6570032100", "hex"),
-      Buffer.from(batch.public_key, "hex"),
-    ]),
-    format: "der",
-    type: "spki",
-  });
-  const valid = verifySignature(
-    null,
-    Buffer.from(unsignedBatchJson(batch), "utf8"),
-    publicKey,
-    Buffer.from(batch.signature, "hex"),
-  );
-  if (!valid) {
+  if (
+    !verifyEd25519(
+      batch.public_key,
+      Buffer.from(unsignedBatchJson(batch), "utf8"),
+      batch.signature,
+    )
+  ) {
     throw new ContractError("invalid_signature", "batch signature is invalid");
+  }
+}
+
+function verifyEd25519(
+  publicKeyHex: string,
+  data: Buffer,
+  signatureHex: string,
+): boolean {
+  try {
+    const publicKey = createPublicKey({
+      key: Buffer.concat([
+        Buffer.from("302a300506032b6570032100", "hex"),
+        Buffer.from(publicKeyHex, "hex"),
+      ]),
+      format: "der",
+      type: "spki",
+    });
+    return verifySignature(
+      null,
+      data,
+      publicKey,
+      Buffer.from(signatureHex, "hex"),
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -343,17 +384,18 @@ function parsePayload(value: unknown, eventIndex: number): SyncSessionPayload {
       state.raw_status_detail,
       "state.raw_status_detail",
     );
-    if (Object.keys(details).length > 16) {
+    const entryCount = Object.keys(details).length;
+    if (entryCount === 0 || entryCount > 16) {
       throw new ContractError(
         "invalid_field",
-        "state.raw_status_detail has too many entries",
+        "state.raw_status_detail must have between 1 and 16 entries",
       );
     }
     payload.state.raw_status_detail = Object.fromEntries(
       Object.entries(details)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => compareCodeUnits(left, right))
         .map(([key, detail]) => [
-          expectString(key, "raw status detail key", 64),
+          expectDetailKey(key),
           expectString(detail, `raw status detail ${key}`, 256),
         ]),
     );
@@ -434,7 +476,7 @@ function canonicalEvent(event: SyncEvent): SyncEvent {
   ) {
     state.raw_status_detail = Object.fromEntries(
       Object.entries(rawStatusDetail).sort(([left], [right]) =>
-        left.localeCompare(right),
+        compareCodeUnits(left, right),
       ),
     );
   }
@@ -499,7 +541,11 @@ function expectString(value: unknown, name: string, maxLength: number): string {
     typeof value !== "string" ||
     value.length === 0 ||
     value.length > maxLength ||
-    /[\u0000-\u001f\u007f]/.test(value)
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    // Lone surrogates cannot exist in the Rust runner's UTF-8 strings and are
+    // rejected by PostgreSQL jsonb; refusing them keeps both stores and both
+    // languages inside the same contract.
+    !value.isWellFormed()
   ) {
     throw new ContractError(
       "invalid_field",
@@ -559,6 +605,26 @@ function expectHex(value: unknown, name: string, length: number): string {
   return value;
 }
 
+// Version 1 signing bytes sort map keys by Unicode code point (Rust BTreeMap
+// order). String comparison must not be locale-sensitive, and detail keys are
+// restricted to a charset where UTF-16 code-unit order equals code-point order.
+function compareCodeUnits(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+function expectDetailKey(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(value)) {
+    throw new ContractError(
+      "invalid_field",
+      "raw status detail keys must be snake_case ASCII up to 64 characters",
+    );
+  }
+  return value;
+}
+
 function expectDeviceId(value: unknown): string {
   if (typeof value !== "string" || !/^dev_[0-9a-f]{32}$/.test(value)) {
     throw new ContractError("invalid_field", "device_id is invalid");
@@ -567,13 +633,18 @@ function expectDeviceId(value: unknown): string {
 }
 
 function expectUuid(value: unknown, name: string): string {
+  // Lowercase only: PostgreSQL normalizes uuid columns to lowercase, so an
+  // uppercase variant would break replay idempotency between parse and store.
   if (
     typeof value !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       value,
     )
   ) {
-    throw new ContractError("invalid_field", `${name} must be a UUID`);
+    throw new ContractError(
+      "invalid_field",
+      `${name} must be a lowercase UUID`,
+    );
   }
   return value;
 }

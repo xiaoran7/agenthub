@@ -2,6 +2,70 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-27 `localeCompare` 不是字节序：跨语言 canonical JSON 的潜伏炸弹
+
+- **现象**：代码审查发现 Node 侧 canonical JSON 用 `keys.sort(localeCompare)`
+  排序 `raw_status_detail`，Rust 侧是 `BTreeMap`（UTF-8 字节序）。当前所有键
+  恰为同大小写的小写 ASCII，两种顺序碰巧一致，测试全绿。
+- **根因**：`localeCompare` 是 ICU 排序且依赖进程 locale——`['B','a']` 在
+  locale 排序下是 `['a','B']`，字节序是 `['B','a']`；甚至纯小写键在丹麦语等
+  locale 下顺序也会翻转。签名字节因此依赖部署机器的 locale。
+- **解决方式**：Node 改为码元比较（`<`/`>`），同时把 detail 键收紧到
+  `^[a-z][a-z0-9_]{0,63}$`——该字符集内 UTF-16 码元序、Unicode 码点序、UTF-8
+  字节序三者等价；fixture 增加多键 detail 锁定两侧字节一致。
+- **如何避免**：任何"排序后签名"的跨语言协议禁止使用 locale 相关比较；协议文档
+  必须写明比较的是码点还是码元还是字节，并用包含混排键的向量测试钉死。
+
+## 2026-07-27 rusqlite 默认 busy_timeout 为 0，双进程写同库时守护进程会静默死亡
+
+- **现象**：审查发现 `run` 守护进程与 hook 触发的 `ingest-hook` 进程写同一个
+  `runner.db`，写锁重叠时 rusqlite 立即返回 SQLITE_BUSY；`run` 循环把
+  OutboxError 当致命错误 `?` 传播，监控进程直接退出且无人重启。
+- **根因**：SQLite 默认不等待写锁（busy handler 为空）；WAL 只消解读写冲突，
+  写-写冲突仍即时失败。架构上并发写是设计内行为，却没有配等待与容错。
+- **解决方式**：连接统一设置 5 秒 `busy_timeout`；`run` 循环把数据库错误降级为
+  与采集失败相同的退避重试并输出稳定错误码。
+- **如何避免**：任何"多进程共享 SQLite"的设计必须显式设置 busy_timeout 并测试
+  写-写并发；守护进程主循环里区分"该崩"与"该退避"的错误类别。
+
+## 2026-07-27 子进程成功退出不代表管道已关：join 前必须先杀进程树
+
+- **现象**：审查发现 Claude 采集**成功**路径在 `reader.join()` 之后才 drop Job
+  Object；后代进程继承 stdout 写端时读线程等不到 EOF，`join` 永久阻塞——超时
+  失败路径当初特意先 `drop(job)` 再 join，成功路径漏了同样的处理。
+- **根因**：EOF 由"最后一个写端关闭"决定，与直接子进程退出无关；PITFALLS 里
+  2026-07-25 的 Job Object 条目只修了超时分支。
+- **解决方式**：`wait_for_child` 返回后、join 之前统一先 drop Job Object。
+- **如何避免**：所有"进程树 + 管道 + 读线程"的清理顺序固定为：拿到退出状态 →
+  杀完整进程树 → join 读线程；两条路径（成功/超时）用同一段顺序，不允许分叉。
+
+## 2026-07-27 迁移校验和对行尾敏感：Windows 开发 + Linux 部署会自毁
+
+- **现象**：迁移文件 SHA-256 直接对检出文本计算；`core.autocrlf` 在 Windows 把
+  `.sql` 变 CRLF，Linux 检出是 LF，同一文件两个校验和。数据库先在 Linux 迁移、
+  再从 Windows 连接时会报 checksum mismatch 拒绝启动。
+- **根因**：校验和的输入是"工作区字节"而不是"仓库内容"，而工作区字节受 git
+  行尾转换影响。
+- **解决方式**：计算前把 `\r\n` 归一化为 `\n`，并加 `.gitattributes` 强制
+  `*.sql text eol=lf` 双保险。
+- **如何避免**：凡是对仓库文件做内容寻址（哈希、签名、缓存键）都先归一化行尾，
+  或在 `.gitattributes` 固定该类文件的检出形态。
+
+## 2026-07-27 本机验证 Unix 代码路径的两条弯路
+
+- **现象**：为验证新增的 cfg(unix) 进程组代码，`rustup target add
+  x86_64-unknown-linux-gnu` 下载 rust-std 被网络重置（可断点续传重试）；改用
+  本机已有的 `x86_64-linux-android` 目标又因 rusqlite bundled 需要 NDK clang
+  编译 SQLite C 源码而失败。
+- **根因**：cargo check 也会执行依赖的 build.rs（含 cc 编译），纯 Rust 交叉
+  检查被 C 依赖绑架；Android 目标虽属 unix family 但需要完整交叉 C 工具链。
+- **解决方式**：重试下载 rust-std 成功后，把 cfg(unix) 片段抽成无 C 依赖的
+  最小 crate 单独 `cargo check --target x86_64-unknown-linux-gnu`（只需
+  rust-std，不需链接器与 cc），编译通过。注意这只验证了编译，未在真实 Unix 上
+  运行过进程组终止路径。
+- **如何避免**：验证平台特定代码的编译性时优先构造无 build.rs 依赖的最小
+  再现；`cargo check` ≠ 不跑构建脚本。
+
 ## 2026-07-25 WindowsApps 中的 Codex 可发现但不可执行
 
 - **现象**：`Get-Command codex` 能返回

@@ -78,11 +78,17 @@ export function createGatewayApp(
       registration.binding_code,
       registration.device_id,
     );
-    const result = await store.registerDevice(
-      ownerId,
-      registration.device_id,
-      registration.public_key,
-    );
+    let result;
+    try {
+      result = await store.registerDevice(
+        ownerId,
+        registration.device_id,
+        registration.public_key,
+      );
+    } catch (error) {
+      bindingCodes.release(registration.binding_code, registration.device_id);
+      throw error;
+    }
     return reply.status(result.created ? 201 : 200).send({
       device_id: result.device.device_id,
       owner_id: result.device.owner_id,

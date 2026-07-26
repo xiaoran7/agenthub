@@ -514,6 +514,13 @@ fn main() -> Result<()> {
                 let summary =
                     push_outbox(&client, &mut outbox, &device_identity, limit, max_batches)
                         .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                if summary.batches_sent == 0 && summary.pending_events > 0 {
+                    eprintln!(
+                        "warning: {} pending events belong to a different device ID; \
+                         they were likely collected without --identity",
+                        summary.pending_events
+                    );
+                }
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             }
         },

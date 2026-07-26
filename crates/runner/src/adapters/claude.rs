@@ -4,7 +4,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    adapters::{detail, safe_tool_category, string_field},
+    adapters::{clamp_raw_status, detail, safe_tool_category, sanitize_detail_value, string_field},
     domain::{
         ActivityStatus, AgentType, Confidence, ObservationMeta, ObservationSource, Presence,
         SessionObservation, SessionState, WaitingReason,
@@ -16,8 +16,6 @@ use crate::{
 pub enum ClaudeAdapterError {
     #[error("invalid Claude agents JSON: {0}")]
     InvalidAgentsJson(#[from] serde_json::Error),
-    #[error("Claude agents entry at index {index} has no session id")]
-    MissingSessionId { index: usize },
     #[error("Claude hook has no session_id")]
     MissingHookSessionId,
 }
@@ -51,25 +49,25 @@ pub fn normalize_agents_json(
     redactor: &ProjectRedactor,
 ) -> Result<Vec<SessionObservation>, ClaudeAdapterError> {
     let entries: Vec<ClaudeAgentEntry> = serde_json::from_str(input)?;
-    entries
+    // One malformed entry must not blind monitoring for every other session;
+    // entries without a usable session id are skipped, matching the Codex
+    // thread-list behaviour.
+    Ok(entries
         .into_iter()
-        .enumerate()
-        .map(|(index, entry)| normalize_agent_entry(entry, index, meta, redactor))
-        .collect()
+        .filter_map(|entry| normalize_agent_entry(entry, meta, redactor))
+        .collect())
 }
 
 fn normalize_agent_entry(
     entry: ClaudeAgentEntry,
-    index: usize,
     meta: &ObservationMeta,
     redactor: &ProjectRedactor,
-) -> Result<SessionObservation, ClaudeAdapterError> {
+) -> Option<SessionObservation> {
     let session_id = entry
         .session_id
         .clone()
         .or_else(|| entry.id.clone())
-        .filter(|id| !id.trim().is_empty())
-        .ok_or(ClaudeAdapterError::MissingSessionId { index })?;
+        .filter(|id| !id.trim().is_empty())?;
 
     let status_value = entry.status.as_ref().and_then(value_as_short_status);
     let raw_status = entry
@@ -95,12 +93,18 @@ fn normalize_agent_entry(
         SessionState {
             presence,
             activity_status,
-            raw_status,
+            raw_status: clamp_raw_status(&raw_status),
             raw_status_detail: detail([
-                ("kind", entry.kind.clone()),
+                ("kind", entry.kind.as_deref().map(sanitize_detail_value)),
                 ("process", entry.pid.map(|_| "alive".to_owned())),
-                ("waiting_for", entry.waiting_for.clone()),
-                ("cli_status", status_value),
+                (
+                    "waiting_for",
+                    entry.waiting_for.as_deref().map(sanitize_detail_value),
+                ),
+                (
+                    "cli_status",
+                    status_value.as_deref().map(sanitize_detail_value),
+                ),
             ]),
             waiting_reason,
         },
@@ -111,7 +115,7 @@ fn normalize_agent_entry(
         .started_at
         .and_then(DateTime::<Utc>::from_timestamp_millis);
     observation.last_activity_at = None;
-    Ok(observation)
+    Some(observation)
 }
 
 fn value_as_short_status(value: &Value) -> Option<String> {
@@ -134,8 +138,10 @@ fn map_activity(raw_status: &str, waiting_reason: Option<WaitingReason>) -> Acti
             Some(WaitingReason::Permission | WaitingReason::Sandbox) => {
                 ActivityStatus::WaitingPermission
             }
+            // An unrecognized waitingFor phrase could mean input or a new
+            // approval flow; claiming WAITING_INPUT would fabricate certainty.
+            Some(WaitingReason::Unknown) | None => ActivityStatus::Unknown,
             Some(_) => ActivityStatus::WaitingInput,
-            None => ActivityStatus::Unknown,
         },
         "idle" => ActivityStatus::Idle,
         "done" | "completed" => ActivityStatus::Completed,
@@ -192,20 +198,20 @@ pub fn normalize_hook(
     let state = SessionState {
         presence,
         activity_status,
-        raw_status: event.to_owned(),
+        raw_status: clamp_raw_status(event),
         raw_status_detail: detail([
             (
                 "notification_type",
-                notification_type.map(sanitize_hook_enum),
+                notification_type.map(sanitize_detail_value),
             ),
             ("tool_category", safe_tool_category(tool_name)),
             (
                 "error_type",
-                string_field(&value, &["error"]).map(sanitize_hook_enum),
+                string_field(&value, &["error"]).map(sanitize_detail_value),
             ),
             (
                 "end_reason",
-                string_field(&value, &["reason"]).map(sanitize_hook_enum),
+                string_field(&value, &["reason"]).map(sanitize_detail_value),
             ),
         ]),
         waiting_reason,
@@ -270,19 +276,6 @@ fn map_hook_event(
     }
 }
 
-fn sanitize_hook_enum(value: &str) -> String {
-    let sanitized: String = value
-        .chars()
-        .take(64)
-        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ' '))
-        .collect();
-    if sanitized.is_empty() {
-        "unknown".into()
-    } else {
-        sanitized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
@@ -332,6 +325,52 @@ mod tests {
                 .unwrap()
                 .contains(r"C:\work")
         );
+    }
+
+    #[test]
+    fn blocked_with_unrecognized_waiting_reason_is_not_reported_as_input() {
+        let input = r#"[{
+          "cwd": "C:\\work\\demo",
+          "sessionId": "session-999",
+          "state": "blocked",
+          "pid": 4300,
+          "waitingFor": "permission: Bash(rm -rf /tmp/secret)"
+        }]"#;
+
+        let observations = normalize_agents_json(input, &meta(), &redactor()).unwrap();
+        let observation = &observations[0];
+        assert_eq!(observation.state.activity_status, ActivityStatus::Unknown);
+        assert_eq!(
+            observation.state.waiting_reason,
+            Some(WaitingReason::Unknown)
+        );
+        assert_eq!(observation.confidence, crate::domain::Confidence::Inferred);
+        // The unrecognized phrase is stored sanitized, never verbatim.
+        let stored = observation
+            .state
+            .raw_status_detail
+            .get("waiting_for")
+            .unwrap();
+        assert!(!stored.contains('('));
+        assert!(!stored.contains(':'));
+    }
+
+    #[test]
+    fn agents_json_detail_values_are_sanitized_and_bounded() {
+        let long_kind = "k".repeat(500);
+        let input = format!(
+            r#"[{{
+              "cwd": "C:\\work\\demo",
+              "sessionId": "session-1",
+              "state": "working",
+              "kind": "{long_kind}\u0007"
+            }}]"#
+        );
+
+        let observations = normalize_agents_json(&input, &meta(), &redactor()).unwrap();
+        let kind = observations[0].state.raw_status_detail.get("kind").unwrap();
+        assert!(kind.len() <= 64);
+        assert!(kind.chars().all(|ch| !ch.is_control()));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type {
   ActivityStatus,
   Presence,
@@ -90,6 +92,19 @@ export class OneTimeBindingCodes {
     this.#claims.set(code, { deviceId, ownerId });
     return ownerId;
   }
+
+  /**
+   * Undo a claim whose registration failed so the code is not burned by a
+   * rejected attempt (for example a device_conflict from the store).
+   */
+  release(code: string, deviceId: string): void {
+    const existing = this.#claims.get(code);
+    if (existing === undefined || existing.deviceId !== deviceId) {
+      return;
+    }
+    this.#claims.delete(code);
+    this.#available.set(code, existing.ownerId);
+  }
 }
 
 export class InMemoryGatewayStore implements GatewayStore {
@@ -150,7 +165,7 @@ export class InMemoryGatewayStore implements GatewayStore {
     for (const event of batch.events) {
       const existingById = this.#eventsById.get(event.event_id);
       if (existingById !== undefined) {
-        if (stableEvent(existingById) !== stableEvent(event)) {
+        if (!isDeepStrictEqual(existingById, event)) {
           throw new GatewayStoreError(
             "event_conflict",
             "event ID was reused with different data",
@@ -238,10 +253,6 @@ export class InMemoryGatewayStore implements GatewayStore {
         return time === 0 ? right.sequence - left.sequence : time;
       });
   }
-}
-
-function stableEvent(event: SyncEvent): string {
-  return JSON.stringify(event);
 }
 
 function sessionKey(event: SyncEvent): string {

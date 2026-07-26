@@ -55,6 +55,8 @@ fn claude_agents_fixture_maps_all_primary_states() {
         claude::normalize_agents_json(&fixture("claude-agents.json"), &meta(), &redactor())
             .unwrap();
 
+    // The fixture contains five entries; the one without a session id is
+    // skipped instead of failing the whole collection.
     assert_eq!(observations.len(), 4);
     assert!(observations.iter().any(|item| {
         item.agent_session_id == "claude-working"

@@ -396,7 +396,11 @@ export async function migratePostgres(sql: postgres.Sql): Promise<void> {
     `);
     for (const migration of MIGRATIONS) {
       const source = await readFile(migration.url, "utf8");
-      const checksum = createHash("sha256").update(source).digest("hex");
+      // Normalize line endings before hashing: a CRLF checkout on Windows and
+      // an LF checkout on the deploy host must agree on the checksum.
+      const checksum = createHash("sha256")
+        .update(source.replaceAll("\r\n", "\n"))
+        .digest("hex");
       const existing = await transaction<
         Array<{ version: number; checksum: string }>
       >`

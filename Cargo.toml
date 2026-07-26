@@ -15,11 +15,13 @@ ctrlc = "3.5.2"
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 hex = "0.4"
 hmac = "0.12"
+libc = "0.2"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+tempfile = "3.23"
 thiserror = "2.0"
 ureq = { version = "3.3.0", default-features = false, features = ["json", "rustls"] }
 url = "2.5.8"

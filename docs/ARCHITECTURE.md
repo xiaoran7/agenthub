@@ -67,7 +67,8 @@ flowchart LR
 #### Device Identity
 
 - 首次运行生成 Ed25519 设备密钥，设备 ID 由公钥 SHA-256 摘要的前 128 位派生。
-- 私钥仅保存在本地身份文件，创建时禁止覆盖；Unix 新文件权限为 `0600`。
+- 私钥仅保存在本地身份文件，创建时禁止覆盖；写入使用同目录临时文件加不覆盖式
+  落位，崩溃不会留下半写身份文件。Unix 新文件权限为 `0600`。
 - 设备身份同时派生项目目录 HMAC 指纹密钥，避免手工配置两套不一致身份。
 - 通过一次性绑定码与用户账号绑定。
 - 云端仅保存设备公钥；同步批次由设备私钥签名。
@@ -92,10 +93,15 @@ flowchart LR
 - 失败从 2 秒指数退避到最多 60 秒。
 - `Ctrl-C` 协作式退出和诊断用最大尝试次数。
 - 适配器健康状态写入 SQLite，只保存固定安全错误码。
-- 状态快照无变化时不生成重复 Outbox 事件。
+- 状态快照无变化时不生成重复 Outbox 事件；入队事件携带与本地快照一致的合并后
+  状态，并保留本次观察自身的事件 ID 与观察时间。
 - 所有采集子进程和协议请求默认 15 秒强制超时。
-- Windows 使用 Job Object 管理采集子进程树，超时或退出时关闭所有后代进程。
-- Codex 被动通知与 `thread/list`、`thread/loaded/list` 轮询结果合并。
+- Windows 使用 Job Object、Unix 使用独立进程组管理采集子进程树，超时或退出时
+  终止所有后代进程，并保证先杀进程树再回收读取线程。
+- Codex 被动通知与 `thread/list`、`thread/loaded/list` 轮询结果合并；带
+  `method` 的服务端消息不会被当作请求响应吞掉。
+- SQLite 连接设置 busy_timeout，与 hook 进程并发写时等待而非立即失败；本地
+  数据库暂时性错误按采集失败退避，不终止守护进程。
 
 尚未完成 Codex 跨客户端实时通知覆盖的真实 CLI 验证；轮询仍是权威兜底。
 
@@ -185,9 +191,13 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
 
 当前已实现开发期 HTTP 协议入口：
 
-- 一次性绑定码将设备公钥关联到用户；同一设备重试幂等，绑定码不能转给其他设备。
+- 一次性绑定码将设备公钥关联到用户；注册必须携带设备私钥对注册字段的 Ed25519
+  持有证明签名，公开可见的公钥不能被第三方抢注。同一设备重试幂等，绑定码不能
+  转给其他设备；注册被存储拒绝时绑定码回滚，不会被失败请求烧毁。
 - 批次进入存储前执行深层字段白名单、协议/Schema 版本、设备 ID、公钥、连续序列和
-  Ed25519 签名校验。
+  Ed25519 签名校验。校验顺序为：结构与字段白名单 → 公钥派生设备 ID → 签名 →
+  存储层注册与序列约束。签名字节需要从解析后的规范形式重建，因此结构校验必然
+  先于验签；任何数据落库前签名与注册检查都已通过。
 - `x-user-id` 仅用于模拟已认证读请求，不是生产认证方案。
 - Runner 已可调用登记与批次接口，并验证有界确认后清理 Outbox。
 - 默认只监听 `127.0.0.1`；尚未实现 TLS WebSocket、心跳、速率限制和正式鉴权。
@@ -342,9 +352,10 @@ presence = PERSISTED
 | `state=blocked`, `waitingFor=permission prompt` | `LIVE` | `WAITING_PERMISSION` | `authoritative` |
 | `state=blocked`, `waitingFor=sandbox request` | `LIVE` | `WAITING_PERMISSION` | `authoritative` |
 | `state=blocked`, `waitingFor=input needed` | `LIVE` | `WAITING_INPUT` | `authoritative` |
+| `state=blocked`, `waitingFor` 无法识别 | `UNKNOWN` | `UNKNOWN` | `inferred` |
 | `state=done` | `LIVE` 或 `PERSISTED` | `COMPLETED` | `authoritative` |
 | `state=failed` | `LIVE` 或 `PERSISTED` | `FAILED` | `authoritative` |
-| `state=stopped` | `PERSISTED` | `STOPPED` | `authoritative` |
+| `state=stopped` | `LIVE` 或 `PERSISTED` | `STOPPED` | `authoritative` |
 | `UserPromptSubmit` Hook | `LIVE` | `WORKING` | `observed` |
 | `PermissionRequest` Hook | `LIVE` | `WAITING_PERMISSION` | `observed` |
 | `Elicitation` Hook | `LIVE` | `WAITING_INPUT` | `observed` |
@@ -371,8 +382,13 @@ presence = PERSISTED
 | `Stop` Hook | `LIVE` | `COMPLETED` | `observed` |
 | `SessionEnd` Hook | `PERSISTED` | 保留最近状态 | `observed` |
 | `thread.status=notLoaded` | `UNKNOWN` | 保留最近状态 | `inferred` |
+| `thread/closed` | `UNKNOWN` | 保留最近状态 | `inferred` |
+| 未识别的 thread 状态或方法 | 按信号推断 | 保留最近状态 | `inferred` |
 
-特别注意：`notLoaded` 不能直接映射为历史或停止。
+特别注意：`notLoaded` 不能直接映射为历史或停止；所有无法识别的状态与方法一律
+降为 `inferred` 置信度，不得以权威级伪造判断。带 `pid`/存活证据的 `stopped`
+Presence 为 `LIVE`（§5.1 对 LIVE 的定义以进程存活为准），"历史会话"过滤只看
+`presence = PERSISTED`。
 
 ## 7. 冲突处理
 
@@ -401,7 +417,7 @@ presence = PERSISTED
 - Agent 类型和版本
 - Session ID
 - 设备 ID
-- 项目显示名
+- 项目显示名（工作目录恰为当前用户主目录时固定为 `home`，不上传用户名）
 - 工作目录设备内指纹
 - Presence 与统一状态
 - 原始状态枚举

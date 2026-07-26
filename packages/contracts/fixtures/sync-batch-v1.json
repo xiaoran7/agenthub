@@ -26,12 +26,19 @@
         },
         "state": {
           "presence": "LIVE",
-          "activity_status": "WORKING",
-          "raw_status": "active"
+          "activity_status": "WAITING_PERMISSION",
+          "raw_status": "active",
+          "raw_status_detail": {
+            "method": "item/commandExecution/requestApproval",
+            "source": "cli",
+            "tool_category": "shell"
+          },
+          "waiting_reason": "permission"
         },
+        "started_at": "2026-07-24T23:59:00Z",
         "last_activity_at": "2026-07-25T00:00:00Z"
       }
     }
   ],
-  "signature": "100bb4bb67da094b42f23c08e3797a1d46e0cc64eb6ea7bf559e3ac86e7587143f9ad910dd142ab692b45fddfeafadc94a4fc1a45a45f9e4ceaf0833cffd3c06"
+  "signature": "437b56cf94eb2e61c9082255a4580c995fe82e97c7fb79978aa5e31884163e4506f54b9fdb140c431772e39cd1caefbc8242ed6ea35a58e6b12a81da4e731600"
 }

@@ -40,6 +40,7 @@ pub enum SyncError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncSessionPayload {
     pub project: ProjectRef,
     pub state: SessionState,
@@ -50,6 +51,7 @@ pub struct SyncSessionPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncEvent {
     pub sequence: i64,
     pub event_id: Uuid,
@@ -97,6 +99,7 @@ impl SyncEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncBatch {
     pub protocol_version: u16,
     pub batch_id: Uuid,
@@ -164,6 +167,7 @@ impl SyncBatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncAck {
     pub protocol_version: u16,
     pub batch_id: Uuid,
@@ -320,6 +324,39 @@ mod tests {
             Err(SyncError::AckOutOfRange)
         ));
         assert_eq!(outbox.stats().unwrap().pending_events, 2);
+    }
+
+    #[test]
+    fn acknowledgement_for_another_batch_or_device_is_rejected() {
+        let identity = DeviceIdentity::generate();
+        let mut outbox = Outbox::open_in_memory().unwrap();
+        outbox
+            .enqueue(&observation(&identity, "session-1"))
+            .unwrap();
+        let batch = prepare_sync_batch(&outbox, &identity, 10).unwrap().unwrap();
+
+        let wrong_batch = SyncAck {
+            protocol_version: SYNC_PROTOCOL_VERSION,
+            batch_id: Uuid::new_v4(),
+            device_id: batch.device_id.clone(),
+            accepted_through: batch.last_sequence,
+        };
+        assert!(matches!(
+            apply_sync_ack(&mut outbox, &batch, &wrong_batch),
+            Err(SyncError::AckMismatch)
+        ));
+
+        let wrong_device = SyncAck {
+            protocol_version: SYNC_PROTOCOL_VERSION,
+            batch_id: batch.batch_id,
+            device_id: "dev_other".into(),
+            accepted_through: batch.last_sequence,
+        };
+        assert!(matches!(
+            apply_sync_ack(&mut outbox, &batch, &wrong_device),
+            Err(SyncError::AckMismatch)
+        ));
+        assert_eq!(outbox.stats().unwrap().pending_events, 1);
     }
 
     #[test]

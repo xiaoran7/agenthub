@@ -61,6 +61,11 @@ fn project_display_name(raw_cwd: &str) -> String {
     if trimmed.is_empty() {
         return "unknown-project".into();
     }
+    // A session started directly in the home directory would otherwise use the
+    // account name as its display name; the username is not project metadata.
+    if is_current_user_home(trimmed) {
+        return "home".into();
+    }
 
     Path::new(trimmed)
         .file_name()
@@ -74,6 +79,17 @@ fn project_display_name(raw_cwd: &str) -> String {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "unknown-project".into())
+}
+
+fn is_current_user_home(trimmed_cwd: &str) -> bool {
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    home.is_some_and(|home| matches_home(trimmed_cwd, home.to_string_lossy().as_ref()))
+}
+
+fn matches_home(trimmed_cwd: &str, home: &str) -> bool {
+    let home = home.trim().trim_end_matches(['/', '\\']);
+    !home.is_empty()
+        && normalize_path_for_fingerprint(trimmed_cwd) == normalize_path_for_fingerprint(home)
 }
 
 #[cfg(test)]
@@ -97,5 +113,14 @@ mod tests {
             redactor.redact("/work/app").fingerprint,
             redactor.redact("/work/app").fingerprint
         );
+    }
+
+    #[test]
+    fn home_directory_is_not_used_as_a_display_name() {
+        assert!(matches_home(r"C:\Users\alice", r"C:\Users\alice"));
+        #[cfg(windows)]
+        assert!(matches_home(r"C:\Users\Alice", r"c:/users/alice"));
+        assert!(!matches_home(r"C:\Users\alice\project", r"C:\Users\alice"));
+        assert!(!matches_home(r"C:\Users\alice", ""));
     }
 }

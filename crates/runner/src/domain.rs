@@ -76,12 +76,14 @@ pub enum WaitingReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectRef {
     pub display_name: String,
     pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionState {
     pub presence: Presence,
     pub activity_status: ActivityStatus,
@@ -93,6 +95,7 @@ pub struct SessionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionObservation {
     pub schema_version: u16,
     pub event_id: Uuid,
@@ -108,8 +111,6 @@ pub struct SessionObservation {
     pub started_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +152,6 @@ impl SessionObservation {
             observed_at: meta.observed_at,
             started_at: None,
             last_activity_at: Some(meta.observed_at),
-            display_name: None,
         }
     }
 
@@ -175,7 +175,6 @@ impl SessionObservation {
             && self.confidence == other.confidence
             && self.started_at == other.started_at
             && self.last_activity_at == other.last_activity_at
-            && self.display_name == other.display_name
     }
 }
 
@@ -194,12 +193,15 @@ pub fn merge_observations(
     let mut merged = incoming.clone();
     if incoming.state.activity_status == ActivityStatus::Unknown {
         merged.state.activity_status = previous.state.activity_status;
+        if incoming.state.waiting_reason.is_none() {
+            merged.state.waiting_reason = previous.state.waiting_reason;
+        }
     }
     if incoming.started_at.is_none() {
         merged.started_at = previous.started_at;
     }
-    if incoming.display_name.is_none() {
-        merged.display_name = previous.display_name.clone();
+    if merged.last_activity_at < previous.last_activity_at {
+        merged.last_activity_at = previous.last_activity_at;
     }
     merged
 }
@@ -244,6 +246,36 @@ mod tests {
         let merged = merge_observations(&previous, &incoming);
         assert_eq!(merged.state.activity_status, ActivityStatus::Working);
         assert_eq!(merged.state.presence, incoming.state.presence);
+    }
+
+    #[test]
+    fn unknown_activity_preserves_previous_waiting_reason() {
+        let mut previous = observation(ActivityStatus::WaitingPermission, Confidence::Observed);
+        previous.state.waiting_reason = Some(crate::domain::WaitingReason::Permission);
+        let mut incoming = observation(ActivityStatus::Unknown, Confidence::Inferred);
+        incoming.observed_at += chrono::Duration::seconds(1);
+
+        let merged = merge_observations(&previous, &incoming);
+        assert_eq!(
+            merged.state.activity_status,
+            ActivityStatus::WaitingPermission
+        );
+        assert_eq!(
+            merged.state.waiting_reason,
+            Some(crate::domain::WaitingReason::Permission)
+        );
+    }
+
+    #[test]
+    fn last_activity_never_moves_backwards() {
+        let mut previous = observation(ActivityStatus::Working, Confidence::Observed);
+        previous.last_activity_at = Some(previous.observed_at + chrono::Duration::seconds(5));
+        let mut incoming = observation(ActivityStatus::Idle, Confidence::Authoritative);
+        incoming.observed_at += chrono::Duration::seconds(1);
+        incoming.last_activity_at = Some(previous.observed_at);
+
+        let merged = merge_observations(&previous, &incoming);
+        assert_eq!(merged.last_activity_at, previous.last_activity_at);
     }
 
     #[test]

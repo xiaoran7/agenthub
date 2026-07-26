@@ -36,3 +36,25 @@ pub(crate) fn detail(
         .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value)))
         .collect()
 }
+
+/// Detail values must stay enum-like: agent CLIs may grow richer payloads in
+/// these fields, and anything outside the fixed charset or length budget is
+/// dropped rather than synced.
+pub(crate) fn sanitize_detail_value(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .take(64)
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ' ' | '/'))
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".into()
+    } else {
+        sanitized
+    }
+}
+
+/// Raw status values are protocol-bounded (128 chars at the gateway); clamp
+/// locally so one oversized upstream value cannot wedge outbox syncing.
+pub(crate) fn clamp_raw_status(value: &str) -> String {
+    value.chars().take(128).collect()
+}

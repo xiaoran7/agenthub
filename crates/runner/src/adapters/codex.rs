@@ -5,7 +5,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    adapters::{detail, safe_tool_category, string_field},
+    adapters::{clamp_raw_status, detail, safe_tool_category, sanitize_detail_value, string_field},
     domain::{
         ActivityStatus, AgentType, Confidence, ObservationMeta, ObservationSource, Presence,
         SessionObservation, SessionState, WaitingReason,
@@ -77,9 +77,9 @@ pub fn normalize_app_server_message(
         SessionState {
             presence,
             activity_status,
-            raw_status,
+            raw_status: clamp_raw_status(&raw_status),
             raw_status_detail: detail([
-                ("method", Some(method.chars().take(96).collect::<String>())),
+                ("method", Some(sanitize_detail_value(method))),
                 (
                     "tool_category",
                     string_field(&value, &["params", "toolName"])
@@ -89,7 +89,12 @@ pub fn normalize_app_server_message(
             waiting_reason,
         },
         ObservationSource::CodexAppServer,
-        Confidence::Authoritative,
+        // A method or status we cannot map is not an authoritative reading.
+        if activity_status == ActivityStatus::Unknown {
+            Confidence::Inferred
+        } else {
+            Confidence::Authoritative
+        },
     );
     Ok(Some(observation))
 }
@@ -233,18 +238,25 @@ pub fn normalize_thread_list_result(
         .iter()
         .filter_map(|thread| {
             let thread_id = thread.get("id")?.as_str()?.to_owned();
+            // A listing without a cwd (common for notLoaded threads) must not
+            // erase a previously learned project; fall back to the remembered
+            // one and only remember non-empty values.
             let cwd = thread
                 .get("cwd")
                 .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .or_else(|| context.get(&thread_id).map(|entry| entry.cwd.clone()))
+                .unwrap_or_default();
             let status_value = thread.get("status").unwrap_or(&Value::Null);
             let status = status_value
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("notLoaded");
             let (presence, activity_status, waiting_reason) = map_thread_status(status_value);
-            context.remember(&thread_id, &cwd);
+            if !cwd.is_empty() {
+                context.remember(&thread_id, &cwd);
+            }
 
             let mut observation = SessionObservation::new(
                 meta,
@@ -254,18 +266,20 @@ pub fn normalize_thread_list_result(
                 SessionState {
                     presence,
                     activity_status,
-                    raw_status: status.to_owned(),
+                    raw_status: clamp_raw_status(status),
                     raw_status_detail: detail([(
                         "source",
                         thread
                             .get("source")
                             .and_then(Value::as_str)
-                            .map(|source| source.chars().take(64).collect()),
+                            .map(sanitize_detail_value),
                     )]),
                     waiting_reason,
                 },
                 ObservationSource::CodexAppServer,
-                if status == "notLoaded" {
+                // Unmapped status types are readings we cannot vouch for, the
+                // same as notLoaded.
+                if activity_status == ActivityStatus::Unknown {
                     Confidence::Inferred
                 } else {
                     Confidence::Authoritative
@@ -322,7 +336,7 @@ pub fn normalize_hook(
         SessionState {
             presence,
             activity_status,
-            raw_status: event.to_owned(),
+            raw_status: clamp_raw_status(event),
             raw_status_detail: detail([("tool_category", safe_tool_category(tool_name))]),
             waiting_reason,
         },
@@ -394,6 +408,50 @@ mod tests {
         assert_eq!(
             observations[0].state.activity_status,
             ActivityStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn thread_list_without_cwd_keeps_the_remembered_project() {
+        let mut context = CodexThreadContext::default();
+        context.remember("thread-1", "/work/known-project");
+        let input = r#"{
+          "data": [{
+            "id": "thread-1",
+            "status": {"type": "notLoaded"}
+          }]
+        }"#;
+
+        let observations =
+            normalize_thread_list_result(input, &meta(), &redactor(), &mut context).unwrap();
+        assert_eq!(observations[0].project.display_name, "known-project");
+        assert_eq!(
+            context.get("thread-1").map(|entry| entry.cwd.as_str()),
+            Some("/work/known-project")
+        );
+    }
+
+    #[test]
+    fn unmapped_thread_status_is_inferred_not_authoritative() {
+        let input = r#"{
+          "data": [{
+            "id": "thread-1",
+            "cwd": "/work/demo",
+            "status": {"type": "archived"}
+          }]
+        }"#;
+        let mut context = CodexThreadContext::default();
+
+        let observations =
+            normalize_thread_list_result(input, &meta(), &redactor(), &mut context).unwrap();
+        assert_eq!(observations[0].state.presence, Presence::Unknown);
+        assert_eq!(
+            observations[0].state.activity_status,
+            ActivityStatus::Unknown
+        );
+        assert_eq!(
+            observations[0].confidence,
+            crate::domain::Confidence::Inferred
         );
     }
 

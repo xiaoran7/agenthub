@@ -73,6 +73,17 @@ struct DeviceRegistration<'a> {
     binding_code: &'a str,
     device_id: &'a str,
     public_key: String,
+    signature: String,
+}
+
+/// Signing input for the registration proof of possession: the same fields in
+/// declaration order, without the signature, as compact JSON. The gateway
+/// rebuilds these bytes to verify the caller holds the device private key.
+#[derive(Serialize)]
+struct UnsignedDeviceRegistration<'a> {
+    binding_code: &'a str,
+    device_id: &'a str,
+    public_key: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -93,6 +104,9 @@ impl GatewayClient {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .user_agent(concat!("agent-platform-runner/", env!("CARGO_PKG_VERSION")))
+            // Following a redirect could resend the request to an address the
+            // HTTPS/loopback policy never validated.
+            .max_redirects(0)
             .build();
         Ok(Self {
             base_url,
@@ -111,10 +125,19 @@ impl GatewayClient {
         {
             return Err(GatewayError::InvalidBindingCode);
         }
+        let public_key = identity.public_key_hex();
+        let unsigned = UnsignedDeviceRegistration {
+            binding_code,
+            device_id: identity.device_id(),
+            public_key: &public_key,
+        };
+        let signing_bytes =
+            serde_json::to_vec(&unsigned).map_err(|_| GatewayError::InvalidBindingCode)?;
         let registration = DeviceRegistration {
             binding_code,
             device_id: identity.device_id(),
-            public_key: identity.public_key_hex(),
+            signature: hex::encode(identity.sign(&signing_bytes).to_bytes()),
+            public_key,
         };
         let response: DeviceBindingResponse =
             self.post_json("/v1/devices/register", &registration)?;
@@ -252,10 +275,16 @@ mod tests {
 
     #[test]
     fn rejects_insecure_remote_and_ambiguous_urls() {
-        assert!(matches!(
-            validate_base_url("http://gateway.example"),
-            Err(GatewayError::InsecureUrl)
-        ));
+        for value in [
+            "http://gateway.example",
+            "http://foo.localhost:3000",
+            "http://localhost.:3000",
+        ] {
+            assert!(matches!(
+                validate_base_url(value),
+                Err(GatewayError::InsecureUrl)
+            ));
+        }
         for value in [
             "https://user:secret@gateway.example",
             "https://gateway.example?tenant=one",

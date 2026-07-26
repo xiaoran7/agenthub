@@ -242,6 +242,8 @@ pub struct PollReport {
     pub consecutive_failures: u32,
     pub next_attempt_at: DateTime<Utc>,
     pub next_delay_seconds: u64,
+    #[serde(skip)]
+    pub next_delay: Duration,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
 }
@@ -286,6 +288,7 @@ pub fn poll_source_once(
                 consecutive_failures: 0,
                 next_attempt_at,
                 next_delay_seconds: delay.as_secs(),
+                next_delay: delay,
                 error_code: None,
             })
         }
@@ -310,6 +313,7 @@ pub fn poll_source_once(
                 consecutive_failures: state.consecutive_failures,
                 next_attempt_at,
                 next_delay_seconds: delay.as_secs(),
+                next_delay: delay,
                 error_code: Some(error_code.to_owned()),
             })
         }
@@ -374,7 +378,7 @@ impl RunnerRuntime {
                 if now < managed.next_attempt {
                     continue;
                 }
-                let report = poll_source_once(
+                match poll_source_once(
                     managed.source.as_mut(),
                     &self.device_id,
                     &self.redactor,
@@ -382,13 +386,37 @@ impl RunnerRuntime {
                     &mut managed.state,
                     self.policy,
                     Utc::now(),
-                )?;
-                managed.next_attempt =
-                    Instant::now() + Duration::from_secs(report.next_delay_seconds);
-                eprintln!(
-                    "{}",
-                    serde_json::to_string(&report).expect("PollReport is always JSON serializable")
-                );
+                ) {
+                    Ok(report) => {
+                        managed.next_attempt = Instant::now() + report.next_delay;
+                        eprintln!(
+                            "{}",
+                            serde_json::to_string(&report)
+                                .expect("PollReport is always JSON serializable")
+                        );
+                    }
+                    Err(error) => {
+                        // A transient local database failure (for example
+                        // SQLITE_BUSY while a hook process writes) must not
+                        // kill the monitoring daemon; back off and retry.
+                        managed.state.consecutive_failures =
+                            managed.state.consecutive_failures.saturating_add(1);
+                        let delay = self
+                            .policy
+                            .failure_delay(managed.state.consecutive_failures);
+                        managed.next_attempt = Instant::now() + delay;
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({
+                                "agent_type": managed.source.agent_type(),
+                                "succeeded": false,
+                                "consecutive_failures": managed.state.consecutive_failures,
+                                "next_delay_seconds": delay.as_secs(),
+                                "error_code": error.code(),
+                            })
+                        );
+                    }
+                }
                 attempts = attempts.saturating_add(1);
                 attempted = true;
                 if max_attempts.is_some_and(|maximum| attempts >= maximum) {

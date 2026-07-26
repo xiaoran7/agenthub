@@ -1,8 +1,4 @@
-use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    path::Path,
-};
+use std::{fs, io::Write, path::Path};
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -100,12 +96,24 @@ impl DeviceIdentity {
         let mut serialized = serde_json::to_vec_pretty(&persisted)?;
         serialized.push(b'\n');
 
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        set_private_file_mode(&mut options);
-        let mut file = options.open(path)?;
-        file.write_all(&serialized)?;
-        file.sync_all()?;
+        // Write to a same-directory temp file and link it into place without
+        // replacing an existing identity: a crash mid-write must never leave a
+        // truncated identity file at the final path. tempfile creates the temp
+        // file with 0600 on Unix.
+        let directory = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        let mut temp_file = tempfile::Builder::new()
+            .prefix(".identity-")
+            .suffix(".tmp")
+            .tempfile_in(directory)?;
+        temp_file.write_all(&serialized)?;
+        temp_file.as_file().sync_all()?;
+        temp_file
+            .persist_noclobber(path)
+            .map_err(|error| DeviceIdentityError::Io(error.error))?;
+        sync_directory(directory);
         Ok(())
     }
 
@@ -159,15 +167,21 @@ fn decode_array<const N: usize>(value: &str) -> Result<[u8; N], DeviceIdentityEr
         .map_err(|_| DeviceIdentityError::InvalidKeyEncoding)
 }
 
-#[cfg(unix)]
-fn set_private_file_mode(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.mode(0o600);
+/// Flush the directory entry so a power loss immediately after `save_new`
+/// cannot lose the freshly linked identity file. Windows cannot fsync
+/// directories, so this is best-effort and Unix-only.
+fn sync_directory(directory: &Path) {
+    #[cfg(unix)]
+    {
+        if let Ok(handle) = fs::File::open(directory) {
+            let _ = handle.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+    }
 }
-
-#[cfg(not(unix))]
-fn set_private_file_mode(_options: &mut OpenOptions) {}
 
 #[cfg(test)]
 mod tests {

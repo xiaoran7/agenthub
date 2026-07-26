@@ -56,9 +56,16 @@ const batch: SyncBatch = {
         },
         state: {
           presence: "LIVE",
-          activity_status: "WORKING",
+          activity_status: "WAITING_PERMISSION",
           raw_status: "active",
+          raw_status_detail: {
+            method: "item/commandExecution/requestApproval",
+            source: "cli",
+            tool_category: "shell",
+          },
+          waiting_reason: "permission",
         },
+        started_at: "2026-07-24T23:59:00Z",
         last_activity_at: "2026-07-25T00:00:00Z",
       },
     },

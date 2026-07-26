@@ -25,6 +25,34 @@ const fixture = parseSyncBatch(
   ),
 );
 
+const fixturePrivateKey = createPrivateKey({
+  key: Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"),
+    Buffer.from(
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "hex",
+    ),
+  ]),
+  format: "der",
+  type: "pkcs8",
+});
+
+function registrationPayload(bindingCode: string): Record<string, unknown> {
+  const registration = {
+    binding_code: bindingCode,
+    device_id: fixture.device_id,
+    public_key: fixture.public_key,
+  };
+  return {
+    ...registration,
+    signature: sign(
+      null,
+      Buffer.from(JSON.stringify(registration), "utf8"),
+      fixturePrivateKey,
+    ).toString("hex"),
+  };
+}
+
 test("registration, signed ingestion, replay, and read queries form a loop", async () => {
   let now = new Date("2026-07-25T00:00:01Z");
   const store = new InMemoryGatewayStore(() => now);
@@ -38,22 +66,14 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
   const registration = await app.inject({
     method: "POST",
     url: "/v1/devices/register",
-    payload: {
-      binding_code: "one-time-code",
-      device_id: fixture.device_id,
-      public_key: fixture.public_key,
-    },
+    payload: registrationPayload("one-time-code"),
   });
   assert.equal(registration.statusCode, 201);
 
   const retryRegistration = await app.inject({
     method: "POST",
     url: "/v1/devices/register",
-    payload: {
-      binding_code: "one-time-code",
-      device_id: fixture.device_id,
-      public_key: fixture.public_key,
-    },
+    payload: registrationPayload("one-time-code"),
   });
   assert.equal(retryRegistration.statusCode, 200);
 
@@ -79,7 +99,7 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
 
   const sessions = await app.inject({
     method: "GET",
-    url: "/v1/sessions?activity_status=WORKING&presence=LIVE",
+    url: "/v1/sessions?activity_status=WAITING_PERMISSION&presence=LIVE",
     headers: { "x-user-id": "user-1" },
   });
   assert.equal(sessions.statusCode, 200);
@@ -115,11 +135,7 @@ test("tampered and extra content is rejected before storage", async () => {
   await app.inject({
     method: "POST",
     url: "/v1/devices/register",
-    payload: {
-      binding_code: "one-time-code",
-      device_id: fixture.device_id,
-      public_key: fixture.public_key,
-    },
+    payload: registrationPayload("one-time-code"),
   });
 
   const withPrompt = structuredClone(fixture) as SyncBatch & {
@@ -161,11 +177,7 @@ test("a signed sequence gap is rejected atomically", async () => {
   await app.inject({
     method: "POST",
     url: "/v1/devices/register",
-    payload: {
-      binding_code: "one-time-code",
-      device_id: fixture.device_id,
-      public_key: fixture.public_key,
-    },
+    payload: registrationPayload("one-time-code"),
   });
   await app.inject({
     method: "POST",
