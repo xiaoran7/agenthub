@@ -6,6 +6,7 @@ import type {
   Presence,
   SyncBatch,
   SyncEvent,
+  WaitingReason,
 } from "@agent-platform/contracts";
 
 export interface RegisteredDevice {
@@ -45,13 +46,39 @@ export interface DeviceRegistrationResult {
   created: boolean;
 }
 
+/**
+ * A session whose stored snapshot changed activity status while ingesting one
+ * batch. Only the whitelisted metadata already visible in the read panel is
+ * carried here; it feeds the change stream and push notifications, which must
+ * not widen the sync field policy.
+ */
+export interface SessionStatusChange {
+  device_id: string;
+  agent_type: AgentType;
+  agent_session_id: string;
+  project_display_name: string;
+  presence: Presence;
+  activity_status: ActivityStatus;
+  waiting_reason?: WaitingReason;
+  observed_at: string;
+  /** Snapshot status before the batch; absent when the session is new. */
+  previous_activity_status?: ActivityStatus;
+}
+
+export interface IngestResult {
+  /** Number of events stored; repeated batches accept zero. */
+  accepted: number;
+  owner_id: string;
+  changes: SessionStatusChange[];
+}
+
 export interface GatewayStore {
   registerDevice(
     ownerId: string,
     deviceId: string,
     publicKey: string,
   ): Promise<DeviceRegistrationResult>;
-  ingestBatch(batch: SyncBatch): Promise<number>;
+  ingestBatch(batch: SyncBatch): Promise<IngestResult>;
   listDevices(ownerId: string): Promise<DeviceView[]>;
   listSessions(
     ownerId: string,
@@ -158,7 +185,7 @@ export class InMemoryGatewayStore implements GatewayStore {
     return { device, created: true };
   }
 
-  async ingestBatch(batch: SyncBatch): Promise<number> {
+  async ingestBatch(batch: SyncBatch): Promise<IngestResult> {
     const device = this.#devices.get(batch.device_id);
     if (device === undefined) {
       throw new GatewayStoreError(
@@ -208,7 +235,23 @@ export class InMemoryGatewayStore implements GatewayStore {
       );
     }
 
+    // Snapshot the pre-batch status of every touched session so the reported
+    // transition is "before this batch -> after this batch", not one entry per
+    // intermediate event.
+    const before = new Map<string, ActivityStatus>();
+    for (const event of newEvents) {
+      const key = sessionKey(event);
+      if (before.has(key)) {
+        continue;
+      }
+      const current = this.#sessions.get(key);
+      if (current !== undefined) {
+        before.set(key, current.payload.state.activity_status);
+      }
+    }
+
     const receivedAt = this.#now().toISOString();
+    const touched = new Set<string>();
     for (const event of newEvents) {
       this.#eventsById.set(event.event_id, {
         ...event,
@@ -220,13 +263,31 @@ export class InMemoryGatewayStore implements GatewayStore {
       );
       this.#lastSequenceByDevice.set(event.device_id, event.sequence);
       const key = sessionKey(event);
+      touched.add(key);
       const current = this.#sessions.get(key);
       if (current === undefined || shouldReplaceSnapshot(current, event)) {
         this.#sessions.set(key, { ...event, received_at: receivedAt });
       }
     }
     device.last_seen_at = receivedAt;
-    return newEvents.length;
+
+    const changes: SessionStatusChange[] = [];
+    for (const key of touched) {
+      const snapshot = this.#sessions.get(key);
+      if (snapshot === undefined) {
+        continue;
+      }
+      const previous = before.get(key);
+      if (previous === snapshot.payload.state.activity_status) {
+        continue;
+      }
+      changes.push(sessionStatusChange(snapshot, previous));
+    }
+    return {
+      accepted: newEvents.length,
+      owner_id: device.owner_id,
+      changes,
+    };
   }
 
   async listDevices(ownerId: string): Promise<DeviceView[]> {
@@ -292,6 +353,28 @@ export class InMemoryGatewayStore implements GatewayStore {
 
 function sessionKey(event: SyncEvent): string {
   return `${event.device_id}:${event.agent_type}:${event.agent_session_id}`;
+}
+
+export function sessionStatusChange(
+  event: SyncEvent,
+  previousActivityStatus: ActivityStatus | undefined,
+): SessionStatusChange {
+  const change: SessionStatusChange = {
+    device_id: event.device_id,
+    agent_type: event.agent_type,
+    agent_session_id: event.agent_session_id,
+    project_display_name: event.payload.project.display_name,
+    presence: event.payload.state.presence,
+    activity_status: event.payload.state.activity_status,
+    observed_at: event.observed_at,
+  };
+  if (event.payload.state.waiting_reason !== undefined) {
+    change.waiting_reason = event.payload.state.waiting_reason;
+  }
+  if (previousActivityStatus !== undefined) {
+    change.previous_activity_status = previousActivityStatus;
+  }
+  return change;
 }
 
 function shouldReplaceSnapshot(

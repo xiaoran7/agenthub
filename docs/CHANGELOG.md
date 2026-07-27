@@ -7,6 +7,21 @@
 
 ### Added
 
+- Gateway 新增 owner 维度实时变化通道 `GET /v1/stream`（Server-Sent Events）：
+  批次入库且确实产生新事件时推送 `event: sessions`，数据仅
+  `{"device_id","accepted"}`，会话内容仍只能从既有读接口获得；20 秒注释心跳、
+  单 owner 并发 8 条流上限（超出 429 `too_many_streams`）、重放批次不推送、
+  进程关闭时统一收流。Store 的 `ingestBatch` 随之返回
+  `{accepted, owner_id, changes}`，`changes` 是本批次前后活动状态确实发生变化的
+  会话（内存与 PostgreSQL 两侧同一契约，PostgreSQL 在锁定设备行的事务内前后各读
+  一次快照状态）。
+- 面板接入实时通道：变化到达即刷新列表与详情时间线，轮询降级为兜底（连上流
+  30 秒、断流 5 秒），顶部状态显示「实时 / 轮询」。断流按 1→15 秒指数退避重连，
+  流不可用时行为回落到原来的 5 秒轮询。
+- `apps/web` 新增 `app/v1/stream/route.ts` 流式代理：Next 的 `/v1/:path*`
+  rewrite 会缓冲响应体，SSE 经它转发永远到不了浏览器，改由 Route Handler 直接
+  透传上游 body，同源代理与「网关不开 CORS」的结构保持不变。
+
 - M3 响应式 Web 面板（`apps/web`，Next.js 16 + React 19，纳入 npm workspace
   与根质量门）：设备列表（在线状态、最近上报时间、点击筛选）、会话五类视图
   （全部/活动/等待处理/最近完成/历史，视图是可重叠的过滤器而非分区）、会话

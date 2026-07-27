@@ -2,6 +2,22 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-27 Next.js rewrites 会缓冲响应体，SSE 经它转发一帧都收不到
+
+- **现象**：网关 `GET /v1/stream` 在浏览器里 `fetch` 到 `200 text/event-stream`
+  响应头，但 `body.getReader()` 读了 38 秒（期间已过两次 20 秒心跳）一帧没有；
+  同一时刻 Node 直连 `127.0.0.1:3001` 首帧 47ms 到达，证明网关侧写入与 flush
+  都正常。
+- **根因**：`next.config.mjs` 里 `rewrites()` 的代理会缓冲上游响应体，流式响应
+  被攒在代理里，只有连接结束才可能吐出。响应头先到很有迷惑性——它让人以为链路
+  已经打通，问题出在客户端解析。
+- **解决方式**：SSE 单独走 Route Handler（`app/v1/stream/route.ts`），用
+  `fetch` 拿到上游 `Response` 后原样 `new Response(upstream.body, …)` 交还，
+  并透传 `request.signal` 让关标签页能连带关掉网关侧的流。改完首帧 272ms。
+- **如何避免**：任何长连接/流式接口都不要假设反向代理透明，先用"直连 vs 经代理"
+  两路对比首帧时间；只验证响应头到达等于没验证。同理生产环境的 nginx 需要
+  `proxy_buffering off`，网关已经在响应里带 `X-Accel-Buffering: no`。
+
 ## 2026-07-27 npm overrides 对已存在的依赖树不生效，只有全量重装才可靠
 
 - **现象**：为修 Next 依赖链的 postcss/sharp 漏洞在根 package.json 加

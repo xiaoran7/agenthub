@@ -9,6 +9,7 @@ import {
 } from "@agent-platform/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 
+import { ChangeBroker } from "./events.js";
 import {
   GatewayStoreError,
   InMemoryGatewayStore,
@@ -19,10 +20,17 @@ import {
 
 const DEFAULT_SESSION_EVENT_LIMIT = 100;
 const MAX_SESSION_EVENT_LIMIT = 500;
+/** Reconnect delay advertised to EventSource clients. */
+const STREAM_RETRY_MS = 5_000;
+/** Keeps intermediaries from closing an idle stream, and detects dead peers. */
+const STREAM_HEARTBEAT_MS = 20_000;
+/** One panel opens one stream; the cap bounds a misbehaving or hostile client. */
+const MAX_STREAMS_PER_OWNER = 8;
 
 export interface GatewayAppOptions {
   store?: GatewayStore;
   bindingCodes?: OneTimeBindingCodes;
+  broker?: ChangeBroker;
   logger?: boolean;
 }
 
@@ -33,6 +41,8 @@ export function createGatewayApp(
   const bindingCodes =
     options.bindingCodes ??
     new OneTimeBindingCodes(new Map([["local-development", "local-user"]]));
+  const broker = options.broker ?? new ChangeBroker();
+  const openStreams = new Set<() => void>();
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: 1024 * 1024,
@@ -103,7 +113,13 @@ export function createGatewayApp(
   app.post("/v1/sync/batches", async (request, reply) => {
     const batch = parseSyncBatch(request.body);
     verifySyncBatch(batch);
-    await store.ingestBatch(batch);
+    const result = await store.ingestBatch(batch);
+    if (result.accepted > 0) {
+      broker.publish(result.owner_id, {
+        device_id: batch.device_id,
+        accepted: result.accepted,
+      });
+    }
     return reply.status(200).send({
       protocol_version: batch.protocol_version,
       batch_id: batch.batch_id,
@@ -203,11 +219,68 @@ export function createGatewayApp(
     return reply.send({ events });
   });
 
-  if (store.close !== undefined) {
-    app.addHook("onClose", async () => {
-      await store.close?.();
+  // Server-sent events rather than WebSocket: the read-only phase only pushes
+  // gateway -> panel, and the panel reaches the gateway through a same-origin
+  // HTTP proxy that does not forward upgrade requests. Adding WebSocket would
+  // mean opening CORS, which is deliberately deferred until real auth exists.
+  app.get("/v1/stream", (request, reply) => {
+    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    if (broker.subscriberCount(ownerId) >= MAX_STREAMS_PER_OWNER) {
+      void reply.status(429).send({ error: "too_many_streams" });
+      return;
+    }
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+      // Ask reverse proxies not to buffer; buffering turns the stream into a
+      // hung request that only flushes when the connection closes.
+      "x-accel-buffering": "no",
     });
-  }
+    request.raw.socket.setNoDelay(true);
+    request.raw.socket.setTimeout(0);
+
+    const write = (chunk: string): void => {
+      if (!raw.writableEnded) {
+        raw.write(chunk);
+      }
+    };
+    write(`retry: ${STREAM_RETRY_MS}\n\n`);
+    write("event: ready\ndata: {}\n\n");
+
+    const unsubscribe = broker.subscribe(ownerId, (message) => {
+      write(`event: sessions\ndata: ${JSON.stringify(message)}\n\n`);
+    });
+    const heartbeat = setInterval(
+      () => write(": keepalive\n\n"),
+      STREAM_HEARTBEAT_MS,
+    );
+    heartbeat.unref();
+
+    let closed = false;
+    const close = (): void => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+      openStreams.delete(close);
+      raw.end();
+    };
+    openStreams.add(close);
+    raw.on("close", close);
+    raw.on("error", close);
+  });
+
+  app.addHook("onClose", async () => {
+    for (const close of [...openStreams]) {
+      close();
+    }
+    await store.close?.();
+  });
 
   return app;
 }

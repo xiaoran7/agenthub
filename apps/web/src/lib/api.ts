@@ -25,6 +25,10 @@ export function sessionsUrl(base: string): string {
   return `${base}/v1/sessions`;
 }
 
+export function streamUrl(base: string): string {
+  return `${base}/v1/stream`;
+}
+
 export function sessionEventsUrl(
   base: string,
   ref: SessionRef,

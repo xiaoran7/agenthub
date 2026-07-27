@@ -2,17 +2,24 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 
-import type { SyncBatch, SyncEvent } from "@agent-platform/contracts";
+import type {
+  ActivityStatus,
+  SyncBatch,
+  SyncEvent,
+} from "@agent-platform/contracts";
 import postgres from "postgres";
 
 import {
   GatewayStoreError,
+  sessionStatusChange,
   type DeviceRegistrationResult,
   type DeviceView,
   type GatewayStore,
+  type IngestResult,
   type RegisteredDevice,
   type SessionEventFilters,
   type SessionFilters,
+  type SessionStatusChange,
   type StoredSession,
 } from "./store.js";
 
@@ -49,6 +56,13 @@ interface ExistingEventRow {
 interface SessionRow {
   event_data: unknown;
   received_at: unknown;
+}
+
+interface SessionStatusRow {
+  agent_type: string;
+  agent_session_id: string;
+  activity_status: ActivityStatus;
+  event_data: unknown;
 }
 
 export class PostgresGatewayStore implements GatewayStore {
@@ -127,7 +141,7 @@ export class PostgresGatewayStore implements GatewayStore {
     });
   }
 
-  async ingestBatch(batch: SyncBatch): Promise<number> {
+  async ingestBatch(batch: SyncBatch): Promise<IngestResult> {
     try {
       return await this.#sql.begin(async (sql) => {
         const devices = await sql<DeviceRow[]>`
@@ -212,7 +226,30 @@ export class PostgresGatewayStore implements GatewayStore {
         }
 
         const receivedAt = new Date();
+        const changes: SessionStatusChange[] = [];
         if (newEvents.length > 0) {
+          const snapshotEvents = bestSessionEvents(newEvents);
+          // The device row is already locked FOR UPDATE, so no concurrent
+          // batch can move these snapshots between the before/after reads.
+          const before = new Map<string, ActivityStatus>(
+            (
+              await sql<SessionStatusRow[]>`
+                SELECT agent_type, agent_session_id, activity_status, event_data
+                FROM agent_platform_sessions
+                WHERE
+                  device_id = ${batch.device_id}
+                  AND agent_session_id IN ${sql(
+                    snapshotEvents.map((event) => event.agent_session_id),
+                  )}
+              `
+            ).map(
+              (row) =>
+                [
+                  `${row.agent_type}:${row.agent_session_id}`,
+                  row.activity_status,
+                ] as const,
+            ),
+          );
           const eventRows = newEvents.map((event) => ({
             event_id: event.event_id,
             device_id: event.device_id,
@@ -233,7 +270,6 @@ export class PostgresGatewayStore implements GatewayStore {
             )}
           `;
 
-          const snapshotEvents = bestSessionEvents(newEvents);
           const sessionRows = snapshotEvents.map((event) => ({
             device_id: event.device_id,
             agent_type: event.agent_type,
@@ -309,6 +345,34 @@ export class PostgresGatewayStore implements GatewayStore {
                 AND EXCLUDED.sequence > agent_platform_sessions.sequence
               )
           `;
+
+          const after = await sql<SessionStatusRow[]>`
+            SELECT agent_type, agent_session_id, activity_status, event_data
+            FROM agent_platform_sessions
+            WHERE
+              device_id = ${batch.device_id}
+              AND agent_session_id IN ${sql(
+                snapshotEvents.map((event) => event.agent_session_id),
+              )}
+          `;
+          const touched = new Set<string>(
+            snapshotEvents.map(
+              (event) => `${event.agent_type}:${event.agent_session_id}`,
+            ),
+          );
+          for (const row of after) {
+            const key = `${row.agent_type}:${row.agent_session_id}`;
+            if (!touched.has(key)) {
+              continue;
+            }
+            const previous = before.get(key);
+            if (previous === row.activity_status) {
+              continue;
+            }
+            changes.push(
+              sessionStatusChange(syncEvent(row.event_data), previous),
+            );
+          }
         }
 
         const acceptedSequence =
@@ -320,7 +384,11 @@ export class PostgresGatewayStore implements GatewayStore {
             last_sequence = ${acceptedSequence}
           WHERE device_id = ${batch.device_id}
         `;
-        return newEvents.length;
+        return {
+          accepted: newEvents.length,
+          owner_id: device.owner_id,
+          changes,
+        };
       });
     } catch (error) {
       throw classifyPostgresConflict(error);

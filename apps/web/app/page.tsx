@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DeviceStrip } from "../src/components/DeviceStrip";
 import { SessionDetail } from "../src/components/SessionDetail";
@@ -23,10 +23,16 @@ import {
   type SessionTab,
 } from "../src/lib/classify";
 import { formatRelative } from "../src/lib/format";
+import { openChangeStream } from "../src/lib/stream";
 import type { DeviceRecord, SessionRecord, SessionRef } from "../src/lib/types";
 import { sessionKey, sessionRef } from "../src/lib/types";
 
 const POLL_INTERVAL_MS = 5_000;
+/**
+ * With the change stream connected, polling is only a safety net for missed
+ * notifications (single-instance broker, sleeping tabs, proxies that buffer).
+ */
+const STREAMING_POLL_INTERVAL_MS = 30_000;
 
 export default function PanelPage() {
   const [config, setConfig] = useState<PanelConfig | undefined>(undefined);
@@ -47,6 +53,7 @@ export default function PanelPage() {
     undefined,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [streamConnected, setStreamConnected] = useState(false);
 
   // Config only exists in the browser; loading it in an effect keeps the
   // server-rendered markup deterministic.
@@ -72,29 +79,77 @@ export default function PanelPage() {
     }
   }, [config]);
 
+  const timelineRequest = useRef(0);
+  const loadTimeline = useCallback(async () => {
+    if (config === undefined || selected === undefined) {
+      return;
+    }
+    timelineRequest.current += 1;
+    const request = timelineRequest.current;
+    try {
+      const events = await fetchSessionEvents(config, selected);
+      if (request === timelineRequest.current) {
+        setTimeline(events);
+        setTimelineError(undefined);
+      }
+    } catch (error) {
+      if (request === timelineRequest.current) {
+        setTimelineError(describeApiError(error));
+      }
+    }
+  }, [config, selected]);
+
+  const pollIntervalMs = streamConnected
+    ? STREAMING_POLL_INTERVAL_MS
+    : POLL_INTERVAL_MS;
+
   useEffect(() => {
     if (config === undefined) {
       return;
     }
-    void refresh();
     // The first fetch always runs (embedded webviews can report "hidden"
     // permanently); only the recurring poll pauses while not visible.
-    const interval = window.setInterval(() => {
-      if (!document.hidden) {
-        void refresh();
-      }
-    }, POLL_INTERVAL_MS);
+    void refresh();
     const onVisibility = () => {
       if (!document.hidden) {
         void refresh();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [config, refresh]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (!document.hidden) {
+        void refresh();
+      }
+    }, pollIntervalMs);
+    return () => window.clearInterval(interval);
+  }, [refresh, pollIntervalMs]);
+
+  // The stream handlers must reach the current loaders without restarting the
+  // connection every time a fetch closure is recreated.
+  const refreshRef = useRef(refresh);
+  const loadTimelineRef = useRef(loadTimeline);
+  useEffect(() => {
+    refreshRef.current = refresh;
+    loadTimelineRef.current = loadTimeline;
+  }, [refresh, loadTimeline]);
+
+  useEffect(() => {
+    if (config === undefined) {
+      return;
+    }
+    setStreamConnected(false);
+    return openChangeStream(config, {
+      onChange: () => {
+        void refreshRef.current();
+        void loadTimelineRef.current();
+      },
+      onConnected: setStreamConnected,
+    });
+  }, [config]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
@@ -102,38 +157,25 @@ export default function PanelPage() {
   }, []);
 
   useEffect(() => {
-    if (config === undefined || selected === undefined) {
-      setTimeline(undefined);
-      setTimelineError(undefined);
-      return;
-    }
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const events = await fetchSessionEvents(config, selected);
-        if (!cancelled) {
-          setTimeline(events);
-          setTimelineError(undefined);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setTimelineError(describeApiError(error));
-        }
-      }
-    };
     setTimeline(undefined);
     setTimelineError(undefined);
-    void load();
+    if (config === undefined || selected === undefined) {
+      // Invalidate any in-flight load so a late response cannot repopulate the
+      // timeline of a session the user already left.
+      timelineRequest.current += 1;
+      return;
+    }
+    void loadTimeline();
+  }, [config, selected, loadTimeline]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       if (!document.hidden) {
-        void load();
+        void loadTimeline();
       }
-    }, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [config, selected]);
+    }, pollIntervalMs);
+    return () => window.clearInterval(interval);
+  }, [loadTimeline, pollIntervalMs]);
 
   const visibleSessions = useMemo(
     () => sortSessions(filterSessions(sessions, tab, deviceFilter)),
@@ -183,7 +225,7 @@ export default function PanelPage() {
                 ? syncError
                 : lastSyncMs === undefined
                   ? "连接网关中…"
-                  : `已更新 · ${formatRelative(
+                  : `${streamConnected ? "实时" : "轮询"} · 已更新 ${formatRelative(
                       new Date(lastSyncMs).toISOString(),
                       nowMs,
                     )}`}

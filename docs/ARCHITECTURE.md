@@ -291,8 +291,13 @@ Pub/Sub。MVP 不必一开始维护两套基础设施。
 Session 可按设备、Presence 和 Activity Status 过滤；状态事件时间线按
 `device_id + agent_type + agent_session_id` 定位会话，按 `sequence` 降序返回，
 `limit` 默认 100、上限 500，查询按 owner 隔离。设备在线状态按最近批次接收时间
-和 45 秒阈值计算；心跳尚未接入，因此无新事件的设备会按阈值离线。实时订阅尚未
-实现，Web 端以 5 秒轮询代替。
+和 45 秒阈值计算；心跳尚未接入，因此无新事件的设备会按阈值离线。
+
+实时订阅为 `GET /v1/stream`（Server-Sent Events，owner 维度）。批次入库且确实
+产生新事件时推送一帧 `event: sessions`，内容只有 `device_id` 与本批接收数量：
+**通道只负责"有变化"信号，会话数据一律回读上述查询接口**，因此实时通道不可能
+偏离读接口已经执行的字段策略。每 20 秒发一条注释心跳；单 owner 并发流上限 8 条，
+超出返回 429。当前 broker 是进程内实现，多实例部署前不能取消轮询兜底。
 
 ## 5. 状态数据模型
 
@@ -534,9 +539,10 @@ Agent-Platform/
 - 历史列表（已完成，`presence = PERSISTED` 过滤）
 - Session 详情与状态时间线（已完成，基于 `GET /v1/sessions/events`）
 
-面板位于 `apps/web`，5 秒轮询、可见性暂停周期刷新（首次拉取不受可见性影响）、
-深浅色与移动端适配、PWA manifest。开发期经 Next rewrites 同源代理访问网关；
-Service Worker、推送通知与 WebSocket 实时通道未实现。
+面板位于 `apps/web`，可见性暂停周期刷新（首次拉取不受可见性影响）、深浅色与
+移动端适配、PWA manifest。变化经 `GET /v1/stream` 实时到达，轮询降级为兜底
+（连上流 30 秒、断流 5 秒）。开发期同源代理访问网关：普通请求走 Next rewrites，
+SSE 走 `app/v1/stream/route.ts`（rewrites 会缓冲响应体）。
 
 ### Milestone 4：安全与稳定性
 

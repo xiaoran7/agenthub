@@ -12,10 +12,17 @@ Device Gateway 与只读查询 API 的开发期实现。
 | `GET`  | `/v1/devices`          | 查询当前开发用户的设备                         |
 | `GET`  | `/v1/sessions`         | 按设备、Presence、Activity Status 查询 Session |
 | `GET`  | `/v1/sessions/events`  | 查询单个 Session 的状态事件时间线              |
+| `GET`  | `/v1/stream`           | 订阅本 owner 的会话变化信号（SSE）             |
 
 `/v1/sessions/events` 需要 `device_id`、`agent_type`、`agent_session_id` 三个
 必填查询参数定位会话，按 `sequence` 降序返回历史观察事件；`limit` 默认 100、
 上限 500，查询按 owner 隔离。
+
+`/v1/stream` 是 Server-Sent Events：连接后先发 `retry` 与 `event: ready`，此后
+每当该 owner 的批次真的写入新事件就发一帧 `event: sessions`，数据只有
+`{"device_id", "accepted"}`——客户端据此回读查询接口，流本身不携带会话内容。
+每 20 秒一条注释心跳；单 owner 并发上限 8 条流，超出返回 429
+`too_many_streams`。重放批次不产生推送。
 
 读接口暂时使用 `x-user-id` 头模拟已认证用户，只允许本地开发和协议测试，不能作为
 生产认证。请求体上限为 1 MiB。存储是进程内实现，服务重启后数据和绑定码状态都会
@@ -83,5 +90,6 @@ npm.cmd test --workspace @agent-platform/api
 
 - 用户登录与正式访问令牌
 - 绑定码持久化、生成、过期、撤销和设备密钥轮换
-- WebSocket 心跳与实时推送
+- 心跳（`/v1/stream` 只推变化，不代表设备活性）
+- 跨实例的变化广播（当前 broker 在进程内，多实例部署会漏推）
 - 多实例并发、速率限制与审计日志
