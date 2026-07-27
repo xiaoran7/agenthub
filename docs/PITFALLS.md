@@ -2,6 +2,20 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-27 嵌入式浏览器的 `Notification.permission` 恒为 denied，推送无法本机验证
+
+- **现象**：Claude Code 浏览器面板里 `window.isSecureContext`、
+  `'serviceWorker' in navigator`、`'PushManager' in window` 全为真，但
+  `Notification.permission` 直接是 `denied`，`requestPermission()` 不会弹窗。
+  面板因此只能显示"浏览器已拒绝本站通知权限"。
+- **根因**：嵌入式 WebView 没有可用的权限提示 UI，实现直接返回拒绝；这与
+  代码是否正确无关。
+- **解决方式**：把能在该环境验证的部分验证到位——Service Worker 注册与激活
+  （root scope）、`/v1/push/key` 在未配置 VAPID 时返回 404、开关渲染出对应的
+  禁用态与原因文案；订阅与真实推送投递如实标为未验证，不当作已通过。
+- **如何避免**：任何依赖浏览器权限提示的功能都要提前确认验证环境能否弹窗，
+  并把"环境能测的"与"必须真人真机测的"在验收清单里分开写。
+
 ## 2026-07-27 Next.js rewrites 会缓冲响应体，SSE 经它转发一帧都收不到
 
 - **现象**：网关 `GET /v1/stream` 在浏览器里 `fetch` 到 `200 text/event-stream`

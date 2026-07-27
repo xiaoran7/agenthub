@@ -555,6 +555,8 @@ Agent-Platform/
 - 最近完成（已完成）
 - 历史列表（已完成，`presence = PERSISTED` 过滤）
 - Session 详情与状态时间线（已完成，基于 `GET /v1/sessions/events`）
+- 实时刷新（已完成，基于 `GET /v1/stream`，轮询保留为兜底）
+- Service Worker 与推送通知（已完成；等待输入/等待权限时推送，需配置 VAPID）
 
 面板位于 `apps/web`，可见性暂停周期刷新（首次拉取不受可见性影响）、深浅色与
 移动端适配、PWA manifest。变化经 `GET /v1/stream` 实时到达，轮询降级为兜底
