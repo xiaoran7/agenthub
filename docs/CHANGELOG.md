@@ -7,6 +7,23 @@
 
 ### Added
 
+- M3 响应式 Web 面板（`apps/web`，Next.js 16 + React 19，纳入 npm workspace
+  与根质量门）：设备列表（在线状态、最近上报时间、点击筛选）、会话五类视图
+  （全部/活动/等待处理/最近完成/历史，视图是可重叠的过滤器而非分区）、会话
+  详情与状态时间线、5 秒轮询（页面不可见时暂停周期轮询但首次拉取总是执行）、
+  移动端全屏详情、深浅色主题与 PWA manifest。开发期经 Next rewrites 把 `/v1`
+  代理到网关（默认 `http://127.0.0.1:3001`，可用 `GATEWAY_ORIGIN` 覆盖），
+  浏览器只访问同源地址，网关无需开 CORS。网关地址与 `x-user-id` 存
+  localStorage，不进 URL；直连地址校验沿用 Runner 出站策略（HTTPS 或回环
+  HTTP，禁凭据/查询/片段）。
+- Gateway 新增 `GET /v1/sessions/events`（Session 状态时间线）：按
+  `device_id + agent_type + agent_session_id` 返回该会话的历史观察事件，
+  sequence 降序，`limit` 默认 100、上限 500；查询按 owner 隔离，未知参数与
+  非法 limit 拒绝。内存与 PostgreSQL 双 store 实现同一契约，PostgreSQL 增加
+  0002 迁移建立 `(device_id, agent_type, agent_session_id, sequence DESC)`
+  表达式索引。内存 store 的事件表随之保存 `received_at`，与 PostgreSQL 返回
+  形状一致。
+
 - 设备注册增加 Ed25519 私钥持有证明：Runner 对
   `{binding_code, device_id, public_key}` 紧凑 JSON 签名，Gateway 验签后才接受
   注册，公开可见的公钥不能再被第三方抢注绑定到其他账号。
@@ -41,6 +58,9 @@
 
 ### Fixed
 
+- PostgreSQL 集成测试的 `listSessions` 过滤断言从 `WORKING` 修正为
+  fixture 实际的 `WAITING_PERMISSION`：该测试因环境门控在本机始终 SKIP，
+  错误断言从未暴露，真实数据库上第一次运行就会失败。
 - Claude 采集成功路径先关闭 Windows Job Object 再等待读取线程：后代进程持有
   stdout 写端时不再造成守护进程永久挂死（超时路径此前已正确处理）。
 - Unix 侧采集子进程放入独立进程组，超时与清理时对整组发送 SIGKILL，对齐
@@ -103,6 +123,10 @@
 
 ### Security
 
+- 根 package.json 增加 npm `overrides`，把 Next.js 依赖链中的 postcss 顶至
+  8.5.23、sharp 顶至 0.35.3，消除三个高危 advisory（postcss sourceMappingURL
+  路径穿越与 XSS、sharp 捆绑 libvips CVE）；受影响范围覆盖 Next 全部现行
+  版本，无法靠升级 Next 本体解决，`npm audit` 现为零漏洞。
 - Claude `agents --json` 路径的 `kind`、`waiting_for`、`cli_status` 值改为
   经过共享消毒器（64 字符 + 固定字符集）再入 detail，`raw_status` 钳制到协议
   上限 128 字符；此前这些 CLI 控制的字符串会原样进入同步字段，未来 CLI 若在

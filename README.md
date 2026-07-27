@@ -36,7 +36,22 @@ SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签�
 云端已具备开发期设备绑定、签名批次验收、内存幂等写入与只读 Session 查询。
 Runner 已可通过 HTTPS（本地开发允许回环 HTTP）完成设备绑定、批次上传和确认清理。
 Gateway 已提供 PostgreSQL 迁移和事务 Store；未配置数据库时仍使用开发期内存存储。
-生产认证、WebSocket/心跳和 Web/PWA 尚未接入。
+Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时间线的只读展示。
+生产认证、WebSocket/心跳、PWA 离线与推送尚未接入。
+
+### Web 面板
+
+先启动 Gateway（见 [Gateway 说明](services/api/README.md)），再启动面板：
+
+```powershell
+npm.cmd run dev --workspace @agent-platform/web
+```
+
+开发服务器监听 `http://localhost:3000`，并把 `/v1` 请求代理到
+`http://127.0.0.1:3001`（可用 `GATEWAY_ORIGIN` 环境变量覆盖）。面板右上角
+「设置」可修改开发期用户标识（默认 `local-user`，需与 Gateway 的
+`AGENT_PLATFORM_OWNER_ID` 一致）或改为直连网关地址；直连要求 HTTPS 或回环
+HTTP，且需要网关侧允许跨源（尚未实现，开发期请使用同源代理）。
 
 Rust 与 TypeScript 全量检查：
 

@@ -287,9 +287,12 @@ Pub/Sub。MVP 不必一开始维护两套基础设施。
 
 实时接口只推送元数据变化，不推送 transcript。
 
-当前已实现 `GET /v1/devices` 和 `GET /v1/sessions`，Session 可按设备、Presence 和
-Activity Status 过滤。设备在线状态按最近批次接收时间和 45 秒阈值计算；心跳尚未
-接入，因此无新事件的设备会按阈值离线。
+当前已实现 `GET /v1/devices`、`GET /v1/sessions` 和 `GET /v1/sessions/events`。
+Session 可按设备、Presence 和 Activity Status 过滤；状态事件时间线按
+`device_id + agent_type + agent_session_id` 定位会话，按 `sequence` 降序返回，
+`limit` 默认 100、上限 500，查询按 owner 隔离。设备在线状态按最近批次接收时间
+和 45 秒阈值计算；心跳尚未接入，因此无新事件的设备会按阈值离线。实时订阅尚未
+实现，Web 端以 5 秒轮询代替。
 
 ## 5. 状态数据模型
 
@@ -468,7 +471,8 @@ MVP 默认 `task_summary = null`。
 
 ### Web 与移动端
 
-- Next.js
+- Next.js（当前为 16.x：Next 15 不支持仓库统一的 TypeScript 7，16 需启用
+  `experimental.useTypeScriptCli`）
 - 响应式 Web + PWA
 - 第一阶段不单独开发原生 iOS/Android App
 
@@ -523,12 +527,16 @@ Agent-Platform/
 
 ### Milestone 3：响应式 Web / PWA
 
-- 设备列表
-- 活动 Session
-- 等待处理
-- 最近完成
-- 历史列表
-- Session 详情与状态时间线
+- 设备列表（已完成：在线状态、最近上报、点击筛选）
+- 活动 Session（已完成）
+- 等待处理（已完成，列表中置顶）
+- 最近完成（已完成）
+- 历史列表（已完成，`presence = PERSISTED` 过滤）
+- Session 详情与状态时间线（已完成，基于 `GET /v1/sessions/events`）
+
+面板位于 `apps/web`，5 秒轮询、可见性暂停周期刷新（首次拉取不受可见性影响）、
+深浅色与移动端适配、PWA manifest。开发期经 Next rewrites 同源代理访问网关；
+Service Worker、推送通知与 WebSocket 实时通道未实现。
 
 ### Milestone 4：安全与稳定性
 

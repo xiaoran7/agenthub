@@ -1,0 +1,121 @@
+import type { PanelConfig } from "./config";
+import type { DeviceRecord, SessionRecord, SessionRef } from "./types";
+
+export const DEFAULT_TIMELINE_LIMIT = 100;
+
+export class ApiError extends Error {
+  /** HTTP status; 0 means the request never reached the gateway. */
+  readonly status: number;
+  /** Stable gateway error code, or a client-side classification. */
+  readonly code: string;
+
+  constructor(status: number, code: string) {
+    super(`gateway request failed: ${status} ${code}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function devicesUrl(base: string): string {
+  return `${base}/v1/devices`;
+}
+
+export function sessionsUrl(base: string): string {
+  return `${base}/v1/sessions`;
+}
+
+export function sessionEventsUrl(
+  base: string,
+  ref: SessionRef,
+  limit: number,
+): string {
+  const query = new URLSearchParams({
+    device_id: ref.device_id,
+    agent_type: ref.agent_type,
+    agent_session_id: ref.agent_session_id,
+    limit: String(limit),
+  });
+  return `${base}/v1/sessions/events?${query.toString()}`;
+}
+
+export function describeApiError(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return "未知错误";
+  }
+  if (error.status === 0) {
+    return "无法连接网关";
+  }
+  if (error.code === "missing_development_identity") {
+    return "网关要求提供用户标识，请检查设置";
+  }
+  if (error.status === 401 || error.status === 403) {
+    return "网关拒绝了当前用户标识";
+  }
+  if (error.status >= 500) {
+    return "网关内部错误";
+  }
+  return `网关返回错误（${error.status} ${error.code}）`;
+}
+
+async function fetchJson<T>(url: string, userId: string): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { "x-user-id": userId },
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "network_error");
+  }
+  if (!response.ok) {
+    let code = "http_error";
+    try {
+      const body: unknown = await response.json();
+      if (
+        typeof body === "object" &&
+        body !== null &&
+        "error" in body &&
+        typeof body.error === "string"
+      ) {
+        code = body.error;
+      }
+    } catch {
+      // Keep the generic classification when the body is not JSON.
+    }
+    throw new ApiError(response.status, code);
+  }
+  return (await response.json()) as T;
+}
+
+export async function fetchDevices(
+  config: PanelConfig,
+): Promise<DeviceRecord[]> {
+  const body = await fetchJson<{ devices: DeviceRecord[] }>(
+    devicesUrl(config.gatewayBase),
+    config.userId,
+  );
+  return body.devices;
+}
+
+export async function fetchSessions(
+  config: PanelConfig,
+): Promise<SessionRecord[]> {
+  const body = await fetchJson<{ sessions: SessionRecord[] }>(
+    sessionsUrl(config.gatewayBase),
+    config.userId,
+  );
+  return body.sessions;
+}
+
+export async function fetchSessionEvents(
+  config: PanelConfig,
+  ref: SessionRef,
+  limit: number = DEFAULT_TIMELINE_LIMIT,
+): Promise<SessionRecord[]> {
+  const body = await fetchJson<{ events: SessionRecord[] }>(
+    sessionEventsUrl(config.gatewayBase, ref, limit),
+    config.userId,
+  );
+  return body.events;
+}

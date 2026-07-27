@@ -2,6 +2,49 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-27 npm overrides 对已存在的依赖树不生效，只有全量重装才可靠
+
+- **现象**：为修 Next 依赖链的 postcss/sharp 漏洞在根 package.json 加
+  `overrides` 后，`npm install`、`npm update postcss sharp`、甚至删除
+  package-lock.json 再 install 都显示 "up to date"，`npm ls` 里仍是旧版本；
+  定点删除 `node_modules/postcss` 等目录再装，npm 反而把包删没导致树不一致。
+- **根因**：npm 会从现存 node_modules 反推 lockfile，物理目录里的旧版本会被
+  当作现状保留；overrides 只在真正重新解析依赖树时参与。定点删目录则触发了
+  "从残缺现状重建" 的另一个坑。
+- **解决方式**：删除整个 node_modules 加 package-lock.json 后全量
+  `npm install`，overrides 立即生效且 `npm audit` 归零。
+- **如何避免**：改动 `overrides` 后一律全量重装验证；`npm ls` 之后会对被
+  override 的包永远报 `invalid`（override 越过上游声明范围的预期表现，并使
+  命令以非零退出），不要把 `npm ls` 的退出码当健康检查。另外重装时若开发
+  服务器仍在运行，会因占用 esbuild.exe 等二进制报 EPERM 并留下无害的
+  `.package-aKtoqp3V` 残目录，先停服务再重装可避免。
+
+## 2026-07-27 Next.js 15 与 TypeScript 7 不兼容；16 需要显式启用 CLI 模式
+
+- **现象**：`next dev`（15.5.22）启动即失败："TypeScript 7.0.2 is not
+  supported by this version of Next.js"；升级 next@16.2.12 后启动仍抛
+  Unhandled Rejection，提示启用 `experimental.useTypeScriptCli`。
+- **根因**：TS7 原生编译器不再提供 Next 依赖的进程内 JS 编译器 API；Next
+  16.2.11+ 提供 "shell 出去调 TS CLI" 的兼容路径，但默认关闭。
+- **解决方式**：升级 next@16 并在 next.config.mjs 设
+  `experimental: { useTypeScriptCli: true }`。仓库统一 TS7 是拍板决策，
+  不为 Next 降级 TS6。
+- **如何避免**：Next 16 首次运行会重写 next-env.d.ts 引用
+  `.next/dev/types/routes.d.ts`，新检出仓库直接 `tsc --noEmit` 会因文件
+  不存在而失败——web 的 typecheck 脚本必须是 `next typegen && tsc --noEmit`。
+
+## 2026-07-27 嵌入式 WebView 的 document.hidden 恒为 true，可见性暂停会饿死首屏
+
+- **现象**：面板在 Claude Code 浏览器面板中始终显示"连接网关中…"，
+  read_network_requests 里一个请求都没有；同一页面在普通浏览器正常。
+- **根因**：轮询为省流量在 `document.hidden` 时跳过，而该 WebView 未合成
+  帧（viewport 0x0）时 visibilityState 恒为 hidden，visibilitychange 也
+  永远不触发，连首次拉取都被跳过。
+- **解决方式**：首次拉取与配置变更后的拉取无条件执行，只有周期轮询检查
+  `document.hidden`。
+- **如何避免**：任何"可见才刷新"的优化都要保证首屏数据路径不依赖可见性；
+  在无头/嵌入环境验证 UI 时优先看 DOM/网络请求而不是截图。
+
 ## 2026-07-27 `localeCompare` 不是字节序：跨语言 canonical JSON 的潜伏炸弹
 
 - **现象**：代码审查发现 Node 侧 canonical JSON 用 `keys.sort(localeCompare)`
