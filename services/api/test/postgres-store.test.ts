@@ -68,7 +68,7 @@ test(
       assert.equal(
         (
           await secondStore.listSessions("postgres-user", {
-            activity_status: "WORKING",
+            activity_status: "WAITING_PERMISSION",
             presence: "LIVE",
           })
         )[0]?.agent_session_id,
@@ -76,6 +76,26 @@ test(
       );
       assert.equal(
         (await secondStore.listSessions("another-user", {})).length,
+        0,
+      );
+      const timeline = await secondStore.listSessionEvents("postgres-user", {
+        device_id: fixture.device_id,
+        agent_type: "codex",
+        agent_session_id: "contract-session",
+        limit: 10,
+      });
+      assert.equal(timeline.length, 1);
+      assert.equal(timeline[0]?.sequence, 1);
+      assert.equal(typeof timeline[0]?.received_at, "string");
+      assert.equal(
+        (
+          await secondStore.listSessionEvents("another-user", {
+            device_id: fixture.device_id,
+            agent_type: "codex",
+            agent_session_id: "contract-session",
+            limit: 10,
+          })
+        ).length,
         0,
       );
       await secondStore.close();

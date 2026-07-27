@@ -11,6 +11,11 @@ Device Gateway 与只读查询 API 的开发期实现。
 | `POST` | `/v1/sync/batches`     | 验证并幂等接收签名事件批次                     |
 | `GET`  | `/v1/devices`          | 查询当前开发用户的设备                         |
 | `GET`  | `/v1/sessions`         | 按设备、Presence、Activity Status 查询 Session |
+| `GET`  | `/v1/sessions/events`  | 查询单个 Session 的状态事件时间线              |
+
+`/v1/sessions/events` 需要 `device_id`、`agent_type`、`agent_session_id` 三个
+必填查询参数定位会话，按 `sequence` 降序返回历史观察事件；`limit` 默认 100、
+上限 500，查询按 owner 隔离。
 
 读接口暂时使用 `x-user-id` 头模拟已认证用户，只允许本地开发和协议测试，不能作为
 生产认证。请求体上限为 1 MiB。存储是进程内实现，服务重启后数据和绑定码状态都会

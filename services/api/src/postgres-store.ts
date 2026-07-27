@@ -11,6 +11,7 @@ import {
   type DeviceView,
   type GatewayStore,
   type RegisteredDevice,
+  type SessionEventFilters,
   type SessionFilters,
   type StoredSession,
 } from "./store.js";
@@ -19,6 +20,13 @@ const MIGRATIONS = [
   {
     version: 1,
     url: new URL("../migrations/0001_gateway.sql", import.meta.url),
+  },
+  {
+    version: 2,
+    url: new URL(
+      "../migrations/0002_session_timeline_index.sql",
+      import.meta.url,
+    ),
   },
 ] as const;
 
@@ -372,6 +380,29 @@ export class PostgresGatewayStore implements GatewayStore {
         ${activityFilter}
         ${presenceFilter}
       ORDER BY sessions.observed_at DESC, sessions.sequence DESC
+    `;
+    return rows.map((row) => ({
+      ...syncEvent(row.event_data),
+      received_at: isoTimestamp(row.received_at),
+    }));
+  }
+
+  async listSessionEvents(
+    ownerId: string,
+    filters: SessionEventFilters,
+  ): Promise<StoredSession[]> {
+    const rows = await this.#sql<SessionRow[]>`
+      SELECT events.event_data, events.received_at
+      FROM agent_platform_events AS events
+      INNER JOIN agent_platform_devices AS devices
+        ON devices.device_id = events.device_id
+      WHERE
+        devices.owner_id = ${ownerId}
+        AND events.device_id = ${filters.device_id}
+        AND events.event_data->>'agent_type' = ${filters.agent_type}
+        AND events.event_data->>'agent_session_id' = ${filters.agent_session_id}
+      ORDER BY events.sequence DESC
+      LIMIT ${filters.limit}
     `;
     return rows.map((row) => ({
       ...syncEvent(row.event_data),

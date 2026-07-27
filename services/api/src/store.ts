@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type {
   ActivityStatus,
+  AgentType,
   Presence,
   SyncBatch,
   SyncEvent,
@@ -32,6 +33,13 @@ export interface SessionFilters {
   presence?: Presence;
 }
 
+export interface SessionEventFilters {
+  device_id: string;
+  agent_type: AgentType;
+  agent_session_id: string;
+  limit: number;
+}
+
 export interface DeviceRegistrationResult {
   device: RegisteredDevice;
   created: boolean;
@@ -48,6 +56,10 @@ export interface GatewayStore {
   listSessions(
     ownerId: string,
     filters: SessionFilters,
+  ): Promise<StoredSession[]>;
+  listSessionEvents(
+    ownerId: string,
+    filters: SessionEventFilters,
   ): Promise<StoredSession[]>;
   close?(): Promise<void>;
 }
@@ -109,7 +121,7 @@ export class OneTimeBindingCodes {
 
 export class InMemoryGatewayStore implements GatewayStore {
   readonly #devices = new Map<string, RegisteredDevice>();
-  readonly #eventsById = new Map<string, SyncEvent>();
+  readonly #eventsById = new Map<string, StoredSession>();
   readonly #eventIdsBySequence = new Map<string, string>();
   readonly #lastSequenceByDevice = new Map<string, number>();
   readonly #sessions = new Map<string, StoredSession>();
@@ -165,7 +177,8 @@ export class InMemoryGatewayStore implements GatewayStore {
     for (const event of batch.events) {
       const existingById = this.#eventsById.get(event.event_id);
       if (existingById !== undefined) {
-        if (!isDeepStrictEqual(existingById, event)) {
+        const { received_at: _receivedAt, ...existingEvent } = existingById;
+        if (!isDeepStrictEqual(existingEvent, event)) {
           throw new GatewayStoreError(
             "event_conflict",
             "event ID was reused with different data",
@@ -197,7 +210,10 @@ export class InMemoryGatewayStore implements GatewayStore {
 
     const receivedAt = this.#now().toISOString();
     for (const event of newEvents) {
-      this.#eventsById.set(event.event_id, event);
+      this.#eventsById.set(event.event_id, {
+        ...event,
+        received_at: receivedAt,
+      });
       this.#eventIdsBySequence.set(
         `${event.device_id}:${event.sequence}`,
         event.event_id,
@@ -252,6 +268,25 @@ export class InMemoryGatewayStore implements GatewayStore {
           Date.parse(right.observed_at) - Date.parse(left.observed_at);
         return time === 0 ? right.sequence - left.sequence : time;
       });
+  }
+
+  async listSessionEvents(
+    ownerId: string,
+    filters: SessionEventFilters,
+  ): Promise<StoredSession[]> {
+    const device = this.#devices.get(filters.device_id);
+    if (device === undefined || device.owner_id !== ownerId) {
+      return [];
+    }
+    return [...this.#eventsById.values()]
+      .filter(
+        (event) =>
+          event.device_id === filters.device_id &&
+          event.agent_type === filters.agent_type &&
+          event.agent_session_id === filters.agent_session_id,
+      )
+      .sort((left, right) => right.sequence - left.sequence)
+      .slice(0, filters.limit);
   }
 }
 

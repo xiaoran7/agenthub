@@ -1,6 +1,7 @@
 import {
   ContractError,
   activityStatuses,
+  agentTypes,
   parseDeviceRegistration,
   parseSyncBatch,
   presences,
@@ -15,6 +16,9 @@ import {
   type GatewayStore,
   type SessionFilters,
 } from "./store.js";
+
+const DEFAULT_SESSION_EVENT_LIMIT = 100;
+const MAX_SESSION_EVENT_LIMIT = 500;
 
 export interface GatewayAppOptions {
   store?: GatewayStore;
@@ -149,6 +153,54 @@ export function createGatewayApp(
     }
     const sessions = await store.listSessions(ownerId, filters);
     return reply.send({ sessions });
+  });
+
+  app.get("/v1/sessions/events", async (request, reply) => {
+    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    const query = request.query as Record<string, unknown>;
+    const unknownQuery = Object.keys(query).find(
+      (key) =>
+        !["device_id", "agent_type", "agent_session_id", "limit"].includes(key),
+    );
+    if (unknownQuery !== undefined) {
+      throw new ContractError("invalid_query", "query field is invalid");
+    }
+    if (typeof query.device_id !== "string" || query.device_id.length === 0) {
+      throw new ContractError("invalid_query", "device_id is required");
+    }
+    if (
+      typeof query.agent_type !== "string" ||
+      !isOneOf(agentTypes, query.agent_type)
+    ) {
+      throw new ContractError("invalid_query", "agent_type is invalid");
+    }
+    if (
+      typeof query.agent_session_id !== "string" ||
+      query.agent_session_id.length === 0 ||
+      query.agent_session_id.length > 512
+    ) {
+      throw new ContractError("invalid_query", "agent_session_id is required");
+    }
+    let limit = DEFAULT_SESSION_EVENT_LIMIT;
+    if (query.limit !== undefined) {
+      if (
+        typeof query.limit !== "string" ||
+        !/^[1-9][0-9]{0,3}$/.test(query.limit)
+      ) {
+        throw new ContractError("invalid_query", "limit is invalid");
+      }
+      limit = Number(query.limit);
+      if (limit > MAX_SESSION_EVENT_LIMIT) {
+        throw new ContractError("invalid_query", "limit is invalid");
+      }
+    }
+    const events = await store.listSessionEvents(ownerId, {
+      device_id: query.device_id,
+      agent_type: query.agent_type,
+      agent_session_id: query.agent_session_id,
+      limit,
+    });
+    return reply.send({ events });
   });
 
   if (store.close !== undefined) {

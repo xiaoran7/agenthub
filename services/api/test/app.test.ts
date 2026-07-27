@@ -7,6 +7,7 @@ import {
   deviceIdForPublicKey,
   parseSyncBatch,
   type SyncBatch,
+  type SyncEvent,
   unsignedBatchJson,
 } from "@agent-platform/contracts";
 
@@ -197,7 +198,100 @@ test("a signed sequence gap is rejected atomically", async () => {
   await app.close();
 });
 
-function makeSignedBatch(sequence: number): SyncBatch {
+test("session event timeline is scoped to the owner and ordered by sequence", async () => {
+  const app = createGatewayApp({
+    bindingCodes: new OneTimeBindingCodes(
+      new Map([["one-time-code", "user-1"]]),
+    ),
+  });
+  await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("one-time-code"),
+  });
+  await app.inject({
+    method: "POST",
+    url: "/v1/sync/batches",
+    payload: fixture,
+  });
+  const second = makeSignedBatch(2, (event) => {
+    event.observed_at = "2026-07-25T00:00:05Z";
+    event.payload.state = {
+      presence: "LIVE",
+      activity_status: "WORKING",
+      raw_status: "active",
+    };
+  });
+  const ingestion = await app.inject({
+    method: "POST",
+    url: "/v1/sync/batches",
+    payload: second,
+  });
+  assert.equal(ingestion.statusCode, 200);
+
+  const timelineUrl =
+    `/v1/sessions/events?device_id=${fixture.device_id}` +
+    "&agent_type=codex&agent_session_id=contract-session";
+  const timeline = await app.inject({
+    method: "GET",
+    url: timelineUrl,
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(timeline.statusCode, 200);
+  const events = timeline.json().events;
+  assert.equal(events.length, 2);
+  assert.equal(events[0].sequence, 2);
+  assert.equal(events[0].payload.state.activity_status, "WORKING");
+  assert.equal(events[1].sequence, 1);
+  assert.equal(events[1].payload.state.activity_status, "WAITING_PERMISSION");
+  assert.equal(typeof events[0].received_at, "string");
+
+  const limited = await app.inject({
+    method: "GET",
+    url: `${timelineUrl}&limit=1`,
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(limited.json().events.length, 1);
+  assert.equal(limited.json().events[0].sequence, 2);
+
+  const otherUser = await app.inject({
+    method: "GET",
+    url: timelineUrl,
+    headers: { "x-user-id": "user-2" },
+  });
+  assert.equal(otherUser.statusCode, 200);
+  assert.equal(otherUser.json().events.length, 0);
+
+  const missingAgentType = await app.inject({
+    method: "GET",
+    url:
+      `/v1/sessions/events?device_id=${fixture.device_id}` +
+      "&agent_session_id=contract-session",
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(missingAgentType.statusCode, 400);
+  assert.equal(missingAgentType.json().error, "invalid_query");
+
+  const unknownField = await app.inject({
+    method: "GET",
+    url: `${timelineUrl}&transcript=1`,
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(unknownField.statusCode, 400);
+
+  const invalidLimit = await app.inject({
+    method: "GET",
+    url: `${timelineUrl}&limit=0`,
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(invalidLimit.statusCode, 400);
+  await app.close();
+});
+
+function makeSignedBatch(
+  sequence: number,
+  mutate?: (event: SyncEvent) => void,
+): SyncBatch {
   const seed = Buffer.from(
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "hex",
@@ -219,6 +313,14 @@ function makeSignedBatch(sequence: number): SyncBatch {
   const deviceId = deviceIdForPublicKey(publicKey);
   const originalEvent = fixture.events[0];
   assert.ok(originalEvent);
+  const event: SyncEvent = {
+    ...structuredClone(originalEvent),
+    sequence,
+    event_id: "223e4567-e89b-42d3-a456-426614174001",
+    device_id: deviceId,
+    observed_at: "2026-07-25T00:00:02Z",
+  };
+  mutate?.(event);
   const batch: SyncBatch = {
     protocol_version: 1,
     batch_id: "223e4567-e89b-42d3-a456-426614174000",
@@ -227,15 +329,7 @@ function makeSignedBatch(sequence: number): SyncBatch {
     created_at: "2026-07-25T00:00:02Z",
     first_sequence: sequence,
     last_sequence: sequence,
-    events: [
-      {
-        ...structuredClone(originalEvent),
-        sequence,
-        event_id: "223e4567-e89b-42d3-a456-426614174001",
-        device_id: deviceId,
-        observed_at: "2026-07-25T00:00:02Z",
-      },
-    ],
+    events: [event],
     signature: "",
   };
   batch.signature = sign(
