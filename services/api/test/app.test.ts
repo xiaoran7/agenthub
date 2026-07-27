@@ -12,6 +12,7 @@ import {
 } from "@agent-platform/contracts";
 
 import { createGatewayApp } from "../src/app.js";
+import type { PushOutcome } from "../src/push.js";
 import { InMemoryGatewayStore, OneTimeBindingCodes } from "../src/store.js";
 
 const fixture = parseSyncBatch(
@@ -288,6 +289,248 @@ test("session event timeline is scoped to the owner and ordered by sequence", as
   await app.close();
 });
 
+test("waiting sessions notify the owner's subscriptions and prune dead ones", async () => {
+  const store = new InMemoryGatewayStore();
+  const sent: Array<{ endpoint: string; payload: string }> = [];
+  let outcome: PushOutcome = "delivered";
+  let delivered: () => void = () => {};
+  const app = createGatewayApp({
+    store,
+    bindingCodes: new OneTimeBindingCodes(
+      new Map([["one-time-code", "user-1"]]),
+    ),
+    push: {
+      publicKey: "test-application-server-key",
+      sender: {
+        send: async (subscription, payload) => {
+          sent.push({ endpoint: subscription.endpoint, payload });
+          delivered();
+          return outcome;
+        },
+      },
+    },
+  });
+  const nextDelivery = (): Promise<void> =>
+    new Promise((resolve) => {
+      delivered = resolve;
+    });
+
+  const key = await app.inject({ method: "GET", url: "/v1/push/key" });
+  assert.equal(key.statusCode, 200);
+  assert.equal(key.json().public_key, "test-application-server-key");
+
+  const subscription = {
+    endpoint: "https://push.example/subscription/abc",
+    expirationTime: null,
+    keys: {
+      p256dh: Buffer.concat([
+        Buffer.from([0x04]),
+        Buffer.alloc(64, 7),
+      ]).toString("base64url"),
+      auth: Buffer.alloc(16, 3).toString("base64url"),
+    },
+  };
+  const subscribed = await app.inject({
+    method: "POST",
+    url: "/v1/push/subscriptions",
+    headers: { "x-user-id": "user-1" },
+    payload: subscription,
+  });
+  assert.equal(subscribed.statusCode, 204);
+  assert.equal((await store.listPushSubscriptions("user-1")).length, 1);
+
+  await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("one-time-code"),
+  });
+
+  // The fixture session is already WAITING_PERMISSION, so storing it is the
+  // transition that should reach the phone.
+  const waiting = nextDelivery();
+  await app.inject({
+    method: "POST",
+    url: "/v1/sync/batches",
+    payload: fixture,
+  });
+  await waiting;
+  assert.equal(sent.length, 1);
+  assert.deepEqual(JSON.parse(sent[0]?.payload ?? "{}"), {
+    device_id: fixture.device_id,
+    agent_type: "codex",
+    agent_session_id: "contract-session",
+    project: "contract-project",
+    activity_status: "WAITING_PERMISSION",
+    waiting_reason: "permission",
+    observed_at: fixture.events[0]?.observed_at,
+  });
+
+  // Leaving the waiting state is not an interruption, so it must stay silent.
+  await app.inject({
+    method: "POST",
+    url: "/v1/sync/batches",
+    payload: makeSignedBatch(2, (event) => {
+      event.observed_at = "2026-07-25T00:00:05Z";
+      event.payload.state = {
+        presence: "LIVE",
+        activity_status: "WORKING",
+        raw_status: "active",
+      };
+    }),
+  });
+  assert.equal(sent.length, 1);
+
+  outcome = "gone";
+  const pruned = nextDelivery();
+  await app.inject({
+    method: "POST",
+    url: "/v1/sync/batches",
+    payload: makeSignedBatch(3, (event) => {
+      event.observed_at = "2026-07-25T00:00:09Z";
+      event.payload.state = {
+        presence: "LIVE",
+        activity_status: "WAITING_INPUT",
+        raw_status: "blocked",
+        waiting_reason: "user_input",
+      };
+    }),
+  });
+  await pruned;
+  assert.equal(sent.length, 2);
+  assert.equal(
+    (await store.listPushSubscriptions("user-1")).length,
+    0,
+    "a subscription the push service reports gone must not be retried",
+  );
+  await app.close();
+});
+
+test("push subscriptions are validated and disabled without VAPID keys", async () => {
+  const disabled = createGatewayApp();
+  const disabledKey = await disabled.inject({
+    method: "GET",
+    url: "/v1/push/key",
+  });
+  assert.equal(disabledKey.statusCode, 404);
+  assert.equal(disabledKey.json().error, "push_disabled");
+  const disabledSubscribe = await disabled.inject({
+    method: "POST",
+    url: "/v1/push/subscriptions",
+    headers: { "x-user-id": "user-1" },
+    payload: {
+      endpoint: "https://push.example/abc",
+      keys: {
+        p256dh: Buffer.concat([
+          Buffer.from([0x04]),
+          Buffer.alloc(64, 7),
+        ]).toString("base64url"),
+        auth: Buffer.alloc(16, 3).toString("base64url"),
+      },
+    },
+  });
+  assert.equal(disabledSubscribe.statusCode, 404);
+  await disabled.close();
+
+  const store = new InMemoryGatewayStore();
+  const app = createGatewayApp({
+    store,
+    push: {
+      publicKey: "test-application-server-key",
+      sender: { send: async () => "delivered" },
+    },
+  });
+  const validKeys = {
+    p256dh: Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 7)]).toString(
+      "base64url",
+    ),
+    auth: Buffer.alloc(16, 3).toString("base64url"),
+  };
+  const rejected = async (payload: unknown): Promise<string> => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/push/subscriptions",
+      headers: { "x-user-id": "user-1" },
+      payload: payload as never,
+    });
+    assert.equal(response.statusCode, 400);
+    return response.json().error;
+  };
+
+  assert.equal(
+    await rejected({ endpoint: "http://push.example/abc", keys: validKeys }),
+    "invalid_endpoint",
+  );
+  assert.equal(
+    await rejected({
+      endpoint: "https://user:pass@push.example/abc",
+      keys: validKeys,
+    }),
+    "invalid_endpoint",
+  );
+  assert.equal(
+    await rejected({
+      endpoint: "https://push.example/abc",
+      keys: { ...validKeys, auth: Buffer.alloc(8, 3).toString("base64url") },
+    }),
+    "invalid_subscription",
+  );
+  assert.equal(
+    await rejected({
+      endpoint: "https://push.example/abc",
+      keys: {
+        ...validKeys,
+        p256dh: Buffer.alloc(65, 7).toString("base64url"),
+      },
+    }),
+    "invalid_subscription",
+  );
+  assert.equal(
+    await rejected({
+      endpoint: "https://push.example/abc",
+      keys: validKeys,
+      transcript: "private",
+    }),
+    "unknown_field",
+  );
+  assert.equal((await store.listPushSubscriptions("user-1")).length, 0);
+
+  const anonymous = await app.inject({
+    method: "POST",
+    url: "/v1/push/subscriptions",
+    payload: { endpoint: "https://push.example/abc", keys: validKeys },
+  });
+  assert.equal(anonymous.statusCode, 401);
+
+  await app.inject({
+    method: "POST",
+    url: "/v1/push/subscriptions",
+    headers: { "x-user-id": "user-1" },
+    payload: { endpoint: "https://push.example/abc", keys: validKeys },
+  });
+  const foreignDelete = await app.inject({
+    method: "DELETE",
+    url: "/v1/push/subscriptions",
+    headers: { "x-user-id": "user-2" },
+    payload: { endpoint: "https://push.example/abc" },
+  });
+  assert.equal(foreignDelete.statusCode, 204);
+  assert.equal(
+    (await store.listPushSubscriptions("user-1")).length,
+    1,
+    "another user must not be able to unsubscribe this browser",
+  );
+
+  const removed = await app.inject({
+    method: "DELETE",
+    url: "/v1/push/subscriptions",
+    headers: { "x-user-id": "user-1" },
+    payload: { endpoint: "https://push.example/abc" },
+  });
+  assert.equal(removed.statusCode, 204);
+  assert.equal((await store.listPushSubscriptions("user-1")).length, 0);
+  await app.close();
+});
+
 test("the change stream is owner scoped, capped, and fires on accepted batches", async () => {
   const store = new InMemoryGatewayStore(
     () => new Date("2026-07-25T00:00:01Z"),
@@ -455,7 +698,9 @@ function makeSignedBatch(
   const event: SyncEvent = {
     ...structuredClone(originalEvent),
     sequence,
-    event_id: "223e4567-e89b-42d3-a456-426614174001",
+    // Distinct per sequence: reusing an event ID with different data is an
+    // event_conflict, which would silently turn a batch into a 409.
+    event_id: `223e4567-e89b-42d3-a456-4266141740${String(sequence).padStart(2, "0")}`,
     device_id: deviceId,
     observed_at: "2026-07-25T00:00:02Z",
   };

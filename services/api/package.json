@@ -7,6 +7,7 @@
     "migrate": "tsx src/migrate.ts",
     "start": "tsx src/server.ts",
     "test": "tsx --test test/**/*.test.ts",
+    "vapid-keys": "tsx src/vapid-keys.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

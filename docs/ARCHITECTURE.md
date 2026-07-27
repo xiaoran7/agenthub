@@ -299,6 +299,23 @@ Session 可按设备、Presence 和 Activity Status 过滤；状态事件时间�
 偏离读接口已经执行的字段策略。每 20 秒发一条注释心跳；单 owner 并发流上限 8 条，
 超出返回 429。当前 broker 是进程内实现，多实例部署前不能取消轮询兜底。
 
+### 4.5 Web Push 通知
+
+面板关闭时靠 Web Push 提醒"有会话在等人"。`GET /v1/push/key` 返回 VAPID 应用
+服务器公钥（未配置密钥时 404 `push_disabled`，功能整体关闭而不是半开）；
+`POST`/`DELETE /v1/push/subscriptions` 增删订阅，endpoint 必须是 HTTPS 且不带
+凭据，p256dh/auth 按长度和点格式校验后才入库。
+
+只有会话的活动状态**跃迁进入** `WAITING_INPUT` 或 `WAITING_PERMISSION` 才发
+通知；完成、失败、离开等待都不打扰用户。通知负载只含面板已经展示的字段
+（设备、Agent 类型、会话 ID、项目显示名、状态、等待原因、观察时间），不含任务
+文本、原始状态明细和工作目录。发送在请求路径之外进行：Runner 上传不等待第三方
+推送服务，推送失败也不会把已入库的批次变成 Runner 会重试的错误。推送服务返回
+404/410 的订阅立即删除。
+
+加密按 RFC 8188 `aes128gcm` + RFC 8291 密钥派生，授权按 RFC 8292 VAPID，均基于
+`node:crypto` 自实现，由 RFC 8291 官方示例向量钉死。
+
 ## 5. 状态数据模型
 
 “历史”不是运行状态。平台使用两个独立维度。

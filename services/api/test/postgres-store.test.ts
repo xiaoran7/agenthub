@@ -46,8 +46,28 @@ test(
         fixture.public_key,
       );
       assert.equal(registration.created, true);
-      assert.equal(await firstStore.ingestBatch(fixture), 1);
-      assert.equal(await firstStore.ingestBatch(fixture), 0);
+      const ingestion = await firstStore.ingestBatch(fixture);
+      assert.equal(ingestion.accepted, 1);
+      assert.equal(ingestion.owner_id, "postgres-user");
+      assert.deepEqual(ingestion.changes, [
+        {
+          device_id: fixture.device_id,
+          agent_type: "codex",
+          agent_session_id: "contract-session",
+          project_display_name: "contract-project",
+          presence: "LIVE",
+          activity_status: "WAITING_PERMISSION",
+          waiting_reason: "permission",
+          observed_at: fixture.events[0]?.observed_at,
+        },
+      ]);
+      const replayed = await firstStore.ingestBatch(fixture);
+      assert.equal(replayed.accepted, 0);
+      assert.deepEqual(
+        replayed.changes,
+        [],
+        "a replayed batch changes nothing and must not notify",
+      );
       assert.equal(
         (await firstStore.listSessions("postgres-user", {})).length,
         1,
@@ -98,6 +118,44 @@ test(
         ).length,
         0,
       );
+
+      const subscription = {
+        endpoint: "https://push.example/subscription/abc",
+        p256dh: Buffer.concat([
+          Buffer.from([0x04]),
+          Buffer.alloc(64, 7),
+        ]).toString("base64url"),
+        auth: Buffer.alloc(16, 3).toString("base64url"),
+      };
+      await secondStore.savePushSubscription("postgres-user", subscription);
+      // Re-subscribing is an upsert, not a duplicate row.
+      await secondStore.savePushSubscription("postgres-user", subscription);
+      assert.deepEqual(
+        await secondStore.listPushSubscriptions("postgres-user"),
+        [subscription],
+      );
+      assert.deepEqual(
+        await secondStore.listPushSubscriptions("another-user"),
+        [],
+      );
+      await secondStore.deletePushSubscription(
+        "another-user",
+        subscription.endpoint,
+      );
+      assert.equal(
+        (await secondStore.listPushSubscriptions("postgres-user")).length,
+        1,
+        "another user must not be able to unsubscribe this browser",
+      );
+      await secondStore.deletePushSubscription(
+        "postgres-user",
+        subscription.endpoint,
+      );
+      assert.equal(
+        (await secondStore.listPushSubscriptions("postgres-user")).length,
+        0,
+      );
+
       await secondStore.close();
       secondSql = undefined;
     } finally {

@@ -1,5 +1,6 @@
-import { createGatewayApp } from "./app.js";
+import { createGatewayApp, type GatewayAppOptions } from "./app.js";
 import { PostgresGatewayStore } from "./postgres-store.js";
+import { WebPushSender, vapidKeysFromEnv } from "./push.js";
 import { InMemoryGatewayStore, OneTimeBindingCodes } from "./store.js";
 
 const port = parsePort(process.env.PORT);
@@ -18,11 +19,21 @@ const store =
   databaseUrl === undefined
     ? new InMemoryGatewayStore()
     : await PostgresGatewayStore.connect(databaseUrl);
-const app = createGatewayApp({
+// Without a full VAPID triple the gateway starts with push disabled rather
+// than half-configured; `npm run vapid-keys` prints a usable pair.
+const vapidKeys = vapidKeysFromEnv();
+const options: GatewayAppOptions = {
   store,
   bindingCodes: new OneTimeBindingCodes(new Map([[bindingCode, ownerId]])),
   logger: true,
-});
+};
+if (vapidKeys !== undefined) {
+  options.push = {
+    publicKey: vapidKeys.publicKey,
+    sender: new WebPushSender(vapidKeys),
+  };
+}
+const app = createGatewayApp(options);
 
 await app.listen({ port, host });
 

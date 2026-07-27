@@ -9,6 +9,8 @@ import type {
   WaitingReason,
 } from "@agent-platform/contracts";
 
+import type { PushSubscription } from "./push.js";
+
 export interface RegisteredDevice {
   device_id: string;
   public_key: string;
@@ -73,6 +75,12 @@ export interface IngestResult {
 }
 
 export interface GatewayStore {
+  savePushSubscription(
+    ownerId: string,
+    subscription: PushSubscription,
+  ): Promise<void>;
+  deletePushSubscription(ownerId: string, endpoint: string): Promise<void>;
+  listPushSubscriptions(ownerId: string): Promise<PushSubscription[]>;
   registerDevice(
     ownerId: string,
     deviceId: string,
@@ -148,6 +156,10 @@ export class OneTimeBindingCodes {
 
 export class InMemoryGatewayStore implements GatewayStore {
   readonly #devices = new Map<string, RegisteredDevice>();
+  readonly #pushSubscriptions = new Map<
+    string,
+    PushSubscription & { owner_id: string }
+  >();
   readonly #eventsById = new Map<string, StoredSession>();
   readonly #eventIdsBySequence = new Map<string, string>();
   readonly #lastSequenceByDevice = new Map<string, number>();
@@ -156,6 +168,33 @@ export class InMemoryGatewayStore implements GatewayStore {
 
   constructor(now: () => Date = () => new Date()) {
     this.#now = now;
+  }
+
+  async savePushSubscription(
+    ownerId: string,
+    subscription: PushSubscription,
+  ): Promise<void> {
+    // The endpoint identifies one browser installation. Re-subscribing under a
+    // different user moves it: the browser now belongs to that user.
+    this.#pushSubscriptions.set(subscription.endpoint, {
+      ...subscription,
+      owner_id: ownerId,
+    });
+  }
+
+  async deletePushSubscription(
+    ownerId: string,
+    endpoint: string,
+  ): Promise<void> {
+    if (this.#pushSubscriptions.get(endpoint)?.owner_id === ownerId) {
+      this.#pushSubscriptions.delete(endpoint);
+    }
+  }
+
+  async listPushSubscriptions(ownerId: string): Promise<PushSubscription[]> {
+    return [...this.#pushSubscriptions.values()]
+      .filter((subscription) => subscription.owner_id === ownerId)
+      .map(({ owner_id: _ownerId, ...subscription }) => subscription);
   }
 
   async registerDevice(

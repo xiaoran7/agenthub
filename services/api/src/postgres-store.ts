@@ -9,6 +9,7 @@ import type {
 } from "@agent-platform/contracts";
 import postgres from "postgres";
 
+import type { PushSubscription } from "./push.js";
 import {
   GatewayStoreError,
   sessionStatusChange,
@@ -34,6 +35,10 @@ const MIGRATIONS = [
       "../migrations/0002_session_timeline_index.sql",
       import.meta.url,
     ),
+  },
+  {
+    version: 3,
+    url: new URL("../migrations/0003_push_subscriptions.sql", import.meta.url),
   },
 ] as const;
 
@@ -87,6 +92,59 @@ export class PostgresGatewayStore implements GatewayStore {
       await sql.end({ timeout: 1 });
       throw error;
     }
+  }
+
+  async savePushSubscription(
+    ownerId: string,
+    subscription: PushSubscription,
+  ): Promise<void> {
+    // The endpoint identifies one browser installation. Re-subscribing under a
+    // different user moves it: the browser now belongs to that user.
+    await this.#sql`
+      INSERT INTO agent_platform_push_subscriptions (
+        endpoint,
+        owner_id,
+        p256dh,
+        auth
+      )
+      VALUES (
+        ${subscription.endpoint},
+        ${ownerId},
+        ${subscription.p256dh},
+        ${subscription.auth}
+      )
+      ON CONFLICT (endpoint) DO UPDATE SET
+        owner_id = EXCLUDED.owner_id,
+        p256dh = EXCLUDED.p256dh,
+        auth = EXCLUDED.auth,
+        updated_at = clock_timestamp()
+    `;
+  }
+
+  async deletePushSubscription(
+    ownerId: string,
+    endpoint: string,
+  ): Promise<void> {
+    await this.#sql`
+      DELETE FROM agent_platform_push_subscriptions
+      WHERE endpoint = ${endpoint} AND owner_id = ${ownerId}
+    `;
+  }
+
+  async listPushSubscriptions(ownerId: string): Promise<PushSubscription[]> {
+    const rows = await this.#sql<
+      Array<{ endpoint: string; p256dh: string; auth: string }>
+    >`
+      SELECT endpoint, p256dh, auth
+      FROM agent_platform_push_subscriptions
+      WHERE owner_id = ${ownerId}
+      ORDER BY endpoint
+    `;
+    return rows.map((row) => ({
+      endpoint: row.endpoint,
+      p256dh: row.p256dh,
+      auth: row.auth,
+    }));
   }
 
   async registerDevice(

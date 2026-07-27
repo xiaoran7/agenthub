@@ -15,6 +15,14 @@
   `{accepted, owner_id, changes}`，`changes` 是本批次前后活动状态确实发生变化的
   会话（内存与 PostgreSQL 两侧同一契约，PostgreSQL 在锁定设备行的事务内前后各读
   一次快照状态）。
+- Gateway 新增 Web Push：`GET /v1/push/key`、`POST`/`DELETE
+  /v1/push/subscriptions`，会话跃迁进入 `WAITING_INPUT`/`WAITING_PERMISSION`
+  时向该 owner 的订阅推送通知，推送服务返回 404/410 的订阅立即清理。加密
+  （RFC 8188 aes128gcm + RFC 8291）与 VAPID 授权（RFC 8292）基于 `node:crypto`
+  自实现，用 RFC 8291 官方示例向量逐字节钉死，不引入新依赖。未配置完整 VAPID
+  三元组时功能整体关闭（`push_disabled`）而不是半开；新增
+  `npm run vapid-keys` 生成密钥对。订阅 endpoint 必须是无凭据的 HTTPS URL，
+  p256dh/auth 按点格式与长度校验；订阅表随 0003 迁移落库，删除按 owner 隔离。
 - 面板接入实时通道：变化到达即刷新列表与详情时间线，轮询降级为兜底（连上流
   30 秒、断流 5 秒），顶部状态显示「实时 / 轮询」。断流按 1→15 秒指数退避重连，
   流不可用时行为回落到原来的 5 秒轮询。
@@ -51,6 +59,9 @@
 
 ### Changed
 
+- PostgreSQL 集成测试补上 `ingestBatch` 新返回值与推送订阅的断言：该测试在本机
+  始终 SKIP，旧断言 `assert.equal(await ingestBatch(...), 1)` 在真实数据库上第
+  一次运行就会失败。
 - 采集守护进程遇到本地 SQLite 暂时性错误（例如 hook 进程并发写导致的
   SQLITE_BUSY）不再退出，改为按失败退避重试并输出稳定错误码；SQLite 连接同时
   设置 5 秒 busy_timeout。
