@@ -25,7 +25,7 @@ import {
 import { formatRelative } from "../src/lib/format";
 import { openChangeStream } from "../src/lib/stream";
 import type { DeviceRecord, SessionRecord, SessionRef } from "../src/lib/types";
-import { sessionKey, sessionRef } from "../src/lib/types";
+import { parseSessionRef, sessionKey, sessionRef } from "../src/lib/types";
 
 const POLL_INTERVAL_MS = 5_000;
 /**
@@ -154,6 +154,36 @@ export default function PanelPage() {
   useEffect(() => {
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(interval);
+  }, []);
+
+  // Clicking a push notification focuses this tab and hands the session over
+  // in a message: identifiers stay out of the URL, history and shared links.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) {
+      return;
+    }
+    const onMessage = (event: MessageEvent) => {
+      const message: unknown = event.data;
+      if (
+        typeof message !== "object" ||
+        message === null ||
+        (message as { type?: unknown }).type !== "select-session"
+      ) {
+        return;
+      }
+      const ref = parseSessionRef((message as { session?: unknown }).session);
+      if (ref === undefined) {
+        return;
+      }
+      // The session may sit outside the current view; reset the filters so the
+      // notification always lands on something visible.
+      setTab("all");
+      setDeviceFilter(undefined);
+      setSelected(ref);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () =>
+      navigator.serviceWorker.removeEventListener("message", onMessage);
   }, []);
 
   useEffect(() => {

@@ -44,3 +44,38 @@ export function sessionRef(session: SessionRecord): SessionRef {
 export function sessionKey(ref: SessionRef): string {
   return `${ref.device_id}:${ref.agent_type}:${ref.agent_session_id}`;
 }
+
+// Key completeness is enforced by the contract type: a new agent type fails to
+// compile here rather than silently failing validation at runtime.
+const AGENT_TYPES: Record<AgentType, true> = {
+  claude_code: true,
+  codex: true,
+};
+
+/**
+ * Validates a session reference that arrived from outside React state — today
+ * a service worker message carrying a notification's payload.
+ */
+export function parseSessionRef(value: unknown): SessionRef | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const candidate = value as Record<string, unknown>;
+  const { device_id: deviceId, agent_session_id: sessionId } = candidate;
+  const agentType = candidate.agent_type;
+  if (
+    typeof deviceId !== "string" ||
+    deviceId.length === 0 ||
+    typeof sessionId !== "string" ||
+    sessionId.length === 0 ||
+    typeof agentType !== "string" ||
+    !Object.hasOwn(AGENT_TYPES, agentType)
+  ) {
+    return undefined;
+  }
+  return {
+    device_id: deviceId,
+    agent_type: agentType as AgentType,
+    agent_session_id: sessionId,
+  };
+}

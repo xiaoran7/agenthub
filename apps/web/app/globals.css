@@ -622,6 +622,26 @@ input:focus-visible {
   font-size: 12px;
 }
 
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  padding-top: 4px;
+}
+
+.settings-toggle button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-toggle button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;

@@ -561,6 +561,13 @@ Agent-Platform/
 （连上流 30 秒、断流 5 秒）。开发期同源代理访问网关：普通请求走 Next rewrites，
 SSE 走 `app/v1/stream/route.ts`（rewrites 会缓冲响应体）。
 
+Service Worker（`public/sw.js`）只处理 `push` 与 `notificationclick`，没有
+fetch 处理器也不做离线缓存——引入它是因为 Web Push 强制要求，不是为了离线。
+点击通知聚焦已打开的面板并用 postMessage 传递会话引用，标识不进 URL。
+
+M3 已全部完成。M4 的安全与稳定性测试尚未开始；跨实例广播、心跳与正式认证
+仍在 M2 遗留清单上。
+
 ### Milestone 4：安全与稳定性
 
 - 字段泄漏测试

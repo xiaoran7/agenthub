@@ -29,6 +29,14 @@ export function streamUrl(base: string): string {
   return `${base}/v1/stream`;
 }
 
+export function pushKeyUrl(base: string): string {
+  return `${base}/v1/push/key`;
+}
+
+export function pushSubscriptionsUrl(base: string): string {
+  return `${base}/v1/push/subscriptions`;
+}
+
 export function sessionEventsUrl(
   base: string,
   ref: SessionRef,
@@ -73,23 +81,86 @@ async function fetchJson<T>(url: string, userId: string): Promise<T> {
     throw new ApiError(0, "network_error");
   }
   if (!response.ok) {
-    let code = "http_error";
-    try {
-      const body: unknown = await response.json();
-      if (
-        typeof body === "object" &&
-        body !== null &&
-        "error" in body &&
-        typeof body.error === "string"
-      ) {
-        code = body.error;
-      }
-    } catch {
-      // Keep the generic classification when the body is not JSON.
-    }
-    throw new ApiError(response.status, code);
+    throw new ApiError(response.status, await errorCode(response));
   }
   return (await response.json()) as T;
+}
+
+async function sendJson(
+  url: string,
+  userId: string,
+  method: "POST" | "DELETE",
+  body: unknown,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: { "x-user-id": userId, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "network_error");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await errorCode(response));
+  }
+}
+
+async function errorCode(response: Response): Promise<string> {
+  try {
+    const body: unknown = await response.json();
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      "error" in body &&
+      typeof body.error === "string"
+    ) {
+      return body.error;
+    }
+  } catch {
+    // Keep the generic classification when the body is not JSON.
+  }
+  return "http_error";
+}
+
+export async function fetchPushKey(config: PanelConfig): Promise<string> {
+  const body = await fetchJson<{ public_key: string }>(
+    pushKeyUrl(config.gatewayBase),
+    config.userId,
+  );
+  return body.public_key;
+}
+
+export async function savePushSubscription(
+  config: PanelConfig,
+  subscription: PushSubscriptionJSON,
+): Promise<void> {
+  await sendJson(
+    pushSubscriptionsUrl(config.gatewayBase),
+    config.userId,
+    "POST",
+    {
+      endpoint: subscription.endpoint,
+      keys: {
+        p256dh: subscription.keys?.p256dh,
+        auth: subscription.keys?.auth,
+      },
+    },
+  );
+}
+
+export async function deletePushSubscription(
+  config: PanelConfig,
+  endpoint: string,
+): Promise<void> {
+  await sendJson(
+    pushSubscriptionsUrl(config.gatewayBase),
+    config.userId,
+    "DELETE",
+    { endpoint },
+  );
 }
 
 export async function fetchDevices(

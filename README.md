@@ -36,8 +36,10 @@ SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签�
 云端已具备开发期设备绑定、签名批次验收、内存幂等写入与只读 Session 查询。
 Runner 已可通过 HTTPS（本地开发允许回环 HTTP）完成设备绑定、批次上传和确认清理。
 Gateway 已提供 PostgreSQL 迁移和事务 Store；未配置数据库时仍使用开发期内存存储。
-Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时间线的只读展示。
-生产认证、WebSocket/心跳、PWA 离线与推送尚未接入。
+Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时间线的只读展示，
+并经 `GET /v1/stream`（SSE）实时刷新，轮询保留为兜底。会话进入等待输入或等待
+权限时可通过 Web Push 推送通知（需在 Gateway 配置 VAPID 密钥）。
+生产认证、跨实例广播与心跳尚未接入；Service Worker 只服务推送，不做离线缓存。
 
 ### Web 面板
 
@@ -52,6 +54,10 @@ npm.cmd run dev --workspace @agent-platform/web
 「设置」可修改开发期用户标识（默认 `local-user`，需与 Gateway 的
 `AGENT_PLATFORM_OWNER_ID` 一致）或改为直连网关地址；直连要求 HTTPS 或回环
 HTTP，且需要网关侧允许跨源（尚未实现，开发期请使用同源代理）。
+
+「设置」里的「推送通知」开关需要 Gateway 配置了 VAPID 密钥（见 Gateway 说明），
+且页面运行在 https 或 localhost 上；开启后会话进入等待输入/等待权限时推送通知，
+点击通知会聚焦已打开的面板并定位到该会话。
 
 Rust 与 TypeScript 全量检查：
 
