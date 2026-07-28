@@ -23,6 +23,7 @@ import {
   type SessionTab,
 } from "../src/lib/classify";
 import { formatRelative } from "../src/lib/format";
+import { parseNotificationPresentedAt } from "../src/lib/notifications";
 import { openChangeStream } from "../src/lib/stream";
 import type { DeviceRecord, SessionRecord, SessionRef } from "../src/lib/types";
 import { parseSessionRef, sessionKey, sessionRef } from "../src/lib/types";
@@ -54,6 +55,9 @@ export default function PanelPage() {
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
+  const [notificationPresentedAt, setNotificationPresentedAt] = useState<
+    number | undefined
+  >(undefined);
 
   // Config only exists in the browser; loading it in an effect keeps the
   // server-rendered markup deterministic.
@@ -164,6 +168,11 @@ export default function PanelPage() {
     }
     const onMessage = (event: MessageEvent) => {
       const message: unknown = event.data;
+      const presentedAt = parseNotificationPresentedAt(message);
+      if (presentedAt !== undefined) {
+        setNotificationPresentedAt(presentedAt);
+        return;
+      }
       if (
         typeof message !== "object" ||
         message === null ||
@@ -346,6 +355,7 @@ export default function PanelPage() {
           devices={devices}
           onSave={handleSaveConfig}
           onDevicesChanged={() => void refresh()}
+          notificationPresentedAt={notificationPresentedAt}
           onClose={() => setSettingsOpen(false)}
         />
       )}

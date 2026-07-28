@@ -17,6 +17,24 @@ export type NotificationState =
   | "on"
   | "off";
 
+export function parseNotificationPresentedAt(
+  value: unknown,
+): number | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    (value as { type?: unknown }).type !== "notification-presented"
+  ) {
+    return undefined;
+  }
+  const presentedAt = (value as { presented_at_ms?: unknown }).presented_at_ms;
+  return typeof presentedAt === "number" &&
+    Number.isSafeInteger(presentedAt) &&
+    presentedAt > 0
+    ? presentedAt
+    : undefined;
+}
+
 /**
  * Push requires a secure context. `localhost` counts as one, so development
  * over plain HTTP still works, but a LAN IP over HTTP does not.

@@ -7,6 +7,10 @@
 
 ### Added
 
+- Web Push 增加浏览器展示回执：Service Worker 仅在解密成功且
+  `showNotification()` 完成后，向已打开的同源面板发送不含设备、Session、项目
+  或 payload 的时间戳；设置面板显示最近回执且只保存在页面内存，用于区分推送
+  服务接受与浏览器展示 API 成功。
 - Gateway 为异步 Web Push 增加隐私安全的投递结果日志：只输出
   `delivered / gone / failed` 聚合计数，不记录订阅 endpoint、owner、Session ID
   或 payload，使真实浏览器联调可以区分推送服务拒绝与系统通知展示失败。

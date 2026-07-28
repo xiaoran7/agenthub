@@ -36,22 +36,38 @@ self.addEventListener("push", (event) => {
   const title = WAITING_TITLES[payload.activity_status] ?? "会话需要处理";
   const project = payload.project ?? "未知项目";
   const agent = AGENT_LABELS[payload.agent_type] ?? payload.agent_type ?? "";
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body: agent ? `${project} · ${agent}` : project,
-      // One notification per session: a session that keeps re-entering the
-      // waiting state replaces its own notification instead of stacking.
-      tag: `${payload.device_id}:${payload.agent_type}:${payload.agent_session_id}`,
-      renotify: true,
-      timestamp: Date.parse(payload.observed_at ?? "") || Date.now(),
-      data: {
-        device_id: payload.device_id,
-        agent_type: payload.agent_type,
-        agent_session_id: payload.agent_session_id,
-      },
-    }),
-  );
+  event.waitUntil(showWaitingNotification(title, project, agent, payload));
 });
+
+async function showWaitingNotification(title, project, agent, payload) {
+  await self.registration.showNotification(title, {
+    body: agent ? `${project} · ${agent}` : project,
+    // One notification per session: a session that keeps re-entering the
+    // waiting state replaces its own notification instead of stacking.
+    tag: `${payload.device_id}:${payload.agent_type}:${payload.agent_session_id}`,
+    renotify: true,
+    timestamp: Date.parse(payload.observed_at ?? "") || Date.now(),
+    data: {
+      device_id: payload.device_id,
+      agent_type: payload.agent_type,
+      agent_session_id: payload.agent_session_id,
+    },
+  });
+  // This receipt contains no session, device or project metadata. It only
+  // proves that the service worker decrypted the push and the browser accepted
+  // showNotification(); Windows may still suppress the visible toast.
+  const clients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  const receipt = {
+    type: "notification-presented",
+    presented_at_ms: Date.now(),
+  };
+  for (const client of clients) {
+    client.postMessage(receipt);
+  }
+}
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();

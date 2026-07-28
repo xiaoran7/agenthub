@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { createECDH } from "node:crypto";
 import test from "node:test";
 
-import { decodeApplicationServerKey } from "../src/lib/notifications";
+import {
+  decodeApplicationServerKey,
+  parseNotificationPresentedAt,
+} from "../src/lib/notifications";
 import { parseSessionRef } from "../src/lib/types";
 
 test("the application server key decodes to the gateway's raw point", () => {
@@ -49,4 +52,36 @@ test("session references from a notification are validated before use", () => {
   assert.equal(parseSessionRef({ ...ref, device_id: 7 }), undefined);
   // Prototype keys must not pass as data.
   assert.equal(parseSessionRef({ ...ref, agent_type: "toString" }), undefined);
+});
+
+test("presentation receipts carry only a bounded browser timestamp", () => {
+  assert.equal(
+    parseNotificationPresentedAt({
+      type: "notification-presented",
+      presented_at_ms: 1_785_233_118_726,
+    }),
+    1_785_233_118_726,
+  );
+  assert.equal(parseNotificationPresentedAt(undefined), undefined);
+  assert.equal(
+    parseNotificationPresentedAt({
+      type: "notification-presented",
+      presented_at_ms: "1785233118726",
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseNotificationPresentedAt({
+      type: "notification-presented",
+      presented_at_ms: Number.POSITIVE_INFINITY,
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseNotificationPresentedAt({
+      type: "select-session",
+      presented_at_ms: 1_785_233_118_726,
+    }),
+    undefined,
+  );
 });

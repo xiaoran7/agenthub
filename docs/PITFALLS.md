@@ -11,7 +11,9 @@
   `PushOutcome`，把第三方推送失败与系统级展示问题混在同一个黑盒里。
 - **解决方式**：每次等待状态投递记录 `delivered / gone / failed` 聚合计数，
   不记录 endpoint、owner、Session ID 或 payload。`delivered` 仅表示推送服务
-  HTTP 成功接受，仍不能替代真实系统通知中心验收。
+  HTTP 成功接受；Service Worker 再在 `showNotification()` 成功后向已打开面板
+  发无元数据时间戳回执，用于证明浏览器展示 API 已接受。两者仍不能替代真实系统
+  通知中心验收。
 - **如何规避**：现场验收必须分别记录 Runner ACK、推送服务结果和浏览器/系统
   展示证据，不能用上游成功替代下游成功。
 

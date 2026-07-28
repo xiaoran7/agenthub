@@ -10,7 +10,7 @@ import {
 import type { PanelConfig } from "../lib/config";
 import { normalizeGatewayBase, normalizeUserId } from "../lib/config";
 import type { NotificationState } from "../lib/notifications";
-import { deviceShortId } from "../lib/format";
+import { deviceShortId, formatClock } from "../lib/format";
 import type { DeviceRecord } from "../lib/types";
 import {
   disableNotifications,
@@ -23,6 +23,7 @@ interface SettingsPanelProps {
   onSave: (config: PanelConfig) => void;
   devices: DeviceRecord[];
   onDevicesChanged: () => void;
+  notificationPresentedAt: number | undefined;
   onClose: () => void;
 }
 
@@ -40,6 +41,7 @@ export function SettingsPanel({
   devices,
   onSave,
   onDevicesChanged,
+  notificationPresentedAt,
   onClose,
 }: SettingsPanelProps) {
   const [gatewayBase, setGatewayBase] = useState(config.gatewayBase);
@@ -261,6 +263,14 @@ export function SettingsPanel({
             ? "正在检查通知能力…"
             : NOTIFICATION_HINTS[notifications]}
         </p>
+        {notifications === "on" && notificationPresentedAt !== undefined && (
+          <p className="settings-hint" role="status">
+            Service Worker 已于{" "}
+            {formatClock(new Date(notificationPresentedAt).toISOString())}{" "}
+            解密最近一条推送并提交给浏览器展示。Windows
+            是否弹出仍受系统通知设置影响。
+          </p>
+        )}
         {notificationError !== undefined && (
           <p className="error-text">{notificationError}</p>
         )}

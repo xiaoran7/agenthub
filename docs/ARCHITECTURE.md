@@ -334,6 +334,12 @@ Session 可按设备、Presence 和 Activity Status 过滤；状态事件时间�
 加密按 RFC 8188 `aes128gcm` + RFC 8291 密钥派生，授权按 RFC 8292 VAPID，均基于
 `node:crypto` 自实现，由 RFC 8291 官方示例向量钉死。
 
+Service Worker 只有在解密 payload 且 `showNotification()` 成功后，才向当前打开的
+同源面板发送 `notification-presented` 回执。回执只含浏览器时间戳，不含设备、
+Session、项目或通知 payload；面板只在当前页面生命周期内保留最近时间，不回传
+Gateway、不写 LocalStorage 或数据库。该回执证明浏览器接受了展示请求，但
+Windows 仍可能因勿扰模式或系统通知设置不弹出 Toast。
+
 ## 5. 状态数据模型
 
 “历史”不是运行状态。平台使用两个独立维度。
