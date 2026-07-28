@@ -40,9 +40,11 @@ export function DeviceStrip({
           <span className="device-dot" data-online={device.online} />
           <span className="mono">{deviceShortId(device.device_id)}</span>
           <span className="device-seen">
-            {device.online
-              ? "在线"
-              : formatRelative(device.last_seen_at, nowMs)}
+            {device.revoked
+              ? "已撤销"
+              : device.online
+                ? "在线"
+                : formatRelative(device.last_seen_at, nowMs)}
           </span>
         </button>
       ))}

@@ -642,6 +642,18 @@ input:focus-visible {
   cursor: not-allowed;
 }
 
+.device-management {
+  display: grid;
+  gap: 8px;
+}
+
+.device-management-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;

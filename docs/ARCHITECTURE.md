@@ -198,7 +198,11 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
 
 - 一次性绑定码将设备公钥关联到用户；注册必须携带设备私钥对注册字段的 Ed25519
   持有证明签名，公开可见的公钥不能被第三方抢注。同一设备重试幂等，绑定码不能
-  转给其他设备；注册被存储拒绝时绑定码回滚，不会被失败请求烧毁。
+  转给其他设备；注册被存储拒绝时绑定码回滚，不会被失败请求烧毁。绑定码由受认证
+  接口生成，默认 10 分钟有效，存储层只保存 SHA-256 摘要；PostgreSQL 以行锁保证
+  两台设备并发领取时只有一台成功。
+- 用户可软撤销自己的设备。撤销保留不可变事件和 Session 历史，但设备不再计为在线，
+  重新登记和后续同步均被拒绝。
 - 批次进入存储前执行深层字段白名单、协议/Schema 版本、设备 ID、公钥、连续序列和
   Ed25519 签名校验。校验顺序为：结构与字段白名单 → 公钥派生设备 ID → 签名 →
   存储层注册与序列约束。签名字节需要从解析后的规范形式重建，因此结构校验必然
@@ -270,14 +274,16 @@ MVP 使用 PostgreSQL：
 当前首版迁移已实现：
 
 - `agent_platform_devices`
+- `agent_platform_binding_codes`
 - `agent_platform_events`
 - `agent_platform_sessions`
 - `agent_platform_schema_migrations`
 
 事件原文只保存已经通过 Contracts 白名单验证的 `SyncEvent` JSONB；Presence 和
 Activity Status 额外保留受约束列用于筛选。迁移使用事务级 advisory lock 防止多个
-实例同时执行，并记录 SQL SHA-256 防止同版本迁移被静默改写。开发期绑定码仍在进程
-内，用户、凭据轮换、连接心跳等表随正式认证与实时通道实现。
+实例同时执行，并记录 SQL SHA-256 防止同版本迁移被静默改写。绑定码表只保存摘要、
+owner、有效期和领取设备；签发新码时清理过期且未领取的记录，已领取记录保留以支持
+同设备重试。用户、凭据轮换、连接心跳等表随正式认证与实时通道实现。
 
 实时广播可以先使用 PostgreSQL `LISTEN/NOTIFY`，达到单机瓶颈后再引入 Redis
 Pub/Sub。MVP 不必一开始维护两套基础设施。
@@ -331,24 +337,24 @@ Session 可按设备、Presence 和 Activity Status 过滤；状态事件时间�
 
 ### 5.1 Presence
 
-| 值 | 含义 |
-| --- | --- |
-| `LIVE` | 最近收到权威实时信号，或确认进程仍存活 |
+| 值          | 含义                                   |
+| ----------- | -------------------------------------- |
+| `LIVE`      | 最近收到权威实时信号，或确认进程仍存活 |
 | `PERSISTED` | 仅存在持久化记录，当前没有可信实时信号 |
-| `UNKNOWN` | 无法确认是否仍有活动进程 |
+| `UNKNOWN`   | 无法确认是否仍有活动进程               |
 
 ### 5.2 Activity Status
 
-| 值 | 含义 |
-| --- | --- |
-| `WORKING` | 正在生成、调用工具或执行命令 |
-| `WAITING_INPUT` | 等待用户回答问题 |
-| `WAITING_PERMISSION` | 等待权限、命令或文件变更审批 |
-| `IDLE` | Session 可继续，但当前没有任务 |
-| `COMPLETED` | 最近一个 Turn 正常完成 |
-| `FAILED` | 最近一个 Turn 执行失败 |
-| `STOPPED` | 最近一个 Turn 或 Session 被主动停止 |
-| `UNKNOWN` | 无法可靠判断 |
+| 值                   | 含义                                |
+| -------------------- | ----------------------------------- |
+| `WORKING`            | 正在生成、调用工具或执行命令        |
+| `WAITING_INPUT`      | 等待用户回答问题                    |
+| `WAITING_PERMISSION` | 等待权限、命令或文件变更审批        |
+| `IDLE`               | Session 可继续，但当前没有任务      |
+| `COMPLETED`          | 最近一个 Turn 正常完成              |
+| `FAILED`             | 最近一个 Turn 执行失败              |
+| `STOPPED`            | 最近一个 Turn 或 Session 被主动停止 |
+| `UNKNOWN`            | 无法可靠判断                        |
 
 UI 中的“历史会话”筛选条件为：
 
@@ -380,44 +386,44 @@ presence = PERSISTED
 
 ### 6.1 Claude Code
 
-| 原始信号 | Presence | Activity Status | Confidence |
-| --- | --- | --- | --- |
-| `state=working` | `LIVE` | `WORKING` | `authoritative` |
-| `state=blocked`, `waitingFor=permission prompt` | `LIVE` | `WAITING_PERMISSION` | `authoritative` |
-| `state=blocked`, `waitingFor=sandbox request` | `LIVE` | `WAITING_PERMISSION` | `authoritative` |
-| `state=blocked`, `waitingFor=input needed` | `LIVE` | `WAITING_INPUT` | `authoritative` |
-| `state=blocked`, `waitingFor` 无法识别 | `UNKNOWN` | `UNKNOWN` | `inferred` |
-| `state=done` | `LIVE` 或 `PERSISTED` | `COMPLETED` | `authoritative` |
-| `state=failed` | `LIVE` 或 `PERSISTED` | `FAILED` | `authoritative` |
-| `state=stopped` | `LIVE` 或 `PERSISTED` | `STOPPED` | `authoritative` |
-| `UserPromptSubmit` Hook | `LIVE` | `WORKING` | `observed` |
-| `PermissionRequest` Hook | `LIVE` | `WAITING_PERMISSION` | `observed` |
-| `Elicitation` Hook | `LIVE` | `WAITING_INPUT` | `observed` |
-| `Stop` Hook | `LIVE` | `COMPLETED` | `observed` |
-| `StopFailure` Hook | `LIVE` | `FAILED` | `observed` |
-| `SessionEnd` Hook | `PERSISTED` | 保留最近状态 | `observed` |
+| 原始信号                                        | Presence              | Activity Status      | Confidence      |
+| ----------------------------------------------- | --------------------- | -------------------- | --------------- |
+| `state=working`                                 | `LIVE`                | `WORKING`            | `authoritative` |
+| `state=blocked`, `waitingFor=permission prompt` | `LIVE`                | `WAITING_PERMISSION` | `authoritative` |
+| `state=blocked`, `waitingFor=sandbox request`   | `LIVE`                | `WAITING_PERMISSION` | `authoritative` |
+| `state=blocked`, `waitingFor=input needed`      | `LIVE`                | `WAITING_INPUT`      | `authoritative` |
+| `state=blocked`, `waitingFor` 无法识别          | `UNKNOWN`             | `UNKNOWN`            | `inferred`      |
+| `state=done`                                    | `LIVE` 或 `PERSISTED` | `COMPLETED`          | `authoritative` |
+| `state=failed`                                  | `LIVE` 或 `PERSISTED` | `FAILED`             | `authoritative` |
+| `state=stopped`                                 | `LIVE` 或 `PERSISTED` | `STOPPED`            | `authoritative` |
+| `UserPromptSubmit` Hook                         | `LIVE`                | `WORKING`            | `observed`      |
+| `PermissionRequest` Hook                        | `LIVE`                | `WAITING_PERMISSION` | `observed`      |
+| `Elicitation` Hook                              | `LIVE`                | `WAITING_INPUT`      | `observed`      |
+| `Stop` Hook                                     | `LIVE`                | `COMPLETED`          | `observed`      |
+| `StopFailure` Hook                              | `LIVE`                | `FAILED`             | `observed`      |
+| `SessionEnd` Hook                               | `PERSISTED`           | 保留最近状态         | `observed`      |
 
 ### 6.2 Codex
 
-| 原始信号 | Presence | Activity Status | Confidence |
-| --- | --- | --- | --- |
-| `thread.status=active` | `LIVE` | `WORKING` | `authoritative` |
-| `thread.status=idle` | `LIVE` | `IDLE` | `authoritative` |
-| `thread.status=systemError` | `LIVE` | `FAILED` | `authoritative` |
-| `turn/started` | `LIVE` | `WORKING` | `authoritative` |
-| `turn/completed: completed` | `LIVE` | `COMPLETED` | `authoritative` |
-| `turn/completed: interrupted` | `LIVE` | `STOPPED` | `authoritative` |
-| `turn/completed: failed` | `LIVE` | `FAILED` | `authoritative` |
-| 任意 `requestApproval` | `LIVE` | `WAITING_PERMISSION` | `authoritative` |
-| `requestUserInput` | `LIVE` | `WAITING_INPUT` | `authoritative` |
-| `mcpServer/elicitation/request` | `LIVE` | `WAITING_INPUT` | `authoritative` |
-| `UserPromptSubmit` Hook | `LIVE` | `WORKING` | `observed` |
-| `PermissionRequest` Hook | `LIVE` | `WAITING_PERMISSION` | `observed` |
-| `Stop` Hook | `LIVE` | `COMPLETED` | `observed` |
-| `SessionEnd` Hook | `PERSISTED` | 保留最近状态 | `observed` |
-| `thread.status=notLoaded` | `UNKNOWN` | 保留最近状态 | `inferred` |
-| `thread/closed` | `UNKNOWN` | 保留最近状态 | `inferred` |
-| 未识别的 thread 状态或方法 | 按信号推断 | 保留最近状态 | `inferred` |
+| 原始信号                        | Presence    | Activity Status      | Confidence      |
+| ------------------------------- | ----------- | -------------------- | --------------- |
+| `thread.status=active`          | `LIVE`      | `WORKING`            | `authoritative` |
+| `thread.status=idle`            | `LIVE`      | `IDLE`               | `authoritative` |
+| `thread.status=systemError`     | `LIVE`      | `FAILED`             | `authoritative` |
+| `turn/started`                  | `LIVE`      | `WORKING`            | `authoritative` |
+| `turn/completed: completed`     | `LIVE`      | `COMPLETED`          | `authoritative` |
+| `turn/completed: interrupted`   | `LIVE`      | `STOPPED`            | `authoritative` |
+| `turn/completed: failed`        | `LIVE`      | `FAILED`             | `authoritative` |
+| 任意 `requestApproval`          | `LIVE`      | `WAITING_PERMISSION` | `authoritative` |
+| `requestUserInput`              | `LIVE`      | `WAITING_INPUT`      | `authoritative` |
+| `mcpServer/elicitation/request` | `LIVE`      | `WAITING_INPUT`      | `authoritative` |
+| `UserPromptSubmit` Hook         | `LIVE`      | `WORKING`            | `observed`      |
+| `PermissionRequest` Hook        | `LIVE`      | `WAITING_PERMISSION` | `observed`      |
+| `Stop` Hook                     | `LIVE`      | `COMPLETED`          | `observed`      |
+| `SessionEnd` Hook               | `PERSISTED` | 保留最近状态         | `observed`      |
+| `thread.status=notLoaded`       | `UNKNOWN`   | 保留最近状态         | `inferred`      |
+| `thread/closed`                 | `UNKNOWN`   | 保留最近状态         | `inferred`      |
+| 未识别的 thread 状态或方法      | 按信号推断  | 保留最近状态         | `inferred`      |
 
 特别注意：`notLoaded` 不能直接映射为历史或停止；所有无法识别的状态与方法一律
 降为 `inferred` 置信度，不得以权威级伪造判断。带 `pid`/存活证据的 `stopped`
@@ -550,7 +556,8 @@ Agent-Platform/
 
 ### Milestone 2：云端同步
 
-- 设备绑定（已完成开发期一次性绑定码、公钥登记和 Runner 出站调用）
+- 设备绑定（已完成受认证签发、过期、摘要持久化、单次领取、软撤销和 Runner
+  出站调用；密钥轮换与恢复绑定待接入）
 - 面板访问认证（已完成个人部署 Bearer 令牌与服务端同源代理；多用户登录和令牌
   生命周期待接入）
 - WebSocket Gateway（已完成 Runner→Gateway HTTP 批次闭环，WebSocket 待接入）
@@ -599,20 +606,20 @@ Fixture、一次性当前版本采集或订阅成功替代这些结论。
 
 ## 11. Milestone 0 验收矩阵
 
-| 场景 | Claude | Codex |
-| --- | --- | --- |
-| 新建 Session | 必须识别 | 必须识别 |
-| 恢复 Session | 必须识别 | 必须识别 |
-| 正在工作 | 必须识别 | 必须识别 |
-| 等待普通输入 | 必须识别 | 必须识别 |
-| 等待权限 | 必须识别 | 必须识别 |
-| 正常完成 | 必须识别 | 必须识别 |
-| 执行失败 | 必须识别 | 必须识别 |
-| 主动停止 | 必须识别 | 必须识别 |
-| Agent 进程崩溃 | 至少变为未知 | 至少变为未知 |
-| 设备断网再恢复 | 不丢事件 | 不丢事件 |
-| 不读取 Token | 必须证明 | 必须证明 |
-| 不上传 transcript | 必须证明 | 必须证明 |
+| 场景              | Claude       | Codex        |
+| ----------------- | ------------ | ------------ |
+| 新建 Session      | 必须识别     | 必须识别     |
+| 恢复 Session      | 必须识别     | 必须识别     |
+| 正在工作          | 必须识别     | 必须识别     |
+| 等待普通输入      | 必须识别     | 必须识别     |
+| 等待权限          | 必须识别     | 必须识别     |
+| 正常完成          | 必须识别     | 必须识别     |
+| 执行失败          | 必须识别     | 必须识别     |
+| 主动停止          | 必须识别     | 必须识别     |
+| Agent 进程崩溃    | 至少变为未知 | 至少变为未知 |
+| 设备断网再恢复    | 不丢事件     | 不丢事件     |
+| 不读取 Token      | 必须证明     | 必须证明     |
+| 不上传 transcript | 必须证明     | 必须证明     |
 
 任何一个“必须识别”场景无法通过稳定官方接口或 Hook 实现时，应在开始云端开发
 前调整 MVP 承诺。

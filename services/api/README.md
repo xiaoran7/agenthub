@@ -7,7 +7,9 @@ Device Gateway 与只读查询 API 的开发期实现。
 | 方法     | 路径                     | 用途                                           |
 | -------- | ------------------------ | ---------------------------------------------- |
 | `GET`    | `/health`                | 进程健康检查                                   |
+| `POST`   | `/v1/device-bindings`    | 生成有时限的一次性设备绑定码                   |
 | `POST`   | `/v1/devices/register`   | 使用一次性绑定码登记设备公钥                   |
+| `DELETE` | `/v1/devices/:deviceId`  | 撤销当前用户的设备，保留既有会话历史           |
 | `POST`   | `/v1/sync/batches`       | 验证并幂等接收签名事件批次                     |
 | `GET`    | `/v1/devices`            | 查询当前开发用户的设备                         |
 | `GET`    | `/v1/sessions`           | 按设备、Presence、Activity Status 查询 Session |
@@ -41,7 +43,8 @@ $env:AGENT_PLATFORM_VAPID_SUBJECT = 'mailto:you@example.com'
 私钥是服务端机密，不要提交进仓库。只有会话跃迁进入 `WAITING_INPUT` /
 `WAITING_PERMISSION` 才发通知，负载仅含面板已展示的元数据。
 
-设备与 Session 查询、SSE 和 Push 订阅接口使用 Bearer 访问令牌认证。个人部署在
+绑定码签发、设备撤销、设备与 Session 查询、SSE 和 Push 订阅接口使用 Bearer
+访问令牌认证。个人部署在
 Gateway 配置 `AGENT_PLATFORM_ACCESS_TOKEN`，在 Web 服务端配置相同的
 `GATEWAY_ACCESS_TOKEN`；浏览器只访问同源代理，令牌不会进入 localStorage、URL
 或浏览器请求头。Gateway 构造认证器后只保留令牌的 SHA-256 摘要，并以固定长度
@@ -57,7 +60,6 @@ Gateway 配置 `AGENT_PLATFORM_ACCESS_TOKEN`，在 Web 服务端配置相同的
 
 ```powershell
 $env:AGENT_PLATFORM_ACCESS_TOKEN = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
-$env:AGENT_PLATFORM_BINDING_CODE = 'local-code'
 $env:AGENT_PLATFORM_OWNER_ID = 'local-user'
 
 npm.cmd start --workspace @agent-platform/api
@@ -90,15 +92,18 @@ npm.cmd start --workspace @agent-platform/api
 ```
 
 `migrate` 可用于部署阶段单独执行迁移；服务启动仍会幂等检查迁移版本和 SHA-256，
-历史迁移内容与数据库记录不一致时拒绝启动。当前持久化 `devices`、不可变事件流和
-Session 快照；批次写入会锁定设备行，在一个事务内完成事件幂等检查、连续序列验证、
-快照合并和设备水位更新。
+历史迁移内容与数据库记录不一致时拒绝启动。当前持久化 `devices`、绑定码摘要、
+不可变事件流和 Session 快照；批次写入会锁定设备行，在一个事务内完成事件幂等
+检查、连续序列验证、快照合并和设备水位更新。
 
-另开一个终端后，可直接用 Runner 完成真实 HTTP 同步闭环：
+在 Web 设置面板点击「生成绑定码」，或带 Bearer 令牌调用
+`POST /v1/device-bindings`，取得默认 10 分钟有效且仅返回一次的绑定码。数据库只
+保存 SHA-256 摘要；同一设备可凭同一码幂等重试，其他设备不能复用。另开终端后，
+可直接用 Runner 完成真实 HTTP 同步闭环：
 
 ```powershell
 $env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
-$env:AGENT_PLATFORM_BINDING_CODE = 'local-code'
+$env:AGENT_PLATFORM_BINDING_CODE = '<从设置面板取得的一次性绑定码>'
 
 cargo run -p agent-platform-runner -- `
   device bind --identity runner-identity.json
@@ -107,8 +112,9 @@ cargo run -p agent-platform-runner -- `
   sync push --identity runner-identity.json --db runner.db
 ```
 
-Runner 对非回环地址强制要求 HTTPS。本地 Gateway 是进程内开发实现，重启后需要重新
-绑定，不能作为持久化或生产部署验证。
+Runner 对非回环地址强制要求 HTTPS。未配置 PostgreSQL 时 Gateway 是进程内开发
+实现，重启后需要重新绑定，不能作为持久化或生产部署验证。撤销设备是软撤销：既有
+Session 历史继续可读，设备显示为「已撤销」且后续同步统一被拒绝。
 
 ## 质量检查
 
@@ -132,7 +138,7 @@ npm.cmd test --workspace @agent-platform/api
 ## 尚未实现
 
 - 多用户登录、令牌签发/轮换/撤销和联合身份提供商
-- 绑定码持久化、生成、过期、撤销和设备密钥轮换
+- 设备密钥轮换、恢复绑定和完整绑定审计日志
 - 心跳（`/v1/stream` 只推变化，不代表设备活性）
 - 跨实例的变化广播（当前 broker 在进程内，多实例部署会漏推）
 - 多实例并发、速率限制与审计日志

@@ -21,6 +21,14 @@ export function devicesUrl(base: string): string {
   return `${base}/v1/devices`;
 }
 
+export function deviceBindingsUrl(base: string): string {
+  return `${base}/v1/device-bindings`;
+}
+
+export function deviceUrl(base: string, deviceId: string): string {
+  return `${base}/v1/devices/${encodeURIComponent(deviceId)}`;
+}
+
 export function sessionsUrl(base: string): string {
   return `${base}/v1/sessions`;
 }
@@ -171,6 +179,53 @@ export async function fetchDevices(
     config.userId,
   );
   return body.devices;
+}
+
+export interface DeviceBinding {
+  binding_code: string;
+  expires_at: string;
+}
+
+export async function createDeviceBinding(
+  config: PanelConfig,
+): Promise<DeviceBinding> {
+  let response: Response;
+  try {
+    response = await fetch(deviceBindingsUrl(config.gatewayBase), {
+      method: "POST",
+      headers: {
+        "x-user-id": config.userId,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ expires_in_seconds: 600 }),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "network_error");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await errorCode(response));
+  }
+  return (await response.json()) as DeviceBinding;
+}
+
+export async function revokeDevice(
+  config: PanelConfig,
+  deviceId: string,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(deviceUrl(config.gatewayBase, deviceId), {
+      method: "DELETE",
+      headers: { "x-user-id": config.userId },
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "network_error");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await errorCode(response));
+  }
 }
 
 export async function fetchSessions(

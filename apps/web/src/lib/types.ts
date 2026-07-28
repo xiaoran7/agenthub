@@ -24,6 +24,7 @@ export interface DeviceRecord {
   created_at: string;
   last_seen_at: string;
   online: boolean;
+  revoked: boolean;
 }
 
 /** Stable identity of one session across snapshot and timeline queries. */

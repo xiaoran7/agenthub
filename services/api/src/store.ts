@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
@@ -17,6 +18,7 @@ export interface RegisteredDevice {
   owner_id: string;
   created_at: string;
   last_seen_at: string;
+  revoked_at?: string;
 }
 
 export interface DeviceView {
@@ -24,6 +26,7 @@ export interface DeviceView {
   created_at: string;
   last_seen_at: string;
   online: boolean;
+  revoked: boolean;
 }
 
 export interface StoredSession extends SyncEvent {
@@ -75,6 +78,17 @@ export interface IngestResult {
 }
 
 export interface GatewayStore {
+  createBindingCode(
+    ownerId: string,
+    codeDigest: string,
+    expiresAt: string,
+  ): Promise<void>;
+  registerDeviceWithBindingCode(
+    codeDigest: string,
+    deviceId: string,
+    publicKey: string,
+  ): Promise<DeviceRegistrationResult>;
+  revokeDevice(ownerId: string, deviceId: string): Promise<boolean>;
   savePushSubscription(
     ownerId: string,
     subscription: PushSubscription,
@@ -156,6 +170,14 @@ export class OneTimeBindingCodes {
 
 export class InMemoryGatewayStore implements GatewayStore {
   readonly #devices = new Map<string, RegisteredDevice>();
+  readonly #bindingCodes = new Map<
+    string,
+    {
+      ownerId: string;
+      expiresAt: string;
+      claimedDeviceId?: string;
+    }
+  >();
   readonly #pushSubscriptions = new Map<
     string,
     PushSubscription & { owner_id: string }
@@ -168,6 +190,78 @@ export class InMemoryGatewayStore implements GatewayStore {
 
   constructor(now: () => Date = () => new Date()) {
     this.#now = now;
+  }
+
+  async createBindingCode(
+    ownerId: string,
+    codeDigest: string,
+    expiresAt: string,
+  ): Promise<void> {
+    const now = this.#now().getTime();
+    for (const [digest, binding] of this.#bindingCodes) {
+      if (
+        binding.claimedDeviceId === undefined &&
+        Date.parse(binding.expiresAt) <= now
+      ) {
+        this.#bindingCodes.delete(digest);
+      }
+    }
+    if (this.#bindingCodes.has(codeDigest)) {
+      throw new GatewayStoreError(
+        "binding_code_conflict",
+        "binding code digest already exists",
+      );
+    }
+    this.#bindingCodes.set(codeDigest, { ownerId, expiresAt });
+  }
+
+  async registerDeviceWithBindingCode(
+    codeDigest: string,
+    deviceId: string,
+    publicKey: string,
+  ): Promise<DeviceRegistrationResult> {
+    const binding = this.#bindingCodes.get(codeDigest);
+    if (binding === undefined) {
+      throw new GatewayStoreError(
+        "invalid_binding_code",
+        "binding code is invalid or expired",
+      );
+    }
+    if (binding.claimedDeviceId !== undefined) {
+      if (binding.claimedDeviceId !== deviceId) {
+        throw new GatewayStoreError(
+          "binding_code_used",
+          "binding code has already been used",
+        );
+      }
+      return this.registerDevice(binding.ownerId, deviceId, publicKey);
+    }
+    if (Date.parse(binding.expiresAt) <= this.#now().getTime()) {
+      throw new GatewayStoreError(
+        "invalid_binding_code",
+        "binding code is invalid or expired",
+      );
+    }
+    binding.claimedDeviceId = deviceId;
+    try {
+      return await this.registerDevice(binding.ownerId, deviceId, publicKey);
+    } catch (error) {
+      delete binding.claimedDeviceId;
+      throw error;
+    }
+  }
+
+  async revokeDevice(ownerId: string, deviceId: string): Promise<boolean> {
+    const device = this.#devices.get(deviceId);
+    if (
+      device === undefined ||
+      device.owner_id !== ownerId ||
+      device.revoked_at !== undefined
+    ) {
+      return false;
+    }
+    device.revoked_at = this.#now().toISOString();
+    return true;
   }
 
   async savePushSubscription(
@@ -204,6 +298,9 @@ export class InMemoryGatewayStore implements GatewayStore {
   ): Promise<DeviceRegistrationResult> {
     const existing = this.#devices.get(deviceId);
     if (existing !== undefined) {
+      if (existing.revoked_at !== undefined) {
+        throw new GatewayStoreError("device_revoked", "device is revoked");
+      }
       if (existing.public_key !== publicKey || existing.owner_id !== ownerId) {
         throw new GatewayStoreError(
           "device_conflict",
@@ -231,6 +328,9 @@ export class InMemoryGatewayStore implements GatewayStore {
         "device_not_registered",
         "device is not registered",
       );
+    }
+    if (device.revoked_at !== undefined) {
+      throw new GatewayStoreError("device_revoked", "device is revoked");
     }
     if (device.public_key !== batch.public_key) {
       throw new GatewayStoreError(
@@ -338,7 +438,10 @@ export class InMemoryGatewayStore implements GatewayStore {
         device_id: device.device_id,
         created_at: device.created_at,
         last_seen_at: device.last_seen_at,
-        online: Date.parse(device.last_seen_at) >= offlineBefore,
+        online:
+          device.revoked_at === undefined &&
+          Date.parse(device.last_seen_at) >= offlineBefore,
+        revoked: device.revoked_at !== undefined,
       }));
   }
 
@@ -388,6 +491,10 @@ export class InMemoryGatewayStore implements GatewayStore {
       .sort((left, right) => right.sequence - left.sequence)
       .slice(0, filters.limit);
   }
+}
+
+export function bindingCodeDigest(code: string): string {
+  return createHash("sha256").update(code, "utf8").digest("hex");
 }
 
 function sessionKey(event: SyncEvent): string {

@@ -306,7 +306,7 @@ export default function PanelPage() {
                 Code / Codex 会话的实时状态：
               </p>
               <ol>
-                <li>启动 Gateway 并配置一次性绑定码</li>
+                <li>打开右上角设置，生成 10 分钟一次性绑定码</li>
                 <li>
                   <span className="mono">
                     agent-platform-runner device bind
@@ -343,7 +343,9 @@ export default function PanelPage() {
       {settingsOpen && config !== undefined && (
         <SettingsPanel
           config={config}
+          devices={devices}
           onSave={handleSaveConfig}
+          onDevicesChanged={() => void refresh()}
           onClose={() => setSettingsOpen(false)}
         />
       )}

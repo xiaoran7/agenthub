@@ -7,6 +7,12 @@
 
 ### Added
 
+- Gateway 新增持久设备生命周期：受 Bearer 保护的 `POST /v1/device-bindings` 签发
+  默认 10 分钟有效的一次性绑定码，Store 只保存 SHA-256 摘要；PostgreSQL 以事务
+  行锁保证并发单次领取，同设备重试幂等，过期未领取码在后续签发时清理。新增
+  `DELETE /v1/devices/:deviceId` owner 隔离软撤销，保留历史 Session、设备显示
+  「已撤销」，并拒绝重新登记和后续同步。Web 设置面板可生成、复制绑定码并管理
+  设备撤销，内存与真实 PostgreSQL 均覆盖过期、竞态、幂等和历史保留。
 - Gateway 新增个人部署 Bearer 访问令牌认证，保护设备/Session 查询、SSE 与 Push
   订阅接口；无效或缺失凭据统一返回 `authentication_required`。Web `/v1` 同源
   Route Handler 从服务端环境注入令牌，丢弃浏览器 Authorization/Cookie，令牌不
@@ -42,7 +48,7 @@
   会话（内存与 PostgreSQL 两侧同一契约，PostgreSQL 在锁定设备行的事务内前后各读
   一次快照状态）。
 - Gateway 新增 Web Push：`GET /v1/push/key`、`POST`/`DELETE
-  /v1/push/subscriptions`，会话跃迁进入 `WAITING_INPUT`/`WAITING_PERMISSION`
+/v1/push/subscriptions`，会话跃迁进入 `WAITING_INPUT`/`WAITING_PERMISSION`
   时向该 owner 的订阅推送通知，推送服务返回 404/410 的订阅立即清理。加密
   （RFC 8188 aes128gcm + RFC 8291）与 VAPID 授权（RFC 8292）基于 `node:crypto`
   自实现，用 RFC 8291 官方示例向量逐字节钉死，不引入新依赖。未配置完整 VAPID

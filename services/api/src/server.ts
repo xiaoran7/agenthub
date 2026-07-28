@@ -7,18 +7,15 @@ import {
 } from "./auth.js";
 import { PostgresGatewayStore } from "./postgres-store.js";
 import { WebPushSender, vapidKeysFromEnv } from "./push.js";
-import { InMemoryGatewayStore, OneTimeBindingCodes } from "./store.js";
+import { InMemoryGatewayStore } from "./store.js";
 
 const port = parsePort(process.env.PORT);
 const host = process.env.HOST ?? "127.0.0.1";
-const bindingCode = process.env.AGENT_PLATFORM_BINDING_CODE;
 const ownerId = process.env.AGENT_PLATFORM_OWNER_ID;
 const databaseUrl = process.env.AGENT_PLATFORM_DATABASE_URL;
 
-if (bindingCode === undefined || ownerId === undefined) {
-  throw new Error(
-    "AGENT_PLATFORM_BINDING_CODE and AGENT_PLATFORM_OWNER_ID are required",
-  );
+if (ownerId === undefined) {
+  throw new Error("AGENT_PLATFORM_OWNER_ID is required");
 }
 const authenticator = ownerAuthenticator(ownerId, host);
 
@@ -31,7 +28,6 @@ const store =
 const vapidKeys = vapidKeysFromEnv();
 const options: GatewayAppOptions = {
   store,
-  bindingCodes: new OneTimeBindingCodes(new Map([[bindingCode, ownerId]])),
   authenticator,
   logger: true,
 };

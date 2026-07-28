@@ -14,7 +14,11 @@ import {
 import { createGatewayApp, type GatewayAppOptions } from "../src/app.js";
 import { DevelopmentIdentityAuthenticator } from "../src/auth.js";
 import type { PushOutcome } from "../src/push.js";
-import { InMemoryGatewayStore, OneTimeBindingCodes } from "../src/store.js";
+import {
+  InMemoryGatewayStore,
+  OneTimeBindingCodes,
+  bindingCodeDigest,
+} from "../src/store.js";
 
 const fixture = parseSyncBatch(
   JSON.parse(
@@ -135,6 +139,188 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
   });
   assert.equal(devices.json().devices[0].online, false);
   await app.close();
+});
+
+test("persistent binding codes expire and revoked devices keep history but cannot sync", async () => {
+  let now = new Date("2026-07-28T10:00:00Z");
+  const store = new InMemoryGatewayStore(() => now);
+  const codes = ["generated-binding-code-a", "generated-binding-code-b"];
+  const app = createGatewayApp({
+    store,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    now: () => now,
+    bindingCodeFactory: () => {
+      const code = codes.shift();
+      assert.ok(code);
+      return code;
+    },
+  });
+
+  const anonymousIssue = await app.inject({
+    method: "POST",
+    url: "/v1/device-bindings",
+    payload: {},
+  });
+  assert.equal(anonymousIssue.statusCode, 401);
+  assert.equal(anonymousIssue.json().error, "authentication_required");
+
+  const invalidTtl = await app.inject({
+    method: "POST",
+    url: "/v1/device-bindings",
+    headers: { "x-user-id": "user-1" },
+    payload: { expires_in_seconds: 59 },
+  });
+  assert.equal(invalidTtl.statusCode, 400);
+  assert.equal(invalidTtl.json().error, "invalid_binding_ttl");
+
+  const unknownField = await app.inject({
+    method: "POST",
+    url: "/v1/device-bindings",
+    headers: { "x-user-id": "user-1" },
+    payload: { unexpected: true },
+  });
+  assert.equal(unknownField.statusCode, 400);
+  assert.equal(unknownField.json().error, "unknown_field");
+
+  const issued = await app.inject({
+    method: "POST",
+    url: "/v1/device-bindings",
+    headers: { "x-user-id": "user-1" },
+    payload: { expires_in_seconds: 60 },
+  });
+  assert.equal(issued.statusCode, 201);
+  assert.deepEqual(issued.json(), {
+    binding_code: "generated-binding-code-a",
+    expires_at: "2026-07-28T10:01:00.000Z",
+  });
+
+  const registration = await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("generated-binding-code-a"),
+  });
+  assert.equal(registration.statusCode, 201);
+  const retry = await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("generated-binding-code-a"),
+  });
+  assert.equal(retry.statusCode, 200);
+
+  assert.equal(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/v1/sync/batches",
+        payload: fixture,
+      })
+    ).statusCode,
+    200,
+  );
+  const foreignRevoke = await app.inject({
+    method: "DELETE",
+    url: `/v1/devices/${fixture.device_id}`,
+    headers: { "x-user-id": "user-2" },
+  });
+  assert.equal(foreignRevoke.statusCode, 204);
+  assert.equal((await store.ingestBatch(fixture)).accepted, 0);
+
+  const revoked = await app.inject({
+    method: "DELETE",
+    url: `/v1/devices/${fixture.device_id}`,
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(revoked.statusCode, 204);
+  const devices = await app.inject({
+    method: "GET",
+    url: "/v1/devices",
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(devices.json().devices[0].revoked, true);
+  assert.equal(devices.json().devices[0].online, false);
+  assert.equal(
+    (
+      await app.inject({
+        method: "GET",
+        url: "/v1/sessions",
+        headers: { "x-user-id": "user-1" },
+      })
+    ).json().sessions.length,
+    1,
+    "soft revocation must preserve monitoring history",
+  );
+  const rejectedBatch = await app.inject({
+    method: "POST",
+    url: "/v1/sync/batches",
+    payload: fixture,
+  });
+  assert.equal(rejectedBatch.statusCode, 403);
+  assert.equal(rejectedBatch.json().error, "device_revoked");
+  const rejectedRegistration = await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("generated-binding-code-a"),
+  });
+  assert.equal(rejectedRegistration.statusCode, 403);
+  assert.equal(rejectedRegistration.json().error, "device_revoked");
+  assert.equal(
+    (
+      await app.inject({
+        method: "DELETE",
+        url: `/v1/devices/${fixture.device_id}`,
+        headers: { "x-user-id": "user-1" },
+      })
+    ).statusCode,
+    204,
+    "repeated revocation must stay idempotent",
+  );
+
+  const expiring = await app.inject({
+    method: "POST",
+    url: "/v1/device-bindings",
+    headers: { "x-user-id": "user-1" },
+    payload: { expires_in_seconds: 60 },
+  });
+  assert.equal(expiring.statusCode, 201);
+  now = new Date("2026-07-28T10:02:00Z");
+  const expiredRegistration = await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("generated-binding-code-b"),
+  });
+  assert.equal(expiredRegistration.statusCode, 403);
+  assert.equal(expiredRegistration.json().error, "invalid_binding_code");
+  await app.close();
+});
+
+test("one binding code cannot race-register two devices", async () => {
+  const store = new InMemoryGatewayStore();
+  const digest = bindingCodeDigest("concurrent-binding-code");
+  await store.createBindingCode("user-1", digest, "2099-01-01T00:00:00.000Z");
+
+  const results = await Promise.allSettled([
+    store.registerDeviceWithBindingCode(
+      digest,
+      "dev_00000000000000000000000000000001",
+      "1".repeat(64),
+    ),
+    store.registerDeviceWithBindingCode(
+      digest,
+      "dev_00000000000000000000000000000002",
+      "2".repeat(64),
+    ),
+  ]);
+
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  const rejected = results.find((result) => result.status === "rejected");
+  assert.ok(rejected);
+  assert.equal(
+    (rejected.reason as { code?: unknown }).code,
+    "binding_code_used",
+  );
 });
 
 test("tampered and extra content is rejected before storage", async () => {

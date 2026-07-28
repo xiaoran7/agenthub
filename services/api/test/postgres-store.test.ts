@@ -16,6 +16,7 @@ import {
   makeM4Batch,
   makeM4Device,
 } from "./m4-fixtures.js";
+import { bindingCodeDigest } from "../src/store.js";
 
 const databaseUrl = process.env.AGENT_PLATFORM_TEST_DATABASE_URL;
 const fixture = parseSyncBatch(
@@ -46,8 +47,14 @@ test(
       firstSql = scopedConnection(databaseUrl, schema);
       await migratePostgres(firstSql);
       const firstStore = new PostgresGatewayStore(firstSql);
-      const registration = await firstStore.registerDevice(
+      const bindingDigest = bindingCodeDigest("postgres-persistent-code");
+      await firstStore.createBindingCode(
         "postgres-user",
+        bindingDigest,
+        "2099-01-01T00:00:00.000Z",
+      );
+      const registration = await firstStore.registerDeviceWithBindingCode(
+        bindingDigest,
         fixture.device_id,
         fixture.public_key,
       );
@@ -84,8 +91,8 @@ test(
       secondSql = scopedConnection(databaseUrl, schema);
       await migratePostgres(secondSql);
       const secondStore = new PostgresGatewayStore(secondSql);
-      const retry = await secondStore.registerDevice(
-        "postgres-user",
+      const retry = await secondStore.registerDeviceWithBindingCode(
+        bindingDigest,
         fixture.device_id,
         fixture.public_key,
       );
@@ -160,6 +167,78 @@ test(
       assert.equal(
         (await secondStore.listPushSubscriptions("postgres-user")).length,
         0,
+      );
+
+      assert.equal(
+        await secondStore.revokeDevice("another-user", fixture.device_id),
+        false,
+      );
+      assert.equal(
+        await secondStore.revokeDevice("postgres-user", fixture.device_id),
+        true,
+      );
+      const revokedDevices = await secondStore.listDevices("postgres-user");
+      assert.equal(revokedDevices.length, 1);
+      assert.equal(revokedDevices[0]?.device_id, fixture.device_id);
+      assert.equal(
+        revokedDevices[0]?.created_at,
+        registration.device.created_at,
+      );
+      assert.equal(revokedDevices[0]?.online, false);
+      assert.equal(revokedDevices[0]?.revoked, true);
+      await assert.rejects(
+        secondStore.ingestBatch(fixture),
+        (error: unknown) =>
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "device_revoked",
+      );
+      await assert.rejects(
+        secondStore.registerDeviceWithBindingCode(
+          bindingDigest,
+          fixture.device_id,
+          fixture.public_key,
+        ),
+        (error: unknown) =>
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "device_revoked",
+      );
+      assert.equal(
+        (await secondStore.listSessions("postgres-user", {})).length,
+        1,
+        "revocation must preserve existing session history",
+      );
+
+      const raceDigest = bindingCodeDigest("postgres-race-code");
+      await secondStore.createBindingCode(
+        "postgres-user",
+        raceDigest,
+        "2099-01-01T00:00:00.000Z",
+      );
+      const race = await Promise.allSettled([
+        secondStore.registerDeviceWithBindingCode(
+          raceDigest,
+          "dev_00000000000000000000000000000001",
+          "1".repeat(64),
+        ),
+        secondStore.registerDeviceWithBindingCode(
+          raceDigest,
+          "dev_00000000000000000000000000000002",
+          "2".repeat(64),
+        ),
+      ]);
+      assert.equal(
+        race.filter((result) => result.status === "fulfilled").length,
+        1,
+      );
+      const raceRejected = race.find((result) => result.status === "rejected");
+      assert.ok(raceRejected);
+      assert.equal(
+        (raceRejected.reason as { code?: unknown }).code,
+        "binding_code_used",
       );
 
       await secondStore.close();

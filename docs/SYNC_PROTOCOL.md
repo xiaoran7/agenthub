@@ -20,17 +20,17 @@ ACL，因此身份应放在仅当前用户可读的应用数据目录。
 
 批次顶层字段：
 
-| 字段 | 含义 |
-| --- | --- |
-| `protocol_version` | 当前固定为 `1` |
-| `batch_id` | 每个发送批次的 UUID |
-| `device_id` | 由公钥派生的设备 ID |
-| `public_key` | 32 字节 Ed25519 公钥的十六进制编码 |
-| `created_at` | Runner 创建批次的 RFC 3339 时间 |
-| `first_sequence` | 本批次首个 Outbox 序列 |
-| `last_sequence` | 本批次最后一个 Outbox 序列 |
-| `events` | 1 到 1000 个连续、升序事件 |
-| `signature` | 64 字节 Ed25519 签名的十六进制编码 |
+| 字段               | 含义                               |
+| ------------------ | ---------------------------------- |
+| `protocol_version` | 当前固定为 `1`                     |
+| `batch_id`         | 每个发送批次的 UUID                |
+| `device_id`        | 由公钥派生的设备 ID                |
+| `public_key`       | 32 字节 Ed25519 公钥的十六进制编码 |
+| `created_at`       | Runner 创建批次的 RFC 3339 时间    |
+| `first_sequence`   | 本批次首个 Outbox 序列             |
+| `last_sequence`    | 本批次最后一个 Outbox 序列         |
+| `events`           | 1 到 1000 个连续、升序事件         |
+| `signature`        | 64 字节 Ed25519 签名的十六进制编码 |
 
 每个事件是固定结构：
 
@@ -113,11 +113,15 @@ Runner 只有在以下条件全部成立时才清理 Outbox：
 
 Runner 使用以下接口：
 
+- `POST /v1/device-bindings`：经用户认证后生成一次性绑定码；默认 10 分钟有效，
+  服务端只保存 SHA-256 摘要并只在签发响应中返回原码。
 - `POST /v1/devices/register`：提交一次性绑定码、设备 ID、公钥和持有证明签名。
   签名输入是 `{binding_code, device_id, public_key}` 按此声明顺序的紧凑 UTF-8
   JSON，由设备私钥 Ed25519 签名；网关验签失败拒绝注册，公开可见的公钥无法被
   第三方抢注。
 - `POST /v1/sync/batches`：提交完整 `SyncBatch` 并接收 `SyncAck`。
+- `DELETE /v1/devices/:deviceId`：经用户认证后软撤销设备；保留历史事件和 Session，
+  但后续登记与批次同步均返回 `device_revoked`。
 
 绑定码长度和控制字符在发出请求前校验。手工 `sync push` 与 `run` 的后台同步共用
 同一套有界批次和 ACK 校验；只在响应能反序列化且通过第 4 节全部确认约束后清理
@@ -135,15 +139,14 @@ IPv6 回环地址使用 HTTP；URL 不允许嵌入用户名、密码、查询参
 
 ## 6. 尚未实现
 
-- 正式账号认证下的一次性绑定码生成、过期和持久化（当前一次性语义仅在网关进程
-  内存中，重启后失效）
 - TLS WebSocket Device Gateway
-- 服务端公钥撤销和轮换
+- 服务端公钥轮换、设备恢复绑定和完整审计日志
 - 心跳与可靠离线判断
 - 在途批次持久化
 - Windows ACL 主动加固或系统密钥库托管
 - SyncAck 的服务端签名（文件式 `sync ack` 诊断流程因此只应在本地信任环境使用）
 - Outbox 事件与会话快照的本地保留/清理策略（长期不同步时数据库单调增长）
 
-开发期 Gateway 已实现内存型一次性绑定码、公钥注册、批次验签、幂等接收和有界确认
-响应；上述清单中的“绑定”指正式账号认证、过期、撤销和持久化流程。
+Gateway 已实现受认证签发、过期、摘要持久化、并发单次领取、同设备幂等重试和软
+撤销；未配置 PostgreSQL 时这些状态只保存在进程内。多用户联合登录、恢复绑定、
+密钥轮换和完整审计仍属于后续账号体系。

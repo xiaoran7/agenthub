@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   ApiError,
   describeApiError,
+  deviceBindingsUrl,
+  deviceUrl,
   devicesUrl,
   sessionEventsUrl,
   sessionsUrl,
@@ -11,6 +13,11 @@ import {
 
 test("read URLs work same-origin and against an explicit base", () => {
   assert.equal(devicesUrl(""), "/v1/devices");
+  assert.equal(deviceBindingsUrl(""), "/v1/device-bindings");
+  assert.equal(
+    deviceUrl("", "dev_56475aa75463474c0285df5dbf2bcab7"),
+    "/v1/devices/dev_56475aa75463474c0285df5dbf2bcab7",
+  );
   assert.equal(
     sessionsUrl("http://127.0.0.1:3001"),
     "http://127.0.0.1:3001/v1/sessions",

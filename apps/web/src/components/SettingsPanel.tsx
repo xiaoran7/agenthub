@@ -1,9 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import { ApiError, describeApiError } from "../lib/api";
+import {
+  ApiError,
+  createDeviceBinding,
+  describeApiError,
+  revokeDevice,
+  type DeviceBinding,
+} from "../lib/api";
 import type { PanelConfig } from "../lib/config";
 import { normalizeGatewayBase, normalizeUserId } from "../lib/config";
 import type { NotificationState } from "../lib/notifications";
+import { deviceShortId } from "../lib/format";
+import type { DeviceRecord } from "../lib/types";
 import {
   disableNotifications,
   enableNotifications,
@@ -13,6 +21,8 @@ import {
 interface SettingsPanelProps {
   config: PanelConfig;
   onSave: (config: PanelConfig) => void;
+  devices: DeviceRecord[];
+  onDevicesChanged: () => void;
   onClose: () => void;
 }
 
@@ -25,7 +35,13 @@ const NOTIFICATION_HINTS: Record<NotificationState, string> = {
   off: "会话进入等待输入或等待权限时提醒你，面板关闭也能收到。",
 };
 
-export function SettingsPanel({ config, onSave, onClose }: SettingsPanelProps) {
+export function SettingsPanel({
+  config,
+  devices,
+  onSave,
+  onDevicesChanged,
+  onClose,
+}: SettingsPanelProps) {
   const [gatewayBase, setGatewayBase] = useState(config.gatewayBase);
   const [userId, setUserId] = useState(config.userId);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -36,6 +52,14 @@ export function SettingsPanel({ config, onSave, onClose }: SettingsPanelProps) {
     string | undefined
   >(undefined);
   const [notificationBusy, setNotificationBusy] = useState(false);
+  const [binding, setBinding] = useState<DeviceBinding | undefined>(undefined);
+  const [bindingBusy, setBindingBusy] = useState(false);
+  const [deviceActionError, setDeviceActionError] = useState<
+    string | undefined
+  >(undefined);
+  const [revokingDevice, setRevokingDevice] = useState<string | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -85,6 +109,39 @@ export function SettingsPanel({ config, onSave, onClose }: SettingsPanelProps) {
     }
   }
 
+  async function generateBindingCode() {
+    setBindingBusy(true);
+    setDeviceActionError(undefined);
+    try {
+      setBinding(await createDeviceBinding(config));
+    } catch (cause) {
+      setDeviceActionError(describeApiError(cause));
+    } finally {
+      setBindingBusy(false);
+    }
+  }
+
+  async function revoke(device: DeviceRecord) {
+    if (
+      device.revoked ||
+      !window.confirm(
+        `撤销设备 ${deviceShortId(device.device_id)}？现有历史会保留，但该设备将无法继续同步。`,
+      )
+    ) {
+      return;
+    }
+    setRevokingDevice(device.device_id);
+    setDeviceActionError(undefined);
+    try {
+      await revokeDevice(config, device.device_id);
+      onDevicesChanged();
+    } catch (cause) {
+      setDeviceActionError(describeApiError(cause));
+    } finally {
+      setRevokingDevice(undefined);
+    }
+  }
+
   return (
     <div
       className="settings-backdrop"
@@ -121,6 +178,60 @@ export function SettingsPanel({ config, onSave, onClose }: SettingsPanelProps) {
           仅供显式开启的本地开发模式使用；部署访问令牌保留在 Web
           服务端，不会存入浏览器。
         </p>
+        <div className="settings-toggle">
+          <span>绑定新设备</span>
+          <button
+            type="button"
+            className="secondary"
+            disabled={bindingBusy}
+            onClick={() => void generateBindingCode()}
+          >
+            {bindingBusy ? "生成中…" : "生成绑定码"}
+          </button>
+        </div>
+        {binding !== undefined && (
+          <>
+            <input
+              className="mono"
+              value={binding.binding_code}
+              readOnly
+              aria-label="一次性绑定码"
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <p className="settings-hint">
+              10 分钟内使用，仅显示在本次设置窗口；点击输入框可全选复制。
+            </p>
+          </>
+        )}
+        {devices.length > 0 && (
+          <div className="device-management">
+            <span>已绑定设备</span>
+            {devices.map((device) => (
+              <div className="device-management-row" key={device.device_id}>
+                <span className="mono" title={device.device_id}>
+                  {deviceShortId(device.device_id)}
+                </span>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={
+                    device.revoked || revokingDevice === device.device_id
+                  }
+                  onClick={() => void revoke(device)}
+                >
+                  {device.revoked
+                    ? "已撤销"
+                    : revokingDevice === device.device_id
+                      ? "撤销中…"
+                      : "撤销"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {deviceActionError !== undefined && (
+          <p className="error-text">{deviceActionError}</p>
+        )}
         <div className="settings-toggle">
           <span>推送通知</span>
           <button

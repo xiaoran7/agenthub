@@ -40,6 +40,10 @@ const MIGRATIONS = [
     version: 3,
     url: new URL("../migrations/0003_push_subscriptions.sql", import.meta.url),
   },
+  {
+    version: 4,
+    url: new URL("../migrations/0004_device_lifecycle.sql", import.meta.url),
+  },
 ] as const;
 
 interface DeviceRow {
@@ -49,6 +53,13 @@ interface DeviceRow {
   created_at: unknown;
   last_seen_at: unknown;
   last_sequence: string | number;
+  revoked_at: unknown | null;
+}
+
+interface BindingCodeRow {
+  owner_id: string;
+  expired: boolean;
+  claimed_device_id: string | null;
 }
 
 interface ExistingEventRow {
@@ -147,6 +158,146 @@ export class PostgresGatewayStore implements GatewayStore {
     }));
   }
 
+  async createBindingCode(
+    ownerId: string,
+    codeDigest: string,
+    expiresAt: string,
+  ): Promise<void> {
+    try {
+      await this.#sql.begin(async (sql) => {
+        await sql`
+          DELETE FROM agent_platform_binding_codes
+          WHERE claimed_at IS NULL
+            AND expires_at <= clock_timestamp()
+        `;
+        await sql`
+          INSERT INTO agent_platform_binding_codes (
+            code_digest,
+            owner_id,
+            expires_at
+          )
+          VALUES (${codeDigest}, ${ownerId}, ${expiresAt})
+        `;
+      });
+    } catch (error) {
+      throw classifyPostgresConflict(error);
+    }
+  }
+
+  async registerDeviceWithBindingCode(
+    codeDigest: string,
+    deviceId: string,
+    publicKey: string,
+  ): Promise<DeviceRegistrationResult> {
+    return this.#sql.begin(async (sql) => {
+      const bindings = await sql<BindingCodeRow[]>`
+        SELECT
+          owner_id,
+          expires_at <= clock_timestamp() AS expired,
+          claimed_device_id
+        FROM agent_platform_binding_codes
+        WHERE code_digest = ${codeDigest}
+        FOR UPDATE
+      `;
+      const binding = bindings[0];
+      if (binding === undefined) {
+        throw new GatewayStoreError(
+          "invalid_binding_code",
+          "binding code is invalid or expired",
+        );
+      }
+      if (
+        binding.claimed_device_id !== null &&
+        binding.claimed_device_id !== deviceId
+      ) {
+        throw new GatewayStoreError(
+          "binding_code_used",
+          "binding code has already been used",
+        );
+      }
+      if (binding.claimed_device_id === null && binding.expired) {
+        throw new GatewayStoreError(
+          "invalid_binding_code",
+          "binding code is invalid or expired",
+        );
+      }
+
+      const inserted = await sql<DeviceRow[]>`
+        INSERT INTO agent_platform_devices (
+          device_id,
+          public_key,
+          owner_id
+        )
+        VALUES (${deviceId}, ${publicKey}, ${binding.owner_id})
+        ON CONFLICT (device_id) DO NOTHING
+        RETURNING
+          device_id,
+          public_key,
+          owner_id,
+          created_at,
+          last_seen_at,
+          last_sequence,
+          revoked_at
+      `;
+      const created = inserted.length === 1;
+      const rows =
+        inserted.length > 0
+          ? inserted
+          : await sql<DeviceRow[]>`
+              SELECT
+                device_id,
+                public_key,
+                owner_id,
+                created_at,
+                last_seen_at,
+                last_sequence,
+                revoked_at
+              FROM agent_platform_devices
+              WHERE device_id = ${deviceId}
+              FOR UPDATE
+            `;
+      const device = rows[0];
+      if (device === undefined) {
+        throw new Error("registered device could not be loaded");
+      }
+      if (device.revoked_at !== null) {
+        throw new GatewayStoreError("device_revoked", "device is revoked");
+      }
+      if (
+        device.public_key !== publicKey ||
+        device.owner_id !== binding.owner_id
+      ) {
+        throw new GatewayStoreError(
+          "device_conflict",
+          "device is already registered with different credentials",
+        );
+      }
+      if (binding.claimed_device_id === null) {
+        await sql`
+          UPDATE agent_platform_binding_codes
+          SET
+            claimed_at = clock_timestamp(),
+            claimed_device_id = ${deviceId}
+          WHERE code_digest = ${codeDigest}
+        `;
+      }
+      return { device: registeredDevice(device), created };
+    });
+  }
+
+  async revokeDevice(ownerId: string, deviceId: string): Promise<boolean> {
+    const rows = await this.#sql<Array<{ device_id: string }>>`
+      UPDATE agent_platform_devices
+      SET revoked_at = clock_timestamp()
+      WHERE
+        device_id = ${deviceId}
+        AND owner_id = ${ownerId}
+        AND revoked_at IS NULL
+      RETURNING device_id
+    `;
+    return rows.length === 1;
+  }
+
   async registerDevice(
     ownerId: string,
     deviceId: string,
@@ -167,7 +318,8 @@ export class PostgresGatewayStore implements GatewayStore {
           owner_id,
           created_at,
           last_seen_at,
-          last_sequence
+          last_sequence,
+          revoked_at
       `;
       const created = inserted.length === 1;
       const rows =
@@ -180,7 +332,8 @@ export class PostgresGatewayStore implements GatewayStore {
                 owner_id,
                 created_at,
                 last_seen_at,
-                last_sequence
+                last_sequence,
+                revoked_at
               FROM agent_platform_devices
               WHERE device_id = ${deviceId}
               FOR UPDATE
@@ -188,6 +341,9 @@ export class PostgresGatewayStore implements GatewayStore {
       const row = rows[0];
       if (row === undefined) {
         throw new Error("registered device could not be loaded");
+      }
+      if (row.revoked_at !== null) {
+        throw new GatewayStoreError("device_revoked", "device is revoked");
       }
       if (row.public_key !== publicKey || row.owner_id !== ownerId) {
         throw new GatewayStoreError(
@@ -209,7 +365,8 @@ export class PostgresGatewayStore implements GatewayStore {
             owner_id,
             created_at,
             last_seen_at,
-            last_sequence
+            last_sequence,
+            revoked_at
           FROM agent_platform_devices
           WHERE device_id = ${batch.device_id}
           FOR UPDATE
@@ -220,6 +377,9 @@ export class PostgresGatewayStore implements GatewayStore {
             "device_not_registered",
             "device is not registered",
           );
+        }
+        if (device.revoked_at !== null) {
+          throw new GatewayStoreError("device_revoked", "device is revoked");
         }
         if (device.public_key !== batch.public_key) {
           throw new GatewayStoreError(
@@ -460,13 +620,16 @@ export class PostgresGatewayStore implements GatewayStore {
         created_at: unknown;
         last_seen_at: unknown;
         online: boolean;
+        revoked_at: unknown | null;
       }>
     >`
       SELECT
         device_id,
         created_at,
         last_seen_at,
-        last_seen_at >= clock_timestamp() - interval '45 seconds' AS online
+        revoked_at,
+        revoked_at IS NULL
+          AND last_seen_at >= clock_timestamp() - interval '45 seconds' AS online
       FROM agent_platform_devices
       WHERE owner_id = ${ownerId}
       ORDER BY device_id
@@ -476,6 +639,7 @@ export class PostgresGatewayStore implements GatewayStore {
       created_at: isoTimestamp(row.created_at),
       last_seen_at: isoTimestamp(row.last_seen_at),
       online: row.online,
+      revoked: row.revoked_at !== null,
     }));
   }
 
@@ -589,6 +753,9 @@ function registeredDevice(row: DeviceRow): RegisteredDevice {
     owner_id: row.owner_id,
     created_at: isoTimestamp(row.created_at),
     last_seen_at: isoTimestamp(row.last_seen_at),
+    ...(row.revoked_at === null
+      ? {}
+      : { revoked_at: isoTimestamp(row.revoked_at) }),
   };
 }
 
@@ -668,6 +835,12 @@ function classifyPostgresConflict(error: unknown): unknown {
     return new GatewayStoreError(
       "sequence_conflict",
       "device sequence was reused by another event",
+    );
+  }
+  if (constraint === "agent_platform_binding_codes_pkey") {
+    return new GatewayStoreError(
+      "binding_code_conflict",
+      "binding code digest already exists",
     );
   }
   return error;

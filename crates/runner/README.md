@@ -161,8 +161,8 @@ cargo run -p agent-platform-runner -- `
 连接开发期 Gateway：
 
 ```powershell
-$env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
-$env:AGENT_PLATFORM_BINDING_CODE = 'local-code'
+  $env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
+  $env:AGENT_PLATFORM_BINDING_CODE = '<从 Web 设置面板取得的一次性绑定码>'
 
 cargo run -p agent-platform-runner -- `
   device bind `
@@ -176,7 +176,9 @@ cargo run -p agent-platform-runner -- `
   --max-batches 10
 ```
 
-绑定码建议通过环境变量提供，避免进入 Shell 历史。`sync push` 保留为诊断和一次性
+绑定码由 Gateway 的 Web 设置面板或受认证的 `POST /v1/device-bindings` 签发，
+默认 10 分钟有效且只显示一次。建议通过环境变量提供，避免进入 Shell 历史。
+`sync push` 保留为诊断和一次性
 排空命令，每次只处理有界数量的批次；Gateway 返回的确认通过本地校验后才会删除
 Outbox 事件。网络失败、超时或无效响应不会清理未确认事件。远程 Gateway 地址必须
 使用 HTTPS，明文 HTTP 只允许 `localhost`、IPv4 或 IPv6 回环地址用于本地开发。
@@ -199,7 +201,7 @@ Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化
 
 - Codex 跨客户端实时通知覆盖验证与缺失事件补偿
 - Hook 插件安装器
-- 正式账号设备绑定、撤销、密钥轮换与 WebSocket 传输
+- 联合账号登录、设备恢复绑定、密钥轮换与 WebSocket 传输
 - Windows 身份文件 ACL 主动加固和系统密钥库接入
 - OS 原生服务安装
 

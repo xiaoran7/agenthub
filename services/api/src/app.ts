@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import {
   ContractError,
   activityStatuses,
@@ -20,6 +22,7 @@ import {
   GatewayStoreError,
   InMemoryGatewayStore,
   OneTimeBindingCodes,
+  bindingCodeDigest,
   type GatewayStore,
   type SessionFilters,
   type SessionStatusChange,
@@ -34,6 +37,10 @@ const STREAM_HEARTBEAT_MS = 20_000;
 /** One panel opens one stream; the cap bounds a misbehaving or hostile client. */
 const MAX_STREAMS_PER_OWNER = 8;
 const MAX_PUSH_ENDPOINT_LENGTH = 2_048;
+const DEFAULT_BINDING_TTL_SECONDS = 600;
+const MIN_BINDING_TTL_SECONDS = 60;
+const MAX_BINDING_TTL_SECONDS = 3_600;
+const DEVICE_ID_PATTERN = /^dev_[0-9a-f]{32}$/;
 /**
  * Statuses that interrupt the user's attention. The panel is a monitor, not a
  * feed: notifying on every completion would train people to ignore it, and the
@@ -53,6 +60,8 @@ export interface GatewayAppOptions {
   broker?: ChangeBroker;
   push?: GatewayPushOptions;
   authenticator?: OwnerAuthenticator;
+  bindingCodeFactory?: () => string;
+  now?: () => Date;
   logger?: boolean;
 }
 
@@ -60,9 +69,10 @@ export function createGatewayApp(
   options: GatewayAppOptions = {},
 ): FastifyInstance {
   const store: GatewayStore = options.store ?? new InMemoryGatewayStore();
-  const bindingCodes =
-    options.bindingCodes ??
-    new OneTimeBindingCodes(new Map([["local-development", "local-user"]]));
+  const bindingCodes = options.bindingCodes;
+  const now = options.now ?? (() => new Date());
+  const bindingCodeFactory =
+    options.bindingCodeFactory ?? (() => randomBytes(32).toString("base64url"));
   const broker = options.broker ?? new ChangeBroker();
   const authenticator = options.authenticator ?? new RejectingAuthenticator();
   const openStreams = new Set<() => void>();
@@ -88,6 +98,7 @@ export function createGatewayApp(
       const status = [
         "device_not_registered",
         "device_key_mismatch",
+        "device_revoked",
         "invalid_binding_code",
       ].includes(error.code)
         ? 403
@@ -112,22 +123,48 @@ export function createGatewayApp(
 
   app.get("/health", async () => ({ status: "ok" }));
 
+  app.post("/v1/device-bindings", async (request, reply) => {
+    const ownerId = authenticator.authenticate(request);
+    const expiresInSeconds = bindingTtlSeconds(request.body);
+    const bindingCode = bindingCodeFactory();
+    const expiresAt = new Date(
+      now().getTime() + expiresInSeconds * 1_000,
+    ).toISOString();
+    await store.createBindingCode(
+      ownerId,
+      bindingCodeDigest(bindingCode),
+      expiresAt,
+    );
+    return reply.status(201).send({
+      binding_code: bindingCode,
+      expires_at: expiresAt,
+    });
+  });
+
   app.post("/v1/devices/register", async (request, reply) => {
     const registration = parseDeviceRegistration(request.body);
-    const ownerId = bindingCodes.claim(
-      registration.binding_code,
-      registration.device_id,
-    );
     let result;
-    try {
-      result = await store.registerDevice(
-        ownerId,
+    if (bindingCodes === undefined) {
+      result = await store.registerDeviceWithBindingCode(
+        bindingCodeDigest(registration.binding_code),
         registration.device_id,
         registration.public_key,
       );
-    } catch (error) {
-      bindingCodes.release(registration.binding_code, registration.device_id);
-      throw error;
+    } else {
+      const ownerId = bindingCodes.claim(
+        registration.binding_code,
+        registration.device_id,
+      );
+      try {
+        result = await store.registerDevice(
+          ownerId,
+          registration.device_id,
+          registration.public_key,
+        );
+      } catch (error) {
+        bindingCodes.release(registration.binding_code, registration.device_id);
+        throw error;
+      }
     }
     return reply.status(result.created ? 201 : 200).send({
       device_id: result.device.device_id,
@@ -165,6 +202,16 @@ export function createGatewayApp(
   app.get("/v1/devices", async (request, reply) => {
     const ownerId = authenticator.authenticate(request);
     return reply.send({ devices: await store.listDevices(ownerId) });
+  });
+
+  app.delete("/v1/devices/:deviceId", async (request, reply) => {
+    const ownerId = authenticator.authenticate(request);
+    const { deviceId } = request.params as { deviceId?: unknown };
+    if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) {
+      throw new ContractError("invalid_device_id", "device ID is invalid");
+    }
+    await store.revokeDevice(ownerId, deviceId);
+    return reply.status(204).send();
   });
 
   app.get("/v1/sessions", async (request, reply) => {
@@ -401,6 +448,34 @@ function expectObject(value: unknown): Record<string, unknown> {
     throw new ContractError("invalid_body", "request body must be an object");
   }
   return value as Record<string, unknown>;
+}
+
+function bindingTtlSeconds(value: unknown): number {
+  if (value === undefined || value === null) {
+    return DEFAULT_BINDING_TTL_SECONDS;
+  }
+  const body = expectObject(value);
+  const unknownField = Object.keys(body).find(
+    (key) => key !== "expires_in_seconds",
+  );
+  if (unknownField !== undefined) {
+    throw new ContractError("unknown_field", "body field is invalid");
+  }
+  if (body.expires_in_seconds === undefined) {
+    return DEFAULT_BINDING_TTL_SECONDS;
+  }
+  if (
+    typeof body.expires_in_seconds !== "number" ||
+    !Number.isSafeInteger(body.expires_in_seconds) ||
+    body.expires_in_seconds < MIN_BINDING_TTL_SECONDS ||
+    body.expires_in_seconds > MAX_BINDING_TTL_SECONDS
+  ) {
+    throw new ContractError(
+      "invalid_binding_ttl",
+      "binding lifetime is invalid",
+    );
+  }
+  return body.expires_in_seconds;
 }
 
 /**
