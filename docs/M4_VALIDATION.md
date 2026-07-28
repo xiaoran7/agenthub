@@ -37,6 +37,20 @@ PostgreSQL，数据库压力尚未实际执行；真实 Claude/Codex 升级和�
 4. 在普通浏览器验证 Web Push 实际订阅与投递。嵌入式浏览器固定拒绝通知权限，
    该限制不会因 M4 自动化测试消失。
 
+## 本机环境探测
+
+2026-07-28 重新执行了工具和运行时探测：
+
+- `claude`：命令不存在，无法执行真实 Claude 状态矩阵。
+- `codex`：可解析到 WindowsApps 内部 `codex.exe`，但实际运行
+  `codex --version` 返回 `Access is denied`，不能把路径存在写成 CLI 可用。
+- PostgreSQL：`psql` 不存在，没有匹配的 Windows 服务，
+  `AGENT_PLATFORM_TEST_DATABASE_URL` 与 `AGENT_PLATFORM_DATABASE_URL` 均未设置。
+- 容器：`docker` 与 `podman` 均不存在，无法临时启动专用测试数据库。
+
+所以本机执行 `npm.cmd test` 时两项 PostgreSQL 测试明确显示 `SKIP`；这属于环境
+阻塞，不是通过，也不是测试代码未接入。
+
 ## 质量门
 
 ```powershell
