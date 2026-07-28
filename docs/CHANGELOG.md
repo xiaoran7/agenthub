@@ -7,6 +7,12 @@
 
 ### Added
 
+- M4 现场验收补齐本机 PostgreSQL 18.4：持久化重连与 12 设备/3000 Session
+  随机 Schema 并发工作负载全部通过、0 跳过；Runner 对 Desktop 内置
+  Codex CLI 0.144.2 完成一次真实只读采集，接收 35 个白名单 Session 且
+  Adapter 健康记录为空。外部不可达 HTTPS 端点超时后磁盘 Outbox 保留事件，
+  改回本地 Gateway 后合法 ACK 清零。普通 Chrome 完成通知授权、Service Worker
+  控制和 Push 订阅登记，但系统级通知呈现仍未观察到，因此保留为未验证边界。
 - M4 第二轮把断网用例升级为磁盘 SQLite Outbox：上传失败后关闭并重开数据库，
   事件与序列水位保持，合法 ACK 后再次重开仍为空；同一套 12 设备/3000 Session
   工作负载抽成共享 Fixture，并接入环境门控的 PostgreSQL 随机 Schema 测试，

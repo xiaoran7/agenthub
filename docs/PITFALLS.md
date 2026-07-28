@@ -2,6 +2,30 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-28 PostgreSQL 服务存在但二进制不在 PATH，`Get-Command psql` 会误判环境
+
+- **现象**：`Get-Command psql` 和常见安装目录探测都找不到客户端，早期验收因此
+  记录“本机没有 PostgreSQL”；但 `Get-Service` 显示 `postgresql-x64-18` 正在
+  运行，服务实际从 `D:\PostgresSQL\bin` 启动。
+- **根因**：安装位置是非默认目录且没有把 `bin` 加入 PATH；只探测命令和
+  `C:\Program Files\PostgreSQL` 不能代表 Windows 服务不存在。
+- **解决方式**：读取 `Win32_Service.PathName` 找到 `pg_ctl.exe` 与数据目录，
+  再用同目录的 `pg_isready.exe`/`psql.exe` 验证服务端 18.4 和连接凭据。
+- **如何规避**：数据库环境探测至少同时检查 PATH、Windows 服务及服务命令行；
+  只有三者都没有证据时才写“本机未安装”。连接密码只注入当前测试进程，不写入
+  仓库、日志或持久环境变量。
+
+## 2026-07-28 PowerShell 管道会改变原始 Fixture 字节，原生 stdin 验收应重定向文件
+
+- **现象**：`Get-Content -Raw fixture.json | runner ingest-hook` 即使显式设置 UTF-8，
+  Runner 仍在第 1 字节报告 JSON 为空或非法；同一个文件由测试直接读取时正常。
+- **根因**：Windows PowerShell 把对象管道重新编码后再写给原生进程 stdin，
+  `$OutputEncoding` 与无 BOM UTF-8 的组合并不可靠，输入已经不是磁盘原始字节。
+- **解决方式**：用 `Start-Process -RedirectStandardInput fixture.json` 把文件字节
+  原样接到 Runner stdin，Hook 随即正常入队并同步。
+- **如何规避**：涉及签名、编码或原始协议字节的 CLI 验收不要经过 PowerShell
+  文本对象管道；优先使用进程级 stdin 文件重定向。
+
 ## 2026-07-27 嵌入式浏览器的 `Notification.permission` 恒为 denied，推送无法本机验证
 
 - **现象**：Claude Code 浏览器面板里 `window.isSecureContext`、

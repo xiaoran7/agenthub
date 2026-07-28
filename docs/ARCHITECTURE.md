@@ -567,21 +567,22 @@ Service Worker（`public/sw.js`）只处理 `push` 与 `notificationclick`，没
 fetch 处理器也不做离线缓存——引入它是因为 Web Push 强制要求，不是为了离线。
 点击通知聚焦已打开的面板并用 postMessage 传递会话引用，标识不进 URL。
 
-M3 已全部完成。M4 已进入执行阶段并完成首轮自动化基线；跨实例广播、心跳与正式
-认证仍在 M2 遗留清单上。
+M3 已全部完成。M4 已完成自动化基线，并在本机 PostgreSQL 18.4 与 Codex CLI
+0.144.2 上补充现场证据；跨实例广播、心跳与正式认证仍在 M2 遗留清单上。
 
 ### Milestone 4：安全与稳定性
 
 - 字段泄漏测试（自动化基线已完成：Adapter → Outbox → 签名批次）
 - 断网重放测试（自动化基线已完成：磁盘 Outbox 失败不 ACK，跨进程重开后原序重放）
-- Agent 升级兼容测试（新版 Fixture 已完成；真实 CLI 升级待验证）
+- Agent 升级兼容测试（新版 Fixture 已完成；Codex 当前版本只读采集已通过，真实
+  升级前后状态矩阵待验证）
 - Hook 禁用和未信任降级（自动化基线已完成）
-- 多设备和大量 Session 压力测试（内存 Store 的 12 设备/3000 Session 已完成；
-  PostgreSQL 随机 Schema 并发工作负载已建立，待配置数据库后实际执行）
+- 多设备和大量 Session 压力测试（内存 Store 与 PostgreSQL 18.4 的
+  12 设备/3000 Session 均已实际通过）
 
 详细证据与未验证边界见 [M4_VALIDATION.md](M4_VALIDATION.md)。M4 保持“进行中”，
-直到真实 PostgreSQL、真实 Agent 版本和真实网络故障验收完成；不得用 Fixture、
-内存 Store 或回环端口故障模拟替代这些结论。
+直到真实 Agent 升级矩阵、TLS/长时间离线恢复和系统级 Web Push 呈现完成；不得用
+Fixture、一次性当前版本采集或订阅成功替代这些结论。
 
 ## 11. Milestone 0 验收矩阵
 
