@@ -40,6 +40,10 @@ Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时
 并经 `GET /v1/stream`（SSE）实时刷新，轮询保留为兜底。会话进入等待输入或等待
 权限时可通过 Web Push 推送通知（需在 Gateway 配置 VAPID 密钥）。
 生产认证、跨实例广播与心跳尚未接入；Service Worker 只服务推送，不做离线缓存。
+M4 安全与稳定性阶段已开始，字段泄漏、断网保留与恢复重放、Agent 新版字段兼容、
+无 Hook 降级和 12 设备/3000 Session 隔离已建立自动化基线；真实 PostgreSQL
+压力、真实 Agent 升级和真实网络故障仍待环境验收，详见
+[M4 验收记录](docs/M4_VALIDATION.md)。
 
 ### Web 面板
 

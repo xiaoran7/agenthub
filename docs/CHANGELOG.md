@@ -7,6 +7,11 @@
 
 ### Added
 
+- M4 安全与稳定性自动化基线：Runner 增加跨层字段泄漏、新版 Agent Fixture、
+  无 Hook 轮询和断网恢复重放验收；Gateway 增加 12 个独立签名设备、3000 个
+  Session 的完整注册/验签/写入/查询工作负载，验证双 owner 隔离、按设备筛选、
+  ACK 重放不重复及读响应字段边界。新增 `docs/M4_VALIDATION.md` 区分自动化证据与
+  真实 PostgreSQL、真实 Agent 升级、真实网络故障等待验证项。
 - Gateway 新增 owner 维度实时变化通道 `GET /v1/stream`（Server-Sent Events）：
   批次入库且确实产生新事件时推送 `event: sessions`，数据仅
   `{"device_id","accepted"}`，会话内容仍只能从既有读接口获得；20 秒注释心跳、
@@ -65,6 +70,9 @@
 
 ### Changed
 
+- Claude/Codex 遇到未知 Hook 名时仍记录来源，但活动状态固定降为 `UNKNOWN`、
+  置信度降为 `inferred`；已识别 Hook 继续使用 `observed`。这样 Agent 新版本新增
+  Hook 不会被平台误报成确定状态。
 - PostgreSQL 集成测试补上 `ingestBatch` 新返回值与推送订阅的断言：该测试在本机
   始终 SKIP，旧断言 `assert.equal(await ingestBatch(...), 1)` 在真实数据库上第
   一次运行就会失败。

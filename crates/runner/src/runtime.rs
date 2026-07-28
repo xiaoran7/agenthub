@@ -522,6 +522,44 @@ mod tests {
     }
 
     #[test]
+    fn polling_remains_healthy_when_hooks_are_not_installed() {
+        let attempted_at = Utc::now();
+        let meta = ObservationMeta {
+            device_id: "device-without-hooks".into(),
+            observed_at: attempted_at,
+        };
+        let mut source = FakeSource {
+            agent_type: AgentType::ClaudeCode,
+            result: Some(Ok(vec![observation(&meta, ActivityStatus::Idle)])),
+        };
+        let mut outbox = Outbox::open_in_memory().unwrap();
+        let mut state = PollState::default();
+
+        let report = poll_source_once(
+            &mut source,
+            "device-without-hooks",
+            &ProjectRedactor::new(b"secret").unwrap(),
+            &mut outbox,
+            &mut state,
+            PollPolicy::default(),
+            attempted_at,
+        )
+        .unwrap();
+
+        assert!(report.succeeded);
+        assert_eq!(report.enqueued, 1);
+        assert_eq!(outbox.stats().unwrap().pending_events, 1);
+        assert_eq!(
+            outbox
+                .adapter_health(AgentType::ClaudeCode)
+                .unwrap()
+                .unwrap()
+                .status,
+            "healthy"
+        );
+    }
+
+    #[test]
     fn failures_back_off_and_store_only_safe_error_codes() {
         let attempted_at = Utc::now();
         let policy = PollPolicy::default();

@@ -327,6 +327,15 @@ pub fn normalize_hook(
         "SessionEnd" => (Presence::Persisted, ActivityStatus::Unknown, None),
         _ => (Presence::Live, ActivityStatus::Unknown, None),
     };
+    let confidence = if activity_status == ActivityStatus::Unknown && event != "SessionEnd" {
+        // Future hook names are untrusted until their semantics are mapped.
+        // Recording the event is useful; asserting a state is not. SessionEnd
+        // remains observed because its PERSISTED presence is known even though
+        // activity is deliberately preserved from the previous snapshot.
+        Confidence::Inferred
+    } else {
+        Confidence::Observed
+    };
 
     Ok(SessionObservation::new(
         meta,
@@ -341,7 +350,7 @@ pub fn normalize_hook(
             waiting_reason,
         },
         ObservationSource::CodexHook,
-        Confidence::Observed,
+        confidence,
     ))
 }
 

@@ -1,0 +1,26 @@
+[
+  {
+    "cwd": "C:\\Users\\alice\\source\\future-known",
+    "sessionId": "claude-future-known",
+    "state": "working",
+    "pid": 5001,
+    "status": "running",
+    "name": "FUTURE_PRIVATE_CLAUDE_TITLE",
+    "prompt": "FUTURE_PRIVATE_CLAUDE_PROMPT",
+    "transcript": "FUTURE_PRIVATE_CLAUDE_TRANSCRIPT",
+    "futureCapabilities": {
+      "environment": "FUTURE_PRIVATE_CLAUDE_ENV"
+    }
+  },
+  {
+    "cwd": "C:\\Users\\alice\\source\\future-unknown",
+    "sessionId": "claude-future-unknown",
+    "state": "pausedForOperatorReview",
+    "pid": 5002,
+    "name": "FUTURE_PRIVATE_CLAUDE_UNKNOWN_TITLE",
+    "assistantMessage": "FUTURE_PRIVATE_CLAUDE_MESSAGE",
+    "newSensitiveEnvelope": {
+      "command": "FUTURE_PRIVATE_CLAUDE_COMMAND"
+    }
+  }
+]

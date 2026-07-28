@@ -567,16 +567,21 @@ Service Worker（`public/sw.js`）只处理 `push` 与 `notificationclick`，没
 fetch 处理器也不做离线缓存——引入它是因为 Web Push 强制要求，不是为了离线。
 点击通知聚焦已打开的面板并用 postMessage 传递会话引用，标识不进 URL。
 
-M3 已全部完成。M4 的安全与稳定性测试尚未开始；跨实例广播、心跳与正式认证
-仍在 M2 遗留清单上。
+M3 已全部完成。M4 已进入执行阶段并完成首轮自动化基线；跨实例广播、心跳与正式
+认证仍在 M2 遗留清单上。
 
 ### Milestone 4：安全与稳定性
 
-- 字段泄漏测试
-- 断网重放测试
-- Agent 升级兼容测试
-- Hook 禁用和未信任降级
-- 多设备和大量 Session 压力测试
+- 字段泄漏测试（自动化基线已完成：Adapter → Outbox → 签名批次）
+- 断网重放测试（自动化基线已完成：失败不 ACK，恢复后原序重放）
+- Agent 升级兼容测试（新版 Fixture 已完成；真实 CLI 升级待验证）
+- Hook 禁用和未信任降级（自动化基线已完成）
+- 多设备和大量 Session 压力测试（内存 Store 的 12 设备/3000 Session 已完成；
+  PostgreSQL 压力待验证）
+
+详细证据与未验证边界见 [M4_VALIDATION.md](M4_VALIDATION.md)。M4 保持“进行中”，
+直到真实 PostgreSQL、真实 Agent 版本和真实网络故障验收完成；不得用 Fixture、
+内存 Store 或回环端口故障模拟替代这些结论。
 
 ## 11. Milestone 0 验收矩阵
 

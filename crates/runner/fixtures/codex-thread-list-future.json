@@ -1,0 +1,37 @@
+{
+  "id": 99,
+  "result": {
+    "data": [
+      {
+        "id": "codex-future-known",
+        "cwd": "C:\\Users\\alice\\source\\future-known",
+        "createdAt": 1785200000,
+        "updatedAt": 1785200010,
+        "source": "cli",
+        "status": {
+          "type": "idle",
+          "futureFlags": ["FUTURE_PRIVATE_CODEX_FLAG"]
+        },
+        "title": "FUTURE_PRIVATE_CODEX_TITLE",
+        "transcript": "FUTURE_PRIVATE_CODEX_TRANSCRIPT"
+      },
+      {
+        "id": "codex-future-unknown",
+        "cwd": "C:\\Users\\alice\\source\\future-unknown",
+        "createdAt": 1785200020,
+        "updatedAt": 1785200030,
+        "source": "cli",
+        "status": {
+          "type": "pausedForOperatorReview",
+          "reason": "FUTURE_PRIVATE_CODEX_REASON"
+        },
+        "preview": "FUTURE_PRIVATE_CODEX_PREVIEW",
+        "messages": ["FUTURE_PRIVATE_CODEX_MESSAGE"]
+      }
+    ],
+    "nextCursor": null,
+    "futureMetadata": {
+      "token": "FUTURE_PRIVATE_CODEX_TOKEN"
+    }
+  }
+}

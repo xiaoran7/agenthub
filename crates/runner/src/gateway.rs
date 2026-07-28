@@ -347,6 +347,55 @@ mod tests {
         server_thread.join().unwrap();
     }
 
+    #[test]
+    fn failed_upload_preserves_outbox_for_later_replay() {
+        let identity = DeviceIdentity::generate();
+        let mut outbox = Outbox::open_in_memory().unwrap();
+        outbox.enqueue(&observation(&identity)).unwrap();
+        let mut second = observation(&identity);
+        second.agent_session_id = "session-after-disconnect".into();
+        outbox.enqueue(&second).unwrap();
+
+        // Reserve and release an ephemeral address so connecting to it fails
+        // immediately without relying on an external network.
+        let unavailable = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let unavailable_address = unavailable.local_addr().unwrap();
+        drop(unavailable);
+        let offline_client = GatewayClient::new(
+            &format!("http://{unavailable_address}"),
+            Duration::from_millis(250),
+        )
+        .unwrap();
+        assert!(matches!(
+            push_outbox(&offline_client, &mut outbox, &identity, 100, 1),
+            Err(GatewayError::Unreachable | GatewayError::Timeout)
+        ));
+        assert_eq!(
+            outbox.stats().unwrap().pending_events,
+            2,
+            "a transport failure must not acknowledge local events"
+        );
+
+        let expected_device_id = identity.device_id().to_owned();
+        let (server, server_thread) = spawn_json_server(move |request| {
+            assert_eq!(request["device_id"], expected_device_id);
+            assert_eq!(request["first_sequence"], 1);
+            assert_eq!(request["last_sequence"], 2);
+            serde_json::json!({
+                "protocol_version": request["protocol_version"],
+                "batch_id": request["batch_id"],
+                "device_id": request["device_id"],
+                "accepted_through": request["last_sequence"]
+            })
+        });
+        let online_client = GatewayClient::new(&server, Duration::from_secs(2)).unwrap();
+        let summary = push_outbox(&online_client, &mut outbox, &identity, 100, 1).unwrap();
+
+        assert_eq!(summary.acknowledged, 2);
+        assert_eq!(summary.pending_events, 0);
+        server_thread.join().unwrap();
+    }
+
     fn observation(identity: &DeviceIdentity) -> SessionObservation {
         SessionObservation::new(
             &ObservationMeta::now(identity.device_id()),

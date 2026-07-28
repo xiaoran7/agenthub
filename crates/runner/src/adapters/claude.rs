@@ -195,6 +195,15 @@ pub fn normalize_hook(
 
     let (presence, activity_status, waiting_reason) =
         map_hook_event(event, notification_type, tool_name);
+    let confidence = if activity_status == ActivityStatus::Unknown && event != "SessionEnd" {
+        // The hook was observed, but a new or unrecognized event does not
+        // prove an activity state. Keep the source while degrading the claim.
+        // SessionEnd is a recognized presence signal whose activity is
+        // intentionally merged from the previous snapshot.
+        Confidence::Inferred
+    } else {
+        Confidence::Observed
+    };
     let state = SessionState {
         presence,
         activity_status,
@@ -224,7 +233,7 @@ pub fn normalize_hook(
         redactor.redact(cwd),
         state,
         ObservationSource::ClaudeHook,
-        Confidence::Observed,
+        confidence,
     ))
 }
 
