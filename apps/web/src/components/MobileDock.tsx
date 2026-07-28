@@ -3,6 +3,7 @@ import type { SessionTab } from "../lib/classify";
 interface MobileDockProps {
   selected: SessionTab;
   onSelect: (tab: SessionTab) => void;
+  onOpenFilters: () => void;
   onOpenSettings: () => void;
 }
 
@@ -14,12 +15,12 @@ const ITEMS: ReadonlyArray<{
   { tab: "all", icon: "⌂", label: "全部" },
   { tab: "live", icon: "◉", label: "活动" },
   { tab: "waiting", icon: "!", label: "待处理" },
-  { tab: "finished", icon: "✓", label: "完成" },
 ];
 
 export function MobileDock({
   selected,
   onSelect,
+  onOpenFilters,
   onOpenSettings,
 }: MobileDockProps) {
   return (
@@ -36,6 +37,10 @@ export function MobileDock({
           {item.label}
         </button>
       ))}
+      <button type="button" onClick={onOpenFilters}>
+        <span aria-hidden="true">◫</span>
+        设备
+      </button>
       <button type="button" onClick={onOpenSettings}>
         <span aria-hidden="true">⚙</span>
         设置

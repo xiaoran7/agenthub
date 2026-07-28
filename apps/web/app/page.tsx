@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DeviceStrip } from "../src/components/DeviceStrip";
 import { MobileDock } from "../src/components/MobileDock";
+import { MobileFilters } from "../src/components/MobileFilters";
 import { EmptySessions, PanelSkeleton } from "../src/components/PanelStates";
 import { SessionDetail } from "../src/components/SessionDetail";
 import { SessionList } from "../src/components/SessionList";
@@ -24,8 +25,9 @@ import {
   tabCounts,
   type SessionTab,
 } from "../src/lib/classify";
-import { formatRelative } from "../src/lib/format";
+import { deviceShortId, formatRelative } from "../src/lib/format";
 import { parseNotificationPresentedAt } from "../src/lib/notifications";
+import { usePwaInstall } from "../src/lib/pwa-install";
 import { openChangeStream } from "../src/lib/stream";
 import type { DeviceRecord, SessionRecord, SessionRef } from "../src/lib/types";
 import { parseSessionRef, sessionKey, sessionRef } from "../src/lib/types";
@@ -56,10 +58,12 @@ export default function PanelPage() {
     undefined,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
   const [notificationPresentedAt, setNotificationPresentedAt] = useState<
     number | undefined
   >(undefined);
+  const pwaInstall = usePwaInstall();
 
   // Config only exists in the browser; loading it in an effect keeps the
   // server-rendered markup deterministic.
@@ -255,6 +259,8 @@ export default function PanelPage() {
   };
   const openSettings = useCallback(() => setSettingsOpen(true), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const openMobileFilters = useCallback(() => setMobileFiltersOpen(true), []);
+  const closeMobileFilters = useCallback(() => setMobileFiltersOpen(false), []);
 
   const showOnboarding =
     config !== undefined &&
@@ -267,6 +273,19 @@ export default function PanelPage() {
 
   const selectMobileTab = (nextTab: SessionTab) => {
     setTab(nextTab);
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById("sessions")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+  const applyMobileFilters = (
+    nextTab: SessionTab,
+    nextDevice: string | undefined,
+  ) => {
+    setTab(nextTab);
+    setDeviceFilter(nextDevice);
+    setMobileFiltersOpen(false);
     window.requestAnimationFrame(() => {
       document
         .getElementById("sessions")
@@ -440,11 +459,29 @@ export default function PanelPage() {
               <p className="eyebrow">SESSIONS</p>
               <h2>{TAB_LABELS[tab]}会话</h2>
             </div>
-            <span className="result-count">
-              {showInitialLoading
-                ? "正在读取"
-                : `${visibleSessions.length} 条结果`}
-            </span>
+            <div className="list-header-actions">
+              <button
+                type="button"
+                className="mobile-filter-trigger"
+                onClick={openMobileFilters}
+              >
+                <span aria-hidden="true">≡</span>
+                筛选
+                {(tab !== "all" || deviceFilter !== undefined) && (
+                  <span className="mobile-filter-summary">
+                    {TAB_LABELS[tab]}
+                    {deviceFilter === undefined
+                      ? ""
+                      : ` · ${deviceShortId(deviceFilter)}`}
+                  </span>
+                )}
+              </button>
+              <span className="result-count">
+                {showInitialLoading
+                  ? "正在读取"
+                  : `${visibleSessions.length} 条结果`}
+              </span>
+            </div>
           </header>
           {showInitialLoading ? (
             <PanelSkeleton />
@@ -501,8 +538,21 @@ export default function PanelPage() {
       <MobileDock
         selected={tab}
         onSelect={selectMobileTab}
+        onOpenFilters={openMobileFilters}
         onOpenSettings={openSettings}
       />
+
+      {mobileFiltersOpen && (
+        <MobileFilters
+          devices={devices}
+          sessions={sessions}
+          selectedTab={tab}
+          selectedDevice={deviceFilter}
+          nowMs={nowMs}
+          onApply={applyMobileFilters}
+          onClose={closeMobileFilters}
+        />
+      )}
 
       {settingsOpen && config !== undefined && (
         <SettingsPanel
@@ -511,6 +561,8 @@ export default function PanelPage() {
           onSave={handleSaveConfig}
           onDevicesChanged={() => void refresh()}
           notificationPresentedAt={notificationPresentedAt}
+          installState={pwaInstall.state}
+          onInstall={pwaInstall.install}
           onClose={closeSettings}
         />
       )}

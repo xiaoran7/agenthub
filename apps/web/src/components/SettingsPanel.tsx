@@ -11,6 +11,7 @@ import type { PanelConfig } from "../lib/config";
 import { normalizeGatewayBase, normalizeUserId } from "../lib/config";
 import type { NotificationState } from "../lib/notifications";
 import { deviceShortId, formatClock } from "../lib/format";
+import type { PwaInstallState } from "../lib/pwa-install";
 import type { DeviceRecord } from "../lib/types";
 import {
   disableNotifications,
@@ -24,6 +25,8 @@ interface SettingsPanelProps {
   devices: DeviceRecord[];
   onDevicesChanged: () => void;
   notificationPresentedAt: number | undefined;
+  installState: PwaInstallState;
+  onInstall: () => Promise<void>;
   onClose: () => void;
 }
 
@@ -36,12 +39,34 @@ const NOTIFICATION_HINTS: Record<NotificationState, string> = {
   off: "会话进入等待输入或等待权限时提醒你，面板关闭也能收到。",
 };
 
+const INSTALL_HINTS: Record<PwaInstallState, string> = {
+  checking: "正在检查当前浏览器的安装能力…",
+  available: "安装后可从桌面或主屏幕直接打开，并使用独立窗口。",
+  installing: "正在等待浏览器确认安装…",
+  submitted: "安装请求已提交；完成后可从系统应用列表打开。",
+  installed: "当前已经在独立应用模式中运行。",
+  manual: "在 Safari 中点“分享”，然后选择“添加到主屏幕”。",
+  unavailable: "当前浏览器暂未提供安装按钮；仍可正常使用网页版本。",
+};
+
+const INSTALL_LABELS: Record<PwaInstallState, string> = {
+  checking: "检查中…",
+  available: "安装应用",
+  installing: "安装中…",
+  submitted: "已提交",
+  installed: "已安装",
+  manual: "查看说明",
+  unavailable: "暂不可用",
+};
+
 export function SettingsPanel({
   config,
   devices,
   onSave,
   onDevicesChanged,
   notificationPresentedAt,
+  installState,
+  onInstall,
   onClose,
 }: SettingsPanelProps) {
   const [gatewayBase, setGatewayBase] = useState(config.gatewayBase);
@@ -54,6 +79,9 @@ export function SettingsPanel({
     string | undefined
   >(undefined);
   const [notificationBusy, setNotificationBusy] = useState(false);
+  const [installError, setInstallError] = useState<string | undefined>(
+    undefined,
+  );
   const [binding, setBinding] = useState<DeviceBinding | undefined>(undefined);
   const [bindingCopied, setBindingCopied] = useState(false);
   const [bindingBusy, setBindingBusy] = useState(false);
@@ -112,6 +140,15 @@ export function SettingsPanel({
       );
     } finally {
       setNotificationBusy(false);
+    }
+  }
+
+  async function installPwa() {
+    setInstallError(undefined);
+    try {
+      await onInstall();
+    } catch {
+      setInstallError("浏览器未能启动安装流程，请稍后重试。");
     }
   }
 
@@ -393,6 +430,38 @@ export function SettingsPanel({
             {notificationError !== undefined && (
               <p className="error-text" role="alert">
                 {notificationError}
+              </p>
+            )}
+          </section>
+
+          <section
+            className="settings-section"
+            aria-labelledby="install-settings"
+          >
+            <div className="settings-section-heading">
+              <span className="settings-section-icon" aria-hidden="true">
+                ⌂
+              </span>
+              <div>
+                <h3 id="install-settings">安装到设备</h3>
+                <p>以独立 PWA 窗口打开 Agent Platform。</p>
+              </div>
+            </div>
+            <div className="settings-toggle">
+              <span>应用安装</span>
+              <button
+                type="button"
+                className="secondary"
+                disabled={installState !== "available"}
+                onClick={() => void installPwa()}
+              >
+                {INSTALL_LABELS[installState]}
+              </button>
+            </div>
+            <p className="settings-hint">{INSTALL_HINTS[installState]}</p>
+            {installError !== undefined && (
+              <p className="error-text" role="alert">
+                {installError}
               </p>
             )}
           </section>
