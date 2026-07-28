@@ -13,6 +13,8 @@ PostgreSQL 18.4 实际跑通了持久化重连契约和 12 设备/3000 Session �
 **进行中**：
 真实 Claude/Agent 升级前后状态矩阵、部署环境 TLS/长时间离线恢复，以及系统级
 Web Push 呈现仍未完成；本机真实 rustls 握手和私有 CA 恢复已进入自动化基线。
+普通 Chrome 的新订阅已让推送服务实际接受一条加密通知，但该成功响应只证明服务
+端投递，不等于 Windows 已展示。
 
 ## 自动化验收矩阵
 
@@ -41,8 +43,10 @@ Web Push 呈现仍未完成；本机真实 rustls 握手和私有 CA 恢复已�
    rustls 未知签发者失败时不清 Outbox、配置私有 CA 后完成真实 TLS ACK，磁盘 Outbox
    跨进程重启不丢序列，后台同步在传输失败后独立退避并持续报告积压。
 3. 在普通浏览器验证 Web Push 的系统级呈现。Chrome 已授予 localhost 通知权限，
-   Service Worker 已受控，Push 订阅成功登记，等待权限事件也已触发；但 Chrome/
-   Windows 没有留下可观察的活动通知，不能把订阅成功写成实际弹窗通过。
+   Service Worker 已受控，Push 订阅成功登记，等待权限事件也已触发；Gateway 的
+   隐私安全聚合日志确认推送服务返回成功（`delivered=1, gone=0, failed=0`），但
+   Chrome/Windows 没有留下可观察的活动通知，不能把服务端投递成功写成实际弹窗
+   通过。
 
 ## 本机环境探测
 
@@ -75,7 +79,11 @@ Web Push 呈现仍未完成；本机真实 rustls 握手和私有 CA 恢复已�
   后续 Runner 上传稳定返回 403 `gateway_rejected`。临时身份、SQLite、日志和进程
   均在验收结束后清理。
 - Chrome：localhost 通知权限为 `granted`，Service Worker 已控制页面，Push
-  订阅登记返回 204；验收结束已注销临时订阅并删除临时 VAPID 密钥与 Runner 数据。
+  订阅登记返回 204。使用新临时 VAPID 密钥、新设备和
+  `WAITING_PERMISSION` Fixture 完成 Runner 签名上传后，Outbox 归零且推送服务
+  返回成功；Gateway 聚合日志为 `delivered=1, gone=0, failed=0`。Windows 未留下
+  可观察的活动通知，因此证据止于服务端投递接受；验收结束已注销临时订阅并删除
+  临时 VAPID 密钥与 Runner 数据。
 
 现场测试没有向仓库写入数据库密码、VAPID 私钥、真实 Session 样本或临时数据库。
 

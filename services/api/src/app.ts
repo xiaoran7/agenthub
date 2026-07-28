@@ -363,6 +363,18 @@ export function createGatewayApp(
           outcome: await push.sender.send(subscription, payload),
         })),
       );
+      const deliveryCounts = {
+        delivered: outcomes.filter((entry) => entry.outcome === "delivered")
+          .length,
+        gone: outcomes.filter((entry) => entry.outcome === "gone").length,
+        failed: outcomes.filter((entry) => entry.outcome === "failed").length,
+      };
+      // Keep production diagnosis possible without logging an endpoint, owner,
+      // session identifier or notification payload.
+      app.log.info(
+        { push_delivery: deliveryCounts },
+        "push delivery completed",
+      );
       for (const { subscription, outcome } of outcomes) {
         if (outcome === "gone") {
           // The browser dropped this subscription; keeping it would retry a

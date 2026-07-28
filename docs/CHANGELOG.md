@@ -7,6 +7,9 @@
 
 ### Added
 
+- Gateway 为异步 Web Push 增加隐私安全的投递结果日志：只输出
+  `delivered / gone / failed` 聚合计数，不记录订阅 endpoint、owner、Session ID
+  或 payload，使真实浏览器联调可以区分推送服务拒绝与系统通知展示失败。
 - Runner 新增私有 Gateway CA 支持：`run`、`device bind` 和 `sync push` 可通过
   `--gateway-ca-cert` / `AGENT_PLATFORM_GATEWAY_CA_CERT` 读取根证书 PEM，严格
   校验证书链、主机名和有效期，不提供跳过验证开关。新增真实 rustls 握手回归：

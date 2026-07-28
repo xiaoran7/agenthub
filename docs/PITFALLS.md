@@ -2,6 +2,19 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-28 Web Push 服务端已接受不等于系统通知已展示
+
+- **现象**：Runner 的签名批次已 ACK、Outbox 已归零，但 Chrome/Windows 没有可
+  观察的活动通知；只看同步结果无法判断是 FCM 拒绝、浏览器接收失败还是系统展示
+  被抑制。
+- **根因**：Web Push 故意在同步请求路径之外执行，原实现没有记录
+  `PushOutcome`，把第三方推送失败与系统级展示问题混在同一个黑盒里。
+- **解决方式**：每次等待状态投递记录 `delivered / gone / failed` 聚合计数，
+  不记录 endpoint、owner、Session ID 或 payload。`delivered` 仅表示推送服务
+  HTTP 成功接受，仍不能替代真实系统通知中心验收。
+- **如何规避**：现场验收必须分别记录 Runner ACK、推送服务结果和浏览器/系统
+  展示证据，不能用上游成功替代下游成功。
+
 ## 2026-07-28 ureq/rustls 的证书错误可能包装成 `io::ErrorKind::InvalidData`
 
 - **现象**：真实 TLS 回归连接自签服务端时，rustls 明确给出
