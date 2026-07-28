@@ -103,6 +103,10 @@ $env:AGENT_PLATFORM_TEST_DATABASE_URL = 'postgresql://agent_platform:password@12
 npm.cmd test --workspace @agent-platform/api
 ```
 
+设置后会同时运行基础持久化契约和 M4 的 12 设备/3000 Session 并发工作负载；
+后者验证双 owner 隔离、按设备查询和整批重放，不设置机器相关的耗时阈值，也不作为
+容量基准。
+
 ## 尚未实现
 
 - 用户登录与正式访问令牌

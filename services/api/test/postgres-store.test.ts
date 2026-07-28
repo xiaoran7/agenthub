@@ -10,6 +10,12 @@ import {
   PostgresGatewayStore,
   migratePostgres,
 } from "../src/postgres-store.js";
+import {
+  M4_DEVICE_COUNT,
+  M4_SESSIONS_PER_DEVICE,
+  makeM4Batch,
+  makeM4Device,
+} from "./m4-fixtures.js";
 
 const databaseUrl = process.env.AGENT_PLATFORM_TEST_DATABASE_URL;
 const fixture = parseSyncBatch(
@@ -175,12 +181,107 @@ test(
   },
 );
 
+test(
+  "PostgreSQL M4 workload isolates 12 devices and replays 3,000 sessions",
+  { skip: databaseUrl === undefined, timeout: 120_000 },
+  async () => {
+    assert.ok(databaseUrl);
+    const admin = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+    const schema = `agent_platform_m4_${randomUUID().replaceAll("-", "")}`;
+    let sql: postgres.Sql | undefined;
+    let schemaCreated = false;
+    try {
+      await admin`CREATE SCHEMA ${admin(schema)}`;
+      schemaCreated = true;
+      sql = scopedConnection(databaseUrl, schema, 4);
+      await migratePostgres(sql);
+      const store = new PostgresGatewayStore(sql);
+      const devices = Array.from({ length: M4_DEVICE_COUNT }, (_, index) =>
+        makeM4Device(
+          index,
+          index < 8 ? "postgres-load-owner-a" : "postgres-load-owner-b",
+        ),
+      );
+
+      await Promise.all(
+        devices.map((device) =>
+          store.registerDevice(
+            device.ownerId,
+            device.deviceId,
+            device.publicKey,
+          ),
+        ),
+      );
+      const batches = devices.map((device) =>
+        makeM4Batch(device, M4_SESSIONS_PER_DEVICE),
+      );
+      const ingested = await Promise.all(
+        batches.map((batch) => store.ingestBatch(batch)),
+      );
+      assert.ok(
+        ingested.every((result) => result.accepted === M4_SESSIONS_PER_DEVICE),
+      );
+      assert.equal(
+        (await store.listSessions("postgres-load-owner-a", {})).length,
+        2_000,
+      );
+      assert.equal(
+        (await store.listSessions("postgres-load-owner-b", {})).length,
+        1_000,
+      );
+
+      const target = devices[0];
+      assert.ok(target);
+      assert.equal(
+        (
+          await store.listSessions("postgres-load-owner-a", {
+            device_id: target.deviceId,
+          })
+        ).length,
+        M4_SESSIONS_PER_DEVICE,
+      );
+      assert.equal(
+        (
+          await store.listSessions("postgres-load-owner-b", {
+            device_id: target.deviceId,
+          })
+        ).length,
+        0,
+      );
+
+      const replayed = await Promise.all(
+        batches.map((batch) => store.ingestBatch(batch)),
+      );
+      assert.ok(replayed.every((result) => result.accepted === 0));
+      assert.equal(
+        (await store.listSessions("postgres-load-owner-a", {})).length,
+        2_000,
+      );
+
+      await store.close();
+      sql = undefined;
+    } finally {
+      if (sql !== undefined) {
+        await sql.end({ timeout: 1 }).catch(() => undefined);
+      }
+      try {
+        if (schemaCreated) {
+          await admin`DROP SCHEMA ${admin(schema)} CASCADE`;
+        }
+      } finally {
+        await admin.end({ timeout: 5 });
+      }
+    }
+  },
+);
+
 function scopedConnection(
   connectionString: string,
   schema: string,
+  max = 1,
 ): postgres.Sql {
   return postgres(connectionString, {
-    max: 1,
+    max,
     onnotice: () => {},
     connection: {
       application_name: "agent-platform-postgres-test",

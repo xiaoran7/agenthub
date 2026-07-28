@@ -7,6 +7,10 @@
 
 ### Added
 
+- M4 第二轮把断网用例升级为磁盘 SQLite Outbox：上传失败后关闭并重开数据库，
+  事件与序列水位保持，合法 ACK 后再次重开仍为空；同一套 12 设备/3000 Session
+  工作负载抽成共享 Fixture，并接入环境门控的 PostgreSQL 随机 Schema 测试，
+  以 4 条连接并发验证设备行锁、双 owner 隔离和整批重放不重复。
 - M4 安全与稳定性自动化基线：Runner 增加跨层字段泄漏、新版 Agent Fixture、
   无 Hook 轮询和断网恢复重放验收；Gateway 增加 12 个独立签名设备、3000 个
   Session 的完整注册/验签/写入/查询工作负载，验证双 owner 隔离、按设备筛选、

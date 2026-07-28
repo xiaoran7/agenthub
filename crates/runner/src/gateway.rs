@@ -350,7 +350,9 @@ mod tests {
     #[test]
     fn failed_upload_preserves_outbox_for_later_replay() {
         let identity = DeviceIdentity::generate();
-        let mut outbox = Outbox::open_in_memory().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("runner.db");
+        let mut outbox = Outbox::open(&database_path).unwrap();
         outbox.enqueue(&observation(&identity)).unwrap();
         let mut second = observation(&identity);
         second.agent_session_id = "session-after-disconnect".into();
@@ -375,6 +377,20 @@ mod tests {
             2,
             "a transport failure must not acknowledge local events"
         );
+        drop(outbox);
+
+        // Opening the same SQLite database models a Runner process restart:
+        // pending events and their sequence watermark must survive it.
+        let mut outbox = Outbox::open(&database_path).unwrap();
+        assert_eq!(outbox.stats().unwrap().pending_events, 2);
+        let pending = outbox.pending(identity.device_id(), 10).unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|record| record.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
 
         let expected_device_id = identity.device_id().to_owned();
         let (server, server_thread) = spawn_json_server(move |request| {
@@ -394,6 +410,16 @@ mod tests {
         assert_eq!(summary.acknowledged, 2);
         assert_eq!(summary.pending_events, 0);
         server_thread.join().unwrap();
+        drop(outbox);
+        assert_eq!(
+            Outbox::open(&database_path)
+                .unwrap()
+                .stats()
+                .unwrap()
+                .pending_events,
+            0,
+            "the acknowledged state must also survive another restart"
+        );
     }
 
     fn observation(identity: &DeviceIdentity) -> SessionObservation {
