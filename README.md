@@ -33,6 +33,8 @@
 
 当前 Runner 已支持 Claude/Codex 一次性和持续采集、状态标准化、隐私脱敏、
 SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签名同步批次。
+常驻 `run` 配置 Gateway 后会在独立线程自动排空 Outbox；新事件立即唤醒同步，
+网络失败按独立退避恢复，不阻塞 Agent 采集。
 云端已具备开发期设备绑定、签名批次验收、内存幂等写入与只读 Session 查询。
 Runner 已可通过 HTTPS（本地开发允许回环 HTTP）完成设备绑定、批次上传和确认清理。
 Gateway 已提供 PostgreSQL 迁移和事务 Store；未配置数据库时仍使用开发期内存存储。

@@ -3,6 +3,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc::SyncSender,
     },
     thread,
     time::{Duration, Instant},
@@ -338,6 +339,7 @@ pub struct RunnerRuntime {
     outbox: Outbox,
     policy: PollPolicy,
     sources: Vec<ManagedSource>,
+    sync_trigger: Option<SyncSender<()>>,
 }
 
 impl RunnerRuntime {
@@ -362,7 +364,13 @@ impl RunnerRuntime {
                     next_attempt: now,
                 })
                 .collect(),
+            sync_trigger: None,
         }
+    }
+
+    pub fn with_sync_trigger(mut self, sync_trigger: SyncSender<()>) -> Self {
+        self.sync_trigger = Some(sync_trigger);
+        self
     }
 
     pub fn run(
@@ -389,6 +397,11 @@ impl RunnerRuntime {
                 ) {
                     Ok(report) => {
                         managed.next_attempt = Instant::now() + report.next_delay;
+                        if report.enqueued > 0
+                            && let Some(sync_trigger) = &self.sync_trigger
+                        {
+                            let _ = sync_trigger.try_send(());
+                        }
                         eprintln!(
                             "{}",
                             serde_json::to_string(&report)
@@ -445,7 +458,7 @@ impl RunnerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::mpsc::sync_channel};
 
     use crate::domain::{Confidence, ObservationSource, ProjectRef, SessionState};
 
@@ -557,6 +570,32 @@ mod tests {
                 .status,
             "healthy"
         );
+    }
+
+    #[test]
+    fn newly_enqueued_observations_wake_background_sync() {
+        let meta = ObservationMeta::now("device-1");
+        let source = FakeSource {
+            agent_type: AgentType::Codex,
+            result: Some(Ok(vec![observation(&meta, ActivityStatus::Working)])),
+        };
+        let (sync_trigger, receiver) = sync_channel(1);
+        let mut runtime = RunnerRuntime::new(
+            "device-1",
+            ProjectRedactor::new(b"secret").unwrap(),
+            Outbox::open_in_memory().unwrap(),
+            PollPolicy::default(),
+            vec![Box::new(source)],
+        )
+        .with_sync_trigger(sync_trigger);
+
+        runtime
+            .run(Arc::new(AtomicBool::new(false)), Some(1))
+            .unwrap();
+
+        receiver
+            .try_recv()
+            .expect("a newly persisted observation must wake the sync worker");
     }
 
     #[test]

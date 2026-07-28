@@ -122,3 +122,28 @@ fn device_and_sync_commands_complete_a_signed_acknowledgement_cycle() {
         0
     );
 }
+
+#[test]
+fn background_sync_rejects_an_unidentified_runner() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("runner.db");
+    let output = runner()
+        .env("AGENT_PLATFORM_FINGERPRINT_KEY", "test-only-key")
+        .args(["run", "claude", "--db"])
+        .arg(&database_path)
+        .args([
+            "--sync-server",
+            "http://127.0.0.1:3001",
+            "--max-attempts",
+            "1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("background sync requires --identity"),
+        "{:?}",
+        output.stderr
+    );
+}

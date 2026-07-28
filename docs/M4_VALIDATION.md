@@ -32,8 +32,8 @@ PostgreSQL 18.4 实际跑通了持久化重连契约和 12 设备/3000 Session �
 1. 在可执行的真实 Claude Code 与 Codex CLI 版本上跑状态矩阵，至少覆盖一次升级前后
    的工作、等待输入、等待权限、完成、失败与停止。
 2. 使用真实 TLS 故障和长时间离线验证恢复；当前测试已证明磁盘 Outbox 跨进程重启
-   不丢序列，且外部不可达端点超时后事件仍保留、显式再次推送可恢复。自动后台同步
-   仍属于 M2 遗留能力。
+   不丢序列，后台同步在真实回环传输失败后保留磁盘事件、独立退避，并在端点恢复后
+   无需手工 `sync push` 即自动 ACK 清零。
 3. 在普通浏览器验证 Web Push 的系统级呈现。Chrome 已授予 localhost 通知权限，
    Service Worker 已受控，Push 订阅成功登记，等待权限事件也已触发；但 Chrome/
    Windows 没有留下可观察的活动通知，不能把订阅成功写成实际弹窗通过。
@@ -55,6 +55,9 @@ PostgreSQL 18.4 实际跑通了持久化重连契约和 12 设备/3000 Session �
 - 外部不可达：Runner 向保留的 `.invalid` HTTPS 主机推送时在 3 秒后返回稳定
   `gateway_timeout`，磁盘 Outbox 保留 1 条事件；随后改回本地 Gateway，合法 ACK
   后待发送事件归零。
+- 后台同步现场：预先在磁盘 Outbox 留下 1 条事件，再用 Codex CLI 0.144.2 启动
+  `run codex` 并连接本地 Gateway；无需执行手工 `sync push`，旧事件与本轮新观察
+  均自动上传，Runner 退出时 `pending_events=0`，云端可查询 2 个 Session。
 - Chrome：localhost 通知权限为 `granted`，Service Worker 已控制页面，Push
   订阅登记返回 204；验收结束已注销临时订阅并删除临时 VAPID 密钥与 Runner 数据。
 

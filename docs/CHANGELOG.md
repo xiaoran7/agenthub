@@ -7,6 +7,12 @@
 
 ### Added
 
+- Runner `run` 新增可选后台自动同步：配置 `AGENT_PLATFORM_GATEWAY_URL` 与设备身份
+  后，以独立线程和 SQLite 连接启动排空旧 Outbox，采集新事件通过容量为 1 的合并
+  信号立即唤醒；网络失败按独立 2→60 秒指数退避，期间 Adapter 继续采集。每轮沿用
+  `sync push` 的批次上限、HTTPS 策略和 ACK 删除约束，并新增启动重放、采集唤醒及
+  真实回环端点失败→恢复后自动清零测试；仅有其他设备旧事件时报告稳定
+  `sync_pending_device_mismatch` 并退避。
 - M4 现场验收补齐本机 PostgreSQL 18.4：持久化重连与 12 设备/3000 Session
   随机 Schema 并发工作负载全部通过、0 跳过；Runner 对 Desktop 内置
   Codex CLI 0.144.2 完成一次真实只读采集，接收 35 个白名单 Session 且

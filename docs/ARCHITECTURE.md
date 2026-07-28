@@ -166,8 +166,13 @@ session_key = agent_type + device_id + agent_session_id
 通过主动出站请求上传，并仅在确认的设备、批次和序列均匹配实际发送范围时清理事件。
 每次推送的批次和单批事件数均有上限；网络失败或无效响应保留未确认事件。远程服务
 强制 HTTPS，本地开发允许回环 HTTP。具体线格式见
-[SYNC_PROTOCOL.md](SYNC_PROTOCOL.md)。自动重试、在途批次持久化、心跳和 WebSocket
-低延迟通道仍属于 Milestone 2。
+[SYNC_PROTOCOL.md](SYNC_PROTOCOL.md)。
+
+常驻 `run` 在配置 Gateway 与设备身份后启动独立后台同步线程。线程启动即扫描磁盘
+Outbox，采集提交新事件后通过容量为 1 的合并信号立即唤醒；网络失败按独立指数退避，
+退避期间继续采集。同步与采集各持一个 SQLite 连接，依赖 WAL 与 `busy_timeout`
+协调，不共享网络阻塞。在途批次持久化、独立设备心跳和 WebSocket 低延迟通道仍属于
+Milestone 2。
 
 ### 3.2 本地 IPC
 
@@ -543,6 +548,7 @@ Agent-Platform/
 
 - 设备绑定（已完成开发期一次性绑定码、公钥登记和 Runner 出站调用）
 - WebSocket Gateway（已完成 Runner→Gateway HTTP 批次闭环，WebSocket 待接入）
+- 后台自动同步（已完成启动排空、新事件唤醒、独立退避与恢复重放）
 - 心跳与离线判断（已完成接收时间阈值，独立心跳待接入）
 - 幂等事件写入（已完成 Runner 上传/确认、内存与 PostgreSQL 事务存储）
 - Session 查询 API（已完成开发期设备和 Session 读接口）

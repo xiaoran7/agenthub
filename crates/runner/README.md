@@ -15,6 +15,7 @@
 - 工作目录显示名与 HMAC 指纹脱敏
 - SQLite Outbox、事件顺序、幂等和 Session 快照
 - Ed25519 本地设备身份、签名同步批次和有界确认
+- 独立后台同步、启动排空、新事件唤醒与网络失败指数退避
 - Fixture 驱动的隐私回归测试
 
 ## 开发命令
@@ -80,6 +81,8 @@ cargo run -p agent-platform-runner -- `
 持续运行两个 Adapter：
 
 ```powershell
+$env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
+
 cargo run -p agent-platform-runner -- `
   --identity runner-identity.json `
   run all `
@@ -91,6 +94,17 @@ cargo run -p agent-platform-runner -- `
 `--idle-interval-seconds`、`--failure-initial-seconds` 和
 `--failure-max-seconds` 调整。每次采集默认最多等待 15 秒，可通过
 `--collector-timeout-seconds` 调整。`Ctrl-C` 会请求 Runner 安全退出。
+
+设置 `AGENT_PLATFORM_GATEWAY_URL`（或 `run --sync-server`）后，`run` 会启动独立
+同步线程：启动时先尝试排空上次进程留下的事件，采集到新事件时立即唤醒；成功后
+默认每 5 秒检查一次，失败按 2、4、8……秒退避到 60 秒。同步线程使用独立 SQLite
+连接，不会让 15 秒网络超时阻塞 Claude/Codex 采集。每轮仍受单批事件数和最大批次
+数约束，只有合法 ACK 才清理 Outbox；可通过 `--sync-interval-seconds`、
+`--sync-failure-initial-seconds`、`--sync-failure-max-seconds`、`--sync-limit`、
+`--sync-max-batches` 和 `--sync-timeout-seconds` 调整。启用后台同步必须同时传入
+`--identity` 或设置 `AGENT_PLATFORM_IDENTITY`，确保采集与签名使用同一个设备 ID。
+若数据库只有其他设备 ID 的旧事件，后台日志会报告
+`sync_pending_device_mismatch` 并退避，不会把“有积压但无可发送批次”写成成功。
 
 Codex Runner 会处理当前 app-server 连接收到的状态、Turn、审批和用户输入通知，
 并与 `thread/list` / `thread/loaded/list` 的轮询结果合并。为保持只读，它不会调用
@@ -162,10 +176,10 @@ cargo run -p agent-platform-runner -- `
   --max-batches 10
 ```
 
-绑定码建议通过环境变量提供，避免进入 Shell 历史。`sync push` 每次只处理有界数量的
-批次；Gateway 返回的确认通过本地校验后才会删除 Outbox 事件。网络失败、超时或无效
-响应不会清理未确认事件。远程 Gateway 地址必须使用 HTTPS，明文 HTTP 只允许
-`localhost`、IPv4 或 IPv6 回环地址用于本地开发。
+绑定码建议通过环境变量提供，避免进入 Shell 历史。`sync push` 保留为诊断和一次性
+排空命令，每次只处理有界数量的批次；Gateway 返回的确认通过本地校验后才会删除
+Outbox 事件。网络失败、超时或无效响应不会清理未确认事件。远程 Gateway 地址必须
+使用 HTTPS，明文 HTTP 只允许 `localhost`、IPv4 或 IPv6 回环地址用于本地开发。
 
 ## 安全约束
 

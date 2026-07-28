@@ -21,7 +21,8 @@ use agent_platform_runner::{
     outbox::Outbox,
     privacy::ProjectRedactor,
     runtime::{ClaudeSessionSource, CodexSessionSource, PollPolicy, RunnerRuntime, SessionSource},
-    sync::{SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
+    sync::{MAX_SYNC_BATCH_EVENTS, SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
+    sync_worker::{SyncPolicy, SyncWorker},
 };
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -102,6 +103,24 @@ enum Command {
         failure_max_seconds: u64,
         #[arg(long, default_value_t = 15)]
         collector_timeout_seconds: u64,
+        #[arg(
+            long,
+            env = "AGENT_PLATFORM_GATEWAY_URL",
+            help = "Continuously drain the Outbox to this Gateway; remote URLs require HTTPS"
+        )]
+        sync_server: Option<String>,
+        #[arg(long, default_value_t = 5)]
+        sync_interval_seconds: u64,
+        #[arg(long, default_value_t = 2)]
+        sync_failure_initial_seconds: u64,
+        #[arg(long, default_value_t = 60)]
+        sync_failure_max_seconds: u64,
+        #[arg(long, default_value_t = 100)]
+        sync_limit: usize,
+        #[arg(long, default_value_t = 10)]
+        sync_max_batches: usize,
+        #[arg(long, default_value_t = 15)]
+        sync_timeout_seconds: u64,
         #[arg(
             long,
             help = "Stop after this many adapter attempts; intended for diagnostics and tests"
@@ -340,6 +359,13 @@ fn main() -> Result<()> {
             failure_initial_seconds,
             failure_max_seconds,
             collector_timeout_seconds,
+            sync_server,
+            sync_interval_seconds,
+            sync_failure_initial_seconds,
+            sync_failure_max_seconds,
+            sync_limit,
+            sync_max_batches,
+            sync_timeout_seconds,
             max_attempts,
         } => {
             let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
@@ -360,6 +386,27 @@ fn main() -> Result<()> {
             }
             let collector_timeout =
                 nonzero_duration("collector timeout", collector_timeout_seconds)?;
+            let sync_policy = SyncPolicy {
+                interval: nonzero_duration("sync interval", sync_interval_seconds)?,
+                failure_initial: nonzero_duration(
+                    "initial sync failure backoff",
+                    sync_failure_initial_seconds,
+                )?,
+                failure_max: nonzero_duration(
+                    "maximum sync failure backoff",
+                    sync_failure_max_seconds,
+                )?,
+            };
+            if sync_policy.failure_initial > sync_policy.failure_max {
+                bail!("initial sync failure backoff cannot exceed maximum sync failure backoff");
+            }
+            if !(1..=MAX_SYNC_BATCH_EVENTS).contains(&sync_limit) {
+                bail!("sync limit must be between 1 and {MAX_SYNC_BATCH_EVENTS}");
+            }
+            if sync_max_batches == 0 {
+                bail!("sync max batches must be greater than zero");
+            }
+            let sync_timeout = nonzero_duration("sync timeout", sync_timeout_seconds)?;
 
             let mut sources: Vec<Box<dyn SessionSource>> = Vec::new();
             if matches!(agent, AgentSelection::All | AgentSelection::Claude) {
@@ -384,8 +431,35 @@ fn main() -> Result<()> {
             })
             .context("failed to install Ctrl-C handler")?;
             let mut runtime =
-                RunnerRuntime::new(device_id, redactor, Outbox::open(db)?, policy, sources);
-            runtime.run(stop, max_attempts)?;
+                RunnerRuntime::new(device_id, redactor, Outbox::open(&db)?, policy, sources);
+            let sync_worker = if let Some(server) = sync_server {
+                let device_identity = runtime_identity.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "background sync requires --identity or AGENT_PLATFORM_IDENTITY"
+                    )
+                })?;
+                let client = GatewayClient::new(&server, sync_timeout)
+                    .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                let worker = SyncWorker::start(
+                    db,
+                    client,
+                    device_identity,
+                    sync_policy,
+                    sync_limit,
+                    sync_max_batches,
+                    Arc::clone(&stop),
+                )
+                .map_err(|_| anyhow::anyhow!("sync_thread_start_failed"))?;
+                runtime = runtime.with_sync_trigger(worker.trigger_sender());
+                Some(worker)
+            } else {
+                None
+            };
+            let run_result = runtime.run(Arc::clone(&stop), max_attempts);
+            stop.store(true, Ordering::Relaxed);
+            let sync_result = sync_worker.map(SyncWorker::join).transpose();
+            run_result?;
+            sync_result.map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
         }
         Command::Outbox { command } => match command {
             OutboxCommand::Stats { db } => {
