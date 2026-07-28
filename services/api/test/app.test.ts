@@ -11,7 +11,8 @@ import {
   unsignedBatchJson,
 } from "@agent-platform/contracts";
 
-import { createGatewayApp } from "../src/app.js";
+import { createGatewayApp, type GatewayAppOptions } from "../src/app.js";
+import { DevelopmentIdentityAuthenticator } from "../src/auth.js";
 import type { PushOutcome } from "../src/push.js";
 import { InMemoryGatewayStore, OneTimeBindingCodes } from "../src/store.js";
 
@@ -39,6 +40,14 @@ const fixturePrivateKey = createPrivateKey({
   type: "pkcs8",
 });
 
+function createTestGatewayApp(options: GatewayAppOptions = {}) {
+  return createGatewayApp({
+    ...options,
+    authenticator:
+      options.authenticator ?? new DevelopmentIdentityAuthenticator(),
+  });
+}
+
 function registrationPayload(bindingCode: string): Record<string, unknown> {
   const registration = {
     binding_code: bindingCode,
@@ -58,7 +67,7 @@ function registrationPayload(bindingCode: string): Record<string, unknown> {
 test("registration, signed ingestion, replay, and read queries form a loop", async () => {
   let now = new Date("2026-07-25T00:00:01Z");
   const store = new InMemoryGatewayStore(() => now);
-  const app = createGatewayApp({
+  const app = createTestGatewayApp({
     store,
     bindingCodes: new OneTimeBindingCodes(
       new Map([["one-time-code", "user-1"]]),
@@ -129,7 +138,7 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
 });
 
 test("tampered and extra content is rejected before storage", async () => {
-  const app = createGatewayApp({
+  const app = createTestGatewayApp({
     bindingCodes: new OneTimeBindingCodes(
       new Map([["one-time-code", "user-1"]]),
     ),
@@ -170,7 +179,7 @@ test("tampered and extra content is rejected before storage", async () => {
 
 test("a signed sequence gap is rejected atomically", async () => {
   const store = new InMemoryGatewayStore();
-  const app = createGatewayApp({
+  const app = createTestGatewayApp({
     store,
     bindingCodes: new OneTimeBindingCodes(
       new Map([["one-time-code", "user-1"]]),
@@ -200,7 +209,7 @@ test("a signed sequence gap is rejected atomically", async () => {
 });
 
 test("session event timeline is scoped to the owner and ordered by sequence", async () => {
-  const app = createGatewayApp({
+  const app = createTestGatewayApp({
     bindingCodes: new OneTimeBindingCodes(
       new Map([["one-time-code", "user-1"]]),
     ),
@@ -294,7 +303,7 @@ test("waiting sessions notify the owner's subscriptions and prune dead ones", as
   const sent: Array<{ endpoint: string; payload: string }> = [];
   let outcome: PushOutcome = "delivered";
   let delivered: () => void = () => {};
-  const app = createGatewayApp({
+  const app = createTestGatewayApp({
     store,
     bindingCodes: new OneTimeBindingCodes(
       new Map([["one-time-code", "user-1"]]),
@@ -406,7 +415,7 @@ test("waiting sessions notify the owner's subscriptions and prune dead ones", as
 });
 
 test("push subscriptions are validated and disabled without VAPID keys", async () => {
-  const disabled = createGatewayApp();
+  const disabled = createTestGatewayApp();
   const disabledKey = await disabled.inject({
     method: "GET",
     url: "/v1/push/key",
@@ -432,7 +441,7 @@ test("push subscriptions are validated and disabled without VAPID keys", async (
   await disabled.close();
 
   const store = new InMemoryGatewayStore();
-  const app = createGatewayApp({
+  const app = createTestGatewayApp({
     store,
     push: {
       publicKey: "test-application-server-key",
@@ -535,7 +544,7 @@ test("the change stream is owner scoped, capped, and fires on accepted batches",
   const store = new InMemoryGatewayStore(
     () => new Date("2026-07-25T00:00:01Z"),
   );
-  const app = createGatewayApp({
+  const app = createTestGatewayApp({
     store,
     bindingCodes: new OneTimeBindingCodes(
       new Map([["one-time-code", "user-1"]]),

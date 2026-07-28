@@ -1,7 +1,7 @@
 export interface PanelConfig {
-  /** Gateway base URL; empty string means same origin (dev rewrite or reverse proxy). */
+  /** Gateway base URL; empty string means the same-origin server proxy. */
   gatewayBase: string;
-  /** Development identity sent as `x-user-id`; replaced by real auth later. */
+  /** Explicit local-development fallback; production auth stays server-side. */
   userId: string;
 }
 

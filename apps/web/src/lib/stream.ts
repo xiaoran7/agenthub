@@ -3,9 +3,9 @@ import type { PanelConfig } from "./config";
 
 /**
  * The panel reads the gateway change stream with fetch instead of EventSource:
- * EventSource cannot set request headers, and the only alternative would be to
- * put `x-user-id` in the query string, which is exactly what the panel keeps
- * out of URLs, history and access logs.
+ * fetch supports AbortSignal and the explicit local-development identity.
+ * Production credentials are added only by the same-origin server proxy and
+ * never enter this browser-side module.
  */
 export interface StreamFrame {
   event: string;

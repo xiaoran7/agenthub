@@ -2,6 +2,18 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-28 `next build` 与 `next typegen` 并行会争用 `.next` 并触发 EPIPE
+
+- **现象**：全量门禁把 Web 生产构建与根级 `typecheck` 并行执行时，类型检查成功，
+  `next build` 却在没有编译错误的情况下以 `EPIPE: broken pipe, write` 退出；随后
+  单独执行同一构建完整通过。
+- **根因**：Web 的 typecheck 会先运行 `next typegen`，它与 `next build` 同时读写
+  `.next` 生成目录；两个 Next 进程不支持共享该目录并发生成。
+- **解决方式**：先完成 typecheck，再单独运行生产构建；不要把这两个命令放进同一
+  并行门禁批次。
+- **如何规避**：可以并行执行不同工具链，但凡两个 Next 命令都写 `.next` 就必须
+  串行。看到 EPIPE 时先排除生成目录争用，再判断为应用构建故障。
+
 ## 2026-07-28 PostgreSQL 服务存在但二进制不在 PATH，`Get-Command psql` 会误判环境
 
 - **现象**：`Get-Command psql` 和常见安装目录探测都找不到客户端，早期验收因此

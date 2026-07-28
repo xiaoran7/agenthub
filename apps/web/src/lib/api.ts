@@ -58,11 +58,11 @@ export function describeApiError(error: unknown): string {
   if (error.status === 0) {
     return "无法连接网关";
   }
-  if (error.code === "missing_development_identity") {
-    return "网关要求提供用户标识，请检查设置";
+  if (error.code === "authentication_required") {
+    return "网关访问令牌缺失或无效，请检查服务端配置";
   }
   if (error.status === 401 || error.status === 403) {
-    return "网关拒绝了当前用户标识";
+    return "网关拒绝了当前身份";
   }
   if (error.status >= 500) {
     return "网关内部错误";

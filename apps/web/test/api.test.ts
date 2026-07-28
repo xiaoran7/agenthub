@@ -40,12 +40,12 @@ test("errors map to operator-readable messages", () => {
     "无法连接网关",
   );
   assert.equal(
-    describeApiError(new ApiError(401, "missing_development_identity")),
-    "网关要求提供用户标识，请检查设置",
+    describeApiError(new ApiError(401, "authentication_required")),
+    "网关访问令牌缺失或无效，请检查服务端配置",
   );
   assert.equal(
     describeApiError(new ApiError(403, "forbidden")),
-    "网关拒绝了当前用户标识",
+    "网关拒绝了当前身份",
   );
   assert.equal(
     describeApiError(new ApiError(500, "internal_error")),

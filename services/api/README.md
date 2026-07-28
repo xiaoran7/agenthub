@@ -41,21 +41,43 @@ $env:AGENT_PLATFORM_VAPID_SUBJECT = 'mailto:you@example.com'
 私钥是服务端机密，不要提交进仓库。只有会话跃迁进入 `WAITING_INPUT` /
 `WAITING_PERMISSION` 才发通知，负载仅含面板已展示的元数据。
 
-读接口暂时使用 `x-user-id` 头模拟已认证用户，只允许本地开发和协议测试，不能作为
-生产认证。请求体上限为 1 MiB。存储是进程内实现，服务重启后数据和绑定码状态都会
-丢失。
+设备与 Session 查询、SSE 和 Push 订阅接口使用 Bearer 访问令牌认证。个人部署在
+Gateway 配置 `AGENT_PLATFORM_ACCESS_TOKEN`，在 Web 服务端配置相同的
+`GATEWAY_ACCESS_TOKEN`；浏览器只访问同源代理，令牌不会进入 localStorage、URL
+或浏览器请求头。Gateway 构造认证器后只保留令牌的 SHA-256 摘要，并以固定长度
+比较验证请求，同时删除进程中的原始令牌环境项。令牌要求 32–512 UTF-8 字节且
+不能包含空白字符。
+
+`x-user-id` 只在显式设置 `AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true` 时启用，
+且服务会拒绝将该模式绑定到非回环 `HOST`。它只用于本地开发和协议测试。请求体
+上限为 1 MiB。未配置 PostgreSQL 时存储是进程内实现，服务重启后数据和绑定码状态
+都会丢失。
 
 ## 本地运行
 
 ```powershell
+$env:AGENT_PLATFORM_ACCESS_TOKEN = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 $env:AGENT_PLATFORM_BINDING_CODE = 'local-code'
 $env:AGENT_PLATFORM_OWNER_ID = 'local-user'
 
 npm.cmd start --workspace @agent-platform/api
 ```
 
-默认只监听 `127.0.0.1:3001`。可通过 `HOST` 和 `PORT` 调整；对外部署前必须接入 TLS
-终止、正式认证、速率限制和持久化存储。
+另一个终端启动 Web 时，把同一令牌作为服务端变量传入：
+
+```powershell
+$env:GATEWAY_ACCESS_TOKEN = '<与 Gateway 相同的令牌>'
+$env:GATEWAY_ORIGIN = 'http://127.0.0.1:3001'
+npm.cmd run dev --workspace @agent-platform/web
+```
+
+默认只监听 `127.0.0.1:3001`。可通过 `HOST` 和 `PORT` 调整；对外部署前必须接入
+TLS 终止、速率限制和持久化存储。令牌只应注入进程环境或密钥管理器，不要提交、
+写入 URL 或传给浏览器。仅做本地开发时可不配置令牌，改为：
+
+```powershell
+$env:AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH = 'true'
+```
 
 默认 Store 保存在进程内。设置 PostgreSQL 连接串后，Gateway 会在启动时串行执行
 待处理迁移，并使用事务 Store：
@@ -109,7 +131,7 @@ npm.cmd test --workspace @agent-platform/api
 
 ## 尚未实现
 
-- 用户登录与正式访问令牌
+- 多用户登录、令牌签发/轮换/撤销和联合身份提供商
 - 绑定码持久化、生成、过期、撤销和设备密钥轮换
 - 心跳（`/v1/stream` 只推变化，不代表设备活性）
 - 跨实例的变化广播（当前 broker 在进程内，多实例部署会漏推）

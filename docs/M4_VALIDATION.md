@@ -8,7 +8,8 @@
 M4 已于 2026-07-28 进入执行阶段，五类验收均已建立自动化基线；磁盘 Outbox
 重启恢复与 PostgreSQL 压力用例也已进入测试套件。2026-07-28 使用本机
 PostgreSQL 18.4 实际跑通了持久化重连契约和 12 设备/3000 Session 工作负载，
-并用可执行的 Codex CLI 0.144.2 完成一次真实只读采集。阶段仍为**进行中**：
+并用可执行的 Codex CLI 0.144.2 完成一次真实只读采集。个人部署的 Bearer
+访问令牌与 Web 服务端代理也已进入自动化安全基线。阶段仍为**进行中**：
 真实 Claude/Agent 升级前后状态矩阵、TLS 与长时间离线恢复，以及系统级 Web Push
 呈现仍未完成。
 
@@ -21,6 +22,7 @@ PostgreSQL 18.4 实际跑通了持久化重连契约和 12 设备/3000 Session �
 | Agent 升级兼容 | 新版 Fixture 增加未知字段并混合已知/未知状态；已知状态继续识别，未知状态降为 `UNKNOWN + inferred`，新内容字段不进入事件 | 通过（Fixture） |
 | Hook 禁用和未信任降级 | 无 Hook 的轮询源仍入队并保持健康；未知 Hook 只记来源、状态降为 `UNKNOWN + inferred`；缺少 Session ID 的 Hook 拒绝 | 通过 |
 | 多设备和大量 Session | 12 个独立 Ed25519 设备经完整注册、验签、批次入口写入 3000 个 Session；验证 8/4 设备的双 owner 隔离、按设备筛选、重放不重复和读响应字段边界。相同工作负载使用 PostgreSQL 18.4 的随机 Schema 与 4 条连接实际并发执行 | 内存与 PostgreSQL 均通过 |
+| 面板访问认证 | 无令牌、错误 Scheme、错误令牌、尾随内容和仅伪造 `x-user-id` 均返回相同 401；正确 Bearer 令牌绑定固定 owner。Web 同源代理覆盖浏览器自带凭据、丢弃 Cookie，并只从服务端注入令牌 | 通过 |
 
 压力用例是确定性的回归工作负载，不设置机器相关的毫秒阈值。它用于发现无界增长、
 串号、隔离失效和重放重复，不冒充容量基准。
@@ -58,6 +60,9 @@ PostgreSQL 18.4 实际跑通了持久化重连契约和 12 设备/3000 Session �
 - 后台同步现场：预先在磁盘 Outbox 留下 1 条事件，再用 Codex CLI 0.144.2 启动
   `run codex` 并连接本地 Gateway；无需执行手工 `sync push`，旧事件与本轮新观察
   均自动上传，Runner 退出时 `pending_events=0`，云端可查询 2 个 Session。
+- 认证现场：实际启动 Gateway 与生产构建后的 Web 两个进程；直接匿名和仅伪造
+  `x-user-id` 均返回 401，正确 Bearer 返回 200。浏览器不携带令牌经同源代理返回
+  200，额外注入攻击者 Authorization/用户头仍由服务端令牌覆盖。
 - Chrome：localhost 通知权限为 `granted`，Service Worker 已控制页面，Push
   订阅登记返回 204；验收结束已注销临时订阅并删除临时 VAPID 密钥与 Runner 数据。
 

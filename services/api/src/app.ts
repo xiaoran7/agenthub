@@ -9,6 +9,11 @@ import {
 } from "@agent-platform/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 
+import {
+  AuthenticationError,
+  RejectingAuthenticator,
+  type OwnerAuthenticator,
+} from "./auth.js";
 import { ChangeBroker } from "./events.js";
 import type { PushSender, PushSubscription } from "./push.js";
 import {
@@ -47,6 +52,7 @@ export interface GatewayAppOptions {
   bindingCodes?: OneTimeBindingCodes;
   broker?: ChangeBroker;
   push?: GatewayPushOptions;
+  authenticator?: OwnerAuthenticator;
   logger?: boolean;
 }
 
@@ -58,6 +64,7 @@ export function createGatewayApp(
     options.bindingCodes ??
     new OneTimeBindingCodes(new Map([["local-development", "local-user"]]));
   const broker = options.broker ?? new ChangeBroker();
+  const authenticator = options.authenticator ?? new RejectingAuthenticator();
   const openStreams = new Set<() => void>();
   const app = Fastify({
     logger: options.logger ?? false,
@@ -68,9 +75,12 @@ export function createGatewayApp(
     if (error instanceof ContractError) {
       const status =
         error.code === "invalid_signature" ||
-        error.code === "missing_development_identity"
+        error instanceof AuthenticationError
           ? 401
           : 400;
+      if (error instanceof AuthenticationError) {
+        void reply.header("www-authenticate", 'Bearer realm="agent-platform"');
+      }
       void reply.status(status).send({ error: error.code });
       return;
     }
@@ -153,12 +163,12 @@ export function createGatewayApp(
   });
 
   app.get("/v1/devices", async (request, reply) => {
-    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    const ownerId = authenticator.authenticate(request);
     return reply.send({ devices: await store.listDevices(ownerId) });
   });
 
   app.get("/v1/sessions", async (request, reply) => {
-    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    const ownerId = authenticator.authenticate(request);
     const query = request.query as Record<string, unknown>;
     const unknownQuery = Object.keys(query).find(
       (key) => !["device_id", "activity_status", "presence"].includes(key),
@@ -196,7 +206,7 @@ export function createGatewayApp(
   });
 
   app.get("/v1/sessions/events", async (request, reply) => {
-    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    const ownerId = authenticator.authenticate(request);
     const query = request.query as Record<string, unknown>;
     const unknownQuery = Object.keys(query).find(
       (key) =>
@@ -251,7 +261,7 @@ export function createGatewayApp(
   });
 
   app.post("/v1/push/subscriptions", async (request, reply) => {
-    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    const ownerId = authenticator.authenticate(request);
     if (options.push === undefined) {
       return reply.status(404).send({ error: "push_disabled" });
     }
@@ -260,7 +270,7 @@ export function createGatewayApp(
   });
 
   app.delete("/v1/push/subscriptions", async (request, reply) => {
-    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    const ownerId = authenticator.authenticate(request);
     const body = expectObject(request.body);
     const unknownField = Object.keys(body).find((key) => key !== "endpoint");
     if (unknownField !== undefined) {
@@ -321,10 +331,11 @@ export function createGatewayApp(
 
   // Server-sent events rather than WebSocket: the read-only phase only pushes
   // gateway -> panel, and the panel reaches the gateway through a same-origin
-  // HTTP proxy that does not forward upgrade requests. Adding WebSocket would
-  // mean opening CORS, which is deliberately deferred until real auth exists.
+  // HTTP proxy. Adding WebSocket would require a separately authenticated
+  // upgrade proxy, which is deferred until the product has a bidirectional
+  // use case.
   app.get("/v1/stream", (request, reply) => {
-    const ownerId = developmentOwner(request.headers["x-user-id"]);
+    const ownerId = authenticator.authenticate(request);
     if (broker.subscriberCount(ownerId) >= MAX_STREAMS_PER_OWNER) {
       void reply.status(429).send({ error: "too_many_streams" });
       return;
@@ -383,16 +394,6 @@ export function createGatewayApp(
   });
 
   return app;
-}
-
-function developmentOwner(value: string | string[] | undefined): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 128) {
-    throw new ContractError(
-      "missing_development_identity",
-      "x-user-id is required",
-    );
-  }
-  return value;
 }
 
 function expectObject(value: unknown): Record<string, unknown> {

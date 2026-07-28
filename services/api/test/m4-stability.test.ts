@@ -4,6 +4,7 @@ import test from "node:test";
 import type { SyncBatch } from "@agent-platform/contracts";
 
 import { createGatewayApp } from "../src/app.js";
+import { DevelopmentIdentityAuthenticator } from "../src/auth.js";
 import { InMemoryGatewayStore, OneTimeBindingCodes } from "../src/store.js";
 import {
   M4_DEVICE_COUNT as DEVICE_COUNT,
@@ -21,6 +22,7 @@ test("M4 multi-device load keeps 3,000 sessions isolated and replay-safe", async
     () => new Date("2026-07-28T00:00:00Z"),
   );
   const app = createGatewayApp({
+    authenticator: new DevelopmentIdentityAuthenticator(),
     store,
     bindingCodes: new OneTimeBindingCodes(
       new Map(

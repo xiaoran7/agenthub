@@ -7,6 +7,11 @@
 
 ### Added
 
+- Gateway 新增个人部署 Bearer 访问令牌认证，保护设备/Session 查询、SSE 与 Push
+  订阅接口；无效或缺失凭据统一返回 `authentication_required`。Web `/v1` 同源
+  Route Handler 从服务端环境注入令牌，丢弃浏览器 Authorization/Cookie，令牌不
+  进入 URL、localStorage 或前端配置。`x-user-id` 仅在显式开发模式且回环监听时
+  可用，并新增令牌配置验证、身份冒充拒绝和代理覆盖测试。
 - Runner `run` 新增可选后台自动同步：配置 `AGENT_PLATFORM_GATEWAY_URL` 与设备身份
   后，以独立线程和 SQLite 连接启动排空旧 Outbox，采集新事件通过容量为 1 的合并
   信号立即唤醒；网络失败按独立 2→60 秒指数退避，期间 Adapter 继续采集。每轮沿用

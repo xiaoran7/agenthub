@@ -41,7 +41,9 @@ Gateway 已提供 PostgreSQL 迁移和事务 Store；未配置数据库时仍使
 Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时间线的只读展示，
 并经 `GET /v1/stream`（SSE）实时刷新，轮询保留为兜底。会话进入等待输入或等待
 权限时可通过 Web Push 推送通知（需在 Gateway 配置 VAPID 密钥）。
-生产认证、跨实例广播与心跳尚未接入；Service Worker 只服务推送，不做离线缓存。
+个人部署已支持服务端 Bearer 访问令牌：Gateway 只保留令牌摘要，Web 同源代理在
+服务端注入凭据，令牌不进入浏览器存储。联合登录、跨实例广播与心跳尚未接入；
+Service Worker 只服务推送，不做离线缓存。
 M4 安全与稳定性阶段已完成自动化基线；PostgreSQL 18.4 的 12 设备/3000 Session
 并发工作负载、外部不可达后的 Outbox 保留/恢复，以及 Codex CLI 0.144.2 当前版本
 只读采集也已现场通过。真实 Agent 升级矩阵、TLS/长时间离线和系统级 Web Push
@@ -56,10 +58,11 @@ npm.cmd run dev --workspace @agent-platform/web
 ```
 
 开发服务器监听 `http://localhost:3000`，并把 `/v1` 请求代理到
-`http://127.0.0.1:3001`（可用 `GATEWAY_ORIGIN` 环境变量覆盖）。面板右上角
-「设置」可修改开发期用户标识（默认 `local-user`，需与 Gateway 的
-`AGENT_PLATFORM_OWNER_ID` 一致）或改为直连网关地址；直连要求 HTTPS 或回环
-HTTP，且需要网关侧允许跨源（尚未实现，开发期请使用同源代理）。
+`http://127.0.0.1:3001`（可用 `GATEWAY_ORIGIN` 环境变量覆盖）。个人部署还应在
+Web 服务端设置与 Gateway 相同的 `GATEWAY_ACCESS_TOKEN`；同源代理会注入令牌，
+浏览器无法读取或覆盖。面板右上角「设置」中的用户标识仅用于 Gateway 显式开启
+开发认证时的本地调试。直连要求 HTTPS 或回环 HTTP，且不会获得服务端访问令牌，
+令牌部署请保持网关地址为空并使用同源代理。
 
 「设置」里的「推送通知」开关需要 Gateway 配置了 VAPID 密钥（见 Gateway 说明），
 且页面运行在 https 或 localhost 上；开启后会话进入等待输入/等待权限时推送通知，

@@ -1,4 +1,7 @@
-const gatewayOrigin = process.env.GATEWAY_ORIGIN ?? "http://127.0.0.1:3001";
+import {
+  gatewayHeaders,
+  gatewayOrigin,
+} from "../../../src/server/gateway-proxy";
 
 // Never cache or pre-render: this route is an open pipe, not a document.
 export const dynamic = "force-dynamic";
@@ -14,15 +17,12 @@ export const revalidate = 0;
  * the panel keeps talking to one origin and the gateway still needs no CORS.
  */
 export async function GET(request: Request): Promise<Response> {
-  const headers: Record<string, string> = { accept: "text/event-stream" };
-  const userId = request.headers.get("x-user-id");
-  if (userId !== null) {
-    headers["x-user-id"] = userId;
-  }
+  const headers = gatewayHeaders(request.headers);
+  headers.set("accept", "text/event-stream");
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${gatewayOrigin}/v1/stream`, {
+    upstream = await fetch(`${gatewayOrigin()}/v1/stream`, {
       headers,
       cache: "no-store",
       // Closing the browser tab must close the gateway stream too, otherwise

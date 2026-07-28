@@ -118,7 +118,8 @@ export function SettingsPanel({ config, onSave, onClose }: SettingsPanelProps) {
           />
         </label>
         <p className="settings-hint">
-          开发期身份标识，正式认证接入后会被替换。
+          仅供显式开启的本地开发模式使用；部署访问令牌保留在 Web
+          服务端，不会存入浏览器。
         </p>
         <div className="settings-toggle">
           <span>推送通知</span>

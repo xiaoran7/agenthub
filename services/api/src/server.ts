@@ -1,4 +1,10 @@
+import { isIP } from "node:net";
+
 import { createGatewayApp, type GatewayAppOptions } from "./app.js";
+import {
+  BearerTokenAuthenticator,
+  DevelopmentIdentityAuthenticator,
+} from "./auth.js";
 import { PostgresGatewayStore } from "./postgres-store.js";
 import { WebPushSender, vapidKeysFromEnv } from "./push.js";
 import { InMemoryGatewayStore, OneTimeBindingCodes } from "./store.js";
@@ -14,6 +20,7 @@ if (bindingCode === undefined || ownerId === undefined) {
     "AGENT_PLATFORM_BINDING_CODE and AGENT_PLATFORM_OWNER_ID are required",
   );
 }
+const authenticator = ownerAuthenticator(ownerId, host);
 
 const store =
   databaseUrl === undefined
@@ -25,6 +32,7 @@ const vapidKeys = vapidKeysFromEnv();
 const options: GatewayAppOptions = {
   store,
   bindingCodes: new OneTimeBindingCodes(new Map([[bindingCode, ownerId]])),
+  authenticator,
   logger: true,
 };
 if (vapidKeys !== undefined) {
@@ -46,4 +54,40 @@ function parsePort(value: string | undefined): number {
     throw new Error("PORT must be an integer between 1 and 65535");
   }
   return port;
+}
+
+function isLoopbackHost(value: string): boolean {
+  return (
+    value === "localhost" ||
+    value === "::1" ||
+    (isIP(value) === 4 && value.split(".", 1)[0] === "127")
+  );
+}
+
+function ownerAuthenticator(
+  ownerId: string,
+  host: string,
+): BearerTokenAuthenticator | DevelopmentIdentityAuthenticator {
+  const accessToken = process.env.AGENT_PLATFORM_ACCESS_TOKEN;
+  const allowDevelopmentAuth =
+    process.env.AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH === "true";
+  if (accessToken === undefined && !allowDevelopmentAuth) {
+    throw new Error(
+      "AGENT_PLATFORM_ACCESS_TOKEN is required; set " +
+        "AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true only for local development",
+    );
+  }
+  if (allowDevelopmentAuth && !isLoopbackHost(host)) {
+    throw new Error(
+      "AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH is only allowed on a loopback HOST",
+    );
+  }
+  if (accessToken === undefined) {
+    return new DevelopmentIdentityAuthenticator();
+  }
+  const authenticator = new BearerTokenAuthenticator(ownerId, accessToken);
+  // Child processes must not inherit a credential the API no longer needs in
+  // plaintext; the authenticator retains only the digest.
+  delete process.env.AGENT_PLATFORM_ACCESS_TOKEN;
+  return authenticator;
 }
