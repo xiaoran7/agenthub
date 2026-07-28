@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DeviceStrip } from "../src/components/DeviceStrip";
+import { MobileDock } from "../src/components/MobileDock";
+import { EmptySessions, PanelSkeleton } from "../src/components/PanelStates";
 import { SessionDetail } from "../src/components/SessionDetail";
 import { SessionList } from "../src/components/SessionList";
 import { SettingsPanel } from "../src/components/SettingsPanel";
@@ -251,12 +253,26 @@ export default function PanelPage() {
     setSettingsOpen(false);
     setConfig(next);
   };
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
   const showOnboarding =
     config !== undefined &&
     devices.length === 0 &&
     syncError === undefined &&
     lastSyncMs !== undefined;
+  const showInitialLoading =
+    config === undefined ||
+    (lastSyncMs === undefined && syncError === undefined);
+
+  const selectMobileTab = (nextTab: SessionTab) => {
+    setTab(nextTab);
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById("sessions")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
 
   return (
     <div className="panel">
@@ -269,6 +285,8 @@ export default function PanelPage() {
         <div className="header-actions">
           <p
             className="connection-pill"
+            role="status"
+            aria-live="polite"
             data-state={
               syncError !== undefined
                 ? "error"
@@ -292,13 +310,32 @@ export default function PanelPage() {
           <button
             type="button"
             className="secondary settings-button"
-            onClick={() => setSettingsOpen(true)}
+            onClick={openSettings}
           >
             <span aria-hidden="true">⚙</span>
             设置
           </button>
         </div>
       </header>
+
+      {syncError !== undefined && (
+        <section className="sync-banner" role="alert">
+          <span className="sync-banner-icon" aria-hidden="true">
+            !
+          </span>
+          <div>
+            <strong>暂时无法刷新数据</strong>
+            <p>{syncError}</p>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void refresh()}
+          >
+            重新连接
+          </button>
+        </section>
+      )}
 
       <section className="overview-grid" aria-label="运行概览">
         <article className="overview-card" data-tone="devices">
@@ -307,10 +344,14 @@ export default function PanelPage() {
           </div>
           <div>
             <p>在线设备</p>
-            <strong>
-              {onlineDevices}
-              <span> / {activeDevices.length}</span>
-            </strong>
+            {showInitialLoading ? (
+              <span className="overview-value-skeleton" aria-hidden="true" />
+            ) : (
+              <strong>
+                {onlineDevices}
+                <span> / {activeDevices.length}</span>
+              </strong>
+            )}
           </div>
         </article>
         <article className="overview-card" data-tone="live">
@@ -319,7 +360,11 @@ export default function PanelPage() {
           </div>
           <div>
             <p>活动会话</p>
-            <strong>{globalCounts.live}</strong>
+            {showInitialLoading ? (
+              <span className="overview-value-skeleton" aria-hidden="true" />
+            ) : (
+              <strong>{globalCounts.live}</strong>
+            )}
           </div>
         </article>
         <article className="overview-card" data-tone="waiting">
@@ -328,7 +373,11 @@ export default function PanelPage() {
           </div>
           <div>
             <p>等待处理</p>
-            <strong>{globalCounts.waiting}</strong>
+            {showInitialLoading ? (
+              <span className="overview-value-skeleton" aria-hidden="true" />
+            ) : (
+              <strong>{globalCounts.waiting}</strong>
+            )}
           </div>
         </article>
         <article className="overview-card" data-tone="finished">
@@ -337,12 +386,20 @@ export default function PanelPage() {
           </div>
           <div>
             <p>最近完成</p>
-            <strong>{globalCounts.finished}</strong>
+            {showInitialLoading ? (
+              <span className="overview-value-skeleton" aria-hidden="true" />
+            ) : (
+              <strong>{globalCounts.finished}</strong>
+            )}
           </div>
         </article>
       </section>
 
-      <section className="control-surface" aria-label="面板筛选">
+      <section
+        className="control-surface"
+        aria-label="面板筛选"
+        data-loading={showInitialLoading}
+      >
         <div className="control-row">
           <span className="control-label">设备范围</span>
           <DeviceStrip
@@ -373,6 +430,7 @@ export default function PanelPage() {
       </section>
 
       <main
+        id="sessions"
         className="content"
         data-detail-open={selectedSession !== undefined}
       >
@@ -383,10 +441,14 @@ export default function PanelPage() {
               <h2>{TAB_LABELS[tab]}会话</h2>
             </div>
             <span className="result-count">
-              {visibleSessions.length} 条结果
+              {showInitialLoading
+                ? "正在读取"
+                : `${visibleSessions.length} 条结果`}
             </span>
           </header>
-          {showOnboarding ? (
+          {showInitialLoading ? (
+            <PanelSkeleton />
+          ) : showOnboarding ? (
             <div className="onboarding">
               <h2>还没有绑定设备</h2>
               <p>
@@ -408,6 +470,14 @@ export default function PanelPage() {
               </ol>
               <p>具体命令见仓库 README。</p>
             </div>
+          ) : visibleSessions.length === 0 ? (
+            <EmptySessions
+              filtered={tab !== "all" || deviceFilter !== undefined}
+              onReset={() => {
+                setTab("all");
+                setDeviceFilter(undefined);
+              }}
+            />
           ) : (
             <SessionList
               sessions={visibleSessions}
@@ -428,6 +498,12 @@ export default function PanelPage() {
         )}
       </main>
 
+      <MobileDock
+        selected={tab}
+        onSelect={selectMobileTab}
+        onOpenSettings={openSettings}
+      />
+
       {settingsOpen && config !== undefined && (
         <SettingsPanel
           config={config}
@@ -435,7 +511,7 @@ export default function PanelPage() {
           onSave={handleSaveConfig}
           onDevicesChanged={() => void refresh()}
           notificationPresentedAt={notificationPresentedAt}
-          onClose={() => setSettingsOpen(false)}
+          onClose={closeSettings}
         />
       )}
     </div>

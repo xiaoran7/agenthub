@@ -55,6 +55,7 @@ export function SettingsPanel({
   >(undefined);
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [binding, setBinding] = useState<DeviceBinding | undefined>(undefined);
+  const [bindingCopied, setBindingCopied] = useState(false);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [deviceActionError, setDeviceActionError] = useState<
     string | undefined
@@ -76,6 +77,21 @@ export function SettingsPanel({
       cancelled = true;
     };
   }, [config]);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose]);
 
   async function toggleNotifications() {
     setNotificationBusy(true);
@@ -114,12 +130,26 @@ export function SettingsPanel({
   async function generateBindingCode() {
     setBindingBusy(true);
     setDeviceActionError(undefined);
+    setBindingCopied(false);
     try {
       setBinding(await createDeviceBinding(config));
     } catch (cause) {
       setDeviceActionError(describeApiError(cause));
     } finally {
       setBindingBusy(false);
+    }
+  }
+
+  async function copyBindingCode() {
+    if (binding === undefined) {
+      return;
+    }
+    setDeviceActionError(undefined);
+    try {
+      await navigator.clipboard.writeText(binding.binding_code);
+      setBindingCopied(true);
+    } catch {
+      setDeviceActionError("无法自动复制，请点按绑定码后手动复制。");
     }
   }
 
@@ -147,140 +177,239 @@ export function SettingsPanel({
   return (
     <div
       className="settings-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label="面板设置"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
     >
-      <form className="settings" onSubmit={handleSubmit}>
-        <h2>设置</h2>
-        <label>
-          网关地址
-          <input
-            value={gatewayBase}
-            onChange={(event) => setGatewayBase(event.target.value)}
-            placeholder="留空使用当前源（开发代理）"
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <p className="settings-hint">
-          留空时请求经当前源的 /v1 代理转发；直连其他地址需要网关允许跨源。
-          非回环地址必须使用 https。
-        </p>
-        <label>
-          用户标识（x-user-id）
-          <input
-            value={userId}
-            onChange={(event) => setUserId(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <p className="settings-hint">
-          仅供显式开启的本地开发模式使用；部署访问令牌保留在 Web
-          服务端，不会存入浏览器。
-        </p>
-        <div className="settings-toggle">
-          <span>绑定新设备</span>
+      <form
+        className="settings"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        onSubmit={handleSubmit}
+      >
+        <header className="settings-header">
+          <div>
+            <p className="eyebrow">PANEL SETTINGS</p>
+            <h2 id="settings-title">面板设置</h2>
+            <p>管理连接、设备与等待提醒。</p>
+          </div>
           <button
             type="button"
-            className="secondary"
-            disabled={bindingBusy}
-            onClick={() => void generateBindingCode()}
+            className="icon-button"
+            aria-label="关闭设置"
+            onClick={onClose}
           >
-            {bindingBusy ? "生成中…" : "生成绑定码"}
+            ✕
           </button>
-        </div>
-        {binding !== undefined && (
-          <>
-            <input
-              className="mono"
-              value={binding.binding_code}
-              readOnly
-              aria-label="一次性绑定码"
-              onFocus={(event) => event.currentTarget.select()}
-            />
+        </header>
+
+        <div className="settings-scroll">
+          <section
+            className="settings-section"
+            aria-labelledby="connection-settings"
+          >
+            <div className="settings-section-heading">
+              <span className="settings-section-icon" aria-hidden="true">
+                ↗
+              </span>
+              <div>
+                <h3 id="connection-settings">连接</h3>
+                <p>配置面板读取数据时使用的网关。</p>
+              </div>
+            </div>
+            <label>
+              网关地址
+              <input
+                value={gatewayBase}
+                onChange={(event) => setGatewayBase(event.target.value)}
+                placeholder="留空使用当前源（开发代理）"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
             <p className="settings-hint">
-              10 分钟内使用，仅显示在本次设置窗口；点击输入框可全选复制。
+              留空时请求经当前源的 /v1 代理转发；非回环直连地址必须使用 https。
             </p>
-          </>
-        )}
-        {devices.length > 0 && (
-          <div className="device-management">
-            <span>已绑定设备</span>
-            {devices.map((device) => (
-              <div className="device-management-row" key={device.device_id}>
-                <span className="mono" title={device.device_id}>
-                  {deviceShortId(device.device_id)}
-                </span>
+            <label>
+              用户标识（x-user-id）
+              <input
+                value={userId}
+                onChange={(event) => setUserId(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <p className="settings-hint">
+              仅供显式开启的本地开发模式使用；部署访问令牌只保留在 Web 服务端。
+            </p>
+          </section>
+
+          <section
+            className="settings-section"
+            aria-labelledby="device-settings"
+          >
+            <div className="settings-section-heading">
+              <span className="settings-section-icon" aria-hidden="true">
+                ◫
+              </span>
+              <div>
+                <h3 id="device-settings">设备</h3>
+                <p>绑定新的 Runner，或撤销不再使用的设备。</p>
+              </div>
+            </div>
+            <div className="settings-toggle">
+              <span>绑定新设备</span>
+              <button
+                type="button"
+                className="secondary"
+                disabled={bindingBusy}
+                onClick={() => void generateBindingCode()}
+              >
+                {bindingBusy ? "生成中…" : "生成绑定码"}
+              </button>
+            </div>
+            {binding !== undefined && (
+              <div className="binding-code">
+                <input
+                  className="mono"
+                  value={binding.binding_code}
+                  readOnly
+                  aria-label="一次性绑定码"
+                  onFocus={(event) => event.currentTarget.select()}
+                />
                 <button
                   type="button"
                   className="secondary"
-                  disabled={
-                    device.revoked || revokingDevice === device.device_id
-                  }
-                  onClick={() => void revoke(device)}
+                  onClick={() => void copyBindingCode()}
                 >
-                  {device.revoked
-                    ? "已撤销"
-                    : revokingDevice === device.device_id
-                      ? "撤销中…"
-                      : "撤销"}
+                  {bindingCopied ? "已复制" : "复制"}
                 </button>
+                <p className="settings-hint">
+                  10 分钟内有效，仅显示在本次设置窗口。
+                </p>
               </div>
-            ))}
-          </div>
-        )}
-        {deviceActionError !== undefined && (
-          <p className="error-text">{deviceActionError}</p>
-        )}
-        <div className="settings-toggle">
-          <span>推送通知</span>
-          <button
-            type="button"
-            className="secondary"
-            disabled={
-              notifications === undefined ||
-              notificationBusy ||
-              notifications === "unavailable" ||
-              notifications === "disabled" ||
-              notifications === "denied"
-            }
-            aria-pressed={notifications === "on"}
-            onClick={() => void toggleNotifications()}
+            )}
+            {devices.length > 0 && (
+              <div className="device-management">
+                <span className="settings-subheading">已绑定设备</span>
+                {devices.map((device) => (
+                  <div className="device-management-row" key={device.device_id}>
+                    <span className="device-management-copy">
+                      <span
+                        className="device-dot"
+                        data-online={device.online && !device.revoked}
+                      />
+                      <span>
+                        <span className="mono" title={device.device_id}>
+                          {deviceShortId(device.device_id)}
+                        </span>
+                        <small>
+                          {device.revoked
+                            ? "已撤销"
+                            : device.online
+                              ? "在线"
+                              : "离线"}
+                        </small>
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary danger-button"
+                      disabled={
+                        device.revoked || revokingDevice === device.device_id
+                      }
+                      onClick={() => void revoke(device)}
+                    >
+                      {device.revoked
+                        ? "已撤销"
+                        : revokingDevice === device.device_id
+                          ? "撤销中…"
+                          : "撤销"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {deviceActionError !== undefined && (
+              <p className="error-text" role="alert">
+                {deviceActionError}
+              </p>
+            )}
+          </section>
+
+          <section
+            className="settings-section"
+            aria-labelledby="notification-settings"
           >
-            {notifications === undefined
-              ? "检查中…"
-              : notificationBusy
-                ? "处理中…"
-                : notifications === "on"
-                  ? "已开启"
-                  : "开启"}
-          </button>
+            <div className="settings-section-heading">
+              <span className="settings-section-icon" aria-hidden="true">
+                ◉
+              </span>
+              <div>
+                <h3 id="notification-settings">等待提醒</h3>
+                <p>面板关闭后仍可接收等待输入或权限通知。</p>
+              </div>
+            </div>
+            <div className="settings-toggle">
+              <span>推送通知</span>
+              <button
+                type="button"
+                className="secondary"
+                disabled={
+                  notifications === undefined ||
+                  notificationBusy ||
+                  notifications === "unavailable" ||
+                  notifications === "disabled" ||
+                  notifications === "denied"
+                }
+                aria-pressed={notifications === "on"}
+                onClick={() => void toggleNotifications()}
+              >
+                {notifications === undefined
+                  ? "检查中…"
+                  : notificationBusy
+                    ? "处理中…"
+                    : notifications === "on"
+                      ? "已开启"
+                      : "开启"}
+              </button>
+            </div>
+            <p className="settings-hint">
+              {notifications === undefined
+                ? "正在检查通知能力…"
+                : NOTIFICATION_HINTS[notifications]}
+            </p>
+            {notifications === "on" &&
+              notificationPresentedAt !== undefined && (
+                <p className="settings-receipt" role="status">
+                  最近展示请求：{" "}
+                  {formatClock(new Date(notificationPresentedAt).toISOString())}
+                  。Windows 是否弹出仍受系统设置影响。
+                </p>
+              )}
+            {notificationError !== undefined && (
+              <p className="error-text" role="alert">
+                {notificationError}
+              </p>
+            )}
+          </section>
+
+          {error !== undefined && (
+            <p className="error-text settings-form-error" role="alert">
+              {error}
+            </p>
+          )}
         </div>
-        <p className="settings-hint">
-          {notifications === undefined
-            ? "正在检查通知能力…"
-            : NOTIFICATION_HINTS[notifications]}
-        </p>
-        {notifications === "on" && notificationPresentedAt !== undefined && (
-          <p className="settings-hint" role="status">
-            Service Worker 已于{" "}
-            {formatClock(new Date(notificationPresentedAt).toISOString())}{" "}
-            解密最近一条推送并提交给浏览器展示。Windows
-            是否弹出仍受系统通知设置影响。
-          </p>
-        )}
-        {notificationError !== undefined && (
-          <p className="error-text">{notificationError}</p>
-        )}
-        {error !== undefined && <p className="error-text">{error}</p>}
-        <div className="settings-actions">
+
+        <footer className="settings-actions">
           <button type="button" className="secondary" onClick={onClose}>
             取消
           </button>
           <button type="submit">保存</button>
-        </div>
+        </footer>
       </form>
     </div>
   );
