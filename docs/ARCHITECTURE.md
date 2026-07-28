@@ -165,13 +165,16 @@ session_key = agent_type + device_id + agent_session_id
 当前已实现 HTTP 同步闭环：从 Outbox 生成最多 1000 个事件的 Ed25519 签名批次，
 通过主动出站请求上传，并仅在确认的设备、批次和序列均匹配实际发送范围时清理事件。
 每次推送的批次和单批事件数均有上限；网络失败或无效响应保留未确认事件。远程服务
-强制 HTTPS，本地开发允许回环 HTTP。具体线格式见
+强制 HTTPS，本地开发允许回环 HTTP。公共 CA 使用内置 WebPKI 根；私有部署可显式
+提供单个根证书 PEM，Runner 仍严格验证证书链、主机名和有效期，不存在“忽略证书
+错误”模式。具体线格式见
 [SYNC_PROTOCOL.md](SYNC_PROTOCOL.md)。
 
 常驻 `run` 在配置 Gateway 与设备身份后启动独立后台同步线程。线程启动即扫描磁盘
 Outbox，采集提交新事件后通过容量为 1 的合并信号立即唤醒；网络失败按独立指数退避，
 退避期间继续采集。同步与采集各持一个 SQLite 连接，依赖 WAL 与 `busy_timeout`
-协调，不共享网络阻塞。在途批次持久化、独立设备心跳和 WebSocket 低延迟通道仍属于
+协调，不共享网络阻塞。失败报告读取磁盘统计并携带 `pending_events`，长时间离线时
+可以持续观察积压量。在途批次持久化、独立设备心跳和 WebSocket 低延迟通道仍属于
 Milestone 2。
 
 ### 3.2 本地 IPC

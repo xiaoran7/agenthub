@@ -37,7 +37,8 @@ SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签�
 网络失败按独立退避恢复，不阻塞 Agent 采集。
 云端已具备受认证的一次性设备绑定、软撤销、签名批次验收、内存幂等写入与只读
 Session 查询；绑定码和设备生命周期在 PostgreSQL 部署中持久化。
-Runner 已可通过 HTTPS（本地开发允许回环 HTTP）完成设备绑定、批次上传和确认清理。
+Runner 已可通过 HTTPS（本地开发允许回环 HTTP）完成设备绑定、批次上传和确认清理，
+并支持为私有 Gateway 显式配置 CA 根证书而不关闭证书验证。
 Gateway 已提供 PostgreSQL 迁移和事务 Store；未配置数据库时仍使用开发期内存存储。
 Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时间线的只读展示，
 并经 `GET /v1/stream`（SSE）实时刷新，轮询保留为兜底。会话进入等待输入或等待
@@ -48,8 +49,9 @@ Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时
 Service Worker 只服务推送，不做离线缓存。
 M4 安全与稳定性阶段已完成自动化基线；PostgreSQL 18.4 的 12 设备/3000 Session
 并发工作负载、外部不可达后的 Outbox 保留/恢复，以及 Codex CLI 0.144.2 当前版本
-只读采集也已现场通过。真实 Agent 升级矩阵、TLS/长时间离线和系统级 Web Push
-呈现仍待环境验收，详见 [M4 验收记录](docs/M4_VALIDATION.md)。
+只读采集也已现场通过；本机真实 TLS 握手和私有 CA 恢复已进入回归套件。真实 Agent
+升级矩阵、部署网络证书故障/长时间离线和系统级 Web Push 呈现仍待环境验收，详见
+[M4 验收记录](docs/M4_VALIDATION.md)。
 
 ### Web 面板
 

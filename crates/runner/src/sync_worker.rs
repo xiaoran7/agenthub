@@ -102,7 +102,17 @@ impl SyncWorker {
                     &receiver,
                     &stop,
                     policy,
-                    || push_outbox(&client, &mut outbox, &identity, limit, max_batches),
+                    || {
+                        push_outbox(&client, &mut outbox, &identity, limit, max_batches).map_err(
+                            |error| SyncAttemptFailure {
+                                error,
+                                pending_events: outbox
+                                    .stats()
+                                    .ok()
+                                    .map(|stats| stats.pending_events),
+                            },
+                        )
+                    },
                     |report| {
                         eprintln!(
                             "{}",
@@ -128,11 +138,16 @@ impl SyncWorker {
     }
 }
 
+struct SyncAttemptFailure {
+    error: GatewayError,
+    pending_events: Option<u64>,
+}
+
 fn run_sync_loop(
     receiver: &Receiver<()>,
     stop: &Arc<AtomicBool>,
     policy: SyncPolicy,
-    mut push: impl FnMut() -> Result<PushSummary, GatewayError>,
+    mut push: impl FnMut() -> Result<PushSummary, SyncAttemptFailure>,
     mut report: impl FnMut(&SyncReport),
 ) {
     let mut consecutive_failures = 0_u32;
@@ -170,7 +185,7 @@ fn run_sync_loop(
                 }
                 (policy.interval, false)
             }
-            Err(error) => {
+            Err(failure) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
                 let delay = policy.failure_delay(consecutive_failures);
                 report(&SyncReport {
@@ -178,10 +193,10 @@ fn run_sync_loop(
                     succeeded: false,
                     batches_sent: 0,
                     acknowledged: 0,
-                    pending_events: None,
+                    pending_events: failure.pending_events,
                     consecutive_failures,
                     next_delay_seconds: delay.as_secs(),
-                    error_code: Some(error.code().to_owned()),
+                    error_code: Some(failure.error.code().to_owned()),
                 });
                 (delay, true)
             }
@@ -249,7 +264,10 @@ mod tests {
             || {
                 attempts += 1;
                 if attempts == 1 {
-                    Err(GatewayError::Unreachable)
+                    Err(SyncAttemptFailure {
+                        error: GatewayError::Unreachable,
+                        pending_events: Some(2),
+                    })
                 } else {
                     stop.store(true, Ordering::Relaxed);
                     Ok(PushSummary {
@@ -266,6 +284,7 @@ mod tests {
         assert_eq!(reports.len(), 2);
         assert!(!reports[0].succeeded);
         assert_eq!(reports[0].consecutive_failures, 1);
+        assert_eq!(reports[0].pending_events, Some(2));
         assert_eq!(
             reports[0].error_code.as_deref(),
             Some("gateway_unreachable")
@@ -451,7 +470,13 @@ mod tests {
                 } else if result.is_ok() {
                     stop.store(true, Ordering::Relaxed);
                 }
-                result
+                result.map_err(|error| SyncAttemptFailure {
+                    error,
+                    pending_events: outbox
+                        .as_ref()
+                        .and_then(|outbox| outbox.stats().ok())
+                        .map(|stats| stats.pending_events),
+                })
             },
             |report| reports.push(report.clone()),
         );

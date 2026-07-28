@@ -7,6 +7,12 @@
 
 ### Added
 
+- Runner 新增私有 Gateway CA 支持：`run`、`device bind` 和 `sync push` 可通过
+  `--gateway-ca-cert` / `AGENT_PLATFORM_GATEWAY_CA_CERT` 读取根证书 PEM，严格
+  校验证书链、主机名和有效期，不提供跳过验证开关。新增真实 rustls 握手回归：
+  未知签发者返回 `gateway_tls_failed` 且不清 Outbox，配置正确根证书后完成 ACK；
+  无效或不可读证书返回稳定错误且不泄露路径/内容。后台同步失败报告现在持续携带
+  磁盘 `pending_events`，便于观察长时间离线积压。
 - Gateway 新增持久设备生命周期：受 Bearer 保护的 `POST /v1/device-bindings` 签发
   默认 10 分钟有效的一次性绑定码，Store 只保存 SHA-256 摘要；PostgreSQL 以事务
   行锁保证并发单次领取，同设备重试幂等，过期未领取码在后续签发时清理。新增

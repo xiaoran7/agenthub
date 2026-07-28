@@ -2,6 +2,18 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-28 ureq/rustls 的证书错误可能包装成 `io::ErrorKind::InvalidData`
+
+- **现象**：真实 TLS 回归连接自签服务端时，rustls 明确给出
+  `InvalidCertificate(UnknownIssuer)`，Runner 却把它归类为 `gateway_unreachable`
+  而不是 `gateway_tls_failed`。
+- **根因**：ureq 3.3 的这条握手失败路径使用 `ureq::Error::Io` 包装 rustls 错误，
+  内层 `io::ErrorKind` 为 `InvalidData`；只匹配顶层 `Tls`/`Rustls` 变体会漏掉。
+- **解决方式**：传输分类同时把 `Io(InvalidData)` 识别为 TLS 失败，并用真实
+  rustls 服务端钉死“未知 CA 拒绝、配置 CA 成功”的两次握手。
+- **如何规避**：网络库错误分类要用真实握手覆盖，不能只构造枚举变体；升级 ureq/
+  rustls 后保留该测试，若包装方式变化应更新分类但不得回显底层证书或系统错误。
+
 ## 2026-07-28 `next build` 与 `next typegen` 并行会争用 `.next` 并触发 EPIPE
 
 - **现象**：全量门禁把 Web 生产构建与根级 `typecheck` 并行执行时，类型检查成功，

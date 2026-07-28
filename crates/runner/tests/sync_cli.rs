@@ -147,3 +147,51 @@ fn background_sync_rejects_an_unidentified_runner() {
         output.stderr
     );
 }
+
+#[test]
+fn gateway_ca_file_failures_use_stable_errors_without_leaking_contents() {
+    let directory = tempfile::tempdir().unwrap();
+    let identity_path = directory.path().join("identity.json");
+    let invalid_ca_path = directory.path().join("invalid-ca.pem");
+    let missing_ca_path = directory.path().join("missing-ca.pem");
+    fs::write(&invalid_ca_path, "private-marker-not-a-certificate").unwrap();
+    let init = runner()
+        .args(["device", "init", "--identity"])
+        .arg(&identity_path)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{:?}", init.stderr);
+
+    let invalid = runner()
+        .args(["device", "bind", "--identity"])
+        .arg(&identity_path)
+        .args([
+            "--server",
+            "https://gateway.example",
+            "--binding-code",
+            "test-binding-code",
+            "--gateway-ca-cert",
+        ])
+        .arg(&invalid_ca_path)
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let invalid_error = String::from_utf8_lossy(&invalid.stderr);
+    assert!(invalid_error.contains("gateway_invalid_ca_certificate"));
+    assert!(!invalid_error.contains("private-marker"));
+    assert!(!invalid_error.contains(&invalid_ca_path.display().to_string()));
+
+    let missing = runner()
+        .args(["sync", "push", "--identity"])
+        .arg(&identity_path)
+        .arg("--db")
+        .arg(directory.path().join("runner.db"))
+        .args(["--server", "https://gateway.example", "--gateway-ca-cert"])
+        .arg(&missing_ca_path)
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    let missing_error = String::from_utf8_lossy(&missing.stderr);
+    assert!(missing_error.contains("gateway_ca_cert_unreadable"));
+    assert!(!missing_error.contains(&missing_ca_path.display().to_string()));
+}

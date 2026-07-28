@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
+use ureq::tls::{Certificate, RootCerts, TlsConfig};
 use url::{Host, Url};
 
 use crate::{
@@ -11,6 +12,7 @@ use crate::{
 };
 
 const MAX_BINDING_CODE_LENGTH: usize = 128;
+const MAX_CA_CERTIFICATE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
 pub enum GatewayError {
@@ -20,6 +22,8 @@ pub enum GatewayError {
     InsecureUrl,
     #[error("binding code is invalid")]
     InvalidBindingCode,
+    #[error("gateway CA certificate is invalid")]
+    InvalidCaCertificate,
     #[error("maximum sync batch count must be greater than zero")]
     InvalidBatchCount,
     #[error("gateway request timed out")]
@@ -44,6 +48,7 @@ impl GatewayError {
             Self::InvalidUrl => "gateway_invalid_url",
             Self::InsecureUrl => "gateway_insecure_url",
             Self::InvalidBindingCode => "gateway_invalid_binding_code",
+            Self::InvalidCaCertificate => "gateway_invalid_ca_certificate",
             Self::InvalidBatchCount => "gateway_invalid_batch_count",
             Self::Timeout => "gateway_timeout",
             Self::Unreachable => "gateway_unreachable",
@@ -100,14 +105,34 @@ pub struct GatewayClient {
 
 impl GatewayClient {
     pub fn new(base_url: &str, timeout: Duration) -> Result<Self, GatewayError> {
+        Self::new_with_ca_certificate(base_url, timeout, None)
+    }
+
+    pub fn new_with_ca_certificate(
+        base_url: &str,
+        timeout: Duration,
+        ca_certificate_pem: Option<&[u8]>,
+    ) -> Result<Self, GatewayError> {
         let base_url = validate_base_url(base_url)?;
-        let config = ureq::Agent::config_builder()
+        let mut config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .user_agent(concat!("agent-platform-runner/", env!("CARGO_PKG_VERSION")))
             // Following a redirect could resend the request to an address the
             // HTTPS/loopback policy never validated.
-            .max_redirects(0)
-            .build();
+            .max_redirects(0);
+        if let Some(pem) = ca_certificate_pem {
+            if pem.is_empty() || pem.len() > MAX_CA_CERTIFICATE_BYTES {
+                return Err(GatewayError::InvalidCaCertificate);
+            }
+            let certificate =
+                Certificate::from_pem(pem).map_err(|_| GatewayError::InvalidCaCertificate)?;
+            config = config.tls_config(
+                TlsConfig::builder()
+                    .root_certs(RootCerts::new_with_certs(&[certificate]))
+                    .build(),
+            );
+        }
+        let config = config.build();
         Ok(Self {
             base_url,
             agent: config.new_agent(),
@@ -234,6 +259,9 @@ fn classify_transport_error(error: ureq::Error) -> GatewayError {
     match error {
         ureq::Error::StatusCode(status) => GatewayError::Rejected { status },
         ureq::Error::Timeout(_) => GatewayError::Timeout,
+        ureq::Error::Io(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            GatewayError::TlsFailed
+        }
         ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_) => {
             GatewayError::Unreachable
         }
@@ -249,8 +277,12 @@ mod tests {
         collections::BTreeMap,
         io::{Read, Write},
         net::{IpAddr, TcpListener},
+        sync::Arc,
         thread::{self, JoinHandle},
     };
+
+    use rcgen::generate_simple_self_signed;
+    use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::PrivatePkcs8KeyDer};
 
     use crate::domain::{
         ActivityStatus, AgentType, Confidence, ObservationMeta, ObservationSource, Presence,
@@ -309,6 +341,18 @@ mod tests {
             GatewayError::InvalidResponse.code(),
             "gateway_invalid_response"
         );
+        assert_eq!(
+            GatewayError::InvalidCaCertificate.code(),
+            "gateway_invalid_ca_certificate"
+        );
+        assert!(matches!(
+            GatewayClient::new_with_ca_certificate(
+                "https://gateway.example",
+                Duration::from_secs(1),
+                Some(b"not a certificate"),
+            ),
+            Err(GatewayError::InvalidCaCertificate)
+        ));
     }
 
     #[test]
@@ -344,6 +388,47 @@ mod tests {
                 pending_events: 0,
             }
         );
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn private_ca_rejects_an_untrusted_connection_then_completes_real_tls() {
+        let identity = DeviceIdentity::generate();
+        let expected_device_id = identity.device_id().to_owned();
+        let (server, ca_certificate, server_thread) = spawn_tls_json_server(move |request| {
+            assert_eq!(request["device_id"], expected_device_id);
+            serde_json::json!({
+                "protocol_version": request["protocol_version"],
+                "batch_id": request["batch_id"],
+                "device_id": request["device_id"],
+                "accepted_through": request["last_sequence"]
+            })
+        });
+        let mut outbox = Outbox::open_in_memory().unwrap();
+        outbox.enqueue(&observation(&identity)).unwrap();
+
+        let untrusted = GatewayClient::new(&server, Duration::from_secs(2)).unwrap();
+        let error = push_outbox(&untrusted, &mut outbox, &identity, 100, 1).unwrap_err();
+        assert!(
+            matches!(error, GatewayError::TlsFailed),
+            "unexpected certificate failure classification: {error:?}"
+        );
+        assert_eq!(
+            outbox.stats().unwrap().pending_events,
+            1,
+            "a certificate failure must not acknowledge the Outbox"
+        );
+
+        let trusted = GatewayClient::new_with_ca_certificate(
+            &server,
+            Duration::from_secs(2),
+            Some(ca_certificate.as_bytes()),
+        )
+        .unwrap();
+        let summary = push_outbox(&trusted, &mut outbox, &identity, 100, 1).unwrap();
+
+        assert_eq!(summary.acknowledged, 1);
+        assert_eq!(summary.pending_events, 0);
         server_thread.join().unwrap();
     }
 
@@ -450,44 +535,86 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server_thread = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = Vec::new();
-            let body_start = loop {
-                let mut buffer = [0_u8; 4096];
-                let read = stream.read(&mut buffer).unwrap();
-                assert!(read > 0);
-                request.extend_from_slice(&buffer[..read]);
-                if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n")
-                {
-                    break position + 4;
-                }
-            };
-            let headers = std::str::from_utf8(&request[..body_start]).unwrap();
-            let content_length = headers
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().unwrap())
-                })
-                .unwrap();
-            while request.len() < body_start + content_length {
-                let mut buffer = [0_u8; 4096];
-                let read = stream.read(&mut buffer).unwrap();
-                assert!(read > 0);
-                request.extend_from_slice(&buffer[..read]);
-            }
-            let body: serde_json::Value =
-                serde_json::from_slice(&request[body_start..body_start + content_length]).unwrap();
-            let response = serde_json::to_vec(&handler(body)).unwrap();
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                response.len()
-            )
-            .unwrap();
-            stream.write_all(&response).unwrap();
-            stream.flush().unwrap();
+            serve_json_request(&mut stream, handler);
         });
         (format!("http://{address}"), server_thread)
+    }
+
+    fn spawn_tls_json_server(
+        handler: impl FnOnce(serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> (String, String, JoinHandle<()>) {
+        let certified = generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let certificate_pem = certified.cert.pem();
+        let private_key = PrivatePkcs8KeyDer::from(certified.signing_key.serialize_der());
+        let config = Arc::new(
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![certified.cert.der().clone()], private_key.into())
+                .unwrap(),
+        );
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_thread = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            let mut rejected =
+                StreamOwned::new(ServerConnection::new(Arc::clone(&config)).unwrap(), socket);
+            let mut probe = [0_u8; 1];
+            assert!(
+                rejected.read(&mut probe).is_err(),
+                "the client without the private CA must reject the certificate"
+            );
+
+            let (socket, _) = listener.accept().unwrap();
+            let mut trusted =
+                StreamOwned::new(ServerConnection::new(Arc::clone(&config)).unwrap(), socket);
+            serve_json_request(&mut trusted, handler);
+        });
+        (
+            format!("https://127.0.0.1:{}", address.port()),
+            certificate_pem,
+            server_thread,
+        )
+    }
+
+    fn serve_json_request(
+        stream: &mut (impl Read + Write),
+        handler: impl FnOnce(serde_json::Value) -> serde_json::Value,
+    ) {
+        let mut request = Vec::new();
+        let body_start = loop {
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&request[..body_start]).unwrap();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        while request.len() < body_start + content_length {
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let body: serde_json::Value =
+            serde_json::from_slice(&request[body_start..body_start + content_length]).unwrap();
+        let response = serde_json::to_vec(&handler(body)).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response.len()
+        )
+        .unwrap();
+        stream.write_all(&response).unwrap();
+        stream.flush().unwrap();
     }
 }

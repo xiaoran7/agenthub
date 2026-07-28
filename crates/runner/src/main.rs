@@ -109,6 +109,13 @@ enum Command {
             help = "Continuously drain the Outbox to this Gateway; remote URLs require HTTPS"
         )]
         sync_server: Option<String>,
+        #[arg(
+            long,
+            env = "AGENT_PLATFORM_GATEWAY_CA_CERT",
+            value_name = "PEM",
+            help = "Trust this private CA certificate for Gateway HTTPS"
+        )]
+        gateway_ca_cert: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         sync_interval_seconds: u64,
         #[arg(long, default_value_t = 2)]
@@ -224,6 +231,13 @@ enum DeviceCommand {
         binding_code: String,
         #[arg(long, default_value_t = 15)]
         timeout_seconds: u64,
+        #[arg(
+            long,
+            env = "AGENT_PLATFORM_GATEWAY_CA_CERT",
+            value_name = "PEM",
+            help = "Trust this private CA certificate for Gateway HTTPS"
+        )]
+        gateway_ca_cert: Option<PathBuf>,
     },
 }
 
@@ -262,6 +276,13 @@ enum SyncCommand {
         max_batches: usize,
         #[arg(long, default_value_t = 15)]
         timeout_seconds: u64,
+        #[arg(
+            long,
+            env = "AGENT_PLATFORM_GATEWAY_CA_CERT",
+            value_name = "PEM",
+            help = "Trust this private CA certificate for Gateway HTTPS"
+        )]
+        gateway_ca_cert: Option<PathBuf>,
     },
 }
 
@@ -360,6 +381,7 @@ fn main() -> Result<()> {
             failure_max_seconds,
             collector_timeout_seconds,
             sync_server,
+            gateway_ca_cert,
             sync_interval_seconds,
             sync_failure_initial_seconds,
             sync_failure_max_seconds,
@@ -438,8 +460,7 @@ fn main() -> Result<()> {
                         "background sync requires --identity or AGENT_PLATFORM_IDENTITY"
                     )
                 })?;
-                let client = GatewayClient::new(&server, sync_timeout)
-                    .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                let client = gateway_client(&server, sync_timeout, gateway_ca_cert.as_deref())?;
                 let worker = SyncWorker::start(
                     db,
                     client,
@@ -515,14 +536,15 @@ fn main() -> Result<()> {
                 server,
                 binding_code,
                 timeout_seconds,
+                gateway_ca_cert,
             } => {
                 let device_identity = DeviceIdentity::load(&identity)
                     .with_context(|| format!("failed to load {}", identity.display()))?;
-                let client = GatewayClient::new(
+                let client = gateway_client(
                     &server,
                     nonzero_duration("gateway timeout", timeout_seconds)?,
-                )
-                .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                    gateway_ca_cert.as_deref(),
+                )?;
                 let binding = client
                     .bind(&device_identity, &binding_code)
                     .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
@@ -576,14 +598,15 @@ fn main() -> Result<()> {
                 limit,
                 max_batches,
                 timeout_seconds,
+                gateway_ca_cert,
             } => {
                 let device_identity = DeviceIdentity::load(&identity)
                     .with_context(|| format!("failed to load {}", identity.display()))?;
-                let client = GatewayClient::new(
+                let client = gateway_client(
                     &server,
                     nonzero_duration("gateway timeout", timeout_seconds)?,
-                )
-                .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                    gateway_ca_cert.as_deref(),
+                )?;
                 let mut outbox = Outbox::open(db)?;
                 let summary =
                     push_outbox(&client, &mut outbox, &device_identity, limit, max_batches)
@@ -601,6 +624,19 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn gateway_client(
+    server: &str,
+    timeout: Duration,
+    ca_certificate_path: Option<&std::path::Path>,
+) -> Result<GatewayClient> {
+    let ca_certificate = ca_certificate_path
+        .map(fs::read)
+        .transpose()
+        .map_err(|_| anyhow::anyhow!("gateway_ca_cert_unreadable"))?;
+    GatewayClient::new_with_ca_certificate(server, timeout, ca_certificate.as_deref())
+        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))
 }
 
 fn read_json_file<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T> {

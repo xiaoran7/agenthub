@@ -105,6 +105,18 @@ cargo run -p agent-platform-runner -- `
 `--identity` 或设置 `AGENT_PLATFORM_IDENTITY`，确保采集与签名使用同一个设备 ID。
 若数据库只有其他设备 ID 的旧事件，后台日志会报告
 `sync_pending_device_mismatch` 并退避，不会把“有积压但无可发送批次”写成成功。
+传输失败期间的每条后台同步报告都会包含当前磁盘 `pending_events`，便于确认长期
+离线时积压仍在增长而非丢失。
+
+远程 Gateway 使用私有 CA 时，把根证书 PEM 文件传给
+`AGENT_PLATFORM_GATEWAY_CA_CERT`（或 `--gateway-ca-cert`）。该选项适用于 `run`、
+`device bind` 和 `sync push`，仍会严格验证证书链、主机名和有效期，不提供跳过
+证书校验的开关：
+
+```powershell
+$env:AGENT_PLATFORM_GATEWAY_URL = 'https://agent.example.internal'
+$env:AGENT_PLATFORM_GATEWAY_CA_CERT = 'C:\ProgramData\AgentPlatform\gateway-ca.pem'
+```
 
 Codex Runner 会处理当前 app-server 连接收到的状态、Turn、审批和用户输入通知，
 并与 `thread/list` / `thread/loaded/list` 的轮询结果合并。为保持只读，它不会调用
@@ -178,6 +190,7 @@ cargo run -p agent-platform-runner -- `
 
 绑定码由 Gateway 的 Web 设置面板或受认证的 `POST /v1/device-bindings` 签发，
 默认 10 分钟有效且只显示一次。建议通过环境变量提供，避免进入 Shell 历史。
+私有 CA 部署还需设置 `AGENT_PLATFORM_GATEWAY_CA_CERT`；公共 CA 部署不设置即可。
 `sync push` 保留为诊断和一次性
 排空命令，每次只处理有界数量的批次；Gateway 返回的确认通过本地校验后才会删除
 Outbox 事件。网络失败、超时或无效响应不会清理未确认事件。远程 Gateway 地址必须
