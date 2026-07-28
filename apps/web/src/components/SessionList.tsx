@@ -39,19 +39,36 @@ export function SessionList({
               onClick={() => onSelect(session)}
             >
               <div className="session-card-top">
-                <span className="session-project">
-                  {session.payload.project.display_name}
+                <span
+                  className="session-agent-mark"
+                  data-agent={session.agent_type}
+                  aria-hidden="true"
+                >
+                  {session.agent_type === "claude_code" ? "C" : "X"}
+                </span>
+                <span className="session-copy">
+                  <span className="session-project">
+                    {session.payload.project.display_name}
+                  </span>
+                  <span className="session-agent">
+                    {AGENT_LABELS[session.agent_type]}
+                  </span>
                 </span>
                 <StatusBadge state={state} />
               </div>
               <div className="session-card-bottom">
-                <span>{AGENT_LABELS[session.agent_type]}</span>
                 {state.waiting_reason !== undefined && (
                   <span className="session-waiting">
+                    <span aria-hidden="true">●</span>
                     {WAITING_REASON_LABELS[state.waiting_reason]}
                   </span>
                 )}
-                <span className="mono">{deviceShortId(session.device_id)}</span>
+                <span className="session-device">
+                  设备{" "}
+                  <span className="mono">
+                    {deviceShortId(session.device_id)}
+                  </span>
+                </span>
                 <span className="session-time">
                   {formatRelative(session.observed_at, nowMs)}
                 </span>

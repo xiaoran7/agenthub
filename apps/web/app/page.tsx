@@ -224,6 +224,12 @@ export default function PanelPage() {
     () => tabCounts(sessions, deviceFilter),
     [sessions, deviceFilter],
   );
+  const globalCounts = useMemo(
+    () => tabCounts(sessions, undefined),
+    [sessions],
+  );
+  const activeDevices = devices.filter((device) => !device.revoked);
+  const onlineDevices = activeDevices.filter((device) => device.online).length;
   const selectedKey = selected === undefined ? undefined : sessionKey(selected);
   const selectedSession = useMemo(
     () =>
@@ -255,9 +261,23 @@ export default function PanelPage() {
   return (
     <div className="panel">
       <header className="panel-header">
-        <div>
+        <div className="brand-block">
+          <p className="eyebrow">AGENT OPERATIONS</p>
           <h1>Agent Platform</h1>
-          <p className="panel-status">
+          <p className="brand-subtitle">跨设备 Coding Agent 会话监控中心</p>
+        </div>
+        <div className="header-actions">
+          <p
+            className="connection-pill"
+            data-state={
+              syncError !== undefined
+                ? "error"
+                : streamConnected
+                  ? "live"
+                  : "polling"
+            }
+          >
+            <span className="connection-dot" />
             {config === undefined
               ? "初始化…"
               : syncError !== undefined
@@ -268,45 +288,104 @@ export default function PanelPage() {
                       new Date(lastSyncMs).toISOString(),
                       nowMs,
                     )}`}
-            {syncError !== undefined && <span className="status-dot-error" />}
           </p>
-        </div>
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => setSettingsOpen(true)}
-        >
-          设置
-        </button>
-      </header>
-
-      <DeviceStrip
-        devices={devices}
-        selected={deviceFilter}
-        nowMs={nowMs}
-        onSelect={setDeviceFilter}
-      />
-
-      <nav className="tabs" aria-label="会话分类">
-        {SESSION_TABS.map((entry) => (
           <button
             type="button"
-            key={entry}
-            className="tab"
-            data-selected={entry === tab}
-            onClick={() => setTab(entry)}
+            className="secondary settings-button"
+            onClick={() => setSettingsOpen(true)}
           >
-            {TAB_LABELS[entry]}
-            <span className="tab-count">{counts[entry]}</span>
+            <span aria-hidden="true">⚙</span>
+            设置
           </button>
-        ))}
-      </nav>
+        </div>
+      </header>
+
+      <section className="overview-grid" aria-label="运行概览">
+        <article className="overview-card" data-tone="devices">
+          <div className="overview-icon" aria-hidden="true">
+            ◫
+          </div>
+          <div>
+            <p>在线设备</p>
+            <strong>
+              {onlineDevices}
+              <span> / {activeDevices.length}</span>
+            </strong>
+          </div>
+        </article>
+        <article className="overview-card" data-tone="live">
+          <div className="overview-icon" aria-hidden="true">
+            ◉
+          </div>
+          <div>
+            <p>活动会话</p>
+            <strong>{globalCounts.live}</strong>
+          </div>
+        </article>
+        <article className="overview-card" data-tone="waiting">
+          <div className="overview-icon" aria-hidden="true">
+            !
+          </div>
+          <div>
+            <p>等待处理</p>
+            <strong>{globalCounts.waiting}</strong>
+          </div>
+        </article>
+        <article className="overview-card" data-tone="finished">
+          <div className="overview-icon" aria-hidden="true">
+            ✓
+          </div>
+          <div>
+            <p>最近完成</p>
+            <strong>{globalCounts.finished}</strong>
+          </div>
+        </article>
+      </section>
+
+      <section className="control-surface" aria-label="面板筛选">
+        <div className="control-row">
+          <span className="control-label">设备范围</span>
+          <DeviceStrip
+            devices={devices}
+            selected={deviceFilter}
+            nowMs={nowMs}
+            onSelect={setDeviceFilter}
+          />
+        </div>
+        <div className="control-divider" />
+        <div className="control-row">
+          <span className="control-label">会话视图</span>
+          <nav className="tabs" aria-label="会话分类">
+            {SESSION_TABS.map((entry) => (
+              <button
+                type="button"
+                key={entry}
+                className="tab"
+                data-selected={entry === tab}
+                onClick={() => setTab(entry)}
+              >
+                {TAB_LABELS[entry]}
+                <span className="tab-count">{counts[entry]}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      </section>
 
       <main
         className="content"
         data-detail-open={selectedSession !== undefined}
       >
         <section className="list-pane">
+          <header className="list-header">
+            <div>
+              <p className="eyebrow">SESSIONS</p>
+              <h2>{TAB_LABELS[tab]}会话</h2>
+            </div>
+            <span className="result-count">
+              {visibleSessions.length} 条结果
+            </span>
+          </header>
           {showOnboarding ? (
             <div className="onboarding">
               <h2>还没有绑定设备</h2>

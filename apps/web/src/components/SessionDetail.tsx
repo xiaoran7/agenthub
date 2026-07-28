@@ -30,6 +30,7 @@ export function SessionDetail({
     <aside className="detail" aria-label="会话详情">
       <header className="detail-header">
         <div className="detail-title">
+          <p className="eyebrow">SESSION DETAIL</p>
           <h2>{session.payload.project.display_name}</h2>
           <p className="detail-subtitle">
             {AGENT_LABELS[session.agent_type]} ·{" "}
