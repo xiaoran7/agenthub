@@ -359,6 +359,13 @@ Session 视图、设备筛选和等待优先排序，不创建移动端专属状
 配置。原生端不读取 Agent Token、不保存 transcript，也不调用绑定、撤销、Push
 订阅等写接口。
 
+Android 表现层使用 Compose 原生动画，不共享 Web 的 GSAP 运行时。底栏 section
+切换由 `AnimatedContent` 表达方向，Session/设备/时间线以稳定业务键触发有界
+`AnimatedVisibility` stagger，详情以 Session key 与活动状态作为入场键，概览数字
+与选中态使用 value-based animation，品牌 C 标记使用低速 `InfiniteTransition`。
+这些动画只包裹现有 Composable，不参与 Gateway 请求、筛选或导航状态；统一服从
+平台 `MotionDurationScale`，系统动画缩放为 0 时直接显示最终内容。
+
 浏览器 `offline` 事件会立即停止 SSE 和周期请求、保留当前页面内存中的最后快照并
 显示离线提示；`online` 事件立即刷新并重建 SSE。该信号只表示浏览器网络链路，
 不能替代 Gateway 可达性判断，联网后的请求失败仍显示独立同步错误。刷新页面后没有

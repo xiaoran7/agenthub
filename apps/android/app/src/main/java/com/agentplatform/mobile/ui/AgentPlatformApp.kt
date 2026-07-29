@@ -1,6 +1,19 @@
 package com.agentplatform.mobile.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +37,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,6 +68,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -114,18 +129,23 @@ fun AgentPlatformApp(controller: AppController) {
 
     if (selected != null) {
         val index = detailList.indexOfFirst { it.key == selected.key }
-        SessionDetailScreen(
-            state = state,
-            position = index.takeIf { it >= 0 }?.plus(1),
-            total = detailList.size,
-            onBack = { controller.selectSession(null) },
-            onPrevious = detailList.getOrNull(index - 1)?.let { previous ->
-                { controller.selectSession(previous) }
-            },
-            onNext = detailList.getOrNull(index + 1)?.let { next ->
-                { controller.selectSession(next) }
-            },
-        )
+        MotionEntrance(
+            motionKey = "${selected.key}:${selected.state.activityStatus}",
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            SessionDetailScreen(
+                state = state,
+                position = index.takeIf { it >= 0 }?.plus(1),
+                total = detailList.size,
+                onBack = { controller.selectSession(null) },
+                onPrevious = detailList.getOrNull(index - 1)?.let { previous ->
+                    { controller.selectSession(previous) }
+                },
+                onNext = detailList.getOrNull(index + 1)?.let { next ->
+                    { controller.selectSession(next) }
+                },
+            )
+        }
         return
     }
 
@@ -145,44 +165,64 @@ fun AgentPlatformApp(controller: AppController) {
             )
         },
     ) { innerPadding ->
-        when (section) {
-            AppSection.SESSIONS,
-            AppSection.WAITING ->
-                SessionsScreen(
-                    state = state,
-                    forcedFilter =
-                        if (section == AppSection.WAITING) {
-                            SessionFilter.WAITING
-                        } else {
-                            null
-                        },
-                    selectedDevice = selectedDevice,
-                    onSelectedDevice = { selectedDevice = it },
-                    onRefresh = controller::refresh,
-                    onSelectSession = controller::selectSession,
-                    modifier = Modifier.padding(innerPadding),
-                )
-            AppSection.DEVICES ->
-                DevicesScreen(
-                    state = state,
-                    onRefresh = controller::refresh,
-                    onSelectDevice = {
-                        selectedDevice = it
-                        section = AppSection.SESSIONS
-                    },
-                    modifier = Modifier.padding(innerPadding),
-                )
-            AppSection.SETTINGS ->
-                SettingsScreen(
-                    config = state.config,
-                    onSave = { config ->
-                        controller.saveConfig(config).also { error ->
-                            if (error == null) section = AppSection.SESSIONS
+        AnimatedContent(
+            targetState = section,
+            modifier = Modifier.fillMaxSize(),
+            transitionSpec = {
+                val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                (
+                    fadeIn(tween(MotionTokens.Standard)) +
+                        slideInHorizontally(tween(MotionTokens.Emphasized)) { width ->
+                            direction * (width / 9)
                         }
-                    },
-                    onClear = controller::clearConfig,
-                    modifier = Modifier.padding(innerPadding),
-                )
+                ).togetherWith(
+                    fadeOut(tween(MotionTokens.Quick)) +
+                        slideOutHorizontally(tween(MotionTokens.Standard)) { width ->
+                            -direction * (width / 12)
+                        },
+                ).using(SizeTransform(clip = false))
+            },
+            label = "app-section",
+        ) { targetSection ->
+            when (targetSection) {
+                AppSection.SESSIONS,
+                AppSection.WAITING ->
+                    SessionsScreen(
+                        state = state,
+                        forcedFilter =
+                            if (targetSection == AppSection.WAITING) {
+                                SessionFilter.WAITING
+                            } else {
+                                null
+                            },
+                        selectedDevice = selectedDevice,
+                        onSelectedDevice = { selectedDevice = it },
+                        onRefresh = controller::refresh,
+                        onSelectSession = controller::selectSession,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+                AppSection.DEVICES ->
+                    DevicesScreen(
+                        state = state,
+                        onRefresh = controller::refresh,
+                        onSelectDevice = {
+                            selectedDevice = it
+                            section = AppSection.SESSIONS
+                        },
+                        modifier = Modifier.padding(innerPadding),
+                    )
+                AppSection.SETTINGS ->
+                    SettingsScreen(
+                        config = state.config,
+                        onSave = { config ->
+                            controller.saveConfig(config).also { error ->
+                                if (error == null) section = AppSection.SESSIONS
+                            }
+                        },
+                        onClear = controller::clearConfig,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+            }
         }
     }
 }
@@ -279,8 +319,13 @@ private fun SessionsScreen(
                 )
             }
         } else {
-            items(sessions, key = SessionRecord::key) { session ->
-                SessionCard(session = session, onClick = { onSelectSession(session) })
+            itemsIndexed(sessions, key = { _, session -> session.key }) { index, session ->
+                MotionEntrance(
+                    motionKey = "${filter.name}:${session.key}:${session.state.activityStatus}",
+                    index = index,
+                ) {
+                    SessionCard(session = session, onClick = { onSelectSession(session) })
+                }
             }
         }
     }
@@ -326,7 +371,34 @@ private fun ProductHeader(
 @Composable
 private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
     val ink = MaterialTheme.colorScheme.onBackground
-    Canvas(Modifier.size(size)) {
+    val transition = rememberInfiniteTransition(label = "brand-motion")
+    val rotation by
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec =
+                infiniteRepeatable(
+                    animation = tween(22_000, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart,
+                ),
+            label = "brand-rotation",
+        )
+    val signalScale by
+        transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.45f,
+            animationSpec =
+                infiniteRepeatable(
+                    animation = tween(1_200),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+            label = "brand-signal",
+        )
+    Canvas(
+        Modifier
+            .size(size)
+            .graphicsLayer { rotationZ = rotation },
+    ) {
         val stroke = this.size.minDimension * 0.075f
         drawArc(
             color = ink,
@@ -342,7 +414,7 @@ private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
         )
         drawCircle(
             color = PinkSignal,
-            radius = this.size.minDimension * 0.075f,
+            radius = this.size.minDimension * 0.075f * signalScale,
             center = Offset(this.size.width * 0.79f, this.size.height * 0.29f),
         )
         drawCircle(
@@ -492,7 +564,7 @@ private fun MetricCard(
                 Text(mark, fontSize = 24.sp, fontWeight = FontWeight.Black)
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(value, style = MaterialTheme.typography.headlineLarge)
+                AnimatedMetricText(value, style = MaterialTheme.typography.headlineLarge)
                 if (signal) {
                     Spacer(Modifier.width(7.dp))
                     PinkDot()
@@ -511,33 +583,35 @@ private fun SessionFilterRow(
     LazyRow(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         items(SessionFilter.entries) { filter ->
             val active = filter == selected
-            Surface(
-                modifier = Modifier.clickable { onSelect(filter) },
-                shape = RoundedCornerShape(999.dp),
-                color =
-                    if (active) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    },
-                contentColor =
-                    if (active) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                border =
-                    if (active) null
-                    else androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.outline,
-                    ),
-            ) {
-                Text(
-                    "${filter.label} ${counts[filter]}",
-                    modifier = Modifier.padding(horizontal = 17.dp, vertical = 11.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                )
+            MotionSelection(active = active) {
+                Surface(
+                    modifier = Modifier.clickable { onSelect(filter) },
+                    shape = RoundedCornerShape(999.dp),
+                    color =
+                        if (active) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        },
+                    contentColor =
+                        if (active) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    border =
+                        if (active) null
+                        else androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline,
+                        ),
+                ) {
+                    Text(
+                        "${filter.label} ${counts[filter]}",
+                        modifier = Modifier.padding(horizontal = 17.dp, vertical = 11.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
             }
         }
     }
@@ -693,13 +767,18 @@ private fun DevicesScreen(
                 )
             }
         } else {
-            items(devices, key = DeviceRecord::deviceId) { device ->
+            itemsIndexed(devices, key = { _, device -> device.deviceId }) { index, device ->
                 val deviceSessions = state.sessions.filter { it.deviceId == device.deviceId }
-                DeviceCard(
-                    device = device,
-                    sessions = deviceSessions,
-                    onClick = { onSelectDevice(device.deviceId) },
-                )
+                MotionEntrance(
+                    motionKey = "${device.deviceId}:${device.online}",
+                    index = index,
+                ) {
+                    DeviceCard(
+                        device = device,
+                        sessions = deviceSessions,
+                        onClick = { onSelectDevice(device.deviceId) },
+                    )
+                }
             }
         }
     }
@@ -988,8 +1067,13 @@ private fun SessionDetailScreen(
             state.timeline.isEmpty() ->
                 item { EmptyCard("暂无状态事件", "Gateway 还没有保存这条 Session 的历史变化。") }
             else ->
-                items(state.timeline, key = SessionRecord::eventId) { event ->
-                    TimelineCard(event)
+                itemsIndexed(
+                    state.timeline,
+                    key = { _, event -> event.eventId },
+                ) { index, event ->
+                    MotionEntrance(motionKey = event.eventId, index = index) {
+                        TimelineCard(event)
+                    }
                 }
         }
     }
@@ -1071,44 +1155,49 @@ private fun FloatingDock(
         ) {
             AppSection.entries.forEach { item ->
                 val active = item == selected
-                Column(
-                    modifier =
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(20.dp))
-                            .clickable { onSelect(item) }
-                            .background(
-                                if (active) MaterialTheme.colorScheme.primary
-                                else Color.Transparent,
-                            )
-                            .padding(vertical = 7.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                MotionSelection(
+                    active = active,
+                    modifier = Modifier.weight(1f),
                 ) {
-                    Box {
+                    Column(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { onSelect(item) }
+                                .background(
+                                    if (active) MaterialTheme.colorScheme.primary
+                                    else Color.Transparent,
+                                )
+                                .padding(vertical = 7.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box {
+                            Text(
+                                item.mark,
+                                color =
+                                    if (active) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.Black,
+                            )
+                            if (item == AppSection.WAITING && waitingCount > 0) {
+                                Box(
+                                    Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(7.dp)
+                                        .background(PinkSignal, CircleShape),
+                                )
+                            }
+                        }
                         Text(
-                            item.mark,
+                            item.label,
                             color =
                                 if (active) MaterialTheme.colorScheme.onPrimary
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 21.sp,
-                            fontWeight = FontWeight.Black,
+                            style = MaterialTheme.typography.labelLarge,
                         )
-                        if (item == AppSection.WAITING && waitingCount > 0) {
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopEnd)
-                                    .size(7.dp)
-                                    .background(PinkSignal, CircleShape),
-                            )
-                        }
                     }
-                    Text(
-                        item.label,
-                        color =
-                            if (active) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
                 }
             }
         }

@@ -7,6 +7,12 @@
 
 ### Added
 
+- 原生 Android 增加与 Web 同语义的 Jetpack Compose 动效系统：底栏页面按方向切换，
+  Session、设备与时间线使用有界 stagger 入场，详情按 Session/状态重新进入，概览
+  数字平滑切换，筛选和底栏选中态提供缩放/透明度反馈，C 形品牌标记与粉色信号保持
+  低速持续动画。全部使用 Compose 原生 `AnimatedContent`、`AnimatedVisibility`、
+  `animate*AsState` 与 `InfiniteTransition`，服从 Android 系统动画时长缩放；模拟器
+  已验证 10x 可观察过渡、0x 直接显示最终状态，原有相邻会话和系统 Back 不变。
 - Web/桌面端接入 GSAP 3 与 `@gsap/react` 动效层：首屏标题、连接区、概览卡、筛选面和
   列表标题按时间线入场；会话筛选和状态变化使用 transform/opacity stagger，详情、
   时间线与设置/筛选面板按布局方向进入；概览数字平滑过渡，品牌 C 标记和实时连接点

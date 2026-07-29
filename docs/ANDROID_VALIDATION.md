@@ -1,5 +1,26 @@
 # 原生 Android 验收记录
 
+## 2026-07-29 Compose 动效轮次
+
+### 自动化
+
+- `.\gradlew.bat testDebugUnitTest lintDebug assembleDebug`：4 个 JVM 测试通过，
+  Android Lint 与 Debug APK 构建通过；新增测试锁定 45ms stagger 与 270ms 上限。
+- 动效只新增 `androidx.compose.animation:animation` 官方 Compose artifact，不改变
+  Gateway、Keystore、网络安全或只读请求代码。
+
+### 模拟器运行
+
+- 环境：Android Emulator `Medium_Phone_API_36.1`，1080×2400；调试 APK 覆盖安装。
+- 数据：`adb reverse tcp:3001 tcp:3001` 连接临时只读 Gateway，首页实际显示 2 台
+  在线设备、4 条 Session、2 条待处理与 1 条最近完成。
+- 动效：系统 Animator duration scale 设为 `10x` 时，首页→设备与首页→详情的
+  fade/slide 中间帧可见；设为 `0x` 后 300ms 截图直接是完整首页、没有双页残影。
+- 导航：详情从 Checkout Web 相邻切换到 Memory Index 成功；Android 系统 Back
+  返回带 CURRENT STATUS 的会话首页。
+- 视觉：最终首页与设备页在 Paper / Ink / Pink Signal 体系下无裁切，固定底栏、
+  Hero、四张指标卡和筛选行保持原布局。
+
 ## 2026-07-29 首版基线
 
 ### 自动化

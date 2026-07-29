@@ -41,6 +41,9 @@ Web、桌面宽屏与原生 Android 使用同一套产品语言：安静的纸�
 
 - Web/桌面端使用 GSAP 编排首屏、筛选结果、详情和面板层级；React 生命周期统一通过
   `useGSAP` 和局部 scope 管理，组件卸载或依赖变化时自动回收。
+- 原生 Android 使用 Compose `AnimatedContent`、`AnimatedVisibility`、
+  `animate*AsState` 与 `InfiniteTransition` 对应同一动效语义，不嵌入 GSAP 或
+  WebView；页面方向、列表 stagger、指标和品牌反馈由原生渲染。
 - 页面入场遵循“品牌与连接 → 概览 → 控制面 → 内容”的阅读顺序；列表用短距离
   stagger 表达结果重排，详情在桌面从右侧、手机从底部进入。
 - 数据数字可以平滑计数，实时连接点与 C 形品牌标记可以持续低速反馈；等待/完成等
@@ -49,3 +52,5 @@ Web、桌面宽屏与原生 Android 使用同一套产品语言：安静的纸�
   不用 width、height、top、left 驱动移动，不为未动画元素长期声明 `will-change`。
 - `prefers-reduced-motion: reduce` 时停用位移、stagger、视差和循环动画，内容直接呈现
   最终状态；焦点、筛选、详情导航和数据刷新不能依赖动画完成回调。
+- Android 动效服从系统 Animator duration scale；缩放为 `0x` 时 Compose 直接收敛到
+  最终状态。stagger 延迟封顶 270ms，长列表不能因索引增长而无限延后可见内容。
