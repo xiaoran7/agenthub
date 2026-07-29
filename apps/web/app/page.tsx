@@ -476,7 +476,7 @@ export default function PanelPage() {
                   </span>
                 )}
               </button>
-              <span className="result-count">
+              <span className="result-count" role="status" aria-live="polite">
                 {showInitialLoading
                   ? "正在读取"
                   : `${visibleSessions.length} 条结果`}

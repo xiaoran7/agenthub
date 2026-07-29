@@ -16,7 +16,9 @@ Web Push 呈现仍未完成；本机真实 rustls 握手和私有 CA 恢复已�
 普通 Chrome 的新订阅已让推送服务实际接受一条加密通知，但该成功响应只证明服务
 端投递。现在 Service Worker 也已回传不含 Session/设备信息的展示时间戳，证明
 payload 解密和 `showNotification()` 成功；该浏览器级证据仍不等于 Windows 已
-实际弹出。
+实际弹出。2026-07-29 另用普通 Chrome 验证了移动 PWA 的 manifest 与安装条件：
+DevTools 返回 0 条 installability error，页面收到 `beforeinstallprompt` 并显示
+安装入口；未执行系统安装，因此该证据不扩张为“已安装”。
 
 ## 自动化验收矩阵
 
@@ -87,6 +89,11 @@ payload 解密和 `showNotification()` 成功；该浏览器级证据仍不等�
   随后在设置面板显示 `2026/7/28 19:24:40` 展示回执，证明同一条消息已解密并由
   浏览器接受 `showNotification()`。Windows 未留下可观察的活动通知，因此系统
   Toast 仍未通过；验收结束已注销临时订阅并删除临时 VAPID 密钥与 Runner 数据。
+- Chrome 移动 PWA：390×844 视口以临时 Runner 签名同步的等待/完成 Session
+  验证连接状态、焦点圈定/恢复、全屏详情、44px 关闭触控目标和无横向溢出。
+  `Page.getAppManifest` 返回完整 standalone manifest 且无解析错误，
+  `Page.getInstallabilityErrors` 返回空数组，设置页实际显示“安装应用”。本轮未
+  点击安装按钮，未改变系统应用列表；临时身份、Outbox、日志和进程均已清理。
 
 现场测试没有向仓库写入数据库密码、VAPID 私钥、真实 Session 样本或临时数据库。
 

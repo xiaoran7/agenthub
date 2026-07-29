@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   SESSION_TABS,
@@ -6,6 +6,7 @@ import {
   tabCounts,
   type SessionTab,
 } from "../lib/classify";
+import { useModalDialog } from "../lib/dialog-focus";
 import { summarizeDevices } from "../lib/device-summary";
 import { AGENT_LABELS, deviceShortId, formatRelative } from "../lib/format";
 import type { DeviceRecord, SessionRecord } from "../lib/types";
@@ -39,21 +40,7 @@ export function MobileFilters({
     () => tabCounts(sessions, draftDevice),
     [sessions, draftDevice],
   );
-
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [onClose]);
+  const dialogRef = useModalDialog<HTMLElement>(onClose);
 
   return (
     <div
@@ -65,10 +52,12 @@ export function MobileFilters({
       }}
     >
       <section
+        ref={dialogRef}
         className="mobile-sheet mobile-filter-sheet"
         role="dialog"
         aria-modal="true"
         aria-labelledby="mobile-filter-title"
+        tabIndex={-1}
       >
         <header className="mobile-sheet-header">
           <div>

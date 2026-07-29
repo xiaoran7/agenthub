@@ -2,6 +2,19 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-29 开发认证开启后仍必须提供固定 owner
+
+- **现象**：设置 `AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true` 后启动本地 Gateway
+  仍立即退出，错误为 `AGENT_PLATFORM_OWNER_ID is required`；Web 能启动但只能等待
+  不存在的 API。
+- **根因**：开发认证只是允许回环请求通过 `x-user-id` 标识调用者，不替代服务端
+  固定 owner 配置。Gateway 的进程级数据归属和认证入口是两个独立约束。
+- **解决方式**：本地 QA 进程同时设置开发认证开关与
+  `AGENT_PLATFORM_OWNER_ID=local-user`，确认 3001 端口监听后再执行绑定、签名同步和
+  浏览器验收；变量只注入临时子进程。
+- **如何规避**：启动脚本必须先读 `server.ts` 的完整必填环境校验，并在进入数据准备
+  前检查健康端口和错误日志，不能用 Web 3000 已监听推断 Gateway 也已就绪。
+
 ## 2026-07-28 PowerShell 不会因原生命令非零退出自动停止
 
 - **现象**：移动端真实数据 Fixture 脚本继续执行并启动 Web，但 Runner 设备绑定实际

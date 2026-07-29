@@ -9,6 +9,7 @@ import {
 } from "../lib/api";
 import type { PanelConfig } from "../lib/config";
 import { normalizeGatewayBase, normalizeUserId } from "../lib/config";
+import { useModalDialog } from "../lib/dialog-focus";
 import type { NotificationState } from "../lib/notifications";
 import { deviceShortId, formatClock } from "../lib/format";
 import type { PwaInstallState } from "../lib/pwa-install";
@@ -91,6 +92,7 @@ export function SettingsPanel({
   const [revokingDevice, setRevokingDevice] = useState<string | undefined>(
     undefined,
   );
+  const dialogRef = useModalDialog<HTMLFormElement>(onClose);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,21 +107,6 @@ export function SettingsPanel({
       cancelled = true;
     };
   }, [config]);
-
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [onClose]);
 
   async function toggleNotifications() {
     setNotificationBusy(true);
@@ -221,10 +208,12 @@ export function SettingsPanel({
       }}
     >
       <form
+        ref={dialogRef}
         className="settings"
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
+        tabIndex={-1}
         onSubmit={handleSubmit}
       >
         <header className="settings-header">

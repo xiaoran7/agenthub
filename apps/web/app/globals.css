@@ -95,6 +95,7 @@ button {
   font: inherit;
   color: inherit;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 button:disabled {
@@ -874,6 +875,7 @@ input:focus-visible {
   justify-content: center;
   background: rgb(8 12 24 / 58%);
   backdrop-filter: blur(8px);
+  animation: backdrop-in 160ms ease-out;
 }
 
 .mobile-sheet {
@@ -888,6 +890,20 @@ input:focus-visible {
   border-radius: 22px 22px 0 0;
   background: var(--surface);
   box-shadow: 0 -18px 64px rgb(0 0 0 / 28%);
+  animation: sheet-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0.72;
+  }
 }
 
 .mobile-sheet::before {
@@ -1138,7 +1154,14 @@ input:focus-visible {
     border-radius: 0;
     border: none;
     overflow-y: auto;
-    padding: 20px 16px 40px;
+    overscroll-behavior: contain;
+    padding: calc(20px + env(safe-area-inset-top)) 16px
+      calc(40px + env(safe-area-inset-bottom));
+  }
+
+  .detail .icon-button {
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 
@@ -1301,6 +1324,7 @@ input:focus-visible {
   justify-content: center;
   padding: 16px;
   backdrop-filter: blur(8px);
+  animation: backdrop-in 160ms ease-out;
 }
 
 .settings {
@@ -1527,7 +1551,8 @@ input:focus-visible {
 
 @media (max-width: 760px) {
   .panel {
-    padding: 20px 14px calc(104px + env(safe-area-inset-bottom));
+    padding: calc(20px + env(safe-area-inset-top)) 14px
+      calc(104px + env(safe-area-inset-bottom));
   }
 
   .panel-header {
@@ -1588,6 +1613,20 @@ input:focus-visible {
     box-shadow: var(--shadow-sm);
     color: var(--muted);
     font-size: 11px;
+  }
+
+  .mobile-filter-views button {
+    min-height: 46px;
+  }
+
+  .mobile-device-card {
+    min-height: 64px;
+  }
+
+  .mobile-sheet .icon-button,
+  .settings .icon-button {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .mobile-filter-trigger > span:first-child {
@@ -1689,6 +1728,7 @@ input:focus-visible {
     border-bottom: 0;
     border-left: 0;
     border-radius: 22px 22px 0 0;
+    animation: sheet-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .settings::before {
@@ -1710,19 +1750,43 @@ input:focus-visible {
   .settings-actions {
     padding-bottom: calc(14px + env(safe-area-inset-bottom));
   }
+
+  .settings-scroll {
+    overscroll-behavior: contain;
+  }
 }
 
 @media (max-width: 520px) {
+  .panel-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+
+  .header-actions {
+    display: contents;
+  }
+
+  .settings-button {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+  }
+
+  .connection-pill {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    max-width: none;
+    justify-content: flex-start;
+    white-space: normal;
+  }
+
   .brand-subtitle {
     max-width: 240px;
   }
 
   .settings-button {
     padding-inline: 11px;
-  }
-
-  .connection-pill {
-    display: none;
   }
 
   .overview-card {
@@ -1761,6 +1825,13 @@ input:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .mobile-sheet-backdrop,
+  .mobile-sheet,
+  .settings-backdrop,
+  .settings {
+    animation: none;
+  }
+
   .session-card {
     transition: none;
   }
