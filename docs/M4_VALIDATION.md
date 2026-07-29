@@ -89,10 +89,12 @@ DevTools 返回 0 条 installability error，页面收到 `beforeinstallprompt` 
   随后在设置面板显示 `2026/7/28 19:24:40` 展示回执，证明同一条消息已解密并由
   浏览器接受 `showNotification()`。Windows 未留下可观察的活动通知，因此系统
   Toast 仍未通过；验收结束已注销临时订阅并删除临时 VAPID 密钥与 Runner 数据。
-- Chrome 移动 PWA：390×844 视口以临时 Runner 签名同步的等待/完成 Session
-  验证连接状态、焦点圈定/恢复、全屏详情、44px 关闭触控目标和无横向溢出。
+- Chrome 移动 PWA：先在 390×844 视口以临时 Runner 签名同步的等待/完成 Session
+  验证连接状态、焦点圈定/恢复、全屏详情与 44px 关闭触控目标；第四轮再用
+  320×568 和 844×390 验证等待数量徽标、设备筛选标记、断网即时保留提示、恢复
+  联网后自动刷新、横屏移动底栏和 `scrollWidth === innerWidth`。
   `Page.getAppManifest` 返回完整 standalone manifest 且无解析错误，
-  `Page.getInstallabilityErrors` 返回空数组，设置页实际显示“安装应用”。本轮未
+  `Page.getInstallabilityErrors` 返回空数组，设置页实际显示“安装应用”。两轮均未
   点击安装按钮，未改变系统应用列表；临时身份、Outbox、日志和进程均已清理。
 
 现场测试没有向仓库写入数据库密码、VAPID 私钥、真实 Session 样本或临时数据库。

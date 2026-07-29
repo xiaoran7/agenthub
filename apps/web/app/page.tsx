@@ -25,6 +25,7 @@ import {
   tabCounts,
   type SessionTab,
 } from "../src/lib/classify";
+import { connectionStatus } from "../src/lib/connection-status";
 import { deviceShortId, formatRelative } from "../src/lib/format";
 import { parseNotificationPresentedAt } from "../src/lib/notifications";
 import { usePwaInstall } from "../src/lib/pwa-install";
@@ -60,6 +61,7 @@ export default function PanelPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
+  const [browserOnline, setBrowserOnline] = useState(true);
   const [notificationPresentedAt, setNotificationPresentedAt] = useState<
     number | undefined
   >(undefined);
@@ -72,7 +74,7 @@ export default function PanelPage() {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (config === undefined) {
+    if (config === undefined || !navigator.onLine) {
       return;
     }
     try {
@@ -148,7 +150,26 @@ export default function PanelPage() {
   }, [refresh, loadTimeline]);
 
   useEffect(() => {
-    if (config === undefined) {
+    const onOnline = () => {
+      setBrowserOnline(true);
+      void refreshRef.current();
+    };
+    const onOffline = () => {
+      setBrowserOnline(false);
+      setStreamConnected(false);
+    };
+    setBrowserOnline(navigator.onLine);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (config === undefined || !browserOnline) {
+      setStreamConnected(false);
       return;
     }
     setStreamConnected(false);
@@ -159,7 +180,7 @@ export default function PanelPage() {
       },
       onConnected: setStreamConnected,
     });
-  }, [config]);
+  }, [config, browserOnline]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
@@ -270,6 +291,16 @@ export default function PanelPage() {
   const showInitialLoading =
     config === undefined ||
     (lastSyncMs === undefined && syncError === undefined);
+  const connection = connectionStatus({
+    configured: config !== undefined,
+    online: browserOnline,
+    syncError,
+    lastSyncLabel:
+      lastSyncMs === undefined
+        ? undefined
+        : formatRelative(new Date(lastSyncMs).toISOString(), nowMs),
+    streamConnected,
+  });
 
   const selectMobileTab = (nextTab: SessionTab) => {
     setTab(nextTab);
@@ -306,25 +337,10 @@ export default function PanelPage() {
             className="connection-pill"
             role="status"
             aria-live="polite"
-            data-state={
-              syncError !== undefined
-                ? "error"
-                : streamConnected
-                  ? "live"
-                  : "polling"
-            }
+            data-state={connection.tone}
           >
             <span className="connection-dot" />
-            {config === undefined
-              ? "初始化…"
-              : syncError !== undefined
-                ? syncError
-                : lastSyncMs === undefined
-                  ? "连接网关中…"
-                  : `${streamConnected ? "实时" : "轮询"} · 已更新 ${formatRelative(
-                      new Date(lastSyncMs).toISOString(),
-                      nowMs,
-                    )}`}
+            {connection.label}
           </p>
           <button
             type="button"
@@ -337,22 +353,30 @@ export default function PanelPage() {
         </div>
       </header>
 
-      {syncError !== undefined && (
+      {(!browserOnline || syncError !== undefined) && (
         <section className="sync-banner" role="alert">
           <span className="sync-banner-icon" aria-hidden="true">
             !
           </span>
           <div>
-            <strong>暂时无法刷新数据</strong>
-            <p>{syncError}</p>
+            <strong>
+              {browserOnline ? "暂时无法刷新数据" : "网络连接已断开"}
+            </strong>
+            <p>
+              {browserOnline
+                ? syncError
+                : "已保留上次同步结果，恢复联网后会自动重试。"}
+            </p>
           </div>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void refresh()}
-          >
-            重新连接
-          </button>
+          {browserOnline && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void refresh()}
+            >
+              重新连接
+            </button>
+          )}
         </section>
       )}
 
@@ -537,6 +561,8 @@ export default function PanelPage() {
 
       <MobileDock
         selected={tab}
+        counts={counts}
+        deviceFilterActive={deviceFilter !== undefined}
         onSelect={selectMobileTab}
         onOpenFilters={openMobileFilters}
         onOpenSettings={openSettings}
