@@ -369,6 +369,13 @@ PWA 安装入口由浏览器能力事件驱动：捕获 `beforeinstallprompt` �
 注册现有 Service Worker，但注册本身不请求通知权限；通知订阅仍只能由用户在设置中
 显式开启。Service Worker 不增加 fetch 处理器，安装能力不改变实时数据的缓存边界。
 
+Web 视觉动效由 GSAP 3 与 `@gsap/react` 承担，并集中在面板作用域 Hook 中，不进入
+数据请求、分类或只读契约。首屏使用 timeline 编排，Session 列表按稳定会话键与状态
+变化触发 stagger，详情、时间线和底部/设置面板按当前布局入场；概览数字使用独立
+组件过渡。React 更新和卸载由 `useGSAP` context 回收，持续动画和桌面指针视差只在
+`prefers-reduced-motion: no-preference` 下创建，动画属性限制为 transform 与
+opacity，结束后清除瞬时内联样式。动效关闭时所有内容和交互仍直接处于最终状态。
+
 ### 4.5 Web Push 通知
 
 面板关闭时靠 Web Push 提醒"有会话在等人"。`GET /v1/push/key` 返回 VAPID 应用

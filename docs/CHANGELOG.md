@@ -7,6 +7,11 @@
 
 ### Added
 
+- Web/桌面端接入 GSAP 3 与 `@gsap/react` 动效层：首屏标题、连接区、概览卡、筛选面和
+  列表标题按时间线入场；会话筛选和状态变化使用 transform/opacity stagger，详情、
+  时间线与设置/筛选面板按布局方向进入；概览数字平滑过渡，品牌 C 标记和实时连接点
+  提供克制的持续反馈，桌面概览卡使用 `quickTo` 指针视差。所有动画限定在组件作用域
+  并自动清理，`prefers-reduced-motion` 下停用，完成后移除瞬时内联样式。
 - 新增独立原生 Android App（Kotlin + Jetpack Compose，非 WebView/PWA 封装）：
   直接消费现有只读设备、Session 与时间线 API，提供全部/进行中/待处理/最近完成/
   历史五类筛选、等待优先首页、设备列表、详情时间线、相邻会话和系统返回。生产

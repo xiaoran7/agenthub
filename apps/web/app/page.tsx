@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeviceStrip } from "../src/components/DeviceStrip";
 import { MobileDock } from "../src/components/MobileDock";
 import { MobileFilters } from "../src/components/MobileFilters";
+import { MotionMetric } from "../src/components/MotionMetric";
 import { EmptySessions, PanelSkeleton } from "../src/components/PanelStates";
 import { SessionDetail } from "../src/components/SessionDetail";
 import { SessionList } from "../src/components/SessionList";
@@ -29,6 +30,7 @@ import { connectionStatus } from "../src/lib/connection-status";
 import { deviceShortId, formatRelative } from "../src/lib/format";
 import { parseNotificationPresentedAt } from "../src/lib/notifications";
 import { usePwaInstall } from "../src/lib/pwa-install";
+import { usePanelMotion } from "../src/lib/use-panel-motion";
 import {
   sessionNeighborIndex,
   type SessionNavigationDirection,
@@ -70,6 +72,7 @@ export default function PanelPage() {
     number | undefined
   >(undefined);
   const pwaInstall = usePwaInstall();
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Config only exists in the browser; loading it in an effect keeps the
   // server-rendered markup deterministic.
@@ -313,6 +316,18 @@ export default function PanelPage() {
     streamConnected,
   });
 
+  usePanelMotion({
+    root: panelRef,
+    connectionTone: connection.tone,
+    deviceFilter,
+    mobileFiltersOpen,
+    selectedKey,
+    settingsOpen,
+    tab,
+    timeline,
+    visibleSessions,
+  });
+
   const selectMobileTab = (nextTab: SessionTab) => {
     setTab(nextTab);
     window.requestAnimationFrame(() => {
@@ -348,7 +363,7 @@ export default function PanelPage() {
   };
 
   return (
-    <div className="panel">
+    <div className="panel" ref={panelRef}>
       <header className="panel-header">
         <div className="brand-block">
           <p className="eyebrow">AGENT OPERATIONS</p>
@@ -418,8 +433,11 @@ export default function PanelPage() {
               <span className="overview-value-skeleton" aria-hidden="true" />
             ) : (
               <strong>
-                {onlineDevices}
-                <span> / {activeDevices.length}</span>
+                <MotionMetric value={onlineDevices} />
+                <span>
+                  {" "}
+                  / <MotionMetric value={activeDevices.length} />
+                </span>
               </strong>
             )}
           </div>
@@ -433,7 +451,9 @@ export default function PanelPage() {
             {showInitialLoading ? (
               <span className="overview-value-skeleton" aria-hidden="true" />
             ) : (
-              <strong>{globalCounts.live}</strong>
+              <strong>
+                <MotionMetric value={globalCounts.live} />
+              </strong>
             )}
           </div>
         </article>
@@ -446,7 +466,9 @@ export default function PanelPage() {
             {showInitialLoading ? (
               <span className="overview-value-skeleton" aria-hidden="true" />
             ) : (
-              <strong>{globalCounts.waiting}</strong>
+              <strong>
+                <MotionMetric value={globalCounts.waiting} />
+              </strong>
             )}
           </div>
         </article>
@@ -459,7 +481,9 @@ export default function PanelPage() {
             {showInitialLoading ? (
               <span className="overview-value-skeleton" aria-hidden="true" />
             ) : (
-              <strong>{globalCounts.finished}</strong>
+              <strong>
+                <MotionMetric value={globalCounts.finished} />
+              </strong>
             )}
           </div>
         </article>
