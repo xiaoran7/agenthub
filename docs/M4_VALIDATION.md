@@ -96,6 +96,11 @@ DevTools 返回 0 条 installability error，页面收到 `beforeinstallprompt` 
   `Page.getAppManifest` 返回完整 standalone manifest 且无解析错误，
   `Page.getInstallabilityErrors` 返回空数组，设置页实际显示“安装应用”。两轮均未
   点击安装按钮，未改变系统应用列表；临时身份、Outbox、日志和进程均已清理。
+- Chrome 移动详情：390×844 和 844×390 下全屏详情声明 dialog/aria-modal，打开后
+  body overflow 锁定，初始焦点、Shift+Tab 反向循环、相邻 Session 切换回顶、边界
+  disabled 后焦点保留及 Escape 返回当前 Session 卡均通过；页面
+  `scrollWidth === innerWidth`。1280×800 下详情保持 sticky complementary 侧栏，
+  无 aria-modal、背景锁定和移动相邻导航。数据仍来自同一临时 Runner 签名批次。
 
 现场测试没有向仓库写入数据库密码、VAPID 私钥、真实 Session 样本或临时数据库。
 

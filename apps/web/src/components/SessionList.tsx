@@ -34,6 +34,7 @@ export function SessionList({
             <button
               type="button"
               className="session-card"
+              data-session-key={key}
               data-selected={key === selectedKey}
               data-status={state.activity_status}
               onClick={() => onSelect(session)}

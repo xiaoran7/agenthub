@@ -1,3 +1,6 @@
+import { useCallback, useEffect, useRef } from "react";
+
+import { useModalDialog } from "../lib/dialog-focus";
 import {
   AGENT_LABELS,
   CONFIDENCE_LABELS,
@@ -7,7 +10,9 @@ import {
   formatClock,
   formatRelative,
 } from "../lib/format";
+import { useMediaQuery } from "../lib/media-query";
 import type { SessionRecord } from "../lib/types";
+import { sessionKey, sessionRef } from "../lib/types";
 import { StatusBadge } from "./StatusBadge";
 
 interface SessionDetailProps {
@@ -15,6 +20,10 @@ interface SessionDetailProps {
   timeline: SessionRecord[] | undefined;
   timelineError: string | undefined;
   nowMs: number;
+  position: number;
+  total: number;
+  onPrevious: (() => void) | undefined;
+  onNext: (() => void) | undefined;
   onClose: () => void;
 }
 
@@ -23,15 +32,81 @@ export function SessionDetail({
   timeline,
   timelineError,
   nowMs,
+  position,
+  total,
+  onPrevious,
+  onNext,
   onClose,
 }: SessionDetailProps) {
   const { state } = session.payload;
+  const mobileModal = useMediaQuery("(max-width: 919px)");
+  const detailSessionKey = sessionKey(sessionRef(session));
+  const currentSessionKey = useRef(detailSessionKey);
+  currentSessionKey.current = detailSessionKey;
+  const restoreCurrentSessionFocus = useCallback(
+    () =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>("[data-session-key]"),
+      ).find(
+        (element) => element.dataset.sessionKey === currentSessionKey.current,
+      ),
+    [],
+  );
+  const detailRef = useModalDialog<HTMLElement>(
+    onClose,
+    mobileModal,
+    restoreCurrentSessionFocus,
+  );
+  const pendingNavigationFocus = useRef<"previous" | "next" | undefined>(
+    undefined,
+  );
+
+  useEffect(() => {
+    if (mobileModal) {
+      detailRef.current?.scrollTo({ top: 0 });
+    }
+    const preferred = pendingNavigationFocus.current;
+    const detail = detailRef.current;
+    if (preferred === undefined || detail === null) {
+      return;
+    }
+    const fallback = preferred === "next" ? "previous" : "next";
+    const target =
+      detail.querySelector<HTMLButtonElement>(
+        `[data-detail-${preferred}]:not(:disabled)`,
+      ) ??
+      detail.querySelector<HTMLButtonElement>(
+        `[data-detail-${fallback}]:not(:disabled)`,
+      ) ??
+      detail.querySelector<HTMLButtonElement>(".detail-close");
+    target?.focus();
+    pendingNavigationFocus.current = undefined;
+  }, [detailRef, detailSessionKey, mobileModal]);
+
+  const navigateAndKeepFocus = (
+    navigate: () => void,
+    preferred: "previous" | "next",
+  ) => {
+    pendingNavigationFocus.current = preferred;
+    navigate();
+  };
+
   return (
-    <aside className="detail" aria-label="会话详情">
+    <aside
+      ref={detailRef}
+      className="detail"
+      role={mobileModal ? "dialog" : undefined}
+      aria-modal={mobileModal ? true : undefined}
+      aria-labelledby="session-detail-title"
+      tabIndex={mobileModal ? -1 : undefined}
+      data-mobile-modal={mobileModal}
+    >
       <header className="detail-header">
         <div className="detail-title">
           <p className="eyebrow">SESSION DETAIL</p>
-          <h2>{session.payload.project.display_name}</h2>
+          <h2 id="session-detail-title">
+            {session.payload.project.display_name}
+          </h2>
           <p className="detail-subtitle">
             {AGENT_LABELS[session.agent_type]} ·{" "}
             <span className="mono">{session.agent_session_id}</span>
@@ -39,12 +114,51 @@ export function SessionDetail({
         </div>
         <button
           type="button"
-          className="icon-button"
+          className="icon-button detail-close"
           onClick={onClose}
           aria-label="关闭详情"
         >
-          ✕
+          <span className="detail-close-desktop-icon" aria-hidden="true">
+            ✕
+          </span>
+          <span className="detail-close-mobile-icon" aria-hidden="true">
+            ←
+          </span>
+          <span className="detail-close-label">返回</span>
         </button>
+        {position > 0 && total > 0 && (
+          <nav className="detail-session-nav" aria-label="筛选结果中的会话">
+            <button
+              type="button"
+              className="secondary"
+              data-detail-previous
+              disabled={onPrevious === undefined}
+              onClick={() => {
+                if (onPrevious !== undefined) {
+                  navigateAndKeepFocus(onPrevious, "previous");
+                }
+              }}
+            >
+              ← 上一条
+            </button>
+            <span role="status" aria-live="polite">
+              {position} / {total}
+            </span>
+            <button
+              type="button"
+              className="secondary"
+              data-detail-next
+              disabled={onNext === undefined}
+              onClick={() => {
+                if (onNext !== undefined) {
+                  navigateAndKeepFocus(onNext, "next");
+                }
+              }}
+            >
+              下一条 →
+            </button>
+          </nav>
+        )}
       </header>
 
       <section className="detail-state">

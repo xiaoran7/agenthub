@@ -1152,6 +1152,12 @@ input:focus-visible {
   backdrop-filter: blur(16px);
 }
 
+.detail-close-label,
+.detail-close-mobile-icon,
+.detail-session-nav {
+  display: none;
+}
+
 @media (min-width: 920px) {
   .detail {
     position: sticky;
@@ -1170,13 +1176,81 @@ input:focus-visible {
     border: none;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: calc(20px + env(safe-area-inset-top)) 16px
-      calc(40px + env(safe-area-inset-bottom));
+    padding: 0 16px calc(40px + env(safe-area-inset-bottom));
   }
 
-  .detail .icon-button {
-    min-width: 44px;
+  .detail .detail-header {
+    position: sticky;
+    z-index: 2;
+    top: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    margin: 0 -16px;
+    border-bottom: 1px solid var(--border);
+    padding: calc(14px + env(safe-area-inset-top)) 16px 12px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    box-shadow: 0 10px 24px rgb(15 23 42 / 8%);
+    backdrop-filter: blur(20px);
+  }
+
+  .detail .detail-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    width: auto;
+    min-width: 68px;
     min-height: 44px;
+    padding: 0 11px;
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .detail-close-label {
+    display: inline;
+  }
+
+  .detail-close-desktop-icon {
+    display: none;
+  }
+
+  .detail-close-mobile-icon {
+    display: inline;
+  }
+
+  .detail-session-nav {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .detail-session-nav button {
+    min-height: 44px;
+    padding: 7px 10px;
+  }
+
+  .detail-session-nav button:last-child {
+    justify-self: stretch;
+  }
+
+  .detail-session-nav button:disabled {
+    opacity: 0.42;
+  }
+
+  .detail-session-nav > span {
+    min-width: 52px;
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  .detail-state {
+    border-top: 0;
+    padding-top: 18px;
   }
 }
 

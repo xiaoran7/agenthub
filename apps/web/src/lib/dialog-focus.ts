@@ -33,10 +33,15 @@ function focusableElements(dialog: HTMLElement): HTMLElement[] {
 
 export function useModalDialog<T extends HTMLElement>(
   onClose: () => void,
+  active = true,
+  restoreFocus?: () => HTMLElement | null | undefined,
 ): RefObject<T | null> {
   const dialogRef = useRef<T>(null);
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     const dialog = dialogRef.current;
     if (dialog === null) {
       return;
@@ -82,9 +87,9 @@ export function useModalDialog<T extends HTMLElement>(
       window.cancelAnimationFrame(focusFrame);
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
-      previouslyFocused?.focus();
+      (restoreFocus?.() ?? previouslyFocused)?.focus();
     };
-  }, [onClose]);
+  }, [active, onClose, restoreFocus]);
 
   return dialogRef;
 }

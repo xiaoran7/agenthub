@@ -29,6 +29,10 @@ import { connectionStatus } from "../src/lib/connection-status";
 import { deviceShortId, formatRelative } from "../src/lib/format";
 import { parseNotificationPresentedAt } from "../src/lib/notifications";
 import { usePwaInstall } from "../src/lib/pwa-install";
+import {
+  sessionNeighborIndex,
+  type SessionNavigationDirection,
+} from "../src/lib/session-navigation";
 import { openChangeStream } from "../src/lib/stream";
 import type { DeviceRecord, SessionRecord, SessionRef } from "../src/lib/types";
 import { parseSessionRef, sessionKey, sessionRef } from "../src/lib/types";
@@ -267,6 +271,12 @@ export default function PanelPage() {
           ),
     [sessions, selectedKey],
   );
+  const selectedVisibleIndex =
+    selectedKey === undefined
+      ? -1
+      : visibleSessions.findIndex(
+          (session) => sessionKey(sessionRef(session)) === selectedKey,
+        );
 
   const handleSaveConfig = (next: PanelConfig) => {
     saveConfig(window.localStorage, next);
@@ -282,6 +292,7 @@ export default function PanelPage() {
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const openMobileFilters = useCallback(() => setMobileFiltersOpen(true), []);
   const closeMobileFilters = useCallback(() => setMobileFiltersOpen(false), []);
+  const closeDetail = useCallback(() => setSelected(undefined), []);
 
   const showOnboarding =
     config !== undefined &&
@@ -322,6 +333,18 @@ export default function PanelPage() {
         .getElementById("sessions")
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  };
+  const navigateDetail = (direction: SessionNavigationDirection) => {
+    const nextIndex = sessionNeighborIndex(
+      selectedVisibleIndex,
+      visibleSessions.length,
+      direction,
+    );
+    const nextSession =
+      nextIndex === undefined ? undefined : visibleSessions[nextIndex];
+    if (nextSession !== undefined) {
+      setSelected(sessionRef(nextSession));
+    }
   };
 
   return (
@@ -554,7 +577,27 @@ export default function PanelPage() {
             timeline={timeline}
             timelineError={timelineError}
             nowMs={nowMs}
-            onClose={() => setSelected(undefined)}
+            position={selectedVisibleIndex + 1}
+            total={visibleSessions.length}
+            onPrevious={
+              sessionNeighborIndex(
+                selectedVisibleIndex,
+                visibleSessions.length,
+                -1,
+              ) === undefined
+                ? undefined
+                : () => navigateDetail(-1)
+            }
+            onNext={
+              sessionNeighborIndex(
+                selectedVisibleIndex,
+                visibleSessions.length,
+                1,
+              ) === undefined
+                ? undefined
+                : () => navigateDetail(1)
+            }
+            onClose={closeDetail}
           />
         )}
       </main>
