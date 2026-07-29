@@ -7,6 +7,16 @@
 
 ### Added
 
+- 新增独立原生 Android App（Kotlin + Jetpack Compose，非 WebView/PWA 封装）：
+  直接消费现有只读设备、Session 与时间线 API，提供全部/进行中/待处理/最近完成/
+  历史五类筛选、等待优先首页、设备列表、详情时间线、相邻会话和系统返回。生产
+  Gateway 强制 HTTPS，本地 HTTP 仅允许回环调试；访问令牌经 Android Keystore
+  AES-256-GCM 加密且配置禁止备份。Android 36.1 模拟器使用 Runner 签名同步的
+  Claude 等待授权与 Codex 完成 Fixture 完成安装、数据、详情和重启恢复验收。
+- Web、桌面宽屏与 Android 启用统一“Paper / Ink / Pink Signal”视觉系统：暖白
+  纸张背景、高对比标题、24–32px 大圆角细描边卡片、黑色胶囊选中态、粉色提醒点和
+  同一 C 形品牌图标；PWA 的 SVG 与 192/512 PNG 图标同步重制，业务分类和状态色
+  保持原语义。
 - Web/PWA 完成移动端 UI 第五轮：920px 以下的全屏 Session 详情升级为真正的模态
   钻取，打开后锁定背景滚动、焦点进入返回按钮、Tab/Shift+Tab 圈定、Escape 关闭，
   并把焦点恢复到最后查看的 Session 卡；桌面 sticky 侧栏保持非模态。手机详情增加

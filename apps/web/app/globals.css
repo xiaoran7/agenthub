@@ -1,16 +1,17 @@
 :root {
   color-scheme: light dark;
-  --bg: #f3f5fa;
+  --bg: #fbfaf7;
   --surface: #ffffff;
-  --surface-2: #f0f2f8;
-  --surface-elevated: rgb(255 255 255 / 88%);
-  --text: #182033;
-  --muted: #687189;
-  --border: #dde2ed;
-  --accent: #5b5ce2;
-  --accent-soft: #ededff;
-  --shadow: 0 12px 32px rgb(34 42 70 / 7%);
-  --shadow-sm: 0 4px 14px rgb(34 42 70 / 6%);
+  --surface-2: #f4f2ee;
+  --surface-elevated: rgb(255 255 255 / 94%);
+  --text: #111111;
+  --muted: #777570;
+  --border: #e2dfd9;
+  --accent: #111111;
+  --accent-soft: #ffedf3;
+  --signal: #ef7fa7;
+  --shadow: 0 18px 48px rgb(34 30 24 / 8%);
+  --shadow-sm: 0 7px 22px rgb(34 30 24 / 5%);
   --danger: #b91c1c;
   --ok: #16a34a;
   --status-working: #2563eb;
@@ -25,15 +26,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1018;
-    --surface: #171b25;
-    --surface-2: #202532;
-    --surface-elevated: rgb(23 27 37 / 90%);
-    --text: #f0f2f8;
-    --muted: #9da6ba;
-    --border: #2a3040;
-    --accent: #8a8bf8;
-    --accent-soft: #25264b;
+    --bg: #11110f;
+    --surface: #1b1b18;
+    --surface-2: #25241f;
+    --surface-elevated: rgb(27 27 24 / 94%);
+    --text: #f5f2ec;
+    --muted: #b9b5ad;
+    --border: #3a3933;
+    --accent: #f7f5f0;
+    --accent-soft: #3a2730;
+    --signal: #ef7fa7;
     --shadow: 0 16px 42px rgb(0 0 0 / 28%);
     --shadow-sm: 0 6px 18px rgb(0 0 0 / 22%);
     --danger: #f87171;
@@ -61,10 +63,7 @@ body {
 
 body {
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 8% 0%, rgb(91 92 226 / 10%), transparent 28rem),
-    radial-gradient(circle at 94% 8%, rgb(37 99 235 / 7%), transparent 24rem),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -104,14 +103,14 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 3px solid var(--signal);
   outline-offset: 2px;
 }
 
 .panel {
-  max-width: 1320px;
+  max-width: 1360px;
   margin: 0 auto;
-  padding: 28px 24px 56px;
+  padding: 34px 28px 64px;
 }
 
 .panel-header {
@@ -124,14 +123,15 @@ input:focus-visible {
 
 .panel-header h1 {
   margin: 0;
-  font-size: clamp(27px, 3vw, 36px);
+  font-size: clamp(30px, 3.2vw, 42px);
+  font-weight: 850;
   line-height: 1.08;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.05em;
 }
 
 .eyebrow {
   margin: 0 0 6px;
-  color: var(--accent);
+  color: var(--signal);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.16em;
@@ -149,6 +149,40 @@ input:focus-visible {
   gap: 10px;
 }
 
+.brand-mark {
+  position: relative;
+  display: block;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  margin-right: 4px;
+  border: 4px solid var(--text);
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+
+.brand-mark-signal,
+.brand-mark-stop {
+  position: absolute;
+  right: -2px;
+  border-radius: 50%;
+  background: var(--signal);
+}
+
+.brand-mark-signal {
+  top: 7px;
+  width: 7px;
+  height: 7px;
+}
+
+.brand-mark-stop {
+  right: -3px;
+  bottom: 8px;
+  width: 5px;
+  height: 5px;
+  background: var(--text);
+}
+
 .connection-pill {
   display: inline-flex;
   align-items: center;
@@ -156,7 +190,7 @@ input:focus-visible {
   margin: 0;
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 9px 14px;
   background: var(--surface-elevated);
   color: var(--muted);
   box-shadow: var(--shadow-sm);
@@ -206,8 +240,8 @@ input:focus-visible {
 .secondary {
   border: 1px solid var(--border);
   background: var(--surface-elevated);
-  border-radius: 10px;
-  padding: 8px 14px;
+  border-radius: 999px;
+  padding: 9px 16px;
   box-shadow: var(--shadow-sm);
 }
 
@@ -268,10 +302,10 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 13px;
-  min-height: 94px;
+  min-height: 112px;
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 18px;
+  border-radius: 26px;
+  padding: 21px;
   background: var(--surface-elevated);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(14px);
@@ -283,7 +317,7 @@ input:focus-visible {
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
-  border-radius: 12px;
+  border-radius: 15px;
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 18px;
@@ -297,7 +331,7 @@ input:focus-visible {
 }
 
 .overview-card strong {
-  font-size: 25px;
+  font-size: 30px;
   line-height: 1;
   letter-spacing: -0.025em;
 }
@@ -354,8 +388,8 @@ input:focus-visible {
 .control-surface {
   margin-bottom: 20px;
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 12px 14px;
+  border-radius: 24px;
+  padding: 15px 17px;
   background: var(--surface-elevated);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(14px);
@@ -407,8 +441,8 @@ input:focus-visible {
 
 .device-chip[data-selected="true"] {
   border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
   box-shadow: none;
 }
 
@@ -441,8 +475,8 @@ input:focus-visible {
   gap: 6px;
   border: 1px solid transparent;
   background: transparent;
-  border-radius: 8px;
-  padding: 6px 12px;
+  border-radius: 999px;
+  padding: 8px 14px;
   color: var(--muted);
 }
 
@@ -451,9 +485,9 @@ input:focus-visible {
 }
 
 .tab[data-selected="true"] {
-  background: var(--accent-soft);
+  background: var(--accent);
   border-color: transparent;
-  color: var(--accent);
+  color: var(--surface);
   font-weight: 600;
 }
 
@@ -466,7 +500,8 @@ input:focus-visible {
 }
 
 .tab[data-selected="true"] .tab-count {
-  color: var(--accent);
+  color: var(--surface);
+  background: color-mix(in srgb, var(--surface) 18%, transparent);
 }
 
 .content {
@@ -496,8 +531,9 @@ input:focus-visible {
 
 .list-header h2 {
   margin: 0;
-  font-size: 18px;
-  letter-spacing: -0.015em;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
 }
 
 .list-header .eyebrow {
@@ -525,17 +561,17 @@ input:focus-visible {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 12px;
 }
 
 .session-card {
   width: 100%;
   text-align: left;
   border: 1px solid var(--border);
-  border-left: 4px solid var(--border);
+  border-left: 1px solid var(--border);
   background: var(--surface-elevated);
-  border-radius: 14px;
-  padding: 13px 15px 12px;
+  border-radius: 24px;
+  padding: 18px 20px 17px;
   display: flex;
   flex-direction: column;
   gap: 9px;
@@ -555,26 +591,26 @@ input:focus-visible {
 
 .session-card[data-selected="true"] {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
   box-shadow:
     inset 0 0 0 1px var(--accent),
     var(--shadow);
 }
 
 .session-card[data-status="WAITING_INPUT"] {
-  border-left-color: var(--status-waiting-input);
+  border-color: color-mix(in srgb, var(--signal) 56%, var(--border));
 }
 
 .session-card[data-status="WAITING_PERMISSION"] {
-  border-left-color: var(--status-waiting-permission);
+  border-color: color-mix(in srgb, var(--signal) 56%, var(--border));
 }
 
 .session-card[data-status="WORKING"] {
-  border-left-color: var(--status-working);
+  border-color: color-mix(in srgb, var(--status-working) 28%, var(--border));
 }
 
 .session-card[data-status="FAILED"] {
-  border-left-color: var(--status-failed);
+  border-color: color-mix(in srgb, var(--status-failed) 45%, var(--border));
 }
 
 .session-card[data-status="WAITING_INPUT"],
@@ -598,7 +634,7 @@ input:focus-visible {
   width: 34px;
   height: 34px;
   flex: 0 0 auto;
-  border-radius: 10px;
+  border-radius: 13px;
   color: var(--accent);
   background: var(--accent-soft);
   font-size: 13px;
@@ -619,8 +655,8 @@ input:focus-visible {
 }
 
 .session-project {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 750;
   overflow-wrap: anywhere;
 }
 
@@ -902,7 +938,7 @@ input:focus-visible {
   overflow: hidden;
   border: 1px solid var(--border);
   border-bottom: 0;
-  border-radius: 22px 22px 0 0;
+  border-radius: 30px 30px 0 0;
   background: var(--surface);
   box-shadow: 0 -18px 64px rgb(0 0 0 / 28%);
   animation: sheet-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -1003,7 +1039,7 @@ input:focus-visible {
   justify-content: space-between;
   min-height: 44px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 16px;
   padding: 9px 11px;
   background: var(--surface);
   color: var(--muted);
@@ -1012,8 +1048,8 @@ input:focus-visible {
 
 .mobile-filter-views button[data-selected="true"] {
   border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--surface);
+  background: var(--accent);
   font-weight: 700;
 }
 
@@ -1039,15 +1075,15 @@ input:focus-visible {
   gap: 11px;
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 13px;
-  padding: 12px;
+  border-radius: 20px;
+  padding: 14px;
   background: var(--surface);
   text-align: left;
 }
 
 .mobile-device-card[data-selected="true"] {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 48%, var(--surface));
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface));
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
@@ -1110,7 +1146,7 @@ input:focus-visible {
 }
 
 .mobile-device-card[data-selected="true"] .mobile-device-check {
-  color: var(--accent);
+  color: var(--signal);
 }
 
 .mobile-device-all > span:nth-child(2) {
@@ -1133,7 +1169,7 @@ input:focus-visible {
 
 .primary-button {
   border: 1px solid var(--accent);
-  border-radius: 10px;
+  border-radius: 999px;
   padding: 9px 16px;
   background: var(--accent);
   color: #fff;
@@ -1142,7 +1178,7 @@ input:focus-visible {
 
 .detail {
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 28px;
   background: var(--surface-elevated);
   padding: 20px;
   display: flex;
@@ -1306,8 +1342,8 @@ input:focus-visible {
 }
 
 .detail-grid > div {
-  border-radius: 10px;
-  padding: 9px 10px;
+  border-radius: 16px;
+  padding: 11px 12px;
   background: var(--surface-2);
 }
 
@@ -1424,7 +1460,7 @@ input:focus-visible {
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: 30px;
   background: var(--surface);
   box-shadow: 0 28px 80px rgb(0 0 0 / 30%);
 }
@@ -1463,8 +1499,8 @@ input:focus-visible {
   display: grid;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 15px;
+  border-radius: 22px;
+  padding: 17px;
   background: color-mix(in srgb, var(--surface-2) 35%, var(--surface));
 }
 
@@ -1510,8 +1546,8 @@ input:focus-visible {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
-  border-radius: 10px;
-  padding: 10px 11px;
+  border-radius: 16px;
+  padding: 12px 13px;
   font: inherit;
   font-weight: 400;
 }
@@ -1629,9 +1665,9 @@ input:focus-visible {
 .settings-actions button[type="submit"] {
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
-  border-radius: 10px;
-  padding: 8px 20px;
+  color: var(--surface);
+  border-radius: 999px;
+  padding: 10px 22px;
 }
 
 .mobile-dock {
@@ -1773,10 +1809,10 @@ input:focus-visible {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-    border-radius: 18px;
-    padding: 6px;
+    border-radius: 28px;
+    padding: 7px;
     background: color-mix(in srgb, var(--surface) 88%, transparent);
-    box-shadow: 0 16px 46px rgb(15 23 42 / 22%);
+    box-shadow: 0 18px 52px rgb(34 30 24 / 18%);
     backdrop-filter: blur(22px);
   }
 
@@ -1787,7 +1823,7 @@ input:focus-visible {
     min-width: 0;
     min-height: 48px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 20px;
     padding: 5px 2px 4px;
     background: transparent;
     color: var(--muted);
@@ -1830,12 +1866,12 @@ input:focus-visible {
     height: 7px;
     border: 2px solid var(--surface);
     border-radius: 50%;
-    background: var(--accent);
+    background: var(--signal);
   }
 
   .mobile-dock button[data-selected="true"] {
-    color: var(--accent);
-    background: var(--accent-soft);
+    color: var(--surface);
+    background: var(--accent);
     font-weight: 700;
   }
 
@@ -1850,7 +1886,7 @@ input:focus-visible {
     border-right: 0;
     border-bottom: 0;
     border-left: 0;
-    border-radius: 22px 22px 0 0;
+    border-radius: 30px 30px 0 0;
     animation: sheet-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
@@ -1968,10 +2004,16 @@ input:focus-visible {
     display: contents;
   }
 
-  .settings-button {
+  .brand-mark {
     grid-column: 2;
     grid-row: 1;
-    align-self: start;
+    width: 46px;
+    height: 46px;
+    margin: 0;
+  }
+
+  .settings-button {
+    display: none;
   }
 
   .connection-pill {
@@ -1984,10 +2026,6 @@ input:focus-visible {
 
   .brand-subtitle {
     max-width: 240px;
-  }
-
-  .settings-button {
-    padding-inline: 11px;
   }
 
   .overview-card {

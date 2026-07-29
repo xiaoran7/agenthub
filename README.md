@@ -6,7 +6,7 @@
 用户在电脑上安装轻量级本地客户端后，可以通过网页端或移动端统一查看：
 
 - 多台电脑的在线状态
-- 每台电脑已安装并登录的 Coding Agent
+- 每台电脑已观测到的 Coding Agent
 - 多个项目和 Session 的实时状态
 - 等待用户处理、最近完成及历史 Session
 
@@ -21,6 +21,8 @@
 - [技术可行性报告](docs/TECHNICAL_FEASIBILITY.md)
 - [MVP 系统架构](docs/ARCHITECTURE.md)
 - [设备同步协议](docs/SYNC_PROTOCOL.md)
+- [跨端设计系统](docs/DESIGN_SYSTEM.md)
+- [Android 验收记录](docs/ANDROID_VALIDATION.md)
 - [变更日志](docs/CHANGELOG.md)
 - [设计取舍](docs/MISC.md)
 - [踩坑集](docs/PITFALLS.md)
@@ -43,6 +45,10 @@ Gateway 已提供 PostgreSQL 迁移和事务 Store；未配置数据库时仍使
 Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时间线的只读展示，
 并经 `GET /v1/stream`（SSE）实时刷新，轮询保留为兜底。会话进入等待输入或等待
 权限时可通过 Web Push 推送通知（需在 Gateway 配置 VAPID 密钥）。
+独立原生 Android 客户端（`apps/android`）已提供同一五类 Session 视图、待处理
+入口、设备页、详情时间线和相邻会话巡检；它直接访问 Gateway 只读接口，每 5 秒
+刷新，并用 Android Keystore 加密保存部署凭据。Web、桌面宽屏和 Android 共享
+[跨端设计系统](docs/DESIGN_SYSTEM.md) 的颜色、圆角、排版与状态表达。
 个人部署已支持服务端 Bearer 访问令牌：Gateway 只保留令牌摘要，Web 同源代理在
 服务端注入凭据，令牌不进入浏览器存储。设置面板可签发一次性绑定码并软撤销设备。
 联合登录、跨实例广播与心跳尚未接入；
@@ -72,6 +78,29 @@ Web 服务端设置与 Gateway 相同的 `GATEWAY_ACCESS_TOKEN`；同源代理�
 且页面运行在 https 或 localhost 上；开启后会话进入等待输入/等待权限时推送通知，
 点击通知会聚焦已打开的面板并定位到该会话。
 
+### 原生 Android App
+
+Android 客户端是独立 Kotlin + Jetpack Compose 应用，不是 WebView 或 PWA 封装。
+本机需要 JDK 17+ 与 Android SDK 36；仓库已包含 Gradle Wrapper：
+
+```powershell
+cd apps/android
+.\gradlew.bat testDebugUnitTest assembleDebug
+```
+
+调试 APK 输出到 `apps/android/app/build/outputs/apk/debug/app-debug.apk`。连接本机
+Gateway 时先执行：
+
+```powershell
+adb reverse tcp:3001 tcp:3001
+```
+
+然后在 App 设置中使用 `http://127.0.0.1:3001` 和本机开发用户。生产部署必须填写
+HTTPS Gateway 和访问令牌；令牌经 Android Keystore 加密后写入不可备份的私有配置，
+不会进入日志、URL 或仓库。当前原生版本只读并使用周期刷新；原生推送、发布签名与
+实体设备矩阵仍属于后续交付边界，详见
+[Android 验收记录](docs/ANDROID_VALIDATION.md)。
+
 Rust 与 TypeScript 全量检查：
 
 ```powershell
@@ -80,4 +109,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 npm.cmd test
 npm.cmd run typecheck
 npm.cmd run format:check
+cd apps/android
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
 ```

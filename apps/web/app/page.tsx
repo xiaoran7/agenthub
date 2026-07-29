@@ -356,6 +356,10 @@ export default function PanelPage() {
           <p className="brand-subtitle">跨设备 Coding Agent 会话监控中心</p>
         </div>
         <div className="header-actions">
+          <span className="brand-mark" aria-hidden="true">
+            <span className="brand-mark-signal" />
+            <span className="brand-mark-stop" />
+          </span>
           <p
             className="connection-pill"
             role="status"

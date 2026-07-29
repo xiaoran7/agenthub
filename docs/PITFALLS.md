@@ -2,6 +2,28 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-07-29 根 Prettier 会递归进入 Android 构建报告
+
+- **现象**：新增 `apps/android` 后，`npm.cmd run format` 开始格式化 Gradle
+  `build/intermediates` JSON，并在 Gradle 生成的测试 HTML 上报语法错误。
+- **根因**：根脚本把整个 `apps` 目录交给 Prettier，而原 `.prettierignore` 只排除
+  `node_modules` 和 `dist`，不了解 Gradle 的模块级 `build` 输出。
+- **解决方式**：根 `.prettierignore` 增加 `apps/android/.gradle`、
+  `apps/android/**/build` 和本机 `local.properties`。
+- **如何规避**：任何新工具链加入 npm 扫描目录时，同时登记其生成目录；生成报告
+  由生成器维护，不应被跨语言格式化器读取或改写。
+
+## 2026-07-29 PowerShell `>` 会污染 adb 二进制截图
+
+- **现象**：`adb exec-out screencap -p > screenshot.png` 返回成功且文件存在，但
+  图片工具无法解析；设备上应用实际运行正常。
+- **根因**：Windows PowerShell 把原生 stdout 当文本重新编码，PNG 字节被改变；
+  这与此前 Fixture stdin 被管道改写是同一类问题。
+- **解决方式**：先在设备执行 `screencap -p /sdcard/name.png`，再用二进制安全的
+  `adb pull` 拉到主机，最后删除设备临时文件。
+- **如何规避**：签名输入、压缩包、图片等二进制数据不要经过 PowerShell 文本
+  管道或重定向；使用工具自身的文件参数或二进制安全复制命令。
+
 ## 2026-07-29 移动规则写在基础样式前可能被同权重选择器覆盖
 
 - **现象**：手机详情已经命中 `max-width: 919px`，上一条/下一条却被挤成两列竖排；

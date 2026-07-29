@@ -49,6 +49,7 @@ flowchart LR
 
     subgraph Client["用户界面"]
         Web["响应式 Web / PWA"]
+        Android["原生 Android App"]
     end
 
     Sync -->|"主动出站连接"| GW
@@ -58,6 +59,7 @@ flowchart LR
     PG --> API
     RT --> Web
     API --> Web
+    API --> Android
 ```
 
 ## 3. 本地 Runner
@@ -323,7 +325,7 @@ Web 面板按“全局概览 → 查询维度 → 会话列表 → 单会话详�
 仍按现有分类规则置顶。920px 以上以列表/详情双栏钻取，以下使用全屏详情；两种布局
 消费同一份只读响应，不引入额外内容字段。
 
-移动端仍是同一 Next.js PWA 的专属响应式壳层，而不是第二套数据客户端。760px
+Web 移动端仍保留同一 Next.js PWA 的专属响应式壳层。760px
 以下以及不超过 920×480 的手机横屏提供全部、活动、待处理、设备和设置的固定快捷
 导航；完整的五类重叠视图与设备范围收进同一个底部筛选抽屉，低频的最近完成/历史
 仍可直接访问。底栏等待徽标复用当前设备范围下的分类计数，设备标记只表示已有筛选
@@ -342,6 +344,20 @@ Web 面板按“全局概览 → 查询维度 → 会话列表 → 单会话详�
 Session 卡。详情可在当前设备与分类筛选结果内只读切换上一条/下一条，切换时重置
 详情滚动位置；边界按钮禁用后焦点转到仍可用的相邻按钮。920px 以上继续使用 sticky
 侧栏，不声明 `aria-modal`、不锁背景、也不显示移动详情导航。
+
+独立原生 Android 客户端位于 `apps/android`，使用 Kotlin + Jetpack Compose，
+不是 WebView 或 PWA 封装。它直接消费同一组 `GET /v1/devices`、
+`GET /v1/sessions` 与 `GET /v1/sessions/events` 只读接口，复用相同的五类重叠
+Session 视图、设备筛选和等待优先排序，不创建移动端专属状态。首版每 5 秒轮询，
+尚未复用浏览器 SSE 或接入原生推送；生命周期恢复会重新创建界面并从 Gateway
+回读权威快照。
+
+生产 Android 配置只允许 HTTPS；本地模拟器/设备调试仅对白名单回环主机允许 HTTP，
+推荐通过 `adb reverse tcp:3001 tcp:3001` 保持 Gateway 继续监听
+`127.0.0.1`。访问令牌用 Android Keystore 中不可导出的 AES-256-GCM 密钥加密后
+保存到应用私有、禁止备份的 SharedPreferences；开发用户头只允许作为回环开发认证
+配置。原生端不读取 Agent Token、不保存 transcript，也不调用绑定、撤销、Push
+订阅等写接口。
 
 浏览器 `offline` 事件会立即停止 SSE 和周期请求、保留当前页面内存中的最后快照并
 显示离线提示；`online` 事件立即刷新并重建 SSE。该信号只表示浏览器网络链路，
@@ -551,15 +567,22 @@ MVP 默认 `task_summary = null`。
 - WebSocket
 - OpenAPI + JSON Schema
 
-### Web 与移动端
+### Web
 
 - Next.js（当前为 16.x：Next 15 不支持仓库统一的 TypeScript 7，16 需启用
   `experimental.useTypeScriptCli`）
 - 响应式 Web + PWA
-- 第一阶段不单独开发原生 iOS/Android App
 
-PWA 足以完成只读监控和通知验证，能够降低第一阶段重复开发成本。需要可靠的
-原生推送、后台能力或商店分发时，再增加原生壳或 React Native 客户端。
+### 原生 Android
+
+- Kotlin 2.0
+- Jetpack Compose + Material 3
+- Android Keystore / AES-256-GCM 配置加密
+- `HttpURLConnection` 只读 Gateway 客户端，首版不引入反射式序列化器
+- minSdk 26、target/compileSdk 36
+
+PWA 继续承担浏览器安装与 Web Push；Android 是独立原生客户端，并与 Web 共享
+Gateway 契约和 `docs/DESIGN_SYSTEM.md`，不共享浏览器凭据或 LocalStorage。
 
 ### Repository
 
@@ -568,6 +591,7 @@ PWA 足以完成只读监控和通知验证，能够降低第一阶段重复开�
 ```text
 Agent-Platform/
   apps/
+    android/
     web/
   services/
     api/
@@ -624,7 +648,7 @@ Agent-Platform/
 - 移动端 PWA 壳层（已完成第五版：高频底部导航及等待/设备筛选提示、完整筛选/设备
   抽屉、设备观测汇总、能力驱动安装入口、应用图标、完整安全区、即时离线恢复、
   超窄屏/手机横屏、底部设置，以及带焦点圈定、返回恢复和相邻会话导航的全屏详情；
-  原生 App 仍不在第一阶段范围）
+  该里程碑仍只描述 Web/PWA，原生 Android 见 Milestone 5）
 
 面板位于 `apps/web`，可见性暂停周期刷新（首次拉取不受可见性影响）、深浅色与
 移动端适配、PWA manifest。变化经 `GET /v1/stream` 实时到达，轮询降级为兜底
@@ -639,6 +663,15 @@ fetch 处理器也不做离线缓存——引入它是因为 Web Push 强制要�
 M3 已全部完成。M4 已完成自动化基线，并在本机 PostgreSQL 18.4 与 Codex CLI
 0.144.2 上补充现场证据；个人部署访问令牌已接入，跨实例广播、心跳、多用户登录
 与令牌生命周期仍在 M2 遗留清单上。
+
+### Milestone 5：原生 Android 与跨端视觉统一
+
+- 独立 Kotlin/Compose 工程与可安装调试 APK（首版已完成）
+- Gateway 安全配置与 Keystore 加密存储（首版已完成）
+- 全部/进行中/待处理/最近完成/历史五类 Session（首版已完成）
+- 设备列表、Session 详情、时间线和相邻巡检（首版已完成）
+- Web/桌面/Android 共享视觉令牌、品牌图标和组件语言（首版已完成）
+- 原生 SSE/推送、断网快照、发布签名、实体设备与系统深浅色矩阵（待完成）
 
 ### Milestone 4：安全与稳定性
 
