@@ -1,0 +1,18 @@
+[Unit]
+Description=AgentPulse Gateway API
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agent-pulse
+EnvironmentFile=/etc/agent-pulse/agent-pulse.env
+ExecStartPre=/usr/bin/npm run migrate --workspace @agent-pulse/api
+ExecStart=/usr/bin/npm start --workspace @agent-pulse/api
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

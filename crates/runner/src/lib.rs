@@ -1,4 +1,6 @@
 pub mod adapters;
+pub mod auth;
+pub mod auth_worker;
 pub mod collectors;
 pub mod device;
 pub mod domain;

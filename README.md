@@ -1,4 +1,4 @@
-# Agent-Platform
+# AgentPulse（智能体脉搏）
 
 一个跨 Claude Code、OpenAI Codex 等本地 Coding Agent 的统一 Session
 监控与远程接入平台。
@@ -37,6 +37,11 @@
 SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签名同步批次。
 常驻 `run` 配置 Gateway 后会在独立线程自动排空 Outbox；新事件立即唤醒同步，
 网络失败按独立退避恢复，不阻塞 Agent 采集。
+凭据管理默认关闭；用户显式开启 `--allow-credential-access` 后，Runner 可通过官方
+Claude CLI/Codex App Server 和受支持的本地 auth 文件、Keychain/Keyring、环境变量
+读取认证状态、刷新与配额，并把原始凭据仅保存于本机加密缓存。Gateway 和 Web 只接收
+脱敏认证快照，不接收 access/refresh token；重新登录、退出和 token reveal 都是本地显式
+命令。
 云端已具备受认证的一次性设备绑定、软撤销、签名批次验收、内存幂等写入与只读
 Session 查询；绑定码和设备生命周期在 PostgreSQL 部署中持久化。
 Runner 已可通过 HTTPS（本地开发允许回环 HTTP）完成设备绑定、批次上传和确认清理，
@@ -64,7 +69,7 @@ M4 安全与稳定性阶段已完成自动化基线；PostgreSQL 18.4 的 12 设
 先启动 Gateway（见 [Gateway 说明](services/api/README.md)），再启动面板：
 
 ```powershell
-npm.cmd run dev --workspace @agent-platform/web
+npm.cmd run dev --workspace @agent-pulse/web
 ```
 
 开发服务器监听 `http://localhost:3000`，并把 `/v1` 请求代理到

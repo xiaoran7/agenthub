@@ -9,11 +9,13 @@ use std::{
     time::Duration,
 };
 
-use agent_platform_runner::{
+use agent_pulse_runner::{
     adapters::{
         claude,
         codex::{self, CodexThreadContext},
     },
+    auth::{AuthManager, AuthProvider},
+    auth_worker::AuthWorker,
     collectors::{CodexAppServer, collect_claude_agents_with_timeout},
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -28,7 +30,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
-#[command(name = "agent-platform-runner")]
+#[command(name = "agent-pulse-runner")]
 #[command(about = "Local metadata collector for Coding Agent sessions")]
 struct Cli {
     #[arg(long, env = "AGENT_PLATFORM_DEVICE_ID", default_value = "local-dev")]
@@ -47,6 +49,20 @@ struct Cli {
         help = "Environment variable containing the project fingerprint key"
     )]
     fingerprint_key_env: String,
+
+    #[arg(
+        long,
+        env = "AGENT_PLATFORM_ALLOW_CREDENTIAL_ACCESS",
+        help = "Allow the Runner to read provider auth files, keyrings and credential environment variables"
+    )]
+    allow_credential_access: bool,
+
+    #[arg(
+        long,
+        env = "AGENT_PLATFORM_AUTH_CACHE",
+        help = "Encrypted local credential cache path"
+    )]
+    auth_cache: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -118,6 +134,8 @@ enum Command {
         gateway_ca_cert: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         sync_interval_seconds: u64,
+        #[arg(long, default_value_t = 60)]
+        auth_interval_seconds: u64,
         #[arg(long, default_value_t = 2)]
         sync_failure_initial_seconds: u64,
         #[arg(long, default_value_t = 60)]
@@ -145,6 +163,63 @@ enum Command {
     Sync {
         #[command(subcommand)]
         command: SyncCommand,
+    },
+    Auth {
+        #[arg(
+            long,
+            default_value = "claude",
+            help = "Override the Claude executable path"
+        )]
+        claude_binary: PathBuf,
+        #[arg(
+            long,
+            default_value = "codex",
+            help = "Override the Codex executable path"
+        )]
+        codex_binary: PathBuf,
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthCommand {
+    Status {
+        #[arg(value_enum, default_value_t = AgentSelection::All)]
+        agent: AgentSelection,
+    },
+    Refresh {
+        #[arg(value_enum, default_value_t = AgentSelection::All)]
+        agent: AgentSelection,
+    },
+    Login {
+        #[arg(value_enum)]
+        agent: Agent,
+    },
+    Logout {
+        #[arg(value_enum)]
+        agent: Agent,
+    },
+    Quota {
+        #[arg(value_enum, default_value_t = AgentSelection::All)]
+        agent: AgentSelection,
+    },
+    ResetCodex {
+        #[arg(long)]
+        credit_id: Option<String>,
+    },
+    Token {
+        #[arg(value_enum)]
+        agent: Agent,
+        #[arg(
+            long,
+            help = "Required acknowledgement before printing raw token material"
+        )]
+        reveal: bool,
+    },
+    ClearCache {
+        #[arg(value_enum, default_value_t = AgentSelection::All)]
+        agent: AgentSelection,
     },
 }
 
@@ -288,6 +363,7 @@ enum SyncCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let identity_path = cli.identity.clone();
     let runtime_identity = cli
         .identity
         .as_ref()
@@ -300,6 +376,8 @@ fn main() -> Result<()> {
         .map(|identity| identity.device_id().to_owned())
         .unwrap_or(cli.device_id);
     let fingerprint_key_env = cli.fingerprint_key_env;
+    let allow_credential_access = cli.allow_credential_access;
+    let auth_cache = cli.auth_cache;
 
     match cli.command {
         Command::Normalize { format, input } => {
@@ -383,6 +461,7 @@ fn main() -> Result<()> {
             sync_server,
             gateway_ca_cert,
             sync_interval_seconds,
+            auth_interval_seconds,
             sync_failure_initial_seconds,
             sync_failure_max_seconds,
             sync_limit,
@@ -429,18 +508,22 @@ fn main() -> Result<()> {
                 bail!("sync max batches must be greater than zero");
             }
             let sync_timeout = nonzero_duration("sync timeout", sync_timeout_seconds)?;
+            let auth_interval = nonzero_duration("auth interval", auth_interval_seconds)?;
+
+            let claude_binary = claude_binary.unwrap_or_else(|| PathBuf::from("claude"));
+            let codex_binary = codex_binary.unwrap_or_else(|| PathBuf::from("codex"));
 
             let mut sources: Vec<Box<dyn SessionSource>> = Vec::new();
             if matches!(agent, AgentSelection::All | AgentSelection::Claude) {
                 sources.push(Box::new(ClaudeSessionSource::new_with_timeout(
-                    claude_binary.unwrap_or_else(|| PathBuf::from("claude")),
+                    claude_binary.clone(),
                     include_completed,
                     collector_timeout,
                 )));
             }
             if matches!(agent, AgentSelection::All | AgentSelection::Codex) {
                 sources.push(Box::new(CodexSessionSource::new_with_timeout(
-                    codex_binary.unwrap_or_else(|| PathBuf::from("codex")),
+                    codex_binary.clone(),
                     codex_limit,
                     collector_timeout,
                 )));
@@ -454,6 +537,38 @@ fn main() -> Result<()> {
             .context("failed to install Ctrl-C handler")?;
             let mut runtime =
                 RunnerRuntime::new(device_id, redactor, Outbox::open(&db)?, policy, sources);
+            let auth_worker = if allow_credential_access {
+                if let Some(server) = sync_server.as_ref() {
+                    let auth_identity_path = identity_path.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "background auth sync requires --identity or AGENT_PLATFORM_IDENTITY"
+                        )
+                    })?;
+                    let auth_identity =
+                        DeviceIdentity::load(&auth_identity_path).with_context(|| {
+                            format!("failed to load {}", auth_identity_path.display())
+                        })?;
+                    let auth_client =
+                        gateway_client(server, sync_timeout, gateway_ca_cert.as_deref())?;
+                    Some(
+                        AuthWorker::start(
+                            auth_client,
+                            auth_identity,
+                            auth_cache.clone(),
+                            claude_binary.clone(),
+                            codex_binary.clone(),
+                            auth_interval,
+                            sync_timeout,
+                            Arc::clone(&stop),
+                        )
+                        .map_err(|_| anyhow::anyhow!("auth_thread_start_failed"))?,
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let sync_worker = if let Some(server) = sync_server {
                 let device_identity = runtime_identity.ok_or_else(|| {
                     anyhow::anyhow!(
@@ -479,8 +594,10 @@ fn main() -> Result<()> {
             let run_result = runtime.run(Arc::clone(&stop), max_attempts);
             stop.store(true, Ordering::Relaxed);
             let sync_result = sync_worker.map(SyncWorker::join).transpose();
+            let auth_result = auth_worker.map(AuthWorker::join).transpose();
             run_result?;
             sync_result.map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+            auth_result.map_err(|error| anyhow::anyhow!("auth_thread_failed: {error}"))?;
         }
         Command::Outbox { command } => match command {
             OutboxCommand::Stats { db } => {
@@ -621,8 +738,103 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             }
         },
+        Command::Auth {
+            claude_binary,
+            codex_binary,
+            command,
+        } => {
+            let mut manager = AuthManager::from_identity(
+                runtime_identity.as_ref(),
+                auth_cache,
+                allow_credential_access,
+                claude_binary,
+                codex_binary,
+                Duration::from_secs(15),
+            )
+            .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+            match command {
+                AuthCommand::Status { agent } => {
+                    print_auth_snapshots(&mut manager, agent, false)?;
+                }
+                AuthCommand::Refresh { agent } => {
+                    print_auth_snapshots(&mut manager, agent, true)?;
+                }
+                AuthCommand::Login { agent } => {
+                    let result = manager
+                        .login(auth_provider(agent))
+                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                AuthCommand::Logout { agent } => {
+                    let result = manager
+                        .logout(auth_provider(agent))
+                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                AuthCommand::Quota { agent } => {
+                    print_auth_snapshots(&mut manager, agent, false)?;
+                }
+                AuthCommand::ResetCodex { credit_id } => {
+                    let result = manager
+                        .consume_codex_reset(credit_id.as_deref())
+                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                AuthCommand::Token { agent, reveal } => {
+                    if !reveal {
+                        bail!("raw token output requires --reveal and --allow-credential-access");
+                    }
+                    let result = manager
+                        .tokens(auth_provider(agent))
+                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                AuthCommand::ClearCache { agent } => {
+                    for provider in auth_providers(agent) {
+                        manager
+                            .clear_cache(provider)
+                            .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+                    }
+                    println!("{}", serde_json::json!({ "cleared": true }));
+                }
+            }
+        }
     }
 
+    Ok(())
+}
+
+fn auth_provider(agent: Agent) -> AuthProvider {
+    match agent {
+        Agent::Claude => AuthProvider::ClaudeCode,
+        Agent::Codex => AuthProvider::Codex,
+    }
+}
+
+fn auth_providers(selection: AgentSelection) -> Vec<AuthProvider> {
+    match selection {
+        AgentSelection::All => vec![AuthProvider::ClaudeCode, AuthProvider::Codex],
+        AgentSelection::Claude => vec![AuthProvider::ClaudeCode],
+        AgentSelection::Codex => vec![AuthProvider::Codex],
+    }
+}
+
+fn print_auth_snapshots(
+    manager: &mut AuthManager,
+    selection: AgentSelection,
+    refresh: bool,
+) -> Result<()> {
+    let mut snapshots = Vec::new();
+    for provider in auth_providers(selection) {
+        let snapshot = if refresh {
+            manager.refresh(provider)
+        } else {
+            manager.status(provider)
+        }
+        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
+        snapshots.push(snapshot);
+    }
+    println!("{}", serde_json::to_string_pretty(&snapshots)?);
     Ok(())
 }
 

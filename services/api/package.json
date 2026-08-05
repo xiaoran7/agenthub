@@ -1,5 +1,5 @@
 {
-  "name": "@agent-platform/api",
+  "name": "@agent-pulse/api",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@agent-platform/contracts": "*",
+    "@agent-pulse/contracts": "*",
     "fastify": "5.10.0",
     "postgres": "3.4.9"
   },

@@ -281,7 +281,7 @@ impl CodexAppServer {
             json!({
                 "clientInfo": {
                     "name": "agent_platform",
-                    "title": "Agent-Platform Runner",
+                    "title": "AgentPulse Runner",
                     "version": env!("CARGO_PKG_VERSION")
                 },
                 "capabilities": {
@@ -382,6 +382,31 @@ impl CodexAppServer {
                 });
             }
             return Ok(message.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+
+    /// Wait for a server notification while preserving unrelated messages for
+    /// the normal collector loop. Auth login uses this to keep the app-server
+    /// alive until the browser/device-code flow reports completion.
+    pub fn wait_for_notification(
+        &mut self,
+        method: &str,
+        timeout: Duration,
+    ) -> Result<Option<Value>, CollectorError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(CollectorError::Timeout {
+                    program: self.program.clone(),
+                    timeout_ms: timeout.as_millis(),
+                });
+            }
+            let message = self.read_message(0, remaining)?;
+            if message.get("method").and_then(Value::as_str) == Some(method) {
+                return Ok(message.get("params").cloned());
+            }
+            self.pending_messages.push_back(message);
         }
     }
 

@@ -120,6 +120,9 @@ Runner 使用以下接口：
   JSON，由设备私钥 Ed25519 签名；网关验签失败拒绝注册，公开可见的公钥无法被
   第三方抢注。
 - `POST /v1/sync/batches`：提交完整 `SyncBatch` 并接收 `SyncAck`。
+- `POST /v1/device-auth`：提交独立的 Ed25519 签名认证/配额安全快照批次；只允许
+  `AuthSnapshot` 白名单字段，原始 access/refresh token 不得出现。
+- `GET /v1/device-auth`：按已认证 owner 查询脱敏认证/配额快照，供 Web 和移动端只读展示。
 - `DELETE /v1/devices/:deviceId`：经用户认证后软撤销设备；保留历史事件和 Session，
   但后续登记与批次同步均返回 `device_revoked`。
 

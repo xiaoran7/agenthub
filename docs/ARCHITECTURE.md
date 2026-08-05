@@ -1,4 +1,4 @@
-# Agent-Platform MVP 系统架构
+# AgentPulse MVP 系统架构
 
 > 本文是当前实现的设计权威。行为变更必须同步更新本文，并在
 > [CHANGELOG.md](CHANGELOG.md) 留痕；具体取舍见 [MISC.md](MISC.md)。
@@ -12,7 +12,8 @@ MVP 只解决一个问题：
 
 架构优先级：
 
-1. 不接触 Agent 登录 Token。
+1. 默认不接触 Agent 登录 Token；显式授权模式也只在 Runner 本地读取和加密缓存，
+   不把原始凭据带出设备。
 2. 不默认上传代码、完整对话和环境变量。
 3. 状态有明确来源与置信度。
 4. 本地客户端只建立出站连接。
@@ -39,7 +40,7 @@ flowchart LR
         DB --> Sync
     end
 
-    subgraph Cloud["Agent-Platform Cloud"]
+    subgraph Cloud["AgentPulse Cloud"]
         GW["设备网关"]
         Ingest["事件校验与幂等写入"]
         PG["PostgreSQL"]
@@ -113,7 +114,7 @@ flowchart LR
 
 1. 周期调用 `claude agents --json`。
 2. 用户允许时调用 `claude agents --json --all` 获取最近完成的后台 Session。
-3. 接收 Agent-Platform Claude Hook 的本地事件。
+3. 接收 AgentPulse Claude Hook 的本地事件。
 4. 使用本地索引记录 Runner 安装后的历史 Session。
 
 建议查询周期：
@@ -129,7 +130,7 @@ flowchart LR
 1. 使用 stdio 启动 `codex app-server`。
 2. 使用 `thread/list` 获取持久化 Thread 元数据。
 3. 使用 `thread/loaded/list` 和状态通知观察 Runner app-server 中的活动 Thread。
-4. 接收 Agent-Platform Codex Hook 的本地事件。
+4. 接收 AgentPulse Codex Hook 的本地事件。
 5. 被动处理当前连接收到的 Turn、审批和用户输入事件。
 
 Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket transport。
@@ -603,7 +604,7 @@ Gateway 契约和 `docs/DESIGN_SYSTEM.md`，不共享浏览器凭据或 LocalSto
 建议结构：
 
 ```text
-Agent-Platform/
+AgentPulse/
   apps/
     android/
     web/
@@ -715,8 +716,24 @@ Fixture、一次性当前版本采集或订阅成功替代这些结论。
 | 主动停止          | 必须识别     | 必须识别     |
 | Agent 进程崩溃    | 至少变为未知 | 至少变为未知 |
 | 设备断网再恢复    | 不丢事件     | 不丢事件     |
-| 不读取 Token      | 必须证明     | 必须证明     |
+| 原始 Token 不离开 Runner | 必须证明 | 必须证明 |
 | 不上传 transcript | 必须证明     | 必须证明     |
 
 任何一个“必须识别”场景无法通过稳定官方接口或 Hook 实现时，应在开始云端开发
 前调整 MVP 承诺。
+
+## 12. 本地凭据管理扩展
+
+授权扩展将凭据读取放在 Runner 内，不把凭据管理放进 Gateway。Runner 通过 provider
+适配器读取用户明确授权的 Codex/Claude 文件、OS Keychain/Keyring、环境变量和官方 CLI
+接口；适配器只返回统一的 `AuthSnapshot`、`QuotaSnapshot` 和内部 `TokenSet`。
+
+`TokenSet` 只允许进入本机加密缓存，缓存密钥由本机设备身份派生，缓存文件/SQLite 表
+必须使用当前用户 ACL；缓存内容禁止进入 Outbox、SyncBatch、日志、错误消息和前端。
+Gateway 只接收签名的脱敏认证/配额快照，字段包括 provider、认证状态、来源、脱敏账号、
+套餐、token 是否存在、过期时间和配额窗口。
+
+Codex 认证、刷新、登录、退出和配额读取优先走官方 App Server；Claude 登录、退出和
+refresh token 交换优先委托官方 CLI。Runner 不复制未公开 OAuth client secret，也不把
+第三方 relay 当成默认认证实现。原始 token 只有用户显式执行本地 `auth token --reveal`
+才可输出。

@@ -1,6 +1,6 @@
 {
-  "name": "Agent Platform",
-  "short_name": "AgentPlatform",
+  "name": "AgentPulse",
+  "short_name": "AgentPulse",
   "description": "跨设备 Coding Agent Session 只读监控面板",
   "id": "/",
   "start_url": "/",

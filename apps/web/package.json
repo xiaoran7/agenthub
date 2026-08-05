@@ -1,5 +1,5 @@
 {
-  "name": "@agent-platform/web",
+  "name": "@agent-pulse/web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -11,7 +11,7 @@
     "typecheck": "next typegen && tsc --noEmit"
   },
   "devDependencies": {
-    "@agent-platform/contracts": "*",
+    "@agent-pulse/contracts": "*",
     "@types/node": "26.1.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

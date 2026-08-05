@@ -218,7 +218,7 @@ export function SettingsPanel({
       >
         <header className="settings-header">
           <div>
-            <p className="eyebrow">PANEL SETTINGS</p>
+            <p className="eyebrow">面板设置</p>
             <h2 id="settings-title">面板设置</h2>
             <p>管理连接、设备与等待提醒。</p>
           </div>
@@ -433,7 +433,7 @@ export function SettingsPanel({
               </span>
               <div>
                 <h3 id="install-settings">安装到设备</h3>
-                <p>以独立 PWA 窗口打开 Agent Platform。</p>
+                <p>以独立 PWA 窗口打开 AgentPulse。</p>
               </div>
             </div>
             <div className="settings-toggle">

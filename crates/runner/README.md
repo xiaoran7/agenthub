@@ -1,4 +1,4 @@
-# Agent-Platform Runner
+# AgentPulse Runner
 
 本地只读 Session 元数据采集器。目前实现：
 
@@ -30,7 +30,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 初始化设备身份：
 
 ```powershell
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   device init `
   --identity runner-identity.json
 ```
@@ -43,7 +43,7 @@ cargo run -p agent-platform-runner -- `
 标准化 Claude Agent 列表 Fixture：
 
 ```powershell
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   --identity runner-identity.json `
   normalize claude-agents `
   --input crates/runner/fixtures/claude-agents.json
@@ -53,7 +53,7 @@ cargo run -p agent-platform-runner -- `
 
 ```powershell
 Get-Content -Raw crates/runner/fixtures/claude-hook-permission.json |
-  cargo run -p agent-platform-runner -- `
+  cargo run -p agent-pulse-runner -- `
     --device-id local-dev `
     ingest-hook claude `
     --db runner.db
@@ -62,12 +62,12 @@ Get-Content -Raw crates/runner/fixtures/claude-hook-permission.json |
 从本机 Claude 或 Codex 采集一次，并写入本地 Outbox：
 
 ```powershell
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   --identity runner-identity.json `
   collect-once claude `
   --db runner.db
 
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   --device-id local-dev `
   collect-once codex `
   --db runner.db `
@@ -83,7 +83,7 @@ cargo run -p agent-platform-runner -- `
 ```powershell
 $env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
 
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   --identity runner-identity.json `
   run all `
   --db runner.db
@@ -128,7 +128,7 @@ Session 元数据的载荷。
 只运行一个 Adapter：
 
 ```powershell
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   --device-id local-dev `
   run codex `
   --db runner.db `
@@ -141,10 +141,10 @@ cargo run -p agent-platform-runner -- `
 查看 Outbox：
 
 ```powershell
-cargo run -p agent-platform-runner -- outbox stats --db runner.db
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- outbox stats --db runner.db
+cargo run -p agent-pulse-runner -- `
   outbox pending --db runner.db --device-id local-dev
-cargo run -p agent-platform-runner -- outbox health --db runner.db
+cargo run -p agent-pulse-runner -- outbox health --db runner.db
 ```
 
 健康状态只保存 `executable_not_found`、`permission_denied`、
@@ -154,13 +154,13 @@ cargo run -p agent-platform-runner -- outbox health --db runner.db
 准备并验证签名同步批次：
 
 ```powershell
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   sync prepare `
   --identity runner-identity.json `
   --db runner.db `
   --limit 100
 
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   sync verify `
   --batch batch.json
 ```
@@ -176,11 +176,11 @@ cargo run -p agent-platform-runner -- `
   $env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
   $env:AGENT_PLATFORM_BINDING_CODE = '<从 Web 设置面板取得的一次性绑定码>'
 
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   device bind `
   --identity runner-identity.json
 
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   sync push `
   --identity runner-identity.json `
   --db runner.db `
@@ -196,6 +196,39 @@ cargo run -p agent-platform-runner -- `
 Outbox 事件。网络失败、超时或无效响应不会清理未确认事件。远程 Gateway 地址必须
 使用 HTTPS，明文 HTTP 只允许 `localhost`、IPv4 或 IPv6 回环地址用于本地开发。
 
+Windows 用户可以使用 [`deploy/windows`](../../deploy/windows) 中的一键接入脚本：将
+`agent-pulse-runner.exe`、`Connect-AgentPulse.cmd` 和 `Connect-AgentPulse.ps1` 放在同一目录，
+双击 `.cmd` 后输入 Web 页面生成的一次性连接码。脚本会自动初始化设备身份、绑定 Gateway、
+创建本地 SQLite Outbox 并启动持续同步。
+
+## 本地认证状态与配额
+
+凭据读取是显式 opt-in 能力，默认关闭。启用后 Runner 只读取当前用户允许的 Claude Code
+与 Codex 本地凭据来源，并将原始 token 保存在设备本地的 AES-GCM 加密缓存中；上传到 Gateway
+的认证同步批次只包含状态、来源、脱敏账号、过期时间和可用配额窗口，不包含 token、cookie、
+环境变量值或凭据文件正文。
+
+```powershell
+cargo run -p agent-pulse-runner -- `
+  --allow-credential-access `
+  --identity runner-identity.json `
+  auth status claude
+
+cargo run -p agent-pulse-runner -- `
+  --allow-credential-access `
+  --identity runner-identity.json `
+  auth quota codex
+```
+
+如果 CLI 不在 `PATH`，在 `auth` 子命令上显式传入 `--claude-binary` 或
+`--codex-binary`；这与 `run` 的 provider binary 覆盖选项相互独立。
+
+`auth refresh` 会调用官方 CLI/app-server 的刷新路径；`auth login` 和 `auth logout` 是显式的
+交互式本地操作。遇到 `reauth_required` 时，重新执行对应 provider 的 `auth login`。原始 token
+只有在同时传入 `--allow-credential-access --reveal` 的 `auth token` 命令中输出到当前终端，
+且不会进入日志、Outbox、同步批次或 Web 面板。`run` 启用凭据访问后会按
+`--auth-interval-seconds`（默认 60 秒）后台刷新安全快照；后台循环不会自动启动交互式登录。
+
 ## 安全约束
 
 标准化输出禁止包含：
@@ -206,7 +239,7 @@ Outbox 事件。网络失败、超时或无效响应不会清理未确认事件�
 - 工具输入与输出
 - 完整工作目录
 - transcript 或 rollout 内容
-- Token、Cookie 和环境变量
+- Token、Cookie 和环境变量（除非用户显式执行本地 `auth token --reveal`）
 
 Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化事件或 Outbox。
 
@@ -215,7 +248,7 @@ Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化
 - Codex 跨客户端实时通知覆盖验证与缺失事件补偿
 - Hook 插件安装器
 - 联合账号登录、设备恢复绑定、密钥轮换与 WebSocket 传输
-- Windows 身份文件 ACL 主动加固和系统密钥库接入
+- Windows 身份文件 ACL 主动加固
 - OS 原生服务安装
 
 这些功能将在核心协议与隐私测试稳定后逐步接入。

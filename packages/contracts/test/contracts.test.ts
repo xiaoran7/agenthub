@@ -6,9 +6,13 @@ import test from "node:test";
 import {
   ContractError,
   deviceIdForPublicKey,
+  parseAuthSyncBatch,
   parseDeviceRegistration,
   parseSyncBatch,
+  unsignedAuthSyncBatchJson,
+  verifyAuthSyncBatch,
   verifySyncBatch,
+  type AuthSyncBatch,
 } from "../src/index.js";
 
 const fixture = JSON.parse(
@@ -51,6 +55,96 @@ test("version 1 cross-language vector validates", () => {
   const batch = parseSyncBatch(fixture);
   verifySyncBatch(batch);
   assert.equal(deviceIdForPublicKey(batch.public_key), batch.device_id);
+});
+
+test("redacted auth sync batch validates and rejects token fields", () => {
+  const batch: AuthSyncBatch = {
+    protocol_version: 1,
+    device_id: parseSyncBatch(fixture).device_id,
+    public_key: parseSyncBatch(fixture).public_key,
+    checked_at: "2026-07-25T00:00:00Z",
+    snapshots: [
+      {
+        provider: "codex",
+        state: "authenticated",
+        source: "app_server",
+        checked_at: "2026-07-25T00:00:00Z",
+        account_hint: "a***e@example.com",
+        plan_type: "plus",
+        auth_mode: "chatgpt",
+        access_token_present: true,
+        refresh_token_present: true,
+        quota: {
+          state: "available",
+          source: "app_server",
+          refreshed_at: "2026-07-25T00:00:00Z",
+          windows: [
+            {
+              name: "primary",
+              used_percent: 25,
+              window_duration_minutes: 300,
+              resets_at: "2026-07-25T05:00:00Z",
+            },
+          ],
+          available_reset_credits: 2,
+        },
+      },
+    ],
+    signature: "",
+  };
+  batch.signature = sign(
+    null,
+    Buffer.from(unsignedAuthSyncBatchJson(batch), "utf8"),
+    fixturePrivateKey,
+  ).toString("hex");
+  assert.deepEqual(parseAuthSyncBatch(batch), batch);
+  verifyAuthSyncBatch(batch);
+
+  const withToken = structuredClone(batch) as unknown as Record<
+    string,
+    unknown
+  >;
+  const snapshots = withToken.snapshots as Array<Record<string, unknown>>;
+  snapshots[0]!.access_token = "must-never-sync";
+  assert.throws(
+    () => parseAuthSyncBatch(withToken),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "unknown_field",
+  );
+});
+
+test("auth sync batches reject duplicate providers", () => {
+  const batch = {
+    protocol_version: 1,
+    device_id: parseSyncBatch(fixture).device_id,
+    public_key: parseSyncBatch(fixture).public_key,
+    checked_at: "2026-07-25T00:00:00Z",
+    snapshots: [
+      {
+        provider: "codex",
+        state: "unknown",
+        source: "unknown",
+        checked_at: "2026-07-25T00:00:00Z",
+        access_token_present: false,
+        refresh_token_present: false,
+      },
+      {
+        provider: "codex",
+        state: "unknown",
+        source: "unknown",
+        checked_at: "2026-07-25T00:00:00Z",
+        access_token_present: false,
+        refresh_token_present: false,
+      },
+    ],
+    signature: "0".repeat(128),
+  };
+  assert.throws(
+    () => parseAuthSyncBatch(batch),
+    (error: unknown) =>
+      error instanceof ContractError &&
+      error.code === "duplicate_auth_provider",
+  );
 });
 
 test("unknown nested fields are rejected", () => {

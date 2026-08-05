@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import { ContractError } from "@agent-platform/contracts";
+import { ContractError } from "@agent-pulse/contracts";
 import type { FastifyRequest } from "fastify";
 
 const MIN_ACCESS_TOKEN_BYTES = 32;

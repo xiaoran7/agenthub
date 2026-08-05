@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fs, process::Command};
 
-use agent_platform_runner::{
+use agent_pulse_runner::{
     device::DeviceIdentity,
     domain::{
         ActivityStatus, AgentType, Confidence, ObservationMeta, ObservationSource, Presence,
@@ -11,7 +11,7 @@ use agent_platform_runner::{
 };
 
 fn runner() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_agent-platform-runner"))
+    Command::new(env!("CARGO_BIN_EXE_agent-pulse-runner"))
 }
 
 #[test]

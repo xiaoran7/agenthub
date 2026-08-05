@@ -5,11 +5,13 @@ import test from "node:test";
 
 import {
   deviceIdForPublicKey,
+  unsignedAuthSyncBatchJson,
   parseSyncBatch,
   type SyncBatch,
   type SyncEvent,
+  type AuthSyncBatch,
   unsignedBatchJson,
-} from "@agent-platform/contracts";
+} from "@agent-pulse/contracts";
 
 import { createGatewayApp, type GatewayAppOptions } from "../src/app.js";
 import { DevelopmentIdentityAuthenticator } from "../src/auth.js";
@@ -138,6 +140,59 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
     headers: { "x-user-id": "user-1" },
   });
   assert.equal(devices.json().devices[0].online, false);
+  await app.close();
+});
+
+test("signed auth snapshots are stored without exposing token material", async () => {
+  const store = new InMemoryGatewayStore();
+  const app = createTestGatewayApp({
+    store,
+    bindingCodes: new OneTimeBindingCodes(
+      new Map([["auth-code", "auth-owner"]]),
+    ),
+  });
+  const registration = await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("auth-code"),
+  });
+  assert.equal(registration.statusCode, 201);
+
+  const authBatch = makeSignedAuthBatch();
+  const ingestion = await app.inject({
+    method: "POST",
+    url: "/v1/device-auth",
+    payload: authBatch,
+  });
+  assert.equal(ingestion.statusCode, 200);
+  assert.deepEqual(ingestion.json(), {
+    protocol_version: 1,
+    device_id: fixture.device_id,
+    accepted: 1,
+  });
+
+  const snapshots = await app.inject({
+    method: "GET",
+    url: "/v1/device-auth",
+    headers: { "x-user-id": "auth-owner" },
+  });
+  assert.equal(snapshots.statusCode, 200);
+  assert.equal(snapshots.json().snapshots.length, 1);
+  assert.equal(snapshots.json().snapshots[0].access_token_present, true);
+  assert.equal("access_token" in snapshots.json().snapshots[0], false);
+
+  const foreign = await app.inject({
+    method: "GET",
+    url: "/v1/device-auth",
+    headers: { "x-user-id": "another-owner" },
+  });
+  assert.deepEqual(foreign.json(), { snapshots: [] });
+  const replay = await app.inject({
+    method: "POST",
+    url: "/v1/device-auth",
+    payload: authBatch,
+  });
+  assert.equal(replay.json().accepted, 0);
   await app.close();
 });
 
@@ -915,6 +970,49 @@ function makeSignedBatch(
     null,
     Buffer.from(unsignedBatchJson(batch), "utf8"),
     privateKey,
+  ).toString("hex");
+  return batch;
+}
+
+function makeSignedAuthBatch(): AuthSyncBatch {
+  const batch: AuthSyncBatch = {
+    protocol_version: 1,
+    device_id: fixture.device_id,
+    public_key: fixture.public_key,
+    checked_at: "2026-07-25T00:00:03Z",
+    snapshots: [
+      {
+        provider: "codex",
+        state: "authenticated",
+        source: "app_server",
+        checked_at: "2026-07-25T00:00:03Z",
+        account_hint: "a***e@example.com",
+        plan_type: "plus",
+        auth_mode: "chatgpt",
+        access_token_present: true,
+        refresh_token_present: true,
+        quota: {
+          state: "available",
+          source: "app_server",
+          refreshed_at: "2026-07-25T00:00:03Z",
+          windows: [
+            {
+              name: "primary",
+              used_percent: 25,
+              window_duration_minutes: 300,
+              resets_at: "2026-07-25T05:00:00Z",
+            },
+          ],
+          available_reset_credits: 2,
+        },
+      },
+    ],
+    signature: "",
+  };
+  batch.signature = sign(
+    null,
+    Buffer.from(unsignedAuthSyncBatchJson(batch), "utf8"),
+    fixturePrivateKey,
   ).toString("hex");
   return batch;
 }

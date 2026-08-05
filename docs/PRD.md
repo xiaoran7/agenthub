@@ -1,10 +1,10 @@
-# Agent-Platform 产品需求文档
+# AgentPulse 产品需求文档
 
 ## 1. 产品概述
 
 ### 1.1 产品定位
 
-Agent-Platform 是一个支持网页端和移动端的统一平台，用于连接用户自己的
+AgentPulse 是一个支持网页端和移动端的统一平台，用于连接用户自己的
 电脑，并集中查看电脑上已经安装、登录和运行的主流 Coding Agent。
 
 首批支持：
@@ -97,7 +97,9 @@ Agent、多个项目和多个设备的实时工作状态。
 - 保留 Agent 类型、版本和可用性信息
 - 支持后续通过适配器扩展新的 Agent
 
-平台不得读取或上传 Agent 的 OAuth Token。
+平台不得在未获得用户明确授权时读取 Agent 的 OAuth Token；用户开启本地凭据管理后，Runner
+可以读取受支持的 auth 文件、OS Keychain/Keyring、环境变量和官方 CLI 的认证状态。
+原始凭据只允许保存在本机受保护的凭据缓存中，默认不得上传到 Gateway、数据库或浏览器。
 
 ### 4.3 Session 采集
 
@@ -358,6 +360,51 @@ Session 的最近任务可以已经完成，但进程仍在线并可以继续；
 - Claude 和 Codex 互相 Review
 - 多 Agent 工作流编排
 - 多电脑统一调度
+
+## 14. 本地凭据、配额和认证管理（授权扩展）
+
+本节覆盖原有“默认不读取 OAuth Token”约束的授权扩展。授权扩展只在用户明确打开
+“本地凭据管理”后生效，默认关闭；关闭后 Runner 只能读取官方非敏感登录状态。
+
+### 14.1 允许读取的本地来源
+
+- Codex：`CODEX_HOME/auth.json`、`CODEX_HOME/.credentials.json`、Codex 官方
+  App Server `account/read`，以及 Codex 配置的 OS Keychain/Keyring 后端。
+- Claude Code：`CLAUDE_CONFIG_DIR/.credentials.json`、平台默认 credentials 文件、
+  OS Keychain/Keyring，以及 `claude auth status --json`。
+- 用户显式配置的 `OPENAI_API_KEY`、`CODEX_ACCESS_TOKEN`、
+  `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CODE_OAUTH_REFRESH_TOKEN` 等环境变量。
+
+Runner 必须使用固定 provider allow-list 和字段 allow-list，只提取认证所需字段；不得
+递归扫描用户目录、读取浏览器 Cookie、读取无关密码库或把完整文件复制到缓存。
+
+### 14.2 Token 生命周期
+
+- access token、refresh token、token expiry、scope、account id 和认证模式属于敏感字段。
+- 原始 token 只进入本机加密缓存，CLI 的 `auth token --reveal` 才能在用户明确要求时
+  输出，Web/UI/API 只收到 token 是否存在、脱敏账号、过期时间和状态。
+- Codex 优先通过 App Server 的 `account/read`、`account/login/start`、`account/logout`
+  完成刷新和重新认证，不自行复制 Codex 的 OAuth 客户端密钥或实现未公开的刷新端点。
+- Claude 优先委托 `claude auth login/logout` 管理本地凭据；若用户提供 refresh token，
+  通过 `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` 和官方 CLI 完成重新认证，不在 Runner 中伪造
+  Anthropic 的私有 OAuth 协议。
+- 刷新失败必须转换为 `reauth_required` 或 `unknown`，不能把过期 token 继续标记为有效。
+
+### 14.3 配额和用量
+
+- Codex 使用 App Server `account/rateLimits/read` 获取窗口使用率、重置时间和可用
+  reset credit；消费 reset credit 后必须再次刷新快照。
+- Claude 只展示官方 CLI/状态行能够提供的 rate limit 字段；如果当前 CLI 没有机器可读
+  配额接口，状态为 `unavailable`，不根据请求次数猜测配额。
+- 配额快照缓存到本机并同步脱敏快照；原始 token、refresh token、完整响应和 Cookie
+  永不同步。
+
+### 14.4 认证操作
+
+本阶段提供 Runner CLI 的 `auth status`、`auth refresh`、`auth login`、`auth logout`、
+`auth quota` 和显式 `auth token --reveal`。所有会改变登录状态、消费 reset credit 或
+输出原始 token 的命令必须由用户主动执行；后台轮询只能读取、刷新过期 token 和更新
+缓存，不能自动登出、消费配额或发起交互式登录。
 
 ## 14. 待验证事项
 

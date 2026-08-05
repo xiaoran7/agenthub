@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AgentPlatformAndroid"
+rootProject.name = "AgentPulseAndroid"
 include(":app")

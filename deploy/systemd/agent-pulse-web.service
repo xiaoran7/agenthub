@@ -1,0 +1,19 @@
+[Unit]
+Description=AgentPulse Web Panel
+After=network-online.target agent-pulse-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agent-pulse
+EnvironmentFile=/etc/agent-pulse/agent-pulse.env
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3000
+ExecStart=/usr/bin/npm start --workspace @agent-pulse/web
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

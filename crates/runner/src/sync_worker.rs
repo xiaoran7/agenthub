@@ -95,7 +95,7 @@ impl SyncWorker {
     ) -> std::io::Result<Self> {
         let (trigger, receiver) = sync_channel(1);
         let handle = thread::Builder::new()
-            .name("agent-platform-sync".into())
+            .name("agent-pulse-sync".into())
             .spawn(move || {
                 let mut outbox = Outbox::open(database_path)?;
                 run_sync_loop(

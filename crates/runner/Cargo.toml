@@ -1,17 +1,19 @@
 [package]
-name = "agent-platform-runner"
+name = "agent-pulse-runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+aes-gcm.workspace = true
 chrono.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
 hmac.workspace = true
+keyring.workspace = true
 rand_core.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

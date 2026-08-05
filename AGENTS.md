@@ -1,4 +1,4 @@
-# Agent-Platform 智能体工作规范
+# AgentPulse（智能体脉搏）工作规范
 
 > 适用于在本仓库工作的 Claude Code、Codex、其他智能体及人类协作者。
 
@@ -16,8 +16,9 @@
 
 - **只读优先**：第一阶段不得向 Agent 发送消息、批准权限、停止任务或恢复
   Session。
-- **凭据隔离**：不得读取、复制或上传 Claude/OpenAI Token、Cookie、登录文件或
-  OAuth 状态。
+- **凭据隔离**：默认不得读取 Claude/OpenAI Token、Cookie、登录文件或 OAuth 状态；
+  用户明确启用凭据管理扩展后，原始凭据仍只能留在 Runner 的本地加密缓存中，绝不复制
+  或上传到 Gateway、Outbox、日志或浏览器。
 - **元数据白名单**：不得默认保存或同步 Prompt、Assistant 消息、代码、Diff、
   Shell 命令、工具输入输出、完整工作目录、环境变量、`.env`、transcript 或 rollout。
 - **工作目录脱敏**：只保留项目目录显示名和设备密钥派生的 HMAC 指纹。
@@ -60,3 +61,11 @@
 7. 提交前检查 `git status`，只暂存本次任务文件，不使用会误收其他改动的
    `git add -A`。
 8. 如实汇报未验证项和环境阻塞，不能把 Fixture 通过写成真实 CLI 已通过。
+
+## 凭据管理扩展（用户明确授权后适用）
+
+本项目现支持可选的本地凭据管理功能：用户明确启用后，Runner 可以按 provider allow-list
+读取 Claude/Codex 的 auth 文件、`.credentials.json`、OS Keychain/Keyring 和授权环境变量，
+用于本机加密缓存、官方认证刷新、配额快照和重新认证。原始 access/refresh token 不得进入
+Outbox、SyncBatch、日志、错误消息、浏览器或默认 Gateway API；只有显式的本地 reveal 命令
+可以输出原始 token。不得递归扫描用户目录、读取浏览器 Cookie 或上传完整凭据文件。

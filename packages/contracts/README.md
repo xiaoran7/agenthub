@@ -1,4 +1,4 @@
-# Agent-Platform Contracts
+# AgentPulse Contracts
 
 Runner 与 Device Gateway 共享的同步协议版本 1 TypeScript 实现。
 
@@ -12,14 +12,14 @@ Runner 与 Device Gateway 共享的同步协议版本 1 TypeScript 实现。
 - Node 生成、Rust 验证的跨语言测试向量
 
 ```powershell
-npm.cmd run typecheck --workspace @agent-platform/contracts
-npm.cmd test --workspace @agent-platform/contracts
+npm.cmd run typecheck --workspace @agent-pulse/contracts
+npm.cmd test --workspace @agent-pulse/contracts
 ```
 
 重新生成固定测试向量：
 
 ```powershell
-npm.cmd run generate:test-vector --workspace @agent-platform/contracts
+npm.cmd run generate:test-vector --workspace @agent-pulse/contracts
 ```
 
 生成脚本中的密钥只用于公开测试向量，不得用于真实设备。

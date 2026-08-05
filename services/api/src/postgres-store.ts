@@ -4,15 +4,19 @@ import { isDeepStrictEqual } from "node:util";
 
 import type {
   ActivityStatus,
+  AuthSnapshot,
+  AuthSyncBatch,
   SyncBatch,
   SyncEvent,
-} from "@agent-platform/contracts";
+} from "@agent-pulse/contracts";
 import postgres from "postgres";
 
 import type { PushSubscription } from "./push.js";
 import {
   GatewayStoreError,
   sessionStatusChange,
+  type AuthFilters,
+  type AuthIngestResult,
   type DeviceRegistrationResult,
   type DeviceView,
   type GatewayStore,
@@ -21,6 +25,7 @@ import {
   type SessionEventFilters,
   type SessionFilters,
   type SessionStatusChange,
+  type StoredAuthSnapshot,
   type StoredSession,
 } from "./store.js";
 
@@ -43,6 +48,10 @@ const MIGRATIONS = [
   {
     version: 4,
     url: new URL("../migrations/0004_device_lifecycle.sql", import.meta.url),
+  },
+  {
+    version: 5,
+    url: new URL("../migrations/0005_device_auth.sql", import.meta.url),
   },
 ] as const;
 
@@ -74,6 +83,14 @@ interface SessionRow {
   received_at: unknown;
 }
 
+interface AuthSnapshotRow {
+  device_id: string;
+  agent_type: string;
+  checked_at: unknown;
+  received_at: unknown;
+  snapshot_data: unknown;
+}
+
 interface SessionStatusRow {
   agent_type: string;
   agent_session_id: string;
@@ -94,7 +111,7 @@ export class PostgresGatewayStore implements GatewayStore {
       connect_timeout: 10,
       idle_timeout: 20,
       onnotice: () => {},
-      connection: { application_name: "agent-platform-api" },
+      connection: { application_name: "agent-pulse-api" },
     });
     try {
       await migratePostgres(sql);
@@ -613,6 +630,110 @@ export class PostgresGatewayStore implements GatewayStore {
     }
   }
 
+  async ingestAuthBatch(batch: AuthSyncBatch): Promise<AuthIngestResult> {
+    return this.#sql.begin(async (sql) => {
+      const devices = await sql<DeviceRow[]>`
+        SELECT
+          device_id,
+          public_key,
+          owner_id,
+          created_at,
+          last_seen_at,
+          last_sequence,
+          revoked_at
+        FROM agent_platform_devices
+        WHERE device_id = ${batch.device_id}
+        FOR UPDATE
+      `;
+      const device = devices[0];
+      if (device === undefined) {
+        throw new GatewayStoreError(
+          "device_not_registered",
+          "device is not registered",
+        );
+      }
+      if (device.revoked_at !== null) {
+        throw new GatewayStoreError("device_revoked", "device is revoked");
+      }
+      if (device.public_key !== batch.public_key) {
+        throw new GatewayStoreError(
+          "device_key_mismatch",
+          "auth batch public key does not match registered device",
+        );
+      }
+
+      const receivedAt = new Date();
+      let accepted = 0;
+      for (const snapshot of batch.snapshots) {
+        const existing = await sql<
+          Array<{ checked_at: unknown; snapshot_data: unknown }>
+        >`
+          SELECT checked_at, snapshot_data
+          FROM agent_platform_auth_snapshots
+          WHERE device_id = ${batch.device_id}
+            AND agent_type = ${snapshot.provider}
+        `;
+        const existingCheckedAt = existing[0]?.checked_at;
+        const existingSnapshot = existing[0]?.snapshot_data as
+          AuthSnapshot | undefined;
+        if (
+          existingCheckedAt !== undefined &&
+          (Date.parse(isoTimestamp(existingCheckedAt)) >
+            Date.parse(snapshot.checked_at) ||
+            (Date.parse(isoTimestamp(existingCheckedAt)) ===
+              Date.parse(snapshot.checked_at) &&
+              existingSnapshot !== undefined &&
+              isDeepStrictEqual(existingSnapshot, snapshot)))
+        ) {
+          continue;
+        }
+        await sql`
+          INSERT INTO agent_platform_auth_snapshots (
+            device_id,
+            agent_type,
+            checked_at,
+            received_at,
+            snapshot_data
+          )
+          VALUES (
+            ${batch.device_id},
+            ${snapshot.provider},
+            ${snapshot.checked_at},
+            ${receivedAt},
+            ${sql.json(snapshot as unknown as postgres.JSONValue)}
+          )
+          ON CONFLICT (device_id, agent_type)
+          DO UPDATE SET
+            checked_at = EXCLUDED.checked_at,
+            received_at = EXCLUDED.received_at,
+            snapshot_data = EXCLUDED.snapshot_data
+          WHERE EXCLUDED.checked_at >= agent_platform_auth_snapshots.checked_at
+        `;
+        accepted += 1;
+      }
+      await sql`
+        UPDATE agent_platform_devices
+        SET last_seen_at = ${receivedAt}
+        WHERE device_id = ${batch.device_id}
+      `;
+      const rows = await sql<AuthSnapshotRow[]>`
+        SELECT device_id, agent_type, checked_at, received_at, snapshot_data
+        FROM agent_platform_auth_snapshots
+        WHERE device_id = ${batch.device_id}
+        ORDER BY checked_at DESC, agent_type
+      `;
+      return {
+        accepted,
+        owner_id: device.owner_id,
+        snapshots: rows.map((row) => ({
+          ...(row.snapshot_data as AuthSnapshot),
+          device_id: batch.device_id,
+          received_at: isoTimestamp(row.received_at),
+        })),
+      };
+    });
+  }
+
   async listDevices(ownerId: string): Promise<DeviceView[]> {
     const rows = await this.#sql<
       Array<{
@@ -698,6 +819,38 @@ export class PostgresGatewayStore implements GatewayStore {
       ...syncEvent(row.event_data),
       received_at: isoTimestamp(row.received_at),
     }));
+  }
+
+  async listAuth(
+    ownerId: string,
+    filters: AuthFilters,
+  ): Promise<StoredAuthSnapshot[]> {
+    const deviceFilter =
+      filters.device_id === undefined
+        ? this.#sql``
+        : this.#sql`AND snapshots.device_id = ${filters.device_id}`;
+    const rows = await this.#sql<AuthSnapshotRow[]>`
+      SELECT
+        snapshots.device_id,
+        snapshots.agent_type,
+        snapshots.checked_at,
+        snapshots.received_at,
+        snapshots.snapshot_data
+      FROM agent_platform_auth_snapshots AS snapshots
+      INNER JOIN agent_platform_devices AS devices
+        ON devices.device_id = snapshots.device_id
+      WHERE devices.owner_id = ${ownerId}
+        ${deviceFilter}
+      ORDER BY snapshots.checked_at DESC, snapshots.agent_type
+    `;
+    return rows.map((row) => {
+      const snapshot = row.snapshot_data as AuthSnapshot;
+      return {
+        ...snapshot,
+        device_id: row.device_id,
+        received_at: isoTimestamp(row.received_at),
+      };
+    });
   }
 
   async close(): Promise<void> {

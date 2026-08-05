@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { parseSyncBatch } from "@agent-platform/contracts";
+import { parseSyncBatch } from "@agent-pulse/contracts";
 import postgres from "postgres";
 
 import {
@@ -363,7 +363,7 @@ function scopedConnection(
     max,
     onnotice: () => {},
     connection: {
-      application_name: "agent-platform-postgres-test",
+      application_name: "agent-pulse-postgres-test",
       search_path: schema,
     },
   });

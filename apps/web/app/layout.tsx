@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Agent Platform",
-  description: "跨设备 Coding Agent Session 只读监控面板",
+  title: "AgentPulse",
+  description: "安静、清晰、高信息密度的跨设备 Coding Agent 会话监控面板。",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -21,8 +21,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f6f8" },
-    { media: "(prefers-color-scheme: dark)", color: "#101216" },
+    { media: "(prefers-color-scheme: light)", color: "#111118" },
+    { media: "(prefers-color-scheme: dark)", color: "#111118" },
   ],
 };
 

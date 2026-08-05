@@ -1,0 +1,45 @@
+# 1Panel OpenResty site configuration for platform.tannerlab.xyz.
+# The existing wildcard certificate is reused on the server; replace the
+# certificate paths if 1Panel later provisions a dedicated certificate.
+
+server {
+    listen 80;
+    listen 8443 ssl;
+    server_name platform.tannerlab.xyz;
+
+    location ^~ /.well-known/acme-challenge {
+        allow all;
+        root /www/sites/platform.tannerlab.xyz/index;
+    }
+
+    if ($scheme = http) {
+        return 301 https://$host:8443$request_uri;
+    }
+
+    ssl_certificate /www/sites/api.tannerlab.xyz/ssl/fullchain.pem;
+    ssl_certificate_key /www/sites/api.tannerlab.xyz/ssl/privkey.pem;
+    ssl_protocols TLSv1.3 TLSv1.2;
+    http2 on;
+    error_page 497 https://$host:8443$request_uri;
+    add_header Strict-Transport-Security "max-age=31536000";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+
+    location ^~ /v1/stream {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_set_header Connection "";
+        add_header X-Accel-Buffering no;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3100;
+    }
+}

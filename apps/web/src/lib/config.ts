@@ -10,7 +10,8 @@ export const DEFAULT_CONFIG: PanelConfig = {
   userId: "local-user",
 };
 
-export const CONFIG_STORAGE_KEY = "agent-platform.panel-config.v1";
+export const CONFIG_STORAGE_KEY = "agent-pulse.panel-config.v1";
+export const LEGACY_CONFIG_STORAGE_KEY = "agent-platform.panel-config.v1";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
@@ -62,7 +63,9 @@ export function loadConfig(
   }
   let raw: string | null;
   try {
-    raw = storage.getItem(CONFIG_STORAGE_KEY);
+    raw =
+      storage.getItem(CONFIG_STORAGE_KEY) ??
+      storage.getItem(LEGACY_CONFIG_STORAGE_KEY);
   } catch {
     return { ...DEFAULT_CONFIG };
   }

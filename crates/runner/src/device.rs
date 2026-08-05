@@ -136,7 +136,19 @@ impl DeviceIdentity {
 
     pub fn fingerprint_key(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
+        // Keep the fingerprint namespace stable so existing devices retain their identity
+        // after the AgentPulse product rename.
         digest.update(b"agent-platform/project-fingerprint/v1");
+        digest.update(self.signing_key.to_bytes());
+        digest.finalize().into()
+    }
+
+    /// Derive a separate local-only key for the encrypted credential cache.
+    /// It is intentionally namespaced away from the project fingerprint key so
+    /// a cache compromise cannot be used as a project identity oracle.
+    pub fn credential_cache_key(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"agent-pulse/local-credential-cache/v1");
         digest.update(self.signing_key.to_bytes());
         digest.finalize().into()
     }

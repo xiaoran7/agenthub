@@ -11,7 +11,7 @@ import {
   type SyncBatch,
   type SyncEvent,
   unsignedBatchJson,
-} from "@agent-platform/contracts";
+} from "@agent-pulse/contracts";
 
 export const M4_DEVICE_COUNT = 12;
 export const M4_SESSIONS_PER_DEVICE = 250;

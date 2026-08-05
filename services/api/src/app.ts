@@ -4,11 +4,12 @@ import {
   ContractError,
   activityStatuses,
   agentTypes,
+  parseAuthSyncBatch,
   parseDeviceRegistration,
   parseSyncBatch,
   presences,
   verifySyncBatch,
-} from "@agent-platform/contracts";
+} from "@agent-pulse/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import {
@@ -23,6 +24,7 @@ import {
   InMemoryGatewayStore,
   OneTimeBindingCodes,
   bindingCodeDigest,
+  type AuthFilters,
   type GatewayStore,
   type SessionFilters,
   type SessionStatusChange,
@@ -89,7 +91,7 @@ export function createGatewayApp(
           ? 401
           : 400;
       if (error instanceof AuthenticationError) {
-        void reply.header("www-authenticate", 'Bearer realm="agent-platform"');
+        void reply.header("www-authenticate", 'Bearer realm="agent-pulse"');
       }
       void reply.status(status).send({ error: error.code });
       return;
@@ -199,9 +201,46 @@ export function createGatewayApp(
     });
   });
 
+  app.post("/v1/device-auth", async (request, reply) => {
+    const batch = parseAuthSyncBatch(request.body);
+    const result = await store.ingestAuthBatch(batch);
+    if (result.accepted > 0) {
+      broker.publish(result.owner_id, {
+        device_id: batch.device_id,
+        accepted: result.accepted,
+        auth_snapshots: true,
+      });
+    }
+    return reply.status(200).send({
+      protocol_version: batch.protocol_version,
+      device_id: batch.device_id,
+      accepted: result.accepted,
+    });
+  });
+
   app.get("/v1/devices", async (request, reply) => {
     const ownerId = authenticator.authenticate(request);
     return reply.send({ devices: await store.listDevices(ownerId) });
+  });
+
+  app.get("/v1/device-auth", async (request, reply) => {
+    const ownerId = authenticator.authenticate(request);
+    const query = request.query as Record<string, unknown>;
+    const unknownQuery = Object.keys(query).find((key) => key !== "device_id");
+    if (unknownQuery !== undefined) {
+      throw new ContractError("invalid_query", "query field is invalid");
+    }
+    const filters: AuthFilters = {};
+    if (query.device_id !== undefined) {
+      if (
+        typeof query.device_id !== "string" ||
+        !DEVICE_ID_PATTERN.test(query.device_id)
+      ) {
+        throw new ContractError("invalid_query", "device_id is invalid");
+      }
+      filters.device_id = query.device_id;
+    }
+    return reply.send({ snapshots: await store.listAuth(ownerId, filters) });
   });
 
   app.delete("/v1/devices/:deviceId", async (request, reply) => {

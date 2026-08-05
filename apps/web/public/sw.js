@@ -1,5 +1,5 @@
 /*
- * Agent Platform service worker.
+ * AgentPulse service worker.
  *
  * Push delivery only. There is deliberately no fetch handler and no cache:
  * a live monitoring panel gains nothing from serving stale data offline, and

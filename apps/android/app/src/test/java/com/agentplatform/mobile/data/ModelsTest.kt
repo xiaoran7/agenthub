@@ -78,7 +78,7 @@ class ModelsTest {
             agentSessionId = id,
             observedAt = Instant.parse(observedAt),
             receivedAt = null,
-            project = ProjectInfo(displayName = "Agent-Platform", pathFingerprint = null),
+            project = ProjectInfo(displayName = "AgentPulse", pathFingerprint = null),
             state = SessionState(presence, status, null),
         )
 }

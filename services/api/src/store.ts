@@ -4,11 +4,13 @@ import { isDeepStrictEqual } from "node:util";
 import type {
   ActivityStatus,
   AgentType,
+  AuthSnapshot,
+  AuthSyncBatch,
   Presence,
   SyncBatch,
   SyncEvent,
   WaitingReason,
-} from "@agent-platform/contracts";
+} from "@agent-pulse/contracts";
 
 import type { PushSubscription } from "./push.js";
 
@@ -33,10 +35,19 @@ export interface StoredSession extends SyncEvent {
   received_at: string;
 }
 
+export interface StoredAuthSnapshot extends AuthSnapshot {
+  device_id: string;
+  received_at: string;
+}
+
 export interface SessionFilters {
   device_id?: string;
   activity_status?: ActivityStatus;
   presence?: Presence;
+}
+
+export interface AuthFilters {
+  device_id?: string;
 }
 
 export interface SessionEventFilters {
@@ -77,6 +88,13 @@ export interface IngestResult {
   changes: SessionStatusChange[];
 }
 
+export interface AuthIngestResult {
+  /** Number of snapshots inserted or updated; repeated snapshots accept zero. */
+  accepted: number;
+  owner_id: string;
+  snapshots: StoredAuthSnapshot[];
+}
+
 export interface GatewayStore {
   createBindingCode(
     ownerId: string,
@@ -101,6 +119,7 @@ export interface GatewayStore {
     publicKey: string,
   ): Promise<DeviceRegistrationResult>;
   ingestBatch(batch: SyncBatch): Promise<IngestResult>;
+  ingestAuthBatch(batch: AuthSyncBatch): Promise<AuthIngestResult>;
   listDevices(ownerId: string): Promise<DeviceView[]>;
   listSessions(
     ownerId: string,
@@ -110,6 +129,10 @@ export interface GatewayStore {
     ownerId: string,
     filters: SessionEventFilters,
   ): Promise<StoredSession[]>;
+  listAuth(
+    ownerId: string,
+    filters: AuthFilters,
+  ): Promise<StoredAuthSnapshot[]>;
   close?(): Promise<void>;
 }
 
@@ -186,6 +209,7 @@ export class InMemoryGatewayStore implements GatewayStore {
   readonly #eventIdsBySequence = new Map<string, string>();
   readonly #lastSequenceByDevice = new Map<string, number>();
   readonly #sessions = new Map<string, StoredSession>();
+  readonly #authSnapshots = new Map<string, StoredAuthSnapshot>();
   readonly #now: () => Date;
 
   constructor(now: () => Date = () => new Date()) {
@@ -429,6 +453,64 @@ export class InMemoryGatewayStore implements GatewayStore {
     };
   }
 
+  async ingestAuthBatch(batch: AuthSyncBatch): Promise<AuthIngestResult> {
+    const device = this.#devices.get(batch.device_id);
+    if (device === undefined) {
+      throw new GatewayStoreError(
+        "device_not_registered",
+        "device is not registered",
+      );
+    }
+    if (device.revoked_at !== undefined) {
+      throw new GatewayStoreError("device_revoked", "device is revoked");
+    }
+    if (device.public_key !== batch.public_key) {
+      throw new GatewayStoreError(
+        "device_key_mismatch",
+        "auth batch public key does not match registered device",
+      );
+    }
+
+    const receivedAt = this.#now().toISOString();
+    const accepted: StoredAuthSnapshot[] = [];
+    let acceptedCount = 0;
+    for (const snapshot of batch.snapshots) {
+      const key = `${batch.device_id}:${snapshot.provider}`;
+      const existing = this.#authSnapshots.get(key);
+      if (existing !== undefined) {
+        const {
+          device_id: _deviceId,
+          received_at: _receivedAt,
+          ...existingSnapshot
+        } = existing;
+        const checkedAt = Date.parse(existing.checked_at);
+        const incomingCheckedAt = Date.parse(snapshot.checked_at);
+        if (
+          checkedAt > incomingCheckedAt ||
+          (checkedAt === incomingCheckedAt &&
+            isDeepStrictEqual(existingSnapshot, snapshot))
+        ) {
+          accepted.push(existing);
+          continue;
+        }
+      }
+      const stored: StoredAuthSnapshot = {
+        ...snapshot,
+        device_id: batch.device_id,
+        received_at: receivedAt,
+      };
+      this.#authSnapshots.set(key, stored);
+      accepted.push(stored);
+      acceptedCount += 1;
+    }
+    device.last_seen_at = receivedAt;
+    return {
+      accepted: acceptedCount,
+      owner_id: device.owner_id,
+      snapshots: accepted,
+    };
+  }
+
   async listDevices(ownerId: string): Promise<DeviceView[]> {
     const offlineBefore = this.#now().getTime() - 45_000;
     return [...this.#devices.values()]
@@ -490,6 +572,28 @@ export class InMemoryGatewayStore implements GatewayStore {
       )
       .sort((left, right) => right.sequence - left.sequence)
       .slice(0, filters.limit);
+  }
+
+  async listAuth(
+    ownerId: string,
+    filters: AuthFilters,
+  ): Promise<StoredAuthSnapshot[]> {
+    const ownedDevices = new Set(
+      [...this.#devices.values()]
+        .filter((device) => device.owner_id === ownerId)
+        .map((device) => device.device_id),
+    );
+    return [...this.#authSnapshots.values()]
+      .filter(
+        (snapshot) =>
+          ownedDevices.has(snapshot.device_id) &&
+          (filters.device_id === undefined ||
+            snapshot.device_id === filters.device_id),
+      )
+      .sort((left, right) => {
+        const time = Date.parse(right.checked_at) - Date.parse(left.checked_at);
+        return time === 0 ? left.provider.localeCompare(right.provider) : time;
+      });
   }
 }
 

@@ -1,4 +1,4 @@
-import type { AgentType } from "@agent-platform/contracts";
+import type { AgentType } from "@agent-pulse/contracts";
 
 import { matchesTab } from "./classify";
 import type { DeviceRecord, SessionRecord } from "./types";

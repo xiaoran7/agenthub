@@ -1,5 +1,10 @@
 import type { PanelConfig } from "./config";
-import type { DeviceRecord, SessionRecord, SessionRef } from "./types";
+import type {
+  AuthRecord,
+  DeviceRecord,
+  SessionRecord,
+  SessionRef,
+} from "./types";
 
 export const DEFAULT_TIMELINE_LIMIT = 100;
 
@@ -31,6 +36,10 @@ export function deviceUrl(base: string, deviceId: string): string {
 
 export function sessionsUrl(base: string): string {
   return `${base}/v1/sessions`;
+}
+
+export function deviceAuthUrl(base: string): string {
+  return `${base}/v1/device-auth`;
 }
 
 export function streamUrl(base: string): string {
@@ -236,6 +245,16 @@ export async function fetchSessions(
     config.userId,
   );
   return body.sessions;
+}
+
+export async function fetchDeviceAuth(
+  config: PanelConfig,
+): Promise<AuthRecord[]> {
+  const body = await fetchJson<{ snapshots: AuthRecord[] }>(
+    deviceAuthUrl(config.gatewayBase),
+    config.userId,
+  );
+  return body.snapshots;
 }
 
 export async function fetchSessionEvents(

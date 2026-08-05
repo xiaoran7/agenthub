@@ -40,7 +40,7 @@ test("bearer authentication rejects spoofed development identities", async () =>
     assert.equal(response.json().error, "authentication_required");
     assert.equal(
       response.headers["www-authenticate"],
-      'Bearer realm="agent-platform"',
+      'Bearer realm="agent-pulse"',
     );
   }
 

@@ -1,4 +1,4 @@
-# Agent-Platform Gateway API
+# AgentPulse Gateway API
 
 Device Gateway 与只读查询 API 的开发期实现。
 
@@ -11,8 +11,10 @@ Device Gateway 与只读查询 API 的开发期实现。
 | `POST`   | `/v1/devices/register`   | 使用一次性绑定码登记设备公钥                   |
 | `DELETE` | `/v1/devices/:deviceId`  | 撤销当前用户的设备，保留既有会话历史           |
 | `POST`   | `/v1/sync/batches`       | 验证并幂等接收签名事件批次                     |
+| `POST`   | `/v1/device-auth`        | 验证并幂等接收 Runner 的认证/配额安全快照      |
 | `GET`    | `/v1/devices`            | 查询当前开发用户的设备                         |
 | `GET`    | `/v1/sessions`           | 按设备、Presence、Activity Status 查询 Session |
+| `GET`    | `/v1/device-auth`        | 查询当前用户的认证/配额安全快照                |
 | `GET`    | `/v1/sessions/events`    | 查询单个 Session 的状态事件时间线              |
 | `GET`    | `/v1/stream`             | 订阅本 owner 的会话变化信号（SSE）             |
 | `GET`    | `/v1/push/key`           | 取 VAPID 应用服务器公钥                        |
@@ -29,11 +31,18 @@ Device Gateway 与只读查询 API 的开发期实现。
 每 20 秒一条注释心跳；单 owner 并发上限 8 条流，超出返回 429
 `too_many_streams`。重放批次不产生推送。
 
+`POST /v1/device-auth` 接收独立于 Session Outbox 的版本化 Ed25519 签名批次。Gateway
+会校验设备注册、公钥、撤销状态、批次顺序和每个 provider 的白名单字段，并按
+`(device_id, agent_type)` 幂等更新最新快照。`GET /v1/device-auth` 只返回状态、来源、
+脱敏账号、过期时间和配额窗口；原始 access/refresh token、cookie、凭据文件内容和环境变量
+值不会被该 API 接收或返回。Runner 只有在用户显式开启凭据访问后才会上报，后台同步不会
+代替登录或自动完成交互式重新认证。
+
 Web Push 默认关闭。生成一对 VAPID 密钥并配置齐三个变量后才启用，缺一个则
 `/v1/push/key` 返回 404、订阅接口拒绝登记：
 
 ```powershell
-npm.cmd run vapid-keys --workspace @agent-platform/api
+npm.cmd run vapid-keys --workspace @agent-pulse/api
 
 $env:AGENT_PLATFORM_VAPID_PUBLIC_KEY = '...'
 $env:AGENT_PLATFORM_VAPID_PRIVATE_KEY = '...'
@@ -62,7 +71,7 @@ Gateway 配置 `AGENT_PLATFORM_ACCESS_TOKEN`，在 Web 服务端配置相同的
 $env:AGENT_PLATFORM_ACCESS_TOKEN = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 $env:AGENT_PLATFORM_OWNER_ID = 'local-user'
 
-npm.cmd start --workspace @agent-platform/api
+npm.cmd start --workspace @agent-pulse/api
 ```
 
 另一个终端启动 Web 时，把同一令牌作为服务端变量传入：
@@ -70,7 +79,7 @@ npm.cmd start --workspace @agent-platform/api
 ```powershell
 $env:GATEWAY_ACCESS_TOKEN = '<与 Gateway 相同的令牌>'
 $env:GATEWAY_ORIGIN = 'http://127.0.0.1:3001'
-npm.cmd run dev --workspace @agent-platform/web
+npm.cmd run dev --workspace @agent-pulse/web
 ```
 
 默认只监听 `127.0.0.1:3001`。可通过 `HOST` 和 `PORT` 调整；对外部署前必须接入
@@ -87,8 +96,8 @@ $env:AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH = 'true'
 ```powershell
 $env:AGENT_PLATFORM_DATABASE_URL = 'postgresql://agent_platform:password@127.0.0.1:5432/agent_platform'
 
-npm.cmd run migrate --workspace @agent-platform/api
-npm.cmd start --workspace @agent-platform/api
+npm.cmd run migrate --workspace @agent-pulse/api
+npm.cmd start --workspace @agent-pulse/api
 ```
 
 `migrate` 可用于部署阶段单独执行迁移；服务启动仍会幂等检查迁移版本和 SHA-256，
@@ -105,10 +114,10 @@ npm.cmd start --workspace @agent-platform/api
 $env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
 $env:AGENT_PLATFORM_BINDING_CODE = '<从设置面板取得的一次性绑定码>'
 
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   device bind --identity runner-identity.json
 
-cargo run -p agent-platform-runner -- `
+cargo run -p agent-pulse-runner -- `
   sync push --identity runner-identity.json --db runner.db
 ```
 
@@ -119,8 +128,8 @@ Session 历史继续可读，设备显示为「已撤销」且后续同步统一
 ## 质量检查
 
 ```powershell
-npm.cmd run typecheck --workspace @agent-platform/api
-npm.cmd test --workspace @agent-platform/api
+npm.cmd run typecheck --workspace @agent-pulse/api
+npm.cmd test --workspace @agent-pulse/api
 ```
 
 PostgreSQL 集成测试默认显式跳过。对专用测试数据库设置以下变量后会为每次测试创建
@@ -128,7 +137,7 @@ PostgreSQL 集成测试默认显式跳过。对专用测试数据库设置以下
 
 ```powershell
 $env:AGENT_PLATFORM_TEST_DATABASE_URL = 'postgresql://agent_platform:password@127.0.0.1:5432/agent_platform_test'
-npm.cmd test --workspace @agent-platform/api
+npm.cmd test --workspace @agent-pulse/api
 ```
 
 设置后会同时运行基础持久化契约和 M4 的 12 设备/3000 Session 并发工作负载；

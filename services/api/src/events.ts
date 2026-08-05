@@ -11,6 +11,7 @@
 export interface ChangeMessage {
   device_id: string;
   accepted: number;
+  auth_snapshots?: boolean;
 }
 
 export type ChangeListener = (message: ChangeMessage) => void;

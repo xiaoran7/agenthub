@@ -1,4 +1,4 @@
-# Agent-Platform 技术可行性报告
+# AgentPulse 技术可行性报告
 
 调研日期：2026-07-25
 
@@ -123,9 +123,9 @@ Claude Code 自带 Remote Control，能够通过 Anthropic 官方网页和移动
 
 - 是 Anthropic 自有产品能力，不是第三方聚合平台的通用读取 API。
 - 会把 Session transcript 存储到 Anthropic 服务以实现跨设备同步。
-- 不能替代 Agent-Platform 对 Claude、Codex 和其他 Agent 的统一聚合。
+- 不能替代 AgentPulse 对 Claude、Codex 和其他 Agent 的统一聚合。
 
-因此它是产品对标和安全设计参考，不是 Agent-Platform 的数据源。
+因此它是产品对标和安全设计参考，不是 AgentPulse 的数据源。
 
 ## 3. Codex 可用能力
 
@@ -191,7 +191,7 @@ Hook 输入包含：
 - Turn 事件中的 `turn_id`
 - 部分事件中的 `permission_mode`
 
-因此，MVP 应安装一个可审查的 Agent-Platform Codex 插件或用户级 Hook，
+因此，MVP 应安装一个可审查的 AgentPulse Codex 插件或用户级 Hook，
 用于向本机 Runner 推送普通 CLI、IDE 和桌面 Session 的生命周期事件。
 
 限制：
@@ -208,7 +208,7 @@ Hook 输入包含：
 Codex 在 `CODEX_HOME`（默认 `~/.codex`）保存配置、Session 和其他本地状态，
 并提供 `thread/list` 对持久化记录进行查询和修复。
 
-Runner 不应读取：
+默认监控模式下 Runner 不应读取：
 
 - `auth.json`
 - OS Keychain/Keyring 中的 Codex 凭据
@@ -226,7 +226,7 @@ Runner 不应读取：
 | 等待权限 | `permission prompt`、PermissionRequest Hook | 多种 requestApproval |
 | 成功/失败/停止 | `done/failed/stopped`、Stop/StopFailure | `turn/completed` |
 | 历史 Session | 本地索引，完整枚举有限 | `thread/list` |
-| 原始登录复用 | 是，不读取 Token | 是，不读取 Token |
+| 原始登录复用 | 默认不读取 Token；授权模式可读取本机凭据缓存 | 默认不读取 Token；授权模式可读取本机凭据缓存 |
 | 完整对话非必需 | 是 | 是 |
 
 ## 5. 状态准确性分级
@@ -265,11 +265,18 @@ UI 必须显示数据来源、最后观察时间和状态置信度，避免把�
 该方案符合产品的基本安全边界：
 
 - Runner 主动连接云端，不开放公网端口。
-- 使用本机 Agent 的合法接口，不复制或上传 OAuth Token。
+- 使用本机 Agent 的合法接口；授权模式可在本机读取凭据，但不复制或上传 OAuth Token。
 - 只同步白名单元数据。
 - 原始工作目录默认转换为显示名和不可逆设备内指纹。
 - transcript 只保留在本机，除非用户未来明确开启更高级功能。
 - 远程控制、回复和审批能力与只读监控使用独立权限开关。
+
+授权模式补充：默认监控仍不读取敏感凭据；用户显式打开本地凭据管理后，Runner 可以
+读取 `auth.json`、`.credentials.json`、OS Keychain/Keyring 和授权环境变量。原始值只
+进入本机加密缓存，不进入同步协议。Codex 优先使用 App Server 的
+`account/read`、`account/rateLimits/read`、`account/login/start` 与 `account/logout`；
+Claude 优先委托 `claude auth status/login/logout`，不在 Runner 中复制私有 OAuth client
+secret 或猜测未公开刷新端点。
 
 ## 8. 官方资料
 

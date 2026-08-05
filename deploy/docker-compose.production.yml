@@ -1,0 +1,34 @@
+name: agent-pulse
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    container_name: agent-pulse-api
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./docker.env
+    environment:
+      NODE_ENV: production
+      HOST: 127.0.0.1
+      PORT: 3101
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    container_name: agent-pulse-web
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./docker.env
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 127.0.0.1
+      PORT: 3100
+      GATEWAY_ORIGIN: http://127.0.0.1:3101
+      GATEWAY_ACCESS_TOKEN: ${AGENT_PLATFORM_ACCESS_TOKEN}
+    depends_on:
+      api:
+        condition: service_started

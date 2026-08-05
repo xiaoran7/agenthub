@@ -7,6 +7,13 @@
 
 ### Added
 
+- Runner 增加显式授权的 Claude Code/Codex 认证状态与配额采集：通过官方 CLI/app-server
+  查询登录状态、刷新生命周期与配额窗口，使用设备派生密钥将原始凭据仅缓存于本地，
+  并以独立的 Ed25519 签名快照同步到 Gateway。Gateway 和 Web 只接收安全字段；后台
+  状态循环不启动交互式登录，`auth login/logout/token --reveal` 保留为本地显式操作。
+- Web 面板修复来源筛选后检查器残留与筛选状态循环，移动端底栏补齐诊断/帮助入口，
+  活动页和总览页的静态标签改为真实可操作筛选，并增加 Agent 认证与配额健康卡片。
+
 - 原生 Android 增加与 Web 同语义的 Jetpack Compose 动效系统：底栏页面按方向切换，
   Session、设备与时间线使用有界 stagger 入场，详情按 Session/状态重新进入，概览
   数字平滑切换，筛选和底栏选中态提供缩放/透明度反馈，C 形品牌标记与粉色信号保持
@@ -213,7 +220,7 @@
 - PostgreSQL 迁移校验和在计算前归一化 CRLF，Windows 检出与 Linux 部署不再
   因行尾差异触发启动失败。
 
-- 初始化 Agent-Platform 独立 Git 仓库及 Solum 风格的 Agent 工作规范、变更日志、
+- 初始化 AgentPulse 独立 Git 仓库及 Solum 风格的 Agent 工作规范、变更日志、
   踩坑集和杂项决策记录。
 - 建立 Rust Runner：Claude/Codex Session 状态标准化、Hook 事件适配、工作目录
   HMAC 脱敏、SQLite Outbox、Session 快照和 Fixture 隐私契约测试。

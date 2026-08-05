@@ -6,6 +6,7 @@ use ureq::tls::{Certificate, RootCerts, TlsConfig};
 use url::{Host, Url};
 
 use crate::{
+    auth::AuthSyncBatch,
     device::DeviceIdentity,
     outbox::Outbox,
     sync::{SyncAck, SyncBatch, SyncError, apply_sync_ack, prepare_sync_batch},
@@ -98,6 +99,11 @@ pub struct PushSummary {
     pub pending_events: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct AuthPushSummary {
+    pub accepted: usize,
+}
+
 pub struct GatewayClient {
     base_url: String,
     agent: ureq::Agent,
@@ -116,7 +122,7 @@ impl GatewayClient {
         let base_url = validate_base_url(base_url)?;
         let mut config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
-            .user_agent(concat!("agent-platform-runner/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("agent-pulse-runner/", env!("CARGO_PKG_VERSION")))
             // Following a redirect could resend the request to an address the
             // HTTPS/loopback policy never validated.
             .max_redirects(0);
@@ -177,6 +183,10 @@ impl GatewayClient {
 
     pub fn upload(&self, batch: &SyncBatch) -> Result<SyncAck, GatewayError> {
         self.post_json("/v1/sync/batches", batch)
+    }
+
+    pub fn upload_auth(&self, batch: &AuthSyncBatch) -> Result<AuthPushSummary, GatewayError> {
+        self.post_json("/v1/device-auth", batch)
     }
 
     fn post_json<T: Serialize, R: DeserializeOwned>(

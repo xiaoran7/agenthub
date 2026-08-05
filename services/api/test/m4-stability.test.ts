@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SyncBatch } from "@agent-platform/contracts";
+import type { SyncBatch } from "@agent-pulse/contracts";
 
 import { createGatewayApp } from "../src/app.js";
 import { DevelopmentIdentityAuthenticator } from "../src/auth.js";
