@@ -125,6 +125,16 @@ Runner 使用以下接口：
 - `GET /v1/device-auth`：按已认证 owner 查询脱敏认证/配额快照，供 Web 和移动端只读展示。
 - `DELETE /v1/devices/:deviceId`：经用户认证后软撤销设备；保留历史事件和 Session，
   但后续登记与批次同步均返回 `device_revoked`。
+- `POST /v1/tasks` / `GET /v1/tasks` / `POST /v1/tasks/:taskId/cancel`：登录用户创建、
+  查询和取消租户隔离任务；Free、设备归属和 Pro/Team 并发额度均由服务端强制检查。
+- `POST /v1/device-tasks/claim`：设备以 Ed25519 签名领取最早任务；未确认响应可重复领取
+  同一未完成任务，过期或取消任务不会再次下发。
+- `POST /v1/device-tasks/:taskId/status`：设备签名回报预期版本与新状态；只接受合法状态
+  迁移，完全相同的回报重放幂等。
+
+任务请求只包含 Agent 类型、提示词、可选项目指纹、幂等键、过期时间与执行策略，明确
+禁止服务端路径和任意 shell 命令。当前 API 只开放 `local_confirmation`；Runner 必须用
+本地 allow-list 解析项目指纹，并把提示词经 stdin 交给 CLI，避免进入进程参数列表。
 
 绑定码长度和控制字符在发出请求前校验。手工 `sync push` 与 `run` 的后台同步共用
 同一套有界批次和 ACK 校验；只在响应能反序列化且通过第 4 节全部确认约束后清理
@@ -151,6 +161,7 @@ IPv6 回环地址使用 HTTP；URL 不允许嵌入用户名、密码、查询参
 - Windows ACL 主动加固或系统密钥库托管
 - SyncAck 的服务端签名（文件式 `sync ack` 诊断流程因此只应在本地信任环境使用）
 - Outbox 事件与会话快照的本地保留/清理策略（长期不同步时数据库单调增长）
+- `observe_only` / `trusted_execution` 策略、任务执行本地持久收据与崩溃后自动续跑
 
 Gateway 已实现受认证签发、过期、摘要持久化、并发单次领取、同设备幂等重试和软
 撤销；未配置 PostgreSQL 时这些状态只保存在进程内。多用户联合登录、恢复绑定、

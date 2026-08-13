@@ -10,6 +10,7 @@ use crate::{
     device::DeviceIdentity,
     outbox::Outbox,
     sync::{SyncAck, SyncBatch, SyncError, apply_sync_ack, prepare_sync_batch},
+    tasks::{DeviceTaskClaim, DeviceTaskUpdate, RemoteTask},
 };
 
 const MAX_BINDING_CODE_LENGTH: usize = 128;
@@ -187,6 +188,37 @@ impl GatewayClient {
 
     pub fn upload_auth(&self, batch: &AuthSyncBatch) -> Result<AuthPushSummary, GatewayError> {
         self.post_json("/v1/device-auth", batch)
+    }
+
+    pub fn claim_task(
+        &self,
+        identity: &DeviceIdentity,
+    ) -> Result<Option<RemoteTask>, GatewayError> {
+        let claim = DeviceTaskClaim::signed(identity)?;
+        let url = format!("{}/v1/device-tasks/claim", self.base_url);
+        let mut response = self
+            .agent
+            .post(&url)
+            .send_json(&claim)
+            .map_err(classify_transport_error)?;
+        if response.status().as_u16() == 204 {
+            return Ok(None);
+        }
+        let task: RemoteTask = response
+            .body_mut()
+            .read_json()
+            .map_err(|_| GatewayError::InvalidResponse)?;
+        if task.target_device_id != identity.device_id() {
+            return Err(GatewayError::DeviceMismatch);
+        }
+        Ok(Some(task))
+    }
+
+    pub fn update_task(&self, update: &DeviceTaskUpdate) -> Result<RemoteTask, GatewayError> {
+        self.post_json(
+            &format!("/v1/device-tasks/{}/status", update.task_id),
+            update,
+        )
     }
 
     fn post_json<T: Serialize, R: DeserializeOwned>(

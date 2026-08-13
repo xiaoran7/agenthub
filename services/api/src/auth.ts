@@ -8,7 +8,7 @@ const MAX_ACCESS_TOKEN_BYTES = 512;
 const MAX_OWNER_ID_LENGTH = 128;
 
 export interface OwnerAuthenticator {
-  authenticate(request: FastifyRequest): string;
+  authenticate(request: FastifyRequest): string | Promise<string>;
 }
 
 /** Deny-by-default factory behaviour for callers that omit authentication. */

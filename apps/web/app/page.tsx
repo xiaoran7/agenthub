@@ -20,6 +20,7 @@ import {
   OverviewView,
   SessionsView,
 } from "../src/components/PlatformViews";
+import { TasksView } from "../src/components/TasksView";
 import { PlatformShell } from "../src/components/PlatformShell";
 import {
   describeApiError,
@@ -27,6 +28,7 @@ import {
   fetchDevices,
   fetchSessionEvents,
   fetchSessions,
+  fetchTasks,
 } from "../src/lib/api";
 import type { PanelConfig } from "../src/lib/config";
 import { loadConfig, saveConfig } from "../src/lib/config";
@@ -50,6 +52,7 @@ import type {
   DeviceRecord,
   SessionRecord,
   SessionRef,
+  RemoteTask,
 } from "../src/lib/types";
 import { parseSessionRef, sessionKey, sessionRef } from "../src/lib/types";
 import {
@@ -58,6 +61,12 @@ import {
   previewTimelineFor,
 } from "../src/lib/preview-data";
 import { Icon } from "../src/components/Icon";
+import { AccountGate } from "../src/components/AccountGate";
+import {
+  currentAccount,
+  logoutAccount,
+  type AccountView,
+} from "../src/lib/account";
 
 const POLL_INTERVAL_MS = 5_000;
 const STREAMING_POLL_INTERVAL_MS = 30_000;
@@ -118,11 +127,13 @@ function SyncAlert({
 }
 
 export default function PanelPage() {
+  const [account, setAccount] = useState<AccountView | null | undefined>();
   const [config, setConfig] = useState<PanelConfig | undefined>();
   const [previewMode, setPreviewMode] = useState<boolean | undefined>();
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [authSnapshots, setAuthSnapshots] = useState<AuthRecord[]>([]);
+  const [tasks, setTasks] = useState<RemoteTask[]>([]);
   const [syncError, setSyncError] = useState<string | undefined>();
   const [lastSyncMs, setLastSyncMs] = useState<number | undefined>();
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -148,10 +159,17 @@ export default function PanelPage() {
   const timelineRequest = useRef(0);
 
   useEffect(() => {
+    const preview =
+      new URLSearchParams(window.location.search).get("preview") === "1";
+    setPreviewMode(preview);
     setConfig(loadConfig(window.localStorage));
-    setPreviewMode(
-      new URLSearchParams(window.location.search).get("preview") === "1",
-    );
+    if (preview) {
+      setAccount(null);
+      return;
+    }
+    void currentAccount()
+      .then((next) => setAccount(next ?? null))
+      .catch(() => setAccount(null));
   }, []);
 
   const refresh = useCallback(async () => {
@@ -161,25 +179,30 @@ export default function PanelPage() {
       setDevices(PREVIEW_DEVICES);
       setSessions(PREVIEW_SESSIONS);
       setAuthSnapshots([]);
+      setTasks([]);
       setSyncError(undefined);
       setLastSyncMs(Date.now());
       return;
     }
+    if (account === undefined || account === null) return;
     try {
-      const [nextDevices, nextSessions, nextAuthSnapshots] = await Promise.all([
-        fetchDevices(config),
-        fetchSessions(config),
-        fetchDeviceAuth(config),
-      ]);
+      const [nextDevices, nextSessions, nextAuthSnapshots, nextTasks] =
+        await Promise.all([
+          fetchDevices(config),
+          fetchSessions(config),
+          fetchDeviceAuth(config),
+          fetchTasks(config),
+        ]);
       setDevices(nextDevices);
       setSessions(nextSessions);
       setAuthSnapshots(nextAuthSnapshots);
+      setTasks(nextTasks);
       setSyncError(undefined);
       setLastSyncMs(Date.now());
     } catch (error) {
       setSyncError(describeApiError(error));
     }
-  }, [config, previewMode]);
+  }, [account, config, previewMode]);
 
   refreshRef.current = refresh;
 
@@ -224,7 +247,13 @@ export default function PanelPage() {
   }, [config, previewMode, refresh]);
 
   useEffect(() => {
-    if (previewMode === undefined || previewMode) return;
+    if (
+      previewMode === undefined ||
+      previewMode ||
+      account === undefined ||
+      account === null
+    )
+      return;
     const interval = window.setInterval(
       () => {
         if (!document.hidden) void refresh();
@@ -238,6 +267,8 @@ export default function PanelPage() {
     if (
       previewMode === undefined ||
       previewMode ||
+      account === undefined ||
+      account === null ||
       config === undefined ||
       !browserOnline
     ) {
@@ -252,7 +283,7 @@ export default function PanelPage() {
       },
       onConnected: setStreamConnected,
     });
-  }, [browserOnline, config, loadTimeline, previewMode]);
+  }, [account, browserOnline, config, loadTimeline, previewMode]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -401,6 +432,7 @@ export default function PanelPage() {
     setDevices([]);
     setSessions([]);
     setAuthSnapshots([]);
+    setTasks([]);
     setSelected(undefined);
     setFullSession(false);
     setSyncError(undefined);
@@ -411,6 +443,7 @@ export default function PanelPage() {
   };
 
   const showInitialLoading =
+    account === undefined ||
     previewMode === undefined ||
     (lastSyncMs === undefined && syncError === undefined);
   const connection = previewMode
@@ -465,6 +498,22 @@ export default function PanelPage() {
         authSnapshots={authSnapshots}
       />
     );
+  } else if (
+    section === "tasks" &&
+    account !== null &&
+    account !== undefined &&
+    config !== undefined
+  ) {
+    view = (
+      <TasksView
+        account={account}
+        config={config}
+        devices={devices}
+        onRefresh={refresh}
+        sessions={sessions}
+        tasks={tasks}
+      />
+    );
   } else if (section === "activity") {
     view = (
       <ActivityView devices={devices} nowMs={nowMs} sessions={baseSessions} />
@@ -516,6 +565,10 @@ export default function PanelPage() {
       />
     );
 
+  if (previewMode === false && account === null) {
+    return <AccountGate onAuthenticated={setAccount} />;
+  }
+
   return (
     <>
       <PlatformShell
@@ -537,6 +590,16 @@ export default function PanelPage() {
         rangeFilter={rangeFilter}
         search={search}
         section={section}
+        account={account ?? undefined}
+        onLogout={() => {
+          void logoutAccount().finally(() => {
+            setAccount(null);
+            setDevices([]);
+            setSessions([]);
+            setAuthSnapshots([]);
+            setTasks([]);
+          });
+        }}
       >
         <SyncAlert
           browserOnline={browserOnline}
@@ -547,6 +610,7 @@ export default function PanelPage() {
       </PlatformShell>
       {settingsOpen && config !== undefined && (
         <SettingsPanel
+          account={account ?? undefined}
           config={config}
           devices={devices}
           installState={pwaInstall.state}
@@ -554,6 +618,14 @@ export default function PanelPage() {
           onClose={() => setSettingsOpen(false)}
           onDevicesChanged={() => void refresh()}
           onInstall={pwaInstall.install}
+          onLoggedOut={() => {
+            setSettingsOpen(false);
+            setAccount(null);
+            setDevices([]);
+            setSessions([]);
+            setAuthSnapshots([]);
+            setTasks([]);
+          }}
           onSave={handleSaveConfig}
         />
       )}

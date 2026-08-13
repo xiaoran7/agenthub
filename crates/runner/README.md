@@ -17,6 +17,24 @@
 - Ed25519 本地设备身份、签名同步批次和有界确认
 - 独立后台同步、启动排空、新事件唤醒与网络失败指数退避
 - Fixture 驱动的隐私回归测试
+- Pro/Team 远程任务主动领取、本机项目指纹 allow-list、本地确认与 Claude/Codex CLI 执行
+
+## 远程任务
+
+任务 Worker 只建立出站连接。每个项目必须在本机显式配置指纹到路径的映射；Gateway
+只看到指纹，不接收路径。当前只支持本地确认策略，提示词会在终端完整显示，并通过
+stdin 交给 Agent CLI，不进入命令行参数：
+
+```powershell
+cargo run -p agent-pulse-runner -- tasks work `
+  --identity runner-identity.json `
+  --server http://127.0.0.1:3001 `
+  --project <64位项目指纹>=D:\Projects\Example
+```
+
+Runner 在 `delivered`、`accepted` 或 `waiting_user` 阶段重启可安全恢复同一任务；若在
+`running` 后中断，下次领取会回报 `execution_interrupted`，不会自动重复执行可能已产生
+修改的提示词。`--once` 只轮询一次，供诊断与自动化验证。
 
 ## 开发命令
 

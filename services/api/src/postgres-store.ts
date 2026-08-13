@@ -6,22 +6,43 @@ import type {
   ActivityStatus,
   AuthSnapshot,
   AuthSyncBatch,
+  DeviceTaskClaim,
+  DeviceTaskUpdate,
+  RemoteTask,
   SyncBatch,
   SyncEvent,
 } from "@agent-pulse/contracts";
 import postgres from "postgres";
 
+import {
+  AccountError,
+  accountView,
+  isNewerSubscriptionEvent,
+  type AccountStore,
+  type AccountUser,
+  type AccountView,
+  type LoginAttemptResult,
+  type SubscriptionEvent,
+  type SubscriptionEventResult,
+  type SubscriptionRecord,
+  type WebSessionView,
+} from "./accounts.js";
 import type { PushSubscription } from "./push.js";
 import {
+  canDeviceTransition,
   GatewayStoreError,
   sessionStatusChange,
   type AuthFilters,
   type AuthIngestResult,
+  type CreateRemoteTaskRecord,
   type DeviceRegistrationResult,
   type DeviceView,
   type GatewayStore,
   type IngestResult,
   type RegisteredDevice,
+  type RemoteTaskCreateResult,
+  type RemoteTaskFilters,
+  type RemoteTaskMutationResult,
   type SessionEventFilters,
   type SessionFilters,
   type SessionStatusChange,
@@ -52,6 +73,25 @@ const MIGRATIONS = [
   {
     version: 5,
     url: new URL("../migrations/0005_device_auth.sql", import.meta.url),
+  },
+  {
+    version: 6,
+    url: new URL(
+      "../migrations/0006_accounts_subscriptions.sql",
+      import.meta.url,
+    ),
+  },
+  {
+    version: 7,
+    url: new URL("../migrations/0007_remote_tasks.sql", import.meta.url),
+  },
+  {
+    version: 8,
+    url: new URL("../migrations/0008_account_lifecycle.sql", import.meta.url),
+  },
+  {
+    version: 9,
+    url: new URL("../migrations/0009_password_lifecycle.sql", import.meta.url),
   },
 ] as const;
 
@@ -98,7 +138,30 @@ interface SessionStatusRow {
   event_data: unknown;
 }
 
-export class PostgresGatewayStore implements GatewayStore {
+interface RemoteTaskRow {
+  task_id: string;
+  target_device_id: string;
+  agent_type: RemoteTask["agent_type"];
+  prompt: string;
+  project_fingerprint: string | null;
+  idempotency_key: string;
+  execution_policy: RemoteTask["execution_policy"];
+  status: RemoteTask["status"];
+  version: number;
+  created_at: unknown;
+  expires_at: unknown;
+  updated_at: unknown;
+  delivered_at: unknown | null;
+  started_at: unknown | null;
+  completed_at: unknown | null;
+  agent_session_id: string | null;
+  result_summary: string | null;
+  error_code: string | null;
+}
+
+type QuerySql = postgres.Sql | postgres.TransactionSql;
+
+export class PostgresGatewayStore implements GatewayStore, AccountStore {
   readonly #sql: postgres.Sql;
 
   constructor(sql: postgres.Sql) {
@@ -120,6 +183,592 @@ export class PostgresGatewayStore implements GatewayStore {
       await sql.end({ timeout: 1 });
       throw error;
     }
+  }
+
+  async createAccount(input: {
+    userId: string;
+    email: string;
+    displayName: string;
+    passwordHash: string;
+  }): Promise<AccountView> {
+    try {
+      return await this.#sql.begin(async (sql) => {
+        const rows = await sql<AccountUser[]>`
+          INSERT INTO agent_pulse_users (
+            user_id,
+            email,
+            password_hash,
+            display_name
+          )
+          VALUES (
+            ${input.userId},
+            ${input.email},
+            ${input.passwordHash},
+            ${input.displayName}
+          )
+          RETURNING
+            user_id::text,
+            email,
+            display_name,
+            password_hash,
+            status,
+            email_verified_at,
+            created_at
+        `;
+        const user = rows[0];
+        if (user === undefined)
+          throw new Error("account insert returned no row");
+        const subscriptions = await sql<SubscriptionRecord[]>`
+          INSERT INTO agent_pulse_subscriptions (user_id)
+          VALUES (${input.userId})
+          RETURNING plan, status, current_period_end
+        `;
+        const subscription = subscriptions[0];
+        if (subscription === undefined) {
+          throw new Error("subscription insert returned no row");
+        }
+        return accountView(
+          normalizeAccountUser(user),
+          normalizeSubscription(subscription),
+        );
+      });
+    } catch (error) {
+      if (postgresConstraint(error) === "agent_pulse_users_email_unique_idx") {
+        throw new AccountError(
+          "email_already_registered",
+          "email is already registered",
+          409,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async findAccountByEmail(email: string): Promise<AccountUser | undefined> {
+    const rows = await this.#sql<AccountUser[]>`
+      SELECT
+        user_id::text,
+        email,
+        display_name,
+        password_hash,
+        status,
+        email_verified_at,
+        created_at
+      FROM agent_pulse_users
+      WHERE lower(email) = ${email}
+      LIMIT 1
+    `;
+    return rows[0] === undefined ? undefined : normalizeAccountUser(rows[0]);
+  }
+
+  async accountView(userId: string): Promise<AccountView | undefined> {
+    return postgresAccountView(this.#sql, userId);
+  }
+
+  async createWebSession(input: {
+    sessionId: string;
+    digest: string;
+    userId: string;
+    createdAt: string;
+    expiresAt: string;
+  }): Promise<void> {
+    await this.#sql`
+      INSERT INTO agent_pulse_web_sessions (
+        session_id,
+        session_digest,
+        user_id,
+        created_at,
+        last_seen_at,
+        expires_at
+      )
+      VALUES (
+        ${input.sessionId}, ${input.digest}, ${input.userId},
+        ${input.createdAt}, ${input.createdAt}, ${input.expiresAt}
+      )
+    `;
+  }
+
+  async findWebSession(
+    digest: string,
+    now: string,
+  ): Promise<string | undefined> {
+    const rows = await this.#sql<Array<{ user_id: string }>>`
+      UPDATE agent_pulse_web_sessions AS sessions
+      SET last_seen_at = clock_timestamp()
+      FROM agent_pulse_users AS users
+      WHERE sessions.session_digest = ${digest}
+        AND sessions.user_id = users.user_id
+        AND sessions.expires_at > ${now}
+        AND users.status = 'active'
+      RETURNING sessions.user_id::text
+    `;
+    return rows[0]?.user_id;
+  }
+
+  async deleteWebSession(digest: string): Promise<void> {
+    await this.#sql`
+      DELETE FROM agent_pulse_web_sessions
+      WHERE session_digest = ${digest}
+    `;
+  }
+
+  async listWebSessions(
+    userId: string,
+    currentDigest: string,
+    now: string,
+  ): Promise<WebSessionView[]> {
+    const rows = await this.#sql<
+      Array<{
+        session_id: string;
+        created_at: unknown;
+        last_seen_at: unknown;
+        expires_at: unknown;
+        current: boolean;
+      }>
+    >`
+      SELECT
+        session_id::text,
+        created_at,
+        last_seen_at,
+        expires_at,
+        session_digest = ${currentDigest} AS current
+      FROM agent_pulse_web_sessions
+      WHERE user_id = ${userId} AND expires_at > ${now}
+      ORDER BY last_seen_at DESC
+    `;
+    return rows.map((row) => ({
+      session_id: row.session_id,
+      created_at: isoTimestamp(row.created_at),
+      last_seen_at: isoTimestamp(row.last_seen_at),
+      expires_at: isoTimestamp(row.expires_at),
+      current: row.current,
+    }));
+  }
+
+  async revokeWebSession(userId: string, sessionId: string): Promise<boolean> {
+    const rows = await this.#sql<Array<{ session_id: string }>>`
+      DELETE FROM agent_pulse_web_sessions
+      WHERE user_id = ${userId} AND session_id = ${sessionId}
+      RETURNING session_id::text
+    `;
+    return rows.length > 0;
+  }
+
+  async revokeOtherWebSessions(
+    userId: string,
+    currentDigest: string,
+  ): Promise<number> {
+    const rows = await this.#sql<Array<{ session_id: string }>>`
+      DELETE FROM agent_pulse_web_sessions
+      WHERE user_id = ${userId} AND session_digest <> ${currentDigest}
+      RETURNING session_id::text
+    `;
+    return rows.length;
+  }
+
+  async issueEmailVerification(input: {
+    digest: string;
+    userId: string;
+    createdAt: string;
+    expiresAt: string;
+    minimumIntervalSeconds: number;
+  }): Promise<LoginAttemptResult> {
+    return this.#sql.begin(async (sql) => {
+      const users = await sql<Array<{ email_verified_at: unknown | null }>>`
+        SELECT email_verified_at
+        FROM agent_pulse_users
+        WHERE user_id = ${input.userId} AND status = 'active'
+        FOR UPDATE
+      `;
+      const user = users[0];
+      if (user === undefined) {
+        throw new AccountError(
+          "account_unavailable",
+          "account unavailable",
+          403,
+        );
+      }
+      if (user.email_verified_at !== null) {
+        return { allowed: false, retry_after_seconds: 0 };
+      }
+      const latest = await sql<Array<{ created_at: unknown }>>`
+        SELECT created_at
+        FROM agent_pulse_email_verifications
+        WHERE user_id = ${input.userId}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+      const nextAllowedAt =
+        latest[0] === undefined
+          ? 0
+          : Date.parse(isoTimestamp(latest[0].created_at)) +
+            input.minimumIntervalSeconds * 1_000;
+      if (nextAllowedAt > Date.parse(input.createdAt)) {
+        return {
+          allowed: false,
+          retry_after_seconds: Math.ceil(
+            (nextAllowedAt - Date.parse(input.createdAt)) / 1_000,
+          ),
+        };
+      }
+      await sql`
+        UPDATE agent_pulse_email_verifications
+        SET consumed_at = ${input.createdAt}
+        WHERE user_id = ${input.userId} AND consumed_at IS NULL
+      `;
+      await sql`
+        INSERT INTO agent_pulse_email_verifications (
+          token_digest, user_id, created_at, expires_at
+        ) VALUES (
+          ${input.digest}, ${input.userId}, ${input.createdAt}, ${input.expiresAt}
+        )
+      `;
+      return { allowed: true, retry_after_seconds: 0 };
+    });
+  }
+
+  async consumeEmailVerification(
+    digest: string,
+    now: string,
+  ): Promise<AccountView | undefined> {
+    const userId = await this.#sql.begin(async (sql) => {
+      const rows = await sql<Array<{ user_id: string }>>`
+        UPDATE agent_pulse_email_verifications
+        SET consumed_at = ${now}
+        WHERE token_digest = ${digest}
+          AND consumed_at IS NULL
+          AND expires_at > ${now}
+        RETURNING user_id::text
+      `;
+      const id = rows[0]?.user_id;
+      if (id === undefined) return undefined;
+      await sql`
+        UPDATE agent_pulse_users
+        SET email_verified_at = COALESCE(email_verified_at, ${now}),
+            updated_at = clock_timestamp()
+        WHERE user_id = ${id} AND status = 'active'
+      `;
+      return id;
+    });
+    return userId === undefined ? undefined : this.accountView(userId);
+  }
+
+  async deletePendingEmailVerification(digest: string): Promise<void> {
+    await this.#sql`
+      DELETE FROM agent_pulse_email_verifications
+      WHERE token_digest = ${digest} AND consumed_at IS NULL
+    `;
+  }
+
+  async issuePasswordReset(input: {
+    digest: string;
+    userId: string;
+    createdAt: string;
+    expiresAt: string;
+    minimumIntervalSeconds: number;
+  }): Promise<LoginAttemptResult> {
+    return this.#sql.begin(async (sql) => {
+      const users = await sql<Array<{ user_id: string }>>`
+        SELECT user_id::text
+        FROM agent_pulse_users
+        WHERE user_id = ${input.userId} AND status = 'active'
+        FOR UPDATE
+      `;
+      if (users[0] === undefined) {
+        return { allowed: false, retry_after_seconds: 0 };
+      }
+      const latest = await sql<Array<{ created_at: unknown }>>`
+        SELECT created_at
+        FROM agent_pulse_password_resets
+        WHERE user_id = ${input.userId}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+      const nextAllowedAt =
+        latest[0] === undefined
+          ? 0
+          : Date.parse(isoTimestamp(latest[0].created_at)) +
+            input.minimumIntervalSeconds * 1_000;
+      if (nextAllowedAt > Date.parse(input.createdAt)) {
+        return {
+          allowed: false,
+          retry_after_seconds: Math.ceil(
+            (nextAllowedAt - Date.parse(input.createdAt)) / 1_000,
+          ),
+        };
+      }
+      await sql`
+        UPDATE agent_pulse_password_resets
+        SET consumed_at = ${input.createdAt}
+        WHERE user_id = ${input.userId} AND consumed_at IS NULL
+      `;
+      await sql`
+        INSERT INTO agent_pulse_password_resets (
+          token_digest, user_id, created_at, expires_at
+        ) VALUES (
+          ${input.digest}, ${input.userId}, ${input.createdAt}, ${input.expiresAt}
+        )
+      `;
+      return { allowed: true, retry_after_seconds: 0 };
+    });
+  }
+
+  async consumePasswordReset(input: {
+    digest: string;
+    passwordHash: string;
+    now: string;
+  }): Promise<{ updated: boolean; revoked_sessions: number }> {
+    return this.#sql.begin(async (sql) => {
+      const resets = await sql<Array<{ user_id: string }>>`
+        SELECT user_id::text
+        FROM agent_pulse_password_resets
+        WHERE token_digest = ${input.digest}
+          AND consumed_at IS NULL
+          AND expires_at > ${input.now}
+        FOR UPDATE
+      `;
+      const userId = resets[0]?.user_id;
+      if (userId === undefined) {
+        return { updated: false, revoked_sessions: 0 };
+      }
+      const users = await sql<Array<{ user_id: string }>>`
+        UPDATE agent_pulse_users
+        SET password_hash = ${input.passwordHash}, updated_at = clock_timestamp()
+        WHERE user_id = ${userId} AND status = 'active'
+        RETURNING user_id::text
+      `;
+      if (users[0] === undefined) {
+        return { updated: false, revoked_sessions: 0 };
+      }
+      await sql`
+        UPDATE agent_pulse_password_resets
+        SET consumed_at = ${input.now}
+        WHERE user_id = ${userId} AND consumed_at IS NULL
+      `;
+      const revoked = await sql<Array<{ session_id: string }>>`
+        DELETE FROM agent_pulse_web_sessions
+        WHERE user_id = ${userId}
+        RETURNING session_id::text
+      `;
+      return { updated: true, revoked_sessions: revoked.length };
+    });
+  }
+
+  async deletePendingPasswordReset(digest: string): Promise<void> {
+    await this.#sql`
+      DELETE FROM agent_pulse_password_resets
+      WHERE token_digest = ${digest} AND consumed_at IS NULL
+    `;
+  }
+
+  async changePassword(input: {
+    userId: string;
+    expectedPasswordHash: string;
+    passwordHash: string;
+    currentSessionDigest: string;
+  }): Promise<{ updated: boolean; revoked_sessions: number }> {
+    return this.#sql.begin(async (sql) => {
+      const users = await sql<Array<{ user_id: string }>>`
+        UPDATE agent_pulse_users
+        SET password_hash = ${input.passwordHash}, updated_at = clock_timestamp()
+        WHERE user_id = ${input.userId}
+          AND status = 'active'
+          AND password_hash = ${input.expectedPasswordHash}
+        RETURNING user_id::text
+      `;
+      if (users[0] === undefined) {
+        return { updated: false, revoked_sessions: 0 };
+      }
+      await sql`
+        UPDATE agent_pulse_password_resets
+        SET consumed_at = clock_timestamp()
+        WHERE user_id = ${input.userId} AND consumed_at IS NULL
+      `;
+      const revoked = await sql<Array<{ session_id: string }>>`
+        DELETE FROM agent_pulse_web_sessions
+        WHERE user_id = ${input.userId}
+          AND session_digest <> ${input.currentSessionDigest}
+        RETURNING session_id::text
+      `;
+      return { updated: true, revoked_sessions: revoked.length };
+    });
+  }
+
+  async consumeLoginAttempt(input: {
+    scopeDigest: string;
+    now: string;
+    windowSeconds: number;
+    maximumAttempts: number;
+    blockSeconds: number;
+  }): Promise<LoginAttemptResult> {
+    return this.#sql.begin(async (sql) => {
+      const inserted = await sql<Array<{ scope_digest: string }>>`
+        INSERT INTO agent_pulse_login_limits (
+          scope_digest, attempt_count, window_started_at
+        ) VALUES (${input.scopeDigest}, 1, ${input.now})
+        ON CONFLICT (scope_digest) DO NOTHING
+        RETURNING scope_digest
+      `;
+      if (inserted.length > 0) {
+        return { allowed: true, retry_after_seconds: 0 };
+      }
+      const rows = await sql<
+        Array<{
+          attempt_count: number;
+          window_started_at: unknown;
+          blocked_until: unknown | null;
+        }>
+      >`
+        SELECT attempt_count, window_started_at, blocked_until
+        FROM agent_pulse_login_limits
+        WHERE scope_digest = ${input.scopeDigest}
+        FOR UPDATE
+      `;
+      const row = rows[0];
+      if (row === undefined) throw new Error("login limit row disappeared");
+      const nowMs = Date.parse(input.now);
+      if (
+        Date.parse(isoTimestamp(row.window_started_at)) +
+          input.windowSeconds * 1_000 <=
+        nowMs
+      ) {
+        await sql`
+          UPDATE agent_pulse_login_limits
+          SET attempt_count = 1, window_started_at = ${input.now}, blocked_until = NULL
+          WHERE scope_digest = ${input.scopeDigest}
+        `;
+        return { allowed: true, retry_after_seconds: 0 };
+      }
+      if (row.blocked_until !== null) {
+        const blockedUntil = Date.parse(isoTimestamp(row.blocked_until));
+        if (blockedUntil > nowMs) {
+          return {
+            allowed: false,
+            retry_after_seconds: Math.ceil((blockedUntil - nowMs) / 1_000),
+          };
+        }
+      }
+      const attemptCount = Number(row.attempt_count) + 1;
+      const blocked = attemptCount > input.maximumAttempts;
+      const blockedUntil = blocked
+        ? new Date(nowMs + input.blockSeconds * 1_000).toISOString()
+        : undefined;
+      await sql`
+        UPDATE agent_pulse_login_limits
+        SET attempt_count = ${attemptCount},
+            blocked_until = ${blockedUntil ?? null}
+        WHERE scope_digest = ${input.scopeDigest}
+      `;
+      return {
+        allowed: !blocked,
+        retry_after_seconds: blocked ? input.blockSeconds : 0,
+      };
+    });
+  }
+
+  async clearLoginAttempts(scopeDigest: string): Promise<void> {
+    await this.#sql`
+      DELETE FROM agent_pulse_login_limits
+      WHERE scope_digest = ${scopeDigest}
+    `;
+  }
+
+  async applySubscriptionEvent(
+    event: SubscriptionEvent,
+  ): Promise<SubscriptionEventResult> {
+    return this.#sql.begin(async (sql) => {
+      const subscriptions = await sql<SubscriptionRecord[]>`
+        SELECT
+          plan, status, provider, provider_customer_id,
+          provider_subscription_id, current_period_end,
+          last_event_at, last_event_id::text
+        FROM agent_pulse_subscriptions
+        WHERE user_id = ${event.user_id}
+        FOR UPDATE
+      `;
+      const currentRow = subscriptions[0];
+      if (currentRow === undefined) {
+        throw new AccountError(
+          "account_unavailable",
+          "account unavailable",
+          404,
+        );
+      }
+      const existing = await sql<
+        Array<
+          SubscriptionEvent & {
+            applied: boolean;
+            current_period_end: unknown | null;
+          }
+        >
+      >`
+        SELECT
+          event_id::text, user_id::text, provider, provider_customer_id,
+          provider_subscription_id, plan, status, current_period_end,
+          occurred_at, applied
+        FROM agent_pulse_subscription_events
+        WHERE event_id = ${event.event_id}
+      `;
+      if (existing[0] !== undefined) {
+        const stored = normalizeSubscriptionEvent(existing[0]);
+        if (!isDeepStrictEqual(stored, event)) {
+          throw new AccountError(
+            "subscription_event_conflict",
+            "event ID was reused with different data",
+            409,
+          );
+        }
+        const account = await postgresAccountView(sql, event.user_id);
+        if (account === undefined) {
+          throw new AccountError(
+            "account_unavailable",
+            "account unavailable",
+            404,
+          );
+        }
+        return { applied: existing[0].applied, duplicate: true, account };
+      }
+      const current = normalizeSubscription(currentRow);
+      const applied = isNewerSubscriptionEvent(current, event);
+      await sql`
+        INSERT INTO agent_pulse_subscription_events (
+          event_id, user_id, provider, provider_customer_id,
+          provider_subscription_id, plan, status, current_period_end,
+          occurred_at, applied
+        ) VALUES (
+          ${event.event_id}, ${event.user_id}, ${event.provider},
+          ${event.provider_customer_id}, ${event.provider_subscription_id},
+          ${event.plan}, ${event.status}, ${event.current_period_end ?? null},
+          ${event.occurred_at}, ${applied}
+        )
+      `;
+      if (applied) {
+        await sql`
+          UPDATE agent_pulse_subscriptions
+          SET plan = ${event.plan}, status = ${event.status},
+              provider = ${event.provider},
+              provider_customer_id = ${event.provider_customer_id},
+              provider_subscription_id = ${event.provider_subscription_id},
+              current_period_end = ${event.current_period_end ?? null},
+              last_event_at = ${event.occurred_at},
+              last_event_id = ${event.event_id},
+              updated_at = clock_timestamp()
+          WHERE user_id = ${event.user_id}
+        `;
+      }
+      const account = await postgresAccountView(sql, event.user_id);
+      if (account === undefined) throw new Error("updated account disappeared");
+      return { applied, duplicate: false, account };
+    });
+  }
+
+  async countActiveDevices(ownerId: string): Promise<number> {
+    const rows = await this.#sql<Array<{ count: string | number }>>`
+      SELECT count(*) AS count
+      FROM agent_platform_devices
+      WHERE owner_id = ${ownerId} AND revoked_at IS NULL
+    `;
+    return Number(rows[0]?.count ?? 0);
   }
 
   async savePushSubscription(
@@ -734,6 +1383,306 @@ export class PostgresGatewayStore implements GatewayStore {
     });
   }
 
+  async createRemoteTask(
+    ownerId: string,
+    input: CreateRemoteTaskRecord,
+  ): Promise<RemoteTaskCreateResult> {
+    try {
+      return await this.#sql.begin(async (sql) => {
+        await sql`SELECT user_id FROM agent_pulse_users WHERE user_id = ${ownerId} FOR UPDATE`;
+        await expireRemoteTasks(sql, ownerId);
+        const existing = await sql<RemoteTaskRow[]>`
+          SELECT ${remoteTaskColumns(sql)}
+          FROM agent_pulse_remote_tasks
+          WHERE owner_id = ${ownerId}
+            AND idempotency_key = ${input.idempotency_key}
+          LIMIT 1
+        `;
+        if (existing[0] !== undefined) {
+          const task = remoteTask(existing[0]);
+          if (!samePostgresTaskCreation(task, input)) {
+            throw new GatewayStoreError(
+              "idempotency_conflict",
+              "idempotency key was reused with different task data",
+            );
+          }
+          return { task, created: false };
+        }
+        const devices = await sql<DeviceRow[]>`
+          SELECT
+            device_id, public_key, owner_id, created_at, last_seen_at,
+            last_sequence, revoked_at
+          FROM agent_platform_devices
+          WHERE device_id = ${input.target_device_id}
+            AND owner_id = ${ownerId}
+            AND revoked_at IS NULL
+          LIMIT 1
+        `;
+        if (devices[0] === undefined) {
+          throw new GatewayStoreError(
+            "device_not_owned",
+            "target device is unavailable",
+          );
+        }
+        const counts = await sql<Array<{ count: string | number }>>`
+          SELECT count(*) AS count
+          FROM agent_pulse_remote_tasks
+          WHERE owner_id = ${ownerId}
+            AND status IN ('queued', 'delivered', 'accepted', 'running', 'waiting_user')
+        `;
+        if (Number(counts[0]?.count ?? 0) >= input.max_concurrent_tasks) {
+          throw new GatewayStoreError(
+            "task_limit_reached",
+            "subscription concurrent task limit reached",
+          );
+        }
+        const rows = await sql<RemoteTaskRow[]>`
+          INSERT INTO agent_pulse_remote_tasks (
+            task_id, owner_id, target_device_id, agent_type, prompt,
+            project_fingerprint, idempotency_key, execution_policy,
+            status, version, created_at, expires_at, updated_at
+          ) VALUES (
+            ${input.task_id}, ${ownerId}, ${input.target_device_id},
+            ${input.agent_type}, ${input.prompt},
+            ${input.project_fingerprint ?? null}, ${input.idempotency_key},
+            ${input.execution_policy}, 'queued', 1, ${input.created_at},
+            ${input.expires_at}, ${input.created_at}
+          )
+          RETURNING ${remoteTaskColumns(sql)}
+        `;
+        await sql`
+          INSERT INTO agent_pulse_remote_task_events (
+            task_id, from_status, to_status, version, actor, occurred_at
+          ) VALUES (${input.task_id}, NULL, 'queued', 1, 'user', ${input.created_at})
+        `;
+        const row = rows[0];
+        if (row === undefined) throw new Error("task insert returned no row");
+        return { task: remoteTask(row), created: true };
+      });
+    } catch (error) {
+      throw classifyPostgresConflict(error);
+    }
+  }
+
+  async countActiveRemoteTasks(ownerId: string): Promise<number> {
+    await expireRemoteTasks(this.#sql, ownerId);
+    const rows = await this.#sql<Array<{ count: string | number }>>`
+      SELECT count(*) AS count
+      FROM agent_pulse_remote_tasks
+      WHERE owner_id = ${ownerId}
+        AND status IN ('queued', 'delivered', 'accepted', 'running', 'waiting_user')
+    `;
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async listRemoteTasks(
+    ownerId: string,
+    filters: RemoteTaskFilters,
+  ): Promise<RemoteTask[]> {
+    await expireRemoteTasks(this.#sql, ownerId);
+    const deviceFilter =
+      filters.target_device_id === undefined
+        ? this.#sql``
+        : this.#sql`AND target_device_id = ${filters.target_device_id}`;
+    const statusFilter =
+      filters.status === undefined
+        ? this.#sql``
+        : this.#sql`AND status = ${filters.status}`;
+    const rows = await this.#sql<RemoteTaskRow[]>`
+      SELECT ${remoteTaskColumns(this.#sql)}
+      FROM agent_pulse_remote_tasks
+      WHERE owner_id = ${ownerId}
+        ${deviceFilter}
+        ${statusFilter}
+      ORDER BY created_at DESC, task_id DESC
+    `;
+    return rows.map(remoteTask);
+  }
+
+  async cancelRemoteTask(ownerId: string, taskId: string): Promise<RemoteTask> {
+    return this.#sql.begin(async (sql) => {
+      await expireRemoteTasks(sql, ownerId);
+      const rows = await sql<RemoteTaskRow[]>`
+        SELECT ${remoteTaskColumns(sql)}
+        FROM agent_pulse_remote_tasks
+        WHERE task_id = ${taskId} AND owner_id = ${ownerId}
+        FOR UPDATE
+      `;
+      const row = rows[0];
+      if (row === undefined) {
+        throw new GatewayStoreError("task_not_found", "task was not found");
+      }
+      if (row.status === "canceled") return remoteTask(row);
+      if (
+        ![
+          "queued",
+          "delivered",
+          "accepted",
+          "running",
+          "waiting_user",
+        ].includes(row.status)
+      ) {
+        throw new GatewayStoreError(
+          "task_terminal",
+          "task is already terminal",
+        );
+      }
+      const now = new Date();
+      const updated = await sql<RemoteTaskRow[]>`
+        UPDATE agent_pulse_remote_tasks
+        SET status = 'canceled', version = version + 1,
+            updated_at = ${now}, completed_at = ${now}
+        WHERE task_id = ${taskId}
+        RETURNING ${remoteTaskColumns(sql)}
+      `;
+      const task = updated[0];
+      if (task === undefined) throw new Error("task update returned no row");
+      await insertTaskEvent(
+        sql,
+        taskId,
+        row.status,
+        "canceled",
+        task.version,
+        "user",
+        now,
+      );
+      return remoteTask(task);
+    });
+  }
+
+  async claimRemoteTask(
+    claim: DeviceTaskClaim,
+  ): Promise<RemoteTaskMutationResult | undefined> {
+    return this.#sql.begin(async (sql) => {
+      const device = await requirePostgresTaskDevice(
+        sql,
+        claim.device_id,
+        claim.public_key,
+      );
+      await expireRemoteTasks(sql, device.owner_id);
+      const delivered = await sql<RemoteTaskRow[]>`
+        SELECT ${remoteTaskColumns(sql)}
+        FROM agent_pulse_remote_tasks
+        WHERE owner_id = ${device.owner_id}
+          AND target_device_id = ${claim.device_id}
+          AND status IN ('delivered', 'accepted', 'waiting_user', 'running')
+        ORDER BY created_at, task_id
+        LIMIT 1
+        FOR UPDATE
+      `;
+      if (delivered[0] !== undefined) {
+        return { task: remoteTask(delivered[0]), owner_id: device.owner_id };
+      }
+      const queued = await sql<RemoteTaskRow[]>`
+        SELECT ${remoteTaskColumns(sql)}
+        FROM agent_pulse_remote_tasks
+        WHERE owner_id = ${device.owner_id}
+          AND target_device_id = ${claim.device_id}
+          AND status = 'queued'
+        ORDER BY created_at, task_id
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      `;
+      const row = queued[0];
+      if (row === undefined) return undefined;
+      const now = new Date();
+      const updated = await sql<RemoteTaskRow[]>`
+        UPDATE agent_pulse_remote_tasks
+        SET status = 'delivered', version = version + 1,
+            updated_at = ${now}, delivered_at = ${now}
+        WHERE task_id = ${row.task_id}
+        RETURNING ${remoteTaskColumns(sql)}
+      `;
+      const task = updated[0];
+      if (task === undefined) throw new Error("task claim returned no row");
+      await insertTaskEvent(
+        sql,
+        row.task_id,
+        "queued",
+        "delivered",
+        task.version,
+        "device",
+        now,
+      );
+      return { task: remoteTask(task), owner_id: device.owner_id };
+    });
+  }
+
+  async updateRemoteTask(
+    update: DeviceTaskUpdate,
+  ): Promise<RemoteTaskMutationResult> {
+    return this.#sql.begin(async (sql) => {
+      const device = await requirePostgresTaskDevice(
+        sql,
+        update.device_id,
+        update.public_key,
+      );
+      await expireRemoteTasks(sql, device.owner_id);
+      const rows = await sql<RemoteTaskRow[]>`
+        SELECT ${remoteTaskColumns(sql)}
+        FROM agent_pulse_remote_tasks
+        WHERE task_id = ${update.task_id}
+          AND owner_id = ${device.owner_id}
+          AND target_device_id = ${device.device_id}
+        FOR UPDATE
+      `;
+      const row = rows[0];
+      if (row === undefined) {
+        throw new GatewayStoreError("task_not_found", "task was not found");
+      }
+      const current = remoteTask(row);
+      if (
+        current.version === update.expected_version + 1 &&
+        samePostgresTaskUpdate(current, update)
+      ) {
+        return { task: current, owner_id: device.owner_id };
+      }
+      if (current.version !== update.expected_version) {
+        throw new GatewayStoreError(
+          "task_version_conflict",
+          "task version is stale",
+        );
+      }
+      if (!canDeviceTransition(current.status, update.status)) {
+        throw new GatewayStoreError(
+          "invalid_task_transition",
+          "task transition is invalid",
+        );
+      }
+      const terminal = ["succeeded", "failed", "canceled"].includes(
+        update.status,
+      );
+      const updated = await sql<RemoteTaskRow[]>`
+        UPDATE agent_pulse_remote_tasks
+        SET status = ${update.status}, version = version + 1,
+            updated_at = ${update.updated_at},
+            started_at = CASE
+              WHEN ${update.status} = 'running' AND started_at IS NULL
+                THEN ${update.updated_at}
+              ELSE started_at
+            END,
+            completed_at = CASE WHEN ${terminal} THEN ${update.updated_at} ELSE completed_at END,
+            agent_session_id = COALESCE(${update.agent_session_id ?? null}, agent_session_id),
+            result_summary = COALESCE(${update.result_summary ?? null}, result_summary),
+            error_code = COALESCE(${update.error_code ?? null}, error_code)
+        WHERE task_id = ${update.task_id}
+        RETURNING ${remoteTaskColumns(sql)}
+      `;
+      const task = updated[0];
+      if (task === undefined) throw new Error("task update returned no row");
+      await insertTaskEvent(
+        sql,
+        update.task_id,
+        row.status,
+        update.status,
+        task.version,
+        "device",
+        new Date(update.updated_at),
+      );
+      return { task: remoteTask(task), owner_id: device.owner_id };
+    });
+  }
+
   async listDevices(ownerId: string): Promise<DeviceView[]> {
     const rows = await this.#sql<
       Array<{
@@ -772,6 +1721,10 @@ export class PostgresGatewayStore implements GatewayStore {
       filters.device_id === undefined
         ? this.#sql``
         : this.#sql`AND sessions.device_id = ${filters.device_id}`;
+    const agentFilter =
+      filters.agent_type === undefined
+        ? this.#sql``
+        : this.#sql`AND sessions.agent_type = ${filters.agent_type}`;
     const activityFilter =
       filters.activity_status === undefined
         ? this.#sql``
@@ -788,6 +1741,7 @@ export class PostgresGatewayStore implements GatewayStore {
       WHERE
         devices.owner_id = ${ownerId}
         ${deviceFilter}
+        ${agentFilter}
         ${activityFilter}
         ${presenceFilter}
       ORDER BY sessions.observed_at DESC, sessions.sequence DESC
@@ -912,6 +1866,154 @@ function registeredDevice(row: DeviceRow): RegisteredDevice {
   };
 }
 
+function remoteTaskColumns(
+  sql: QuerySql,
+): postgres.PendingQuery<postgres.Row[]> {
+  return sql`
+    task_id::text, target_device_id, agent_type, prompt,
+    project_fingerprint, idempotency_key, execution_policy, status, version,
+    created_at, expires_at, updated_at, delivered_at, started_at, completed_at,
+    agent_session_id, result_summary, error_code
+  `;
+}
+
+function remoteTask(row: RemoteTaskRow): RemoteTask {
+  return {
+    task_id: row.task_id,
+    target_device_id: row.target_device_id,
+    agent_type: row.agent_type,
+    prompt: row.prompt,
+    ...(row.project_fingerprint === null
+      ? {}
+      : { project_fingerprint: row.project_fingerprint }),
+    idempotency_key: row.idempotency_key,
+    execution_policy: row.execution_policy,
+    status: row.status,
+    version: Number(row.version),
+    created_at: isoTimestamp(row.created_at),
+    expires_at: isoTimestamp(row.expires_at),
+    updated_at: isoTimestamp(row.updated_at),
+    ...(row.delivered_at === null
+      ? {}
+      : { delivered_at: isoTimestamp(row.delivered_at) }),
+    ...(row.started_at === null
+      ? {}
+      : { started_at: isoTimestamp(row.started_at) }),
+    ...(row.completed_at === null
+      ? {}
+      : { completed_at: isoTimestamp(row.completed_at) }),
+    ...(row.agent_session_id === null
+      ? {}
+      : { agent_session_id: row.agent_session_id }),
+    ...(row.result_summary === null
+      ? {}
+      : { result_summary: row.result_summary }),
+    ...(row.error_code === null ? {} : { error_code: row.error_code }),
+  };
+}
+
+async function requirePostgresTaskDevice(
+  sql: QuerySql,
+  deviceId: string,
+  publicKey: string,
+): Promise<RegisteredDevice> {
+  const rows = await sql<DeviceRow[]>`
+    SELECT
+      device_id, public_key, owner_id, created_at, last_seen_at,
+      last_sequence, revoked_at
+    FROM agent_platform_devices
+    WHERE device_id = ${deviceId}
+    FOR UPDATE
+  `;
+  const row = rows[0];
+  if (row === undefined) {
+    throw new GatewayStoreError(
+      "device_not_registered",
+      "device is not registered",
+    );
+  }
+  if (row.revoked_at !== null) {
+    throw new GatewayStoreError("device_revoked", "device is revoked");
+  }
+  if (row.public_key !== publicKey) {
+    throw new GatewayStoreError(
+      "device_key_mismatch",
+      "device key does not match",
+    );
+  }
+  return registeredDevice(row);
+}
+
+async function expireRemoteTasks(
+  sql: QuerySql,
+  ownerId: string,
+): Promise<void> {
+  const now = new Date();
+  const expired = await sql<
+    Array<{ task_id: string; status: RemoteTask["status"]; version: number }>
+  >`
+    UPDATE agent_pulse_remote_tasks
+    SET status = 'expired', version = version + 1,
+        updated_at = ${now}, completed_at = ${now}
+    WHERE owner_id = ${ownerId}
+      AND status IN ('queued', 'delivered', 'accepted', 'running', 'waiting_user')
+      AND expires_at <= ${now}
+    RETURNING task_id::text, status, version
+  `;
+  for (const row of expired) {
+    await sql`
+      INSERT INTO agent_pulse_remote_task_events (
+        task_id, from_status, to_status, version, actor, occurred_at
+      ) VALUES (${row.task_id}, NULL, 'expired', ${row.version}, 'system', ${now})
+      ON CONFLICT (task_id, version) DO NOTHING
+    `;
+  }
+}
+
+async function insertTaskEvent(
+  sql: QuerySql,
+  taskId: string,
+  from: RemoteTask["status"],
+  to: RemoteTask["status"],
+  version: number,
+  actor: "user" | "device" | "system",
+  occurredAt: Date,
+): Promise<void> {
+  await sql`
+    INSERT INTO agent_pulse_remote_task_events (
+      task_id, from_status, to_status, version, actor, occurred_at
+    ) VALUES (${taskId}, ${from}, ${to}, ${version}, ${actor}, ${occurredAt})
+  `;
+}
+
+function samePostgresTaskCreation(
+  task: RemoteTask,
+  input: CreateRemoteTaskRecord,
+): boolean {
+  return (
+    task.target_device_id === input.target_device_id &&
+    task.agent_type === input.agent_type &&
+    task.prompt === input.prompt &&
+    task.project_fingerprint === input.project_fingerprint &&
+    task.execution_policy === input.execution_policy &&
+    Date.parse(task.expires_at) - Date.parse(task.created_at) ===
+      Date.parse(input.expires_at) - Date.parse(input.created_at)
+  );
+}
+
+function samePostgresTaskUpdate(
+  task: RemoteTask,
+  update: DeviceTaskUpdate,
+): boolean {
+  return (
+    task.status === update.status &&
+    task.updated_at === update.updated_at &&
+    task.agent_session_id === update.agent_session_id &&
+    task.result_summary === update.result_summary &&
+    task.error_code === update.error_code
+  );
+}
+
 function isoTimestamp(value: unknown): string {
   const date =
     value instanceof Date
@@ -997,4 +2099,138 @@ function classifyPostgresConflict(error: unknown): unknown {
     );
   }
   return error;
+}
+
+function postgresConstraint(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  if ("constraint_name" in error && typeof error.constraint_name === "string") {
+    return error.constraint_name;
+  }
+  if ("constraint" in error && typeof error.constraint === "string") {
+    return error.constraint;
+  }
+  return undefined;
+}
+
+async function postgresAccountView(
+  sql: QuerySql,
+  userId: string,
+): Promise<AccountView | undefined> {
+  const rows = await sql<Array<AccountUser & SubscriptionRecord>>`
+    SELECT
+      users.user_id::text,
+      users.email,
+      users.display_name,
+      users.password_hash,
+      users.status,
+      users.email_verified_at,
+      users.created_at,
+      subscriptions.plan,
+      subscriptions.status AS subscription_status,
+      subscriptions.provider,
+      subscriptions.provider_customer_id,
+      subscriptions.provider_subscription_id,
+      subscriptions.current_period_end,
+      subscriptions.last_event_at,
+      subscriptions.last_event_id::text
+    FROM agent_pulse_users AS users
+    INNER JOIN agent_pulse_subscriptions AS subscriptions
+      ON subscriptions.user_id = users.user_id
+    WHERE users.user_id = ${userId}
+    LIMIT 1
+  `;
+  const row = rows[0] as
+    | (AccountUser &
+        SubscriptionRecord & {
+          subscription_status?: SubscriptionRecord["status"];
+        })
+    | undefined;
+  if (row === undefined || row.status !== "active") return undefined;
+  return accountView(
+    normalizeAccountUser(row),
+    normalizeSubscription({
+      plan: row.plan,
+      status: row.subscription_status ?? row.status,
+      ...(row.current_period_end === undefined ||
+      row.current_period_end === null
+        ? {}
+        : { current_period_end: row.current_period_end }),
+      ...(row.provider === undefined || row.provider === null
+        ? {}
+        : { provider: row.provider }),
+      ...(row.provider_customer_id === undefined ||
+      row.provider_customer_id === null
+        ? {}
+        : { provider_customer_id: row.provider_customer_id }),
+      ...(row.provider_subscription_id === undefined ||
+      row.provider_subscription_id === null
+        ? {}
+        : { provider_subscription_id: row.provider_subscription_id }),
+      ...(row.last_event_at === undefined || row.last_event_at === null
+        ? {}
+        : { last_event_at: row.last_event_at }),
+      ...(row.last_event_id === undefined || row.last_event_id === null
+        ? {}
+        : { last_event_id: row.last_event_id }),
+    }),
+  );
+}
+
+function normalizeAccountUser(row: AccountUser): AccountUser {
+  return {
+    user_id: row.user_id,
+    email: row.email,
+    display_name: row.display_name,
+    password_hash: row.password_hash,
+    status: row.status,
+    ...(row.email_verified_at === undefined || row.email_verified_at === null
+      ? {}
+      : { email_verified_at: isoTimestamp(row.email_verified_at) }),
+    created_at: isoTimestamp(row.created_at),
+  };
+}
+
+function normalizeSubscription(row: SubscriptionRecord): SubscriptionRecord {
+  return {
+    plan: row.plan,
+    status: row.status,
+    ...(row.current_period_end === undefined || row.current_period_end === null
+      ? {}
+      : { current_period_end: isoTimestamp(row.current_period_end) }),
+    ...(row.provider === undefined || row.provider === null
+      ? {}
+      : { provider: row.provider }),
+    ...(row.provider_customer_id === undefined ||
+    row.provider_customer_id === null
+      ? {}
+      : { provider_customer_id: row.provider_customer_id }),
+    ...(row.provider_subscription_id === undefined ||
+    row.provider_subscription_id === null
+      ? {}
+      : { provider_subscription_id: row.provider_subscription_id }),
+    ...(row.last_event_at === undefined || row.last_event_at === null
+      ? {}
+      : { last_event_at: isoTimestamp(row.last_event_at) }),
+    ...(row.last_event_id === undefined || row.last_event_id === null
+      ? {}
+      : { last_event_id: row.last_event_id }),
+  };
+}
+
+function normalizeSubscriptionEvent(
+  row: SubscriptionEvent & { current_period_end: unknown | null },
+): SubscriptionEvent {
+  return {
+    event_id: row.event_id,
+    user_id: row.user_id,
+    provider: row.provider,
+    provider_customer_id: row.provider_customer_id,
+    provider_subscription_id: row.provider_subscription_id,
+    plan: row.plan,
+    status: row.status,
+    ...(row.current_period_end === null
+      ? {}
+      : { current_period_end: isoTimestamp(row.current_period_end) }),
+    occurred_at: isoTimestamp(row.occurred_at),
+  };
 }

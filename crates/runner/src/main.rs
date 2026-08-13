@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::{self, Read},
     path::PathBuf,
@@ -25,6 +26,7 @@ use agent_pulse_runner::{
     runtime::{ClaudeSessionSource, CodexSessionSource, PollPolicy, RunnerRuntime, SessionSource},
     sync::{MAX_SYNC_BATCH_EVENTS, SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
     sync_worker::{SyncPolicy, SyncWorker},
+    tasks::{TaskWorker, parse_project_mapping},
 };
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -179,6 +181,40 @@ enum Command {
         codex_binary: PathBuf,
         #[command(subcommand)]
         command: AuthCommand,
+    },
+    Tasks {
+        #[command(subcommand)]
+        command: TasksCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TasksCommand {
+    Work {
+        #[arg(long)]
+        identity: PathBuf,
+        #[arg(long, env = "AGENT_PLATFORM_GATEWAY_URL")]
+        server: String,
+        #[arg(
+            long = "project",
+            value_name = "FINGERPRINT=PATH",
+            help = "Locally allow one project fingerprint and map it to a path"
+        )]
+        projects: Vec<String>,
+        #[arg(long, default_value = "claude")]
+        claude_binary: PathBuf,
+        #[arg(long, default_value = "codex")]
+        codex_binary: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        poll_interval_seconds: u64,
+        #[arg(long, default_value_t = 14_400)]
+        execution_timeout_seconds: u64,
+        #[arg(long, default_value_t = 15)]
+        gateway_timeout_seconds: u64,
+        #[arg(long, env = "AGENT_PLATFORM_GATEWAY_CA_CERT", value_name = "PEM")]
+        gateway_ca_cert: Option<PathBuf>,
+        #[arg(long, help = "Poll at most once; intended for diagnostics and tests")]
+        once: bool,
     },
 }
 
@@ -799,6 +835,70 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Tasks { command } => match command {
+            TasksCommand::Work {
+                identity,
+                server,
+                projects,
+                claude_binary,
+                codex_binary,
+                poll_interval_seconds,
+                execution_timeout_seconds,
+                gateway_timeout_seconds,
+                gateway_ca_cert,
+                once,
+            } => {
+                let identity = DeviceIdentity::load(&identity)
+                    .map_err(|_| anyhow::anyhow!("task_identity_unreadable"))?;
+                let client = gateway_client(
+                    &server,
+                    nonzero_duration("gateway timeout", gateway_timeout_seconds)?,
+                    gateway_ca_cert.as_deref(),
+                )?;
+                let mut project_map = BTreeMap::new();
+                for value in projects {
+                    let (fingerprint, path) = parse_project_mapping(&value)
+                        .map_err(|message| anyhow::anyhow!("invalid project mapping: {message}"))?;
+                    if project_map.insert(fingerprint, path).is_some() {
+                        bail!("duplicate project fingerprint mapping");
+                    }
+                }
+                let worker = TaskWorker::new(
+                    &client,
+                    &identity,
+                    project_map,
+                    claude_binary,
+                    codex_binary,
+                    nonzero_duration("execution timeout", execution_timeout_seconds)?,
+                );
+                let poll_interval = nonzero_duration("task poll interval", poll_interval_seconds)?;
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop_on_signal = Arc::clone(&stop);
+                ctrlc::set_handler(move || {
+                    stop_on_signal.store(true, Ordering::Relaxed);
+                })
+                .context("failed to install Ctrl-C handler")?;
+                let stdin = io::stdin();
+                let stdout = io::stdout();
+                let mut input = stdin.lock();
+                let mut output = stdout.lock();
+                loop {
+                    match worker.poll_once(&mut input, &mut output) {
+                        Ok(_) => {}
+                        Err(error) if once => {
+                            bail!("{}: {error}", error.code());
+                        }
+                        Err(error) => {
+                            eprintln!("{}", error.code());
+                        }
+                    }
+                    if once || stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(poll_interval);
+                }
+            }
+        },
     }
 
     Ok(())

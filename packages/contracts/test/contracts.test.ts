@@ -7,9 +7,14 @@ import {
   ContractError,
   deviceIdForPublicKey,
   parseAuthSyncBatch,
+  parseCreateRemoteTask,
   parseDeviceRegistration,
+  parseDeviceTaskClaim,
+  parseDeviceTaskUpdate,
   parseSyncBatch,
   unsignedAuthSyncBatchJson,
+  unsignedDeviceTaskClaimJson,
+  unsignedDeviceTaskUpdateJson,
   verifyAuthSyncBatch,
   verifySyncBatch,
   type AuthSyncBatch,
@@ -268,5 +273,59 @@ test("device registration requires proof of private key possession", () => {
     () => parseDeviceRegistration({ ...registration, binding_code: "other" }),
     (error: unknown) =>
       error instanceof ContractError && error.code === "invalid_signature",
+  );
+});
+
+test("remote task contracts reject paths and verify device signatures", () => {
+  const task = parseCreateRemoteTask({
+    target_device_id: parseSyncBatch(fixture).device_id,
+    agent_type: "codex",
+    prompt: "Run the focused test suite",
+    project_fingerprint: "a".repeat(64),
+    idempotency_key: "request-0001",
+    execution_policy: "local_confirmation",
+    expires_in_seconds: 3600,
+  });
+  assert.equal(task.execution_policy, "local_confirmation");
+  assert.throws(
+    () => parseCreateRemoteTask({ ...task, project_path: "C:\\private" }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "unknown_field",
+  );
+
+  const claim = {
+    protocol_version: 1,
+    device_id: parseSyncBatch(fixture).device_id,
+    public_key: parseSyncBatch(fixture).public_key,
+    requested_at: "2026-08-13T12:00:00.000Z",
+    signature: "",
+  };
+  claim.signature = sign(
+    null,
+    Buffer.from(unsignedDeviceTaskClaimJson(claim), "utf8"),
+    fixturePrivateKey,
+  ).toString("hex");
+  assert.deepEqual(parseDeviceTaskClaim(claim), claim);
+
+  const update = {
+    protocol_version: 1,
+    task_id: "11111111-1111-4111-8111-111111111111",
+    device_id: claim.device_id,
+    public_key: claim.public_key,
+    expected_version: 2,
+    status: "accepted" as const,
+    updated_at: "2026-08-13T12:00:00.000Z",
+    signature: "",
+  };
+  update.signature = sign(
+    null,
+    Buffer.from(unsignedDeviceTaskUpdateJson(update), "utf8"),
+    fixturePrivateKey,
+  ).toString("hex");
+  assert.deepEqual(parseDeviceTaskUpdate(update), update);
+  assert.throws(
+    () => parseDeviceTaskUpdate({ ...update, status: "queued" }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
   );
 });

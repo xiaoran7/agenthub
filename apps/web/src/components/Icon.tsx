@@ -3,6 +3,7 @@ import type { SVGProps } from "react";
 export type IconName =
   | "overview"
   | "sessions"
+  | "tasks"
   | "devices"
   | "activity"
   | "diagnostics"
@@ -57,6 +58,13 @@ export function Icon({ name, size = 18, ...props }: IconProps) {
           <rect x="4" y="3" width="16" height="18" rx="2" />
           <path d="M8 8h8M8 12h8M8 16h5" />
           <path d="M6.5 8h.01M6.5 12h.01M6.5 16h.01" strokeWidth="2.5" />
+        </svg>
+      );
+    case "tasks":
+      return (
+        <svg {...common}>
+          <path d="M8 5h11M8 12h11M8 19h11" />
+          <path d="m3.5 5 1.2 1.2L6.8 4M3.5 12l1.2 1.2 2.1-2.2M3.5 19l1.2 1.2 2.1-2.2" />
         </svg>
       );
     case "devices":

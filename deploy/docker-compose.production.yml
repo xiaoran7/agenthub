@@ -28,7 +28,6 @@ services:
       HOSTNAME: 127.0.0.1
       PORT: 3100
       GATEWAY_ORIGIN: http://127.0.0.1:3101
-      GATEWAY_ACCESS_TOKEN: ${AGENT_PLATFORM_ACCESS_TOKEN}
     depends_on:
       api:
         condition: service_started

@@ -2,6 +2,17 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-08-14 浏览器同页重复导航不等价于首次打开秘密片段链接
+
+- **现象**：同一个浏览器 Tab 第二次导航到 `#token=...` 后，地址栏片段未被客户端
+  effect 清理，看起来像重置/验证页泄露了 Token；新建 Tab 首次打开则正常清理。
+- **根因**：自动化运行时复用了已有 React 页面和导航状态，不能代表邮件链接的新文档
+  首次加载路径。
+- **解决方式**：令牌隐私验收使用全新 Tab，从完整 fragment URL 首次载入后检查
+  `window.location.href`，同时检查失败态和运行时错误。
+- **如何规避**：涉及 URL fragment 清理的安全验收必须覆盖“全新文档首次打开”，不要
+  只在同一已挂载页面里重复 `goto` 得出结论。
+
 ## 2026-07-29 根 Prettier 会递归进入 Android 构建报告
 
 - **现象**：新增 `apps/android` 后，`npm.cmd run format` 开始格式化 Gradle
@@ -285,7 +296,7 @@
 ## 2026-07-27 本机验证 Unix 代码路径的两条弯路
 
 - **现象**：为验证新增的 cfg(unix) 进程组代码，`rustup target add
-  x86_64-unknown-linux-gnu` 下载 rust-std 被网络重置（可断点续传重试）；改用
+x86_64-unknown-linux-gnu` 下载 rust-std 被网络重置（可断点续传重试）；改用
   本机已有的 `x86_64-linux-android` 目标又因 rusqlite bundled 需要 NDK clang
   编译 SQLite C 源码而失败。
 - **根因**：cargo check 也会执行依赖的 build.rs（含 cc 编译），纯 Rust 交叉
@@ -353,7 +364,7 @@
 ## 2026-07-25 PowerShell 执行策略拦截 `npm.ps1`
 
 - **现象**：Node 可正常执行，但直接运行 `npm --version` 报告 `npm.ps1 cannot be
-  loaded because running scripts is disabled`。
+loaded because running scripts is disabled`。
 - **根因**：PowerShell 命令解析优先选中了 Node 安装目录中的 `npm.ps1` 包装脚本，
   当前系统执行策略禁止该脚本；npm 本身和对应的 Windows 命令文件并未损坏。
 - **解决方式**：仓库命令和自动化在 Windows 上显式调用 `npm.cmd`。

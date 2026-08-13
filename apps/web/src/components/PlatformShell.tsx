@@ -12,6 +12,7 @@ import {
   type SectionKey,
 } from "../lib/platform-view";
 import type { DeviceRecord } from "../lib/types";
+import type { AccountView } from "../lib/account";
 import { Icon } from "./Icon";
 
 interface PlatformShellProps {
@@ -30,6 +31,8 @@ interface PlatformShellProps {
   connectionLabel: string;
   connectionTone: string;
   inspector?: ReactNode | undefined;
+  account?: AccountView | undefined;
+  onLogout: () => void;
   children: ReactNode;
 }
 
@@ -71,12 +74,16 @@ function NavigationRail({
   onOpenSettings,
   connectionLabel,
   connectionTone,
+  account,
+  onLogout,
 }: {
   section: SectionKey;
   onNavigate: (section: SectionKey) => void;
   onOpenSettings: () => void;
   connectionLabel: string;
   connectionTone: string;
+  account?: AccountView | undefined;
+  onLogout: () => void;
 }) {
   return (
     <aside className="nav-rail">
@@ -103,6 +110,25 @@ function NavigationRail({
         </nav>
       </div>
       <div className="rail-bottom">
+        {account !== undefined && (
+          <div className="rail-account">
+            <span className="rail-account-avatar">
+              {account.user.display_name.slice(0, 1).toUpperCase()}
+            </span>
+            <span>
+              <strong>{account.user.display_name}</strong>
+              <small>{account.subscription.plan.toUpperCase()} 方案</small>
+            </span>
+            <button
+              aria-label="退出登录"
+              onClick={onLogout}
+              title="退出登录"
+              type="button"
+            >
+              <Icon name="chevron-right" size={15} />
+            </button>
+          </div>
+        )}
         <button className="rail-item" onClick={onOpenSettings} type="button">
           <Icon name="settings" size={18} />
           <span>设置</span>
@@ -145,7 +171,12 @@ function ContextBar({
   connectionTone,
 }: Omit<
   PlatformShellProps,
-  "onNavigate" | "onOpenSettings" | "children" | "inspector"
+  | "onNavigate"
+  | "onOpenSettings"
+  | "children"
+  | "inspector"
+  | "account"
+  | "onLogout"
 >) {
   const deviceChange = (event: ChangeEvent<HTMLSelectElement>) => {
     onDeviceFilterChange(
@@ -180,52 +211,70 @@ function ContextBar({
         <span>
           {section === "sessions"
             ? "当前活动"
-            : section === "activity"
-              ? "实时动态"
-              : section === "diagnostics"
-                ? "系统"
-                : "设备总览"}
+            : section === "tasks"
+              ? "远程执行"
+              : section === "activity"
+                ? "实时动态"
+                : section === "diagnostics"
+                  ? "系统"
+                  : "设备总览"}
         </span>
       </div>
       <div className="context-controls">
-        <SelectControl
-          label="设备筛选"
-          onChange={deviceChange}
-          value={deviceFilter ?? "all"}
-        >
-          <option value="all">全部设备</option>
-          {devices
-            .filter((device) => !device.revoked)
-            .map((device) => (
-              <option key={device.device_id} value={device.device_id}>
-                {device.display_name ?? device.device_id.slice(0, 14)}
-              </option>
+        {section !== "tasks" && (
+          <SelectControl
+            label="设备筛选"
+            onChange={deviceChange}
+            value={deviceFilter ?? "all"}
+          >
+            <option value="all">全部设备</option>
+            {devices
+              .filter((device) => !device.revoked)
+              .map((device) => (
+                <option key={device.device_id} value={device.device_id}>
+                  {device.display_name ?? device.device_id.slice(0, 14)}
+                </option>
+              ))}
+          </SelectControl>
+        )}
+        {section !== "tasks" && (
+          <div
+            className="provider-segments"
+            aria-label="Agent 来源"
+            role="group"
+          >
+            {(["all", "claude_code", "codex"] as const).map((provider) => (
+              <button
+                aria-pressed={providerFilter === provider}
+                key={provider}
+                onClick={() => onProviderFilterChange(provider)}
+                type="button"
+              >
+                {provider === "all" ? "全部" : AGENT_LABELS[provider]}
+              </button>
             ))}
-        </SelectControl>
-        <SelectControl
-          label="来源筛选"
-          onChange={providerChange}
-          value={providerFilter}
-        >
-          <option value="all">全部来源</option>
-          <option value="claude_code">{AGENT_LABELS.claude_code}</option>
-          <option value="codex">{AGENT_LABELS.codex}</option>
-        </SelectControl>
-        <SelectControl
-          label="时间范围"
-          onChange={rangeChange}
-          value={rangeFilter}
-        >
-          <option value="24h">过去 24 小时</option>
-          <option value="7d">过去 7 天</option>
-          <option value="all">全部时间</option>
-        </SelectControl>
+          </div>
+        )}
+        {section !== "tasks" && (
+          <SelectControl
+            label="时间范围"
+            onChange={rangeChange}
+            value={rangeFilter}
+          >
+            <option value="24h">过去 24 小时</option>
+            <option value="7d">过去 7 天</option>
+            <option value="all">全部时间</option>
+          </SelectControl>
+        )}
         <label className="search-control">
           <Icon name="search" size={16} />
           <input
             aria-label="搜索会话"
             onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="搜索会话或按 ⌘K"
+            placeholder={
+              section === "tasks" ? "搜索功能即将接入" : "搜索会话或按 ⌘K"
+            }
+            disabled={section === "tasks"}
             value={search}
           />
         </label>
@@ -255,10 +304,12 @@ export function PlatformShell(props: PlatformShellProps) {
       data-section={props.section}
     >
       <NavigationRail
+        account={props.account}
         connectionLabel={props.connectionLabel}
         connectionTone={props.connectionTone}
         onNavigate={props.onNavigate}
         onOpenSettings={props.onOpenSettings}
+        onLogout={props.onLogout}
         section={props.section}
       />
       <div className="app-stage">

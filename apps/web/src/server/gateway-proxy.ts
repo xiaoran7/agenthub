@@ -39,11 +39,25 @@ export function gatewayHeaders(
   const headers = new Headers();
   const accept = incoming.get("accept");
   const contentType = incoming.get("content-type");
+  const cookie = incoming.get("cookie");
   if (accept !== null) {
     headers.set("accept", accept);
   }
   if (contentType !== null) {
     headers.set("content-type", contentType);
+  }
+  if (cookie !== null) {
+    const sessionCookies = cookie
+      .split(";")
+      .map((part) => part.trim())
+      .filter(
+        (part) =>
+          part.startsWith("agent_pulse_session=") ||
+          part.startsWith("__Host-agent_pulse_session="),
+      );
+    if (sessionCookies.length > 0) {
+      headers.set("cookie", sessionCookies.join("; "));
+    }
   }
   if (accessToken !== undefined) {
     validateAccessToken(accessToken);
@@ -62,7 +76,7 @@ export async function proxyGatewayRequest(
   path: readonly string[],
   options: {
     origin?: string;
-    accessToken?: string;
+    accessToken?: string | undefined;
     fetch?: typeof fetch;
   } = {},
 ): Promise<Response> {
@@ -91,6 +105,7 @@ export async function proxyGatewayRequest(
     return Response.json({ error: "gateway_unreachable" }, { status: 502 });
   }
 
+  const setCookie = upstream.headers.get("set-cookie");
   return new Response(upstream.status === 204 ? null : upstream.body, {
     status: upstream.status,
     headers: {
@@ -103,6 +118,7 @@ export async function proxyGatewayRequest(
             "www-authenticate":
               upstream.headers.get("www-authenticate") ?? "Bearer",
           }),
+      ...(setCookie === null ? {} : { "set-cookie": setCookie }),
     },
   });
 }

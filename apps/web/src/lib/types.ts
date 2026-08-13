@@ -3,6 +3,7 @@
 import type {
   AgentType,
   AuthSnapshot,
+  RemoteTask,
   SyncEvent,
 } from "@agent-pulse/contracts";
 
@@ -15,6 +16,9 @@ export type {
   SessionState,
   SyncEvent,
   WaitingReason,
+  RemoteTask,
+  RemoteTaskStatus,
+  TaskExecutionPolicy,
 } from "@agent-pulse/contracts";
 
 export type {

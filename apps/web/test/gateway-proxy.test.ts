@@ -36,17 +36,17 @@ test("server access token overrides browser supplied identity and credentials", 
   assert.equal(headers.get("content-type"), "application/json");
 });
 
-test("development proxy forwards only the explicit local identity", () => {
+test("development proxy forwards session cookie and explicit local identity", () => {
   const incoming = new Headers({
     authorization: "Bearer browser-controlled-token",
     "x-user-id": "local-user",
-    cookie: "private-cookie",
+    cookie: "analytics=private; agent_pulse_session=opaque",
   });
   const headers = gatewayHeaders(incoming, undefined);
 
   assert.equal(headers.get("authorization"), null);
   assert.equal(headers.get("x-user-id"), "local-user");
-  assert.equal(headers.get("cookie"), null);
+  assert.equal(headers.get("cookie"), "agent_pulse_session=opaque");
 });
 
 test("proxy rejects malformed server access tokens", () => {
@@ -68,7 +68,7 @@ test("same-origin proxy injects the server credential without leaking browser he
       {
         headers: {
           authorization: "Bearer attacker-token",
-          cookie: "private-cookie",
+          cookie: "analytics=private; __Host-agent_pulse_session=opaque",
           "x-user-id": "spoofed-owner",
         },
       },
@@ -92,7 +92,34 @@ test("same-origin proxy injects the server credential without leaking browser he
   const headers = new Headers(forwardedInit?.headers);
   assert.equal(headers.get("authorization"), `Bearer ${ACCESS_TOKEN}`);
   assert.equal(headers.get("x-user-id"), null);
-  assert.equal(headers.get("cookie"), null);
+  assert.equal(headers.get("cookie"), "__Host-agent_pulse_session=opaque");
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { events: [] });
+});
+
+test("proxy returns an upstream session cookie to the browser", async () => {
+  const response = await proxyGatewayRequest(
+    new Request("https://panel.example/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "user@example.com", password: "password" }),
+    }),
+    ["auth", "login"],
+    {
+      origin: "https://gateway.example",
+      accessToken: undefined,
+      fetch: async () =>
+        new Response(JSON.stringify({ user: {} }), {
+          headers: {
+            "content-type": "application/json",
+            "set-cookie":
+              "__Host-agent_pulse_session=opaque; Path=/; HttpOnly; Secure",
+          },
+        }),
+    },
+  );
+  assert.match(
+    response.headers.get("set-cookie") ?? "",
+    /__Host-agent_pulse_session=opaque/,
+  );
 });

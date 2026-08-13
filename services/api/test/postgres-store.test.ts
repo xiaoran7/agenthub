@@ -17,6 +17,7 @@ import {
   makeM4Device,
 } from "./m4-fixtures.js";
 import { bindingCodeDigest } from "../src/store.js";
+import { hashPassword, tokenDigest, verifyPassword } from "../src/accounts.js";
 
 const databaseUrl = process.env.AGENT_PLATFORM_TEST_DATABASE_URL;
 const fixture = parseSyncBatch(
@@ -29,6 +30,194 @@ const fixture = parseSyncBatch(
       "utf8",
     ),
   ),
+);
+
+test(
+  "PostgreSQL account lifecycle persists verification, sessions, limits, and ordered billing",
+  { skip: databaseUrl === undefined },
+  async () => {
+    assert.ok(databaseUrl);
+    const admin = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+    const schema = `agent_pulse_accounts_${randomUUID().replaceAll("-", "")}`;
+    let sql: postgres.Sql | undefined;
+    let schemaCreated = false;
+    try {
+      await admin`CREATE SCHEMA ${admin(schema)}`;
+      schemaCreated = true;
+      sql = scopedConnection(databaseUrl, schema);
+      await migratePostgres(sql);
+      const store = new PostgresGatewayStore(sql);
+      const userId = randomUUID();
+      const account = await store.createAccount({
+        userId,
+        email: "postgres-account@example.com",
+        displayName: "Postgres Account",
+        passwordHash: await hashPassword("correct horse battery staple"),
+      });
+      assert.equal(account.user.email_verified_at, undefined);
+
+      const issuedAt = "2026-08-13T12:00:00.000Z";
+      const verificationToken = "v".repeat(43);
+      const verificationDigest = tokenDigest(verificationToken);
+      assert.deepEqual(
+        await store.issueEmailVerification({
+          digest: verificationDigest,
+          userId,
+          createdAt: issuedAt,
+          expiresAt: "2026-08-14T12:00:00.000Z",
+          minimumIntervalSeconds: 60,
+        }),
+        { allowed: true, retry_after_seconds: 0 },
+      );
+      const verified = await store.consumeEmailVerification(
+        verificationDigest,
+        "2026-08-13T12:01:00.000Z",
+      );
+      assert.equal(
+        verified?.user.email_verified_at,
+        "2026-08-13T12:01:00.000Z",
+      );
+      assert.equal(
+        await store.consumeEmailVerification(
+          verificationDigest,
+          "2026-08-13T12:02:00.000Z",
+        ),
+        undefined,
+      );
+
+      const currentDigest = tokenDigest("a".repeat(43));
+      const otherDigest = tokenDigest("b".repeat(43));
+      const currentId = randomUUID();
+      const otherId = randomUUID();
+      for (const [sessionId, digest] of [
+        [currentId, currentDigest],
+        [otherId, otherDigest],
+      ] as const) {
+        await store.createWebSession({
+          sessionId,
+          digest,
+          userId,
+          createdAt: issuedAt,
+          expiresAt: "2026-09-13T12:00:00.000Z",
+        });
+      }
+      const sessions = await store.listWebSessions(
+        userId,
+        currentDigest,
+        "2026-08-13T12:00:01.000Z",
+      );
+      assert.equal(sessions.length, 2);
+      assert.equal(
+        sessions.find((session) => session.current)?.session_id,
+        currentId,
+      );
+      assert.equal(await store.revokeWebSession(randomUUID(), otherId), false);
+      assert.equal(
+        await store.revokeOtherWebSessions(userId, currentDigest),
+        1,
+      );
+
+      const resetToken = "r".repeat(43);
+      const resetDigest = tokenDigest(resetToken);
+      assert.deepEqual(
+        await store.issuePasswordReset({
+          digest: resetDigest,
+          userId,
+          createdAt: issuedAt,
+          expiresAt: "2026-08-13T13:00:00.000Z",
+          minimumIntervalSeconds: 60,
+        }),
+        { allowed: true, retry_after_seconds: 0 },
+      );
+      const changedHash = await hashPassword("postgres changed password");
+      assert.deepEqual(
+        await store.consumePasswordReset({
+          digest: resetDigest,
+          passwordHash: changedHash,
+          now: "2026-08-13T12:05:00.000Z",
+        }),
+        { updated: true, revoked_sessions: 1 },
+      );
+      assert.deepEqual(
+        await store.consumePasswordReset({
+          digest: resetDigest,
+          passwordHash: changedHash,
+          now: "2026-08-13T12:06:00.000Z",
+        }),
+        { updated: false, revoked_sessions: 0 },
+      );
+      assert.equal(
+        await verifyPassword(
+          "postgres changed password",
+          (await store.findAccountByEmail("postgres-account@example.com"))
+            ?.password_hash ?? "",
+        ),
+        true,
+      );
+
+      const scopeDigest = tokenDigest("c".repeat(43));
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        assert.equal(
+          (
+            await store.consumeLoginAttempt({
+              scopeDigest,
+              now: issuedAt,
+              windowSeconds: 900,
+              maximumAttempts: 5,
+              blockSeconds: 900,
+            })
+          ).allowed,
+          true,
+        );
+      }
+      const blocked = await store.consumeLoginAttempt({
+        scopeDigest,
+        now: issuedAt,
+        windowSeconds: 900,
+        maximumAttempts: 5,
+        blockSeconds: 900,
+      });
+      assert.deepEqual(blocked, { allowed: false, retry_after_seconds: 900 });
+      await store.clearLoginAttempts(scopeDigest);
+
+      const newer = {
+        event_id: randomUUID(),
+        user_id: userId,
+        provider: "postgres-adapter",
+        provider_customer_id: "customer-postgres",
+        provider_subscription_id: "subscription-postgres",
+        plan: "team" as const,
+        status: "active" as const,
+        current_period_end: "2026-09-13T12:00:00.000Z",
+        occurred_at: "2026-08-13T12:10:00.000Z",
+      };
+      assert.equal((await store.applySubscriptionEvent(newer)).applied, true);
+      assert.equal((await store.applySubscriptionEvent(newer)).duplicate, true);
+      const older = {
+        ...newer,
+        event_id: randomUUID(),
+        plan: "free" as const,
+        status: "expired" as const,
+        occurred_at: "2026-08-13T12:09:00.000Z",
+      };
+      assert.equal((await store.applySubscriptionEvent(older)).applied, false);
+      assert.equal(
+        (await store.accountView(userId))?.subscription.plan,
+        "team",
+      );
+
+      await store.close();
+      sql = undefined;
+    } finally {
+      if (sql !== undefined)
+        await sql.end({ timeout: 1 }).catch(() => undefined);
+      try {
+        if (schemaCreated) await admin`DROP SCHEMA ${admin(schema)} CASCADE`;
+      } finally {
+        await admin.end({ timeout: 5 });
+      }
+    }
+  },
 );
 
 test(

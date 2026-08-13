@@ -171,6 +171,67 @@ pub fn collect_claude_agents_with_timeout(
     String::from_utf8(output).map_err(|source| CollectorError::InvalidUtf8 { program, source })
 }
 
+pub fn run_agent_task(
+    agent: crate::domain::AgentType,
+    binary: impl AsRef<Path>,
+    project_path: &Path,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<(), CollectorError> {
+    let binary = binary.as_ref();
+    let program = binary.display().to_string();
+    let mut command = Command::new(binary);
+    match agent {
+        crate::domain::AgentType::ClaudeCode => {
+            command.args(["-p", "--output-format", "text"]);
+        }
+        crate::domain::AgentType::Codex => {
+            command.args(["exec", "-"]);
+        }
+    }
+    command
+        .current_dir(project_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    configure_process_group(&mut command);
+    let mut child = command.spawn().map_err(|source| CollectorError::Start {
+        program: program.clone(),
+        source,
+    })?;
+    let job = ChildJob::attach(&child).map_err(|source| {
+        let _ = child.kill();
+        let _ = child.wait();
+        CollectorError::Io {
+            program: program.clone(),
+            source,
+        }
+    })?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| CollectorError::MissingStdio {
+            program: program.clone(),
+        })?;
+    stdin
+        .write_all(prompt.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .map_err(|source| CollectorError::Io {
+            program: program.clone(),
+            source,
+        })?;
+    drop(stdin);
+    let status = wait_for_child(&mut child, &program, timeout)?;
+    drop(job);
+    if !status.success() {
+        return Err(CollectorError::Exit {
+            program,
+            status: status.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn wait_for_child(
     child: &mut Child,
     program: &str,
@@ -758,6 +819,47 @@ mod tests {
         (directory, script)
     }
 
+    fn recording_script(
+        directory: &tempfile::TempDir,
+        arguments_path: &Path,
+        input_path: &Path,
+    ) -> PathBuf {
+        #[cfg(windows)]
+        {
+            let path = directory.path().join("agent.cmd");
+            fs::write(
+                &path,
+                format!(
+                    "@echo off\r\necho %* > \"{}\"\r\nmore > \"{}\"\r\n",
+                    arguments_path.display(),
+                    input_path.display(),
+                ),
+            )
+            .unwrap();
+            path
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let path = directory.path().join("agent");
+            fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\nprintf '%s' \"$*\" > '{}'\ncat > '{}'\n",
+                    arguments_path.display(),
+                    input_path.display(),
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&path, permissions).unwrap();
+            path
+        }
+    }
+
     #[test]
     fn sanitizes_protocol_error_messages() {
         let input = "bad\0message\nwith control";
@@ -823,6 +925,30 @@ mod tests {
             BoundedLine::Line(line) if line == "trailing"
         ));
         assert!(matches!(read_bounded_line(&mut reader), BoundedLine::Eof));
+    }
+
+    #[test]
+    fn task_prompt_uses_stdin_instead_of_process_arguments() {
+        let directory = tempfile::tempdir().unwrap();
+        let arguments_path = directory.path().join("arguments.txt");
+        let input_path = directory.path().join("input.txt");
+        let script = recording_script(&directory, &arguments_path, &input_path);
+        let prompt = "private prompt marker";
+
+        run_agent_task(
+            crate::domain::AgentType::Codex,
+            script,
+            directory.path(),
+            prompt,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+
+        let arguments = fs::read_to_string(arguments_path).unwrap();
+        let input = fs::read_to_string(input_path).unwrap();
+        assert!(arguments.contains("exec"));
+        assert!(!arguments.contains(prompt));
+        assert_eq!(input.trim_end(), prompt);
     }
 
     #[test]

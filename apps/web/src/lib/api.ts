@@ -4,6 +4,7 @@ import type {
   DeviceRecord,
   SessionRecord,
   SessionRef,
+  RemoteTask,
 } from "./types";
 
 export const DEFAULT_TIMELINE_LIMIT = 100;
@@ -34,8 +35,15 @@ export function deviceUrl(base: string, deviceId: string): string {
   return `${base}/v1/devices/${encodeURIComponent(deviceId)}`;
 }
 
-export function sessionsUrl(base: string): string {
-  return `${base}/v1/sessions`;
+export function sessionsUrl(
+  base: string,
+  agentType?: "claude_code" | "codex",
+): string {
+  const query =
+    agentType === undefined
+      ? ""
+      : `?${new URLSearchParams({ agent_type: agentType }).toString()}`;
+  return `${base}/v1/sessions${query}`;
 }
 
 export function deviceAuthUrl(base: string): string {
@@ -44,6 +52,14 @@ export function deviceAuthUrl(base: string): string {
 
 export function streamUrl(base: string): string {
   return `${base}/v1/stream`;
+}
+
+export function tasksUrl(base: string): string {
+  return `${base}/v1/tasks`;
+}
+
+export function cancelTaskUrl(base: string, taskId: string): string {
+  return `${base}/v1/tasks/${encodeURIComponent(taskId)}/cancel`;
 }
 
 export function pushKeyUrl(base: string): string {
@@ -239,9 +255,10 @@ export async function revokeDevice(
 
 export async function fetchSessions(
   config: PanelConfig,
+  agentType?: "claude_code" | "codex",
 ): Promise<SessionRecord[]> {
   const body = await fetchJson<{ sessions: SessionRecord[] }>(
-    sessionsUrl(config.gatewayBase),
+    sessionsUrl(config.gatewayBase, agentType),
     config.userId,
   );
   return body.sessions;
@@ -267,4 +284,67 @@ export async function fetchSessionEvents(
     config.userId,
   );
   return body.events;
+}
+
+export async function fetchTasks(config: PanelConfig): Promise<RemoteTask[]> {
+  const body = await fetchJson<{ tasks: RemoteTask[] }>(
+    tasksUrl(config.gatewayBase),
+    config.userId,
+  );
+  return body.tasks;
+}
+
+export async function createTask(
+  config: PanelConfig,
+  input: {
+    target_device_id: string;
+    agent_type: "claude_code" | "codex";
+    prompt: string;
+    project_fingerprint: string;
+    idempotency_key: string;
+    execution_policy: "local_confirmation";
+    expires_in_seconds: number;
+  },
+): Promise<RemoteTask> {
+  return sendJsonResponse<RemoteTask>(
+    tasksUrl(config.gatewayBase),
+    config.userId,
+    "POST",
+    input,
+  );
+}
+
+export async function cancelTask(
+  config: PanelConfig,
+  taskId: string,
+): Promise<RemoteTask> {
+  return sendJsonResponse<RemoteTask>(
+    cancelTaskUrl(config.gatewayBase, taskId),
+    config.userId,
+    "POST",
+    {},
+  );
+}
+
+async function sendJsonResponse<T>(
+  url: string,
+  userId: string,
+  method: "POST" | "DELETE",
+  body: unknown,
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: { "x-user-id": userId, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "network_error");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await errorCode(response));
+  }
+  return (await response.json()) as T;
 }

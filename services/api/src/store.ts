@@ -7,6 +7,11 @@ import type {
   AuthSnapshot,
   AuthSyncBatch,
   Presence,
+  CreateRemoteTaskInput,
+  DeviceTaskClaim,
+  DeviceTaskUpdate,
+  RemoteTask,
+  RemoteTaskStatus,
   SyncBatch,
   SyncEvent,
   WaitingReason,
@@ -42,12 +47,35 @@ export interface StoredAuthSnapshot extends AuthSnapshot {
 
 export interface SessionFilters {
   device_id?: string;
+  agent_type?: AgentType;
   activity_status?: ActivityStatus;
   presence?: Presence;
 }
 
 export interface AuthFilters {
   device_id?: string;
+}
+
+export interface RemoteTaskFilters {
+  target_device_id?: string;
+  status?: RemoteTaskStatus;
+}
+
+export interface CreateRemoteTaskRecord extends CreateRemoteTaskInput {
+  task_id: string;
+  created_at: string;
+  expires_at: string;
+  max_concurrent_tasks: number;
+}
+
+export interface RemoteTaskCreateResult {
+  task: RemoteTask;
+  created: boolean;
+}
+
+export interface RemoteTaskMutationResult {
+  task: RemoteTask;
+  owner_id: string;
 }
 
 export interface SessionEventFilters {
@@ -113,6 +141,7 @@ export interface GatewayStore {
   ): Promise<void>;
   deletePushSubscription(ownerId: string, endpoint: string): Promise<void>;
   listPushSubscriptions(ownerId: string): Promise<PushSubscription[]>;
+  countActiveDevices(ownerId: string): Promise<number>;
   registerDevice(
     ownerId: string,
     deviceId: string,
@@ -133,6 +162,20 @@ export interface GatewayStore {
     ownerId: string,
     filters: AuthFilters,
   ): Promise<StoredAuthSnapshot[]>;
+  createRemoteTask(
+    ownerId: string,
+    input: CreateRemoteTaskRecord,
+  ): Promise<RemoteTaskCreateResult>;
+  countActiveRemoteTasks(ownerId: string): Promise<number>;
+  listRemoteTasks(
+    ownerId: string,
+    filters: RemoteTaskFilters,
+  ): Promise<RemoteTask[]>;
+  cancelRemoteTask(ownerId: string, taskId: string): Promise<RemoteTask>;
+  claimRemoteTask(
+    claim: DeviceTaskClaim,
+  ): Promise<RemoteTaskMutationResult | undefined>;
+  updateRemoteTask(update: DeviceTaskUpdate): Promise<RemoteTaskMutationResult>;
   close?(): Promise<void>;
 }
 
@@ -210,10 +253,19 @@ export class InMemoryGatewayStore implements GatewayStore {
   readonly #lastSequenceByDevice = new Map<string, number>();
   readonly #sessions = new Map<string, StoredSession>();
   readonly #authSnapshots = new Map<string, StoredAuthSnapshot>();
+  readonly #remoteTasks = new Map<string, RemoteTask & { owner_id: string }>();
+  readonly #taskIdsByIdempotencyKey = new Map<string, string>();
   readonly #now: () => Date;
 
   constructor(now: () => Date = () => new Date()) {
     this.#now = now;
+  }
+
+  async countActiveDevices(ownerId: string): Promise<number> {
+    return [...this.#devices.values()].filter(
+      (device) =>
+        device.owner_id === ownerId && device.revoked_at === undefined,
+    ).length;
   }
 
   async createBindingCode(
@@ -542,6 +594,8 @@ export class InMemoryGatewayStore implements GatewayStore {
           ownedDevices.has(session.device_id) &&
           (filters.device_id === undefined ||
             session.device_id === filters.device_id) &&
+          (filters.agent_type === undefined ||
+            session.agent_type === filters.agent_type) &&
           (filters.activity_status === undefined ||
             session.payload.state.activity_status ===
               filters.activity_status) &&
@@ -594,6 +648,207 @@ export class InMemoryGatewayStore implements GatewayStore {
         const time = Date.parse(right.checked_at) - Date.parse(left.checked_at);
         return time === 0 ? left.provider.localeCompare(right.provider) : time;
       });
+  }
+
+  async createRemoteTask(
+    ownerId: string,
+    input: CreateRemoteTaskRecord,
+  ): Promise<RemoteTaskCreateResult> {
+    this.#expireRemoteTasks();
+    const device = this.#devices.get(input.target_device_id);
+    if (
+      device === undefined ||
+      device.owner_id !== ownerId ||
+      device.revoked_at !== undefined
+    ) {
+      throw new GatewayStoreError(
+        "device_not_owned",
+        "target device is unavailable",
+      );
+    }
+    const idempotencyIndex = `${ownerId}:${input.idempotency_key}`;
+    const existingId = this.#taskIdsByIdempotencyKey.get(idempotencyIndex);
+    if (existingId !== undefined) {
+      const existing = this.#remoteTasks.get(existingId);
+      if (existing === undefined) throw new Error("task index is inconsistent");
+      if (!sameTaskCreation(existing, input)) {
+        throw new GatewayStoreError(
+          "idempotency_conflict",
+          "idempotency key was reused with different task data",
+        );
+      }
+      return { task: publicRemoteTask(existing), created: false };
+    }
+    if (
+      [...this.#remoteTasks.values()].filter(
+        (task) => task.owner_id === ownerId && isActiveTaskStatus(task.status),
+      ).length >= input.max_concurrent_tasks
+    ) {
+      throw new GatewayStoreError(
+        "task_limit_reached",
+        "subscription concurrent task limit reached",
+      );
+    }
+    const task: RemoteTask & { owner_id: string } = {
+      task_id: input.task_id,
+      owner_id: ownerId,
+      target_device_id: input.target_device_id,
+      agent_type: input.agent_type,
+      prompt: input.prompt,
+      ...(input.project_fingerprint === undefined
+        ? {}
+        : { project_fingerprint: input.project_fingerprint }),
+      idempotency_key: input.idempotency_key,
+      execution_policy: input.execution_policy,
+      status: "queued",
+      version: 1,
+      created_at: input.created_at,
+      expires_at: input.expires_at,
+      updated_at: input.created_at,
+    };
+    this.#remoteTasks.set(task.task_id, task);
+    this.#taskIdsByIdempotencyKey.set(idempotencyIndex, task.task_id);
+    return { task: publicRemoteTask(task), created: true };
+  }
+
+  async countActiveRemoteTasks(ownerId: string): Promise<number> {
+    this.#expireRemoteTasks();
+    return [...this.#remoteTasks.values()].filter(
+      (task) => task.owner_id === ownerId && isActiveTaskStatus(task.status),
+    ).length;
+  }
+
+  async listRemoteTasks(
+    ownerId: string,
+    filters: RemoteTaskFilters,
+  ): Promise<RemoteTask[]> {
+    this.#expireRemoteTasks();
+    return [...this.#remoteTasks.values()]
+      .filter(
+        (task) =>
+          task.owner_id === ownerId &&
+          (filters.target_device_id === undefined ||
+            task.target_device_id === filters.target_device_id) &&
+          (filters.status === undefined || task.status === filters.status),
+      )
+      .sort((left, right) => right.created_at.localeCompare(left.created_at))
+      .map(publicRemoteTask);
+  }
+
+  async cancelRemoteTask(ownerId: string, taskId: string): Promise<RemoteTask> {
+    this.#expireRemoteTasks();
+    const task = this.#remoteTasks.get(taskId);
+    if (task === undefined || task.owner_id !== ownerId) {
+      throw new GatewayStoreError("task_not_found", "task was not found");
+    }
+    if (task.status === "canceled") return publicRemoteTask(task);
+    if (!isActiveTaskStatus(task.status)) {
+      throw new GatewayStoreError("task_terminal", "task is already terminal");
+    }
+    transitionRemoteTask(task, "canceled", this.#now().toISOString());
+    return publicRemoteTask(task);
+  }
+
+  async claimRemoteTask(
+    claim: DeviceTaskClaim,
+  ): Promise<RemoteTaskMutationResult | undefined> {
+    const device = this.#requireTaskDevice(claim.device_id, claim.public_key);
+    this.#expireRemoteTasks();
+    const existing = [...this.#remoteTasks.values()]
+      .filter(
+        (task) =>
+          task.owner_id === device.owner_id &&
+          task.target_device_id === device.device_id &&
+          ["delivered", "accepted", "waiting_user", "running"].includes(
+            task.status,
+          ),
+      )
+      .sort((left, right) =>
+        left.created_at.localeCompare(right.created_at),
+      )[0];
+    if (existing !== undefined) {
+      return { task: publicRemoteTask(existing), owner_id: device.owner_id };
+    }
+    const queued = [...this.#remoteTasks.values()]
+      .filter(
+        (task) =>
+          task.owner_id === device.owner_id &&
+          task.target_device_id === device.device_id &&
+          task.status === "queued",
+      )
+      .sort((left, right) =>
+        left.created_at.localeCompare(right.created_at),
+      )[0];
+    if (queued === undefined) return undefined;
+    transitionRemoteTask(queued, "delivered", this.#now().toISOString());
+    return { task: publicRemoteTask(queued), owner_id: device.owner_id };
+  }
+
+  async updateRemoteTask(
+    update: DeviceTaskUpdate,
+  ): Promise<RemoteTaskMutationResult> {
+    const device = this.#requireTaskDevice(update.device_id, update.public_key);
+    this.#expireRemoteTasks();
+    const task = this.#remoteTasks.get(update.task_id);
+    if (
+      task === undefined ||
+      task.owner_id !== device.owner_id ||
+      task.target_device_id !== device.device_id
+    ) {
+      throw new GatewayStoreError("task_not_found", "task was not found");
+    }
+    if (
+      task.version === update.expected_version + 1 &&
+      sameTaskUpdate(task, update)
+    ) {
+      return { task: publicRemoteTask(task), owner_id: device.owner_id };
+    }
+    if (task.version !== update.expected_version) {
+      throw new GatewayStoreError(
+        "task_version_conflict",
+        "task version is stale",
+      );
+    }
+    if (!canDeviceTransition(task.status, update.status)) {
+      throw new GatewayStoreError(
+        "invalid_task_transition",
+        "task transition is invalid",
+      );
+    }
+    transitionRemoteTask(task, update.status, update.updated_at, update);
+    return { task: publicRemoteTask(task), owner_id: device.owner_id };
+  }
+
+  #requireTaskDevice(deviceId: string, publicKey: string): RegisteredDevice {
+    const device = this.#devices.get(deviceId);
+    if (device === undefined) {
+      throw new GatewayStoreError(
+        "device_not_registered",
+        "device is not registered",
+      );
+    }
+    if (device.revoked_at !== undefined) {
+      throw new GatewayStoreError("device_revoked", "device is revoked");
+    }
+    if (device.public_key !== publicKey) {
+      throw new GatewayStoreError(
+        "device_key_mismatch",
+        "device key does not match",
+      );
+    }
+    return device;
+  }
+
+  #expireRemoteTasks(): void {
+    const now = this.#now();
+    for (const task of this.#remoteTasks.values()) {
+      if (
+        isActiveTaskStatus(task.status) &&
+        Date.parse(task.expires_at) <= now.getTime()
+      ) {
+        transitionRemoteTask(task, "expired", now.toISOString());
+      }
+    }
   }
 }
 
@@ -650,4 +905,88 @@ function shouldReplaceSnapshot(
     );
   }
   return incoming.sequence > current.sequence;
+}
+
+const ACTIVE_TASK_STATUSES = new Set<RemoteTaskStatus>([
+  "queued",
+  "delivered",
+  "accepted",
+  "running",
+  "waiting_user",
+]);
+
+export function isActiveTaskStatus(status: RemoteTaskStatus): boolean {
+  return ACTIVE_TASK_STATUSES.has(status);
+}
+
+export function canDeviceTransition(
+  from: RemoteTaskStatus,
+  to: RemoteTaskStatus,
+): boolean {
+  const allowed: Partial<
+    Record<RemoteTaskStatus, readonly RemoteTaskStatus[]>
+  > = {
+    delivered: ["accepted", "canceled", "failed"],
+    accepted: ["running", "waiting_user", "canceled", "failed"],
+    running: ["waiting_user", "succeeded", "failed", "canceled"],
+    waiting_user: ["running", "succeeded", "failed", "canceled"],
+  };
+  return allowed[from]?.includes(to) ?? false;
+}
+
+function transitionRemoteTask(
+  task: RemoteTask,
+  status: RemoteTaskStatus,
+  updatedAt: string,
+  update?: DeviceTaskUpdate,
+): void {
+  task.status = status;
+  task.version += 1;
+  task.updated_at = updatedAt;
+  if (status === "delivered") task.delivered_at = updatedAt;
+  if (status === "running" && task.started_at === undefined) {
+    task.started_at = updatedAt;
+  }
+  if (["succeeded", "failed", "canceled", "expired"].includes(status)) {
+    task.completed_at = updatedAt;
+  }
+  if (update?.agent_session_id !== undefined) {
+    task.agent_session_id = update.agent_session_id;
+  }
+  if (update?.result_summary !== undefined) {
+    task.result_summary = update.result_summary;
+  }
+  if (update?.error_code !== undefined) task.error_code = update.error_code;
+}
+
+function publicRemoteTask(
+  task: RemoteTask & { owner_id?: string },
+): RemoteTask {
+  const { owner_id: _ownerId, ...visible } = task;
+  return structuredClone(visible);
+}
+
+function sameTaskCreation(
+  task: RemoteTask,
+  input: CreateRemoteTaskRecord,
+): boolean {
+  return (
+    task.target_device_id === input.target_device_id &&
+    task.agent_type === input.agent_type &&
+    task.prompt === input.prompt &&
+    task.project_fingerprint === input.project_fingerprint &&
+    task.execution_policy === input.execution_policy &&
+    Date.parse(task.expires_at) - Date.parse(task.created_at) ===
+      Date.parse(input.expires_at) - Date.parse(input.created_at)
+  );
+}
+
+function sameTaskUpdate(task: RemoteTask, update: DeviceTaskUpdate): boolean {
+  return (
+    task.status === update.status &&
+    task.updated_at === update.updated_at &&
+    task.agent_session_id === update.agent_session_id &&
+    task.result_summary === update.result_summary &&
+    task.error_code === update.error_code
+  );
 }

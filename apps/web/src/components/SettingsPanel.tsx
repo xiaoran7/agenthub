@@ -15,12 +15,23 @@ import { deviceShortId, formatClock } from "../lib/format";
 import type { PwaInstallState } from "../lib/pwa-install";
 import type { DeviceRecord } from "../lib/types";
 import {
+  accountErrorMessage,
+  changePassword,
+  fetchWebSessions,
+  requestEmailVerification,
+  revokeOtherWebSessions,
+  revokeWebSession,
+  type AccountView,
+  type WebSessionView,
+} from "../lib/account";
+import {
   disableNotifications,
   enableNotifications,
   readNotificationState,
 } from "../lib/notifications";
 
 interface SettingsPanelProps {
+  account: AccountView | undefined;
   config: PanelConfig;
   onSave: (config: PanelConfig) => void;
   devices: DeviceRecord[];
@@ -28,6 +39,7 @@ interface SettingsPanelProps {
   notificationPresentedAt: number | undefined;
   installState: PwaInstallState;
   onInstall: () => Promise<void>;
+  onLoggedOut: () => void;
   onClose: () => void;
 }
 
@@ -61,6 +73,7 @@ const INSTALL_LABELS: Record<PwaInstallState, string> = {
 };
 
 export function SettingsPanel({
+  account,
   config,
   devices,
   onSave,
@@ -68,6 +81,7 @@ export function SettingsPanel({
   notificationPresentedAt,
   installState,
   onInstall,
+  onLoggedOut,
   onClose,
 }: SettingsPanelProps) {
   const [gatewayBase, setGatewayBase] = useState(config.gatewayBase);
@@ -92,6 +106,13 @@ export function SettingsPanel({
   const [revokingDevice, setRevokingDevice] = useState<string | undefined>(
     undefined,
   );
+  const [webSessions, setWebSessions] = useState<WebSessionView[]>();
+  const [accountAction, setAccountAction] = useState<string>();
+  const [accountMessage, setAccountMessage] = useState<string>();
+  const [accountError, setAccountError] = useState<string>();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const dialogRef = useModalDialog<HTMLFormElement>(onClose);
 
   useEffect(() => {
@@ -107,6 +128,106 @@ export function SettingsPanel({
       cancelled = true;
     };
   }, [config]);
+
+  useEffect(() => {
+    if (account === undefined) return;
+    let cancelled = false;
+    void fetchWebSessions()
+      .then((sessions) => {
+        if (!cancelled) setWebSessions(sessions);
+      })
+      .catch((cause) => {
+        if (!cancelled) setAccountError(accountErrorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  async function resendVerification() {
+    setAccountAction("verification");
+    setAccountError(undefined);
+    setAccountMessage(undefined);
+    try {
+      const result = await requestEmailVerification();
+      setAccountMessage(
+        result.verified
+          ? "邮箱已经验证。"
+          : result.accepted
+            ? "验证邮件已发送。"
+            : "验证请求没有产生新邮件。",
+      );
+    } catch (cause) {
+      setAccountError(accountErrorMessage(cause));
+    } finally {
+      setAccountAction(undefined);
+    }
+  }
+
+  async function revokeSession(session: WebSessionView) {
+    setAccountAction(session.session_id);
+    setAccountError(undefined);
+    setAccountMessage(undefined);
+    try {
+      await revokeWebSession(session.session_id);
+      if (session.current) {
+        onLoggedOut();
+        return;
+      }
+      setWebSessions((current) =>
+        current?.filter((item) => item.session_id !== session.session_id),
+      );
+      setAccountMessage("登录会话已撤销。");
+    } catch (cause) {
+      setAccountError(accountErrorMessage(cause));
+    } finally {
+      setAccountAction(undefined);
+    }
+  }
+
+  async function revokeOthers() {
+    setAccountAction("others");
+    setAccountError(undefined);
+    setAccountMessage(undefined);
+    try {
+      const revoked = await revokeOtherWebSessions();
+      setWebSessions((current) =>
+        current?.filter((session) => session.current),
+      );
+      setAccountMessage(`已撤销 ${revoked} 个其他登录会话。`);
+    } catch (cause) {
+      setAccountError(accountErrorMessage(cause));
+    } finally {
+      setAccountAction(undefined);
+    }
+  }
+
+  async function submitPasswordChange() {
+    setAccountError(undefined);
+    setAccountMessage(undefined);
+    if (newPassword !== confirmPassword) {
+      setAccountError("两次输入的新密码不一致");
+      return;
+    }
+    setAccountAction("password");
+    try {
+      const revoked = await changePassword({
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setWebSessions((current) =>
+        current?.filter((session) => session.current),
+      );
+      setAccountMessage(`密码已更新，并撤销 ${revoked} 个其他登录会话。`);
+    } catch (cause) {
+      setAccountError(accountErrorMessage(cause));
+    } finally {
+      setAccountAction(undefined);
+    }
+  }
 
   async function toggleNotifications() {
     setNotificationBusy(true);
@@ -220,7 +341,7 @@ export function SettingsPanel({
           <div>
             <p className="eyebrow">面板设置</p>
             <h2 id="settings-title">面板设置</h2>
-            <p>管理连接、设备与等待提醒。</p>
+            <p>管理账户安全、连接、设备与等待提醒。</p>
           </div>
           <button
             type="button"
@@ -233,6 +354,156 @@ export function SettingsPanel({
         </header>
 
         <div className="settings-scroll">
+          {account !== undefined && (
+            <section
+              className="settings-section"
+              aria-labelledby="account-settings"
+            >
+              <div className="settings-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ◎
+                </span>
+                <div>
+                  <h3 id="account-settings">账户安全</h3>
+                  <p>检查邮箱状态并管理所有网页登录会话。</p>
+                </div>
+              </div>
+              <div className="account-security-status">
+                <span
+                  className="account-verification-dot"
+                  data-verified={account.user.email_verified_at !== undefined}
+                />
+                <span>
+                  <strong>{account.user.email}</strong>
+                  <small>
+                    {account.user.email_verified_at === undefined
+                      ? "邮箱尚未验证"
+                      : `已验证 · ${formatClock(account.user.email_verified_at)}`}
+                  </small>
+                </span>
+                {account.user.email_verified_at === undefined && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={accountAction === "verification"}
+                    onClick={() => void resendVerification()}
+                  >
+                    {accountAction === "verification"
+                      ? "发送中…"
+                      : "发送验证邮件"}
+                  </button>
+                )}
+              </div>
+              <div className="account-password-form">
+                <span className="settings-subheading">更改密码</span>
+                <div className="account-password-fields">
+                  <label>
+                    当前密码
+                    <input
+                      autoComplete="current-password"
+                      minLength={10}
+                      onChange={(event) =>
+                        setCurrentPassword(event.target.value)
+                      }
+                      type="password"
+                      value={currentPassword}
+                    />
+                  </label>
+                  <label>
+                    新密码
+                    <input
+                      autoComplete="new-password"
+                      minLength={10}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                      type="password"
+                      value={newPassword}
+                    />
+                  </label>
+                  <label>
+                    确认新密码
+                    <input
+                      autoComplete="new-password"
+                      minLength={10}
+                      onChange={(event) =>
+                        setConfirmPassword(event.target.value)
+                      }
+                      type="password"
+                      value={confirmPassword}
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={
+                    accountAction !== undefined ||
+                    currentPassword.length < 10 ||
+                    newPassword.length < 10 ||
+                    confirmPassword.length < 10
+                  }
+                  onClick={() => void submitPasswordChange()}
+                >
+                  {accountAction === "password" ? "更新中…" : "更新密码"}
+                </button>
+              </div>
+              <div className="settings-toggle account-session-heading">
+                <span>登录会话</span>
+                <button
+                  type="button"
+                  className="secondary danger-button"
+                  disabled={
+                    accountAction !== undefined ||
+                    !webSessions?.some((session) => !session.current)
+                  }
+                  onClick={() => void revokeOthers()}
+                >
+                  {accountAction === "others" ? "撤销中…" : "撤销其他会话"}
+                </button>
+              </div>
+              <div className="account-session-list">
+                {webSessions === undefined ? (
+                  <p className="settings-hint">正在读取登录会话…</p>
+                ) : (
+                  webSessions.map((session) => (
+                    <div
+                      className="account-session-row"
+                      key={session.session_id}
+                    >
+                      <span>
+                        <strong>
+                          {session.current ? "当前会话" : "网页登录"}
+                        </strong>
+                        <small>
+                          最近活动 {formatClock(session.last_seen_at)} · 到期{" "}
+                          {formatClock(session.expires_at)}
+                        </small>
+                      </span>
+                      <button
+                        type="button"
+                        className="secondary danger-button"
+                        disabled={accountAction === session.session_id}
+                        onClick={() => void revokeSession(session)}
+                      >
+                        {accountAction === session.session_id
+                          ? "撤销中…"
+                          : "撤销"}
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+              {accountMessage !== undefined && (
+                <p className="settings-receipt" role="status">
+                  {accountMessage}
+                </p>
+              )}
+              {accountError !== undefined && (
+                <p className="error-text" role="alert">
+                  {accountError}
+                </p>
+              )}
+            </section>
+          )}
           <section
             className="settings-section"
             aria-labelledby="connection-settings"

@@ -7,8 +7,10 @@ import {
   deviceBindingsUrl,
   deviceUrl,
   devicesUrl,
+  cancelTaskUrl,
   sessionEventsUrl,
   sessionsUrl,
+  tasksUrl,
 } from "../src/lib/api";
 
 test("read URLs work same-origin and against an explicit base", () => {
@@ -21,6 +23,10 @@ test("read URLs work same-origin and against an explicit base", () => {
   assert.equal(
     sessionsUrl("http://127.0.0.1:3001"),
     "http://127.0.0.1:3001/v1/sessions",
+  );
+  assert.equal(
+    sessionsUrl("", "claude_code"),
+    "/v1/sessions?agent_type=claude_code",
   );
 });
 
@@ -39,6 +45,15 @@ test("timeline URLs escape session identifiers", () => {
     "/v1/sessions/events?device_id=dev_56475aa75463474c0285df5dbf2bcab7" +
       "&agent_type=codex&agent_session_id=thread+%231%262&limit=100",
   );
+});
+
+test("task URLs remain same-origin and escape task identifiers", () => {
+  assert.equal(tasksUrl(""), "/v1/tasks");
+  assert.equal(
+    tasksUrl("https://gateway.example"),
+    "https://gateway.example/v1/tasks",
+  );
+  assert.equal(cancelTaskUrl("", "task/id"), "/v1/tasks/task%2Fid/cancel");
 });
 
 test("errors map to operator-readable messages", () => {

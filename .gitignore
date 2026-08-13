@@ -3,3 +3,9 @@
 **/dist/
 **/.next/
 *.tsbuildinfo
+*.db
+*.db-shm
+*.db-wal
+runner-identity.json
+.env
+deploy/docker.env

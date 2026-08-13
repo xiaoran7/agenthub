@@ -48,13 +48,19 @@ sudoedit /etc/agent-pulse/agent-pulse.env
 
 至少替换这些值：
 
-- `AGENT_PLATFORM_OWNER_ID`：这个个人 Gateway 的固定 owner 标识
-- `AGENT_PLATFORM_ACCESS_TOKEN`
-- `GATEWAY_ACCESS_TOKEN`：必须与上一个值完全相同
 - `AGENT_PLATFORM_DATABASE_URL`
+- `AGENT_PULSE_LOGIN_RATE_LIMIT_SECRET`
 - `GATEWAY_ORIGIN=http://127.0.0.1:3001`
 
-随机令牌示例：
+用 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`
+生成登录限流密钥。需要邮箱验证时成组设置 `AGENT_PULSE_PUBLIC_BASE_URL`、
+`AGENT_PULSE_EMAIL_ENDPOINT`、`AGENT_PULSE_EMAIL_TOKEN`；账单适配器使用独立的
+`AGENT_PULSE_BILLING_WEBHOOK_SECRET`。这些值只进入服务器密钥文件，不进入 Web 构建参数。
+
+新部署使用用户注册/登录和 HttpOnly 会话 Cookie，不配置全局 owner 或访问令牌。旧个人
+部署迁移时才使用示例文件里注释的 Bearer 兼容变量。
+
+旧兼容模式随机令牌示例：
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -119,10 +125,14 @@ sudo systemctl reload nginx
 4. Runner 使用 HTTPS Gateway 地址完成设备绑定和同步。
 5. 新事件写入后，Sessions 和 Activity 页面能通过 SSE 刷新；若 SSE 不可用，页面应退回轮询。
 6. 重启 API 后历史设备和 Session 仍存在，证明使用的是 PostgreSQL 而非内存 Store。
+7. 请求密码重置邮件，确认链接片段在页面载入后立即从地址栏移除；重置后旧密码和旧
+   Web 会话全部失效，新密码可登录。
 
 ## 7. 当前上线边界
 
-当前认证模型是单 owner 的个人部署，不包含多用户登录、SSO、token 轮换/撤销、跨实例事件广播和外部限流。正式对多人开放前，需要补齐这些能力，并在反向代理或网关层增加限流、访问日志脱敏和备份恢复策略。
+当前已支持多用户邮箱账户、Web 会话轮换、邮箱验证、密码重置与签名订阅事件，但仍不
+包含 SSO、真实邮件/支付供应商适配、跨实例事件广播和完整分布式限流。正式对公网开放
+前，需要接入供应商并在反向代理或网关层补充全局限流、访问日志脱敏和备份恢复策略。
 
 ## 8. Docker 部署
 

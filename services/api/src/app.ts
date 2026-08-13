@@ -1,17 +1,45 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 
 import {
   ContractError,
   activityStatuses,
   agentTypes,
   parseAuthSyncBatch,
+  parseCreateRemoteTask,
   parseDeviceRegistration,
+  parseDeviceTaskClaim,
+  parseDeviceTaskUpdate,
   parseSyncBatch,
   presences,
+  remoteTaskStatuses,
   verifySyncBatch,
 } from "@agent-pulse/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 
+import {
+  AccountError,
+  accountBody,
+  assertOnlyFields,
+  clearLoginSession,
+  createLoginSession,
+  currentSessionDigest,
+  hashPassword,
+  newUserId,
+  normalizeDisplayName,
+  normalizeEmail,
+  tokenDigest,
+  validatePassword,
+  verifyAccountPassword,
+  type AccountStore,
+  type AccountView,
+  type LoginAttemptResult,
+} from "./accounts.js";
+import { BillingEventVerifier } from "./billing.js";
+import {
+  passwordResetUrl,
+  verificationUrl,
+  type EmailVerificationSender,
+} from "./email.js";
 import {
   AuthenticationError,
   RejectingAuthenticator,
@@ -26,6 +54,7 @@ import {
   bindingCodeDigest,
   type AuthFilters,
   type GatewayStore,
+  type RemoteTaskFilters,
   type SessionFilters,
   type SessionStatusChange,
 } from "./store.js";
@@ -43,6 +72,20 @@ const DEFAULT_BINDING_TTL_SECONDS = 600;
 const MIN_BINDING_TTL_SECONDS = 60;
 const MAX_BINDING_TTL_SECONDS = 3_600;
 const DEVICE_ID_PATTERN = /^dev_[0-9a-f]{32}$/;
+const TASK_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const MAX_DEVICE_CLOCK_SKEW_MS = 5 * 60_000;
+const EMAIL_VERIFICATION_BYTES = 32;
+const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60_000;
+const EMAIL_VERIFICATION_MIN_INTERVAL_SECONDS = 60;
+const PASSWORD_RESET_BYTES = 32;
+const PASSWORD_RESET_TTL_MS = 60 * 60_000;
+const PASSWORD_RESET_MIN_INTERVAL_SECONDS = 60;
+const LOGIN_WINDOW_SECONDS = 15 * 60;
+const LOGIN_MAXIMUM_ATTEMPTS = 5;
+const LOGIN_BLOCK_SECONDS = 15 * 60;
+const SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /**
  * Statuses that interrupt the user's attention. The panel is a monitor, not a
  * feed: notifying on every completion would train people to ignore it, and the
@@ -62,6 +105,15 @@ export interface GatewayAppOptions {
   broker?: ChangeBroker;
   push?: GatewayPushOptions;
   authenticator?: OwnerAuthenticator;
+  accounts?: AccountStore;
+  secureCookies?: boolean;
+  emailVerification?: {
+    baseUrl: string;
+    sender: EmailVerificationSender;
+  };
+  billingVerifier?: BillingEventVerifier;
+  loginRateLimitSecret?: Buffer;
+  trustProxy?: boolean;
   bindingCodeFactory?: () => string;
   now?: () => Date;
   logger?: boolean;
@@ -77,13 +129,19 @@ export function createGatewayApp(
     options.bindingCodeFactory ?? (() => randomBytes(32).toString("base64url"));
   const broker = options.broker ?? new ChangeBroker();
   const authenticator = options.authenticator ?? new RejectingAuthenticator();
+  const loginRateLimitSecret = options.loginRateLimitSecret ?? randomBytes(32);
   const openStreams = new Set<() => void>();
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: 1024 * 1024,
+    trustProxy: options.trustProxy ?? false,
   });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof AccountError) {
+      void reply.status(error.statusCode).send({ error: error.code });
+      return;
+    }
     if (error instanceof ContractError) {
       const status =
         error.code === "invalid_signature" ||
@@ -97,14 +155,18 @@ export function createGatewayApp(
       return;
     }
     if (error instanceof GatewayStoreError) {
-      const status = [
-        "device_not_registered",
-        "device_key_mismatch",
-        "device_revoked",
-        "invalid_binding_code",
-      ].includes(error.code)
-        ? 403
-        : 409;
+      const status = ["task_not_found"].includes(error.code)
+        ? 404
+        : [
+              "device_not_registered",
+              "device_key_mismatch",
+              "device_revoked",
+              "invalid_binding_code",
+              "device_not_owned",
+              "task_limit_reached",
+            ].includes(error.code)
+          ? 403
+          : 409;
       void reply.status(status).send({ error: error.code });
       return;
     }
@@ -125,8 +187,380 @@ export function createGatewayApp(
 
   app.get("/health", async () => ({ status: "ok" }));
 
+  app.post("/v1/auth/register", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["email", "password", "display_name"]);
+    const email = normalizeEmail(body.email);
+    const password = validatePassword(body.password);
+    const account = await accounts.createAccount({
+      userId: newUserId(),
+      email,
+      displayName: normalizeDisplayName(body.display_name, email),
+      passwordHash: await hashPassword(password),
+    });
+    await createLoginSession(
+      accounts,
+      account.user.user_id,
+      reply,
+      options.secureCookies ?? false,
+      now(),
+    );
+    if (options.emailVerification !== undefined) {
+      try {
+        await issueEmailVerification(
+          accounts,
+          account,
+          options.emailVerification,
+          now(),
+          app,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof AccountError) ||
+          error.code !== "email_delivery_failed"
+        ) {
+          throw error;
+        }
+      }
+    }
+    return reply.status(201).send(account);
+  });
+
+  app.post("/v1/auth/login", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["email", "password"]);
+    const email = normalizeEmail(body.email);
+    const password = validatePassword(body.password);
+    const loginScope = createHmac("sha256", loginRateLimitSecret)
+      .update(`${email}\n${request.ip}`, "utf8")
+      .digest("hex");
+    const rateLimit = await accounts.consumeLoginAttempt({
+      scopeDigest: loginScope,
+      now: now().toISOString(),
+      windowSeconds: LOGIN_WINDOW_SECONDS,
+      maximumAttempts: LOGIN_MAXIMUM_ATTEMPTS,
+      blockSeconds: LOGIN_BLOCK_SECONDS,
+    });
+    if (!rateLimit.allowed) {
+      reply.header("retry-after", String(rateLimit.retry_after_seconds));
+      throw new AccountError(
+        "login_rate_limited",
+        "too many login attempts",
+        429,
+      );
+    }
+    const user = await accounts.findAccountByEmail(email);
+    if (!(await verifyAccountPassword(password, user)) || user === undefined) {
+      throw new AccountError(
+        "invalid_credentials",
+        "email or password is incorrect",
+        401,
+      );
+    }
+    const account = await accounts.accountView(user.user_id);
+    if (account === undefined) {
+      throw new AccountError("account_unavailable", "account unavailable", 403);
+    }
+    await accounts.clearLoginAttempts(loginScope);
+    await createLoginSession(
+      accounts,
+      user.user_id,
+      reply,
+      options.secureCookies ?? false,
+      now(),
+    );
+    return reply.send(account);
+  });
+
+  app.post("/v1/auth/logout", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    await clearLoginSession(
+      accounts,
+      request,
+      reply,
+      options.secureCookies ?? false,
+    );
+    return reply.status(204).send();
+  });
+
+  app.get("/v1/auth/me", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const userId = await authenticator.authenticate(request);
+    const account = await accounts.accountView(userId);
+    if (account === undefined) throw new AuthenticationError();
+    return reply.send(account);
+  });
+
+  app.post("/v1/auth/email-verifications", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const userId = await authenticator.authenticate(request);
+    const account = await accounts.accountView(userId);
+    if (account === undefined) throw new AuthenticationError();
+    const issued = await issueEmailVerification(
+      accounts,
+      account,
+      options.emailVerification,
+      now(),
+      app,
+    );
+    if (!issued.allowed && issued.retry_after_seconds > 0) {
+      reply.header("retry-after", String(issued.retry_after_seconds));
+      throw new AccountError(
+        "email_verification_rate_limited",
+        "verification was sent recently",
+        429,
+      );
+    }
+    return reply.status(202).send({
+      accepted: issued.allowed,
+      verified: account.user.email_verified_at !== undefined,
+    });
+  });
+
+  app.post("/v1/auth/email-verifications/confirm", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["token"]);
+    if (
+      typeof body.token !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/.test(body.token)
+    ) {
+      throw new AccountError(
+        "invalid_email_verification",
+        "verification token is invalid",
+        400,
+      );
+    }
+    const account = await accounts.consumeEmailVerification(
+      tokenDigest(body.token),
+      now().toISOString(),
+    );
+    if (account === undefined) {
+      throw new AccountError(
+        "invalid_email_verification",
+        "verification token is invalid or expired",
+        400,
+      );
+    }
+    return reply.send(account);
+  });
+
+  app.post("/v1/auth/password-resets", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const delivery = options.emailVerification;
+    if (delivery?.sender.sendPasswordReset === undefined) {
+      throw new AccountError(
+        "email_delivery_unavailable",
+        "password reset delivery is unavailable",
+        404,
+      );
+    }
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["email"]);
+    const email = normalizeEmail(body.email);
+    const user = await accounts.findAccountByEmail(email);
+    if (user !== undefined && user.status === "active") {
+      const token = randomBytes(PASSWORD_RESET_BYTES).toString("base64url");
+      const digest = tokenDigest(token);
+      const createdAt = now();
+      const expiresAt = new Date(createdAt.getTime() + PASSWORD_RESET_TTL_MS);
+      const issued = await accounts.issuePasswordReset({
+        digest,
+        userId: user.user_id,
+        createdAt: createdAt.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        minimumIntervalSeconds: PASSWORD_RESET_MIN_INTERVAL_SECONDS,
+      });
+      if (issued.allowed) {
+        try {
+          await delivery.sender.sendPasswordReset({
+            user_id: user.user_id,
+            email: user.email,
+            display_name: user.display_name,
+            reset_url: passwordResetUrl(delivery.baseUrl, token),
+            expires_at: expiresAt.toISOString(),
+          });
+        } catch (error) {
+          await accounts.deletePendingPasswordReset(digest);
+          app.log.error(error, "password reset delivery failed");
+        }
+      }
+    }
+    return reply.status(202).send({ accepted: true });
+  });
+
+  app.post("/v1/auth/password-resets/confirm", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["token", "password"]);
+    if (
+      typeof body.token !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/.test(body.token)
+    ) {
+      throw new AccountError(
+        "invalid_password_reset",
+        "password reset token is invalid",
+        400,
+      );
+    }
+    const password = validatePassword(body.password);
+    const result = await accounts.consumePasswordReset({
+      digest: tokenDigest(body.token),
+      passwordHash: await hashPassword(password),
+      now: now().toISOString(),
+    });
+    if (!result.updated) {
+      throw new AccountError(
+        "invalid_password_reset",
+        "password reset token is invalid or expired",
+        400,
+      );
+    }
+    await clearLoginSession(
+      accounts,
+      request,
+      reply,
+      options.secureCookies ?? false,
+    );
+    return reply.send({ changed: true });
+  });
+
+  app.post("/v1/auth/password", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const userId = await authenticator.authenticate(request);
+    const currentDigest = currentSessionDigest(request);
+    if (currentDigest === undefined) throw new AuthenticationError();
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["current_password", "new_password"]);
+    const currentPassword = validatePassword(body.current_password);
+    const newPassword = validatePassword(body.new_password);
+    const account = await accounts.accountView(userId);
+    if (account === undefined) throw new AuthenticationError();
+    const user = await accounts.findAccountByEmail(account.user.email);
+    if (
+      !(await verifyAccountPassword(currentPassword, user)) ||
+      user === undefined
+    ) {
+      throw new AccountError(
+        "invalid_current_password",
+        "current password is incorrect",
+        401,
+      );
+    }
+    if (currentPassword === newPassword) {
+      throw new AccountError(
+        "password_unchanged",
+        "new password must be different",
+        400,
+      );
+    }
+    const result = await accounts.changePassword({
+      userId,
+      expectedPasswordHash: user.password_hash,
+      passwordHash: await hashPassword(newPassword),
+      currentSessionDigest: currentDigest,
+    });
+    if (!result.updated) throw new AuthenticationError();
+    return reply.send({ changed: true, revoked: result.revoked_sessions });
+  });
+
+  app.get("/v1/auth/sessions", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const userId = await authenticator.authenticate(request);
+    const digest = currentSessionDigest(request);
+    if (digest === undefined) throw new AuthenticationError();
+    return reply.send({
+      sessions: await accounts.listWebSessions(
+        userId,
+        digest,
+        now().toISOString(),
+      ),
+    });
+  });
+
+  app.delete("/v1/auth/sessions/:sessionId", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const userId = await authenticator.authenticate(request);
+    const { sessionId } = request.params as { sessionId?: unknown };
+    if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId)) {
+      throw new AccountError(
+        "invalid_session_id",
+        "session ID is invalid",
+        400,
+      );
+    }
+    const digest = currentSessionDigest(request);
+    if (digest === undefined) throw new AuthenticationError();
+    const sessions = await accounts.listWebSessions(
+      userId,
+      digest,
+      now().toISOString(),
+    );
+    const target = sessions.find((session) => session.session_id === sessionId);
+    if (
+      target === undefined ||
+      !(await accounts.revokeWebSession(userId, sessionId))
+    ) {
+      throw new AccountError("session_not_found", "session was not found", 404);
+    }
+    if (target.current) {
+      await clearLoginSession(
+        accounts,
+        request,
+        reply,
+        options.secureCookies ?? false,
+      );
+    }
+    return reply.status(204).send();
+  });
+
+  app.delete("/v1/auth/sessions", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const userId = await authenticator.authenticate(request);
+    const digest = currentSessionDigest(request);
+    if (digest === undefined) throw new AuthenticationError();
+    const revoked = await accounts.revokeOtherWebSessions(userId, digest);
+    return reply.send({ revoked });
+  });
+
+  app.post("/v1/billing/events", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    if (options.billingVerifier === undefined) {
+      throw new AccountError(
+        "billing_unavailable",
+        "billing integration is unavailable",
+        404,
+      );
+    }
+    const event = options.billingVerifier.verify(request, now());
+    const result = await accounts.applySubscriptionEvent(event);
+    return reply.send({
+      applied: result.applied,
+      duplicate: result.duplicate,
+      subscription: result.account.subscription,
+      entitlements: result.account.entitlements,
+    });
+  });
+
   app.post("/v1/device-bindings", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
+    if (options.accounts !== undefined) {
+      const account = await options.accounts.accountView(ownerId);
+      if (account === undefined) throw new AuthenticationError();
+      requireVerifiedEmail(account, options.emailVerification !== undefined);
+      if (
+        (await store.countActiveDevices(ownerId)) >=
+        account.entitlements.max_devices
+      ) {
+        throw new AccountError(
+          "device_limit_reached",
+          "subscription device limit reached",
+          403,
+        );
+      }
+    }
     const expiresInSeconds = bindingTtlSeconds(request.body);
     const bindingCode = bindingCodeFactory();
     const expiresAt = new Date(
@@ -219,12 +653,12 @@ export function createGatewayApp(
   });
 
   app.get("/v1/devices", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
     return reply.send({ devices: await store.listDevices(ownerId) });
   });
 
   app.get("/v1/device-auth", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
     const query = request.query as Record<string, unknown>;
     const unknownQuery = Object.keys(query).find((key) => key !== "device_id");
     if (unknownQuery !== undefined) {
@@ -243,8 +677,130 @@ export function createGatewayApp(
     return reply.send({ snapshots: await store.listAuth(ownerId, filters) });
   });
 
+  app.post("/v1/tasks", async (request, reply) => {
+    const ownerId = await authenticator.authenticate(request);
+    const accounts = requireAccounts(options.accounts);
+    const account = await accounts.accountView(ownerId);
+    if (account === undefined) throw new AuthenticationError();
+    requireVerifiedEmail(account, options.emailVerification !== undefined);
+    if (!account.entitlements.remote_tasks) {
+      throw new AccountError(
+        "remote_tasks_unavailable",
+        "remote tasks require a paid subscription",
+        403,
+      );
+    }
+    const input = parseCreateRemoteTask(request.body);
+    if (input.execution_policy !== "local_confirmation") {
+      throw new AccountError(
+        "execution_policy_unavailable",
+        "execution policy is not enabled",
+        403,
+      );
+    }
+    const createdAt = now();
+    const result = await store.createRemoteTask(ownerId, {
+      ...input,
+      task_id: randomUUID(),
+      created_at: createdAt.toISOString(),
+      expires_at: new Date(
+        createdAt.getTime() + input.expires_in_seconds * 1_000,
+      ).toISOString(),
+      max_concurrent_tasks: account.entitlements.max_concurrent_tasks,
+    });
+    if (result.created) {
+      broker.publish(ownerId, {
+        device_id: result.task.target_device_id,
+        accepted: 0,
+        remote_tasks: true,
+      });
+    }
+    return reply.status(result.created ? 201 : 200).send(result.task);
+  });
+
+  app.get("/v1/tasks", async (request, reply) => {
+    const ownerId = await authenticator.authenticate(request);
+    const query = request.query as Record<string, unknown>;
+    const unknownQuery = Object.keys(query).find(
+      (key) => !["target_device_id", "status"].includes(key),
+    );
+    if (unknownQuery !== undefined) {
+      throw new ContractError("invalid_query", "query field is invalid");
+    }
+    const filters: RemoteTaskFilters = {};
+    if (query.target_device_id !== undefined) {
+      if (
+        typeof query.target_device_id !== "string" ||
+        !DEVICE_ID_PATTERN.test(query.target_device_id)
+      ) {
+        throw new ContractError("invalid_query", "target_device_id is invalid");
+      }
+      filters.target_device_id = query.target_device_id;
+    }
+    if (query.status !== undefined) {
+      if (
+        typeof query.status !== "string" ||
+        !isOneOf(remoteTaskStatuses, query.status)
+      ) {
+        throw new ContractError("invalid_query", "status is invalid");
+      }
+      filters.status = query.status;
+    }
+    return reply.send({ tasks: await store.listRemoteTasks(ownerId, filters) });
+  });
+
+  app.post("/v1/tasks/:taskId/cancel", async (request, reply) => {
+    const ownerId = await authenticator.authenticate(request);
+    const { taskId } = request.params as { taskId?: unknown };
+    if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
+      throw new ContractError("invalid_task_id", "task ID is invalid");
+    }
+    const task = await store.cancelRemoteTask(ownerId, taskId);
+    broker.publish(ownerId, {
+      device_id: task.target_device_id,
+      accepted: 0,
+      remote_tasks: true,
+    });
+    return reply.send(task);
+  });
+
+  app.post("/v1/device-tasks/claim", async (request, reply) => {
+    const claim = parseDeviceTaskClaim(request.body);
+    assertFreshDeviceTimestamp(claim.requested_at, now());
+    const task = await store.claimRemoteTask(claim);
+    if (task === undefined) return reply.status(204).send();
+    broker.publish(task.owner_id, {
+      device_id: task.task.target_device_id,
+      accepted: 0,
+      remote_tasks: true,
+    });
+    return reply.send(task.task);
+  });
+
+  app.post("/v1/device-tasks/:taskId/status", async (request, reply) => {
+    const { taskId } = request.params as { taskId?: unknown };
+    if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
+      throw new ContractError("invalid_task_id", "task ID is invalid");
+    }
+    const update = parseDeviceTaskUpdate(request.body);
+    if (update.task_id !== taskId) {
+      throw new ContractError(
+        "task_id_mismatch",
+        "task ID does not match route",
+      );
+    }
+    assertFreshDeviceTimestamp(update.updated_at, now());
+    const result = await store.updateRemoteTask(update);
+    broker.publish(result.owner_id, {
+      device_id: result.task.target_device_id,
+      accepted: 0,
+      remote_tasks: true,
+    });
+    return reply.send(result.task);
+  });
+
   app.delete("/v1/devices/:deviceId", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
     const { deviceId } = request.params as { deviceId?: unknown };
     if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) {
       throw new ContractError("invalid_device_id", "device ID is invalid");
@@ -254,10 +810,13 @@ export function createGatewayApp(
   });
 
   app.get("/v1/sessions", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
     const query = request.query as Record<string, unknown>;
     const unknownQuery = Object.keys(query).find(
-      (key) => !["device_id", "activity_status", "presence"].includes(key),
+      (key) =>
+        !["device_id", "agent_type", "activity_status", "presence"].includes(
+          key,
+        ),
     );
     if (unknownQuery !== undefined) {
       throw new ContractError("invalid_query", "query field is invalid");
@@ -268,6 +827,15 @@ export function createGatewayApp(
         throw new ContractError("invalid_query", "device_id is invalid");
       }
       filters.device_id = query.device_id;
+    }
+    if (query.agent_type !== undefined) {
+      if (
+        typeof query.agent_type !== "string" ||
+        !isOneOf(agentTypes, query.agent_type)
+      ) {
+        throw new ContractError("invalid_query", "agent_type is invalid");
+      }
+      filters.agent_type = query.agent_type;
     }
     if (query.activity_status !== undefined) {
       if (
@@ -292,7 +860,7 @@ export function createGatewayApp(
   });
 
   app.get("/v1/sessions/events", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
     const query = request.query as Record<string, unknown>;
     const unknownQuery = Object.keys(query).find(
       (key) =>
@@ -347,7 +915,7 @@ export function createGatewayApp(
   });
 
   app.post("/v1/push/subscriptions", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
     if (options.push === undefined) {
       return reply.status(404).send({ error: "push_disabled" });
     }
@@ -356,7 +924,7 @@ export function createGatewayApp(
   });
 
   app.delete("/v1/push/subscriptions", async (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+    const ownerId = await authenticator.authenticate(request);
     const body = expectObject(request.body);
     const unknownField = Object.keys(body).find((key) => key !== "endpoint");
     if (unknownField !== undefined) {
@@ -432,8 +1000,8 @@ export function createGatewayApp(
   // HTTP proxy. Adding WebSocket would require a separately authenticated
   // upgrade proxy, which is deferred until the product has a bidirectional
   // use case.
-  app.get("/v1/stream", (request, reply) => {
-    const ownerId = authenticator.authenticate(request);
+  app.get("/v1/stream", async (request, reply) => {
+    const ownerId = await authenticator.authenticate(request);
     if (broker.subscriberCount(ownerId) >= MAX_STREAMS_PER_OWNER) {
       void reply.status(429).send({ error: "too_many_streams" });
       return;
@@ -606,4 +1174,81 @@ function isOneOf<const T extends readonly string[]>(
   value: string,
 ): value is T[number] {
   return (values as readonly string[]).includes(value);
+}
+
+function assertFreshDeviceTimestamp(value: string, now: Date): void {
+  if (Math.abs(Date.parse(value) - now.getTime()) > MAX_DEVICE_CLOCK_SKEW_MS) {
+    throw new ContractError(
+      "stale_device_request",
+      "device timestamp is stale",
+    );
+  }
+}
+
+function requireAccounts(accounts: AccountStore | undefined): AccountStore {
+  if (accounts === undefined) {
+    throw new AccountError(
+      "accounts_unavailable",
+      "account service is not configured",
+      503,
+    );
+  }
+  return accounts;
+}
+
+async function issueEmailVerification(
+  accounts: AccountStore,
+  account: AccountView,
+  delivery: { baseUrl: string; sender: EmailVerificationSender } | undefined,
+  issuedAt: Date,
+  app: FastifyInstance,
+): Promise<LoginAttemptResult> {
+  if (account.user.email_verified_at !== undefined) {
+    return { allowed: false, retry_after_seconds: 0 };
+  }
+  if (delivery === undefined) {
+    throw new AccountError(
+      "email_delivery_unavailable",
+      "email verification delivery is unavailable",
+      503,
+    );
+  }
+  const token = randomBytes(EMAIL_VERIFICATION_BYTES).toString("base64url");
+  const expiresAt = new Date(issuedAt.getTime() + EMAIL_VERIFICATION_TTL_MS);
+  const result = await accounts.issueEmailVerification({
+    digest: tokenDigest(token),
+    userId: account.user.user_id,
+    createdAt: issuedAt.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    minimumIntervalSeconds: EMAIL_VERIFICATION_MIN_INTERVAL_SECONDS,
+  });
+  if (!result.allowed) return result;
+  try {
+    await delivery.sender.sendVerification({
+      user_id: account.user.user_id,
+      email: account.user.email,
+      display_name: account.user.display_name,
+      verification_url: verificationUrl(delivery.baseUrl, token),
+      expires_at: expiresAt.toISOString(),
+    });
+  } catch (error) {
+    await accounts.deletePendingEmailVerification(tokenDigest(token));
+    app.log.error({ error_code: "email_verification_delivery_failed" });
+    throw new AccountError(
+      "email_delivery_failed",
+      "verification email could not be delivered",
+      503,
+    );
+  }
+  return result;
+}
+
+function requireVerifiedEmail(account: AccountView, required: boolean): void {
+  if (required && account.user.email_verified_at === undefined) {
+    throw new AccountError(
+      "email_verification_required",
+      "email verification is required",
+      403,
+    );
+  }
 }

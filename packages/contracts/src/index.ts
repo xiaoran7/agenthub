@@ -50,6 +50,79 @@ export type ObservationSource = (typeof observationSources)[number];
 export type Confidence = (typeof confidences)[number];
 export type WaitingReason = (typeof waitingReasons)[number];
 
+export const remoteTaskStatuses = [
+  "queued",
+  "delivered",
+  "accepted",
+  "running",
+  "waiting_user",
+  "succeeded",
+  "failed",
+  "canceled",
+  "expired",
+] as const;
+export const taskExecutionPolicies = [
+  "observe_only",
+  "local_confirmation",
+  "trusted_execution",
+] as const;
+
+export type RemoteTaskStatus = (typeof remoteTaskStatuses)[number];
+export type TaskExecutionPolicy = (typeof taskExecutionPolicies)[number];
+
+export interface CreateRemoteTaskInput {
+  target_device_id: string;
+  agent_type: AgentType;
+  prompt: string;
+  project_fingerprint?: string;
+  idempotency_key: string;
+  execution_policy: TaskExecutionPolicy;
+  expires_in_seconds: number;
+}
+
+export interface RemoteTask {
+  task_id: string;
+  target_device_id: string;
+  agent_type: AgentType;
+  prompt: string;
+  project_fingerprint?: string;
+  idempotency_key: string;
+  execution_policy: TaskExecutionPolicy;
+  status: RemoteTaskStatus;
+  version: number;
+  created_at: string;
+  expires_at: string;
+  updated_at: string;
+  delivered_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  agent_session_id?: string;
+  result_summary?: string;
+  error_code?: string;
+}
+
+export interface DeviceTaskClaim {
+  protocol_version: number;
+  device_id: string;
+  public_key: string;
+  requested_at: string;
+  signature: string;
+}
+
+export interface DeviceTaskUpdate {
+  protocol_version: number;
+  task_id: string;
+  device_id: string;
+  public_key: string;
+  expected_version: number;
+  status: Exclude<RemoteTaskStatus, "queued" | "delivered" | "expired">;
+  updated_at: string;
+  agent_session_id?: string;
+  result_summary?: string;
+  error_code?: string;
+  signature: string;
+}
+
 export const authStates = [
   "authenticated",
   "unauthenticated",
@@ -184,6 +257,188 @@ export class ContractError extends Error {
     super(message);
     this.name = "ContractError";
     this.code = code;
+  }
+}
+
+export function parseCreateRemoteTask(value: unknown): CreateRemoteTaskInput {
+  const object = expectObject(value, "remote task");
+  expectKeys(
+    object,
+    [
+      "target_device_id",
+      "agent_type",
+      "prompt",
+      "idempotency_key",
+      "execution_policy",
+      "expires_in_seconds",
+    ],
+    ["project_fingerprint"],
+  );
+  const prompt = expectString(object.prompt, "prompt", 32_000);
+  if (Buffer.byteLength(prompt, "utf8") > 64_000) {
+    throw new ContractError("invalid_field", "prompt exceeds 64000 bytes");
+  }
+  const input: CreateRemoteTaskInput = {
+    target_device_id: expectDeviceId(object.target_device_id),
+    agent_type: expectEnum(object.agent_type, agentTypes, "agent_type"),
+    prompt,
+    idempotency_key: expectIdempotencyKey(object.idempotency_key),
+    execution_policy: expectEnum(
+      object.execution_policy,
+      taskExecutionPolicies,
+      "execution_policy",
+    ),
+    expires_in_seconds: expectInteger(
+      object.expires_in_seconds,
+      "expires_in_seconds",
+      60,
+    ),
+  };
+  if (input.expires_in_seconds > 86_400) {
+    throw new ContractError(
+      "invalid_field",
+      "expires_in_seconds must be at most 86400",
+    );
+  }
+  if (object.project_fingerprint !== undefined) {
+    input.project_fingerprint = expectHex(
+      object.project_fingerprint,
+      "project_fingerprint",
+      64,
+    );
+  }
+  return input;
+}
+
+export function parseDeviceTaskClaim(value: unknown): DeviceTaskClaim {
+  const object = expectObject(value, "device task claim");
+  expectKeys(object, [
+    "protocol_version",
+    "device_id",
+    "public_key",
+    "requested_at",
+    "signature",
+  ]);
+  const claim: DeviceTaskClaim = {
+    protocol_version: expectProtocolVersion(object.protocol_version),
+    device_id: expectDeviceId(object.device_id),
+    public_key: expectHex(object.public_key, "public_key", 64),
+    requested_at: expectTimestamp(object.requested_at, "requested_at"),
+    signature: expectHex(object.signature, "signature", 128),
+  };
+  verifyDeviceSignature(
+    claim.device_id,
+    claim.public_key,
+    unsignedDeviceTaskClaimJson(claim),
+    claim.signature,
+  );
+  return claim;
+}
+
+export function unsignedDeviceTaskClaimJson(claim: DeviceTaskClaim): string {
+  return JSON.stringify({
+    protocol_version: claim.protocol_version,
+    device_id: claim.device_id,
+    public_key: claim.public_key,
+    requested_at: claim.requested_at,
+  });
+}
+
+export function parseDeviceTaskUpdate(value: unknown): DeviceTaskUpdate {
+  const object = expectObject(value, "device task update");
+  expectKeys(
+    object,
+    [
+      "protocol_version",
+      "task_id",
+      "device_id",
+      "public_key",
+      "expected_version",
+      "status",
+      "updated_at",
+      "signature",
+    ],
+    ["agent_session_id", "result_summary", "error_code"],
+  );
+  const status = expectEnum(object.status, remoteTaskStatuses, "status");
+  if (status === "queued" || status === "delivered" || status === "expired") {
+    throw new ContractError("invalid_field", "device task status is invalid");
+  }
+  const update: DeviceTaskUpdate = {
+    protocol_version: expectProtocolVersion(object.protocol_version),
+    task_id: expectUuid(object.task_id, "task_id"),
+    device_id: expectDeviceId(object.device_id),
+    public_key: expectHex(object.public_key, "public_key", 64),
+    expected_version: expectInteger(
+      object.expected_version,
+      "expected_version",
+      1,
+    ),
+    status,
+    updated_at: expectTimestamp(object.updated_at, "updated_at"),
+    signature: expectHex(object.signature, "signature", 128),
+  };
+  if (object.agent_session_id !== undefined) {
+    update.agent_session_id = expectString(
+      object.agent_session_id,
+      "agent_session_id",
+      512,
+    );
+  }
+  if (object.result_summary !== undefined) {
+    update.result_summary = expectString(
+      object.result_summary,
+      "result_summary",
+      2_000,
+    );
+  }
+  if (object.error_code !== undefined) {
+    update.error_code = expectSafeCode(object.error_code, "error_code");
+  }
+  verifyDeviceSignature(
+    update.device_id,
+    update.public_key,
+    unsignedDeviceTaskUpdateJson(update),
+    update.signature,
+  );
+  return update;
+}
+
+export function unsignedDeviceTaskUpdateJson(update: DeviceTaskUpdate): string {
+  return JSON.stringify({
+    protocol_version: update.protocol_version,
+    task_id: update.task_id,
+    device_id: update.device_id,
+    public_key: update.public_key,
+    expected_version: update.expected_version,
+    status: update.status,
+    updated_at: update.updated_at,
+    ...(update.agent_session_id === undefined
+      ? {}
+      : { agent_session_id: update.agent_session_id }),
+    ...(update.result_summary === undefined
+      ? {}
+      : { result_summary: update.result_summary }),
+    ...(update.error_code === undefined
+      ? {}
+      : { error_code: update.error_code }),
+  });
+}
+
+function verifyDeviceSignature(
+  deviceId: string,
+  publicKey: string,
+  unsignedJson: string,
+  signature: string,
+): void {
+  if (deviceIdForPublicKey(publicKey) !== deviceId) {
+    throw new ContractError(
+      "device_id_mismatch",
+      "device ID does not match public key",
+    );
+  }
+  if (!verifyEd25519(publicKey, Buffer.from(unsignedJson, "utf8"), signature)) {
+    throw new ContractError("invalid_signature", "device signature is invalid");
   }
 }
 
@@ -931,6 +1186,40 @@ function expectInteger(value: unknown, name: string, minimum: number): number {
       "invalid_field",
       `${name} must be a safe integer >= ${minimum}`,
     );
+  }
+  return value;
+}
+
+function expectProtocolVersion(value: unknown): number {
+  const version = expectInteger(value, "protocol_version", 1);
+  if (version !== SYNC_PROTOCOL_VERSION) {
+    throw new ContractError(
+      "unsupported_protocol",
+      `unsupported protocol version ${version}`,
+    );
+  }
+  return version;
+}
+
+function expectIdempotencyKey(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 8 ||
+    value.length > 128 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]+$/.test(value)
+  ) {
+    throw new ContractError("invalid_field", "idempotency_key is invalid");
+  }
+  return value;
+}
+
+function expectSafeCode(value: unknown, name: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 128 ||
+    !/^[a-z][a-z0-9_]*$/.test(value)
+  ) {
+    throw new ContractError("invalid_field", `${name} is invalid`);
   }
   return value;
 }
