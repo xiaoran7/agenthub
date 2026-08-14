@@ -304,6 +304,9 @@
 
 ### Security
 
+- 更新传递依赖 `fast-uri` 至 3.1.5/4.1.2、`nanoid` 至 3.3.18，修复 URL host
+  confusion 与零长度自定义生成器死循环 advisory；生产镜像构建前重新执行
+  `npm audit --audit-level=high`，结果为零漏洞。
 - 根 package.json 增加 npm `overrides`，把 Next.js 依赖链中的 postcss 顶至
   8.5.23、sharp 顶至 0.35.3，消除三个高危 advisory（postcss sourceMappingURL
   路径穿越与 XSS、sharp 捆绑 libvips CVE）；受影响范围覆盖 Next 全部现行
