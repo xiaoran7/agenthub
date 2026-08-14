@@ -68,7 +68,7 @@ Session、SSE 和 Push 均按登录用户隔离。旧个人部署 Bearer 令牌�
 审计只保存动作与公开白名单元数据。服务端已提供厂商无关的签名账单事件入口，并在
 PostgreSQL 部署中通过 `LISTEN/NOTIFY` 跨 API 实例广播变化；服务端现在可选接入 Stripe
 Checkout、Customer Portal 和原始 webhook 验签，未配置密钥时支付入口明确关闭；实际邮件
-供应商与联合登录尚未接入。Runner 默认每 15 秒通过
+供应商可选使用通用 HTTP 适配器或 Resend，联合登录尚未接入。Runner 默认每 15 秒通过
 `POST /v1/devices/heartbeat` 发送 Ed25519 签名设备心跳；Gateway 校验登记、公钥、撤销
 状态和 5 分钟时钟窗口，并按设备拒绝旧时间戳重放。心跳不携带 Session、Prompt、代码或
 凭据内容。Service Worker 只服务推送，不做离线缓存。

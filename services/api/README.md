@@ -112,8 +112,11 @@ Agent 类型、前一状态、当前状态和公开 ID。事件只包含动作�
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-邮箱验证、密码重置与 Team 邀请通过通用 HTTPS 邮件适配器发送。`AGENT_PULSE_PUBLIC_BASE_URL`、
-`AGENT_PULSE_EMAIL_ENDPOINT`、`AGENT_PULSE_EMAIL_TOKEN` 必须成组配置；启用后未验证
+邮箱验证、密码重置与 Team 邀请可通过通用 HTTPS 邮件适配器发送，也可直接使用 Resend。
+通用适配器要求 `AGENT_PULSE_PUBLIC_BASE_URL`、`AGENT_PULSE_EMAIL_ENDPOINT`、
+`AGENT_PULSE_EMAIL_TOKEN` 成组配置；Resend 要求 `AGENT_PULSE_PUBLIC_BASE_URL`、
+`AGENT_PULSE_RESEND_API_KEY`、`AGENT_PULSE_RESEND_FROM` 成组配置，且两种适配器不能同时启用。
+启用后未验证
 账户不能签发设备绑定码或创建远程任务。验证 Token 只在邮件链接 fragment 中出现，
 不会发送给 Web/Nginx，页面读取后立即清理地址栏，数据库只保存摘要。密码重置请求
 统一返回接受，避免泄露邮箱是否注册；重置成功撤销所有会话，登录后改密只保留当前

@@ -11,7 +11,7 @@ import {
   DevelopmentIdentityAuthenticator,
 } from "./auth.js";
 import { BillingEventVerifier } from "./billing.js";
-import { HttpEmailVerificationSender } from "./email.js";
+import { HttpEmailVerificationSender, ResendEmailSender } from "./email.js";
 import { ChangeBroker, PostgresChangeBroker } from "./events.js";
 import { PostgresGatewayStore } from "./postgres-store.js";
 import { WebPushSender, vapidKeysFromEnv } from "./push.js";
@@ -88,6 +88,26 @@ if (emailValues.some((value) => value !== undefined)) {
     sender: new HttpEmailVerificationSender(emailEndpoint, emailToken),
   };
   delete process.env.AGENT_PULSE_EMAIL_TOKEN;
+}
+const resendApiKey = process.env.AGENT_PULSE_RESEND_API_KEY;
+const resendFrom = process.env.AGENT_PULSE_RESEND_FROM;
+if (resendApiKey !== undefined || resendFrom !== undefined) {
+  if (
+    resendApiKey === undefined ||
+    resendFrom === undefined ||
+    publicBaseUrl === undefined ||
+    emailEndpoint !== undefined ||
+    emailToken !== undefined
+  ) {
+    throw new Error(
+      "AGENT_PULSE_RESEND_API_KEY, AGENT_PULSE_RESEND_FROM and AGENT_PULSE_PUBLIC_BASE_URL must be configured together and cannot be combined with the HTTP email adapter",
+    );
+  }
+  options.emailVerification = {
+    baseUrl: publicBaseUrl,
+    sender: new ResendEmailSender(resendApiKey, resendFrom),
+  };
+  delete process.env.AGENT_PULSE_RESEND_API_KEY;
 }
 const stripeSecretKey = process.env.AGENT_PULSE_STRIPE_SECRET_KEY;
 const stripeWebhookSecret = process.env.AGENT_PULSE_STRIPE_WEBHOOK_SECRET;

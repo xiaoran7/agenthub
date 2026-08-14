@@ -57,6 +57,11 @@ sudoedit /etc/agent-pulse/agent-pulse.env
 `AGENT_PULSE_EMAIL_ENDPOINT`、`AGENT_PULSE_EMAIL_TOKEN`；账单适配器使用独立的
 `AGENT_PULSE_BILLING_WEBHOOK_SECRET`。这些值只进入服务器密钥文件，不进入 Web 构建参数。
 
+也可以直接使用 Resend：成组设置 `AGENT_PULSE_PUBLIC_BASE_URL`、
+`AGENT_PULSE_RESEND_API_KEY` 和 `AGENT_PULSE_RESEND_FROM`，不要再设置 HTTP 邮件适配器的
+Endpoint/Token。Resend API Key 只在 API 初始化时读取并从进程环境删除；发送失败统一表现为
+`email_delivery_failed`，不会把供应商响应或密钥写入日志。
+
 如需启用真实 Stripe 订阅购买，还必须成组设置 `AGENT_PULSE_STRIPE_SECRET_KEY`、
 `AGENT_PULSE_STRIPE_WEBHOOK_SECRET`、`AGENT_PULSE_STRIPE_PRICE_PRO`、
 `AGENT_PULSE_STRIPE_PRICE_TEAM` 和正式 HTTPS 的 `AGENT_PULSE_PUBLIC_BASE_URL`。
