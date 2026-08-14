@@ -71,6 +71,45 @@ export interface WebSessionView {
   current: boolean;
 }
 
+export type WorkspaceRole = "owner" | "admin" | "member";
+export type InviteRole = Exclude<WorkspaceRole, "owner">;
+
+export interface SessionIdentity {
+  actor_user_id: string;
+  workspace_owner_id: string;
+  role: WorkspaceRole;
+}
+
+export interface WorkspaceSummary {
+  workspace_owner_id: string;
+  name: string;
+  role: WorkspaceRole;
+  current: boolean;
+}
+
+export interface WorkspaceMemberView {
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: WorkspaceRole;
+  joined_at: string;
+}
+
+export interface TeamInvitationView {
+  invitation_id: string;
+  email: string;
+  role: InviteRole;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface TeamWorkspaceView {
+  workspace: WorkspaceSummary;
+  members: WorkspaceMemberView[];
+  invitations: TeamInvitationView[];
+  member_limit: number;
+}
+
 export interface SubscriptionEvent {
   event_id: string;
   user_id: string;
@@ -132,7 +171,10 @@ export interface AccountStore {
     createdAt: string;
     expiresAt: string;
   }): Promise<void>;
-  findWebSession(digest: string, now: string): Promise<string | undefined>;
+  findWebSession(
+    digest: string,
+    now: string,
+  ): Promise<SessionIdentity | undefined>;
   deleteWebSession(digest: string): Promise<void>;
   listWebSessions(
     userId: string,
@@ -183,6 +225,51 @@ export interface AccountStore {
     blockSeconds: number;
   }): Promise<LoginAttemptResult>;
   clearLoginAttempts(scopeDigest: string): Promise<void>;
+  listWorkspaces(
+    userId: string,
+    currentOwnerId: string,
+  ): Promise<WorkspaceSummary[]>;
+  workspaceView(
+    actorUserId: string,
+    workspaceOwnerId: string,
+    memberLimit: number,
+    now: string,
+  ): Promise<TeamWorkspaceView | undefined>;
+  issueTeamInvitation(input: {
+    invitationId: string;
+    digest: string;
+    workspaceOwnerId: string;
+    invitedUserId: string;
+    invitedEmail: string;
+    role: InviteRole;
+    invitedBy: string;
+    createdAt: string;
+    expiresAt: string;
+    memberLimit: number;
+  }): Promise<void>;
+  consumeTeamInvitation(input: {
+    digest: string;
+    userId: string;
+    now: string;
+  }): Promise<string | undefined>;
+  revokeTeamInvitation(
+    actorUserId: string,
+    workspaceOwnerId: string,
+    invitationId: string,
+    now: string,
+  ): Promise<boolean>;
+  updateWorkspaceMember(input: {
+    actorUserId: string;
+    workspaceOwnerId: string;
+    memberUserId: string;
+    role?: InviteRole;
+    remove: boolean;
+  }): Promise<boolean>;
+  switchWebSessionWorkspace(input: {
+    digest: string;
+    actorUserId: string;
+    workspaceOwnerId: string;
+  }): Promise<SessionIdentity | undefined>;
   applySubscriptionEvent(
     event: SubscriptionEvent,
   ): Promise<SubscriptionEventResult>;
@@ -197,6 +284,7 @@ export class InMemoryAccountStore implements AccountStore {
     {
       sessionId: string;
       userId: string;
+      workspaceOwnerId: string;
       createdAt: string;
       lastSeenAt: string;
       expiresAt: string;
@@ -228,6 +316,25 @@ export class InMemoryAccountStore implements AccountStore {
     string,
     { event: SubscriptionEvent; applied: boolean }
   >();
+  readonly #workspaceMembers = new Map<
+    string,
+    Map<string, { role: WorkspaceRole; createdAt: string }>
+  >();
+  readonly #teamInvitations = new Map<
+    string,
+    {
+      invitationId: string;
+      workspaceOwnerId: string;
+      invitedUserId: string;
+      invitedEmail: string;
+      role: InviteRole;
+      invitedBy: string;
+      createdAt: string;
+      expiresAt: string;
+      consumedAt?: string;
+      revokedAt?: string;
+    }
+  >();
 
   async createAccount(input: {
     userId: string;
@@ -249,6 +356,10 @@ export class InMemoryAccountStore implements AccountStore {
     this.#users.set(user.user_id, user);
     this.#userIdsByEmail.set(user.email, user.user_id);
     this.#subscriptions.set(user.user_id, { plan: "free", status: "active" });
+    this.#workspaceMembers.set(
+      user.user_id,
+      new Map([[user.user_id, { role: "owner", createdAt: user.created_at }]]),
+    );
     return accountView(user, { plan: "free", status: "active" });
   }
 
@@ -275,6 +386,7 @@ export class InMemoryAccountStore implements AccountStore {
     this.#sessions.set(input.digest, {
       sessionId: input.sessionId,
       userId: input.userId,
+      workspaceOwnerId: input.userId,
       createdAt: input.createdAt,
       lastSeenAt: input.createdAt,
       expiresAt: input.expiresAt,
@@ -284,12 +396,21 @@ export class InMemoryAccountStore implements AccountStore {
   async findWebSession(
     digest: string,
     now: string,
-  ): Promise<string | undefined> {
+  ): Promise<SessionIdentity | undefined> {
     const session = this.#sessions.get(digest);
     if (session === undefined || session.expiresAt <= now) return undefined;
     const user = this.#users.get(session.userId);
     session.lastSeenAt = now;
-    return user?.status === "active" ? user.user_id : undefined;
+    if (user?.status !== "active") return undefined;
+    const role = this.#workspaceMembers
+      .get(session.workspaceOwnerId)
+      ?.get(user.user_id)?.role;
+    if (role === undefined) return undefined;
+    return {
+      actor_user_id: user.user_id,
+      workspace_owner_id: session.workspaceOwnerId,
+      role,
+    };
   }
 
   async deleteWebSession(digest: string): Promise<void> {
@@ -578,6 +699,275 @@ export class InMemoryAccountStore implements AccountStore {
     this.#loginLimits.delete(scopeDigest);
   }
 
+  async listWorkspaces(
+    userId: string,
+    currentOwnerId: string,
+  ): Promise<WorkspaceSummary[]> {
+    const result: WorkspaceSummary[] = [];
+    for (const [ownerId, members] of this.#workspaceMembers) {
+      const membership = members.get(userId);
+      const owner = this.#users.get(ownerId);
+      if (membership === undefined || owner?.status !== "active") continue;
+      result.push({
+        workspace_owner_id: ownerId,
+        name:
+          ownerId === userId ? "个人工作区" : `${owner.display_name} 的工作区`,
+        role: membership.role,
+        current: ownerId === currentOwnerId,
+      });
+    }
+    return result.sort((left, right) => {
+      if (left.workspace_owner_id === userId) return -1;
+      if (right.workspace_owner_id === userId) return 1;
+      return left.name.localeCompare(right.name);
+    });
+  }
+
+  async workspaceView(
+    actorUserId: string,
+    workspaceOwnerId: string,
+    memberLimit: number,
+    now: string,
+  ): Promise<TeamWorkspaceView | undefined> {
+    const members = this.#workspaceMembers.get(workspaceOwnerId);
+    const actor = members?.get(actorUserId);
+    const owner = this.#users.get(workspaceOwnerId);
+    if (members === undefined || actor === undefined || owner === undefined) {
+      return undefined;
+    }
+    const canManage = actor.role === "owner" || actor.role === "admin";
+    return {
+      workspace: {
+        workspace_owner_id: workspaceOwnerId,
+        name:
+          workspaceOwnerId === actorUserId
+            ? "个人工作区"
+            : `${owner.display_name} 的工作区`,
+        role: actor.role,
+        current: true,
+      },
+      members: [...members.entries()]
+        .map(([userId, membership]) => {
+          const user = this.#users.get(userId);
+          return user === undefined
+            ? undefined
+            : {
+                user_id: userId,
+                email: user.email,
+                display_name: user.display_name,
+                role: membership.role,
+                joined_at: membership.createdAt,
+              };
+        })
+        .filter((member): member is WorkspaceMemberView => member !== undefined)
+        .sort((left, right) => roleOrder(left.role) - roleOrder(right.role)),
+      invitations: canManage
+        ? [...this.#teamInvitations.values()]
+            .filter(
+              (invitation) =>
+                invitation.workspaceOwnerId === workspaceOwnerId &&
+                invitation.consumedAt === undefined &&
+                invitation.revokedAt === undefined &&
+                invitation.expiresAt > now,
+            )
+            .map((invitation) => ({
+              invitation_id: invitation.invitationId,
+              email: invitation.invitedEmail,
+              role: invitation.role,
+              created_at: invitation.createdAt,
+              expires_at: invitation.expiresAt,
+            }))
+        : [],
+      member_limit: memberLimit,
+    };
+  }
+
+  async issueTeamInvitation(input: {
+    invitationId: string;
+    digest: string;
+    workspaceOwnerId: string;
+    invitedUserId: string;
+    invitedEmail: string;
+    role: InviteRole;
+    invitedBy: string;
+    createdAt: string;
+    expiresAt: string;
+    memberLimit: number;
+  }): Promise<void> {
+    const members = this.#workspaceMembers.get(input.workspaceOwnerId);
+    const actorRole = members?.get(input.invitedBy)?.role;
+    if (
+      members === undefined ||
+      (actorRole !== "owner" && actorRole !== "admin") ||
+      (actorRole === "admin" && input.role === "admin")
+    ) {
+      throw new AccountError(
+        "team_permission_denied",
+        "team permission denied",
+        403,
+      );
+    }
+    if (members.has(input.invitedUserId)) {
+      throw new AccountError(
+        "team_member_exists",
+        "user is already a member",
+        409,
+      );
+    }
+    const pending = [...this.#teamInvitations.values()].filter(
+      (invitation) =>
+        invitation.workspaceOwnerId === input.workspaceOwnerId &&
+        invitation.consumedAt === undefined &&
+        invitation.revokedAt === undefined &&
+        invitation.expiresAt > input.createdAt,
+    );
+    if (
+      pending.some(
+        (invitation) => invitation.invitedUserId === input.invitedUserId,
+      )
+    ) {
+      throw new AccountError(
+        "team_invitation_exists",
+        "invitation already exists",
+        409,
+      );
+    }
+    if (members.size + pending.length >= input.memberLimit) {
+      throw new AccountError(
+        "team_member_limit_reached",
+        "team member limit reached",
+        403,
+      );
+    }
+    this.#teamInvitations.set(input.digest, {
+      invitationId: input.invitationId,
+      workspaceOwnerId: input.workspaceOwnerId,
+      invitedUserId: input.invitedUserId,
+      invitedEmail: input.invitedEmail,
+      role: input.role,
+      invitedBy: input.invitedBy,
+      createdAt: input.createdAt,
+      expiresAt: input.expiresAt,
+    });
+  }
+
+  async consumeTeamInvitation(input: {
+    digest: string;
+    userId: string;
+    now: string;
+  }): Promise<string | undefined> {
+    const invitation = this.#teamInvitations.get(input.digest);
+    if (
+      invitation === undefined ||
+      invitation.invitedUserId !== input.userId ||
+      invitation.consumedAt !== undefined ||
+      invitation.revokedAt !== undefined ||
+      invitation.expiresAt <= input.now
+    ) {
+      return undefined;
+    }
+    const members = this.#workspaceMembers.get(invitation.workspaceOwnerId);
+    const subscription = this.#subscriptions.get(invitation.workspaceOwnerId);
+    const memberLimit =
+      subscription === undefined
+        ? 0
+        : entitlementsFor(subscription).team_members;
+    if (members === undefined || members.size >= memberLimit) {
+      throw new AccountError(
+        "team_member_limit_reached",
+        "team member limit reached",
+        403,
+      );
+    }
+    invitation.consumedAt = input.now;
+    members.set(input.userId, {
+      role: invitation.role,
+      createdAt: input.now,
+    });
+    return invitation.workspaceOwnerId;
+  }
+
+  async revokeTeamInvitation(
+    actorUserId: string,
+    workspaceOwnerId: string,
+    invitationId: string,
+    now: string,
+  ): Promise<boolean> {
+    const actorRole = this.#workspaceMembers
+      .get(workspaceOwnerId)
+      ?.get(actorUserId)?.role;
+    for (const invitation of this.#teamInvitations.values()) {
+      if (
+        invitation.invitationId === invitationId &&
+        invitation.workspaceOwnerId === workspaceOwnerId &&
+        invitation.consumedAt === undefined &&
+        invitation.revokedAt === undefined &&
+        (actorRole === "owner" ||
+          (actorRole === "admin" && invitation.role === "member"))
+      ) {
+        invitation.revokedAt = now;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async updateWorkspaceMember(input: {
+    actorUserId: string;
+    workspaceOwnerId: string;
+    memberUserId: string;
+    role?: InviteRole;
+    remove: boolean;
+  }): Promise<boolean> {
+    const members = this.#workspaceMembers.get(input.workspaceOwnerId);
+    const actorRole = members?.get(input.actorUserId)?.role;
+    const target = members?.get(input.memberUserId);
+    if (
+      members === undefined ||
+      target === undefined ||
+      target.role === "owner" ||
+      (actorRole !== "owner" && actorRole !== "admin") ||
+      (actorRole === "admin" &&
+        (target.role !== "member" || input.role === "admin"))
+    ) {
+      return false;
+    }
+    if (input.remove) {
+      members.delete(input.memberUserId);
+      for (const session of this.#sessions.values()) {
+        if (
+          session.userId === input.memberUserId &&
+          session.workspaceOwnerId === input.workspaceOwnerId
+        ) {
+          session.workspaceOwnerId = input.memberUserId;
+        }
+      }
+    } else if (input.role !== undefined) {
+      target.role = input.role;
+    }
+    return true;
+  }
+
+  async switchWebSessionWorkspace(input: {
+    digest: string;
+    actorUserId: string;
+    workspaceOwnerId: string;
+  }): Promise<SessionIdentity | undefined> {
+    const session = this.#sessions.get(input.digest);
+    const role = this.#workspaceMembers
+      .get(input.workspaceOwnerId)
+      ?.get(input.actorUserId)?.role;
+    if (session?.userId !== input.actorUserId || role === undefined) {
+      return undefined;
+    }
+    session.workspaceOwnerId = input.workspaceOwnerId;
+    return {
+      actor_user_id: input.actorUserId,
+      workspace_owner_id: input.workspaceOwnerId,
+      role,
+    };
+  }
+
   async applySubscriptionEvent(
     event: SubscriptionEvent,
   ): Promise<SubscriptionEventResult> {
@@ -652,15 +1042,26 @@ export class SessionAuthenticator implements OwnerAuthenticator {
     if (token === undefined) {
       throw new AuthenticationError();
     }
-    const userId = await this.#accounts.findWebSession(
+    const identity = await this.#accounts.findWebSession(
       tokenDigest(token),
       new Date().toISOString(),
     );
-    if (userId === undefined) {
+    if (identity === undefined) {
       throw new AuthenticationError();
     }
-    return userId;
+    return identity.workspace_owner_id;
   }
+}
+
+export async function currentSessionIdentity(
+  accounts: AccountStore,
+  request: FastifyRequest,
+  now: Date = new Date(),
+): Promise<SessionIdentity | undefined> {
+  const digest = currentSessionDigest(request);
+  return digest === undefined
+    ? undefined
+    : accounts.findWebSession(digest, now.toISOString());
 }
 
 export function normalizeEmail(value: unknown): string {
@@ -987,4 +1388,8 @@ function derivePassword(password: string, salt: Buffer): Promise<Buffer> {
       },
     );
   });
+}
+
+function roleOrder(role: WorkspaceRole): number {
+  return role === "owner" ? 0 : role === "admin" ? 1 : 2;
 }

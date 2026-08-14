@@ -17,11 +17,20 @@ import type { DeviceRecord } from "../lib/types";
 import {
   accountErrorMessage,
   changePassword,
+  createTeamInvitation,
+  currentAccount,
+  fetchTeamWorkspace,
   fetchWebSessions,
+  removeTeamMember,
   requestEmailVerification,
   revokeOtherWebSessions,
+  revokeTeamInvitation,
   revokeWebSession,
+  switchWorkspace,
+  updateTeamMember,
   type AccountView,
+  type InviteRole,
+  type TeamWorkspaceView,
   type WebSessionView,
 } from "../lib/account";
 import {
@@ -36,6 +45,7 @@ interface SettingsPanelProps {
   onSave: (config: PanelConfig) => void;
   devices: DeviceRecord[];
   onDevicesChanged: () => void;
+  onWorkspaceChanged: (account: AccountView) => void;
   notificationPresentedAt: number | undefined;
   installState: PwaInstallState;
   onInstall: () => Promise<void>;
@@ -72,12 +82,17 @@ const INSTALL_LABELS: Record<PwaInstallState, string> = {
   unavailable: "暂不可用",
 };
 
+function roleLabel(role: "owner" | "admin" | "member"): string {
+  return role === "owner" ? "所有者" : role === "admin" ? "管理员" : "成员";
+}
+
 export function SettingsPanel({
   account,
   config,
   devices,
   onSave,
   onDevicesChanged,
+  onWorkspaceChanged,
   notificationPresentedAt,
   installState,
   onInstall,
@@ -113,6 +128,13 @@ export function SettingsPanel({
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [team, setTeam] = useState<TeamWorkspaceView>();
+  const [teamEmail, setTeamEmail] = useState("");
+  const [teamRole, setTeamRole] = useState<InviteRole>("member");
+  const [teamAction, setTeamAction] = useState<string>();
+  const [teamMessage, setTeamMessage] = useState<string>();
+  const [teamError, setTeamError] = useState<string>();
+  const [invitationUrl, setInvitationUrl] = useState<string>();
   const dialogRef = useModalDialog<HTMLFormElement>(onClose);
 
   useEffect(() => {
@@ -138,6 +160,27 @@ export function SettingsPanel({
       })
       .catch((cause) => {
         if (!cancelled) setAccountError(accountErrorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  useEffect(() => {
+    if (team?.workspace.role === "admin" && teamRole === "admin") {
+      setTeamRole("member");
+    }
+  }, [team, teamRole]);
+
+  useEffect(() => {
+    if (account === undefined) return;
+    let cancelled = false;
+    void fetchTeamWorkspace()
+      .then((next) => {
+        if (!cancelled) setTeam(next);
+      })
+      .catch((cause) => {
+        if (!cancelled) setTeamError(accountErrorMessage(cause));
       });
     return () => {
       cancelled = true;
@@ -226,6 +269,104 @@ export function SettingsPanel({
       setAccountError(accountErrorMessage(cause));
     } finally {
       setAccountAction(undefined);
+    }
+  }
+
+  async function selectWorkspace(workspaceOwnerId: string) {
+    setTeamAction("workspace");
+    setTeamError(undefined);
+    setInvitationUrl(undefined);
+    try {
+      await switchWorkspace(workspaceOwnerId);
+      const next = await currentAccount();
+      if (next === undefined) throw new Error("account unavailable");
+      onWorkspaceChanged(next);
+      setTeam(await fetchTeamWorkspace());
+      setTeamMessage("工作区已切换。");
+    } catch (cause) {
+      setTeamError(accountErrorMessage(cause));
+    } finally {
+      setTeamAction(undefined);
+    }
+  }
+
+  async function inviteMember() {
+    setTeamAction("invite");
+    setTeamError(undefined);
+    setTeamMessage(undefined);
+    setInvitationUrl(undefined);
+    try {
+      const invitation = await createTeamInvitation({
+        email: teamEmail,
+        role: teamRole,
+      });
+      setInvitationUrl(
+        invitation.invitation_url.startsWith("#")
+          ? `${window.location.origin}/${invitation.invitation_url.replace("token=", "team_invitation=")}`
+          : invitation.invitation_url,
+      );
+      setTeamEmail("");
+      setTeam(await fetchTeamWorkspace());
+      setTeamMessage("邀请已创建；链接只在本次设置窗口显示。");
+    } catch (cause) {
+      setTeamError(accountErrorMessage(cause));
+    } finally {
+      setTeamAction(undefined);
+    }
+  }
+
+  async function copyInvitation() {
+    if (invitationUrl === undefined) return;
+    try {
+      await navigator.clipboard.writeText(invitationUrl);
+      setTeamMessage("邀请链接已复制。");
+    } catch {
+      setTeamError("无法自动复制，请手动选择邀请链接。");
+    }
+  }
+
+  async function changeMemberRole(userId: string, role: InviteRole) {
+    setTeamAction(userId);
+    setTeamError(undefined);
+    try {
+      await updateTeamMember(userId, role);
+      setTeam(await fetchTeamWorkspace());
+      setTeamMessage("成员角色已更新。");
+    } catch (cause) {
+      setTeamError(accountErrorMessage(cause));
+    } finally {
+      setTeamAction(undefined);
+    }
+  }
+
+  async function removeMember(userId: string) {
+    if (!window.confirm("将这个成员移出当前工作区？其会话会回到个人工作区。")) {
+      return;
+    }
+    setTeamAction(userId);
+    setTeamError(undefined);
+    try {
+      await removeTeamMember(userId);
+      setTeam(await fetchTeamWorkspace());
+      setTeamMessage("成员已移出工作区。");
+    } catch (cause) {
+      setTeamError(accountErrorMessage(cause));
+    } finally {
+      setTeamAction(undefined);
+    }
+  }
+
+  async function cancelInvitation(invitationId: string) {
+    setTeamAction(invitationId);
+    setTeamError(undefined);
+    try {
+      await revokeTeamInvitation(invitationId);
+      setTeam(await fetchTeamWorkspace());
+      setTeamMessage("邀请已撤销。");
+    } catch (cause) {
+      setTeamError(accountErrorMessage(cause));
+    } finally {
+      setTeamAction(undefined);
     }
   }
 
@@ -500,6 +641,203 @@ export function SettingsPanel({
               {accountError !== undefined && (
                 <p className="error-text" role="alert">
                   {accountError}
+                </p>
+              )}
+            </section>
+          )}
+          {account !== undefined && (
+            <section
+              className="settings-section"
+              aria-labelledby="team-settings"
+            >
+              <div className="settings-section-heading team-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ◇
+                </span>
+                <div>
+                  <h3 id="team-settings">团队工作区</h3>
+                  <p>切换共享数据空间，并管理 Team 方案成员。</p>
+                </div>
+                {team !== undefined && (
+                  <span className="team-seat-count">
+                    {team.members.length + team.invitations.length}/
+                    {team.member_limit}
+                  </span>
+                )}
+              </div>
+              {account.workspaces !== undefined && (
+                <label className="team-workspace-select">
+                  当前工作区
+                  <select
+                    disabled={teamAction === "workspace"}
+                    onChange={(event) =>
+                      void selectWorkspace(event.target.value)
+                    }
+                    value={
+                      account.workspaces.find((workspace) => workspace.current)
+                        ?.workspace_owner_id ?? account.user.user_id
+                    }
+                  >
+                    {account.workspaces.map((workspace) => (
+                      <option
+                        key={workspace.workspace_owner_id}
+                        value={workspace.workspace_owner_id}
+                      >
+                        {workspace.name} · {roleLabel(workspace.role)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {team === undefined ? (
+                <p className="settings-hint">正在读取团队成员…</p>
+              ) : (
+                <>
+                  <div className="team-member-list">
+                    {team.members.map((member) => {
+                      const actorRole = team.workspace.role;
+                      const manageable =
+                        member.role !== "owner" &&
+                        (actorRole === "owner" ||
+                          (actorRole === "admin" && member.role === "member"));
+                      return (
+                        <div className="team-member-row" key={member.user_id}>
+                          <span className="team-avatar" aria-hidden="true">
+                            {member.display_name.slice(0, 1).toUpperCase()}
+                          </span>
+                          <span className="team-member-copy">
+                            <strong>{member.display_name}</strong>
+                            <small>{member.email}</small>
+                          </span>
+                          {manageable && actorRole === "owner" ? (
+                            <select
+                              aria-label={`${member.display_name} 的角色`}
+                              disabled={teamAction === member.user_id}
+                              onChange={(event) =>
+                                void changeMemberRole(
+                                  member.user_id,
+                                  event.target.value as InviteRole,
+                                )
+                              }
+                              value={member.role}
+                            >
+                              <option value="admin">管理员</option>
+                              <option value="member">成员</option>
+                            </select>
+                          ) : (
+                            <span className="team-role-badge">
+                              {roleLabel(member.role)}
+                            </span>
+                          )}
+                          {manageable && (
+                            <button
+                              className="secondary danger-button"
+                              disabled={teamAction === member.user_id}
+                              onClick={() => void removeMember(member.user_id)}
+                              type="button"
+                            >
+                              移除
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {(team.workspace.role === "owner" ||
+                    team.workspace.role === "admin") &&
+                    team.member_limit > 1 && (
+                      <div className="team-invite-form">
+                        <label>
+                          邀请已注册用户
+                          <input
+                            autoComplete="email"
+                            onChange={(event) =>
+                              setTeamEmail(event.target.value)
+                            }
+                            placeholder="member@example.com"
+                            type="email"
+                            value={teamEmail}
+                          />
+                        </label>
+                        <label>
+                          角色
+                          <select
+                            onChange={(event) =>
+                              setTeamRole(event.target.value as InviteRole)
+                            }
+                            value={teamRole}
+                          >
+                            <option value="member">成员</option>
+                            {team.workspace.role === "owner" && (
+                              <option value="admin">管理员</option>
+                            )}
+                          </select>
+                        </label>
+                        <button
+                          className="secondary"
+                          disabled={
+                            teamAction !== undefined ||
+                            teamEmail.trim().length < 3 ||
+                            team.members.length + team.invitations.length >=
+                              team.member_limit
+                          }
+                          onClick={() => void inviteMember()}
+                          type="button"
+                        >
+                          {teamAction === "invite" ? "创建中…" : "创建邀请"}
+                        </button>
+                      </div>
+                    )}
+                  {invitationUrl !== undefined && (
+                    <div className="team-invitation-link">
+                      <input
+                        aria-label="团队邀请链接"
+                        onFocus={(event) => event.currentTarget.select()}
+                        readOnly
+                        value={invitationUrl}
+                      />
+                      <button
+                        className="secondary"
+                        onClick={() => void copyInvitation()}
+                        type="button"
+                      >
+                        复制
+                      </button>
+                    </div>
+                  )}
+                  {team.invitations.length > 0 && (
+                    <div className="team-pending-list">
+                      <span className="settings-subheading">待接受邀请</span>
+                      {team.invitations.map((invitation) => (
+                        <div key={invitation.invitation_id}>
+                          <span>
+                            <strong>{invitation.email}</strong>
+                            <small>{roleLabel(invitation.role)}</small>
+                          </span>
+                          <button
+                            className="secondary danger-button"
+                            disabled={teamAction === invitation.invitation_id}
+                            onClick={() =>
+                              void cancelInvitation(invitation.invitation_id)
+                            }
+                            type="button"
+                          >
+                            撤销
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              {teamMessage !== undefined && (
+                <p className="settings-receipt" role="status">
+                  {teamMessage}
+                </p>
+              )}
+              {teamError !== undefined && (
+                <p className="error-text" role="alert">
+                  {teamError}
                 </p>
               )}
             </section>

@@ -22,6 +22,7 @@ import {
   assertOnlyFields,
   clearLoginSession,
   createLoginSession,
+  currentSessionIdentity,
   currentSessionDigest,
   hashPassword,
   newUserId,
@@ -33,10 +34,12 @@ import {
   type AccountStore,
   type AccountView,
   type LoginAttemptResult,
+  type InviteRole,
 } from "./accounts.js";
 import { BillingEventVerifier } from "./billing.js";
 import {
   passwordResetUrl,
+  teamInvitationUrl,
   verificationUrl,
   type EmailVerificationSender,
 } from "./email.js";
@@ -81,6 +84,8 @@ const EMAIL_VERIFICATION_MIN_INTERVAL_SECONDS = 60;
 const PASSWORD_RESET_BYTES = 32;
 const PASSWORD_RESET_TTL_MS = 60 * 60_000;
 const PASSWORD_RESET_MIN_INTERVAL_SECONDS = 60;
+const TEAM_INVITATION_BYTES = 32;
+const TEAM_INVITATION_TTL_MS = 72 * 60 * 60_000;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const LOGIN_MAXIMUM_ATTEMPTS = 5;
 const LOGIN_BLOCK_SECONDS = 15 * 60;
@@ -287,16 +292,35 @@ export function createGatewayApp(
 
   app.get("/v1/auth/me", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const userId = await authenticator.authenticate(request);
-    const account = await accounts.accountView(userId);
+    const identity = await requireAccountIdentity(
+      accounts,
+      authenticator,
+      request,
+      now(),
+    );
+    const account = await accounts.accountView(identity.actor_user_id);
     if (account === undefined) throw new AuthenticationError();
-    return reply.send(account);
+    const workspaceAccount = await accounts.accountView(
+      identity.workspace_owner_id,
+    );
+    if (workspaceAccount === undefined) throw new AuthenticationError();
+    const workspaces = await accounts.listWorkspaces(
+      identity.actor_user_id,
+      identity.workspace_owner_id,
+    );
+    return reply.send({
+      ...account,
+      workspaces,
+      workspace: workspaces.find((workspace) => workspace.current),
+      workspace_subscription: workspaceAccount.subscription,
+      workspace_entitlements: workspaceAccount.entitlements,
+    });
   });
 
   app.post("/v1/auth/email-verifications", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const userId = await authenticator.authenticate(request);
-    const account = await accounts.accountView(userId);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const account = await accounts.accountView(identity.actor_user_id);
     if (account === undefined) throw new AuthenticationError();
     const issued = await issueEmailVerification(
       accounts,
@@ -429,7 +453,8 @@ export function createGatewayApp(
 
   app.post("/v1/auth/password", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const userId = await authenticator.authenticate(request);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const userId = identity.actor_user_id;
     const currentDigest = currentSessionDigest(request);
     if (currentDigest === undefined) throw new AuthenticationError();
     const body = accountBody(request.body);
@@ -468,12 +493,12 @@ export function createGatewayApp(
 
   app.get("/v1/auth/sessions", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const userId = await authenticator.authenticate(request);
+    const identity = await requireSessionIdentity(accounts, request, now());
     const digest = currentSessionDigest(request);
     if (digest === undefined) throw new AuthenticationError();
     return reply.send({
       sessions: await accounts.listWebSessions(
-        userId,
+        identity.actor_user_id,
         digest,
         now().toISOString(),
       ),
@@ -482,7 +507,8 @@ export function createGatewayApp(
 
   app.delete("/v1/auth/sessions/:sessionId", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const userId = await authenticator.authenticate(request);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const userId = identity.actor_user_id;
     const { sessionId } = request.params as { sessionId?: unknown };
     if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId)) {
       throw new AccountError(
@@ -518,11 +544,259 @@ export function createGatewayApp(
 
   app.delete("/v1/auth/sessions", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const userId = await authenticator.authenticate(request);
+    const identity = await requireSessionIdentity(accounts, request, now());
     const digest = currentSessionDigest(request);
     if (digest === undefined) throw new AuthenticationError();
-    const revoked = await accounts.revokeOtherWebSessions(userId, digest);
+    const revoked = await accounts.revokeOtherWebSessions(
+      identity.actor_user_id,
+      digest,
+    );
     return reply.send({ revoked });
+  });
+
+  app.get("/v1/team", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const workspaceAccount = await accounts.accountView(
+      identity.workspace_owner_id,
+    );
+    if (workspaceAccount === undefined) throw new AuthenticationError();
+    const workspace = await accounts.workspaceView(
+      identity.actor_user_id,
+      identity.workspace_owner_id,
+      workspaceAccount.entitlements.team_members,
+      now().toISOString(),
+    );
+    if (workspace === undefined) throw new AuthenticationError();
+    return reply.send(workspace);
+  });
+
+  app.post("/v1/team/invitations", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const workspaceAccount = await accounts.accountView(
+      identity.workspace_owner_id,
+    );
+    if (workspaceAccount === undefined) throw new AuthenticationError();
+    if (workspaceAccount.entitlements.team_members <= 1) {
+      throw new AccountError(
+        "team_plan_required",
+        "Team plan is required",
+        403,
+      );
+    }
+    requireVerifiedEmail(
+      workspaceAccount,
+      options.emailVerification !== undefined,
+    );
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["email", "role"]);
+    const email = normalizeEmail(body.email);
+    const role = inviteRole(body.role);
+    const invited = await accounts.findAccountByEmail(email);
+    if (invited === undefined || invited.status !== "active") {
+      throw new AccountError(
+        "team_invitee_unavailable",
+        "invitee is unavailable",
+        404,
+      );
+    }
+    const token = randomBytes(TEAM_INVITATION_BYTES).toString("base64url");
+    const createdAt = now();
+    const expiresAt = new Date(createdAt.getTime() + TEAM_INVITATION_TTL_MS);
+    const invitationId = randomUUID();
+    await accounts.issueTeamInvitation({
+      invitationId,
+      digest: tokenDigest(token),
+      workspaceOwnerId: identity.workspace_owner_id,
+      invitedUserId: invited.user_id,
+      invitedEmail: invited.email,
+      role,
+      invitedBy: identity.actor_user_id,
+      createdAt: createdAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      memberLimit: workspaceAccount.entitlements.team_members,
+    });
+    const invitationUrl =
+      options.emailVerification === undefined
+        ? `#token=${encodeURIComponent(token)}`
+        : teamInvitationUrl(options.emailVerification.baseUrl, token);
+    if (options.emailVerification?.sender.sendTeamInvitation !== undefined) {
+      const inviter = await accounts.accountView(identity.actor_user_id);
+      try {
+        await options.emailVerification.sender.sendTeamInvitation({
+          email: invited.email,
+          display_name: invited.display_name,
+          inviter_name: inviter?.user.display_name ?? "AgentPulse 团队管理员",
+          invitation_url: invitationUrl,
+          role,
+          expires_at: expiresAt.toISOString(),
+        });
+      } catch (error) {
+        await accounts.revokeTeamInvitation(
+          identity.actor_user_id,
+          identity.workspace_owner_id,
+          invitationId,
+          now().toISOString(),
+        );
+        app.log.error({ error_code: "team_invitation_delivery_failed" });
+        throw new AccountError(
+          "email_delivery_failed",
+          "team invitation could not be delivered",
+          503,
+        );
+      }
+    }
+    return reply.status(201).send({
+      invitation_id: invitationId,
+      invitation_url: invitationUrl,
+      email: invited.email,
+      role,
+      expires_at: expiresAt.toISOString(),
+    });
+  });
+
+  app.post("/v1/team/invitations/accept", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["token"]);
+    if (
+      typeof body.token !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/.test(body.token)
+    ) {
+      throw new AccountError(
+        "invalid_team_invitation",
+        "invitation is invalid",
+        400,
+      );
+    }
+    const workspaceOwnerId = await accounts.consumeTeamInvitation({
+      digest: tokenDigest(body.token),
+      userId: identity.actor_user_id,
+      now: now().toISOString(),
+    });
+    if (workspaceOwnerId === undefined) {
+      throw new AccountError(
+        "invalid_team_invitation",
+        "invitation is invalid or expired",
+        400,
+      );
+    }
+    return reply.send({ accepted: true, workspace_owner_id: workspaceOwnerId });
+  });
+
+  app.delete("/v1/team/invitations/:invitationId", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const { invitationId } = request.params as { invitationId?: unknown };
+    if (
+      typeof invitationId !== "string" ||
+      !SESSION_ID_PATTERN.test(invitationId)
+    ) {
+      throw new AccountError(
+        "invalid_team_invitation",
+        "invitation is invalid",
+        400,
+      );
+    }
+    if (
+      !(await accounts.revokeTeamInvitation(
+        identity.actor_user_id,
+        identity.workspace_owner_id,
+        invitationId,
+        now().toISOString(),
+      ))
+    ) {
+      throw new AccountError(
+        "team_invitation_not_found",
+        "invitation not found",
+        404,
+      );
+    }
+    return reply.status(204).send();
+  });
+
+  app.patch("/v1/team/members/:userId", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const { userId } = request.params as { userId?: unknown };
+    if (typeof userId !== "string" || !SESSION_ID_PATTERN.test(userId)) {
+      throw new AccountError("invalid_team_member", "member is invalid", 400);
+    }
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["role"]);
+    const role = inviteRole(body.role);
+    if (
+      !(await accounts.updateWorkspaceMember({
+        actorUserId: identity.actor_user_id,
+        workspaceOwnerId: identity.workspace_owner_id,
+        memberUserId: userId,
+        role,
+        remove: false,
+      }))
+    ) {
+      throw new AccountError(
+        "team_permission_denied",
+        "team permission denied",
+        403,
+      );
+    }
+    return reply.send({ updated: true });
+  });
+
+  app.delete("/v1/team/members/:userId", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const { userId } = request.params as { userId?: unknown };
+    if (typeof userId !== "string" || !SESSION_ID_PATTERN.test(userId)) {
+      throw new AccountError("invalid_team_member", "member is invalid", 400);
+    }
+    if (
+      !(await accounts.updateWorkspaceMember({
+        actorUserId: identity.actor_user_id,
+        workspaceOwnerId: identity.workspace_owner_id,
+        memberUserId: userId,
+        remove: true,
+      }))
+    ) {
+      throw new AccountError(
+        "team_permission_denied",
+        "team permission denied",
+        403,
+      );
+    }
+    return reply.status(204).send();
+  });
+
+  app.post("/v1/team/workspace", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const digest = currentSessionDigest(request);
+    if (digest === undefined) throw new AuthenticationError();
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["workspace_owner_id"]);
+    if (
+      typeof body.workspace_owner_id !== "string" ||
+      !SESSION_ID_PATTERN.test(body.workspace_owner_id)
+    ) {
+      throw new AccountError("invalid_workspace", "workspace is invalid", 400);
+    }
+    const switched = await accounts.switchWebSessionWorkspace({
+      digest,
+      actorUserId: identity.actor_user_id,
+      workspaceOwnerId: body.workspace_owner_id,
+    });
+    if (switched === undefined) {
+      throw new AccountError("workspace_not_found", "workspace not found", 404);
+    }
+    return reply.send({
+      switched: true,
+      workspaces: await accounts.listWorkspaces(
+        identity.actor_user_id,
+        switched.workspace_owner_id,
+      ),
+    });
   });
 
   app.post("/v1/billing/events", async (request, reply) => {
@@ -1194,6 +1468,39 @@ function requireAccounts(accounts: AccountStore | undefined): AccountStore {
     );
   }
   return accounts;
+}
+
+async function requireSessionIdentity(
+  accounts: AccountStore,
+  request: Parameters<typeof currentSessionIdentity>[1],
+  at: Date,
+) {
+  const identity = await currentSessionIdentity(accounts, request, at);
+  if (identity === undefined) throw new AuthenticationError();
+  return identity;
+}
+
+async function requireAccountIdentity(
+  accounts: AccountStore,
+  authenticator: OwnerAuthenticator,
+  request: Parameters<typeof currentSessionIdentity>[1],
+  at: Date,
+) {
+  const sessionIdentity = await currentSessionIdentity(accounts, request, at);
+  if (sessionIdentity !== undefined) return sessionIdentity;
+  const ownerId = await authenticator.authenticate(request);
+  return {
+    actor_user_id: ownerId,
+    workspace_owner_id: ownerId,
+    role: "owner" as const,
+  };
+}
+
+function inviteRole(value: unknown): InviteRole {
+  if (value !== "admin" && value !== "member") {
+    throw new AccountError("invalid_team_role", "team role is invalid", 400);
+  }
+  return value;
 }
 
 async function issueEmailVerification(

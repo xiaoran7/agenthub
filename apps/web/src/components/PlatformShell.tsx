@@ -117,7 +117,13 @@ function NavigationRail({
             </span>
             <span>
               <strong>{account.user.display_name}</strong>
-              <small>{account.subscription.plan.toUpperCase()} 方案</small>
+              <small>
+                {account.workspace?.name ?? "个人工作区"} ·{" "}
+                {(
+                  account.workspace_subscription?.plan ??
+                  account.subscription.plan
+                ).toUpperCase()}
+              </small>
             </span>
             <button
               aria-label="退出登录"

@@ -6,8 +6,16 @@ import {
   gatewayOrigin,
   proxyGatewayRequest,
 } from "../src/server/gateway-proxy";
+import * as gatewayRoute from "../app/v1/[...path]/route";
 
 const ACCESS_TOKEN = "test-access-token-32-bytes-long!!";
+
+test("same-origin route exposes every supported mutation method", () => {
+  assert.equal(typeof gatewayRoute.GET, "function");
+  assert.equal(typeof gatewayRoute.POST, "function");
+  assert.equal(typeof gatewayRoute.PATCH, "function");
+  assert.equal(typeof gatewayRoute.DELETE, "function");
+});
 
 test("gateway origin rejects credential leaks and insecure remote transport", () => {
   assert.equal(gatewayOrigin(undefined), "http://127.0.0.1:3001");

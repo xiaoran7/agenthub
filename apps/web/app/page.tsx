@@ -63,6 +63,8 @@ import {
 import { Icon } from "../src/components/Icon";
 import { AccountGate } from "../src/components/AccountGate";
 import {
+  acceptTeamInvitation,
+  accountErrorMessage,
   currentAccount,
   logoutAccount,
   type AccountView,
@@ -157,10 +159,16 @@ export default function PanelPage() {
   const pwaInstall = usePwaInstall();
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
   const timelineRequest = useRef(0);
+  const pendingTeamInvitation = useRef<string | null>(null);
 
   useEffect(() => {
     const preview =
       new URLSearchParams(window.location.search).get("preview") === "1";
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    pendingTeamInvitation.current = hash.get("team_invitation");
+    if (pendingTeamInvitation.current !== null) {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
     setPreviewMode(preview);
     setConfig(loadConfig(window.localStorage));
     if (preview) {
@@ -171,6 +179,21 @@ export default function PanelPage() {
       .then((next) => setAccount(next ?? null))
       .catch(() => setAccount(null));
   }, []);
+
+  useEffect(() => {
+    const token = pendingTeamInvitation.current;
+    if (account === undefined || account === null || token === null) return;
+    pendingTeamInvitation.current = null;
+    void acceptTeamInvitation(token)
+      .then(() => currentAccount())
+      .then((next) => {
+        if (next !== undefined) {
+          setAccount(next);
+          setSettingsOpen(true);
+        }
+      })
+      .catch((cause) => setSyncError(accountErrorMessage(cause)));
+  }, [account]);
 
   const refresh = useCallback(async () => {
     if (config === undefined || previewMode === undefined || !navigator.onLine)
@@ -566,7 +589,16 @@ export default function PanelPage() {
     );
 
   if (previewMode === false && account === null) {
-    return <AccountGate onAuthenticated={setAccount} />;
+    return (
+      <AccountGate
+        onAuthenticated={(authenticated) => {
+          setAccount(authenticated);
+          void currentAccount().then((next) => {
+            if (next !== undefined) setAccount(next);
+          });
+        }}
+      />
+    );
   }
 
   return (
@@ -617,6 +649,16 @@ export default function PanelPage() {
           notificationPresentedAt={notificationPresentedAt}
           onClose={() => setSettingsOpen(false)}
           onDevicesChanged={() => void refresh()}
+          onWorkspaceChanged={(nextAccount) => {
+            setAccount(nextAccount);
+            setDevices([]);
+            setSessions([]);
+            setAuthSnapshots([]);
+            setTasks([]);
+            setSelected(undefined);
+            setTimeline(undefined);
+            void refreshRef.current();
+          }}
           onInstall={pwaInstall.install}
           onLoggedOut={() => {
             setSettingsOpen(false);

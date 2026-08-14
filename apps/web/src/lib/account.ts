@@ -1,6 +1,15 @@
 export type SubscriptionPlan = "free" | "pro" | "team";
 export type SubscriptionStatus =
   "trialing" | "active" | "past_due" | "canceled" | "expired";
+export type WorkspaceRole = "owner" | "admin" | "member";
+export type InviteRole = "admin" | "member";
+
+export interface WorkspaceSummary {
+  workspace_owner_id: string;
+  name: string;
+  role: WorkspaceRole;
+  current: boolean;
+}
 
 export interface AccountView {
   user: {
@@ -23,6 +32,33 @@ export interface AccountView {
     remote_tasks: boolean;
     team_members: number;
   };
+  workspaces?: WorkspaceSummary[];
+  workspace?: WorkspaceSummary;
+  workspace_subscription?: AccountView["subscription"];
+  workspace_entitlements?: AccountView["entitlements"];
+}
+
+export interface TeamMemberView {
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: WorkspaceRole;
+  joined_at: string;
+}
+
+export interface TeamInvitationView {
+  invitation_id: string;
+  email: string;
+  role: InviteRole;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface TeamWorkspaceView {
+  workspace: WorkspaceSummary;
+  members: TeamMemberView[];
+  invitations: TeamInvitationView[];
+  member_limit: number;
 }
 
 export interface WebSessionView {
@@ -151,6 +187,71 @@ export async function revokeOtherWebSessions(): Promise<number> {
   return body.revoked;
 }
 
+export async function fetchTeamWorkspace(): Promise<TeamWorkspaceView> {
+  const response = await fetch("/v1/team", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw await accountError(response);
+  return (await response.json()) as TeamWorkspaceView;
+}
+
+export async function createTeamInvitation(input: {
+  email: string;
+  role: InviteRole;
+}): Promise<{
+  invitation_id: string;
+  invitation_url: string;
+  email: string;
+  role: InviteRole;
+  expires_at: string;
+}> {
+  return accountRequest("/v1/team/invitations", input);
+}
+
+export async function acceptTeamInvitation(token: string): Promise<void> {
+  await accountRequest<{ accepted: boolean }>("/v1/team/invitations/accept", {
+    token,
+  });
+}
+
+export async function revokeTeamInvitation(
+  invitationId: string,
+): Promise<void> {
+  await accountMutation(
+    `/v1/team/invitations/${encodeURIComponent(invitationId)}`,
+    "DELETE",
+  );
+}
+
+export async function updateTeamMember(
+  userId: string,
+  role: InviteRole,
+): Promise<void> {
+  await accountMutation(
+    `/v1/team/members/${encodeURIComponent(userId)}`,
+    "PATCH",
+    { role },
+  );
+}
+
+export async function removeTeamMember(userId: string): Promise<void> {
+  await accountMutation(
+    `/v1/team/members/${encodeURIComponent(userId)}`,
+    "DELETE",
+  );
+}
+
+export async function switchWorkspace(
+  workspaceOwnerId: string,
+): Promise<WorkspaceSummary[]> {
+  const response = await accountRequest<{ workspaces: WorkspaceSummary[] }>(
+    "/v1/team/workspace",
+    { workspace_owner_id: workspaceOwnerId },
+  );
+  return response.workspaces;
+}
+
 export function accountErrorMessage(error: unknown): string {
   if (!(error instanceof AccountApiError)) return "账户服务暂时不可用";
   const messages: Record<string, string> = {
@@ -170,6 +271,15 @@ export function accountErrorMessage(error: unknown): string {
     login_rate_limited: "登录尝试过多，请稍后再试",
     invalid_session_id: "登录会话标识无效",
     session_not_found: "登录会话不存在或已撤销",
+    team_plan_required: "需要 Team 方案才能邀请成员",
+    team_invitee_unavailable: "这个邮箱尚未注册 AgentPulse",
+    team_member_exists: "这个用户已经在当前工作区",
+    team_invitation_exists: "这个用户已有待接受邀请",
+    team_member_limit_reached: "团队席位已用完",
+    team_permission_denied: "当前角色不能执行这个团队操作",
+    invalid_team_invitation: "团队邀请无效或已经过期",
+    team_invitation_not_found: "团队邀请不存在或已撤销",
+    workspace_not_found: "工作区不存在或你已不再是成员",
   };
   return messages[error.code] ?? "账户操作失败，请稍后重试";
 }
@@ -187,6 +297,25 @@ async function accountRequest<T = AccountView>(
   });
   if (!response.ok) throw await accountError(response);
   return (await response.json()) as T;
+}
+
+async function accountMutation(
+  url: string,
+  method: "PATCH" | "DELETE",
+  body?: object,
+): Promise<void> {
+  const response = await fetch(url, {
+    method,
+    ...(body === undefined
+      ? {}
+      : {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) throw await accountError(response);
 }
 
 async function accountResponse(response: Response): Promise<AccountView> {

@@ -53,7 +53,7 @@ sudoedit /etc/agent-pulse/agent-pulse.env
 - `GATEWAY_ORIGIN=http://127.0.0.1:3001`
 
 用 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`
-生成登录限流密钥。需要邮箱验证时成组设置 `AGENT_PULSE_PUBLIC_BASE_URL`、
+生成登录限流密钥。需要邮箱验证、密码重置和 Team 邀请时成组设置 `AGENT_PULSE_PUBLIC_BASE_URL`、
 `AGENT_PULSE_EMAIL_ENDPOINT`、`AGENT_PULSE_EMAIL_TOKEN`；账单适配器使用独立的
 `AGENT_PULSE_BILLING_WEBHOOK_SECRET`。这些值只进入服务器密钥文件，不进入 Web 构建参数。
 
@@ -127,10 +127,15 @@ sudo systemctl reload nginx
 6. 重启 API 后历史设备和 Session 仍存在，证明使用的是 PostgreSQL 而非内存 Store。
 7. 请求密码重置邮件，确认链接片段在页面载入后立即从地址栏移除；重置后旧密码和旧
    Web 会话全部失效，新密码可登录。
+8. 准备两个已验证账户并把所有者设为 Team：所有者邀请成员，邮件适配器收到
+   `agent-pulse-team-invitation` 模板；成员从全新页面接受 fragment 链接后地址栏立即清理，
+   可以切换团队工作区且看不到所有者账户资料。
+9. 验证所有者可管理管理员/成员、管理员只能管理普通成员，待处理邀请计入席位；移除成员
+   后，该成员所有已选择团队的 Web 会话都回到个人工作区。
 
 ## 7. 当前上线边界
 
-当前已支持多用户邮箱账户、Web 会话轮换、邮箱验证、密码重置与签名订阅事件，但仍不
+当前已支持多用户邮箱账户、Web 会话轮换、邮箱验证、密码重置、Team 工作区与签名订阅事件，但仍不
 包含 SSO、真实邮件/支付供应商适配、跨实例事件广播和完整分布式限流。正式对公网开放
 前，需要接入供应商并在反向代理或网关层补充全局限流、访问日志脱敏和备份恢复策略。
 

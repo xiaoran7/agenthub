@@ -195,8 +195,10 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
 
 ### 4.0 账户、租户与订阅控制面
 
-- `user_id` 是设备、Session、认证快照、SSE 与 Push 数据的租户边界；Web 请求只能从
-  服务端会话解析该值，不能使用浏览器提供的 owner 标识。
+- Web 会话同时保存 `actor_user_id`（登录的人）和 `workspace_owner_id`（当前数据租户）。
+  账户、密码和网页登录会话管理始终使用 actor；设备、Session、任务、SSE 与 Push 始终
+  使用 workspace owner。两个身份都只能从服务端会话解析，不能使用浏览器提供的 owner
+  标识，`/v1/auth/me` 也只返回 actor 的账户资料，避免切换工作区后泄露所有者账户信息。
 - 邮箱注册使用规范化唯一索引，密码以随机盐 scrypt 摘要保存。Web 会话使用 32 字节
   随机 Token，浏览器只通过 HttpOnly/SameSite Cookie 持有原值，数据库保存 SHA-256
   摘要和过期时间。
@@ -212,11 +214,18 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
   Token 与摘要都不进入响应。登录失败按邮箱和客户端地址的 HMAC scope 做共享 Store
   限流，生产 HMAC 密钥必须稳定配置。API 仅在自身绑定回环地址时信任反向代理提供的
   客户端地址；直接监听非回环地址时不接受可伪造的转发头。
+- 每个账户自动拥有一个个人工作区。Team 所有者可邀请已注册账户为 `admin` 或 `member`；
+  邀请 Token 由 32 字节随机数生成，只保存摘要，72 小时过期，并通过 URL fragment 传递。
+  已加入成员与未过期邀请共同占用 `team_members` 席位，接受时再次读取所有者当前权益，
+  防止邀请签发后降级绕过额度。
+- 所有者可管理管理员和成员；管理员只能邀请、撤销或移除普通成员。所有者不能被移除或
+  降级。成员被移除后，其指向该团队的全部 Web 会话自动回到个人工作区；之后的请求不会
+  继续使用已失效的租户选择。
 - 账单供应商 payload 不直接进入权益层。独立适配器完成供应商验签后，以 HMAC 签名的
   严格内部事件更新订阅；事件 UUID 幂等，`occurred_at + event_id` 抗乱序。取消或欠费
   在已付周期结束前保留权益，过期后自动退回 Free。
 - 新部署默认使用账户会话；旧单 owner Bearer 认证只作为显式迁移兼容模式。联合登录、
-  实际邮件/支付供应商适配与团队成员管理仍待接入。
+  实际邮件/支付供应商适配仍待接入。
 
 任务中转使用独立控制面：任务按 `user_id + target_device_id + agent_type` 入队，Runner
 通过主动出站 HTTPS 轮询领取。当前只开放 `local_confirmation`：服务端传递提示词和
@@ -317,6 +326,13 @@ MVP 使用 PostgreSQL：
 - `agent_platform_events`
 - `agent_platform_sessions`
 - `agent_platform_schema_migrations`
+
+后续账户与任务迁移还实现了 `agent_pulse_users`、`agent_pulse_subscriptions`、
+`agent_pulse_web_sessions`、验证/重置/限流/账单审计表、远程任务及其事件表。0010 迁移
+为 Web 会话增加当前工作区，并新增 `agent_pulse_workspace_members` 与
+`agent_pulse_team_invitations`；每个既有用户会回填个人工作区所有者成员记录。该迁移已
+通过类型检查、内存契约和环境门控的 PostgreSQL 测试定义，但仍需在配置真实测试数据库后
+完成运行时验证。
 
 事件原文只保存已经通过 Contracts 白名单验证的 `SyncEvent` JSONB；Presence 和
 Activity Status 额外保留受约束列用于筛选。迁移使用事务级 advisory lock 防止多个

@@ -19,6 +19,13 @@ Device Gateway、任务中转与查询 API 的开发期实现。
 | `GET`    | `/v1/auth/sessions`                    | 列出当前账户的网页登录会话                     |
 | `DELETE` | `/v1/auth/sessions/:sessionId`         | 撤销一个自己的网页登录会话                     |
 | `DELETE` | `/v1/auth/sessions`                    | 撤销除当前会话外的其他网页登录会话             |
+| `GET`    | `/v1/team`                             | 查询当前工作区的成员、邀请和席位               |
+| `POST`   | `/v1/team/invitations`                 | 邀请已注册用户加入 Team 工作区                 |
+| `POST`   | `/v1/team/invitations/accept`          | 使用一次性 Token 接受 Team 邀请                |
+| `DELETE` | `/v1/team/invitations/:invitationId`   | 按角色权限撤销待处理邀请                       |
+| `PATCH`  | `/v1/team/members/:userId`             | 更新工作区成员角色                             |
+| `DELETE` | `/v1/team/members/:userId`             | 从工作区移除成员                               |
+| `POST`   | `/v1/team/workspace`                   | 切换当前 Web 会话的数据工作区                  |
 | `POST`   | `/v1/billing/events`                   | 接收内部账单适配器的签名订阅事件               |
 | `POST`   | `/v1/device-bindings`                  | 生成有时限的一次性设备绑定码                   |
 | `POST`   | `/v1/devices/register`                 | 使用一次性绑定码登记设备公钥                   |
@@ -73,9 +80,9 @@ $env:AGENT_PLATFORM_VAPID_SUBJECT = 'mailto:you@example.com'
 新部署默认使用邮箱注册/登录与 HttpOnly、SameSite=Lax 会话 Cookie；生产 HTTPS 下 Cookie
 同时启用 Secure 并使用 `__Host-` 前缀。密码通过带随机盐的 scrypt 保存，随机会话 Token
 只在浏览器 Cookie 中出现，数据库只保存 SHA-256 摘要。设置面板可列出带公开 UUID 的
-会话并逐个或批量撤销；不返回 Cookie Token 或摘要。设备、Session、SSE 和 Push
-均从会话解析 `user_id`，不接受前端传入 owner。Free 设备上限在绑定码签发前由服务端
-强制检查。
+会话并逐个或批量撤销；不返回 Cookie Token 或摘要。会话分别记录登录人和当前工作区：
+账户、密码与会话管理使用登录人，设备、Session、任务、SSE 与 Push 使用工作区 owner，
+不接受前端传入 owner。Free 设备上限在绑定码签发前由服务端强制检查。
 
 生产必须设置 `AGENT_PULSE_LOGIN_RATE_LIMIT_SECRET`（32 字节以上随机值的 base64url
 编码）；登录失败按规范化邮箱和 Fastify 解析的客户端地址做 HMAC scope，15 分钟内第
@@ -85,13 +92,15 @@ $env:AGENT_PLATFORM_VAPID_SUBJECT = 'mailto:you@example.com'
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-邮箱验证与密码重置通过通用 HTTPS 邮件适配器发送。`AGENT_PULSE_PUBLIC_BASE_URL`、
+邮箱验证、密码重置与 Team 邀请通过通用 HTTPS 邮件适配器发送。`AGENT_PULSE_PUBLIC_BASE_URL`、
 `AGENT_PULSE_EMAIL_ENDPOINT`、`AGENT_PULSE_EMAIL_TOKEN` 必须成组配置；启用后未验证
 账户不能签发设备绑定码或创建远程任务。验证 Token 只在邮件链接 fragment 中出现，
 不会发送给 Web/Nginx，页面读取后立即清理地址栏，数据库只保存摘要。密码重置请求
 统一返回接受，避免泄露邮箱是否注册；重置成功撤销所有会话，登录后改密只保留当前
-会话。邮件适配器接收
-`{template,to,variables}` JSON，模板名为 `agent-pulse-email-verification`。
+会话。Team 邀请要求对方已注册，Token 只保存摘要、72 小时过期，未过期邀请与已加入
+成员共同占用席位，接受时再次校验工作区所有者的当前 Team 权益。邮件适配器接收
+`{template,to,variables}` JSON，模板名分别为 `agent-pulse-email-verification`、
+`agent-pulse-password-reset` 和 `agent-pulse-team-invitation`。
 
 账单供应商先在独立适配器内验签并规范化，再向 `/v1/billing/events` 发送内部事件。
 请求需带 Unix 秒 `x-agent-pulse-timestamp` 和
@@ -152,8 +161,8 @@ npm.cmd start --workspace @agent-pulse/api
 
 `migrate` 可用于部署阶段单独执行迁移；服务启动仍会幂等检查迁移版本和 SHA-256，
 历史迁移内容与数据库记录不一致时拒绝启动。当前持久化账户、邮箱验证/密码重置摘要、Web 会话、
-登录限流 scope、订阅事件审计、`devices`、绑定码摘要、远程任务及审计事件、不可变事件流
-和 Session 快照；批次写入会锁定设备行，在一个事务内完成事件幂等
+工作区成员与邀请、登录限流 scope、订阅事件审计、`devices`、绑定码摘要、远程任务及审计
+事件、不可变事件流和 Session 快照；批次写入会锁定设备行，在一个事务内完成事件幂等
 检查、连续序列验证、快照合并和设备水位更新。
 
 在 Web 设置面板点击「生成绑定码」，或带 Bearer 令牌调用
@@ -202,4 +211,4 @@ npm.cmd test --workspace @agent-pulse/api
 - 心跳（`/v1/stream` 只推变化，不代表设备活性）
 - 跨实例的变化广播（当前 broker 在进程内，多实例部署会漏推）
 - 全局/设备 API 分布式速率限制与统一审计日志
-- 支付供应商收银台/webhook 适配、订阅自助变更、团队成员、任务执行收据与可信执行策略
+- 支付供应商收银台/webhook 适配、订阅自助变更、任务执行收据与可信执行策略

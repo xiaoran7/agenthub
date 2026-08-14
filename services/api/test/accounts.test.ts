@@ -566,6 +566,189 @@ test("authenticated password change preserves only the current session", async (
   await app.close();
 });
 
+test("team workspaces enforce roles, invitations, and actor privacy", async () => {
+  const accounts = new InMemoryAccountStore();
+  const store = new InMemoryGatewayStore();
+  const app = createGatewayApp({
+    accounts,
+    store,
+    authenticator: new SessionAuthenticator(accounts),
+    now: () => new Date("2026-08-13T12:00:00.000Z"),
+  });
+  const register = async (email: string, displayName: string) =>
+    app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      payload: {
+        email,
+        display_name: displayName,
+        password: "correct horse battery staple",
+      },
+    });
+  const owner = await register("team-owner@example.com", "Team Owner");
+  const admin = await register("team-admin@example.com", "Team Admin");
+  const member = await register("team-member@example.com", "Team Member");
+  const outsider = await register("team-outsider@example.com", "Outsider");
+  const ownerId = owner.json().user.user_id as string;
+  const adminId = admin.json().user.user_id as string;
+  const memberId = member.json().user.user_id as string;
+  accounts.setSubscription(ownerId, { plan: "team", status: "active" });
+  await store.registerDevice(
+    ownerId,
+    "dev_33333333333333333333333333333333",
+    "44".repeat(32),
+  );
+
+  const invite = async (
+    cookie: string,
+    email: string,
+    role: "admin" | "member",
+  ) =>
+    app.inject({
+      method: "POST",
+      url: "/v1/team/invitations",
+      headers: { cookie },
+      payload: { email, role },
+    });
+  const accept = async (cookie: string, invitationUrl: string) => {
+    const token = new URLSearchParams(invitationUrl.slice(1)).get("token");
+    assert.match(token ?? "", /^[A-Za-z0-9_-]{43}$/);
+    return app.inject({
+      method: "POST",
+      url: "/v1/team/invitations/accept",
+      headers: { cookie },
+      payload: { token },
+    });
+  };
+
+  const adminInvitation = await invite(
+    sessionCookie(owner),
+    "team-admin@example.com",
+    "admin",
+  );
+  assert.equal(adminInvitation.statusCode, 201);
+  const wrongRecipient = await accept(
+    sessionCookie(outsider),
+    adminInvitation.json().invitation_url,
+  );
+  assert.equal(wrongRecipient.statusCode, 400);
+  const acceptedAdmin = await accept(
+    sessionCookie(admin),
+    adminInvitation.json().invitation_url,
+  );
+  assert.deepEqual(acceptedAdmin.json(), {
+    accepted: true,
+    workspace_owner_id: ownerId,
+  });
+  const switchAdmin = await app.inject({
+    method: "POST",
+    url: "/v1/team/workspace",
+    headers: { cookie: sessionCookie(admin) },
+    payload: { workspace_owner_id: ownerId },
+  });
+  assert.equal(switchAdmin.statusCode, 200);
+
+  const memberInvitation = await invite(
+    sessionCookie(admin),
+    "team-member@example.com",
+    "member",
+  );
+  assert.equal(memberInvitation.statusCode, 201);
+  const adminCannotInviteAdmin = await invite(
+    sessionCookie(admin),
+    "team-outsider@example.com",
+    "admin",
+  );
+  assert.equal(adminCannotInviteAdmin.statusCode, 403);
+  await accept(sessionCookie(member), memberInvitation.json().invitation_url);
+
+  const switchWorkspace = await app.inject({
+    method: "POST",
+    url: "/v1/team/workspace",
+    headers: { cookie: sessionCookie(member) },
+    payload: { workspace_owner_id: ownerId },
+  });
+  assert.equal(switchWorkspace.statusCode, 200);
+  assert.equal(
+    switchWorkspace
+      .json()
+      .workspaces.find((workspace: { current: boolean }) => workspace.current)
+      .workspace_owner_id,
+    ownerId,
+  );
+  const memberMe = await app.inject({
+    method: "GET",
+    url: "/v1/auth/me",
+    headers: { cookie: sessionCookie(member) },
+  });
+  assert.equal(memberMe.json().user.email, "team-member@example.com");
+  assert.equal(memberMe.json().subscription.plan, "free");
+  const sharedDevices = await app.inject({
+    method: "GET",
+    url: "/v1/devices",
+    headers: { cookie: sessionCookie(member) },
+  });
+  assert.equal(sharedDevices.json().devices.length, 1);
+
+  const memberCannotInvite = await invite(
+    sessionCookie(member),
+    "team-outsider@example.com",
+    "member",
+  );
+  assert.equal(memberCannotInvite.statusCode, 403);
+  const memberCannotChangeAdmin = await app.inject({
+    method: "PATCH",
+    url: `/v1/team/members/${adminId}`,
+    headers: { cookie: sessionCookie(member) },
+    payload: { role: "member" },
+  });
+  assert.equal(memberCannotChangeAdmin.statusCode, 403);
+  const memberCannotRemoveAdmin = await app.inject({
+    method: "DELETE",
+    url: `/v1/team/members/${adminId}`,
+    headers: { cookie: sessionCookie(member) },
+  });
+  assert.equal(memberCannotRemoveAdmin.statusCode, 403);
+  const memberRemoved = await app.inject({
+    method: "DELETE",
+    url: `/v1/team/members/${memberId}`,
+    headers: { cookie: sessionCookie(admin) },
+  });
+  assert.equal(memberRemoved.statusCode, 204);
+  const personalDevices = await app.inject({
+    method: "GET",
+    url: "/v1/devices",
+    headers: { cookie: sessionCookie(member) },
+  });
+  assert.deepEqual(personalDevices.json(), { devices: [] });
+
+  const ownerPromotes = await app.inject({
+    method: "PATCH",
+    url: `/v1/team/members/${adminId}`,
+    headers: { cookie: sessionCookie(owner) },
+    payload: { role: "member" },
+  });
+  assert.equal(ownerPromotes.statusCode, 200);
+  const team = await app.inject({
+    method: "GET",
+    url: "/v1/team",
+    headers: { cookie: sessionCookie(owner) },
+  });
+  assert.equal(team.statusCode, 200);
+  assert.equal(team.json().member_limit, 10);
+  assert.deepEqual(
+    team.json().members.map((entry: { email: string; role: string }) => ({
+      email: entry.email,
+      role: entry.role,
+    })),
+    [
+      { email: "team-owner@example.com", role: "owner" },
+      { email: "team-admin@example.com", role: "member" },
+    ],
+  );
+  await app.close();
+});
+
 test("signed billing events are idempotent, ordered, and preserve paid-through access", async () => {
   const secret = Buffer.alloc(32, 7);
   const accounts = new InMemoryAccountStore();

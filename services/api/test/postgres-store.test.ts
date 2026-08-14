@@ -221,6 +221,124 @@ test(
 );
 
 test(
+  "PostgreSQL team workspaces persist invitations, roles, and session selection",
+  { skip: databaseUrl === undefined },
+  async () => {
+    assert.ok(databaseUrl);
+    const admin = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+    const schema = `agent_pulse_team_${randomUUID().replaceAll("-", "")}`;
+    let sql: postgres.Sql | undefined;
+    let schemaCreated = false;
+    try {
+      await admin`CREATE SCHEMA ${admin(schema)}`;
+      schemaCreated = true;
+      sql = scopedConnection(databaseUrl, schema);
+      await migratePostgres(sql);
+      const store = new PostgresGatewayStore(sql);
+      const ownerId = randomUUID();
+      const memberId = randomUUID();
+      const passwordHash = await hashPassword("correct horse battery staple");
+      await store.createAccount({
+        userId: ownerId,
+        email: "postgres-team-owner@example.com",
+        displayName: "Postgres Team Owner",
+        passwordHash,
+      });
+      await store.createAccount({
+        userId: memberId,
+        email: "postgres-team-member@example.com",
+        displayName: "Postgres Team Member",
+        passwordHash,
+      });
+      await store.applySubscriptionEvent({
+        event_id: randomUUID(),
+        user_id: ownerId,
+        provider: "postgres-test",
+        provider_customer_id: "customer-team",
+        provider_subscription_id: "subscription-team",
+        plan: "team",
+        status: "active",
+        current_period_end: "2026-09-13T12:00:00.000Z",
+        occurred_at: "2026-08-13T12:00:00.000Z",
+      });
+      const invitationToken = "t".repeat(43);
+      await store.issueTeamInvitation({
+        invitationId: randomUUID(),
+        digest: tokenDigest(invitationToken),
+        workspaceOwnerId: ownerId,
+        invitedUserId: memberId,
+        invitedEmail: "postgres-team-member@example.com",
+        role: "member",
+        invitedBy: ownerId,
+        createdAt: "2026-08-13T12:01:00.000Z",
+        expiresAt: "2026-08-16T12:01:00.000Z",
+        memberLimit: 10,
+      });
+      assert.equal(
+        await store.consumeTeamInvitation({
+          digest: tokenDigest(invitationToken),
+          userId: memberId,
+          now: "2026-08-13T12:02:00.000Z",
+        }),
+        ownerId,
+      );
+      const sessionDigest = tokenDigest("s".repeat(43));
+      await store.createWebSession({
+        sessionId: randomUUID(),
+        digest: sessionDigest,
+        userId: memberId,
+        createdAt: "2026-08-13T12:03:00.000Z",
+        expiresAt: "2026-09-13T12:03:00.000Z",
+      });
+      const switched = await store.switchWebSessionWorkspace({
+        digest: sessionDigest,
+        actorUserId: memberId,
+        workspaceOwnerId: ownerId,
+      });
+      assert.equal(switched?.workspace_owner_id, ownerId);
+      assert.equal(
+        (await store.findWebSession(sessionDigest, "2026-08-13T12:04:00.000Z"))
+          ?.actor_user_id,
+        memberId,
+      );
+      const team = await store.workspaceView(
+        memberId,
+        ownerId,
+        10,
+        "2026-08-13T12:04:00.000Z",
+      );
+      assert.equal(team?.workspace.role, "member");
+      assert.equal(team?.members.length, 2);
+      assert.equal(
+        await store.updateWorkspaceMember({
+          actorUserId: ownerId,
+          workspaceOwnerId: ownerId,
+          memberUserId: memberId,
+          remove: true,
+        }),
+        true,
+      );
+      assert.equal(
+        (await store.findWebSession(sessionDigest, "2026-08-13T12:05:00.000Z"))
+          ?.workspace_owner_id,
+        memberId,
+      );
+      await store.close();
+      sql = undefined;
+    } finally {
+      if (sql !== undefined) {
+        await sql.end({ timeout: 1 }).catch(() => undefined);
+      }
+      try {
+        if (schemaCreated) await admin`DROP SCHEMA ${admin(schema)} CASCADE`;
+      } finally {
+        await admin.end({ timeout: 5 });
+      }
+    }
+  },
+);
+
+test(
   "PostgreSQL store persists registration, replay state, and session queries",
   { skip: databaseUrl === undefined },
   async () => {

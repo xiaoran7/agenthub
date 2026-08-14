@@ -14,9 +14,19 @@ export interface PasswordResetMessage {
   expires_at: string;
 }
 
+export interface TeamInvitationMessage {
+  email: string;
+  display_name: string;
+  inviter_name: string;
+  invitation_url: string;
+  role: "admin" | "member";
+  expires_at: string;
+}
+
 export interface EmailVerificationSender {
   sendVerification(message: EmailVerificationMessage): Promise<void>;
   sendPasswordReset?(message: PasswordResetMessage): Promise<void>;
+  sendTeamInvitation?(message: TeamInvitationMessage): Promise<void>;
 }
 
 export class HttpEmailVerificationSender implements EmailVerificationSender {
@@ -60,6 +70,16 @@ export class HttpEmailVerificationSender implements EmailVerificationSender {
     });
   }
 
+  async sendTeamInvitation(message: TeamInvitationMessage): Promise<void> {
+    await this.#send("agent-pulse-team-invitation", message.email, {
+      display_name: message.display_name,
+      inviter_name: message.inviter_name,
+      invitation_url: message.invitation_url,
+      role: message.role,
+      expires_at: message.expires_at,
+    });
+  }
+
   async #send(
     template: string,
     email: string,
@@ -90,6 +110,15 @@ export function verificationUrl(baseUrl: string, token: string): string {
 
 export function passwordResetUrl(baseUrl: string, token: string): string {
   return secretFragmentUrl(baseUrl, "/reset-password", token);
+}
+
+export function teamInvitationUrl(baseUrl: string, token: string): string {
+  const url = new URL("/", baseUrl);
+  if (url.protocol !== "https:" && url.hostname !== "localhost") {
+    throw new Error("public account URL must use HTTPS");
+  }
+  url.hash = new URLSearchParams({ team_invitation: token }).toString();
+  return url.toString();
 }
 
 function secretFragmentUrl(

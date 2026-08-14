@@ -17,15 +17,22 @@ import postgres from "postgres";
 import {
   AccountError,
   accountView,
+  entitlementsFor,
   isNewerSubscriptionEvent,
   type AccountStore,
   type AccountUser,
   type AccountView,
+  type InviteRole,
   type LoginAttemptResult,
+  type SessionIdentity,
   type SubscriptionEvent,
   type SubscriptionEventResult,
   type SubscriptionRecord,
   type WebSessionView,
+  type WorkspaceMemberView,
+  type WorkspaceRole,
+  type WorkspaceSummary,
+  type TeamWorkspaceView,
 } from "./accounts.js";
 import type { PushSubscription } from "./push.js";
 import {
@@ -92,6 +99,10 @@ const MIGRATIONS = [
   {
     version: 9,
     url: new URL("../migrations/0009_password_lifecycle.sql", import.meta.url),
+  },
+  {
+    version: 10,
+    url: new URL("../migrations/0010_team_workspaces.sql", import.meta.url),
   },
 ] as const;
 
@@ -227,6 +238,11 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         if (subscription === undefined) {
           throw new Error("subscription insert returned no row");
         }
+        await sql`
+          INSERT INTO agent_pulse_workspace_members (
+            workspace_owner_id, user_id, role
+          ) VALUES (${input.userId}, ${input.userId}, 'owner')
+        `;
         return accountView(
           normalizeAccountUser(user),
           normalizeSubscription(subscription),
@@ -277,12 +293,13 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         session_id,
         session_digest,
         user_id,
+        workspace_owner_id,
         created_at,
         last_seen_at,
         expires_at
       )
       VALUES (
-        ${input.sessionId}, ${input.digest}, ${input.userId},
+        ${input.sessionId}, ${input.digest}, ${input.userId}, ${input.userId},
         ${input.createdAt}, ${input.createdAt}, ${input.expiresAt}
       )
     `;
@@ -291,18 +308,30 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
   async findWebSession(
     digest: string,
     now: string,
-  ): Promise<string | undefined> {
-    const rows = await this.#sql<Array<{ user_id: string }>>`
+  ): Promise<SessionIdentity | undefined> {
+    const rows = await this.#sql<
+      Array<{
+        actor_user_id: string;
+        workspace_owner_id: string;
+        role: WorkspaceRole;
+      }>
+    >`
       UPDATE agent_pulse_web_sessions AS sessions
       SET last_seen_at = clock_timestamp()
       FROM agent_pulse_users AS users
+      INNER JOIN agent_pulse_workspace_members AS members
+        ON members.user_id = users.user_id
       WHERE sessions.session_digest = ${digest}
         AND sessions.user_id = users.user_id
+        AND members.workspace_owner_id = sessions.workspace_owner_id
         AND sessions.expires_at > ${now}
         AND users.status = 'active'
-      RETURNING sessions.user_id::text
+      RETURNING
+        sessions.user_id::text AS actor_user_id,
+        sessions.workspace_owner_id::text,
+        members.role
     `;
-    return rows[0]?.user_id;
+    return rows[0];
   }
 
   async deleteWebSession(digest: string): Promise<void> {
@@ -671,6 +700,410 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       DELETE FROM agent_pulse_login_limits
       WHERE scope_digest = ${scopeDigest}
     `;
+  }
+
+  async listWorkspaces(
+    userId: string,
+    currentOwnerId: string,
+  ): Promise<WorkspaceSummary[]> {
+    const rows = await this.#sql<
+      Array<{
+        workspace_owner_id: string;
+        owner_name: string;
+        role: WorkspaceRole;
+      }>
+    >`
+      SELECT
+        members.workspace_owner_id::text,
+        owners.display_name AS owner_name,
+        members.role
+      FROM agent_pulse_workspace_members AS members
+      INNER JOIN agent_pulse_users AS owners
+        ON owners.user_id = members.workspace_owner_id
+      WHERE members.user_id = ${userId} AND owners.status = 'active'
+      ORDER BY
+        members.workspace_owner_id = ${userId} DESC,
+        owners.display_name,
+        members.workspace_owner_id
+    `;
+    return rows.map((row) => ({
+      workspace_owner_id: row.workspace_owner_id,
+      name:
+        row.workspace_owner_id === userId
+          ? "个人工作区"
+          : `${row.owner_name} 的工作区`,
+      role: row.role,
+      current: row.workspace_owner_id === currentOwnerId,
+    }));
+  }
+
+  async workspaceView(
+    actorUserId: string,
+    workspaceOwnerId: string,
+    memberLimit: number,
+    now: string,
+  ): Promise<TeamWorkspaceView | undefined> {
+    const memberships = await this.#sql<
+      Array<{ role: WorkspaceRole; owner_name: string }>
+    >`
+      SELECT members.role, owners.display_name AS owner_name
+      FROM agent_pulse_workspace_members AS members
+      INNER JOIN agent_pulse_users AS owners
+        ON owners.user_id = members.workspace_owner_id
+      WHERE members.workspace_owner_id = ${workspaceOwnerId}
+        AND members.user_id = ${actorUserId}
+        AND owners.status = 'active'
+      LIMIT 1
+    `;
+    const membership = memberships[0];
+    if (membership === undefined) return undefined;
+    const members = await this.#sql<
+      Array<{
+        user_id: string;
+        email: string;
+        display_name: string;
+        role: WorkspaceRole;
+        created_at: unknown;
+      }>
+    >`
+      SELECT
+        users.user_id::text,
+        users.email,
+        users.display_name,
+        members.role,
+        members.created_at
+      FROM agent_pulse_workspace_members AS members
+      INNER JOIN agent_pulse_users AS users ON users.user_id = members.user_id
+      WHERE members.workspace_owner_id = ${workspaceOwnerId}
+      ORDER BY
+        CASE members.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+        users.display_name,
+        users.user_id
+    `;
+    const canManage =
+      membership.role === "owner" || membership.role === "admin";
+    const invitations = canManage
+      ? await this.#sql<
+          Array<{
+            invitation_id: string;
+            invited_email: string;
+            role: InviteRole;
+            created_at: unknown;
+            expires_at: unknown;
+          }>
+        >`
+          SELECT
+            invitation_id::text,
+            invited_email,
+            role,
+            created_at,
+            expires_at
+          FROM agent_pulse_team_invitations
+          WHERE workspace_owner_id = ${workspaceOwnerId}
+            AND consumed_at IS NULL
+            AND revoked_at IS NULL
+            AND expires_at > ${now}
+          ORDER BY created_at DESC, invitation_id
+        `
+      : [];
+    return {
+      workspace: {
+        workspace_owner_id: workspaceOwnerId,
+        name:
+          workspaceOwnerId === actorUserId
+            ? "个人工作区"
+            : `${membership.owner_name} 的工作区`,
+        role: membership.role,
+        current: true,
+      },
+      members: members.map((member): WorkspaceMemberView => ({
+        user_id: member.user_id,
+        email: member.email,
+        display_name: member.display_name,
+        role: member.role,
+        joined_at: isoTimestamp(member.created_at),
+      })),
+      invitations: invitations.map((invitation) => ({
+        invitation_id: invitation.invitation_id,
+        email: invitation.invited_email,
+        role: invitation.role,
+        created_at: isoTimestamp(invitation.created_at),
+        expires_at: isoTimestamp(invitation.expires_at),
+      })),
+      member_limit: memberLimit,
+    };
+  }
+
+  async issueTeamInvitation(input: {
+    invitationId: string;
+    digest: string;
+    workspaceOwnerId: string;
+    invitedUserId: string;
+    invitedEmail: string;
+    role: InviteRole;
+    invitedBy: string;
+    createdAt: string;
+    expiresAt: string;
+    memberLimit: number;
+  }): Promise<void> {
+    return this.#sql.begin(async (sql) => {
+      await sql`
+        SELECT user_id
+        FROM agent_pulse_subscriptions
+        WHERE user_id = ${input.workspaceOwnerId}
+        FOR UPDATE
+      `;
+      const actors = await sql<Array<{ role: WorkspaceRole }>>`
+        SELECT role
+        FROM agent_pulse_workspace_members
+        WHERE workspace_owner_id = ${input.workspaceOwnerId}
+          AND user_id = ${input.invitedBy}
+      `;
+      const actorRole = actors[0]?.role;
+      if (
+        (actorRole !== "owner" && actorRole !== "admin") ||
+        (actorRole === "admin" && input.role === "admin")
+      ) {
+        throw new AccountError(
+          "team_permission_denied",
+          "team permission denied",
+          403,
+        );
+      }
+      const counts = await sql<Array<{ count: string | number }>>`
+        SELECT (
+          SELECT count(*) FROM agent_pulse_workspace_members
+          WHERE workspace_owner_id = ${input.workspaceOwnerId}
+        ) + (
+          SELECT count(*) FROM agent_pulse_team_invitations
+          WHERE workspace_owner_id = ${input.workspaceOwnerId}
+            AND consumed_at IS NULL
+            AND revoked_at IS NULL
+            AND expires_at > ${input.createdAt}
+        ) AS count
+      `;
+      if (Number(counts[0]?.count ?? 0) >= input.memberLimit) {
+        throw new AccountError(
+          "team_member_limit_reached",
+          "team member limit reached",
+          403,
+        );
+      }
+      const existing = await sql<Array<{ role: WorkspaceRole }>>`
+        SELECT role FROM agent_pulse_workspace_members
+        WHERE workspace_owner_id = ${input.workspaceOwnerId}
+          AND user_id = ${input.invitedUserId}
+      `;
+      if (existing[0] !== undefined) {
+        throw new AccountError(
+          "team_member_exists",
+          "user is already a member",
+          409,
+        );
+      }
+      await sql`
+        UPDATE agent_pulse_team_invitations
+        SET revoked_at = ${input.createdAt}
+        WHERE workspace_owner_id = ${input.workspaceOwnerId}
+          AND invited_user_id = ${input.invitedUserId}
+          AND consumed_at IS NULL
+          AND revoked_at IS NULL
+          AND expires_at <= ${input.createdAt}
+      `;
+      try {
+        await sql`
+          INSERT INTO agent_pulse_team_invitations (
+            invitation_id, token_digest, workspace_owner_id, invited_user_id,
+            invited_email, role, invited_by, created_at, expires_at
+          ) VALUES (
+            ${input.invitationId}, ${input.digest}, ${input.workspaceOwnerId},
+            ${input.invitedUserId}, ${input.invitedEmail}, ${input.role},
+            ${input.invitedBy}, ${input.createdAt}, ${input.expiresAt}
+          )
+        `;
+      } catch (error) {
+        if (
+          postgresConstraint(error) ===
+          "agent_pulse_team_invitations_pending_idx"
+        ) {
+          throw new AccountError(
+            "team_invitation_exists",
+            "invitation already exists",
+            409,
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  async consumeTeamInvitation(input: {
+    digest: string;
+    userId: string;
+    now: string;
+  }): Promise<string | undefined> {
+    return this.#sql.begin(async (sql) => {
+      const candidates = await sql<
+        Array<{
+          workspace_owner_id: string;
+          role: InviteRole;
+        }>
+      >`
+        SELECT workspace_owner_id::text, role
+        FROM agent_pulse_team_invitations
+        WHERE token_digest = ${input.digest}
+          AND invited_user_id = ${input.userId}
+          AND consumed_at IS NULL
+          AND revoked_at IS NULL
+          AND expires_at > ${input.now}
+        FOR UPDATE
+      `;
+      const invitation = candidates[0];
+      if (invitation === undefined) return undefined;
+      const subscriptions = await sql<SubscriptionRecord[]>`
+        SELECT plan, status, current_period_end
+        FROM agent_pulse_subscriptions
+        WHERE user_id = ${invitation.workspace_owner_id}
+        FOR UPDATE
+      `;
+      const subscription = subscriptions[0];
+      const memberLimit =
+        subscription === undefined
+          ? 0
+          : entitlementsFor(normalizeSubscription(subscription)).team_members;
+      const memberCounts = await sql<Array<{ count: string | number }>>`
+        SELECT count(*) AS count
+        FROM agent_pulse_workspace_members
+        WHERE workspace_owner_id = ${invitation.workspace_owner_id}
+      `;
+      if (Number(memberCounts[0]?.count ?? 0) >= memberLimit) {
+        throw new AccountError(
+          "team_member_limit_reached",
+          "team member limit reached",
+          403,
+        );
+      }
+      await sql`
+        UPDATE agent_pulse_team_invitations
+        SET consumed_at = ${input.now}
+        WHERE token_digest = ${input.digest}
+      `;
+      await sql`
+        INSERT INTO agent_pulse_workspace_members (
+          workspace_owner_id, user_id, role, created_at
+        ) VALUES (
+          ${invitation.workspace_owner_id}, ${input.userId},
+          ${invitation.role}, ${input.now}
+        )
+        ON CONFLICT (workspace_owner_id, user_id) DO NOTHING
+      `;
+      return invitation.workspace_owner_id;
+    });
+  }
+
+  async revokeTeamInvitation(
+    actorUserId: string,
+    workspaceOwnerId: string,
+    invitationId: string,
+    now: string,
+  ): Promise<boolean> {
+    const rows = await this.#sql<Array<{ invitation_id: string }>>`
+      UPDATE agent_pulse_team_invitations AS invitations
+      SET revoked_at = ${now}
+      FROM agent_pulse_workspace_members AS actors
+      WHERE invitations.invitation_id = ${invitationId}
+        AND invitations.workspace_owner_id = ${workspaceOwnerId}
+        AND invitations.consumed_at IS NULL
+        AND invitations.revoked_at IS NULL
+        AND actors.workspace_owner_id = invitations.workspace_owner_id
+        AND actors.user_id = ${actorUserId}
+        AND (
+          actors.role = 'owner' OR
+          (actors.role = 'admin' AND invitations.role = 'member')
+        )
+      RETURNING invitations.invitation_id::text
+    `;
+    return rows.length > 0;
+  }
+
+  async updateWorkspaceMember(input: {
+    actorUserId: string;
+    workspaceOwnerId: string;
+    memberUserId: string;
+    role?: InviteRole;
+    remove: boolean;
+  }): Promise<boolean> {
+    return this.#sql.begin(async (sql) => {
+      const rows = await sql<
+        Array<{ actor_role: WorkspaceRole; target_role: WorkspaceRole }>
+      >`
+        SELECT actors.role AS actor_role, targets.role AS target_role
+        FROM agent_pulse_workspace_members AS actors
+        INNER JOIN agent_pulse_workspace_members AS targets
+          ON targets.workspace_owner_id = actors.workspace_owner_id
+        WHERE actors.workspace_owner_id = ${input.workspaceOwnerId}
+          AND actors.user_id = ${input.actorUserId}
+          AND targets.user_id = ${input.memberUserId}
+        FOR UPDATE OF targets
+      `;
+      const roles = rows[0];
+      if (
+        roles === undefined ||
+        roles.target_role === "owner" ||
+        (roles.actor_role !== "owner" &&
+          (roles.actor_role !== "admin" ||
+            roles.target_role !== "member" ||
+            input.role === "admin"))
+      ) {
+        return false;
+      }
+      if (input.remove) {
+        await sql`
+          DELETE FROM agent_pulse_workspace_members
+          WHERE workspace_owner_id = ${input.workspaceOwnerId}
+            AND user_id = ${input.memberUserId}
+        `;
+        await sql`
+          UPDATE agent_pulse_web_sessions
+          SET workspace_owner_id = user_id
+          WHERE user_id = ${input.memberUserId}
+            AND workspace_owner_id = ${input.workspaceOwnerId}
+        `;
+      } else if (input.role !== undefined) {
+        await sql`
+          UPDATE agent_pulse_workspace_members
+          SET role = ${input.role}
+          WHERE workspace_owner_id = ${input.workspaceOwnerId}
+            AND user_id = ${input.memberUserId}
+        `;
+      }
+      return true;
+    });
+  }
+
+  async switchWebSessionWorkspace(input: {
+    digest: string;
+    actorUserId: string;
+    workspaceOwnerId: string;
+  }): Promise<SessionIdentity | undefined> {
+    const rows = await this.#sql<Array<{ role: WorkspaceRole }>>`
+      UPDATE agent_pulse_web_sessions AS sessions
+      SET workspace_owner_id = ${input.workspaceOwnerId}
+      FROM agent_pulse_workspace_members AS members
+      WHERE sessions.session_digest = ${input.digest}
+        AND sessions.user_id = ${input.actorUserId}
+        AND members.workspace_owner_id = ${input.workspaceOwnerId}
+        AND members.user_id = ${input.actorUserId}
+      RETURNING members.role
+    `;
+    const role = rows[0]?.role;
+    return role === undefined
+      ? undefined
+      : {
+          actor_user_id: input.actorUserId,
+          workspace_owner_id: input.workspaceOwnerId,
+          role,
+        };
   }
 
   async applySubscriptionEvent(
