@@ -15,6 +15,7 @@ import { HttpEmailVerificationSender } from "./email.js";
 import { ChangeBroker, PostgresChangeBroker } from "./events.js";
 import { PostgresGatewayStore } from "./postgres-store.js";
 import { WebPushSender, vapidKeysFromEnv } from "./push.js";
+import { StripeBillingProvider } from "./stripe-billing.js";
 import { InMemoryGatewayStore } from "./store.js";
 
 const port = parsePort(process.env.PORT);
@@ -71,7 +72,7 @@ if (billingSecret !== undefined) {
 const emailEndpoint = process.env.AGENT_PULSE_EMAIL_ENDPOINT;
 const emailToken = process.env.AGENT_PULSE_EMAIL_TOKEN;
 const publicBaseUrl = process.env.AGENT_PULSE_PUBLIC_BASE_URL;
-const emailValues = [emailEndpoint, emailToken, publicBaseUrl];
+const emailValues = [emailEndpoint, emailToken];
 if (emailValues.some((value) => value !== undefined)) {
   if (
     emailEndpoint === undefined ||
@@ -87,6 +88,37 @@ if (emailValues.some((value) => value !== undefined)) {
     sender: new HttpEmailVerificationSender(emailEndpoint, emailToken),
   };
   delete process.env.AGENT_PULSE_EMAIL_TOKEN;
+}
+const stripeSecretKey = process.env.AGENT_PULSE_STRIPE_SECRET_KEY;
+const stripeWebhookSecret = process.env.AGENT_PULSE_STRIPE_WEBHOOK_SECRET;
+const stripeProPrice = process.env.AGENT_PULSE_STRIPE_PRICE_PRO;
+const stripeTeamPrice = process.env.AGENT_PULSE_STRIPE_PRICE_TEAM;
+const stripeValues = [
+  stripeSecretKey,
+  stripeWebhookSecret,
+  stripeProPrice,
+  stripeTeamPrice,
+];
+if (stripeValues.some((value) => value !== undefined)) {
+  if (
+    stripeSecretKey === undefined ||
+    stripeWebhookSecret === undefined ||
+    stripeProPrice === undefined ||
+    stripeTeamPrice === undefined ||
+    publicBaseUrl === undefined
+  ) {
+    throw new Error(
+      "AGENT_PULSE_STRIPE_SECRET_KEY, AGENT_PULSE_STRIPE_WEBHOOK_SECRET, AGENT_PULSE_STRIPE_PRICE_PRO, AGENT_PULSE_STRIPE_PRICE_TEAM and AGENT_PULSE_PUBLIC_BASE_URL must be configured together",
+    );
+  }
+  options.billingProvider = new StripeBillingProvider({
+    secretKey: stripeSecretKey,
+    webhookSecret: stripeWebhookSecret,
+    priceIds: { pro: stripeProPrice, team: stripeTeamPrice },
+    baseUrl: publicBaseUrl,
+  });
+  delete process.env.AGENT_PULSE_STRIPE_SECRET_KEY;
+  delete process.env.AGENT_PULSE_STRIPE_WEBHOOK_SECRET;
 }
 if (vapidKeys !== undefined) {
   options.push = {

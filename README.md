@@ -66,8 +66,9 @@ Session、SSE 和 Push 均按登录用户隔离。旧个人部署 Bearer 令牌�
 任务始终按当前工作区隔离。邀请链接只显示一次并通过 URL fragment 传递，待接受邀请也
 计入 10 人席位上限。设置面板可按账户或当前工作区查看安全、订阅、设备和远程任务审计轨迹，
 审计只保存动作与公开白名单元数据。服务端已提供厂商无关的签名账单事件入口，并在
-PostgreSQL 部署中通过 `LISTEN/NOTIFY` 跨 API 实例广播变化；实际邮件供应商、支付
-收银台/webhook 适配与联合登录尚未接入。Runner 默认每 15 秒通过
+PostgreSQL 部署中通过 `LISTEN/NOTIFY` 跨 API 实例广播变化；服务端现在可选接入 Stripe
+Checkout、Customer Portal 和原始 webhook 验签，未配置密钥时支付入口明确关闭；实际邮件
+供应商与联合登录尚未接入。Runner 默认每 15 秒通过
 `POST /v1/devices/heartbeat` 发送 Ed25519 签名设备心跳；Gateway 校验登记、公钥、撤销
 状态和 5 分钟时钟窗口，并按设备拒绝旧时间戳重放。心跳不携带 Session、Prompt、代码或
 凭据内容。Service Worker 只服务推送，不做离线缓存。

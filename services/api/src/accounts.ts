@@ -128,6 +128,12 @@ export interface SubscriptionEventResult {
   account: AccountView;
 }
 
+export interface BillingReference {
+  provider: string;
+  customer_id: string;
+  subscription_id?: string;
+}
+
 export interface LoginAttemptResult {
   allowed: boolean;
   retry_after_seconds: number;
@@ -348,6 +354,7 @@ export interface AccountStore {
   applySubscriptionEvent(
     event: SubscriptionEvent,
   ): Promise<SubscriptionEventResult>;
+  billingReference(userId: string): Promise<BillingReference | undefined>;
   recordAuditEvent(input: AuditRecordInput): Promise<boolean>;
   listAuditEvents(input: AuditQuery): Promise<AuditEvent[]>;
 }
@@ -1262,6 +1269,25 @@ export class InMemoryAccountStore implements AccountStore {
     const account = await this.accountView(event.user_id);
     if (account === undefined) throw new Error("updated account disappeared");
     return { applied, duplicate: false, account };
+  }
+
+  async billingReference(
+    userId: string,
+  ): Promise<BillingReference | undefined> {
+    const subscription = this.#subscriptions.get(userId);
+    if (
+      subscription?.provider === undefined ||
+      subscription.provider_customer_id === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      provider: subscription.provider,
+      customer_id: subscription.provider_customer_id,
+      ...(subscription.provider_subscription_id === undefined
+        ? {}
+        : { subscription_id: subscription.provider_subscription_id }),
+    };
   }
 
   async listAuditEvents(input: AuditQuery): Promise<AuditEvent[]> {

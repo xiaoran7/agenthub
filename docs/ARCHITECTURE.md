@@ -225,14 +225,20 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
 - 账单供应商 payload 不直接进入权益层。独立适配器完成供应商验签后，以 HMAC 签名的
   严格内部事件更新订阅；事件 UUID 幂等，`occurred_at + event_id` 抗乱序。取消或欠费
   在已付周期结束前保留权益，过期后自动退回 Free。
+- Stripe 适配器在 API 内使用官方 SDK：Checkout/Customer Portal 只返回供应商 HTTPS
+  跳转 URL，账户 UUID、方案与配置 Price ID 写入服务端 metadata；Stripe webhook 使用
+  原始请求体和官方验签，未知 Price 或缺失账户 metadata 直接拒绝。已存在订阅不能重复
+  创建 Checkout，只能进入 Portal。未配置 Stripe 时，支付接口显式不可用，不影响监控和
+  通用 HMAC 账单事件入口。
 - 账户、会话、密码、订阅、Team、设备和远程任务动作写入不可变审计事件。`account` 范围只允许登录人
   查看自己的安全与权益动作；`workspace` 范围绑定当前数据租户，并在每次读取时重新验证
   成员关系。审计写入与主 Store 变更处于同一事务，元数据只接受角色、套餐、状态、公开
   UUID、设备 ID、Agent 类型和任务状态等白名单字段，不保存邮箱、密码、Token、IP、请求体、
   Prompt、CLI 内容或路径。设备签名回报的审计操作者留空，网页登录创建/取消任务和设备撤销
   使用当前会话 actor；兼容 Bearer 部署在没有账户 UUID 时跳过账户审计写入。
-- 新部署默认使用账户会话；旧单 owner Bearer 认证只作为显式迁移兼容模式。联合登录、
-  实际邮件/支付供应商适配仍待接入。
+- 新部署默认使用账户会话；旧单 owner Bearer 认证只作为显式迁移兼容模式。联合登录和
+  实际邮件供应商适配仍待接入；Stripe 支付适配已可选接入，是否开放购买取决于服务器
+  是否配置 Stripe 密钥、Price ID 和 HTTPS webhook。
 
 任务中转使用独立控制面：任务按 `user_id + target_device_id + agent_type` 入队，Runner
 通过主动出站 HTTPS 轮询领取。当前只开放 `local_confirmation`：服务端传递提示词和

@@ -121,6 +121,14 @@ export interface AuditPage {
   next_before?: string;
 }
 
+export interface BillingStatus {
+  available: boolean;
+  provider?: string;
+  checkout: boolean;
+  portal: boolean;
+  subscription: AccountView["subscription"];
+}
+
 export class AccountApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -262,6 +270,29 @@ export async function fetchAuditEvents(
   return (await response.json()) as AuditPage;
 }
 
+export async function fetchBillingStatus(): Promise<BillingStatus> {
+  const response = await fetch("/v1/billing", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw await accountError(response);
+  return (await response.json()) as BillingStatus;
+}
+
+export async function createBillingCheckout(
+  plan: "pro" | "team",
+): Promise<string> {
+  const body = await accountRequest<{ url: unknown }>("/v1/billing/checkout", {
+    plan,
+  });
+  return billingRedirectUrl(body.url);
+}
+
+export async function openBillingPortal(): Promise<string> {
+  const body = await accountRequest<{ url: unknown }>("/v1/billing/portal", {});
+  return billingRedirectUrl(body.url);
+}
+
 export async function createTeamInvitation(input: {
   email: string;
   role: InviteRole;
@@ -347,6 +378,14 @@ export function accountErrorMessage(error: unknown): string {
     team_invitation_not_found: "团队邀请不存在或已撤销",
     workspace_not_found: "工作区不存在或你已不再是成员",
     invalid_audit_query: "审计记录查询参数无效",
+    billing_unavailable: "订阅支付暂未配置",
+    billing_provider_failed: "支付服务暂时不可用，请稍后重试",
+    billing_portal_required: "请通过订阅管理入口调整当前方案",
+    billing_customer_unavailable: "当前账户还没有可管理的订阅",
+    billing_provider_mismatch: "当前订阅由其他支付服务管理",
+    invalid_billing_plan: "订阅方案无效",
+    invalid_billing_signature: "支付回调签名无效",
+    invalid_billing_event: "支付回调内容无效",
   };
   return messages[error.code] ?? "账户操作失败，请稍后重试";
 }
@@ -399,4 +438,24 @@ async function accountError(response: Response): Promise<AccountApiError> {
     // Keep the generic classification for non-JSON proxy failures.
   }
   return new AccountApiError(response.status, code);
+}
+
+function billingRedirectUrl(value: unknown): string {
+  if (typeof value !== "string") throw new AccountApiError(502, "http_error");
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AccountApiError(502, "http_error");
+  }
+  if (
+    url.protocol !== "https:" ||
+    (url.hostname !== "checkout.stripe.com" &&
+      !url.hostname.endsWith(".checkout.stripe.com") &&
+      url.hostname !== "billing.stripe.com" &&
+      !url.hostname.endsWith(".billing.stripe.com"))
+  ) {
+    throw new AccountApiError(502, "http_error");
+  }
+  return url.toString();
 }

@@ -17,11 +17,14 @@ import type { DeviceRecord } from "../lib/types";
 import {
   accountErrorMessage,
   changePassword,
+  createBillingCheckout,
   createTeamInvitation,
   currentAccount,
   fetchAuditEvents,
+  fetchBillingStatus,
   fetchTeamWorkspace,
   fetchWebSessions,
+  openBillingPortal,
   removeTeamMember,
   requestEmailVerification,
   revokeOtherWebSessions,
@@ -33,6 +36,7 @@ import {
   type AuditEvent,
   type AuditPage,
   type AuditScope,
+  type BillingStatus,
   type InviteRole,
   type TeamWorkspaceView,
   type WebSessionView,
@@ -187,6 +191,10 @@ export function SettingsPanel({
   const [accountAction, setAccountAction] = useState<string>();
   const [accountMessage, setAccountMessage] = useState<string>();
   const [accountError, setAccountError] = useState<string>();
+  const [billing, setBilling] = useState<BillingStatus>();
+  const [billingAction, setBillingAction] = useState<string>();
+  const [billingMessage, setBillingMessage] = useState<string>();
+  const [billingError, setBillingError] = useState<string>();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -227,6 +235,25 @@ export function SettingsPanel({
       })
       .catch((cause) => {
         if (!cancelled) setAccountError(accountErrorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  useEffect(() => {
+    if (account === undefined) {
+      setBilling(undefined);
+      return;
+    }
+    let cancelled = false;
+    setBillingError(undefined);
+    void fetchBillingStatus()
+      .then((status) => {
+        if (!cancelled) setBilling(status);
+      })
+      .catch((cause) => {
+        if (!cancelled) setBillingError(accountErrorMessage(cause));
       });
     return () => {
       cancelled = true;
@@ -314,6 +341,34 @@ export function SettingsPanel({
       setAccountError(accountErrorMessage(cause));
     } finally {
       setAccountAction(undefined);
+    }
+  }
+
+  async function startBillingCheckout(plan: "pro" | "team") {
+    setBillingAction(plan);
+    setBillingError(undefined);
+    setBillingMessage(undefined);
+    try {
+      const url = await createBillingCheckout(plan);
+      window.location.assign(url);
+    } catch (cause) {
+      setBillingError(accountErrorMessage(cause));
+    } finally {
+      setBillingAction(undefined);
+    }
+  }
+
+  async function startBillingPortal() {
+    setBillingAction("portal");
+    setBillingError(undefined);
+    setBillingMessage(undefined);
+    try {
+      const url = await openBillingPortal();
+      window.location.assign(url);
+    } catch (cause) {
+      setBillingError(accountErrorMessage(cause));
+    } finally {
+      setBillingAction(undefined);
     }
   }
 
@@ -759,6 +814,80 @@ export function SettingsPanel({
               {accountError !== undefined && (
                 <p className="error-text" role="alert">
                   {accountError}
+                </p>
+              )}
+            </section>
+          )}
+          {account !== undefined && (
+            <section
+              className="settings-section"
+              aria-labelledby="billing-settings"
+            >
+              <div className="settings-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  $
+                </span>
+                <div>
+                  <h3 id="billing-settings">订阅方案</h3>
+                  <p>按账户方案控制设备、历史和远程任务额度。</p>
+                </div>
+              </div>
+              <div className="billing-plan-card">
+                <div>
+                  <strong>{account.subscription.plan.toUpperCase()}</strong>
+                  <small>
+                    {account.subscription.status}
+                    {account.subscription.current_period_end === undefined
+                      ? ""
+                      : ` · 到期 ${formatClock(account.subscription.current_period_end)}`}
+                  </small>
+                </div>
+                {billing?.portal === true && (
+                  <button
+                    className="secondary"
+                    disabled={billingAction !== undefined}
+                    onClick={() => void startBillingPortal()}
+                    type="button"
+                  >
+                    {billingAction === "portal" ? "打开中…" : "管理订阅"}
+                  </button>
+                )}
+              </div>
+              {billing === undefined && billingError === undefined && (
+                <p className="settings-hint">正在读取支付状态…</p>
+              )}
+              {billing?.available === false && (
+                <p className="settings-hint">订阅支付尚未配置。</p>
+              )}
+              {billing?.checkout === true &&
+                account.subscription.plan === "free" && (
+                  <div className="billing-plan-actions">
+                    <button
+                      className="secondary"
+                      disabled={billingAction !== undefined}
+                      onClick={() => void startBillingCheckout("pro")}
+                      type="button"
+                    >
+                      {billingAction === "pro" ? "打开中…" : "升级 Pro"}
+                    </button>
+                    <button
+                      className="primary"
+                      disabled={billingAction !== undefined}
+                      onClick={() => void startBillingCheckout("team")}
+                      type="button"
+                    >
+                      {billingAction === "team" ? "打开中…" : "升级 Team"}
+                    </button>
+                  </div>
+                )}
+              {billingError !== undefined && (
+                <p className="error-text" role="alert">
+                  {billingError}
+                </p>
+              )}
+              {billingMessage !== undefined && (
+                <p className="settings-receipt" role="status">
+                  {billingMessage}
                 </p>
               )}
             </section>

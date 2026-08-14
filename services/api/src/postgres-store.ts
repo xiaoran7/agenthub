@@ -21,13 +21,14 @@ import {
   auditMetadata,
   entitlementsFor,
   isNewerSubscriptionEvent,
-  type AuditRecordInput,
   type AccountStore,
   type AccountUser,
   type AccountView,
   type AuditEvent,
   type AuditMetadataValue,
   type AuditQuery,
+  type AuditRecordInput,
+  type BillingReference,
   type InviteRole,
   type LoginAttemptResult,
   type SessionIdentity,
@@ -1444,6 +1445,38 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       if (account === undefined) throw new Error("updated account disappeared");
       return { applied, duplicate: false, account };
     });
+  }
+
+  async billingReference(
+    userId: string,
+  ): Promise<BillingReference | undefined> {
+    const rows = await this.#sql<
+      Array<{
+        provider: string | null;
+        provider_customer_id: string | null;
+        provider_subscription_id: string | null;
+      }>
+    >`
+      SELECT provider, provider_customer_id, provider_subscription_id
+      FROM agent_pulse_subscriptions
+      WHERE user_id = ${userId}
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (
+      row === undefined ||
+      row.provider === null ||
+      row.provider_customer_id === null
+    ) {
+      return undefined;
+    }
+    return {
+      provider: row.provider,
+      customer_id: row.provider_customer_id,
+      ...(row.provider_subscription_id === null
+        ? {}
+        : { subscription_id: row.provider_subscription_id }),
+    };
   }
 
   async listAuditEvents(input: AuditQuery): Promise<AuditEvent[]> {

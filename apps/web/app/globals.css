@@ -2987,6 +2987,39 @@ select {
   display: grid;
 }
 
+.billing-plan-card {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 11px 12px;
+}
+
+.billing-plan-card > div {
+  display: grid;
+  gap: 3px;
+}
+
+.billing-plan-card strong {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.billing-plan-card small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.billing-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
 .team-section-heading {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

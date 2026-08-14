@@ -13,7 +13,9 @@
   "dependencies": {
     "@agent-pulse/contracts": "*",
     "fastify": "5.10.0",
-    "postgres": "3.4.9"
+    "fastify-raw-body": "^6.0.1",
+    "postgres": "3.4.9",
+    "stripe": "^22.5.0"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

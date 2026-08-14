@@ -7,6 +7,12 @@
 
 ### Added
 
+- 新增可选 Stripe 订阅闭环：设置面板显示支付能力，服务端提供当前订阅状态、Pro/Team
+  Checkout 和 Customer Portal；Checkout 只使用当前 HttpOnly 会话和服务端 Price ID，
+  不接受浏览器提交 Customer/Subscription ID。Stripe webhook 使用原始请求体和官方 SDK
+  验签，只映射配置的 Price、账户 metadata 和订阅状态，再复用现有幂等权益 Store。
+  未配置 Stripe 时支付 API 显式返回不可用，不影响登录、监控和通用 HMAC 账单入口。
+
 - 扩展不可变审计轨迹覆盖设备绑定码创建、设备登记/撤销，以及远程任务创建、设备领取、
   取消和状态回报。工作区事件区分网页登录 actor 与设备签名动作，元数据只保留设备/任务
   公开 ID、Agent 类型和状态，不记录 Prompt、路径或 CLI 输出。PostgreSQL 0013 迁移保存

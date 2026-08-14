@@ -6,6 +6,8 @@ import {
   AccountError,
   subscriptionPlans,
   subscriptionStatuses,
+  type AccountView,
+  type SubscriptionPlan,
   type SubscriptionEvent,
 } from "./accounts.js";
 
@@ -15,6 +17,34 @@ const USER_ID_PATTERN = EVENT_ID_PATTERN;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/;
 const SIGNATURE_PATTERN = /^sha256=([0-9a-f]{64})$/;
 const DEFAULT_MAX_CLOCK_SKEW_SECONDS = 300;
+
+export type PaidSubscriptionPlan = Exclude<SubscriptionPlan, "free">;
+
+export interface BillingProvider {
+  readonly name: string;
+  readonly webhookPath: string;
+  readonly webhookSignatureHeader: string;
+  createCheckout(input: {
+    userId: string;
+    email: string;
+    plan: PaidSubscriptionPlan;
+    customerId?: string;
+  }): Promise<string>;
+  createPortal(customerId: string): Promise<string>;
+  parseWebhook(
+    rawBody: Buffer,
+    signature: string | undefined,
+    now: Date,
+  ): SubscriptionEvent | undefined;
+}
+
+export interface BillingStatus {
+  available: boolean;
+  provider?: string;
+  checkout: boolean;
+  portal: boolean;
+  subscription: AccountView["subscription"];
+}
 
 export class BillingEventVerifier {
   readonly #secret: Buffer;

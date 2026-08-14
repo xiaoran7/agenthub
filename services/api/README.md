@@ -27,7 +27,11 @@ Device Gateway、任务中转与查询 API 的开发期实现。
 | `PATCH`  | `/v1/team/members/:userId`             | 更新工作区成员角色                             |
 | `DELETE` | `/v1/team/members/:userId`             | 从工作区移除成员                               |
 | `POST`   | `/v1/team/workspace`                   | 切换当前 Web 会话的数据工作区                  |
+| `GET`    | `/v1/billing`                          | 返回支付供应商可用性和当前订阅管理能力         |
+| `POST`   | `/v1/billing/checkout`                 | 为当前账户创建 Pro/Team Checkout 跳转          |
+| `POST`   | `/v1/billing/portal`                   | 创建当前账户的支付客户门户跳转                 |
 | `POST`   | `/v1/billing/events`                   | 接收内部账单适配器的签名订阅事件               |
+| `POST`   | `/v1/billing/stripe/events`            | 验签并处理 Stripe 订阅 webhook                 |
 | `POST`   | `/v1/device-bindings`                  | 生成有时限的一次性设备绑定码                   |
 | `POST`   | `/v1/devices/register`                 | 使用一次性绑定码登记设备公钥                   |
 | `POST`   | `/v1/devices/heartbeat`                | 验证设备签名并更新在线活跃时间                 |
@@ -118,12 +122,27 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'
 `{template,to,variables}` JSON，模板名分别为 `agent-pulse-email-verification`、
 `agent-pulse-password-reset` 和 `agent-pulse-team-invitation`。
 
-账单供应商先在独立适配器内验签并规范化，再向 `/v1/billing/events` 发送内部事件。
+未配置支付供应商时，`GET /v1/billing` 返回 `available: false`，Checkout/Portal 返回
+`billing_unavailable`，不会影响账户和监控功能。配置 Stripe 的五个变量后，
+`POST /v1/billing/checkout` 只接受 `pro` 或 `team`，服务端从当前 HttpOnly 会话解析用户，
+把用户 UUID、方案和邮箱写入 Checkout metadata，再只返回 Stripe HTTPS 跳转 URL；已有
+订阅必须进入 Portal，避免重复创建订阅。`POST /v1/billing/portal` 只使用服务端保存的
+Stripe Customer ID，浏览器不能提交 Customer/Subscription ID。
+
+Stripe webhook 必须指向 `/v1/billing/stripe/events`，使用原始请求体和
+`AGENT_PULSE_STRIPE_WEBHOOK_SECRET` 验签；只接受配置的 Pro/Team Price ID，并从订阅
+metadata 解析账户。事件随后进入同一个订阅 Store，沿用事件 UUID 幂等和乱序保护。
+通用供应商也可以先在独立适配器内验签规范化，再向 `/v1/billing/events` 发送内部事件。
 请求需带 Unix 秒 `x-agent-pulse-timestamp` 和
 `x-agent-pulse-signature: sha256=<hex>`；签名输入是 `<timestamp>.<canonical-json>`，
 密钥来自 `AGENT_PULSE_BILLING_WEBHOOK_SECRET`。Store 按事件 UUID 幂等并按
 `occurred_at + event_id` 抗乱序；前端不能直接修改权益。`past_due/canceled` 在已付周期
 结束前保留原方案权益，周期结束后自动按 Free 计算。
+
+Stripe 配置示例：`AGENT_PULSE_PUBLIC_BASE_URL`、
+`AGENT_PULSE_STRIPE_SECRET_KEY`、`AGENT_PULSE_STRIPE_WEBHOOK_SECRET`、
+`AGENT_PULSE_STRIPE_PRICE_PRO`、`AGENT_PULSE_STRIPE_PRICE_TEAM` 必须成组设置，
+并使用正式 HTTPS 公网地址。Stripe 密钥只在 API 进程初始化时读取，随后从进程环境删除。
 
 远程任务只对 Pro/Team 开放，并由服务端强制执行设备归属和 3/10 个并发任务上限。
 当前只接受 `local_confirmation`，任务不包含服务器路径或 shell 命令。设备领取与状态

@@ -16,6 +16,7 @@ import {
   verifySyncBatch,
 } from "@agent-pulse/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
+import fastifyRawBody from "fastify-raw-body";
 
 import {
   AccountError,
@@ -37,7 +38,11 @@ import {
   type LoginAttemptResult,
   type InviteRole,
 } from "./accounts.js";
-import { BillingEventVerifier } from "./billing.js";
+import {
+  BillingEventVerifier,
+  type BillingProvider,
+  type PaidSubscriptionPlan,
+} from "./billing.js";
 import {
   passwordResetUrl,
   teamInvitationUrl,
@@ -120,6 +125,7 @@ export interface GatewayAppOptions {
     sender: EmailVerificationSender;
   };
   billingVerifier?: BillingEventVerifier;
+  billingProvider?: BillingProvider;
   loginRateLimitSecret?: Buffer;
   trustProxy?: boolean;
   bindingCodeFactory?: () => string;
@@ -195,6 +201,47 @@ export function createGatewayApp(
     app.log.error(error);
     void reply.status(500).send({ error: "internal_error" });
   });
+
+  if (options.billingProvider !== undefined) {
+    const provider = options.billingProvider;
+    void app.register(async (billingApp) => {
+      await billingApp.register(fastifyRawBody, {
+        global: false,
+        encoding: false,
+        runFirst: true,
+      });
+      billingApp.post(
+        provider.webhookPath,
+        { config: { rawBody: true } },
+        async (request, reply) => {
+          const accounts = requireAccounts(options.accounts);
+          if (!Buffer.isBuffer(request.rawBody)) {
+            throw new AccountError(
+              "invalid_billing_event",
+              "billing webhook body is unavailable",
+              400,
+            );
+          }
+          const signatureValue =
+            request.headers[provider.webhookSignatureHeader];
+          const event = provider.parseWebhook(
+            request.rawBody,
+            typeof signatureValue === "string" ? signatureValue : undefined,
+            now(),
+          );
+          if (event === undefined) {
+            return reply.send({ received: true, ignored: true });
+          }
+          const result = await accounts.applySubscriptionEvent(event);
+          return reply.send({
+            received: true,
+            applied: result.applied,
+            duplicate: result.duplicate,
+          });
+        },
+      );
+    });
+  }
 
   app.get("/health", async () => ({ status: "ok" }));
 
@@ -873,6 +920,89 @@ export function createGatewayApp(
       subscription: result.account.subscription,
       entitlements: result.account.entitlements,
     });
+  });
+
+  app.get("/v1/billing", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const account = await accounts.accountView(identity.actor_user_id);
+    if (account === undefined) throw new AuthenticationError();
+    const provider = options.billingProvider;
+    const reference = await accounts.billingReference(identity.actor_user_id);
+    return reply.send({
+      available: provider !== undefined,
+      ...(provider === undefined ? {} : { provider: provider.name }),
+      checkout: provider !== undefined,
+      portal:
+        provider !== undefined &&
+        reference?.provider === provider.name &&
+        reference.customer_id.length > 0,
+      subscription: account.subscription,
+    });
+  });
+
+  app.post("/v1/billing/checkout", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const provider = options.billingProvider;
+    if (provider === undefined) {
+      throw new AccountError(
+        "billing_unavailable",
+        "billing integration is unavailable",
+        503,
+      );
+    }
+    const account = await accounts.accountView(identity.actor_user_id);
+    if (account === undefined) throw new AuthenticationError();
+    requireVerifiedEmail(account, options.emailVerification !== undefined);
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["plan"]);
+    const plan = paidPlan(body.plan);
+    const reference = await accounts.billingReference(identity.actor_user_id);
+    if (reference?.subscription_id !== undefined) {
+      throw new AccountError(
+        "billing_portal_required",
+        "manage the existing subscription in the billing portal",
+        409,
+      );
+    }
+    if (reference !== undefined && reference.provider !== provider.name) {
+      throw new AccountError(
+        "billing_provider_mismatch",
+        "the existing subscription uses another billing provider",
+        409,
+      );
+    }
+    const url = await provider.createCheckout({
+      userId: identity.actor_user_id,
+      email: account.user.email,
+      plan,
+      ...(reference === undefined ? {} : { customerId: reference.customer_id }),
+    });
+    return reply.send({ provider: provider.name, url });
+  });
+
+  app.post("/v1/billing/portal", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const provider = options.billingProvider;
+    if (provider === undefined) {
+      throw new AccountError(
+        "billing_unavailable",
+        "billing integration is unavailable",
+        503,
+      );
+    }
+    const reference = await accounts.billingReference(identity.actor_user_id);
+    if (reference?.provider !== provider.name) {
+      throw new AccountError(
+        "billing_customer_unavailable",
+        "billing customer is not available",
+        409,
+      );
+    }
+    const url = await provider.createPortal(reference.customer_id);
+    return reply.send({ provider: provider.name, url });
   });
 
   app.post("/v1/device-bindings", async (request, reply) => {
@@ -1628,6 +1758,17 @@ async function mutationIdentity(
 function inviteRole(value: unknown): InviteRole {
   if (value !== "admin" && value !== "member") {
     throw new AccountError("invalid_team_role", "team role is invalid", 400);
+  }
+  return value;
+}
+
+function paidPlan(value: unknown): PaidSubscriptionPlan {
+  if (value !== "pro" && value !== "team") {
+    throw new AccountError(
+      "invalid_billing_plan",
+      "billing plan is invalid",
+      400,
+    );
   }
   return value;
 }

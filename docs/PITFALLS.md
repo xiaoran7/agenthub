@@ -2,6 +2,13 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-08-14 Stripe webhook 必须保留原始请求体
+
+- **现象**：把 Fastify 已解析的 JSON 重新序列化后交给 Stripe 验签，会因空白或字段顺序变化被拒绝。
+- **根因**：Stripe 签名覆盖原始字节，不是语义等价的 JSON 对象。
+- **解决方式**：只在 webhook 路由启用 `fastify-raw-body`，以 Buffer 交给 Stripe 官方 SDK，再映射配置的 Price ID。
+- **如何避免**：支付供应商的 webhook 测试必须覆盖篡改签名、未知 Price、缺失账户 metadata 和重复事件；不要把 Customer/Subscription ID 交给浏览器。
+
 ## 2026-08-14 集成测试中的任务时间不能使用会过期的固定日期
 
 - **现象**：真实 PostgreSQL 审计集成测试在生产容器中运行时，刚创建的任务在取消前就变成终态，返回 `task_terminal`。

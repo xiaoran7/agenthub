@@ -57,6 +57,12 @@ sudoedit /etc/agent-pulse/agent-pulse.env
 `AGENT_PULSE_EMAIL_ENDPOINT`、`AGENT_PULSE_EMAIL_TOKEN`；账单适配器使用独立的
 `AGENT_PULSE_BILLING_WEBHOOK_SECRET`。这些值只进入服务器密钥文件，不进入 Web 构建参数。
 
+如需启用真实 Stripe 订阅购买，还必须成组设置 `AGENT_PULSE_STRIPE_SECRET_KEY`、
+`AGENT_PULSE_STRIPE_WEBHOOK_SECRET`、`AGENT_PULSE_STRIPE_PRICE_PRO`、
+`AGENT_PULSE_STRIPE_PRICE_TEAM` 和正式 HTTPS 的 `AGENT_PULSE_PUBLIC_BASE_URL`。
+Stripe Dashboard webhook 地址为 `/v1/billing/stripe/events`，至少选择订阅创建、更新、
+取消、暂停和恢复事件。未配置这组值时，设置面板显示支付未配置，账户和监控仍可用。
+
 新部署使用用户注册/登录和 HttpOnly 会话 Cookie，不配置全局 owner 或访问令牌。旧个人
 部署迁移时才使用示例文件里注释的 Bearer 兼容变量。
 
@@ -135,8 +141,8 @@ sudo systemctl reload nginx
 
 ## 7. 当前上线边界
 
-当前已支持多用户邮箱账户、Web 会话轮换、邮箱验证、密码重置、Team 工作区与签名订阅事件，但仍不
-包含 SSO、真实邮件/支付供应商适配、跨实例事件广播和完整分布式限流。正式对公网开放
+当前已支持多用户邮箱账户、Web 会话轮换、邮箱验证、密码重置、Team 工作区、签名订阅事件和可选
+Stripe Checkout/Portal/webhook，但仍不包含 SSO、真实邮件供应商适配和完整分布式限流。正式对公网开放
 前，需要接入供应商并在反向代理或网关层补充全局限流、访问日志脱敏和备份恢复策略。
 
 ## 8. Docker 部署
