@@ -2,6 +2,17 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-08-14 Windows GUI 进程不会继承终端代理环境变量
+
+- **现象**：浏览器、PowerShell 和 `curl` 能访问生产域名，Tauri 登录却显示“无法连接
+  AgentPulse 服务器”。
+- **根因**：这些工具实际通过 Windows 当前用户代理访问；从资源管理器启动的 GUI 进程
+  没有 `HTTP_PROXY/HTTPS_PROXY` 环境变量，而 Rust HTTP 客户端未启用系统代理读取。
+- **解决方式**：为共享 `ureq` 客户端启用 `win-system-proxy`，优先保留显式代理环境变量，
+  缺失时读取 Windows Internet Settings，并遵守系统 bypass 列表。
+- **如何避免**：Windows 桌面联网验收必须同时覆盖终端启动和资源管理器启动；看到
+  “浏览器能开、原生客户端不能开”时同时比较 DNS、实际远端 IP 和系统代理配置。
+
 ## 2026-08-14 Claude Session 不能依赖 `claude agents --json`
 
 - **现象**：Runner 设计假设 Claude CLI 存在 `agents --json`，但当前官方 CLI 参考没有

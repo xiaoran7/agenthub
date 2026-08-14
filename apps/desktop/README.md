@@ -34,6 +34,9 @@ $env:AGENT_PULSE_SERVER_URL = 'http://127.0.0.1:3001'
 
 非回环地址必须使用 HTTPS。
 
+Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP_PROXY`、`HTTPS_PROXY`、
+`ALL_PROXY` 和 `NO_PROXY` 仍由 HTTP 客户端优先处理。
+
 ## 本地数据与安全边界
 
 - AgentPulse 的登录 Cookie 只保存在 OS Keyring，前端 JavaScript 不接触 Cookie。

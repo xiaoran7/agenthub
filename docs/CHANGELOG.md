@@ -284,6 +284,8 @@
 
 ### Fixed
 
+- Windows 桌面端 HTTPS 客户端读取当前用户的系统代理配置；从资源管理器启动、没有
+  `HTTP_PROXY` 等终端环境变量时，也能沿用系统代理连接生产 Gateway。
 - Windows Release 桌面程序改用 GUI subsystem，安装后启动只显示 Tauri 前端窗口，
   不再同时弹出控制台黑框；Debug 构建仍保留终端，方便本地诊断。
 - PostgreSQL 集成测试的 `listSessions` 过滤断言从 `WORKING` 修正为
