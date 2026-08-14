@@ -12,6 +12,7 @@ import {
 } from "./auth.js";
 import { BillingEventVerifier } from "./billing.js";
 import { HttpEmailVerificationSender } from "./email.js";
+import { ChangeBroker, PostgresChangeBroker } from "./events.js";
 import { PostgresGatewayStore } from "./postgres-store.js";
 import { WebPushSender, vapidKeysFromEnv } from "./push.js";
 import { InMemoryGatewayStore } from "./store.js";
@@ -31,12 +32,23 @@ if (databaseUrl === undefined) {
   accounts = postgresStore;
 }
 const authenticator = ownerAuthenticator(accounts, host);
+let broker: ChangeBroker = new ChangeBroker();
+if (databaseUrl !== undefined) {
+  try {
+    broker = await PostgresChangeBroker.connect(databaseUrl);
+  } catch {
+    process.stderr.write(
+      '{"level":"warn","code":"postgres_change_broker_unavailable"}\n',
+    );
+  }
+}
 // Without a full VAPID triple the gateway starts with push disabled rather
 // than half-configured; `npm run vapid-keys` prints a usable pair.
 const vapidKeys = vapidKeysFromEnv();
 const options: GatewayAppOptions = {
   store,
   accounts,
+  broker,
   authenticator,
   secureCookies: process.env.NODE_ENV === "production",
   trustProxy: isLoopbackHost(host),

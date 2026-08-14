@@ -56,7 +56,9 @@ Device Gateway、任务中转与查询 API 的开发期实现。
 每当该 owner 的批次真的写入新事件就发一帧 `event: sessions`，数据只有
 `{"device_id", "accepted"}`——客户端据此回读查询接口，流本身不携带会话内容。
 每 20 秒一条注释心跳；单 owner 并发上限 8 条流，超出返回 429
-`too_many_streams`。重放批次不产生推送。
+`too_many_streams`。重放批次不产生推送。配置 PostgreSQL 时，API 启动独立的
+`LISTEN/NOTIFY` Broker，把同一 owner 的变化信号广播到其他实例；通知只含公开设备 ID、
+计数和变化类型，不携带 Session 数据。监听连接失败时保留当前实例的内存广播与轮询兜底。
 
 `POST /v1/device-auth` 接收独立于 Session Outbox 的版本化 Ed25519 签名批次。Gateway
 会校验设备注册、公钥、撤销状态、批次顺序和每个 provider 的白名单字段，并按
@@ -220,7 +222,5 @@ npm.cmd test --workspace @agent-pulse/api
 
 - 联合身份提供商和实际邮件供应商适配
 - 设备密钥轮换、恢复绑定和完整绑定审计日志
-- 心跳（`/v1/stream` 只推变化，不代表设备活性）
-- 跨实例的变化广播（当前 broker 在进程内，多实例部署会漏推）
 - 全局/设备 API 分布式速率限制，以及设备与任务执行层的补充审计
 - 支付供应商收银台/webhook 适配、订阅自助变更、任务执行收据与可信执行策略

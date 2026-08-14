@@ -1399,6 +1399,7 @@ export function createGatewayApp(
     for (const close of [...openStreams]) {
       close();
     }
+    await broker.close();
     await store.close?.();
   });
 
