@@ -1,33 +1,39 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
-  ChevronRight,
+  AlertTriangle,
+  CheckCircle2,
   CircleUserRound,
   Cloud,
   Code2,
+  Database,
   Eye,
   EyeOff,
+  HardDrive,
   LogOut,
   Monitor,
   Pause,
   Play,
   RefreshCw,
-  Settings,
+  Search,
   ShieldCheck,
-  SlidersHorizontal,
+  X,
 } from "lucide-react";
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
 
 import { activityTime, relativeTime, statusView } from "./presentation";
-import type { ActivityStatus, Session, Snapshot } from "./types";
+import type { ActivityStatus, LocalSource, Session, Snapshot } from "./types";
 
 type AuthMode = "login" | "register";
+type AgentFilter = "all" | Session["agent_type"];
 
 export function App() {
   const demo =
@@ -82,7 +88,11 @@ function LoadingScreen() {
   return (
     <main className="loading-screen">
       <PulseMark />
-      <span>正在连接本机 Agent…</span>
+      <strong>正在建立本地索引</strong>
+      <span>读取会话元数据，不读取对话正文</span>
+      <div className="loading-line">
+        <i />
+      </div>
     </main>
   );
 }
@@ -104,6 +114,7 @@ function AuthScreen({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -128,15 +139,15 @@ function AuthScreen({
       <section className="auth-story">
         <Brand />
         <div className="auth-story-copy">
-          <PulseMark large />
+          <span className="story-kicker">LOCAL SESSION OBSERVATORY</span>
           <h1>
-            本地会话，自动发现，
+            看清每一个
             <br />
-            安全同步。
+            本地 Agent 脉搏
           </h1>
           <p>
-            安装后只需登录一次。Claude Code 与 Codex
-            会话会自动出现在你的全部设备上。
+            Claude
+            Code、Codex、历史会话与记忆索引会在登录后自动盘点。只同步状态和脱敏后的项目名。
           </p>
         </div>
         <LocalCloudDiagram />
@@ -144,13 +155,12 @@ function AuthScreen({
       <section className="auth-panel">
         <form onSubmit={submit} className="auth-form">
           <header>
-            <h2>
-              {mode === "login" ? "登录 AgentPulse" : "创建 AgentPulse 账号"}
-            </h2>
+            <span className="card-kicker">AgentPulse Desktop</span>
+            <h2>{mode === "login" ? "连接这台电脑" : "创建账号"}</h2>
             <p>
               {mode === "login"
-                ? "继续管理这台电脑上的 Agent 会话。"
-                : "一个账号即可连接你的所有设备。"}
+                ? "登录后立即扫描本机，不必打开终端。"
+                : "一个账号连接你的所有开发设备。"}
             </p>
           </header>
           <div className="mode-switch" aria-label="账号操作">
@@ -223,16 +233,16 @@ function AuthScreen({
           <button className="primary-button" disabled={busy} type="submit">
             {busy ? (
               <>
-                <RefreshCw className="spin" /> 正在连接
+                <RefreshCw className="spin" /> 正在扫描并连接
               </>
             ) : mode === "login" ? (
-              "登录并连接这台电脑"
+              "登录并扫描本机"
             ) : (
-              "注册并连接这台电脑"
+              "注册并扫描本机"
             )}
           </button>
           <p className="privacy-note">
-            <ShieldCheck /> 仅同步会话状态，不上传对话内容或登录凭据
+            <ShieldCheck /> 不上传对话、Prompt、命令、Token 或记忆正文
           </p>
         </form>
       </section>
@@ -248,9 +258,16 @@ function Dashboard({
   onLogout: () => void;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [busy, setBusy] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState(true);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
+  const [visibleLimit, setVisibleLimit] = useState(100);
+  const refreshInFlight = useRef(false);
+  const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
+
   const sessions = useMemo(
     () =>
       [...snapshot.sessions].sort((a, b) =>
@@ -258,52 +275,93 @@ function Dashboard({
       ),
     [snapshot.sessions],
   );
-  const claudeCount = sessions.filter(
-    (session) => session.agent_type === "claude_code",
-  ).length;
-  const codexCount = sessions.filter(
-    (session) => session.agent_type === "codex",
-  ).length;
+  const filteredSessions = useMemo(
+    () =>
+      sessions.filter((session) => {
+        if (agentFilter !== "all" && session.agent_type !== agentFilter)
+          return false;
+        if (deferredQuery === "") return true;
+        return session.payload.project.display_name
+          .toLocaleLowerCase()
+          .includes(deferredQuery);
+      }),
+    [agentFilter, deferredQuery, sessions],
+  );
+  const counts = useMemo(() => {
+    const next = { claude_code: 0, codex: 0 };
+    for (const session of sessions) next[session.agent_type] += 1;
+    return next;
+  }, [sessions]);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    refreshInFlight.current = true;
+    setRefreshing(true);
     try {
       const next = await invoke<Snapshot>("refresh_dashboard");
       setSnapshot(next);
       setError(undefined);
     } catch (nextError) {
       setError(errorMessage(nextError));
+    } finally {
+      setRefreshing(false);
+      refreshInFlight.current = false;
     }
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void refresh(), 5_000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer = window.setTimeout(async function poll() {
+      await refresh();
+      if (!cancelled) timer = window.setTimeout(poll, 8_000);
+    }, 8_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [refresh]);
 
+  useEffect(() => setVisibleLimit(100), [agentFilter, deferredQuery]);
+
   const toggleSync = async () => {
-    setBusy(true);
+    if (actionBusy) return;
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setSnapshot((current) => ({
+        ...current,
+        sync_running: !current.sync_running,
+      }));
+      return;
+    }
+    setActionBusy(true);
     try {
       await invoke("set_sync_paused", { paused: snapshot.sync_running });
       setSnapshot((current) => ({
         ...current,
         sync_running: !current.sync_running,
       }));
+      setError(undefined);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
-      setBusy(false);
+      setActionBusy(false);
     }
   };
 
   const signOut = async () => {
-    setBusy(true);
+    if (actionBusy) return;
+    if (!("__TAURI_INTERNALS__" in window)) {
+      onLogout();
+      return;
+    }
+    setActionBusy(true);
     try {
       await invoke("logout");
       onLogout();
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
-      setBusy(false);
+      setActionBusy(false);
     }
   };
 
@@ -316,84 +374,154 @@ function Dashboard({
             <Activity />
             <span>会话</span>
           </button>
-          <button>
-            <Monitor />
-            <span>设备</span>
-          </button>
-          <button>
-            <Settings />
-            <span>设置</span>
-          </button>
         </nav>
-        <button className="sidebar-account" title={snapshot.account.user.email}>
+        <button
+          className="sidebar-account"
+          aria-label="查看账号信息"
+          aria-expanded={accountOpen}
+          title={snapshot.account.user.email}
+          onClick={() => setAccountOpen((value) => !value)}
+        >
           <CircleUserRound />
         </button>
       </aside>
+
       <section className="workspace">
         <header className="workspace-header">
           <div>
             <span className="section-label">
-              <Monitor /> 本机设备
+              <Monitor /> LOCAL DEVICE
             </span>
-            <h1>这台电脑</h1>
-            <p>
-              {snapshot.device.name} <i />{" "}
-              {snapshot.sync_running ? "同步正常" : "同步已暂停"}
+            <h1>{snapshot.device.name}</h1>
+            <p
+              className={
+                snapshot.local.pending_events > 0
+                  ? "sync-copy pending"
+                  : "sync-copy"
+              }
+            >
+              <i />{" "}
+              {snapshot.sync_running
+                ? snapshot.local.pending_events > 0
+                  ? `${snapshot.local.pending_events} 条等待上传`
+                  : "本地与云端已同步"
+                : "云同步已暂停，本地扫描继续"}
             </p>
           </div>
           <div className="header-actions">
             <button
+              className="account-summary"
+              onClick={() => setAccountOpen(true)}
+            >
+              <span>
+                {initials(
+                  snapshot.account.user.display_name ||
+                    snapshot.account.user.email,
+                )}
+              </span>
+              <div>
+                <strong>
+                  {snapshot.account.user.display_name || "AgentPulse 用户"}
+                </strong>
+                <small>{snapshot.account.user.email}</small>
+              </div>
+            </button>
+            <button
               className="outline-button"
-              disabled={busy}
-              onClick={toggleSync}
+              disabled={actionBusy}
+              onClick={() => void toggleSync()}
             >
               {snapshot.sync_running ? <Pause /> : <Play />}
-              {snapshot.sync_running ? "暂停同步" : "继续同步"}
+              {snapshot.sync_running ? "暂停云同步" : "继续云同步"}
             </button>
             <button
               className="icon-button"
               aria-label="刷新"
+              disabled={refreshing}
               onClick={() => void refresh()}
             >
-              <RefreshCw />
-            </button>
-            <button
-              className="icon-button"
-              aria-label="退出登录"
-              onClick={() => void signOut()}
-            >
-              <LogOut />
+              <RefreshCw className={refreshing ? "spin" : undefined} />
             </button>
           </div>
         </header>
 
-        <section className="source-list" aria-label="本地 Agent 来源">
-          <SourceRow
-            icon={<Code2 />}
-            name="Claude Code"
-            count={claudeCount}
-            connected={snapshot.sync_running}
-          />
-          <SourceRow
-            icon={<span className="codex-cube">◇</span>}
-            name="Codex"
-            count={codexCount}
-            connected={snapshot.sync_running}
-          />
-          <div className="pulse-connector" aria-hidden="true">
-            <span />
+        <section className="discovery-grid" aria-label="本地发现概览">
+          <div className="source-list">
+            <SourceRow
+              icon={<Code2 />}
+              name="Claude Code"
+              fallbackCount={counts.claude_code}
+              source={snapshot.local.sources.find(
+                (item) => item.agent_type === "claude_code",
+              )}
+            />
+            <SourceRow
+              icon={<span className="codex-cube">◆</span>}
+              name="Codex"
+              fallbackCount={counts.codex}
+              source={snapshot.local.sources.find(
+                (item) => item.agent_type === "codex",
+              )}
+            />
+          </div>
+          <div className="memory-card">
+            <span className="memory-icon">
+              <Database />
+            </span>
+            <div>
+              <span className="card-kicker">本地记忆索引</span>
+              <strong>
+                {snapshot.local.memory.claude_files} 个 Claude 文件 ·{" "}
+                {snapshot.local.memory.codex_indexes} 个 Codex 索引
+              </strong>
+              <p>
+                {formatBytes(
+                  snapshot.local.memory.claude_bytes +
+                    snapshot.local.memory.codex_bytes,
+                )}
+                ，只读取数量和大小
+              </p>
+            </div>
+            <ShieldCheck />
           </div>
         </section>
 
         <section className="session-section">
           <div className="session-heading">
             <div>
-              <h2>会话</h2>
-              <p>{sessions.length} 个会话已安全同步</p>
+              <span className="card-kicker">DISCOVERY LEDGER</span>
+              <h2>会话索引</h2>
+              <p>
+                本机发现 {snapshot.local.session_count} 个 · 当前显示{" "}
+                {filteredSessions.length} 个
+              </p>
             </div>
-            <button>
-              <SlidersHorizontal /> 筛选
-            </button>
+            <div className="session-tools">
+              <label className="session-search">
+                <Search />
+                <input
+                  aria-label="搜索项目"
+                  placeholder="搜索项目"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+              </label>
+              <div className="agent-filter" aria-label="Agent 筛选">
+                {(["all", "claude_code", "codex"] as const).map((value) => (
+                  <button
+                    key={value}
+                    aria-pressed={agentFilter === value}
+                    onClick={() => setAgentFilter(value)}
+                  >
+                    {value === "all"
+                      ? "全部"
+                      : value === "claude_code"
+                        ? "Claude"
+                        : "Codex"}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="session-table" role="table" aria-label="会话列表">
             <div className="session-table-head" role="row">
@@ -401,42 +529,70 @@ function Dashboard({
               <span>Agent</span>
               <span>状态</span>
               <span>最近活动</span>
-              <span />
+              <span>同步</span>
             </div>
-            {sessions.length === 0 ? (
+            {filteredSessions.length === 0 ? (
               <div className="empty-state">
-                <Activity />
-                <h3>等待第一个会话</h3>
-                <p>打开 Claude Code 或 Codex 后，会话会自动出现在这里。</p>
+                {query === "" && agentFilter === "all" ? (
+                  <Activity />
+                ) : (
+                  <Search />
+                )}
+                <h3>
+                  {query === "" && agentFilter === "all"
+                    ? "正在扫描本机会话"
+                    : "没有匹配的会话"}
+                </h3>
+                <p>
+                  {query === "" && agentFilter === "all"
+                    ? "扫描失败时会在上方来源卡片显示原因。"
+                    : "换一个项目名或清除 Agent 筛选。"}
+                </p>
               </div>
             ) : (
-              sessions.map((session) => (
-                <SessionRow
-                  key={`${session.device_id}:${session.agent_type}:${session.agent_session_id}`}
-                  session={session}
-                />
-              ))
+              filteredSessions
+                .slice(0, visibleLimit)
+                .map((session) => (
+                  <SessionRow
+                    key={`${session.device_id}:${session.agent_type}:${session.agent_session_id}`}
+                    session={session}
+                  />
+                ))
             )}
           </div>
+          {filteredSessions.length > visibleLimit && (
+            <button
+              className="load-more"
+              onClick={() => setVisibleLimit((value) => value + 100)}
+            >
+              再显示 {Math.min(100, filteredSessions.length - visibleLimit)}{" "}
+              个会话
+            </button>
+          )}
         </section>
 
-        {notice && (
-          <div className="detection-notice" role="status">
-            <span>
-              <ShieldCheck />
-            </span>
-            <div>
-              <strong>已自动检测到 Claude Code 和 Codex 本地来源</strong>
-              <p>所有会话状态将自动同步到你的账号。</p>
-            </div>
-            <button aria-label="关闭提示" onClick={() => setNotice(false)}>
-              ×
-            </button>
-          </div>
+        <div className="discovery-note" role="status">
+          <HardDrive />
+          <span>
+            本地扫描于 {relativeTime(snapshot.local.refreshed_at)}{" "}
+            更新；对话、Prompt 和记忆正文不会上传。
+          </span>
+        </div>
+        {accountOpen && (
+          <AccountPanel
+            snapshot={snapshot}
+            busy={actionBusy}
+            onClose={() => setAccountOpen(false)}
+            onLogout={() => void signOut()}
+          />
         )}
         {error !== undefined && (
           <div className="toast-error" role="alert">
+            <AlertTriangle />
             {error}
+            <button aria-label="关闭错误" onClick={() => setError(undefined)}>
+              <X />
+            </button>
           </div>
         )}
       </section>
@@ -447,22 +603,43 @@ function Dashboard({
 function SourceRow({
   icon,
   name,
-  count,
-  connected,
+  fallbackCount,
+  source,
 }: {
   icon: React.ReactNode;
   name: string;
-  count: number;
-  connected: boolean;
+  fallbackCount: number;
+  source?: LocalSource;
 }) {
+  const healthy = source?.status === "healthy";
+  const failed = source?.status === "backoff";
   return (
     <div className="source-row">
       <span className="source-icon">{icon}</span>
-      <strong>{name}</strong>
-      <span className="source-count">已发现 {count} 个会话</span>
-      <span className={connected ? "source-health healthy" : "source-health"}>
-        <i />
-        {connected ? "已连接" : "已暂停"}
+      <div className="source-copy">
+        <strong>{name}</strong>
+        <span className="source-count">
+          已发现 {source?.session_count ?? fallbackCount} 个会话
+        </span>
+      </div>
+      <span
+        className={
+          healthy
+            ? "source-health healthy"
+            : failed
+              ? "source-health failed"
+              : "source-health"
+        }
+        title={source?.error_code}
+      >
+        {healthy ? (
+          <CheckCircle2 />
+        ) : failed ? (
+          <AlertTriangle />
+        ) : (
+          <RefreshCw className="spin" />
+        )}
+        {healthy ? "扫描正常" : failed ? "正在重试" : "正在扫描"}
       </span>
     </div>
   );
@@ -474,8 +651,10 @@ function SessionRow({ session }: { session: Session }) {
     session.payload.state.presence,
   );
   return (
-    <button className="session-row" role="row">
-      <strong>{session.payload.project.display_name || "未命名项目"}</strong>
+    <div className="session-row" role="row">
+      <strong title={session.payload.project.display_name}>
+        {session.payload.project.display_name || "未命名项目"}
+      </strong>
       <span>
         {session.agent_type === "claude_code" ? "Claude Code" : "Codex"}
       </span>
@@ -486,8 +665,78 @@ function SessionRow({ session }: { session: Session }) {
         </em>
       </span>
       <time>{relativeTime(activityTime(session))}</time>
-      <ChevronRight />
-    </button>
+      <span
+        className={`sync-dot ${session.sync_state ?? "synced"}`}
+        title={
+          session.sync_state === "local"
+            ? "本地已发现，等待云端确认"
+            : "云端已同步"
+        }
+      />
+    </div>
+  );
+}
+
+function AccountPanel({
+  snapshot,
+  busy,
+  onClose,
+  onLogout,
+}: {
+  snapshot: Snapshot;
+  busy: boolean;
+  onClose: () => void;
+  onLogout: () => void;
+}) {
+  return (
+    <aside className="account-panel" aria-label="账号信息">
+      <header>
+        <div>
+          <span className="card-kicker">AgentPulse 账号</span>
+          <h2>{snapshot.account.user.display_name || "未设置名称"}</h2>
+        </div>
+        <button
+          className="icon-button"
+          aria-label="关闭账号信息"
+          onClick={onClose}
+        >
+          <X />
+        </button>
+      </header>
+      <dl>
+        <div>
+          <dt>邮箱</dt>
+          <dd>{snapshot.account.user.email}</dd>
+        </div>
+        <div>
+          <dt>套餐</dt>
+          <dd>{planLabel(snapshot.account.subscription.plan)}</dd>
+        </div>
+        <div>
+          <dt>账号状态</dt>
+          <dd>
+            {snapshot.account.subscription.status === "active"
+              ? "正常"
+              : snapshot.account.subscription.status}
+          </dd>
+        </div>
+        <div>
+          <dt>历史保留</dt>
+          <dd>{snapshot.account.entitlements?.history_days ?? "—"} 天</dd>
+        </div>
+        <div>
+          <dt>当前设备</dt>
+          <dd>{snapshot.device.name}</dd>
+        </div>
+        <div>
+          <dt>服务</dt>
+          <dd>{new URL(snapshot.server_url).host}</dd>
+        </div>
+      </dl>
+      <button className="logout-button" disabled={busy} onClick={onLogout}>
+        <LogOut /> 退出登录
+      </button>
+    </aside>
   );
 }
 
@@ -500,12 +749,9 @@ function Brand() {
   );
 }
 
-function PulseMark({ large = false }: { large?: boolean }) {
+function PulseMark() {
   return (
-    <span
-      className={large ? "pulse-mark large" : "pulse-mark"}
-      aria-hidden="true"
-    >
+    <span className="pulse-mark" aria-hidden="true">
       <i />
       <i />
       <i />
@@ -523,7 +769,7 @@ function LocalCloudDiagram() {
       <div className="laptop">
         <Monitor />
         <span>
-          <Code2 /> ◇
+          <Code2 /> ◆
         </span>
       </div>
     </div>
@@ -536,6 +782,27 @@ function errorMessage(error: unknown): string {
   return "操作失败，请稍后重试";
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`;
+  return `${(bytes / 1_048_576).toFixed(1)} MB`;
+}
+
+function planLabel(plan: string): string {
+  if (plan === "pro") return "Pro";
+  if (plan === "team") return "Team";
+  return "Free";
+}
+
+function initials(value: string): string {
+  const parts = value.trim().split(/\s+/u).filter(Boolean);
+  if (parts.length === 0) return "AP";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
+
 const demoSnapshot: Snapshot = {
   account: {
     user: {
@@ -544,6 +811,7 @@ const demoSnapshot: Snapshot = {
       display_name: "Developer",
     },
     subscription: { plan: "pro", status: "active" },
+    entitlements: { max_devices: 5, history_days: 90 },
   },
   device: { device_id: "dev_demo", name: "DESKTOP-7K2A" },
   devices: [
@@ -556,6 +824,31 @@ const demoSnapshot: Snapshot = {
   ],
   sync_running: true,
   server_url: "https://platform.tannerlab.xyz",
+  local: {
+    pending_events: 2,
+    session_count: 307,
+    sources: [
+      {
+        agent_type: "claude_code",
+        session_count: 95,
+        detected: true,
+        status: "healthy",
+      },
+      {
+        agent_type: "codex",
+        session_count: 212,
+        detected: true,
+        status: "healthy",
+      },
+    ],
+    memory: {
+      claude_files: 4,
+      claude_bytes: 4_909,
+      codex_indexes: 1,
+      codex_bytes: 1_306_624,
+    },
+    refreshed_at: new Date().toISOString(),
+  },
   sessions: [
     demoSession("claude_code", "电商平台重构", "WORKING", 2),
     demoSession("claude_code", "支付服务优化", "WAITING_PERMISSION", 8),
@@ -579,6 +872,7 @@ function demoSession(
     agent_type: agent,
     agent_session_id: `${agent}-${project}`,
     observed_at: observedAt,
+    sync_state: minutesAgo < 3 ? "local" : "synced",
     payload: {
       project: { display_name: project, fingerprint: "demo" },
       state: { activity_status: activity, presence },

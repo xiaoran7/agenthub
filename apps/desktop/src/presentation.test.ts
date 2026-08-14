@@ -29,5 +29,6 @@ describe("desktop presentation", () => {
     expect(relativeTime("2026-08-14T09:59:30.000Z", now)).toBe("刚刚");
     expect(relativeTime("2026-08-14T09:52:00.000Z", now)).toBe("8 分钟前");
     expect(relativeTime("2026-08-12T10:00:00.000Z", now)).toBe("2 天前");
+    expect(relativeTime("not-a-date", now)).toBe("时间未知");
   });
 });

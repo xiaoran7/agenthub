@@ -15,6 +15,10 @@ export interface Account {
     display_name: string;
   };
   subscription: { plan: string; status: string };
+  entitlements?: {
+    max_devices?: number;
+    history_days?: number;
+  };
 }
 
 export interface Device {
@@ -35,6 +39,29 @@ export interface Session {
     state: { activity_status: ActivityStatus; presence: string };
     last_activity_at?: string;
   };
+  sync_state?: "local" | "synced";
+}
+
+export interface LocalSource {
+  agent_type: "claude_code" | "codex";
+  session_count: number;
+  detected: boolean;
+  status: "healthy" | "backoff" | "scanning";
+  last_success_at?: string;
+  error_code?: string;
+}
+
+export interface LocalInventory {
+  pending_events: number;
+  session_count: number;
+  sources: LocalSource[];
+  memory: {
+    claude_files: number;
+    claude_bytes: number;
+    codex_indexes: number;
+    codex_bytes: number;
+  };
+  refreshed_at: string;
 }
 
 export interface Snapshot {
@@ -44,4 +71,5 @@ export interface Snapshot {
   device: { device_id: string; name: string };
   sync_running: boolean;
   server_url: string;
+  local: LocalInventory;
 }

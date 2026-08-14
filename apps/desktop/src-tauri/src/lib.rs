@@ -10,7 +10,13 @@ use std::{
 };
 
 use agent_pulse_runner::{
+    adapters::{
+        claude,
+        codex::{self, CodexThreadContext},
+    },
+    collectors::{collect_claude_transcripts, collect_codex_local_threads},
     device::DeviceIdentity,
+    domain::{AgentType, ObservationMeta, SessionObservation},
     gateway::GatewayClient,
     outbox::Outbox,
     privacy::ProjectRedactor,
@@ -28,7 +34,9 @@ use url::{Host, Url};
 
 const DEFAULT_SERVER_URL: &str = "https://platform.tannerlab.xyz";
 const KEYRING_SERVICE: &str = "AgentPulse Desktop";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
+const LOCAL_SESSION_LIMIT: u32 = 1_000;
+const DESKTOP_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 enum DesktopError {
@@ -96,12 +104,12 @@ struct DesktopState {
 }
 
 #[tauri::command]
-fn authenticate(input: AuthInput, state: State<'_, DesktopState>) -> Result<Value, String> {
+async fn authenticate(input: AuthInput, state: State<'_, DesktopState>) -> Result<Value, String> {
     authenticate_inner(input, &state).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn restore_session(state: State<'_, DesktopState>) -> Result<Option<Value>, String> {
+async fn restore_session(state: State<'_, DesktopState>) -> Result<Option<Value>, String> {
     let config = match read_config(&state.data_dir) {
         Ok(config) => config,
         Err(DesktopError::NotAuthenticated) => return Ok(None),
@@ -115,15 +123,15 @@ fn restore_session(state: State<'_, DesktopState>) -> Result<Option<Value>, Stri
     let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
     ensure_device_bound(&config.server_url, &cookie, &identity)
         .map_err(|error| error.to_string())?;
+    start_engine(&state, &config.server_url, &identity).map_err(|error| error.to_string())?;
     let mut snapshot = dashboard_snapshot(&config.server_url, &cookie, &identity, &state)
         .map_err(|error| error.to_string())?;
-    start_engine(&state, &config.server_url, &identity).map_err(|error| error.to_string())?;
     snapshot["sync_running"] = Value::Bool(true);
     Ok(Some(snapshot))
 }
 
 #[tauri::command]
-fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, String> {
+async fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, String> {
     let config = read_config(&state.data_dir).map_err(|error| error.to_string())?;
     let cookie = load_cookie(&config.server_url).map_err(|error| error.to_string())?;
     let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
@@ -132,7 +140,7 @@ fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn set_sync_paused(paused: bool, state: State<'_, DesktopState>) -> Result<Value, String> {
+async fn set_sync_paused(paused: bool, state: State<'_, DesktopState>) -> Result<Value, String> {
     let mut engine = state
         .engine
         .lock()
@@ -154,7 +162,7 @@ fn set_sync_paused(paused: bool, state: State<'_, DesktopState>) -> Result<Value
 }
 
 #[tauri::command]
-fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
+async fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
     let config = read_config(&state.data_dir).ok();
     if let Ok(mut engine) = state.engine.lock()
         && let Some(handle) = engine.take()
@@ -178,8 +186,11 @@ fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
 }
 
 fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, DesktopError> {
+    let configured_server = input
+        .server_url
+        .or_else(|| std::env::var("AGENT_PULSE_SERVER_URL").ok());
     let server_url =
-        normalize_server_url(input.server_url.as_deref().unwrap_or(DEFAULT_SERVER_URL))?;
+        normalize_server_url(configured_server.as_deref().unwrap_or(DEFAULT_SERVER_URL))?;
     let path = match input.mode {
         AuthMode::Login => "/v1/auth/login",
         AuthMode::Register => "/v1/auth/register",
@@ -273,9 +284,36 @@ fn dashboard_snapshot(
     identity: &DeviceIdentity,
     state: &DesktopState,
 ) -> Result<Value, DesktopError> {
-    let account = request_json("GET", server_url, "/v1/auth/me", Some(cookie), None)?;
-    let devices = request_json("GET", server_url, "/v1/devices", Some(cookie), None)?;
-    let sessions = request_json("GET", server_url, "/v1/sessions", Some(cookie), None)?;
+    let (account, devices, remote_sessions) = thread::scope(|scope| {
+        let account =
+            scope.spawn(|| request_json("GET", server_url, "/v1/auth/me", Some(cookie), None));
+        let devices =
+            scope.spawn(|| request_json("GET", server_url, "/v1/devices", Some(cookie), None));
+        let sessions =
+            scope.spawn(|| request_json("GET", server_url, "/v1/sessions", Some(cookie), None));
+        Ok::<_, DesktopError>((
+            account
+                .join()
+                .map_err(|_| DesktopError::InvalidResponse)??,
+            devices
+                .join()
+                .map_err(|_| DesktopError::InvalidResponse)??,
+            sessions
+                .join()
+                .map_err(|_| DesktopError::InvalidResponse)??,
+        ))
+    })?;
+    let outbox =
+        Outbox::open(state.data_dir.join("outbox.sqlite")).map_err(|_| DesktopError::Sync)?;
+    let stats = outbox.stats().map_err(|_| DesktopError::Sync)?;
+    let local_sessions = outbox.snapshots().map_err(|_| DesktopError::Sync)?;
+    let claude_health = outbox
+        .adapter_health(AgentType::ClaudeCode)
+        .map_err(|_| DesktopError::Sync)?;
+    let codex_health = outbox
+        .adapter_health(AgentType::Codex)
+        .map_err(|_| DesktopError::Sync)?;
+    let sessions = merge_dashboard_sessions(&remote_sessions["sessions"], &local_sessions);
     let running = state
         .engine
         .lock()
@@ -284,10 +322,20 @@ fn dashboard_snapshot(
     Ok(json!({
         "account": account,
         "devices": devices["devices"],
-        "sessions": sessions["sessions"],
+        "sessions": sessions,
         "device": {
             "device_id": identity.device_id(),
             "name": machine_name()
+        },
+        "local": {
+            "pending_events": stats.pending_events,
+            "session_count": local_sessions.len(),
+            "sources": [
+                local_source_summary(AgentType::ClaudeCode, &local_sessions, claude_health),
+                local_source_summary(AgentType::Codex, &local_sessions, codex_health)
+            ],
+            "memory": local_memory_summary(),
+            "refreshed_at": chrono::Utc::now()
         },
         "sync_running": running,
         "server_url": server_url
@@ -316,23 +364,28 @@ fn build_engine(
     let sync_identity = DeviceIdentity::load(&identity_path).map_err(|_| DesktopError::Identity)?;
     let stop = Arc::new(AtomicBool::new(false));
     let client = GatewayClient::new(server_url, REQUEST_TIMEOUT).map_err(|_| DesktopError::Sync)?;
+    let sources: Vec<Box<dyn SessionSource>> = vec![
+        Box::new(ClaudeSessionSource::new(true)),
+        Box::new(CodexSessionSource::new_with_timeout(
+            "codex",
+            LOCAL_SESSION_LIMIT,
+            DESKTOP_COLLECTOR_TIMEOUT,
+        )),
+    ];
+    let redactor =
+        ProjectRedactor::new(identity.fingerprint_key()).map_err(|_| DesktopError::Sync)?;
+    let mut outbox = Outbox::open(&database_path).map_err(|_| DesktopError::Sync)?;
+    bootstrap_local_sessions(identity, &redactor, &mut outbox)?;
     let sync_worker = SyncWorker::start(
         database_path.clone(),
         client,
         sync_identity,
         SyncPolicy::default(),
         MAX_SYNC_BATCH_EVENTS.min(100),
-        10,
+        20,
         Arc::clone(&stop),
     )
     .map_err(|_| DesktopError::Sync)?;
-    let sources: Vec<Box<dyn SessionSource>> = vec![
-        Box::new(ClaudeSessionSource::new(true)),
-        Box::new(CodexSessionSource::new("codex", 100)),
-    ];
-    let redactor =
-        ProjectRedactor::new(identity.fingerprint_key()).map_err(|_| DesktopError::Sync)?;
-    let outbox = Outbox::open(&database_path).map_err(|_| DesktopError::Sync)?;
     let mut runtime = RunnerRuntime::new(
         identity.device_id(),
         redactor,
@@ -351,6 +404,219 @@ fn build_engine(
         })
         .map_err(|_| DesktopError::Sync)?;
     Ok(EngineHandle { stop, thread })
+}
+
+fn bootstrap_local_sessions(
+    identity: &DeviceIdentity,
+    redactor: &ProjectRedactor,
+    outbox: &mut Outbox,
+) -> Result<(), DesktopError> {
+    let meta = ObservationMeta::now(identity.device_id());
+    let next_attempt = meta.observed_at + chrono::Duration::seconds(10);
+
+    match collect_claude_transcripts(true)
+        .map_err(|error| error.code().to_owned())
+        .and_then(|payload| {
+            claude::normalize_agents_json(&payload, &meta, redactor)
+                .map_err(|_| "claude_payload_invalid".to_owned())
+        }) {
+        Ok(observations) => {
+            for observation in observations {
+                outbox
+                    .enqueue_if_changed(&observation)
+                    .map_err(|_| DesktopError::Sync)?;
+            }
+            outbox
+                .record_adapter_health(
+                    AgentType::ClaudeCode,
+                    meta.observed_at,
+                    true,
+                    0,
+                    next_attempt,
+                    None,
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+        Err(code) => {
+            outbox
+                .record_adapter_health(
+                    AgentType::ClaudeCode,
+                    meta.observed_at,
+                    false,
+                    1,
+                    next_attempt,
+                    Some(&code),
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+    }
+
+    match collect_codex_local_threads(LOCAL_SESSION_LIMIT)
+        .map_err(|error| error.code().to_owned())
+        .and_then(|value| {
+            let payload =
+                serde_json::to_string(&value).map_err(|_| "codex_payload_invalid".to_owned())?;
+            codex::normalize_local_thread_list_result(
+                &payload,
+                &meta,
+                redactor,
+                &mut CodexThreadContext::default(),
+            )
+            .map_err(|_| "codex_payload_invalid".to_owned())
+        }) {
+        Ok(observations) => {
+            for observation in observations {
+                outbox
+                    .enqueue_if_changed(&observation)
+                    .map_err(|_| DesktopError::Sync)?;
+            }
+            outbox
+                .record_adapter_health(
+                    AgentType::Codex,
+                    meta.observed_at,
+                    true,
+                    0,
+                    next_attempt,
+                    None,
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+        Err(code) => {
+            outbox
+                .record_adapter_health(
+                    AgentType::Codex,
+                    meta.observed_at,
+                    false,
+                    1,
+                    next_attempt,
+                    Some(&code),
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+    }
+    Ok(())
+}
+
+fn merge_dashboard_sessions(remote: &Value, local: &[SessionObservation]) -> Vec<Value> {
+    let mut sessions = std::collections::BTreeMap::new();
+    if let Some(remote) = remote.as_array() {
+        for session in remote {
+            if let Some(key) = dashboard_session_key(session) {
+                sessions.insert(key, session.clone());
+            }
+        }
+    }
+    for observation in local {
+        let key = observation.session_key();
+        let sync_state = if sessions.contains_key(&key) {
+            "synced"
+        } else {
+            "local"
+        };
+        sessions.insert(
+            key,
+            json!({
+                "event_id": observation.event_id,
+                "device_id": observation.device_id,
+                "agent_type": observation.agent_type,
+                "agent_session_id": observation.agent_session_id,
+                "observed_at": observation.observed_at,
+                "payload": {
+                    "project": observation.project,
+                    "state": observation.state,
+                    "source": observation.source,
+                    "confidence": observation.confidence,
+                    "started_at": observation.started_at,
+                    "last_activity_at": observation.last_activity_at
+                },
+                "sync_state": sync_state
+            }),
+        );
+    }
+    sessions.into_values().collect()
+}
+
+fn dashboard_session_key(session: &Value) -> Option<String> {
+    Some(format!(
+        "{}:{}:{}",
+        session.get("agent_type")?.as_str()?,
+        session.get("device_id")?.as_str()?,
+        session.get("agent_session_id")?.as_str()?
+    ))
+}
+
+fn local_source_summary(
+    agent_type: AgentType,
+    sessions: &[SessionObservation],
+    health: Option<agent_pulse_runner::outbox::AdapterHealth>,
+) -> Value {
+    let session_count = sessions
+        .iter()
+        .filter(|session| session.agent_type == agent_type)
+        .count();
+    json!({
+        "agent_type": agent_type,
+        "session_count": session_count,
+        "detected": session_count > 0 || health.as_ref().is_some_and(|value| value.status == "healthy"),
+        "status": health.as_ref().map(|value| value.status.as_str()).unwrap_or("scanning"),
+        "last_success_at": health.as_ref().and_then(|value| value.last_success_at),
+        "error_code": health.and_then(|value| value.last_error_code)
+    })
+}
+
+fn local_memory_summary() -> Value {
+    let Some(home) = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+    else {
+        return json!({ "claude_files": 0, "claude_bytes": 0, "codex_indexes": 0, "codex_bytes": 0 });
+    };
+    let claude_projects = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"))
+        .join("projects");
+    let mut claude_files = 0_u64;
+    let mut claude_bytes = 0_u64;
+    if let Ok(projects) = fs::read_dir(claude_projects) {
+        for project in projects.flatten() {
+            let memory = project.path().join("memory");
+            if let Ok(files) = fs::read_dir(memory) {
+                for file in files.flatten() {
+                    if file.file_type().is_ok_and(|kind| kind.is_file()) {
+                        claude_files = claude_files.saturating_add(1);
+                        claude_bytes = claude_bytes.saturating_add(
+                            file.metadata().map(|value| value.len()).unwrap_or_default(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    let mut codex_indexes = 0_u64;
+    let mut codex_bytes = 0_u64;
+    if let Ok(files) = fs::read_dir(codex_home) {
+        for file in files.flatten() {
+            let name = file.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("memories_")
+                && name.ends_with(".sqlite")
+                && file.file_type().is_ok_and(|kind| kind.is_file())
+            {
+                codex_indexes = codex_indexes.saturating_add(1);
+                codex_bytes = codex_bytes
+                    .saturating_add(file.metadata().map(|value| value.len()).unwrap_or_default());
+            }
+        }
+    }
+    json!({
+        "claude_files": claude_files,
+        "claude_bytes": claude_bytes,
+        "codex_indexes": codex_indexes,
+        "codex_bytes": codex_bytes
+    })
 }
 
 fn request_json(

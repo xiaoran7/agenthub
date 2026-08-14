@@ -7,6 +7,15 @@
 
 ### Added
 
+- 重构 Windows 桌面 App 为本地优先的 Session 观测台：启动时先扫描最多 1000 条 Claude
+  与 Codex 历史元数据，再将本地 Outbox 快照与云端结果合并展示；新增真实来源健康、待上传
+  数量、Claude/Codex memory 索引元数据、会话搜索/来源筛选和账号详情面板。仪表盘三条云端
+  请求改为并行，前端轮询改为 8 秒单飞并在完成后再调度，Tauri 阻塞命令移出 UI 主执行路径，
+  避免网络慢或多次刷新导致请求堆积。Codex 桌面扫描上限由 100 提升为 1000；空态和来源卡
+  不再把“同步进程存在”误报成“已检测到 Agent”。
+- 补齐 Tauri bundle 的跨平台图标清单，使 Windows MSI/NSIS 发布不再因未解析到 `.ico`
+  而在 Release EXE 已编译后失败。
+
 - 新增 Windows Tauri 桌面 App：复用现有邮箱注册/登录接口，将 AgentPulse HttpOnly
   会话保存在 OS Keyring；登录后自动创建/加载 Ed25519 设备身份、完成账号设备登记并
   启动内嵌 Runner 与同步 Worker，不再要求用户打开 CMD 或输入配对码。界面提供来源、

@@ -48,6 +48,7 @@ name = "agent-pulse-desktop"
 version = "0.1.0"
 dependencies = [
  "agent-pulse-runner",
+ "chrono",
  "keyring",
  "serde",
  "serde_json",

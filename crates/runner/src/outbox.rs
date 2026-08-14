@@ -290,6 +290,22 @@ impl Outbox {
             .map_err(Into::into)
     }
 
+    /// Returns the latest metadata-only snapshot for every locally observed
+    /// session. The payloads have already crossed the runner privacy boundary;
+    /// transcript bodies, prompts and tool output are never stored here.
+    pub fn snapshots(&self) -> Result<Vec<SessionObservation>, OutboxError> {
+        let mut statement = self.connection.prepare(
+            "SELECT payload FROM session_snapshots ORDER BY observed_at DESC, session_key ASC",
+        )?;
+        let payloads = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        payloads
+            .into_iter()
+            .map(|payload| serde_json::from_str(&payload).map_err(Into::into))
+            .collect()
+    }
+
     pub fn stats(&self) -> Result<OutboxStats, OutboxError> {
         let pending_events = u64::try_from(self.connection.query_row(
             "SELECT COUNT(*) FROM outbox_events",
@@ -571,6 +587,21 @@ mod tests {
         assert_eq!(health.consecutive_failures, 1);
         assert_eq!(health.last_success_at, Some(attempted_at));
         assert_eq!(health.last_error_code.as_deref(), Some("permission_denied"));
+    }
+
+    #[test]
+    fn lists_only_metadata_snapshots_in_stable_order() {
+        let mut outbox = Outbox::open_in_memory().unwrap();
+        let first = observation(ActivityStatus::Working);
+        let mut second = observation(ActivityStatus::Idle);
+        second.agent_session_id = "session-2".into();
+        outbox.enqueue(&first).unwrap();
+        outbox.enqueue(&second).unwrap();
+
+        let snapshots = outbox.snapshots().unwrap();
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].agent_session_id, "session-2");
+        assert_eq!(snapshots[1].agent_session_id, "session-1");
     }
 
     #[test]

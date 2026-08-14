@@ -152,6 +152,9 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
 - 在同一 Tauri 进程内启动 Runner 与同步 Worker，退出登录时停止同步并清理 AgentPulse
   Cookie；Claude/Codex 供应商凭据始终留在各自客户端和系统凭据库中。
 - 默认只允许 HTTPS Gateway，开发环境仅放行回环 HTTP。
+- 启动时先执行一次本地元数据扫描并写入 Outbox；桌面读模型将本地快照与云端已确认
+  Session 按稳定键合并，因此断网或积压不会被误报为“本机未检测到”。扫描健康、待上传数和
+  云端确认是三个独立状态；memory 只统计文件/索引数量与字节，不读取正文。
 
 #### Normalizer
 

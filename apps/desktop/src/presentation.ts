@@ -5,7 +5,9 @@ export function activityTime(session: Session): string {
 }
 
 export function relativeTime(value: string, now = Date.now()): string {
-  const seconds = Math.max(0, (now - Date.parse(value)) / 1_000);
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "时间未知";
+  const seconds = Math.max(0, (now - timestamp) / 1_000);
   if (seconds < 60) return "刚刚";
   if (seconds < 3_600) return `${Math.floor(seconds / 60)} 分钟前`;
   if (seconds < 86_400) return `${Math.floor(seconds / 3_600)} 小时前`;
