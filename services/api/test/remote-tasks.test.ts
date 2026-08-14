@@ -285,6 +285,21 @@ test("remote task relay is tenant scoped, idempotent, signed, and transition saf
     payload: signedClaim(device, current.toISOString()),
   });
   assert.equal(noTask.statusCode, 204);
+  const audit = await app.inject({
+    method: "GET",
+    url: "/v1/audit?scope=workspace",
+    headers: { cookie: owner.cookie },
+  });
+  assert.equal(audit.statusCode, 200);
+  const actions = (audit.json().events as Array<{ action: string }>).map(
+    (event) => event.action,
+  );
+  assert.ok(actions.includes("device.registered"));
+  assert.ok(actions.includes("task.created"));
+  assert.ok(actions.includes("task.claimed"));
+  assert.ok(actions.includes("task.status_updated"));
+  assert.ok(actions.includes("task.canceled"));
+  assert.equal(JSON.stringify(audit.json()).includes("检查测试失败"), false);
   await app.close();
 });
 

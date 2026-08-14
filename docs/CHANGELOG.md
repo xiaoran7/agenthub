@@ -7,6 +7,11 @@
 
 ### Added
 
+- 扩展不可变审计轨迹覆盖设备绑定码创建、设备登记/撤销，以及远程任务创建、设备领取、
+  取消和状态回报。工作区事件区分网页登录 actor 与设备签名动作，元数据只保留设备/任务
+  公开 ID、Agent 类型和状态，不记录 Prompt、路径或 CLI 输出。PostgreSQL 0013 迁移保存
+  绑定码签发操作者，并将审计目标 ID 扩展为受限公开文本。
+
 - PostgreSQL 部署新增跨 API 实例变化广播：每个实例使用独立连接订阅
   `agent_pulse_changes_v1`，本地发布后通过 `LISTEN/NOTIFY` 唤醒其他实例的 owner SSE；
   随机 origin 防止自身回声重复推送，负载只包含设备 ID、计数与变化类型。Broker 连接失败

@@ -225,10 +225,12 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
 - 账单供应商 payload 不直接进入权益层。独立适配器完成供应商验签后，以 HMAC 签名的
   严格内部事件更新订阅；事件 UUID 幂等，`occurred_at + event_id` 抗乱序。取消或欠费
   在已付周期结束前保留权益，过期后自动退回 Free。
-- 账户、会话、密码、订阅和 Team 管理动作写入不可变审计事件。`account` 范围只允许登录人
+- 账户、会话、密码、订阅、Team、设备和远程任务动作写入不可变审计事件。`account` 范围只允许登录人
   查看自己的安全与权益动作；`workspace` 范围绑定当前数据租户，并在每次读取时重新验证
   成员关系。审计写入与主 Store 变更处于同一事务，元数据只接受角色、套餐、状态、公开
-  UUID 和数量等白名单字段，不保存邮箱、密码、Token、IP、请求体、Prompt、CLI 内容或路径。
+  UUID、设备 ID、Agent 类型和任务状态等白名单字段，不保存邮箱、密码、Token、IP、请求体、
+  Prompt、CLI 内容或路径。设备签名回报的审计操作者留空，网页登录创建/取消任务和设备撤销
+  使用当前会话 actor；兼容 Bearer 部署在没有账户 UUID 时跳过账户审计写入。
 - 新部署默认使用账户会话；旧单 owner Bearer 认证只作为显式迁移兼容模式。联合登录、
   实际邮件/支付供应商适配仍待接入。
 
@@ -337,7 +339,8 @@ MVP 使用 PostgreSQL：
 为 Web 会话增加当前工作区，并新增 `agent_pulse_workspace_members` 与
 `agent_pulse_team_invitations`；每个既有用户会回填个人工作区所有者成员记录。0011 迁移
 新增 `agent_pulse_audit_events` 及账户/工作区时间线索引，读取使用 UUID 游标并按当前成员
-关系隔离。迁移均有类型检查、内存契约和环境门控 PostgreSQL 测试定义。
+关系隔离。0013 迁移扩展公开设备/任务目标 ID、绑定码签发操作者和设备/任务审计动作。
+迁移均有类型检查、内存契约和环境门控 PostgreSQL 测试定义。
 
 事件原文只保存已经通过 Contracts 白名单验证的 `SyncEvent` JSONB；Presence 和
 Activity Status 额外保留受约束列用于筛选。迁移使用事务级 advisory lock 防止多个

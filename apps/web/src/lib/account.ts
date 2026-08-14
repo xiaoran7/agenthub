@@ -86,7 +86,14 @@ export type AuditAction =
   | "team.invitation_accepted"
   | "team.member_role_updated"
   | "team.member_removed"
-  | "subscription.updated";
+  | "subscription.updated"
+  | "device.binding_created"
+  | "device.registered"
+  | "device.revoked"
+  | "task.created"
+  | "task.canceled"
+  | "task.claimed"
+  | "task.status_updated";
 
 export interface AuditEvent {
   event_id: string;
@@ -100,7 +107,9 @@ export interface AuditEvent {
     | "workspace"
     | "team_invitation"
     | "team_member"
-    | "subscription";
+    | "subscription"
+    | "device"
+    | "remote_task";
   target_id?: string;
   metadata: Record<string, string | number | boolean>;
   created_at: string;

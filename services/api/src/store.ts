@@ -19,6 +19,7 @@ import type {
 } from "@agent-pulse/contracts";
 
 import type { PushSubscription } from "./push.js";
+import type { AccountStore, AuditRecordInput } from "./accounts.js";
 
 export interface RegisteredDevice {
   device_id: string;
@@ -131,17 +132,23 @@ export interface HeartbeatResult {
 }
 
 export interface GatewayStore {
+  setAuditRecorder?(recorder: Pick<AccountStore, "recordAuditEvent">): void;
   createBindingCode(
     ownerId: string,
     codeDigest: string,
     expiresAt: string,
+    actorUserId?: string,
   ): Promise<void>;
   registerDeviceWithBindingCode(
     codeDigest: string,
     deviceId: string,
     publicKey: string,
   ): Promise<DeviceRegistrationResult>;
-  revokeDevice(ownerId: string, deviceId: string): Promise<boolean>;
+  revokeDevice(
+    ownerId: string,
+    deviceId: string,
+    actorUserId?: string,
+  ): Promise<boolean>;
   savePushSubscription(
     ownerId: string,
     subscription: PushSubscription,
@@ -153,6 +160,7 @@ export interface GatewayStore {
     ownerId: string,
     deviceId: string,
     publicKey: string,
+    actorUserId?: string,
   ): Promise<DeviceRegistrationResult>;
   ingestBatch(batch: SyncBatch): Promise<IngestResult>;
   ingestAuthBatch(batch: AuthSyncBatch): Promise<AuthIngestResult>;
@@ -176,13 +184,18 @@ export interface GatewayStore {
   createRemoteTask(
     ownerId: string,
     input: CreateRemoteTaskRecord,
+    actorUserId?: string,
   ): Promise<RemoteTaskCreateResult>;
   countActiveRemoteTasks(ownerId: string): Promise<number>;
   listRemoteTasks(
     ownerId: string,
     filters: RemoteTaskFilters,
   ): Promise<RemoteTask[]>;
-  cancelRemoteTask(ownerId: string, taskId: string): Promise<RemoteTask>;
+  cancelRemoteTask(
+    ownerId: string,
+    taskId: string,
+    actorUserId?: string,
+  ): Promise<RemoteTask>;
   claimRemoteTask(
     claim: DeviceTaskClaim,
   ): Promise<RemoteTaskMutationResult | undefined>;
@@ -253,6 +266,7 @@ export class InMemoryGatewayStore implements GatewayStore {
       ownerId: string;
       expiresAt: string;
       claimedDeviceId?: string;
+      issuedBy?: string;
     }
   >();
   readonly #pushSubscriptions = new Map<
@@ -268,9 +282,14 @@ export class InMemoryGatewayStore implements GatewayStore {
   readonly #remoteTasks = new Map<string, RemoteTask & { owner_id: string }>();
   readonly #taskIdsByIdempotencyKey = new Map<string, string>();
   readonly #now: () => Date;
+  #auditRecorder: Pick<AccountStore, "recordAuditEvent"> | undefined;
 
   constructor(now: () => Date = () => new Date()) {
     this.#now = now;
+  }
+
+  setAuditRecorder(recorder: Pick<AccountStore, "recordAuditEvent">): void {
+    this.#auditRecorder = recorder;
   }
 
   async countActiveDevices(ownerId: string): Promise<number> {
@@ -284,6 +303,7 @@ export class InMemoryGatewayStore implements GatewayStore {
     ownerId: string,
     codeDigest: string,
     expiresAt: string,
+    actorUserId?: string,
   ): Promise<void> {
     const now = this.#now().getTime();
     for (const [digest, binding] of this.#bindingCodes) {
@@ -300,7 +320,17 @@ export class InMemoryGatewayStore implements GatewayStore {
         "binding code digest already exists",
       );
     }
-    this.#bindingCodes.set(codeDigest, { ownerId, expiresAt });
+    await this.#recordWorkspaceAudit({
+      workspaceOwnerId: ownerId,
+      actorUserId,
+      action: "device.binding_created",
+      metadata: {},
+    });
+    this.#bindingCodes.set(codeDigest, {
+      ownerId,
+      expiresAt,
+      ...(actorUserId === undefined ? {} : { issuedBy: actorUserId }),
+    });
   }
 
   async registerDeviceWithBindingCode(
@@ -322,7 +352,12 @@ export class InMemoryGatewayStore implements GatewayStore {
           "binding code has already been used",
         );
       }
-      return this.registerDevice(binding.ownerId, deviceId, publicKey);
+      return this.registerDevice(
+        binding.ownerId,
+        deviceId,
+        publicKey,
+        binding.issuedBy,
+      );
     }
     if (Date.parse(binding.expiresAt) <= this.#now().getTime()) {
       throw new GatewayStoreError(
@@ -332,14 +367,23 @@ export class InMemoryGatewayStore implements GatewayStore {
     }
     binding.claimedDeviceId = deviceId;
     try {
-      return await this.registerDevice(binding.ownerId, deviceId, publicKey);
+      return await this.registerDevice(
+        binding.ownerId,
+        deviceId,
+        publicKey,
+        binding.issuedBy,
+      );
     } catch (error) {
       delete binding.claimedDeviceId;
       throw error;
     }
   }
 
-  async revokeDevice(ownerId: string, deviceId: string): Promise<boolean> {
+  async revokeDevice(
+    ownerId: string,
+    deviceId: string,
+    actorUserId?: string,
+  ): Promise<boolean> {
     const device = this.#devices.get(deviceId);
     if (
       device === undefined ||
@@ -349,6 +393,15 @@ export class InMemoryGatewayStore implements GatewayStore {
       return false;
     }
     device.revoked_at = this.#now().toISOString();
+    await this.#recordWorkspaceAudit({
+      workspaceOwnerId: ownerId,
+      actorUserId,
+      action: "device.revoked",
+      targetType: "device",
+      targetId: deviceId,
+      metadata: {},
+      createdAt: device.revoked_at,
+    });
     return true;
   }
 
@@ -383,6 +436,7 @@ export class InMemoryGatewayStore implements GatewayStore {
     ownerId: string,
     deviceId: string,
     publicKey: string,
+    actorUserId?: string,
   ): Promise<DeviceRegistrationResult> {
     const existing = this.#devices.get(deviceId);
     if (existing !== undefined) {
@@ -406,6 +460,15 @@ export class InMemoryGatewayStore implements GatewayStore {
       last_seen_at: now,
     };
     this.#devices.set(deviceId, device);
+    await this.#recordWorkspaceAudit({
+      workspaceOwnerId: ownerId,
+      actorUserId,
+      action: "device.registered",
+      targetType: "device",
+      targetId: deviceId,
+      metadata: {},
+      createdAt: device.created_at,
+    });
     return { device, created: true };
   }
 
@@ -698,6 +761,7 @@ export class InMemoryGatewayStore implements GatewayStore {
   async createRemoteTask(
     ownerId: string,
     input: CreateRemoteTaskRecord,
+    actorUserId?: string,
   ): Promise<RemoteTaskCreateResult> {
     this.#expireRemoteTasks();
     const device = this.#devices.get(input.target_device_id);
@@ -753,6 +817,15 @@ export class InMemoryGatewayStore implements GatewayStore {
     };
     this.#remoteTasks.set(task.task_id, task);
     this.#taskIdsByIdempotencyKey.set(idempotencyIndex, task.task_id);
+    await this.#recordWorkspaceAudit({
+      workspaceOwnerId: ownerId,
+      actorUserId,
+      action: "task.created",
+      targetType: "remote_task",
+      targetId: task.task_id,
+      metadata: { agent_type: task.agent_type, task_status: task.status },
+      createdAt: task.created_at,
+    });
     return { task: publicRemoteTask(task), created: true };
   }
 
@@ -780,7 +853,11 @@ export class InMemoryGatewayStore implements GatewayStore {
       .map(publicRemoteTask);
   }
 
-  async cancelRemoteTask(ownerId: string, taskId: string): Promise<RemoteTask> {
+  async cancelRemoteTask(
+    ownerId: string,
+    taskId: string,
+    actorUserId?: string,
+  ): Promise<RemoteTask> {
     this.#expireRemoteTasks();
     const task = this.#remoteTasks.get(taskId);
     if (task === undefined || task.owner_id !== ownerId) {
@@ -790,7 +867,22 @@ export class InMemoryGatewayStore implements GatewayStore {
     if (!isActiveTaskStatus(task.status)) {
       throw new GatewayStoreError("task_terminal", "task is already terminal");
     }
-    transitionRemoteTask(task, "canceled", this.#now().toISOString());
+    const previousStatus = task.status;
+    const updatedAt = this.#now().toISOString();
+    transitionRemoteTask(task, "canceled", updatedAt);
+    await this.#recordWorkspaceAudit({
+      workspaceOwnerId: ownerId,
+      actorUserId,
+      action: "task.canceled",
+      targetType: "remote_task",
+      targetId: task.task_id,
+      metadata: {
+        agent_type: task.agent_type,
+        previous_status: previousStatus,
+        task_status: task.status,
+      },
+      createdAt: updatedAt,
+    });
     return publicRemoteTask(task);
   }
 
@@ -825,7 +917,21 @@ export class InMemoryGatewayStore implements GatewayStore {
         left.created_at.localeCompare(right.created_at),
       )[0];
     if (queued === undefined) return undefined;
-    transitionRemoteTask(queued, "delivered", this.#now().toISOString());
+    const previousStatus = queued.status;
+    const updatedAt = this.#now().toISOString();
+    transitionRemoteTask(queued, "delivered", updatedAt);
+    await this.#recordWorkspaceAudit({
+      workspaceOwnerId: device.owner_id,
+      action: "task.claimed",
+      targetType: "remote_task",
+      targetId: queued.task_id,
+      metadata: {
+        agent_type: queued.agent_type,
+        previous_status: previousStatus,
+        task_status: queued.status,
+      },
+      createdAt: updatedAt,
+    });
     return { task: publicRemoteTask(queued), owner_id: device.owner_id };
   }
 
@@ -860,8 +966,30 @@ export class InMemoryGatewayStore implements GatewayStore {
         "task transition is invalid",
       );
     }
+    const previousStatus = task.status;
     transitionRemoteTask(task, update.status, update.updated_at, update);
+    await this.#recordWorkspaceAudit({
+      workspaceOwnerId: device.owner_id,
+      action: "task.status_updated",
+      targetType: "remote_task",
+      targetId: task.task_id,
+      metadata: {
+        agent_type: task.agent_type,
+        previous_status: previousStatus,
+        task_status: task.status,
+      },
+      createdAt: update.updated_at,
+    });
     return { task: publicRemoteTask(task), owner_id: device.owner_id };
+  }
+
+  async #recordWorkspaceAudit(
+    input: Omit<AuditRecordInput, "scope">,
+  ): Promise<void> {
+    await this.#auditRecorder?.recordAuditEvent({
+      ...input,
+      scope: "workspace",
+    });
   }
 
   #requireTaskDevice(deviceId: string, publicKey: string): RegisteredDevice {

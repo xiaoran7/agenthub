@@ -107,6 +107,13 @@ const AUDIT_ACTION_LABELS: Record<AuditEvent["action"], string> = {
   "team.member_role_updated": "成员角色已更新",
   "team.member_removed": "成员已移出工作区",
   "subscription.updated": "订阅权益已更新",
+  "device.binding_created": "设备绑定码已创建",
+  "device.registered": "设备已登记",
+  "device.revoked": "设备已撤销",
+  "task.created": "远程任务已创建",
+  "task.canceled": "远程任务已取消",
+  "task.claimed": "设备已领取任务",
+  "task.status_updated": "任务状态已更新",
 };
 
 function auditId(value: string | undefined): string | undefined {
@@ -127,6 +134,13 @@ function auditDetail(event: AuditEvent): string {
   if (typeof status === "string") details.push(`状态 ${status}`);
   const revoked = event.metadata.revoked_sessions;
   if (typeof revoked === "number") details.push(`撤销 ${revoked} 个会话`);
+  const agentType = event.metadata.agent_type;
+  if (typeof agentType === "string") details.push(`Agent ${agentType}`);
+  const previousStatus = event.metadata.previous_status;
+  if (typeof previousStatus === "string")
+    details.push(`原状态 ${previousStatus}`);
+  const taskStatus = event.metadata.task_status;
+  if (typeof taskStatus === "string") details.push(`任务状态 ${taskStatus}`);
   const actor = auditId(event.actor_user_id);
   if (event.scope === "workspace" && actor !== undefined) {
     details.push(`操作者 ${actor}`);

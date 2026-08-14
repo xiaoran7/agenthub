@@ -205,6 +205,25 @@ test(
         (await store.accountView(userId))?.subscription.plan,
         "team",
       );
+      const deviceId = `dev_${"1".repeat(32)}`;
+      await store.registerDevice(userId, deviceId, "2".repeat(64), userId);
+      const remoteTask = await store.createRemoteTask(
+        userId,
+        {
+          task_id: randomUUID(),
+          target_device_id: deviceId,
+          agent_type: "codex",
+          prompt: "postgres audit fixture",
+          idempotency_key: "postgres-audit-task",
+          execution_policy: "local_confirmation",
+          expires_in_seconds: 3_600,
+          created_at: "2026-08-13T12:11:00.000Z",
+          expires_at: "2026-08-13T13:11:00.000Z",
+          max_concurrent_tasks: 10,
+        },
+        userId,
+      );
+      await store.cancelRemoteTask(userId, remoteTask.task.task_id, userId);
       const audit = await store.listAuditEvents({
         scope: "account",
         actorUserId: userId,
@@ -219,14 +238,17 @@ test(
         audit.filter((event) => event.action === "subscription.updated").length,
         1,
       );
+      assert.ok(audit.some((event) => event.action === "device.registered"));
+      assert.ok(audit.some((event) => event.action === "task.created"));
+      assert.ok(audit.some((event) => event.action === "task.canceled"));
       assert.equal(
         JSON.stringify(audit).includes("postgres-account@example.com"),
         false,
       );
       const migration = await sql<
         Array<{ version: string | number }>
-      >`SELECT version FROM agent_platform_schema_migrations WHERE version = 11`;
-      assert.equal(Number(migration[0]?.version), 11);
+      >`SELECT version FROM agent_platform_schema_migrations WHERE version = 13`;
+      assert.equal(Number(migration[0]?.version), 13);
 
       await store.close();
       sql = undefined;

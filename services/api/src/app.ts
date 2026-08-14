@@ -138,6 +138,9 @@ export function createGatewayApp(
   const broker = options.broker ?? new ChangeBroker();
   const authenticator = options.authenticator ?? new RejectingAuthenticator();
   const loginRateLimitSecret = options.loginRateLimitSecret ?? randomBytes(32);
+  if (options.accounts !== undefined) {
+    store.setAuditRecorder?.(options.accounts);
+  }
   const openStreams = new Set<() => void>();
   const app = Fastify({
     logger: options.logger ?? false,
@@ -873,7 +876,13 @@ export function createGatewayApp(
   });
 
   app.post("/v1/device-bindings", async (request, reply) => {
-    const ownerId = await authenticator.authenticate(request);
+    const identity = await mutationIdentity(
+      options.accounts,
+      authenticator,
+      request,
+      now(),
+    );
+    const ownerId = identity.workspace_owner_id;
     if (options.accounts !== undefined) {
       const account = await options.accounts.accountView(ownerId);
       if (account === undefined) throw new AuthenticationError();
@@ -898,6 +907,7 @@ export function createGatewayApp(
       ownerId,
       bindingCodeDigest(bindingCode),
       expiresAt,
+      identity.actor_user_id,
     );
     return reply.status(201).send({
       binding_code: bindingCode,
@@ -1021,7 +1031,13 @@ export function createGatewayApp(
   });
 
   app.post("/v1/tasks", async (request, reply) => {
-    const ownerId = await authenticator.authenticate(request);
+    const identity = await mutationIdentity(
+      options.accounts,
+      authenticator,
+      request,
+      now(),
+    );
+    const ownerId = identity.workspace_owner_id;
     const accounts = requireAccounts(options.accounts);
     const account = await accounts.accountView(ownerId);
     if (account === undefined) throw new AuthenticationError();
@@ -1042,15 +1058,19 @@ export function createGatewayApp(
       );
     }
     const createdAt = now();
-    const result = await store.createRemoteTask(ownerId, {
-      ...input,
-      task_id: randomUUID(),
-      created_at: createdAt.toISOString(),
-      expires_at: new Date(
-        createdAt.getTime() + input.expires_in_seconds * 1_000,
-      ).toISOString(),
-      max_concurrent_tasks: account.entitlements.max_concurrent_tasks,
-    });
+    const result = await store.createRemoteTask(
+      ownerId,
+      {
+        ...input,
+        task_id: randomUUID(),
+        created_at: createdAt.toISOString(),
+        expires_at: new Date(
+          createdAt.getTime() + input.expires_in_seconds * 1_000,
+        ).toISOString(),
+        max_concurrent_tasks: account.entitlements.max_concurrent_tasks,
+      },
+      identity.actor_user_id,
+    );
     if (result.created) {
       broker.publish(ownerId, {
         device_id: result.task.target_device_id,
@@ -1093,12 +1113,22 @@ export function createGatewayApp(
   });
 
   app.post("/v1/tasks/:taskId/cancel", async (request, reply) => {
-    const ownerId = await authenticator.authenticate(request);
+    const identity = await mutationIdentity(
+      options.accounts,
+      authenticator,
+      request,
+      now(),
+    );
+    const ownerId = identity.workspace_owner_id;
     const { taskId } = request.params as { taskId?: unknown };
     if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
       throw new ContractError("invalid_task_id", "task ID is invalid");
     }
-    const task = await store.cancelRemoteTask(ownerId, taskId);
+    const task = await store.cancelRemoteTask(
+      ownerId,
+      taskId,
+      identity.actor_user_id,
+    );
     broker.publish(ownerId, {
       device_id: task.target_device_id,
       accepted: 0,
@@ -1143,12 +1173,18 @@ export function createGatewayApp(
   });
 
   app.delete("/v1/devices/:deviceId", async (request, reply) => {
-    const ownerId = await authenticator.authenticate(request);
+    const identity = await mutationIdentity(
+      options.accounts,
+      authenticator,
+      request,
+      now(),
+    );
+    const ownerId = identity.workspace_owner_id;
     const { deviceId } = request.params as { deviceId?: unknown };
     if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) {
       throw new ContractError("invalid_device_id", "device ID is invalid");
     }
-    await store.revokeDevice(ownerId, deviceId);
+    await store.revokeDevice(ownerId, deviceId, identity.actor_user_id);
     return reply.status(204).send();
   });
 
@@ -1563,6 +1599,29 @@ async function requireAccountIdentity(
     actor_user_id: ownerId,
     workspace_owner_id: ownerId,
     role: "owner" as const,
+  };
+}
+
+async function mutationIdentity(
+  accounts: AccountStore | undefined,
+  authenticator: OwnerAuthenticator,
+  request: Parameters<typeof currentSessionIdentity>[1],
+  at: Date,
+): Promise<{
+  workspace_owner_id: string;
+  actor_user_id?: string;
+}> {
+  if (accounts !== undefined) {
+    const identity = await currentSessionIdentity(accounts, request, at);
+    if (identity !== undefined) {
+      return {
+        workspace_owner_id: identity.workspace_owner_id,
+        actor_user_id: identity.actor_user_id,
+      };
+    }
+  }
+  return {
+    workspace_owner_id: await authenticator.authenticate(request),
   };
 }
 

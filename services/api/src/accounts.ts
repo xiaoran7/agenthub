@@ -155,6 +155,13 @@ export const auditActions = [
   "team.member_role_updated",
   "team.member_removed",
   "subscription.updated",
+  "device.binding_created",
+  "device.registered",
+  "device.revoked",
+  "task.created",
+  "task.canceled",
+  "task.claimed",
+  "task.status_updated",
 ] as const;
 
 export type AuditAction = (typeof auditActions)[number];
@@ -165,7 +172,9 @@ export type AuditTargetType =
   | "workspace"
   | "team_invitation"
   | "team_member"
-  | "subscription";
+  | "subscription"
+  | "device"
+  | "remote_task";
 export type AuditMetadataValue = string | number | boolean;
 
 export interface AuditEvent {
@@ -186,6 +195,18 @@ export interface AuditQuery {
   workspaceOwnerId: string;
   beforeEventId?: string;
   limit: number;
+}
+
+export interface AuditRecordInput {
+  scope: AuditScope;
+  accountUserId?: string | undefined;
+  workspaceOwnerId?: string | undefined;
+  actorUserId?: string | undefined;
+  action: AuditAction;
+  targetType?: AuditTargetType | undefined;
+  targetId?: string | undefined;
+  metadata: Record<string, AuditMetadataValue>;
+  createdAt?: string | undefined;
 }
 
 export interface Entitlements {
@@ -327,6 +348,7 @@ export interface AccountStore {
   applySubscriptionEvent(
     event: SubscriptionEvent,
   ): Promise<SubscriptionEventResult>;
+  recordAuditEvent(input: AuditRecordInput): Promise<boolean>;
   listAuditEvents(input: AuditQuery): Promise<AuditEvent[]>;
 }
 
@@ -1273,6 +1295,41 @@ export class InMemoryAccountStore implements AccountStore {
       .map(cloneAuditEvent);
   }
 
+  async recordAuditEvent(input: AuditRecordInput): Promise<boolean> {
+    if (
+      (input.scope === "account" &&
+        (input.accountUserId === undefined ||
+          input.workspaceOwnerId !== undefined ||
+          !this.#users.has(input.accountUserId))) ||
+      (input.scope === "workspace" &&
+        (input.workspaceOwnerId === undefined ||
+          input.accountUserId !== undefined ||
+          !this.#workspaceMembers.has(input.workspaceOwnerId))) ||
+      (input.actorUserId !== undefined &&
+        !this.#users.has(input.actorUserId)) ||
+      (input.targetType === undefined) !== (input.targetId === undefined)
+    ) {
+      return false;
+    }
+    this.#recordAudit({
+      scope: input.scope,
+      ...(input.actorUserId === undefined
+        ? {}
+        : { actor_user_id: input.actorUserId }),
+      ...(input.workspaceOwnerId === undefined
+        ? {}
+        : { workspace_owner_id: input.workspaceOwnerId }),
+      action: input.action,
+      ...(input.targetType === undefined
+        ? {}
+        : { target_type: input.targetType }),
+      ...(input.targetId === undefined ? {} : { target_id: input.targetId }),
+      metadata: input.metadata,
+      created_at: input.createdAt ?? new Date().toISOString(),
+    });
+    return true;
+  }
+
   #recordAudit(event: Omit<AuditEvent, "event_id">): void {
     this.#auditEvents.push({
       ...event,
@@ -1675,6 +1732,9 @@ const AUDIT_METADATA_KEYS = new Set([
   "invited_user_id",
   "invitation_id",
   "revoked_sessions",
+  "agent_type",
+  "task_status",
+  "previous_status",
 ]);
 
 export function auditMetadata(

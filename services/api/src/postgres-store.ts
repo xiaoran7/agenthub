@@ -21,6 +21,7 @@ import {
   auditMetadata,
   entitlementsFor,
   isNewerSubscriptionEvent,
+  type AuditRecordInput,
   type AccountStore,
   type AccountUser,
   type AccountView,
@@ -118,6 +119,10 @@ const MIGRATIONS = [
     version: 12,
     url: new URL("../migrations/0012_device_heartbeat.sql", import.meta.url),
   },
+  {
+    version: 13,
+    url: new URL("../migrations/0013_device_task_audit.sql", import.meta.url),
+  },
 ] as const;
 
 interface DeviceRow {
@@ -135,6 +140,7 @@ interface BindingCodeRow {
   owner_id: string;
   expired: boolean;
   claimed_device_id: string | null;
+  issued_by: string | null;
 }
 
 interface ExistingEventRow {
@@ -1513,6 +1519,30 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     return rows.map(normalizeAuditEvent);
   }
 
+  async recordAuditEvent(input: AuditRecordInput): Promise<boolean> {
+    return this.#sql.begin(async (sql) => {
+      if (input.scope === "account") {
+        if (input.accountUserId === undefined) return false;
+        const users = await sql`
+          SELECT 1 FROM agent_pulse_users
+          WHERE user_id::text = ${input.accountUserId}
+          LIMIT 1
+        `;
+        if (users.length === 0) return false;
+      } else {
+        if (input.workspaceOwnerId === undefined) return false;
+        const owners = await sql`
+          SELECT 1 FROM agent_pulse_users
+          WHERE user_id::text = ${input.workspaceOwnerId}
+          LIMIT 1
+        `;
+        if (owners.length === 0) return false;
+      }
+      await insertAuditEvent(sql, input);
+      return true;
+    });
+  }
+
   async countActiveDevices(ownerId: string): Promise<number> {
     const rows = await this.#sql<Array<{ count: string | number }>>`
       SELECT count(*) AS count
@@ -1579,6 +1609,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     ownerId: string,
     codeDigest: string,
     expiresAt: string,
+    actorUserId?: string,
   ): Promise<void> {
     try {
       await this.#sql.begin(async (sql) => {
@@ -1591,10 +1622,17 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           INSERT INTO agent_platform_binding_codes (
             code_digest,
             owner_id,
+            issued_by,
             expires_at
           )
-          VALUES (${codeDigest}, ${ownerId}, ${expiresAt})
+          VALUES (${codeDigest}, ${ownerId}, ${actorUserId ?? null}, ${expiresAt})
         `;
+        await insertWorkspaceAuditIfVisible(sql, {
+          workspaceOwnerId: ownerId,
+          actorUserId,
+          action: "device.binding_created",
+          metadata: {},
+        });
       });
     } catch (error) {
       throw classifyPostgresConflict(error);
@@ -1610,6 +1648,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       const bindings = await sql<BindingCodeRow[]>`
         SELECT
           owner_id,
+          issued_by,
           expires_at <= clock_timestamp() AS expired,
           claimed_device_id
         FROM agent_platform_binding_codes
@@ -1698,27 +1737,55 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           WHERE code_digest = ${codeDigest}
         `;
       }
+      if (created) {
+        await insertWorkspaceAuditIfVisible(sql, {
+          workspaceOwnerId: binding.owner_id,
+          actorUserId: binding.issued_by ?? undefined,
+          action: "device.registered",
+          targetType: "device",
+          targetId: deviceId,
+          metadata: {},
+          createdAt: isoTimestamp(device.created_at),
+        });
+      }
       return { device: registeredDevice(device), created };
     });
   }
 
-  async revokeDevice(ownerId: string, deviceId: string): Promise<boolean> {
-    const rows = await this.#sql<Array<{ device_id: string }>>`
-      UPDATE agent_platform_devices
-      SET revoked_at = clock_timestamp()
-      WHERE
-        device_id = ${deviceId}
-        AND owner_id = ${ownerId}
-        AND revoked_at IS NULL
-      RETURNING device_id
-    `;
-    return rows.length === 1;
+  async revokeDevice(
+    ownerId: string,
+    deviceId: string,
+    actorUserId?: string,
+  ): Promise<boolean> {
+    return this.#sql.begin(async (sql) => {
+      const rows = await sql<Array<{ device_id: string; revoked_at: unknown }>>`
+        UPDATE agent_platform_devices
+        SET revoked_at = clock_timestamp()
+        WHERE
+          device_id = ${deviceId}
+          AND owner_id = ${ownerId}
+          AND revoked_at IS NULL
+        RETURNING device_id, revoked_at
+      `;
+      if (rows.length !== 1) return false;
+      await insertWorkspaceAuditIfVisible(sql, {
+        workspaceOwnerId: ownerId,
+        actorUserId,
+        action: "device.revoked",
+        targetType: "device",
+        targetId: deviceId,
+        metadata: {},
+        createdAt: isoTimestamp(rows[0]!.revoked_at),
+      });
+      return true;
+    });
   }
 
   async registerDevice(
     ownerId: string,
     deviceId: string,
     publicKey: string,
+    actorUserId?: string,
   ): Promise<DeviceRegistrationResult> {
     return this.#sql.begin(async (sql) => {
       const inserted = await sql<DeviceRow[]>`
@@ -1767,6 +1834,17 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           "device_conflict",
           "device is already registered with different credentials",
         );
+      }
+      if (created) {
+        await insertWorkspaceAuditIfVisible(sql, {
+          workspaceOwnerId: ownerId,
+          actorUserId,
+          action: "device.registered",
+          targetType: "device",
+          targetId: deviceId,
+          metadata: {},
+          createdAt: isoTimestamp(row.created_at),
+        });
       }
       return { device: registeredDevice(row), created };
     });
@@ -2197,6 +2275,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
   async createRemoteTask(
     ownerId: string,
     input: CreateRemoteTaskRecord,
+    actorUserId?: string,
   ): Promise<RemoteTaskCreateResult> {
     try {
       return await this.#sql.begin(async (sql) => {
@@ -2268,6 +2347,18 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         `;
         const row = rows[0];
         if (row === undefined) throw new Error("task insert returned no row");
+        await insertWorkspaceAuditIfVisible(sql, {
+          workspaceOwnerId: ownerId,
+          actorUserId,
+          action: "task.created",
+          targetType: "remote_task",
+          targetId: input.task_id,
+          metadata: {
+            agent_type: input.agent_type,
+            task_status: "queued",
+          },
+          createdAt: input.created_at,
+        });
         return { task: remoteTask(row), created: true };
       });
     } catch (error) {
@@ -2310,7 +2401,11 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     return rows.map(remoteTask);
   }
 
-  async cancelRemoteTask(ownerId: string, taskId: string): Promise<RemoteTask> {
+  async cancelRemoteTask(
+    ownerId: string,
+    taskId: string,
+    actorUserId?: string,
+  ): Promise<RemoteTask> {
     return this.#sql.begin(async (sql) => {
       await expireRemoteTasks(sql, ownerId);
       const rows = await sql<RemoteTaskRow[]>`
@@ -2357,6 +2452,19 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         "user",
         now,
       );
+      await insertWorkspaceAuditIfVisible(sql, {
+        workspaceOwnerId: ownerId,
+        actorUserId,
+        action: "task.canceled",
+        targetType: "remote_task",
+        targetId: taskId,
+        metadata: {
+          agent_type: task.agent_type,
+          previous_status: row.status,
+          task_status: "canceled",
+        },
+        createdAt: now.toISOString(),
+      });
       return remoteTask(task);
     });
   }
@@ -2415,6 +2523,18 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         "device",
         now,
       );
+      await insertWorkspaceAuditIfVisible(sql, {
+        workspaceOwnerId: device.owner_id,
+        action: "task.claimed",
+        targetType: "remote_task",
+        targetId: task.task_id,
+        metadata: {
+          agent_type: task.agent_type,
+          previous_status: "queued",
+          task_status: "delivered",
+        },
+        createdAt: now.toISOString(),
+      });
       return { task: remoteTask(task), owner_id: device.owner_id };
     });
   }
@@ -2490,6 +2610,18 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         "device",
         new Date(update.updated_at),
       );
+      await insertWorkspaceAuditIfVisible(sql, {
+        workspaceOwnerId: device.owner_id,
+        action: "task.status_updated",
+        targetType: "remote_task",
+        targetId: update.task_id,
+        metadata: {
+          agent_type: current.agent_type,
+          previous_status: row.status,
+          task_status: update.status,
+        },
+        createdAt: update.updated_at,
+      });
       return { task: remoteTask(task), owner_id: device.owner_id };
     });
   }
@@ -2923,21 +3055,9 @@ function postgresConstraint(error: unknown): string | undefined {
   return undefined;
 }
 
-interface InsertAuditEventInput {
-  scope: AuditEvent["scope"];
-  accountUserId?: string;
-  workspaceOwnerId?: string;
-  actorUserId?: string;
-  action: AuditEvent["action"];
-  targetType?: AuditEvent["target_type"];
-  targetId?: string;
-  metadata: Record<string, AuditMetadataValue>;
-  createdAt?: string;
-}
-
 async function insertAuditEvent(
   sql: QuerySql,
-  input: InsertAuditEventInput,
+  input: AuditRecordInput,
 ): Promise<void> {
   if (
     (input.scope === "account" &&
@@ -2963,6 +3083,30 @@ async function insertAuditEvent(
       COALESCE(${input.createdAt ?? null}::timestamptz, clock_timestamp())
     )
   `;
+}
+
+async function insertWorkspaceAuditIfVisible(
+  sql: QuerySql,
+  input: Omit<AuditRecordInput, "scope"> & {
+    workspaceOwnerId: string;
+  },
+): Promise<boolean> {
+  const owners = await sql`
+    SELECT 1 FROM agent_pulse_users
+    WHERE user_id::text = ${input.workspaceOwnerId}
+    LIMIT 1
+  `;
+  if (owners.length === 0) return false;
+  if (input.actorUserId !== undefined) {
+    const actors = await sql`
+      SELECT 1 FROM agent_pulse_users
+      WHERE user_id::text = ${input.actorUserId}
+      LIMIT 1
+    `;
+    if (actors.length === 0) return false;
+  }
+  await insertAuditEvent(sql, { ...input, scope: "workspace" });
+  return true;
 }
 
 function normalizeAuditEvent(row: AuditEventRow): AuditEvent {

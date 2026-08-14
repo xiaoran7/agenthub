@@ -95,8 +95,10 @@ $env:AGENT_PLATFORM_VAPID_SUBJECT = 'mailto:you@example.com'
 
 `GET /v1/audit` 的 `scope` 可为 `account`（默认）或 `workspace`，`limit` 为 1–100，
 `before` 使用上一页最后一条事件的公开 UUID。账户范围只返回登录人的事件；工作区范围使用
-当前 Web 会话选择的工作区，并在查询时验证成员关系。事件只包含动作、公开 UUID、角色、
-套餐、状态和数量等白名单元数据，不返回邮箱、IP、请求体、Token、Prompt 或 CLI 内容。
+当前 Web 会话选择的工作区，并在查询时验证成员关系。设备绑定/登记/撤销和远程任务创建、
+领取、取消、状态回报也写入工作区时间线；设备动作不携带网页登录操作者，任务状态只保留
+Agent 类型、前一状态、当前状态和公开 ID。事件只包含动作、公开 UUID、角色、套餐、状态
+和数量等白名单元数据，不返回邮箱、IP、请求体、Token、Prompt 或 CLI 内容。
 
 生产必须设置 `AGENT_PULSE_LOGIN_RATE_LIMIT_SECRET`（32 字节以上随机值的 base64url
 编码）；登录失败按规范化邮箱和 Fastify 解析的客户端地址做 HMAC scope，15 分钟内第
@@ -222,5 +224,5 @@ npm.cmd test --workspace @agent-pulse/api
 
 - 联合身份提供商和实际邮件供应商适配
 - 设备密钥轮换、恢复绑定和完整绑定审计日志
-- 全局/设备 API 分布式速率限制，以及设备与任务执行层的补充审计
+- 全局/设备 API 分布式速率限制
 - 支付供应商收银台/webhook 适配、订阅自助变更、任务执行收据与可信执行策略
