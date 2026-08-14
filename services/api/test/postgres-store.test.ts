@@ -240,11 +240,27 @@ test(
         audit.filter((event) => event.action === "subscription.updated").length,
         1,
       );
-      assert.ok(audit.some((event) => event.action === "device.registered"));
-      assert.ok(audit.some((event) => event.action === "task.created"));
-      assert.ok(audit.some((event) => event.action === "task.canceled"));
       assert.equal(
         JSON.stringify(audit).includes("postgres-account@example.com"),
+        false,
+      );
+      const workspaceAudit = await store.listAuditEvents({
+        scope: "workspace",
+        actorUserId: userId,
+        workspaceOwnerId: userId,
+        limit: 100,
+      });
+      assert.ok(
+        workspaceAudit.some((event) => event.action === "device.registered"),
+      );
+      assert.ok(
+        workspaceAudit.some((event) => event.action === "task.created"),
+      );
+      assert.ok(
+        workspaceAudit.some((event) => event.action === "task.canceled"),
+      );
+      assert.equal(
+        JSON.stringify(workspaceAudit).includes("postgres audit fixture"),
         false,
       );
       const migration = await sql<
