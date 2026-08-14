@@ -17,7 +17,7 @@ use agent_pulse_runner::{
     },
     auth::{AuthManager, AuthProvider},
     auth_worker::AuthWorker,
-    collectors::{CodexAppServer, collect_claude_agents_with_timeout},
+    collectors::{CodexAppServer, collect_claude_transcripts, collect_codex_local_threads},
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
     gateway::{GatewayClient, push_outbox},
@@ -89,9 +89,9 @@ enum Command {
         agent: Agent,
         #[arg(long)]
         db: PathBuf,
-        #[arg(long, help = "Override the claude or codex executable path")]
+        #[arg(long, help = "Override the Codex executable path")]
         binary: Option<PathBuf>,
-        #[arg(long, help = "Include completed Claude sessions")]
+        #[arg(long, help = "Scan up to 1000 Claude history sessions instead of 100")]
         include_completed: bool,
         #[arg(long, default_value_t = 100, help = "Maximum Codex threads to request")]
         limit: u32,
@@ -107,7 +107,7 @@ enum Command {
         claude_binary: Option<PathBuf>,
         #[arg(long, help = "Override the Codex executable path")]
         codex_binary: Option<PathBuf>,
-        #[arg(long, help = "Include completed Claude sessions")]
+        #[arg(long, help = "Scan up to 1000 Claude history sessions instead of 100")]
         include_completed: bool,
         #[arg(long, default_value_t = 100)]
         codex_limit: u32,
@@ -459,18 +459,35 @@ fn main() -> Result<()> {
             let timeout = nonzero_duration("collector timeout", timeout_seconds)?;
             let observations = match agent {
                 Agent::Claude => {
-                    let binary = binary.unwrap_or_else(|| PathBuf::from("claude"));
-                    let payload =
-                        collect_claude_agents_with_timeout(binary, include_completed, timeout)?;
+                    let _ = binary;
+                    let payload = collect_claude_transcripts(include_completed)?;
                     claude::normalize_agents_json(&payload, &meta, &redactor)?
                 }
                 Agent::Codex => {
                     let binary = binary.unwrap_or_else(|| PathBuf::from("codex"));
-                    let result =
-                        CodexAppServer::start_with_timeout(binary, timeout)?.list_threads(limit)?;
+                    let (result, local) = match CodexAppServer::start_with_timeout(binary, timeout)
+                        .and_then(|mut server| server.list_threads(limit))
+                    {
+                        Ok(result) => (result, false),
+                        Err(_) => (collect_codex_local_threads(limit)?, true),
+                    };
                     let payload = serde_json::to_string(&result)?;
                     let mut context = CodexThreadContext::default();
-                    codex::normalize_thread_list_result(&payload, &meta, &redactor, &mut context)?
+                    if local {
+                        codex::normalize_local_thread_list_result(
+                            &payload,
+                            &meta,
+                            &redactor,
+                            &mut context,
+                        )?
+                    } else {
+                        codex::normalize_thread_list_result(
+                            &payload,
+                            &meta,
+                            &redactor,
+                            &mut context,
+                        )?
+                    }
                 }
             };
             let mut outbox = Outbox::open(db)?;
@@ -561,11 +578,7 @@ fn main() -> Result<()> {
 
             let mut sources: Vec<Box<dyn SessionSource>> = Vec::new();
             if matches!(agent, AgentSelection::All | AgentSelection::Claude) {
-                sources.push(Box::new(ClaudeSessionSource::new_with_timeout(
-                    claude_binary.clone(),
-                    include_completed,
-                    collector_timeout,
-                )));
+                sources.push(Box::new(ClaudeSessionSource::new(include_completed)));
             }
             if matches!(agent, AgentSelection::All | AgentSelection::Codex) {
                 sources.push(Box::new(CodexSessionSource::new_with_timeout(

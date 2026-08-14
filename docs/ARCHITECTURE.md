@@ -32,8 +32,8 @@ flowchart LR
         DB["本地 SQLite Outbox"]
         Sync["HTTPS 批次同步客户端 / 后续 WebSocket"]
 
-        Claude -->|"agents --json / Hooks"| CA
-        Codex -->|"app-server stdio / Hooks"| OA
+        Claude -->|"Session JSONL / Hooks"| CA
+        Codex -->|"app-server stdio / 本地 DB"| OA
         CA --> N
         OA --> N
         N --> DB
@@ -49,6 +49,7 @@ flowchart LR
     end
 
     subgraph Client["用户界面"]
+        Desktop["登录式桌面 App"]
         Web["响应式 Web / PWA"]
         Android["原生 Android App"]
     end
@@ -60,6 +61,7 @@ flowchart LR
     PG --> API
     RT --> Web
     API --> Web
+    API --> Desktop
     API --> Android
 ```
 
@@ -73,13 +75,15 @@ flowchart LR
 - 私钥仅保存在本地身份文件，创建时禁止覆盖；写入使用同目录临时文件加不覆盖式
   落位，崩溃不会留下半写身份文件。Unix 新文件权限为 `0600`。
 - 设备身份同时派生项目目录 HMAC 指纹密钥，避免手工配置两套不一致身份。
-- 通过一次性绑定码与用户账号绑定。
+- CLI 可通过一次性绑定码与用户账号绑定；桌面 App 登录后由服务端为当前账号签发并
+  消费内部绑定票据，对用户隐藏配对步骤。
 - 云端仅保存设备公钥；同步批次由设备私钥签名。
 - 支持用户从云端撤销设备。
 
-当前已实现本地身份的创建、加载、完整性校验、公开信息展示，以及通过开发期一次性
-绑定码将公钥登记到 Gateway。Windows 文件沿用父目录 ACL，主动 ACL 加固、系统密钥
-库托管、正式账号绑定、撤销与轮换尚未实现。
+当前已实现本地身份的创建、加载、完整性校验、公开信息展示、网页登录一次性绑定，
+以及桌面 App 登录后的自动登记。AgentPulse 登录 Cookie 保存在 OS Keyring，设备私钥
+继续由 Runner 身份文件持有；Windows 文件沿用父目录 ACL。主动 ACL 加固、私钥系统
+密钥库托管与轮换尚未实现。
 
 #### Adapter Supervisor
 
@@ -112,10 +116,10 @@ flowchart LR
 
 数据来源：
 
-1. 周期调用 `claude agents --json`。
-2. 用户允许时调用 `claude agents --json --all` 获取最近完成的后台 Session。
-3. 接收 AgentPulse Claude Hook 的本地事件。
-4. 使用本地索引记录 Runner 安装后的历史 Session。
+1. 周期扫描 `CLAUDE_CONFIG_DIR` 或默认 `~/.claude/projects` 下的 Session JSONL。
+2. 只读取有界头部中的 Session ID、工作目录与时间字段，不保留消息正文和工具载荷。
+3. 接收 AgentPulse Claude Hook 的本地生命周期事件。
+4. 没有实时证据的磁盘记录统一标记为持久化历史，不猜测活动状态。
 
 建议查询周期：
 
@@ -132,12 +136,22 @@ flowchart LR
 3. 使用 `thread/loaded/list` 和状态通知观察 Runner app-server 中的活动 Thread。
 4. 接收 AgentPulse Codex Hook 的本地事件。
 5. 被动处理当前连接收到的 Turn、审批和用户输入事件。
+6. app-server 不可执行时，以只读模式查询 `CODEX_HOME` 下最新的 `state_*.sqlite`
+   `threads` 元数据；不读取 rollout 正文或 `auth.json`。
 
 Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket transport。
 为保持第一阶段只读，Runner 不调用 `thread/start` 或 `thread/resume` 来获取通知。
 初始化时显式退出消息、推理、计划、Diff、命令输出等内容型通知，只保留状态判断所需
 的元数据事件。官方只保证连接启动或恢复 Thread 后的 Turn/Item 通知，因此当前连接
 对其他客户端 Thread 的实时覆盖不能先验保证，必须由轮询兜底并在真实 CLI 上验证。
+
+#### Desktop Host
+
+- 复用 Gateway 的邮箱注册、密码登录与 HttpOnly 会话接口。
+- 登录成功后自动登记当前 Ed25519 设备身份，不要求用户打开 CMD 或输入配对码。
+- 在同一 Tauri 进程内启动 Runner 与同步 Worker，退出登录时停止同步并清理 AgentPulse
+  Cookie；Claude/Codex 供应商凭据始终留在各自客户端和系统凭据库中。
+- 默认只允许 HTTPS Gateway，开发环境仅放行回环 HTTP。
 
 #### Normalizer
 
@@ -690,7 +704,7 @@ AgentPulse/
 
 ### Milestone 0：协议探针
 
-- Claude `agents --json` 采集探针
+- Claude 本地 Session JSONL 元数据采集探针
 - Claude Hook 事件接收探针
 - Codex app-server stdio 客户端探针
 - Codex Hook 事件接收探针

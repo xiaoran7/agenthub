@@ -7,6 +7,15 @@
 
 ### Added
 
+- 新增 Windows Tauri 桌面 App：复用现有邮箱注册/登录接口，将 AgentPulse HttpOnly
+  会话保存在 OS Keyring；登录后自动创建/加载 Ed25519 设备身份、完成账号设备登记并
+  启动内嵌 Runner 与同步 Worker，不再要求用户打开 CMD 或输入配对码。界面提供来源、
+  会话、设备、暂停/恢复同步、刷新和退出；默认只允许 HTTPS，回环 HTTP 仅用于开发。
+- Runner 新增 Claude Code 本地 Session JSONL 元数据采集，以及 Codex app-server 无法
+  启动时的只读 `state_*.sqlite` Thread 元数据兜底。本机实测可发现 Claude 与 Codex
+  历史会话；采集器有界读取并只保留白名单字段，不读取或上传消息、工具载荷、rollout
+  正文和供应商登录凭据。
+
 - Added signed remote-task execution receipts. Runners can report bounded start/end timestamps, a SHA-256 digest of a restricted receipt, and an optional exit code. The signed fields are persisted in both stores and never include CLI output, paths, prompts, or credentials.
 
 - 新增可选 Stripe 订阅闭环：设置面板显示支付能力，服务端提供当前订阅状态、Pro/Team
@@ -245,6 +254,8 @@
 
 ### Changed
 
+- 移除 Claude Session 采集对非官方/当前不存在的 `claude agents --json` 命令依赖；
+  历史文件只映射为 `PERSISTED/UNKNOWN`，实时工作与等待状态继续由 Hook 提供。
 - Claude/Codex 遇到未知 Hook 名时仍记录来源，但活动状态固定降为 `UNKNOWN`、
   置信度降为 `inferred`；已识别 Hook 继续使用 `observed`。这样 Agent 新版本新增
   Hook 不会被平台误报成确定状态。

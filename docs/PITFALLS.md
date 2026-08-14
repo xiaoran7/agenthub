@@ -2,6 +2,18 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-08-14 Claude Session 不能依赖 `claude agents --json`
+
+- **现象**：Runner 设计假设 Claude CLI 存在 `agents --json`，但当前官方 CLI 参考没有
+  该子命令，本机也无法依靠它列出会话。
+- **根因**：早期调研把非当前官方能力当作稳定接口，且没有用官方 CLI 参考和真实安装
+  交叉验证。
+- **解决方式**：历史发现改为有界扫描 `CLAUDE_CONFIG_DIR` 或
+  `~/.claude/projects` 的 JSONL，只读取 Session ID、工作目录与时间；实时状态由 Hooks
+  补充。Codex app-server 无法执行时只读本地状态库的 Thread 元数据。
+- **如何避免**：每次 Agent 升级都对照当前官方命令参考并做真实探针；本地 Session
+  明文记录与 OAuth/API 凭据是两个边界，不要为了发现会话去“解密”或上传凭据。
+
 ## 2026-08-14 Stripe webhook 必须保留原始请求体
 
 - **现象**：把 Fastify 已解析的 JSON 重新序列化后交给 Stripe 验签，会因空白或字段顺序变化被拒绝。

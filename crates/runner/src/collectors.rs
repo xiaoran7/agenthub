@@ -1,19 +1,25 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
+    env, fs,
     io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError},
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
+use chrono::DateTime;
+use rusqlite::{Connection, OpenFlags};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 
 const MAX_PROTOCOL_LINE_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(15);
 const CHILD_WAIT_INTERVAL: Duration = Duration::from_millis(10);
+const CLAUDE_RECENT_SESSION_LIMIT: usize = 100;
+const CLAUDE_ALL_SESSION_LIMIT: usize = 1_000;
 
 #[derive(Debug, Error)]
 pub enum CollectorError {
@@ -61,6 +67,12 @@ pub enum CollectorError {
         code: String,
         message: String,
     },
+    #[error("failed to read {program}: {source}")]
+    Database {
+        program: String,
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 impl CollectorError {
@@ -82,93 +94,335 @@ impl CollectorError {
             Self::ReaderStopped { .. } => "collector_reader_stopped",
             Self::UnexpectedEof { .. } => "protocol_unexpected_eof",
             Self::Protocol { .. } => "protocol_error",
+            Self::Database { .. } => "local_store_failed",
         }
     }
 }
 
-pub fn collect_claude_agents(
-    binary: impl AsRef<Path>,
-    include_completed: bool,
-) -> Result<String, CollectorError> {
-    collect_claude_agents_with_timeout(binary, include_completed, DEFAULT_COLLECTOR_TIMEOUT)
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeTranscriptMetadata {
+    session_id: Option<String>,
+    cwd: Option<String>,
+    timestamp: Option<String>,
 }
 
-pub fn collect_claude_agents_with_timeout(
-    binary: impl AsRef<Path>,
-    include_completed: bool,
-    timeout: Duration,
-) -> Result<String, CollectorError> {
-    let binary = binary.as_ref();
-    let program = binary.display().to_string();
-    let mut command = Command::new(binary);
-    command.args(["agents", "--json"]);
-    if include_completed {
-        command.arg("--all");
-    }
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::null());
-    configure_process_group(&mut command);
+#[derive(Debug)]
+struct ClaudeTranscriptEntry {
+    session_id: String,
+    cwd: String,
+    started_at_ms: Option<i64>,
+    last_activity_at_ms: Option<i64>,
+}
 
-    let mut child = command.spawn().map_err(|source| CollectorError::Start {
+/// Enumerates Claude Code's documented local transcript store without invoking
+/// the CLI or retaining message/tool content. Claude Code does not expose an
+/// `agents` listing subcommand; lifecycle hooks are the authoritative live
+/// signal while this scanner supplies persisted history.
+pub fn collect_claude_transcripts(include_completed: bool) -> Result<String, CollectorError> {
+    let config_dir = discover_claude_config_dir()?;
+    collect_claude_transcripts_from(&config_dir, include_completed)
+}
+
+pub fn collect_claude_transcripts_from(
+    config_dir: &Path,
+    include_completed: bool,
+) -> Result<String, CollectorError> {
+    let projects_dir = config_dir.join("projects");
+    if !projects_dir.is_dir() {
+        return Ok("[]".to_owned());
+    }
+
+    let program = "Claude transcript store".to_owned();
+    let mut entries = Vec::new();
+    for project in fs::read_dir(&projects_dir).map_err(|source| CollectorError::Io {
+        program: program.clone(),
+        source,
+    })? {
+        let project = project.map_err(|source| CollectorError::Io {
+            program: program.clone(),
+            source,
+        })?;
+        if !project
+            .file_type()
+            .map_err(|source| CollectorError::Io {
+                program: program.clone(),
+                source,
+            })?
+            .is_dir()
+        {
+            continue;
+        }
+        let files = match fs::read_dir(project.path()) {
+            Ok(files) => files,
+            Err(_) => continue,
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+                || !file.file_type().is_ok_and(|kind| kind.is_file())
+            {
+                continue;
+            }
+            if let Some(entry) = read_claude_transcript_metadata(&path, &program)? {
+                entries.push(entry);
+            }
+        }
+    }
+
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_activity_at_ms));
+    entries.truncate(if include_completed {
+        CLAUDE_ALL_SESSION_LIMIT
+    } else {
+        CLAUDE_RECENT_SESSION_LIMIT
+    });
+    serde_json::to_string(
+        &entries
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "sessionId": entry.session_id,
+                    "cwd": entry.cwd,
+                    "kind": "transcript",
+                    "state": "persisted",
+                    "startedAt": entry.started_at_ms,
+                    "lastActivityAt": entry.last_activity_at_ms
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|source| CollectorError::InvalidJson { program, source })
+}
+
+fn discover_claude_config_dir() -> Result<PathBuf, CollectorError> {
+    if let Some(path) = env::var_os("CLAUDE_CONFIG_DIR").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+    home_dir()
+        .map(|home| home.join(".claude"))
+        .ok_or_else(|| CollectorError::Io {
+            program: "Claude transcript store".to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "cannot resolve the current user's home directory",
+            ),
+        })
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("USERPROFILE")
+        .filter(|value| !value.is_empty())
+        .or_else(|| env::var_os("HOME").filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+}
+
+fn read_claude_transcript_metadata(
+    path: &Path,
+    program: &str,
+) -> Result<Option<ClaudeTranscriptEntry>, CollectorError> {
+    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let file_metadata = file.metadata().map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let last_activity_at_ms = file_metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+    let mut reader = BufReader::new(file);
+    let mut session_id = None;
+    let mut cwd = None;
+    let mut started_at_ms: Option<i64> = None;
+
+    // Metadata is repeated on transcript entries. Bound the scan so a damaged
+    // or adversarial transcript cannot make background collection unbounded.
+    for _ in 0..64 {
+        let line = match read_bounded_line(&mut reader) {
+            BoundedLine::Line(line) => line,
+            BoundedLine::Eof => break,
+            BoundedLine::TooLarge => continue,
+            BoundedLine::Io(source) => {
+                return Err(CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                });
+            }
+        };
+        let Ok(metadata) = serde_json::from_str::<ClaudeTranscriptMetadata>(&line) else {
+            continue;
+        };
+        session_id = session_id.or(metadata.session_id);
+        cwd = cwd.or(metadata.cwd);
+        if let Some(timestamp) = metadata.timestamp {
+            let parsed = DateTime::parse_from_rfc3339(&timestamp)
+                .ok()
+                .map(|value| value.timestamp_millis());
+            started_at_ms = match (started_at_ms, parsed) {
+                (Some(current), Some(candidate)) => Some(current.min(candidate)),
+                (None, candidate) => candidate,
+                (current, None) => current,
+            };
+        }
+        if session_id.is_some() && cwd.is_some() && started_at_ms.is_some() {
+            break;
+        }
+    }
+
+    let session_id = session_id
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|value| value.to_str())
+                .map(str::to_owned)
+        })
+        .filter(|value| !value.trim().is_empty());
+    Ok(session_id.map(|session_id| ClaudeTranscriptEntry {
+        session_id,
+        cwd: cwd.unwrap_or_default(),
+        started_at_ms,
+        last_activity_at_ms,
+    }))
+}
+
+/// Reads Codex's metadata-only state database when an app-server executable is
+/// unavailable (notably for Microsoft Store installs). Message bodies live in
+/// rollout JSONL files and are intentionally never opened here.
+pub fn collect_codex_local_threads(limit: u32) -> Result<Value, CollectorError> {
+    let Some(database) = discover_codex_state_database()? else {
+        return Ok(json!({ "data": [], "nextCursor": null }));
+    };
+    collect_codex_local_threads_from(&database, limit)
+}
+
+pub fn collect_codex_local_threads_from(
+    database: &Path,
+    limit: u32,
+) -> Result<Value, CollectorError> {
+    let program = "Codex local state".to_owned();
+    let connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|source| CollectorError::Database {
         program: program.clone(),
         source,
     })?;
-    let job = ChildJob::attach(&child).map_err(|source| {
-        let _ = child.kill();
-        let _ = child.wait();
-        CollectorError::Io {
+    let columns = connection
+        .prepare("PRAGMA table_info(threads)")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<HashSet<_>, _>>()
+        })
+        .map_err(|source| CollectorError::Database {
             program: program.clone(),
             source,
-        }
-    })?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| CollectorError::MissingStdio {
-            program: program.clone(),
         })?;
-    let reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .take((MAX_PROTOCOL_LINE_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-    let status = match wait_for_child(&mut child, &program, timeout) {
-        Ok(status) => status,
-        Err(error) => {
-            drop(job);
-            let _ = reader.join();
-            return Err(error);
-        }
+    if !columns.contains("id") || !columns.contains("cwd") {
+        return Ok(json!({ "data": [], "nextCursor": null }));
+    }
+
+    let created = seconds_expression(&columns, "created_at_ms", "created_at");
+    let updated = seconds_expression(&columns, "updated_at_ms", "updated_at");
+    let recency = seconds_expression(&columns, "recency_at_ms", "recency_at");
+    let source = if columns.contains("thread_source") {
+        "thread_source"
+    } else if columns.contains("source") {
+        "source"
+    } else {
+        "''"
     };
-    // The direct child has exited, but descendants it spawned can still hold
-    // the stdout write end. Close the job before joining the reader so the
-    // remaining process tree is terminated and the reader always sees EOF.
-    drop(job);
-    let output = reader
-        .join()
-        .map_err(|_| CollectorError::ReaderStopped {
+    let archived_filter = if columns.contains("archived") {
+        " WHERE archived = 0"
+    } else {
+        ""
+    };
+    let order_by = if columns.contains("recency_at_ms") {
+        "recency_at_ms"
+    } else if columns.contains("recency_at") {
+        "recency_at"
+    } else if columns.contains("updated_at_ms") {
+        "updated_at_ms"
+    } else {
+        "updated_at"
+    };
+    let sql = format!(
+        "SELECT id, cwd, {created}, {updated}, {recency}, {source} FROM threads{archived_filter} ORDER BY {order_by} DESC LIMIT ?1"
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|source| CollectorError::Database {
             program: program.clone(),
+            source,
+        })?;
+    let rows = statement
+        .query_map([i64::from(limit)], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "cwd": row.get::<_, String>(1).unwrap_or_default(),
+                "createdAt": row.get::<_, Option<i64>>(2)?.unwrap_or_default(),
+                "updatedAt": row.get::<_, Option<i64>>(3)?.unwrap_or_default(),
+                "recencyAt": row.get::<_, Option<i64>>(4)?.unwrap_or_default(),
+                "source": row.get::<_, String>(5).unwrap_or_else(|_| "localStore".to_owned()),
+                "status": { "type": "persisted" }
+            }))
+        })
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
         })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| CollectorError::Database { program, source })?;
+    Ok(json!({ "data": rows, "nextCursor": null }))
+}
+
+fn seconds_expression(columns: &HashSet<String>, millis: &str, seconds: &str) -> String {
+    match (columns.contains(millis), columns.contains(seconds)) {
+        (true, true) => format!("COALESCE(NULLIF({millis}, 0) / 1000, {seconds})"),
+        (true, false) => format!("{millis} / 1000"),
+        (false, true) => seconds.to_owned(),
+        (false, false) => "NULL".to_owned(),
+    }
+}
+
+fn discover_codex_state_database() -> Result<Option<PathBuf>, CollectorError> {
+    let root = if let Some(path) = env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
+        PathBuf::from(path)
+    } else if let Some(home) = home_dir() {
+        home.join(".codex")
+    } else {
+        return Ok(None);
+    };
+    if !root.is_dir() {
+        return Ok(None);
+    }
+    let program = "Codex local state".to_owned();
+    let mut candidates = fs::read_dir(root)
         .map_err(|source| CollectorError::Io {
             program: program.clone(),
             source,
-        })?;
-    if output.len() > MAX_PROTOCOL_LINE_BYTES {
-        return Err(CollectorError::OutputTooLarge {
-            program,
-            limit: MAX_PROTOCOL_LINE_BYTES,
-        });
-    }
-    if !status.success() {
-        return Err(CollectorError::Exit {
-            program,
-            status: status.to_string(),
-        });
-    }
-    String::from_utf8(output).map_err(|source| CollectorError::InvalidUtf8 { program, source })
+        })?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            let version = name
+                .strip_prefix("state_")?
+                .strip_suffix(".sqlite")?
+                .parse::<u32>()
+                .ok()?;
+            entry
+                .file_type()
+                .ok()
+                .filter(|kind| kind.is_file())
+                .map(|_| (version, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    Ok(candidates.into_iter().next().map(|(_, path)| path))
 }
 
 pub fn run_agent_task(
@@ -654,6 +908,12 @@ fn finish_line(line: Vec<u8>) -> BoundedLine {
 #[cfg(windows)]
 struct ChildJob(windows_sys::Win32::Foundation::HANDLE);
 
+// SAFETY: ChildJob exclusively owns a Windows kernel handle. Kernel handles
+// are valid across threads in the owning process, and Drop only calls
+// CloseHandle on that same owned value.
+#[cfg(windows)]
+unsafe impl Send for ChildJob {}
+
 #[cfg(windows)]
 impl ChildJob {
     fn attach(child: &Child) -> std::io::Result<Self> {
@@ -952,15 +1212,69 @@ mod tests {
     }
 
     #[test]
-    fn claude_collector_kills_a_hung_process_at_the_deadline() {
-        let (_directory, script) = sleeping_script();
+    fn claude_transcript_collector_reads_metadata_without_retaining_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("projects").join("encoded-project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("session-123.jsonl"),
+            concat!(
+                "{\"type\":\"user\",\"sessionId\":\"session-123\",",
+                "\"cwd\":\"/work/private-project\",",
+                "\"timestamp\":\"2026-08-14T01:02:03Z\",",
+                "\"message\":{\"content\":\"TOP_SECRET_TRANSCRIPT_CONTENT\"}}\n"
+            ),
+        )
+        .unwrap();
 
-        let started = Instant::now();
-        let error = collect_claude_agents_with_timeout(script, false, Duration::from_millis(100))
-            .unwrap_err();
+        let payload = collect_claude_transcripts_from(directory.path(), false).unwrap();
+        let entries: Value = serde_json::from_str(&payload).unwrap();
+        let entry = &entries.as_array().unwrap()[0];
 
-        assert_eq!(error.code(), "collector_timeout");
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(entry["sessionId"], "session-123");
+        assert_eq!(entry["cwd"], "/work/private-project");
+        assert_eq!(entry["state"], "persisted");
+        assert_eq!(entry["startedAt"], 1_786_669_323_000_i64);
+        assert!(!payload.contains("TOP_SECRET_TRANSCRIPT_CONTENT"));
+        assert!(!payload.contains("message"));
+    }
+
+    #[test]
+    fn codex_local_store_collector_selects_metadata_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("state_5.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    cwd TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    preview TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    recency_at INTEGER NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO threads VALUES (
+                    'thread-123', '/work/private-project',
+                    'TOP_SECRET_TITLE', 'TOP_SECRET_PREVIEW', 'cli',
+                    100, 200, 190, 0
+                );",
+            )
+            .unwrap();
+        drop(connection);
+
+        let payload = collect_codex_local_threads_from(&database, 10).unwrap();
+        let serialized = serde_json::to_string(&payload).unwrap();
+        let thread = &payload["data"][0];
+
+        assert_eq!(thread["id"], "thread-123");
+        assert_eq!(thread["cwd"], "/work/private-project");
+        assert_eq!(thread["status"]["type"], "persisted");
+        assert!(!serialized.contains("TOP_SECRET_TITLE"));
+        assert!(!serialized.contains("TOP_SECRET_PREVIEW"));
     }
 
     #[test]

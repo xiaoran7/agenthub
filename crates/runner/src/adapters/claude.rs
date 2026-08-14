@@ -30,6 +30,8 @@ struct ClaudeAgentEntry {
     #[serde(default)]
     started_at: Option<i64>,
     #[serde(default)]
+    last_activity_at: Option<i64>,
+    #[serde(default)]
     id: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
@@ -78,7 +80,11 @@ fn normalize_agent_entry(
         .to_owned();
     let waiting_reason = entry.waiting_for.as_deref().map(map_waiting_reason);
     let activity_status = map_activity(&raw_status, waiting_reason);
-    let presence = map_presence(activity_status, entry.pid.is_some());
+    let presence = if raw_status.eq_ignore_ascii_case("persisted") {
+        Presence::Persisted
+    } else {
+        map_presence(activity_status, entry.pid.is_some())
+    };
     let confidence = if activity_status == ActivityStatus::Unknown {
         Confidence::Inferred
     } else {
@@ -114,7 +120,9 @@ fn normalize_agent_entry(
     observation.started_at = entry
         .started_at
         .and_then(DateTime::<Utc>::from_timestamp_millis);
-    observation.last_activity_at = None;
+    observation.last_activity_at = entry
+        .last_activity_at
+        .and_then(DateTime::<Utc>::from_timestamp_millis);
     Some(observation)
 }
 

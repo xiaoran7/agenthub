@@ -216,6 +216,7 @@ fn map_thread_status(status: &Value) -> (Presence, ActivityStatus, Option<Waitin
         "active" => (Presence::Live, ActivityStatus::Working, None),
         "idle" => (Presence::Live, ActivityStatus::Idle, None),
         "systemError" => (Presence::Live, ActivityStatus::Failed, None),
+        "persisted" => (Presence::Persisted, ActivityStatus::Unknown, None),
         "notLoaded" => (Presence::Unknown, ActivityStatus::Unknown, None),
         _ => (Presence::Unknown, ActivityStatus::Unknown, None),
     }
@@ -226,6 +227,37 @@ pub fn normalize_thread_list_result(
     meta: &ObservationMeta,
     redactor: &ProjectRedactor,
     context: &mut CodexThreadContext,
+) -> Result<Vec<SessionObservation>, CodexAdapterError> {
+    normalize_thread_list(
+        input,
+        meta,
+        redactor,
+        context,
+        ObservationSource::CodexAppServer,
+    )
+}
+
+pub fn normalize_local_thread_list_result(
+    input: &str,
+    meta: &ObservationMeta,
+    redactor: &ProjectRedactor,
+    context: &mut CodexThreadContext,
+) -> Result<Vec<SessionObservation>, CodexAdapterError> {
+    normalize_thread_list(
+        input,
+        meta,
+        redactor,
+        context,
+        ObservationSource::LocalHistory,
+    )
+}
+
+fn normalize_thread_list(
+    input: &str,
+    meta: &ObservationMeta,
+    redactor: &ProjectRedactor,
+    context: &mut CodexThreadContext,
+    observation_source: ObservationSource,
 ) -> Result<Vec<SessionObservation>, CodexAdapterError> {
     let value: Value = serde_json::from_str(input)?;
     let result = value.get("result").unwrap_or(&value);
@@ -276,7 +308,7 @@ pub fn normalize_thread_list_result(
                     )]),
                     waiting_reason,
                 },
-                ObservationSource::CodexAppServer,
+                observation_source,
                 // Unmapped status types are readings we cannot vouch for, the
                 // same as notLoaded.
                 if activity_status == ActivityStatus::Unknown {

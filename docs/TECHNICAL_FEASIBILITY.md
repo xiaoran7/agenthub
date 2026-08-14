@@ -1,6 +1,6 @@
 # AgentPulse 技术可行性报告
 
-调研日期：2026-07-25
+调研日期：2026-07-25；2026-08-14 按当前官方文档与本机数据复核
 
 ## 1. 结论
 
@@ -12,11 +12,12 @@
 
 建议 MVP 采用“官方查询接口 + 生命周期 Hook + 本地缓存”的组合：
 
-- Claude Code：`claude agents --json` 为主，Hooks 为实时补充。
+- Claude Code：本地 Session JSONL 用于历史发现，Hooks 用于实时状态补充。当前官方
+  CLI 没有 `claude agents --json`，不得依赖该命令。
 - Codex：`codex app-server` 为历史与 Runner 托管 Session 的主接口，Codex
-  Hooks 用于观察普通 CLI、IDE 和桌面 Session。
-- 本地 JSONL 文件只用于发现和兜底，不把内部格式当作稳定协议，也不默认读取
-  或上传对话正文。
+  本地状态数据库作为 app-server 不可执行时的只读历史兜底。
+- 本地 JSONL/SQLite 只读取白名单元数据，不把内部格式当作稳定协议，也不读取或
+  上传对话正文、工具参数和供应商登录凭据。
 
 在用户安装 Runner 后新建或恢复的 Session，可以实现较准确、低延迟的状态监控。
 安装 Runner 之前已经运行、且没有接入 Hook 或 Runner app-server 的 Codex
@@ -26,42 +27,19 @@ Session，只能做尽力识别，不能保证实时状态完全准确。
 
 ### 2.1 当前 Session 查询
 
-Claude Code 官方 CLI 提供：
+截至 2026-08-14，Claude Code 官方 CLI 参考只提供 `--continue`、`--resume`、
+`--print` 等会话操作，没有机器可读的全局 Session 枚举命令。早期设计记录中的
+`claude agents --json` 不属于当前官方 CLI，现有 Runner 已停止调用它。
 
-```text
-claude agents --json
-claude agents --json --all
-```
+因此 Claude 的能力分两层：
 
-`claude agents --json` 可以输出活动 Session；`--all` 还包含已完成的后台
-Session。官方字段包括：
+- 历史发现：扫描 `CLAUDE_CONFIG_DIR` 或默认 `~/.claude/projects` 下的 Session
+  JSONL，只从有界的头部记录提取 `sessionId`、`cwd` 和时间字段。
+- 实时状态：通过 Claude Code Hooks 接收生命周期事件；没有 Hook 证据时，历史记录
+  只标为 `PERSISTED/UNKNOWN`，不能根据文件存在猜测正在工作或已经完成。
 
-- `cwd`
-- `kind`：`interactive` 或 `background`
-- `startedAt`
-- `id`
-- `sessionId`
-- `name`
-- `state`：`working`、`blocked`、`done`、`failed`、`stopped`
-- `pid`
-- `status`
-- `waitingFor`
-
-`waitingFor` 能进一步区分：
-
-- `permission prompt`
-- `input needed`
-- `sandbox request`
-- `worker request`
-- `dialog open`
-
-这已经覆盖 MVP 最重要的实时状态，不需要读取 Claude 登录 Token。
-
-限制：
-
-- CLI 版本较旧时不存在这些字段或命令。
-- `--all` 主要覆盖 Agent View 管理的后台 Session，不等价于所有历史对话。
-- 未识别的新增字段必须保留原始值，并映射为“未知”，不能猜测。
+该路径不需要 Claude 可执行文件，也不读取 Claude 登录 Token。未知字段直接忽略；
+正文、Prompt 和工具载荷不会进入标准化事件。
 
 ### 2.2 生命周期 Hooks
 
@@ -102,9 +80,8 @@ Claude Code 官方文档说明 Session 持续保存在：
 ~/.claude/projects/<project>/<session-id>.jsonl
 ```
 
-但官方明确说明 JSONL 条目格式属于内部实现，可能在任何版本发生变化。MVP
-可使用文件名、修改时间和 Hook 已建立的本地索引发现历史 Session，但不应依赖
-解析完整 JSONL 作为主协议。
+Runner 只反序列化顶层白名单元数据，忽略未知字段，并限制每个文件的读取行数；
+文件名和修改时间仍作为结构变化时的兜底。它不把 JSONL 条目当作稳定的完整对话协议。
 
 如果用户关闭 Session 持久化，Runner 必须接受历史信息不可用。
 
@@ -216,29 +193,29 @@ Codex 在 `CODEX_HOME`（默认 `~/.codex`）保存配置、Session 和其他本
 
 ## 4. 能力对比
 
-| 能力 | Claude Code | Codex |
-| --- | --- | --- |
-| 检测安装 | `claude --version` | `codex --version` |
-| 检测登录可用性 | 非敏感 CLI 状态/命令退出码 | `codex login status` |
-| 当前 Session 列表 | `claude agents --json` | app-server `thread/list` + Hooks |
-| 当前运行状态 | 官方 `state/status/waitingFor` | app-server 状态/Turn 事件 + Hooks |
-| 等待输入 | `blocked + waitingFor`、Notification/Elicitation Hook | `requestUserInput`、MCP elicitation |
-| 等待权限 | `permission prompt`、PermissionRequest Hook | 多种 requestApproval |
-| 成功/失败/停止 | `done/failed/stopped`、Stop/StopFailure | `turn/completed` |
-| 历史 Session | 本地索引，完整枚举有限 | `thread/list` |
-| 原始登录复用 | 默认不读取 Token；授权模式可读取本机凭据缓存 | 默认不读取 Token；授权模式可读取本机凭据缓存 |
-| 完整对话非必需 | 是 | 是 |
+| 能力              | Claude Code                                  | Codex                                        |
+| ----------------- | -------------------------------------------- | -------------------------------------------- |
+| 检测安装          | `claude --version`                           | `codex --version`                            |
+| 检测登录可用性    | 非敏感 CLI 状态/命令退出码                   | `codex login status`                         |
+| 当前 Session 列表 | Hooks 建立的本地索引                         | app-server `thread/list` + Hooks             |
+| 当前运行状态      | Hooks 生命周期事件                           | app-server 状态/Turn 事件 + Hooks            |
+| 等待输入          | Notification/Elicitation Hook                | `requestUserInput`、MCP elicitation          |
+| 等待权限          | PermissionRequest Hook                       | 多种 requestApproval                         |
+| 成功/失败/停止    | Stop/StopFailure/SessionEnd Hook             | `turn/completed`                             |
+| 历史 Session      | `~/.claude/projects` 元数据扫描              | `thread/list`；本地状态库兜底                |
+| 原始登录复用      | 默认不读取 Token；授权模式可读取本机凭据缓存 | 默认不读取 Token；授权模式可读取本机凭据缓存 |
+| 完整对话非必需    | 是                                           | 是                                           |
 
 ## 5. 状态准确性分级
 
 每个状态记录必须带 `confidence`：
 
-| 等级 | 含义 |
-| --- | --- |
+| 等级            | 含义                                  |
+| --------------- | ------------------------------------- |
 | `authoritative` | 来自 Agent 官方状态字段或实时协议事件 |
-| `observed` | 来自官方 Hook 生命周期事件 |
-| `inferred` | 根据进程、文件时间或超时推断 |
-| `unknown` | 无法可靠判断 |
+| `observed`      | 来自官方 Hook 生命周期事件            |
+| `inferred`      | 根据进程、文件时间或超时推断          |
+| `unknown`       | 无法可靠判断                          |
 
 优先级：
 
@@ -252,7 +229,7 @@ Codex 在 `CODEX_HOME`（默认 `~/.codex`）保存配置、Session 和其他本
 
 1. 安装 Runner 之前已经运行的 Codex Session，实时状态可能不完整。
 2. Session 安装或适配器版本过旧时，只能显示有限字段。
-3. Claude Code 的全部历史交互式 Session 没有稳定的机器可读枚举 API。
+3. Claude Code 没有稳定的机器可读枚举 API；历史扫描必须容忍 JSONL 结构演进。
 4. 不读取完整 transcript 时，“当前任务摘要”可能为空。
 5. Agent 关闭持久化后，历史 Session 无法完整恢复。
 6. Hooks 被用户禁用、未信任或被企业策略禁止时，实时精度下降。
@@ -282,9 +259,10 @@ secret 或猜测未公开刷新端点。
 
 ### Claude Code
 
-- [Agent View 与 `claude agents --json`](https://code.claude.com/docs/en/agent-view.md)
+- [CLI 参考](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
 - [Hooks 参考](https://code.claude.com/docs/en/hooks.md)
 - [Session 管理与本地存储](https://code.claude.com/docs/en/sessions.md)
+- [Claude 配置目录](https://code.claude.com/docs/en/claude-directory.md)
 - [Remote Control](https://code.claude.com/docs/en/remote-control.md)
 - [Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview.md)
 
@@ -293,3 +271,12 @@ secret 或猜测未公开刷新端点。
 - [Codex App Server](https://developers.openai.com/codex/app-server/)
 - [Codex Hooks](https://developers.openai.com/codex/hooks/)
 - [Codex App Server 开源实现](https://github.com/openai/codex/tree/main/codex-rs/app-server)
+
+### 开源实现参考
+
+- [claude-code-trace](https://github.com/delexw/claude-code-trace)：扫描
+  `~/.claude/projects` 的本地 Session。
+- [claude-code-viewer](https://github.com/d-kimuson/claude-code-viewer)：按 Session
+  JSONL 展示历史，验证无需解密凭据即可发现记录。
+- [claude-code-history-viewer](https://github.com/jhlee0409/claude-code-history-viewer)：
+  以只读方式挂载 `~/.claude` 与 `~/.codex`。

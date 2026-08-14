@@ -19,8 +19,8 @@ use crate::{
         codex::{self, CodexAdapterError, CodexThreadContext},
     },
     collectors::{
-        CodexAppServer, CollectorError, DEFAULT_COLLECTOR_TIMEOUT,
-        collect_claude_agents_with_timeout,
+        CodexAppServer, CollectorError, DEFAULT_COLLECTOR_TIMEOUT, collect_claude_transcripts,
+        collect_codex_local_threads,
     },
     domain::{ActivityStatus, AgentType, ObservationMeta, Presence, SessionObservation},
     outbox::{Outbox, OutboxError},
@@ -52,7 +52,7 @@ impl SourceError {
     }
 }
 
-pub trait SessionSource {
+pub trait SessionSource: Send {
     fn agent_type(&self) -> AgentType;
 
     fn collect(
@@ -63,26 +63,12 @@ pub trait SessionSource {
 }
 
 pub struct ClaudeSessionSource {
-    binary: PathBuf,
     include_completed: bool,
-    timeout: Duration,
 }
 
 impl ClaudeSessionSource {
-    pub fn new(binary: impl AsRef<Path>, include_completed: bool) -> Self {
-        Self::new_with_timeout(binary, include_completed, DEFAULT_COLLECTOR_TIMEOUT)
-    }
-
-    pub fn new_with_timeout(
-        binary: impl AsRef<Path>,
-        include_completed: bool,
-        timeout: Duration,
-    ) -> Self {
-        Self {
-            binary: binary.as_ref().to_owned(),
-            include_completed,
-            timeout,
-        }
+    pub fn new(include_completed: bool) -> Self {
+        Self { include_completed }
     }
 }
 
@@ -96,8 +82,7 @@ impl SessionSource for ClaudeSessionSource {
         meta: &ObservationMeta,
         redactor: &ProjectRedactor,
     ) -> Result<Vec<SessionObservation>, SourceError> {
-        let payload =
-            collect_claude_agents_with_timeout(&self.binary, self.include_completed, self.timeout)?;
+        let payload = collect_claude_transcripts(self.include_completed)?;
         Ok(claude::normalize_agents_json(&payload, meta, redactor)?)
     }
 }
@@ -108,6 +93,7 @@ pub struct CodexSessionSource {
     server: Option<CodexAppServer>,
     context: CodexThreadContext,
     timeout: Duration,
+    local_only: bool,
 }
 
 impl CodexSessionSource {
@@ -122,25 +108,37 @@ impl CodexSessionSource {
             server: None,
             context: CodexThreadContext::default(),
             timeout,
+            local_only: false,
         }
     }
 
     fn collect_result(
         &mut self,
-    ) -> Result<(serde_json::Value, Vec<serde_json::Value>), CollectorError> {
+    ) -> Result<(serde_json::Value, Vec<serde_json::Value>, bool), CollectorError> {
+        if self.local_only {
+            return collect_codex_local_threads(self.limit)
+                .map(|result| (result, Vec::new(), true));
+        }
         if self.server.is_none() {
-            self.server = Some(CodexAppServer::start_with_timeout(
-                &self.binary,
-                self.timeout,
-            )?);
+            match CodexAppServer::start_with_timeout(&self.binary, self.timeout) {
+                Ok(server) => self.server = Some(server),
+                Err(CollectorError::Start { .. }) => {
+                    self.local_only = true;
+                    return collect_codex_local_threads(self.limit)
+                        .map(|result| (result, Vec::new(), true));
+                }
+                Err(error) => return Err(error),
+            }
         }
         let server = self
             .server
             .as_mut()
             .expect("Codex app-server was initialized");
-        let result = server
-            .list_threads(self.limit)
-            .and_then(|result| server.drain_messages().map(|messages| (result, messages)));
+        let result = server.list_threads(self.limit).and_then(|result| {
+            server
+                .drain_messages()
+                .map(|messages| (result, messages, false))
+        });
         if result.is_err() {
             self.server = None;
         }
@@ -158,8 +156,8 @@ impl SessionSource for CodexSessionSource {
         meta: &ObservationMeta,
         redactor: &ProjectRedactor,
     ) -> Result<Vec<SessionObservation>, SourceError> {
-        let (result, messages) = self.collect_result()?;
-        normalize_codex_collection(&result, messages, meta, redactor, &mut self.context)
+        let (result, messages, local) = self.collect_result()?;
+        normalize_codex_collection(&result, messages, meta, redactor, &mut self.context, local)
     }
 }
 
@@ -169,9 +167,14 @@ fn normalize_codex_collection(
     meta: &ObservationMeta,
     redactor: &ProjectRedactor,
     context: &mut CodexThreadContext,
+    local: bool,
 ) -> Result<Vec<SessionObservation>, SourceError> {
     let payload = serde_json::to_string(result)?;
-    let mut observations = codex::normalize_thread_list_result(&payload, meta, redactor, context)?;
+    let mut observations = if local {
+        codex::normalize_local_thread_list_result(&payload, meta, redactor, context)?
+    } else {
+        codex::normalize_thread_list_result(&payload, meta, redactor, context)?
+    };
     for message in messages {
         let payload = serde_json::to_string(&message)?;
         if let Some(observation) =
@@ -653,6 +656,7 @@ mod tests {
             &meta,
             &ProjectRedactor::new(b"secret").unwrap(),
             &mut context,
+            false,
         )
         .unwrap();
 

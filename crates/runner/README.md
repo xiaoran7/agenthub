@@ -2,12 +2,12 @@
 
 本地只读 Session 元数据采集器。目前实现：
 
-- Claude `agents --json` 状态标准化
+- Claude 本地 Session JSONL 元数据发现
 - Claude 生命周期 Hook 标准化
 - Codex app-server Thread 与实时事件标准化
 - Codex 生命周期 Hook 标准化
-- Claude CLI 一次性 Session 采集
-- Codex app-server stdio 握手与一次性 Thread 采集
+- Claude 配置目录一次性 Session 采集（无需 Claude CLI）
+- Codex app-server stdio 握手与一次性 Thread 采集；不可执行时只读本地状态库兜底
 - Codex app-server 被动状态通知采集与轮询状态合并
 - Claude/Codex 持续采集、活动/空闲自适应间隔与失败指数退避
 - 采集命令和协议响应强制超时；Windows 下终止完整子进程树
@@ -92,9 +92,13 @@ cargo run -p agent-pulse-runner -- `
   --limit 100
 ```
 
-如 CLI 不在 `PATH` 中，可通过 `--binary` 传入可执行文件路径。Claude 可使用
-`--include-completed` 同时读取已完成的 Session。一次性采集默认在 15 秒后超时，
-可通过 `--timeout-seconds` 调整。
+Claude 默认扫描 `CLAUDE_CONFIG_DIR`，未设置时扫描 `~/.claude/projects`，不要求
+`claude` 在 `PATH` 中；`--include-completed` 会把最大历史读取量从 100 提高到 1000。
+扫描只反序列化顶层 Session ID、工作目录与时间，不保留消息或工具载荷。Codex 优先
+使用 app-server；其可执行文件不在 `PATH` 时可通过 `--binary` 指定，启动失败则自动
+只读查询 `CODEX_HOME`（默认 `~/.codex`）最新状态库的 Thread 元数据。该兜底不读取
+rollout 正文或 `auth.json`。一次性采集默认在 15 秒后超时，可通过
+`--timeout-seconds` 调整。
 
 持续运行两个 Adapter：
 
@@ -142,6 +146,10 @@ Codex Runner 会处理当前 app-server 连接收到的状态、Turn、审批和
 发送完整实时通知，仍需在可执行的真实 Codex CLI 环境中验证，轮询始终作为兜底。
 Runner 在初始化时退出消息、推理、计划、Diff、命令输出等内容型通知，避免读取不属于
 Session 元数据的载荷。
+
+Claude Runner 不再调用并不存在于当前官方 CLI 的 `claude agents --json`。磁盘发现的
+Session 只标记为持久化历史；工作中、等待输入、等待审批等实时状态必须来自 Hook 或
+后续受支持的官方事件接口。
 
 只运行一个 Adapter：
 

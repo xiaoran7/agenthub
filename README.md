@@ -32,11 +32,13 @@ Agent 平台。用户通过邮箱注册/登录管理自己的设备；Claude Cod
 
 ## 开发
 
+- [桌面 App 开发说明](apps/desktop/README.md)
 - [Runner 开发说明](crates/runner/README.md)
 - [Gateway API 开发说明](services/api/README.md)
 - [共享同步契约](packages/contracts/README.md)
 
-当前 Runner 已支持 Claude/Codex 一次性和持续采集、状态标准化、隐私脱敏、
+当前 Runner 已支持 Claude 本地 Session JSONL 与 Codex app-server/本地状态库的一次性
+和持续采集、状态标准化、隐私脱敏、
 SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签名同步批次。
 常驻 `run` 配置 Gateway 后会在独立线程自动排空 Outbox；新事件立即唤醒同步，
 网络失败按独立退避恢复，不阻塞 Agent 采集。
@@ -72,11 +74,31 @@ Checkout、Customer Portal 和原始 webhook 验签，未配置密钥时支付�
 `POST /v1/devices/heartbeat` 发送 Ed25519 签名设备心跳；Gateway 校验登记、公钥、撤销
 状态和 5 分钟时钟窗口，并按设备拒绝旧时间戳重放。心跳不携带 Session、Prompt、代码或
 凭据内容。Service Worker 只服务推送，不做离线缓存。
+Windows 桌面 App（`apps/desktop`）已复用同一邮箱注册/登录接口：登录后自动创建或加载
+本机 Ed25519 身份、完成账号设备登记，并在应用进程内启动 Runner 与同步 Worker，无需
+CMD 或手工配对码。AgentPulse 登录 Cookie 保存在 OS Keyring；Claude/Codex 登录凭据、
+对话正文和工具载荷不会上传。
 M4 安全与稳定性阶段已完成自动化基线；PostgreSQL 18.4 的 12 设备/3000 Session
 并发工作负载、外部不可达后的 Outbox 保留/恢复，以及 Codex CLI 0.144.2 当前版本
 只读采集也已现场通过；本机真实 TLS 握手和私有 CA 恢复已进入回归套件。真实 Agent
 升级矩阵、部署网络证书故障/长时间离线和系统级 Web Push 呈现仍待环境验收，详见
 [M4 验收记录](docs/M4_VALIDATION.md)。
+
+### Windows 桌面 App
+
+```powershell
+npm.cmd run tauri --workspace @agent-pulse/desktop -- dev
+```
+
+生产构建：
+
+```powershell
+npm.cmd run tauri --workspace @agent-pulse/desktop -- build
+```
+
+默认连接 `https://platform.tannerlab.xyz`；开发环境可在 Tauri 启动前设置
+`AGENT_PULSE_SERVER_URL` 为回环地址。桌面端配置和安全边界见
+[桌面 App 开发说明](apps/desktop/README.md)。
 
 ### Web 面板
 
