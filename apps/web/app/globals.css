@@ -517,7 +517,7 @@ select {
   color: var(--text-muted);
   font-family: var(--mono);
   font-size: 11px;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .app-shell {
@@ -551,7 +551,7 @@ select {
   color: var(--text-primary);
   font-size: 17px;
   font-weight: 700;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
 }
 
 .brand-mark {
@@ -856,7 +856,7 @@ select {
 .view-header h1 {
   font-size: clamp(24px, 2.2vw, 28px);
   font-weight: 680;
-  letter-spacing: -0.045em;
+  letter-spacing: 0;
   line-height: 1.1;
   margin: 0;
 }
@@ -913,7 +913,7 @@ select {
   color: var(--text-primary);
   font-size: 31px;
   font-weight: 680;
-  letter-spacing: -0.055em;
+  letter-spacing: 0;
   line-height: 1;
   margin-top: 17px;
 }
@@ -957,7 +957,7 @@ select {
 .section-panel-header h2 {
   font-size: 15px;
   font-weight: 650;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   margin: 0;
 }
 
@@ -1515,7 +1515,7 @@ select {
 .device-overview-strip strong {
   font-size: 22px;
   font-weight: 650;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
 }
 
 .device-grid {
@@ -1893,7 +1893,7 @@ select {
 
 .device-connect-header h2 {
   font-size: 22px;
-  letter-spacing: -0.045em;
+  letter-spacing: 0;
   margin: 0;
 }
 
@@ -2466,7 +2466,7 @@ select {
 .inspector-header h2 {
   font-size: 16px;
   font-weight: 620;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2761,7 +2761,7 @@ select {
 
 .settings-header h2 {
   font-size: 20px;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   margin: 0;
 }
 
@@ -3076,6 +3076,105 @@ select {
   min-height: 36px;
 }
 
+.audit-section-heading {
+  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.audit-scope-switch {
+  background: var(--background);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.audit-scope-switch button {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  min-height: 30px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.audit-scope-switch button + button {
+  border-left: 1px solid var(--border-strong);
+}
+
+.audit-scope-switch button[aria-pressed="true"] {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.audit-event-list {
+  border-top: 1px solid var(--border);
+  display: grid;
+}
+
+.audit-event-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  min-height: 54px;
+  padding: 9px 0;
+}
+
+.audit-event-marker {
+  background: var(--primary);
+  border-radius: 50%;
+  height: 7px;
+  width: 7px;
+}
+
+.audit-event-marker[data-scope="workspace"] {
+  background: var(--success);
+}
+
+.audit-event-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.audit-event-copy strong {
+  font-size: 11px;
+}
+
+.audit-event-copy small,
+.audit-event-row time {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.audit-event-row time {
+  white-space: nowrap;
+}
+
+.audit-empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+  margin: 0;
+  padding: 16px;
+  text-align: center;
+}
+
+.audit-load-more {
+  display: block;
+  margin: 12px auto 0;
+}
+
 .team-invitation-link {
   display: grid;
   gap: 8px;
@@ -3244,6 +3343,25 @@ select {
     justify-self: end;
   }
 
+  .audit-section-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .audit-scope-switch {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 2px;
+  }
+
+  .audit-event-row {
+    align-items: start;
+    grid-template-columns: 8px minmax(0, 1fr);
+  }
+
+  .audit-event-row time {
+    grid-column: 2;
+  }
+
   .account-security-status > button,
   .account-session-row > button {
     grid-column: 2;
@@ -3378,7 +3496,7 @@ select {
   .mobile-brand-row > strong {
     font-size: 15px;
     font-weight: 650;
-    letter-spacing: -0.035em;
+    letter-spacing: 0;
   }
 
   .mobile-brand-divider {

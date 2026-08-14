@@ -6,6 +6,7 @@ import { createGatewayApp } from "../src/app.js";
 import {
   InMemoryAccountStore,
   SessionAuthenticator,
+  auditMetadata,
   entitlementsFor,
   hashPassword,
   type SubscriptionEvent,
@@ -65,6 +66,24 @@ test("subscription plans resolve to server-side entitlements", () => {
   assert.equal(
     entitlementsFor({ plan: "team", status: "past_due" }).max_devices,
     1,
+  );
+});
+
+test("audit metadata only accepts bounded public fields", () => {
+  assert.deepEqual(auditMetadata({ role: "member", revoked_sessions: 2 }), {
+    role: "member",
+    revoked_sessions: 2,
+  });
+  assert.throws(
+    () =>
+      auditMetadata({
+        email: "secret@example.com",
+      } as unknown as Parameters<typeof auditMetadata>[0]),
+    /key is not allowed/u,
+  );
+  assert.throws(
+    () => auditMetadata({ provider: "x".repeat(129) }),
+    /value is invalid/u,
   );
 });
 
@@ -746,6 +765,140 @@ test("team workspaces enforce roles, invitations, and actor privacy", async () =
       { email: "team-admin@example.com", role: "member" },
     ],
   );
+  await app.close();
+});
+
+test("audit events are scoped, paginated, and exclude sensitive request data", async () => {
+  const accounts = new InMemoryAccountStore();
+  const app = createGatewayApp({
+    accounts,
+    store: new InMemoryGatewayStore(),
+    authenticator: new SessionAuthenticator(accounts),
+    now: () => new Date("2026-08-13T12:00:00.000Z"),
+  });
+  const password = "correct horse battery staple";
+  const register = async (email: string) =>
+    app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      payload: { email, password },
+    });
+  const owner = await register("audit-owner@example.com");
+  const member = await register("audit-member@example.com");
+  const outsider = await register("audit-outsider@example.com");
+  const ownerId = owner.json().user.user_id as string;
+  const memberId = member.json().user.user_id as string;
+  accounts.setSubscription(ownerId, { plan: "team", status: "active" });
+
+  const firstPage = await app.inject({
+    method: "GET",
+    url: "/v1/audit?scope=account&limit=1",
+    headers: { cookie: sessionCookie(owner) },
+  });
+  assert.equal(firstPage.statusCode, 200);
+  assert.equal(firstPage.json().events.length, 1);
+  assert.match(firstPage.json().next_before, /^[0-9a-f-]{36}$/);
+  const secondPage = await app.inject({
+    method: "GET",
+    url: `/v1/audit?scope=account&limit=1&before=${firstPage.json().next_before}`,
+    headers: { cookie: sessionCookie(owner) },
+  });
+  assert.equal(secondPage.statusCode, 200);
+  assert.equal(secondPage.json().events.length, 1);
+  assert.notEqual(
+    firstPage.json().events[0].event_id,
+    secondPage.json().events[0].event_id,
+  );
+  const invalidCursor = await app.inject({
+    method: "GET",
+    url: "/v1/audit?before=not-a-uuid",
+    headers: { cookie: sessionCookie(owner) },
+  });
+  assert.equal(invalidCursor.statusCode, 400);
+  assert.equal(invalidCursor.json().error, "invalid_audit_query");
+
+  const invitation = await app.inject({
+    method: "POST",
+    url: "/v1/team/invitations",
+    headers: { cookie: sessionCookie(owner) },
+    payload: { email: "audit-member@example.com", role: "member" },
+  });
+  assert.equal(invitation.statusCode, 201);
+  const token = new URLSearchParams(
+    String(invitation.json().invitation_url).slice(1),
+  ).get("token");
+  assert.ok(token);
+  const accepted = await app.inject({
+    method: "POST",
+    url: "/v1/team/invitations/accept",
+    headers: { cookie: sessionCookie(member) },
+    payload: { token },
+  });
+  assert.equal(accepted.statusCode, 200);
+  await app.inject({
+    method: "POST",
+    url: "/v1/team/workspace",
+    headers: { cookie: sessionCookie(member) },
+    payload: { workspace_owner_id: ownerId },
+  });
+
+  const ownerWorkspaceAudit = await app.inject({
+    method: "GET",
+    url: "/v1/audit?scope=workspace",
+    headers: { cookie: sessionCookie(owner) },
+  });
+  const memberWorkspaceAudit = await app.inject({
+    method: "GET",
+    url: "/v1/audit?scope=workspace",
+    headers: { cookie: sessionCookie(member) },
+  });
+  assert.equal(ownerWorkspaceAudit.statusCode, 200);
+  assert.deepEqual(
+    memberWorkspaceAudit.json().events,
+    ownerWorkspaceAudit.json().events,
+  );
+  assert.deepEqual(
+    new Set(
+      ownerWorkspaceAudit
+        .json()
+        .events.map((event: { action: string }) => event.action),
+    ),
+    new Set(["team.invitation_created", "team.invitation_accepted"]),
+  );
+  const serialized = JSON.stringify({
+    account: firstPage.json().events,
+    workspace: ownerWorkspaceAudit.json().events,
+  });
+  for (const forbidden of [
+    "audit-owner@example.com",
+    "audit-member@example.com",
+    password,
+    token,
+    "token_digest",
+    "request",
+    "127.0.0.1",
+  ]) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+
+  const outsiderWorkspaceAudit = await app.inject({
+    method: "GET",
+    url: "/v1/audit?scope=workspace",
+    headers: { cookie: sessionCookie(outsider) },
+  });
+  assert.deepEqual(outsiderWorkspaceAudit.json().events, []);
+  const removed = await app.inject({
+    method: "DELETE",
+    url: `/v1/team/members/${memberId}`,
+    headers: { cookie: sessionCookie(owner) },
+  });
+  assert.equal(removed.statusCode, 204);
+  const formerMemberAudit = await app.inject({
+    method: "GET",
+    url: "/v1/audit?scope=workspace",
+    headers: { cookie: sessionCookie(member) },
+  });
+  assert.deepEqual(formerMemberAudit.json().events, []);
   await app.close();
 });
 

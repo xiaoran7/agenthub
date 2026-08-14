@@ -69,6 +69,49 @@ export interface WebSessionView {
   current: boolean;
 }
 
+export type AuditScope = "account" | "workspace";
+export type AuditAction =
+  | "account.created"
+  | "auth.session_created"
+  | "auth.session_revoked"
+  | "auth.other_sessions_revoked"
+  | "auth.email_verification_requested"
+  | "auth.email_verified"
+  | "auth.password_reset_requested"
+  | "auth.password_reset_completed"
+  | "auth.password_changed"
+  | "workspace.switched"
+  | "team.invitation_created"
+  | "team.invitation_revoked"
+  | "team.invitation_accepted"
+  | "team.member_role_updated"
+  | "team.member_removed"
+  | "subscription.updated";
+
+export interface AuditEvent {
+  event_id: string;
+  scope: AuditScope;
+  actor_user_id?: string;
+  workspace_owner_id?: string;
+  action: AuditAction;
+  target_type?:
+    | "account"
+    | "web_session"
+    | "workspace"
+    | "team_invitation"
+    | "team_member"
+    | "subscription";
+  target_id?: string;
+  metadata: Record<string, string | number | boolean>;
+  created_at: string;
+}
+
+export interface AuditPage {
+  scope: AuditScope;
+  events: AuditEvent[];
+  next_before?: string;
+}
+
 export class AccountApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -196,6 +239,20 @@ export async function fetchTeamWorkspace(): Promise<TeamWorkspaceView> {
   return (await response.json()) as TeamWorkspaceView;
 }
 
+export async function fetchAuditEvents(
+  scope: AuditScope,
+  before?: string,
+): Promise<AuditPage> {
+  const query = new URLSearchParams({ scope, limit: "30" });
+  if (before !== undefined) query.set("before", before);
+  const response = await fetch(`/v1/audit?${query.toString()}`, {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw await accountError(response);
+  return (await response.json()) as AuditPage;
+}
+
 export async function createTeamInvitation(input: {
   email: string;
   role: InviteRole;
@@ -280,6 +337,7 @@ export function accountErrorMessage(error: unknown): string {
     invalid_team_invitation: "团队邀请无效或已经过期",
     team_invitation_not_found: "团队邀请不存在或已撤销",
     workspace_not_found: "工作区不存在或你已不再是成员",
+    invalid_audit_query: "审计记录查询参数无效",
   };
   return messages[error.code] ?? "账户操作失败，请稍后重试";
 }

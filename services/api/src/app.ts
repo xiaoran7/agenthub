@@ -89,6 +89,8 @@ const TEAM_INVITATION_TTL_MS = 72 * 60 * 60_000;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 const LOGIN_MAXIMUM_ATTEMPTS = 5;
 const LOGIN_BLOCK_SECONDS = 15 * 60;
+const DEFAULT_AUDIT_LIMIT = 30;
+const MAX_AUDIT_LIMIT = 100;
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /**
@@ -210,6 +212,7 @@ export function createGatewayApp(
       reply,
       options.secureCookies ?? false,
       now(),
+      "registration",
     );
     if (options.emailVerification !== undefined) {
       try {
@@ -275,6 +278,7 @@ export function createGatewayApp(
       reply,
       options.secureCookies ?? false,
       now(),
+      "login",
     );
     return reply.send(account);
   });
@@ -486,6 +490,7 @@ export function createGatewayApp(
       expectedPasswordHash: user.password_hash,
       passwordHash: await hashPassword(newPassword),
       currentSessionDigest: currentDigest,
+      changedAt: now().toISOString(),
     });
     if (!result.updated) throw new AuthenticationError();
     return reply.send({ changed: true, revoked: result.revoked_sessions });
@@ -552,6 +557,51 @@ export function createGatewayApp(
       digest,
     );
     return reply.send({ revoked });
+  });
+
+  app.get("/v1/audit", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const query = accountBody(request.query);
+    assertOnlyFields(query, ["scope", "before", "limit"]);
+    const scope = query.scope === undefined ? "account" : query.scope;
+    if (scope !== "account" && scope !== "workspace") {
+      throw new AccountError("invalid_audit_query", "scope is invalid", 400);
+    }
+    const before = query.before;
+    if (
+      before !== undefined &&
+      (typeof before !== "string" || !SESSION_ID_PATTERN.test(before))
+    ) {
+      throw new AccountError("invalid_audit_query", "cursor is invalid", 400);
+    }
+    const requestedLimit =
+      query.limit === undefined
+        ? DEFAULT_AUDIT_LIMIT
+        : typeof query.limit === "string" && /^\d{1,3}$/.test(query.limit)
+          ? Number(query.limit)
+          : Number.NaN;
+    if (
+      !Number.isSafeInteger(requestedLimit) ||
+      requestedLimit < 1 ||
+      requestedLimit > MAX_AUDIT_LIMIT
+    ) {
+      throw new AccountError("invalid_audit_query", "limit is invalid", 400);
+    }
+    const events = await accounts.listAuditEvents({
+      scope,
+      actorUserId: identity.actor_user_id,
+      workspaceOwnerId: identity.workspace_owner_id,
+      ...(before === undefined ? {} : { beforeEventId: before }),
+      limit: requestedLimit,
+    });
+    return reply.send({
+      scope,
+      events,
+      ...(events.length < requestedLimit
+        ? {}
+        : { next_before: events.at(-1)?.event_id }),
+    });
   });
 
   app.get("/v1/team", async (request, reply) => {
@@ -734,6 +784,7 @@ export function createGatewayApp(
         memberUserId: userId,
         role,
         remove: false,
+        updatedAt: now().toISOString(),
       }))
     ) {
       throw new AccountError(
@@ -758,6 +809,7 @@ export function createGatewayApp(
         workspaceOwnerId: identity.workspace_owner_id,
         memberUserId: userId,
         remove: true,
+        updatedAt: now().toISOString(),
       }))
     ) {
       throw new AccountError(
@@ -786,6 +838,7 @@ export function createGatewayApp(
       digest,
       actorUserId: identity.actor_user_id,
       workspaceOwnerId: body.workspace_owner_id,
+      switchedAt: now().toISOString(),
     });
     if (switched === undefined) {
       throw new AccountError("workspace_not_found", "workspace not found", 404);

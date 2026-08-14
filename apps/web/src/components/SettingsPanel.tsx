@@ -19,6 +19,7 @@ import {
   changePassword,
   createTeamInvitation,
   currentAccount,
+  fetchAuditEvents,
   fetchTeamWorkspace,
   fetchWebSessions,
   removeTeamMember,
@@ -29,6 +30,9 @@ import {
   switchWorkspace,
   updateTeamMember,
   type AccountView,
+  type AuditEvent,
+  type AuditPage,
+  type AuditScope,
   type InviteRole,
   type TeamWorkspaceView,
   type WebSessionView,
@@ -86,6 +90,50 @@ function roleLabel(role: "owner" | "admin" | "member"): string {
   return role === "owner" ? "所有者" : role === "admin" ? "管理员" : "成员";
 }
 
+const AUDIT_ACTION_LABELS: Record<AuditEvent["action"], string> = {
+  "account.created": "账户已创建",
+  "auth.session_created": "登录会话已建立",
+  "auth.session_revoked": "登录会话已撤销",
+  "auth.other_sessions_revoked": "其他登录会话已撤销",
+  "auth.email_verification_requested": "邮箱验证已请求",
+  "auth.email_verified": "邮箱已验证",
+  "auth.password_reset_requested": "密码重置已请求",
+  "auth.password_reset_completed": "密码已重置",
+  "auth.password_changed": "密码已更新",
+  "workspace.switched": "当前工作区已切换",
+  "team.invitation_created": "团队邀请已创建",
+  "team.invitation_revoked": "团队邀请已撤销",
+  "team.invitation_accepted": "团队邀请已接受",
+  "team.member_role_updated": "成员角色已更新",
+  "team.member_removed": "成员已移出工作区",
+  "subscription.updated": "订阅权益已更新",
+};
+
+function auditId(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : value.slice(0, 8);
+}
+
+function auditDetail(event: AuditEvent): string {
+  const details: string[] = [];
+  const target = auditId(event.target_id);
+  if (target !== undefined) details.push(`目标 ${target}`);
+  const role = event.metadata.role;
+  if (role === "owner" || role === "admin" || role === "member") {
+    details.push(`角色 ${roleLabel(role)}`);
+  }
+  const plan = event.metadata.plan;
+  if (typeof plan === "string") details.push(`方案 ${plan.toUpperCase()}`);
+  const status = event.metadata.status;
+  if (typeof status === "string") details.push(`状态 ${status}`);
+  const revoked = event.metadata.revoked_sessions;
+  if (typeof revoked === "number") details.push(`撤销 ${revoked} 个会话`);
+  const actor = auditId(event.actor_user_id);
+  if (event.scope === "workspace" && actor !== undefined) {
+    details.push(`操作者 ${actor}`);
+  }
+  return details.join(" · ");
+}
+
 export function SettingsPanel({
   account,
   config,
@@ -135,6 +183,11 @@ export function SettingsPanel({
   const [teamMessage, setTeamMessage] = useState<string>();
   const [teamError, setTeamError] = useState<string>();
   const [invitationUrl, setInvitationUrl] = useState<string>();
+  const [auditScope, setAuditScope] = useState<AuditScope>("account");
+  const [auditPage, setAuditPage] = useState<AuditPage>();
+  const [auditError, setAuditError] = useState<string>();
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditRevision, setAuditRevision] = useState(0);
   const dialogRef = useModalDialog<HTMLFormElement>(onClose);
 
   useEffect(() => {
@@ -167,6 +220,26 @@ export function SettingsPanel({
   }, [account]);
 
   useEffect(() => {
+    if (account === undefined) return;
+    let cancelled = false;
+    setAuditLoading(true);
+    setAuditError(undefined);
+    void fetchAuditEvents(auditScope)
+      .then((page) => {
+        if (!cancelled) setAuditPage(page);
+      })
+      .catch((cause) => {
+        if (!cancelled) setAuditError(accountErrorMessage(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setAuditLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account, auditRevision, auditScope]);
+
+  useEffect(() => {
     if (team?.workspace.role === "admin" && teamRole === "admin") {
       setTeamRole("member");
     }
@@ -187,6 +260,28 @@ export function SettingsPanel({
     };
   }, [account]);
 
+  function refreshAudit() {
+    setAuditRevision((current) => current + 1);
+  }
+
+  async function loadMoreAudit() {
+    const before = auditPage?.next_before;
+    if (before === undefined || auditLoading) return;
+    setAuditLoading(true);
+    setAuditError(undefined);
+    try {
+      const next = await fetchAuditEvents(auditScope, before);
+      setAuditPage((current) => ({
+        ...next,
+        events: [...(current?.events ?? []), ...next.events],
+      }));
+    } catch (cause) {
+      setAuditError(accountErrorMessage(cause));
+    } finally {
+      setAuditLoading(false);
+    }
+  }
+
   async function resendVerification() {
     setAccountAction("verification");
     setAccountError(undefined);
@@ -200,6 +295,7 @@ export function SettingsPanel({
             ? "验证邮件已发送。"
             : "验证请求没有产生新邮件。",
       );
+      if (result.accepted) refreshAudit();
     } catch (cause) {
       setAccountError(accountErrorMessage(cause));
     } finally {
@@ -221,6 +317,7 @@ export function SettingsPanel({
         current?.filter((item) => item.session_id !== session.session_id),
       );
       setAccountMessage("登录会话已撤销。");
+      refreshAudit();
     } catch (cause) {
       setAccountError(accountErrorMessage(cause));
     } finally {
@@ -238,6 +335,7 @@ export function SettingsPanel({
         current?.filter((session) => session.current),
       );
       setAccountMessage(`已撤销 ${revoked} 个其他登录会话。`);
+      if (revoked > 0) refreshAudit();
     } catch (cause) {
       setAccountError(accountErrorMessage(cause));
     } finally {
@@ -265,6 +363,7 @@ export function SettingsPanel({
         current?.filter((session) => session.current),
       );
       setAccountMessage(`密码已更新，并撤销 ${revoked} 个其他登录会话。`);
+      refreshAudit();
     } catch (cause) {
       setAccountError(accountErrorMessage(cause));
     } finally {
@@ -283,6 +382,7 @@ export function SettingsPanel({
       onWorkspaceChanged(next);
       setTeam(await fetchTeamWorkspace());
       setTeamMessage("工作区已切换。");
+      refreshAudit();
     } catch (cause) {
       setTeamError(accountErrorMessage(cause));
     } finally {
@@ -308,6 +408,7 @@ export function SettingsPanel({
       setTeamEmail("");
       setTeam(await fetchTeamWorkspace());
       setTeamMessage("邀请已创建；链接只在本次设置窗口显示。");
+      refreshAudit();
     } catch (cause) {
       setTeamError(accountErrorMessage(cause));
     } finally {
@@ -332,6 +433,7 @@ export function SettingsPanel({
       await updateTeamMember(userId, role);
       setTeam(await fetchTeamWorkspace());
       setTeamMessage("成员角色已更新。");
+      refreshAudit();
     } catch (cause) {
       setTeamError(accountErrorMessage(cause));
     } finally {
@@ -349,6 +451,7 @@ export function SettingsPanel({
       await removeTeamMember(userId);
       setTeam(await fetchTeamWorkspace());
       setTeamMessage("成员已移出工作区。");
+      refreshAudit();
     } catch (cause) {
       setTeamError(accountErrorMessage(cause));
     } finally {
@@ -363,6 +466,7 @@ export function SettingsPanel({
       await revokeTeamInvitation(invitationId);
       setTeam(await fetchTeamWorkspace());
       setTeamMessage("邀请已撤销。");
+      refreshAudit();
     } catch (cause) {
       setTeamError(accountErrorMessage(cause));
     } finally {
@@ -838,6 +942,79 @@ export function SettingsPanel({
               {teamError !== undefined && (
                 <p className="error-text" role="alert">
                   {teamError}
+                </p>
+              )}
+            </section>
+          )}
+          {account !== undefined && (
+            <section
+              className="settings-section"
+              aria-labelledby="audit-settings"
+            >
+              <div className="settings-section-heading audit-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ◌
+                </span>
+                <div>
+                  <h3 id="audit-settings">审计记录</h3>
+                  <p>追踪账户安全、订阅和当前工作区的管理动作。</p>
+                </div>
+                <div className="audit-scope-switch" aria-label="审计范围">
+                  {(["account", "workspace"] as const).map((scope) => (
+                    <button
+                      aria-pressed={auditScope === scope}
+                      key={scope}
+                      onClick={() => {
+                        setAuditPage(undefined);
+                        setAuditScope(scope);
+                      }}
+                      type="button"
+                    >
+                      {scope === "account" ? "账户" : "当前工作区"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {auditPage === undefined && auditLoading ? (
+                <p className="settings-hint">正在读取审计记录…</p>
+              ) : auditPage?.events.length === 0 ? (
+                <p className="audit-empty">当前范围还没有审计记录。</p>
+              ) : (
+                <div className="audit-event-list">
+                  {auditPage?.events.map((event) => {
+                    const detail = auditDetail(event);
+                    return (
+                      <div className="audit-event-row" key={event.event_id}>
+                        <span
+                          className="audit-event-marker"
+                          data-scope={event.scope}
+                          aria-hidden="true"
+                        />
+                        <span className="audit-event-copy">
+                          <strong>{AUDIT_ACTION_LABELS[event.action]}</strong>
+                          {detail.length > 0 && <small>{detail}</small>}
+                        </span>
+                        <time dateTime={event.created_at}>
+                          {formatClock(event.created_at)}
+                        </time>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {auditPage?.next_before !== undefined && (
+                <button
+                  className="secondary audit-load-more"
+                  disabled={auditLoading}
+                  onClick={() => void loadMoreAudit()}
+                  type="button"
+                >
+                  {auditLoading ? "读取中…" : "加载更多"}
+                </button>
+              )}
+              {auditError !== undefined && (
+                <p className="error-text" role="alert">
+                  {auditError}
                 </p>
               )}
             </section>

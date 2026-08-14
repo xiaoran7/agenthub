@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 
@@ -17,11 +17,15 @@ import postgres from "postgres";
 import {
   AccountError,
   accountView,
+  auditMetadata,
   entitlementsFor,
   isNewerSubscriptionEvent,
   type AccountStore,
   type AccountUser,
   type AccountView,
+  type AuditEvent,
+  type AuditMetadataValue,
+  type AuditQuery,
   type InviteRole,
   type LoginAttemptResult,
   type SessionIdentity,
@@ -104,6 +108,10 @@ const MIGRATIONS = [
     version: 10,
     url: new URL("../migrations/0010_team_workspaces.sql", import.meta.url),
   },
+  {
+    version: 11,
+    url: new URL("../migrations/0011_audit_events.sql", import.meta.url),
+  },
 ] as const;
 
 interface DeviceRow {
@@ -168,6 +176,18 @@ interface RemoteTaskRow {
   agent_session_id: string | null;
   result_summary: string | null;
   error_code: string | null;
+}
+
+interface AuditEventRow {
+  event_id: string;
+  scope: AuditEvent["scope"];
+  actor_user_id: string | null;
+  workspace_owner_id: string | null;
+  action: AuditEvent["action"];
+  target_type: Exclude<AuditEvent["target_type"], undefined> | null;
+  target_id: string | null;
+  metadata: unknown;
+  created_at: unknown;
 }
 
 type QuerySql = postgres.Sql | postgres.TransactionSql;
@@ -243,10 +263,18 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
             workspace_owner_id, user_id, role
           ) VALUES (${input.userId}, ${input.userId}, 'owner')
         `;
-        return accountView(
-          normalizeAccountUser(user),
-          normalizeSubscription(subscription),
-        );
+        const normalizedUser = normalizeAccountUser(user);
+        await insertAuditEvent(sql, {
+          scope: "account",
+          accountUserId: input.userId,
+          actorUserId: input.userId,
+          action: "account.created",
+          targetType: "account",
+          targetId: input.userId,
+          metadata: { plan: "free" },
+          createdAt: normalizedUser.created_at,
+        });
+        return accountView(normalizedUser, normalizeSubscription(subscription));
       });
     } catch (error) {
       if (postgresConstraint(error) === "agent_pulse_users_email_unique_idx") {
@@ -287,22 +315,35 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     userId: string;
     createdAt: string;
     expiresAt: string;
+    reason?: "registration" | "login";
   }): Promise<void> {
-    await this.#sql`
-      INSERT INTO agent_pulse_web_sessions (
-        session_id,
-        session_digest,
-        user_id,
-        workspace_owner_id,
-        created_at,
-        last_seen_at,
-        expires_at
-      )
-      VALUES (
-        ${input.sessionId}, ${input.digest}, ${input.userId}, ${input.userId},
-        ${input.createdAt}, ${input.createdAt}, ${input.expiresAt}
-      )
-    `;
+    await this.#sql.begin(async (sql) => {
+      await sql`
+        INSERT INTO agent_pulse_web_sessions (
+          session_id,
+          session_digest,
+          user_id,
+          workspace_owner_id,
+          created_at,
+          last_seen_at,
+          expires_at
+        )
+        VALUES (
+          ${input.sessionId}, ${input.digest}, ${input.userId}, ${input.userId},
+          ${input.createdAt}, ${input.createdAt}, ${input.expiresAt}
+        )
+      `;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: input.userId,
+        actorUserId: input.userId,
+        action: "auth.session_created",
+        targetType: "web_session",
+        targetId: input.sessionId,
+        metadata: { reason: input.reason ?? "login" },
+        createdAt: input.createdAt,
+      });
+    });
   }
 
   async findWebSession(
@@ -335,10 +376,24 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
   }
 
   async deleteWebSession(digest: string): Promise<void> {
-    await this.#sql`
-      DELETE FROM agent_pulse_web_sessions
-      WHERE session_digest = ${digest}
-    `;
+    await this.#sql.begin(async (sql) => {
+      const rows = await sql<Array<{ session_id: string; user_id: string }>>`
+        DELETE FROM agent_pulse_web_sessions
+        WHERE session_digest = ${digest}
+        RETURNING session_id::text, user_id::text
+      `;
+      const session = rows[0];
+      if (session === undefined) return;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: session.user_id,
+        actorUserId: session.user_id,
+        action: "auth.session_revoked",
+        targetType: "web_session",
+        targetId: session.session_id,
+        metadata: { reason: "logout" },
+      });
+    });
   }
 
   async listWebSessions(
@@ -375,24 +430,47 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
   }
 
   async revokeWebSession(userId: string, sessionId: string): Promise<boolean> {
-    const rows = await this.#sql<Array<{ session_id: string }>>`
-      DELETE FROM agent_pulse_web_sessions
-      WHERE user_id = ${userId} AND session_id = ${sessionId}
-      RETURNING session_id::text
-    `;
-    return rows.length > 0;
+    return this.#sql.begin(async (sql) => {
+      const rows = await sql<Array<{ session_id: string }>>`
+        DELETE FROM agent_pulse_web_sessions
+        WHERE user_id = ${userId} AND session_id = ${sessionId}
+        RETURNING session_id::text
+      `;
+      if (rows.length === 0) return false;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: userId,
+        actorUserId: userId,
+        action: "auth.session_revoked",
+        targetType: "web_session",
+        targetId: sessionId,
+        metadata: { reason: "manual" },
+      });
+      return true;
+    });
   }
 
   async revokeOtherWebSessions(
     userId: string,
     currentDigest: string,
   ): Promise<number> {
-    const rows = await this.#sql<Array<{ session_id: string }>>`
-      DELETE FROM agent_pulse_web_sessions
-      WHERE user_id = ${userId} AND session_digest <> ${currentDigest}
-      RETURNING session_id::text
-    `;
-    return rows.length;
+    return this.#sql.begin(async (sql) => {
+      const rows = await sql<Array<{ session_id: string }>>`
+        DELETE FROM agent_pulse_web_sessions
+        WHERE user_id = ${userId} AND session_digest <> ${currentDigest}
+        RETURNING session_id::text
+      `;
+      if (rows.length > 0) {
+        await insertAuditEvent(sql, {
+          scope: "account",
+          accountUserId: userId,
+          actorUserId: userId,
+          action: "auth.other_sessions_revoked",
+          metadata: { revoked_sessions: rows.length },
+        });
+      }
+      return rows.length;
+    });
   }
 
   async issueEmailVerification(input: {
@@ -452,6 +530,14 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           ${input.digest}, ${input.userId}, ${input.createdAt}, ${input.expiresAt}
         )
       `;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: input.userId,
+        actorUserId: input.userId,
+        action: "auth.email_verification_requested",
+        metadata: {},
+        createdAt: input.createdAt,
+      });
       return { allowed: true, retry_after_seconds: 0 };
     });
   }
@@ -477,6 +563,16 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
             updated_at = clock_timestamp()
         WHERE user_id = ${id} AND status = 'active'
       `;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: id,
+        actorUserId: id,
+        action: "auth.email_verified",
+        targetType: "account",
+        targetId: id,
+        metadata: {},
+        createdAt: now,
+      });
       return id;
     });
     return userId === undefined ? undefined : this.accountView(userId);
@@ -538,6 +634,14 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           ${input.digest}, ${input.userId}, ${input.createdAt}, ${input.expiresAt}
         )
       `;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: input.userId,
+        actorUserId: input.userId,
+        action: "auth.password_reset_requested",
+        metadata: {},
+        createdAt: input.createdAt,
+      });
       return { allowed: true, retry_after_seconds: 0 };
     });
   }
@@ -579,6 +683,16 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         WHERE user_id = ${userId}
         RETURNING session_id::text
       `;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: userId,
+        actorUserId: userId,
+        action: "auth.password_reset_completed",
+        targetType: "account",
+        targetId: userId,
+        metadata: { revoked_sessions: revoked.length },
+        createdAt: input.now,
+      });
       return { updated: true, revoked_sessions: revoked.length };
     });
   }
@@ -595,6 +709,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     expectedPasswordHash: string;
     passwordHash: string;
     currentSessionDigest: string;
+    changedAt?: string;
   }): Promise<{ updated: boolean; revoked_sessions: number }> {
     return this.#sql.begin(async (sql) => {
       const users = await sql<Array<{ user_id: string }>>`
@@ -619,6 +734,18 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           AND session_digest <> ${input.currentSessionDigest}
         RETURNING session_id::text
       `;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: input.userId,
+        actorUserId: input.userId,
+        action: "auth.password_changed",
+        targetType: "account",
+        targetId: input.userId,
+        metadata: { revoked_sessions: revoked.length },
+        ...(input.changedAt === undefined
+          ? {}
+          : { createdAt: input.changedAt }),
+      });
       return { updated: true, revoked_sessions: revoked.length };
     });
   }
@@ -921,6 +1048,19 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
             ${input.invitedBy}, ${input.createdAt}, ${input.expiresAt}
           )
         `;
+        await insertAuditEvent(sql, {
+          scope: "workspace",
+          workspaceOwnerId: input.workspaceOwnerId,
+          actorUserId: input.invitedBy,
+          action: "team.invitation_created",
+          targetType: "team_invitation",
+          targetId: input.invitationId,
+          metadata: {
+            role: input.role,
+            invited_user_id: input.invitedUserId,
+          },
+          createdAt: input.createdAt,
+        });
       } catch (error) {
         if (
           postgresConstraint(error) ===
@@ -945,11 +1085,12 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     return this.#sql.begin(async (sql) => {
       const candidates = await sql<
         Array<{
+          invitation_id: string;
           workspace_owner_id: string;
           role: InviteRole;
         }>
       >`
-        SELECT workspace_owner_id::text, role
+        SELECT invitation_id::text, workspace_owner_id::text, role
         FROM agent_pulse_team_invitations
         WHERE token_digest = ${input.digest}
           AND invited_user_id = ${input.userId}
@@ -997,6 +1138,19 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         )
         ON CONFLICT (workspace_owner_id, user_id) DO NOTHING
       `;
+      await insertAuditEvent(sql, {
+        scope: "workspace",
+        workspaceOwnerId: invitation.workspace_owner_id,
+        actorUserId: input.userId,
+        action: "team.invitation_accepted",
+        targetType: "team_member",
+        targetId: input.userId,
+        metadata: {
+          role: invitation.role,
+          invitation_id: invitation.invitation_id,
+        },
+        createdAt: input.now,
+      });
       return invitation.workspace_owner_id;
     });
   }
@@ -1007,23 +1161,39 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     invitationId: string,
     now: string,
   ): Promise<boolean> {
-    const rows = await this.#sql<Array<{ invitation_id: string }>>`
-      UPDATE agent_pulse_team_invitations AS invitations
-      SET revoked_at = ${now}
-      FROM agent_pulse_workspace_members AS actors
-      WHERE invitations.invitation_id = ${invitationId}
-        AND invitations.workspace_owner_id = ${workspaceOwnerId}
-        AND invitations.consumed_at IS NULL
-        AND invitations.revoked_at IS NULL
-        AND actors.workspace_owner_id = invitations.workspace_owner_id
-        AND actors.user_id = ${actorUserId}
-        AND (
-          actors.role = 'owner' OR
-          (actors.role = 'admin' AND invitations.role = 'member')
-        )
-      RETURNING invitations.invitation_id::text
-    `;
-    return rows.length > 0;
+    return this.#sql.begin(async (sql) => {
+      const rows = await sql<
+        Array<{ invitation_id: string; role: InviteRole }>
+      >`
+        UPDATE agent_pulse_team_invitations AS invitations
+        SET revoked_at = ${now}
+        FROM agent_pulse_workspace_members AS actors
+        WHERE invitations.invitation_id = ${invitationId}
+          AND invitations.workspace_owner_id = ${workspaceOwnerId}
+          AND invitations.consumed_at IS NULL
+          AND invitations.revoked_at IS NULL
+          AND actors.workspace_owner_id = invitations.workspace_owner_id
+          AND actors.user_id = ${actorUserId}
+          AND (
+            actors.role = 'owner' OR
+            (actors.role = 'admin' AND invitations.role = 'member')
+          )
+        RETURNING invitations.invitation_id::text, invitations.role
+      `;
+      const invitation = rows[0];
+      if (invitation === undefined) return false;
+      await insertAuditEvent(sql, {
+        scope: "workspace",
+        workspaceOwnerId,
+        actorUserId,
+        action: "team.invitation_revoked",
+        targetType: "team_invitation",
+        targetId: invitationId,
+        metadata: { role: invitation.role },
+        createdAt: now,
+      });
+      return true;
+    });
   }
 
   async updateWorkspaceMember(input: {
@@ -1032,6 +1202,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     memberUserId: string;
     role?: InviteRole;
     remove: boolean;
+    updatedAt?: string;
   }): Promise<boolean> {
     return this.#sql.begin(async (sql) => {
       const rows = await sql<
@@ -1069,6 +1240,18 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           WHERE user_id = ${input.memberUserId}
             AND workspace_owner_id = ${input.workspaceOwnerId}
         `;
+        await insertAuditEvent(sql, {
+          scope: "workspace",
+          workspaceOwnerId: input.workspaceOwnerId,
+          actorUserId: input.actorUserId,
+          action: "team.member_removed",
+          targetType: "team_member",
+          targetId: input.memberUserId,
+          metadata: { previous_role: roles.target_role },
+          ...(input.updatedAt === undefined
+            ? {}
+            : { createdAt: input.updatedAt }),
+        });
       } else if (input.role !== undefined) {
         await sql`
           UPDATE agent_pulse_workspace_members
@@ -1076,6 +1259,21 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           WHERE workspace_owner_id = ${input.workspaceOwnerId}
             AND user_id = ${input.memberUserId}
         `;
+        await insertAuditEvent(sql, {
+          scope: "workspace",
+          workspaceOwnerId: input.workspaceOwnerId,
+          actorUserId: input.actorUserId,
+          action: "team.member_role_updated",
+          targetType: "team_member",
+          targetId: input.memberUserId,
+          metadata: {
+            previous_role: roles.target_role,
+            role: input.role,
+          },
+          ...(input.updatedAt === undefined
+            ? {}
+            : { createdAt: input.updatedAt }),
+        });
       }
       return true;
     });
@@ -1085,25 +1283,51 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     digest: string;
     actorUserId: string;
     workspaceOwnerId: string;
+    switchedAt?: string;
   }): Promise<SessionIdentity | undefined> {
-    const rows = await this.#sql<Array<{ role: WorkspaceRole }>>`
-      UPDATE agent_pulse_web_sessions AS sessions
-      SET workspace_owner_id = ${input.workspaceOwnerId}
-      FROM agent_pulse_workspace_members AS members
-      WHERE sessions.session_digest = ${input.digest}
-        AND sessions.user_id = ${input.actorUserId}
-        AND members.workspace_owner_id = ${input.workspaceOwnerId}
-        AND members.user_id = ${input.actorUserId}
-      RETURNING members.role
-    `;
-    const role = rows[0]?.role;
-    return role === undefined
-      ? undefined
-      : {
-          actor_user_id: input.actorUserId,
-          workspace_owner_id: input.workspaceOwnerId,
-          role,
-        };
+    return this.#sql.begin(async (sql) => {
+      const sessions = await sql<Array<{ workspace_owner_id: string }>>`
+        SELECT workspace_owner_id::text
+        FROM agent_pulse_web_sessions
+        WHERE session_digest = ${input.digest}
+          AND user_id = ${input.actorUserId}
+        FOR UPDATE
+      `;
+      const previousWorkspaceOwnerId = sessions[0]?.workspace_owner_id;
+      if (previousWorkspaceOwnerId === undefined) return undefined;
+      const members = await sql<Array<{ role: WorkspaceRole }>>`
+        SELECT role
+        FROM agent_pulse_workspace_members
+        WHERE workspace_owner_id = ${input.workspaceOwnerId}
+          AND user_id = ${input.actorUserId}
+      `;
+      const role = members[0]?.role;
+      if (role === undefined) return undefined;
+      await sql`
+        UPDATE agent_pulse_web_sessions
+        SET workspace_owner_id = ${input.workspaceOwnerId}
+        WHERE session_digest = ${input.digest}
+      `;
+      if (previousWorkspaceOwnerId !== input.workspaceOwnerId) {
+        await insertAuditEvent(sql, {
+          scope: "account",
+          accountUserId: input.actorUserId,
+          actorUserId: input.actorUserId,
+          action: "workspace.switched",
+          targetType: "workspace",
+          targetId: input.workspaceOwnerId,
+          metadata: {},
+          ...(input.switchedAt === undefined
+            ? {}
+            : { createdAt: input.switchedAt }),
+        });
+      }
+      return {
+        actor_user_id: input.actorUserId,
+        workspace_owner_id: input.workspaceOwnerId,
+        role,
+      };
+    });
   }
 
   async applySubscriptionEvent(
@@ -1188,11 +1412,98 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
               updated_at = clock_timestamp()
           WHERE user_id = ${event.user_id}
         `;
+        await insertAuditEvent(sql, {
+          scope: "account",
+          accountUserId: event.user_id,
+          actorUserId: event.user_id,
+          action: "subscription.updated",
+          targetType: "subscription",
+          targetId: event.event_id,
+          metadata: {
+            plan: event.plan,
+            status: event.status,
+            provider: event.provider,
+          },
+          createdAt: event.occurred_at,
+        });
       }
       const account = await postgresAccountView(sql, event.user_id);
       if (account === undefined) throw new Error("updated account disappeared");
       return { applied, duplicate: false, account };
     });
+  }
+
+  async listAuditEvents(input: AuditQuery): Promise<AuditEvent[]> {
+    const cursor =
+      input.beforeEventId === undefined
+        ? undefined
+        : (
+            await this.#sql<Array<{ event_id: string; created_at: unknown }>>`
+              SELECT event_id::text, created_at
+              FROM agent_pulse_audit_events
+              WHERE event_id = ${input.beforeEventId}
+                AND (
+                  (${input.scope} = 'account' AND scope = 'account'
+                    AND account_user_id = ${input.actorUserId}) OR
+                  (${input.scope} = 'workspace' AND scope = 'workspace'
+                    AND workspace_owner_id = ${input.workspaceOwnerId}
+                    AND EXISTS (
+                      SELECT 1 FROM agent_pulse_workspace_members
+                      WHERE workspace_owner_id = ${input.workspaceOwnerId}
+                        AND user_id = ${input.actorUserId}
+                    ))
+                )
+              LIMIT 1
+            `
+          )[0];
+    if (input.beforeEventId !== undefined && cursor === undefined) return [];
+    const cursorTime =
+      cursor === undefined ? undefined : isoTimestamp(cursor.created_at);
+    const rows =
+      input.scope === "account"
+        ? await this.#sql<AuditEventRow[]>`
+            SELECT
+              event_id::text, scope, actor_user_id::text,
+              workspace_owner_id::text, action, target_type,
+              target_id::text, metadata, created_at
+            FROM agent_pulse_audit_events
+            WHERE scope = 'account'
+              AND account_user_id = ${input.actorUserId}
+              AND (
+                ${cursorTime ?? null}::timestamptz IS NULL OR
+                (created_at, event_id) < (
+                  ${cursorTime ?? null}::timestamptz,
+                  ${cursor?.event_id ?? null}::uuid
+                )
+              )
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT ${input.limit}
+          `
+        : await this.#sql<AuditEventRow[]>`
+            SELECT
+              events.event_id::text, events.scope,
+              events.actor_user_id::text, events.workspace_owner_id::text,
+              events.action, events.target_type, events.target_id::text,
+              events.metadata, events.created_at
+            FROM agent_pulse_audit_events AS events
+            WHERE events.scope = 'workspace'
+              AND events.workspace_owner_id = ${input.workspaceOwnerId}
+              AND EXISTS (
+                SELECT 1 FROM agent_pulse_workspace_members AS members
+                WHERE members.workspace_owner_id = events.workspace_owner_id
+                  AND members.user_id = ${input.actorUserId}
+              )
+              AND (
+                ${cursorTime ?? null}::timestamptz IS NULL OR
+                (events.created_at, events.event_id) < (
+                  ${cursorTime ?? null}::timestamptz,
+                  ${cursor?.event_id ?? null}::uuid
+                )
+              )
+            ORDER BY events.created_at DESC, events.event_id DESC
+            LIMIT ${input.limit}
+          `;
+    return rows.map(normalizeAuditEvent);
   }
 
   async countActiveDevices(ownerId: string): Promise<number> {
@@ -2543,6 +2854,71 @@ function postgresConstraint(error: unknown): string | undefined {
     return error.constraint;
   }
   return undefined;
+}
+
+interface InsertAuditEventInput {
+  scope: AuditEvent["scope"];
+  accountUserId?: string;
+  workspaceOwnerId?: string;
+  actorUserId?: string;
+  action: AuditEvent["action"];
+  targetType?: AuditEvent["target_type"];
+  targetId?: string;
+  metadata: Record<string, AuditMetadataValue>;
+  createdAt?: string;
+}
+
+async function insertAuditEvent(
+  sql: QuerySql,
+  input: InsertAuditEventInput,
+): Promise<void> {
+  if (
+    (input.scope === "account" &&
+      (input.accountUserId === undefined ||
+        input.workspaceOwnerId !== undefined)) ||
+    (input.scope === "workspace" &&
+      (input.workspaceOwnerId === undefined ||
+        input.accountUserId !== undefined)) ||
+    (input.targetType === undefined) !== (input.targetId === undefined)
+  ) {
+    throw new Error("audit event scope or target is invalid");
+  }
+  const metadata = auditMetadata(input.metadata);
+  await sql`
+    INSERT INTO agent_pulse_audit_events (
+      event_id, scope, account_user_id, workspace_owner_id, actor_user_id,
+      action, target_type, target_id, metadata, created_at
+    ) VALUES (
+      ${randomUUID()}, ${input.scope}, ${input.accountUserId ?? null},
+      ${input.workspaceOwnerId ?? null}, ${input.actorUserId ?? null},
+      ${input.action}, ${input.targetType ?? null}, ${input.targetId ?? null},
+      ${sql.json(metadata as postgres.JSONValue)},
+      COALESCE(${input.createdAt ?? null}::timestamptz, clock_timestamp())
+    )
+  `;
+}
+
+function normalizeAuditEvent(row: AuditEventRow): AuditEvent {
+  if (
+    typeof row.metadata !== "object" ||
+    row.metadata === null ||
+    Array.isArray(row.metadata)
+  ) {
+    throw new Error("stored audit metadata is invalid");
+  }
+  return {
+    event_id: row.event_id,
+    scope: row.scope,
+    ...(row.actor_user_id === null ? {} : { actor_user_id: row.actor_user_id }),
+    ...(row.workspace_owner_id === null
+      ? {}
+      : { workspace_owner_id: row.workspace_owner_id }),
+    action: row.action,
+    ...(row.target_type === null ? {} : { target_type: row.target_type }),
+    ...(row.target_id === null ? {} : { target_id: row.target_id }),
+    metadata: auditMetadata(row.metadata as Record<string, AuditMetadataValue>),
+    created_at: isoTimestamp(row.created_at),
+  };
 }
 
 async function postgresAccountView(

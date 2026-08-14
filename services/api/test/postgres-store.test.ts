@@ -205,6 +205,28 @@ test(
         (await store.accountView(userId))?.subscription.plan,
         "team",
       );
+      const audit = await store.listAuditEvents({
+        scope: "account",
+        actorUserId: userId,
+        workspaceOwnerId: userId,
+        limit: 100,
+      });
+      assert.ok(audit.some((event) => event.action === "account.created"));
+      assert.ok(
+        audit.some((event) => event.action === "auth.password_reset_completed"),
+      );
+      assert.equal(
+        audit.filter((event) => event.action === "subscription.updated").length,
+        1,
+      );
+      assert.equal(
+        JSON.stringify(audit).includes("postgres-account@example.com"),
+        false,
+      );
+      const migration = await sql<
+        Array<{ version: string | number }>
+      >`SELECT version FROM agent_platform_schema_migrations WHERE version = 11`;
+      assert.equal(Number(migration[0]?.version), 11);
 
       await store.close();
       sql = undefined;
@@ -309,6 +331,16 @@ test(
       );
       assert.equal(team?.workspace.role, "member");
       assert.equal(team?.members.length, 2);
+      const memberAudit = await store.listAuditEvents({
+        scope: "workspace",
+        actorUserId: memberId,
+        workspaceOwnerId: ownerId,
+        limit: 100,
+      });
+      assert.deepEqual(
+        memberAudit.map((event) => event.action),
+        ["team.invitation_accepted", "team.invitation_created"],
+      );
       assert.equal(
         await store.updateWorkspaceMember({
           actorUserId: ownerId,
@@ -317,6 +349,22 @@ test(
           remove: true,
         }),
         true,
+      );
+      const ownerAudit = await store.listAuditEvents({
+        scope: "workspace",
+        actorUserId: ownerId,
+        workspaceOwnerId: ownerId,
+        limit: 100,
+      });
+      assert.equal(ownerAudit[0]?.action, "team.member_removed");
+      assert.deepEqual(
+        await store.listAuditEvents({
+          scope: "workspace",
+          actorUserId: memberId,
+          workspaceOwnerId: ownerId,
+          limit: 100,
+        }),
+        [],
       );
       assert.equal(
         (await store.findWebSession(sessionDigest, "2026-08-13T12:05:00.000Z"))

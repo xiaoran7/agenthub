@@ -138,6 +138,56 @@ export interface PasswordChangeResult {
   revoked_sessions: number;
 }
 
+export const auditActions = [
+  "account.created",
+  "auth.session_created",
+  "auth.session_revoked",
+  "auth.other_sessions_revoked",
+  "auth.email_verification_requested",
+  "auth.email_verified",
+  "auth.password_reset_requested",
+  "auth.password_reset_completed",
+  "auth.password_changed",
+  "workspace.switched",
+  "team.invitation_created",
+  "team.invitation_revoked",
+  "team.invitation_accepted",
+  "team.member_role_updated",
+  "team.member_removed",
+  "subscription.updated",
+] as const;
+
+export type AuditAction = (typeof auditActions)[number];
+export type AuditScope = "account" | "workspace";
+export type AuditTargetType =
+  | "account"
+  | "web_session"
+  | "workspace"
+  | "team_invitation"
+  | "team_member"
+  | "subscription";
+export type AuditMetadataValue = string | number | boolean;
+
+export interface AuditEvent {
+  event_id: string;
+  scope: AuditScope;
+  actor_user_id?: string;
+  workspace_owner_id?: string;
+  action: AuditAction;
+  target_type?: AuditTargetType;
+  target_id?: string;
+  metadata: Record<string, AuditMetadataValue>;
+  created_at: string;
+}
+
+export interface AuditQuery {
+  scope: AuditScope;
+  actorUserId: string;
+  workspaceOwnerId: string;
+  beforeEventId?: string;
+  limit: number;
+}
+
 export interface Entitlements {
   max_devices: number;
   max_concurrent_tasks: number;
@@ -170,6 +220,7 @@ export interface AccountStore {
     userId: string;
     createdAt: string;
     expiresAt: string;
+    reason?: "registration" | "login";
   }): Promise<void>;
   findWebSession(
     digest: string,
@@ -216,6 +267,7 @@ export interface AccountStore {
     expectedPasswordHash: string;
     passwordHash: string;
     currentSessionDigest: string;
+    changedAt?: string;
   }): Promise<PasswordChangeResult>;
   consumeLoginAttempt(input: {
     scopeDigest: string;
@@ -264,15 +316,18 @@ export interface AccountStore {
     memberUserId: string;
     role?: InviteRole;
     remove: boolean;
+    updatedAt?: string;
   }): Promise<boolean>;
   switchWebSessionWorkspace(input: {
     digest: string;
     actorUserId: string;
     workspaceOwnerId: string;
+    switchedAt?: string;
   }): Promise<SessionIdentity | undefined>;
   applySubscriptionEvent(
     event: SubscriptionEvent,
   ): Promise<SubscriptionEventResult>;
+  listAuditEvents(input: AuditQuery): Promise<AuditEvent[]>;
 }
 
 export class InMemoryAccountStore implements AccountStore {
@@ -335,6 +390,7 @@ export class InMemoryAccountStore implements AccountStore {
       revokedAt?: string;
     }
   >();
+  readonly #auditEvents: AuditEvent[] = [];
 
   async createAccount(input: {
     userId: string;
@@ -360,6 +416,15 @@ export class InMemoryAccountStore implements AccountStore {
       user.user_id,
       new Map([[user.user_id, { role: "owner", createdAt: user.created_at }]]),
     );
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: user.user_id,
+      action: "account.created",
+      target_type: "account",
+      target_id: user.user_id,
+      metadata: { plan: "free" },
+      created_at: user.created_at,
+    });
     return accountView(user, { plan: "free", status: "active" });
   }
 
@@ -382,6 +447,7 @@ export class InMemoryAccountStore implements AccountStore {
     userId: string;
     createdAt: string;
     expiresAt: string;
+    reason?: "registration" | "login";
   }): Promise<void> {
     this.#sessions.set(input.digest, {
       sessionId: input.sessionId,
@@ -390,6 +456,15 @@ export class InMemoryAccountStore implements AccountStore {
       createdAt: input.createdAt,
       lastSeenAt: input.createdAt,
       expiresAt: input.expiresAt,
+    });
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: input.userId,
+      action: "auth.session_created",
+      target_type: "web_session",
+      target_id: input.sessionId,
+      metadata: { reason: input.reason ?? "login" },
+      created_at: input.createdAt,
     });
   }
 
@@ -414,7 +489,18 @@ export class InMemoryAccountStore implements AccountStore {
   }
 
   async deleteWebSession(digest: string): Promise<void> {
+    const session = this.#sessions.get(digest);
+    if (session === undefined) return;
     this.#sessions.delete(digest);
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: session.userId,
+      action: "auth.session_revoked",
+      target_type: "web_session",
+      target_id: session.sessionId,
+      metadata: { reason: "logout" },
+      created_at: new Date().toISOString(),
+    });
   }
 
   async listWebSessions(
@@ -442,6 +528,15 @@ export class InMemoryAccountStore implements AccountStore {
     for (const [digest, session] of this.#sessions) {
       if (session.userId === userId && session.sessionId === sessionId) {
         this.#sessions.delete(digest);
+        this.#recordAudit({
+          scope: "account",
+          actor_user_id: userId,
+          action: "auth.session_revoked",
+          target_type: "web_session",
+          target_id: sessionId,
+          metadata: { reason: "manual" },
+          created_at: new Date().toISOString(),
+        });
         return true;
       }
     }
@@ -458,6 +553,15 @@ export class InMemoryAccountStore implements AccountStore {
         this.#sessions.delete(digest);
         revoked += 1;
       }
+    }
+    if (revoked > 0) {
+      this.#recordAudit({
+        scope: "account",
+        actor_user_id: userId,
+        action: "auth.other_sessions_revoked",
+        metadata: { revoked_sessions: revoked },
+        created_at: new Date().toISOString(),
+      });
     }
     return revoked;
   }
@@ -504,6 +608,13 @@ export class InMemoryAccountStore implements AccountStore {
       createdAt: input.createdAt,
       expiresAt: input.expiresAt,
     });
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: input.userId,
+      action: "auth.email_verification_requested",
+      metadata: {},
+      created_at: input.createdAt,
+    });
     return { allowed: true, retry_after_seconds: 0 };
   }
 
@@ -530,6 +641,15 @@ export class InMemoryAccountStore implements AccountStore {
     }
     verification.consumedAt = now;
     user.email_verified_at ??= now;
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: user.user_id,
+      action: "auth.email_verified",
+      target_type: "account",
+      target_id: user.user_id,
+      metadata: {},
+      created_at: now,
+    });
     return accountView(user, subscription);
   }
 
@@ -576,6 +696,13 @@ export class InMemoryAccountStore implements AccountStore {
       createdAt: input.createdAt,
       expiresAt: input.expiresAt,
     });
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: input.userId,
+      action: "auth.password_reset_requested",
+      metadata: {},
+      created_at: input.createdAt,
+    });
     return { allowed: true, retry_after_seconds: 0 };
   }
 
@@ -613,6 +740,15 @@ export class InMemoryAccountStore implements AccountStore {
         revoked += 1;
       }
     }
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: user.user_id,
+      action: "auth.password_reset_completed",
+      target_type: "account",
+      target_id: user.user_id,
+      metadata: { revoked_sessions: revoked },
+      created_at: input.now,
+    });
     return { updated: true, revoked_sessions: revoked };
   }
 
@@ -626,6 +762,7 @@ export class InMemoryAccountStore implements AccountStore {
     expectedPasswordHash: string;
     passwordHash: string;
     currentSessionDigest: string;
+    changedAt?: string;
   }): Promise<PasswordChangeResult> {
     const user = this.#users.get(input.userId);
     if (
@@ -636,7 +773,7 @@ export class InMemoryAccountStore implements AccountStore {
       return { updated: false, revoked_sessions: 0 };
     }
     user.password_hash = input.passwordHash;
-    const changedAt = new Date().toISOString();
+    const changedAt = input.changedAt ?? new Date().toISOString();
     for (const reset of this.#passwordResets.values()) {
       if (reset.userId === input.userId && reset.consumedAt === undefined) {
         reset.consumedAt = changedAt;
@@ -652,6 +789,15 @@ export class InMemoryAccountStore implements AccountStore {
         revoked += 1;
       }
     }
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: input.userId,
+      action: "auth.password_changed",
+      target_type: "account",
+      target_id: input.userId,
+      metadata: { revoked_sessions: revoked },
+      created_at: changedAt,
+    });
     return { updated: true, revoked_sessions: revoked };
   }
 
@@ -849,6 +995,19 @@ export class InMemoryAccountStore implements AccountStore {
       createdAt: input.createdAt,
       expiresAt: input.expiresAt,
     });
+    this.#recordAudit({
+      scope: "workspace",
+      workspace_owner_id: input.workspaceOwnerId,
+      actor_user_id: input.invitedBy,
+      action: "team.invitation_created",
+      target_type: "team_invitation",
+      target_id: input.invitationId,
+      metadata: {
+        role: input.role,
+        invited_user_id: input.invitedUserId,
+      },
+      created_at: input.createdAt,
+    });
   }
 
   async consumeTeamInvitation(input: {
@@ -884,6 +1043,19 @@ export class InMemoryAccountStore implements AccountStore {
       role: invitation.role,
       createdAt: input.now,
     });
+    this.#recordAudit({
+      scope: "workspace",
+      workspace_owner_id: invitation.workspaceOwnerId,
+      actor_user_id: input.userId,
+      action: "team.invitation_accepted",
+      target_type: "team_member",
+      target_id: input.userId,
+      metadata: {
+        role: invitation.role,
+        invitation_id: invitation.invitationId,
+      },
+      created_at: input.now,
+    });
     return invitation.workspaceOwnerId;
   }
 
@@ -906,6 +1078,16 @@ export class InMemoryAccountStore implements AccountStore {
           (actorRole === "admin" && invitation.role === "member"))
       ) {
         invitation.revokedAt = now;
+        this.#recordAudit({
+          scope: "workspace",
+          workspace_owner_id: workspaceOwnerId,
+          actor_user_id: actorUserId,
+          action: "team.invitation_revoked",
+          target_type: "team_invitation",
+          target_id: invitationId,
+          metadata: { role: invitation.role },
+          created_at: now,
+        });
         return true;
       }
     }
@@ -918,6 +1100,7 @@ export class InMemoryAccountStore implements AccountStore {
     memberUserId: string;
     role?: InviteRole;
     remove: boolean;
+    updatedAt?: string;
   }): Promise<boolean> {
     const members = this.#workspaceMembers.get(input.workspaceOwnerId);
     const actorRole = members?.get(input.actorUserId)?.role;
@@ -942,8 +1125,29 @@ export class InMemoryAccountStore implements AccountStore {
           session.workspaceOwnerId = input.memberUserId;
         }
       }
+      this.#recordAudit({
+        scope: "workspace",
+        workspace_owner_id: input.workspaceOwnerId,
+        actor_user_id: input.actorUserId,
+        action: "team.member_removed",
+        target_type: "team_member",
+        target_id: input.memberUserId,
+        metadata: { previous_role: target.role },
+        created_at: input.updatedAt ?? new Date().toISOString(),
+      });
     } else if (input.role !== undefined) {
+      const previousRole = target.role;
       target.role = input.role;
+      this.#recordAudit({
+        scope: "workspace",
+        workspace_owner_id: input.workspaceOwnerId,
+        actor_user_id: input.actorUserId,
+        action: "team.member_role_updated",
+        target_type: "team_member",
+        target_id: input.memberUserId,
+        metadata: { previous_role: previousRole, role: input.role },
+        created_at: input.updatedAt ?? new Date().toISOString(),
+      });
     }
     return true;
   }
@@ -952,6 +1156,7 @@ export class InMemoryAccountStore implements AccountStore {
     digest: string;
     actorUserId: string;
     workspaceOwnerId: string;
+    switchedAt?: string;
   }): Promise<SessionIdentity | undefined> {
     const session = this.#sessions.get(input.digest);
     const role = this.#workspaceMembers
@@ -960,7 +1165,19 @@ export class InMemoryAccountStore implements AccountStore {
     if (session?.userId !== input.actorUserId || role === undefined) {
       return undefined;
     }
+    const previousWorkspaceOwnerId = session.workspaceOwnerId;
     session.workspaceOwnerId = input.workspaceOwnerId;
+    if (previousWorkspaceOwnerId !== input.workspaceOwnerId) {
+      this.#recordAudit({
+        scope: "account",
+        actor_user_id: input.actorUserId,
+        action: "workspace.switched",
+        target_type: "workspace",
+        target_id: input.workspaceOwnerId,
+        metadata: {},
+        created_at: input.switchedAt ?? new Date().toISOString(),
+      });
+    }
     return {
       actor_user_id: input.actorUserId,
       workspace_owner_id: input.workspaceOwnerId,
@@ -1006,10 +1223,62 @@ export class InMemoryAccountStore implements AccountStore {
     });
     if (applied) {
       this.#subscriptions.set(event.user_id, subscriptionFromEvent(event));
+      this.#recordAudit({
+        scope: "account",
+        actor_user_id: event.user_id,
+        action: "subscription.updated",
+        target_type: "subscription",
+        target_id: event.event_id,
+        metadata: {
+          plan: event.plan,
+          status: event.status,
+          provider: event.provider,
+        },
+        created_at: event.occurred_at,
+      });
     }
     const account = await this.accountView(event.user_id);
     if (account === undefined) throw new Error("updated account disappeared");
     return { applied, duplicate: false, account };
+  }
+
+  async listAuditEvents(input: AuditQuery): Promise<AuditEvent[]> {
+    if (
+      input.scope === "workspace" &&
+      !this.#workspaceMembers
+        .get(input.workspaceOwnerId)
+        ?.has(input.actorUserId)
+    ) {
+      return [];
+    }
+    const visible = this.#auditEvents
+      .filter((event) =>
+        input.scope === "account"
+          ? event.scope === "account" &&
+            event.actor_user_id === input.actorUserId
+          : event.scope === "workspace" &&
+            event.workspace_owner_id === input.workspaceOwnerId,
+      )
+      .sort(compareAuditEvents);
+    const cursorIndex =
+      input.beforeEventId === undefined
+        ? -1
+        : visible.findIndex((event) => event.event_id === input.beforeEventId);
+    if (input.beforeEventId !== undefined && cursorIndex < 0) return [];
+    return visible
+      .slice(
+        cursorIndex < 0 ? 0 : cursorIndex + 1,
+        cursorIndex < 0 ? input.limit : cursorIndex + 1 + input.limit,
+      )
+      .map(cloneAuditEvent);
+  }
+
+  #recordAudit(event: Omit<AuditEvent, "event_id">): void {
+    this.#auditEvents.push({
+      ...event,
+      event_id: randomUUID(),
+      metadata: auditMetadata(event.metadata),
+    });
   }
 
   setSubscription(userId: string, subscription: SubscriptionRecord): void {
@@ -1240,6 +1509,7 @@ export async function createLoginSession(
   reply: FastifyReply,
   secure: boolean,
   now: Date = new Date(),
+  reason: "registration" | "login" = "login",
 ): Promise<void> {
   const token = randomBytes(SESSION_BYTES).toString("base64url");
   const sessionId = randomUUID();
@@ -1250,6 +1520,7 @@ export async function createLoginSession(
     userId,
     createdAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
+    reason,
   });
   reply.header("set-cookie", serializeSessionCookie(token, expiresAt, secure));
 }
@@ -1392,4 +1663,47 @@ function derivePassword(password: string, salt: Buffer): Promise<Buffer> {
 
 function roleOrder(role: WorkspaceRole): number {
   return role === "owner" ? 0 : role === "admin" ? 1 : 2;
+}
+
+const AUDIT_METADATA_KEYS = new Set([
+  "reason",
+  "plan",
+  "status",
+  "provider",
+  "role",
+  "previous_role",
+  "invited_user_id",
+  "invitation_id",
+  "revoked_sessions",
+]);
+
+export function auditMetadata(
+  input: Record<string, AuditMetadataValue>,
+): Record<string, AuditMetadataValue> {
+  const output: Record<string, AuditMetadataValue> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!AUDIT_METADATA_KEYS.has(key)) {
+      throw new Error(`audit metadata key is not allowed: ${key}`);
+    }
+    if (
+      (typeof value === "string" &&
+        (value.length > 128 || /[\u0000-\u001f\u007f]/u.test(value))) ||
+      (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0))
+    ) {
+      throw new Error(`audit metadata value is invalid: ${key}`);
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function compareAuditEvents(left: AuditEvent, right: AuditEvent): number {
+  const timeOrder = right.created_at.localeCompare(left.created_at);
+  return timeOrder === 0
+    ? right.event_id.localeCompare(left.event_id)
+    : timeOrder;
+}
+
+function cloneAuditEvent(event: AuditEvent): AuditEvent {
+  return { ...event, metadata: { ...event.metadata } };
 }
