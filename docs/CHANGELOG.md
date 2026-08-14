@@ -284,6 +284,8 @@
 
 ### Fixed
 
+- Windows Release 桌面程序改用 GUI subsystem，安装后启动只显示 Tauri 前端窗口，
+  不再同时弹出控制台黑框；Debug 构建仍保留终端，方便本地诊断。
 - PostgreSQL 集成测试的 `listSessions` 过滤断言从 `WORKING` 修正为
   fixture 实际的 `WAITING_PERMISSION`：该测试因环境门控在本机始终 SKIP，
   错误断言从未暴露，真实数据库上第一次运行就会失败。
