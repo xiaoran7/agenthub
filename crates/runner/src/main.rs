@@ -136,6 +136,8 @@ enum Command {
         gateway_ca_cert: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         sync_interval_seconds: u64,
+        #[arg(long, default_value_t = 15)]
+        heartbeat_interval_seconds: u64,
         #[arg(long, default_value_t = 60)]
         auth_interval_seconds: u64,
         #[arg(long, default_value_t = 2)]
@@ -497,6 +499,7 @@ fn main() -> Result<()> {
             sync_server,
             gateway_ca_cert,
             sync_interval_seconds,
+            heartbeat_interval_seconds,
             auth_interval_seconds,
             sync_failure_initial_seconds,
             sync_failure_max_seconds,
@@ -525,6 +528,10 @@ fn main() -> Result<()> {
                 nonzero_duration("collector timeout", collector_timeout_seconds)?;
             let sync_policy = SyncPolicy {
                 interval: nonzero_duration("sync interval", sync_interval_seconds)?,
+                heartbeat_interval: nonzero_duration(
+                    "heartbeat interval",
+                    heartbeat_interval_seconds,
+                )?,
                 failure_initial: nonzero_duration(
                     "initial sync failure backoff",
                     sync_failure_initial_seconds,
@@ -534,6 +541,9 @@ fn main() -> Result<()> {
                     sync_failure_max_seconds,
                 )?,
             };
+            if sync_policy.heartbeat_interval > Duration::from_secs(30) {
+                bail!("heartbeat interval cannot exceed 30 seconds");
+            }
             if sync_policy.failure_initial > sync_policy.failure_max {
                 bail!("initial sync failure backoff cannot exceed maximum sync failure backoff");
             }

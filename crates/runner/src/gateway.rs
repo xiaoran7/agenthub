@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use ureq::tls::{Certificate, RootCerts, TlsConfig};
@@ -67,6 +68,53 @@ impl GatewayError {
 pub struct DeviceBinding {
     pub device_id: String,
     pub registered: bool,
+}
+
+const HEARTBEAT_PROTOCOL_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeviceHeartbeat {
+    protocol_version: u16,
+    device_id: String,
+    public_key: String,
+    sent_at: DateTime<Utc>,
+    signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HeartbeatResponse {
+    pub protocol_version: u16,
+    pub device_id: String,
+    pub accepted: bool,
+}
+
+#[derive(Serialize)]
+struct UnsignedDeviceHeartbeat<'a> {
+    protocol_version: u16,
+    device_id: &'a str,
+    public_key: &'a str,
+    sent_at: DateTime<Utc>,
+}
+
+impl DeviceHeartbeat {
+    pub fn signed(identity: &DeviceIdentity) -> Result<Self, GatewayError> {
+        let public_key = identity.public_key_hex();
+        let sent_at = Utc::now();
+        let unsigned = UnsignedDeviceHeartbeat {
+            protocol_version: HEARTBEAT_PROTOCOL_VERSION,
+            device_id: identity.device_id(),
+            public_key: &public_key,
+            sent_at,
+        };
+        let bytes = serde_json::to_vec(&unsigned).map_err(|_| GatewayError::InvalidResponse)?;
+        Ok(Self {
+            protocol_version: HEARTBEAT_PROTOCOL_VERSION,
+            device_id: identity.device_id().to_owned(),
+            public_key,
+            sent_at,
+            signature: hex::encode(identity.sign(&bytes).to_bytes()),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +236,18 @@ impl GatewayClient {
 
     pub fn upload_auth(&self, batch: &AuthSyncBatch) -> Result<AuthPushSummary, GatewayError> {
         self.post_json("/v1/device-auth", batch)
+    }
+
+    pub fn heartbeat(&self, identity: &DeviceIdentity) -> Result<HeartbeatResponse, GatewayError> {
+        let heartbeat = DeviceHeartbeat::signed(identity)?;
+        let response: HeartbeatResponse = self.post_json("/v1/devices/heartbeat", &heartbeat)?;
+        if response.protocol_version != HEARTBEAT_PROTOCOL_VERSION {
+            return Err(GatewayError::InvalidResponse);
+        }
+        if response.device_id != identity.device_id() {
+            return Err(GatewayError::DeviceMismatch);
+        }
+        Ok(response)
     }
 
     pub fn claim_task(

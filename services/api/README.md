@@ -30,6 +30,7 @@ Device Gateway、任务中转与查询 API 的开发期实现。
 | `POST`   | `/v1/billing/events`                   | 接收内部账单适配器的签名订阅事件               |
 | `POST`   | `/v1/device-bindings`                  | 生成有时限的一次性设备绑定码                   |
 | `POST`   | `/v1/devices/register`                 | 使用一次性绑定码登记设备公钥                   |
+| `POST`   | `/v1/devices/heartbeat`                | 验证设备签名并更新在线活跃时间                 |
 | `DELETE` | `/v1/devices/:deviceId`                | 撤销当前用户的设备，保留既有会话历史           |
 | `POST`   | `/v1/sync/batches`                     | 验证并幂等接收签名事件批次                     |
 | `POST`   | `/v1/device-auth`                      | 验证并幂等接收 Runner 的认证/配额安全快照      |
@@ -63,6 +64,11 @@ Device Gateway、任务中转与查询 API 的开发期实现。
 脱敏账号、过期时间和配额窗口；原始 access/refresh token、cookie、凭据文件内容和环境变量
 值不会被该 API 接收或返回。Runner 只有在用户显式开启凭据访问后才会上报，后台同步不会
 代替登录或自动完成交互式重新认证。
+
+`POST /v1/devices/heartbeat` 接收设备 Ed25519 签名的当前时间戳。Gateway 校验设备已登记、
+公钥匹配且未撤销，并拒绝超过 5 分钟时钟偏差的请求。相同或更旧的 `sent_at` 返回
+`accepted: false`，不会刷新 `last_seen_at`；Runner 默认每 15 秒发送一次，最长间隔为
+30 秒。PostgreSQL 使用 `last_heartbeat_at` 持久化重放水位。
 
 Web Push 默认关闭。生成一对 VAPID 密钥并配置齐三个变量后才启用，缺一个则
 `/v1/push/key` 返回 404、订阅接口拒绝登记：

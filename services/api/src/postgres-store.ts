@@ -6,6 +6,7 @@ import type {
   ActivityStatus,
   AuthSnapshot,
   AuthSyncBatch,
+  DeviceHeartbeat,
   DeviceTaskClaim,
   DeviceTaskUpdate,
   RemoteTask,
@@ -50,6 +51,7 @@ import {
   type DeviceView,
   type GatewayStore,
   type IngestResult,
+  type HeartbeatResult,
   type RegisteredDevice,
   type RemoteTaskCreateResult,
   type RemoteTaskFilters,
@@ -112,6 +114,10 @@ const MIGRATIONS = [
     version: 11,
     url: new URL("../migrations/0011_audit_events.sql", import.meta.url),
   },
+  {
+    version: 12,
+    url: new URL("../migrations/0012_device_heartbeat.sql", import.meta.url),
+  },
 ] as const;
 
 interface DeviceRow {
@@ -122,6 +128,7 @@ interface DeviceRow {
   last_seen_at: unknown;
   last_sequence: string | number;
   revoked_at: unknown | null;
+  last_heartbeat_at?: unknown | null;
 }
 
 interface BindingCodeRow {
@@ -2123,6 +2130,66 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           device_id: batch.device_id,
           received_at: isoTimestamp(row.received_at),
         })),
+      };
+    });
+  }
+
+  async recordHeartbeat(
+    heartbeat: DeviceHeartbeat,
+    receivedAt: string,
+  ): Promise<HeartbeatResult> {
+    return this.#sql.begin(async (sql) => {
+      const rows = await sql<
+        Array<{
+          owner_id: string;
+          public_key: string;
+          revoked_at: unknown | null;
+          last_seen_at: unknown;
+          last_heartbeat_at: unknown | null;
+        }>
+      >`
+        SELECT owner_id, public_key, revoked_at, last_seen_at, last_heartbeat_at
+        FROM agent_platform_devices
+        WHERE device_id = ${heartbeat.device_id}
+        FOR UPDATE
+      `;
+      const device = rows[0];
+      if (device === undefined) {
+        throw new GatewayStoreError(
+          "device_not_registered",
+          "device is not registered",
+        );
+      }
+      if (device.revoked_at !== null) {
+        throw new GatewayStoreError("device_revoked", "device is revoked");
+      }
+      if (device.public_key !== heartbeat.public_key) {
+        throw new GatewayStoreError(
+          "device_key_mismatch",
+          "heartbeat public key does not match registered device",
+        );
+      }
+      const previous =
+        device.last_heartbeat_at === null
+          ? undefined
+          : isoTimestamp(device.last_heartbeat_at);
+      const accepted = previous === undefined || heartbeat.sent_at > previous;
+      if (accepted) {
+        await sql`
+          UPDATE agent_platform_devices
+          SET last_seen_at = ${receivedAt}, last_heartbeat_at = ${heartbeat.sent_at}
+          WHERE device_id = ${heartbeat.device_id}
+        `;
+        return {
+          accepted: true,
+          owner_id: device.owner_id,
+          last_seen_at: receivedAt,
+        };
+      }
+      return {
+        accepted: false,
+        owner_id: device.owner_id,
+        last_seen_at: isoTimestamp(device.last_seen_at),
       };
     });
   }

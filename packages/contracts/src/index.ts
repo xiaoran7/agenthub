@@ -109,6 +109,14 @@ export interface DeviceTaskClaim {
   signature: string;
 }
 
+export interface DeviceHeartbeat {
+  protocol_version: number;
+  device_id: string;
+  public_key: string;
+  sent_at: string;
+  signature: string;
+}
+
 export interface DeviceTaskUpdate {
   protocol_version: number;
   task_id: string;
@@ -333,6 +341,42 @@ export function parseDeviceTaskClaim(value: unknown): DeviceTaskClaim {
     claim.signature,
   );
   return claim;
+}
+
+export function parseDeviceHeartbeat(value: unknown): DeviceHeartbeat {
+  const object = expectObject(value, "device heartbeat");
+  expectKeys(object, [
+    "protocol_version",
+    "device_id",
+    "public_key",
+    "sent_at",
+    "signature",
+  ]);
+  const heartbeat: DeviceHeartbeat = {
+    protocol_version: expectProtocolVersion(object.protocol_version),
+    device_id: expectDeviceId(object.device_id),
+    public_key: expectHex(object.public_key, "public_key", 64),
+    sent_at: expectTimestamp(object.sent_at, "sent_at"),
+    signature: expectHex(object.signature, "signature", 128),
+  };
+  verifyDeviceSignature(
+    heartbeat.device_id,
+    heartbeat.public_key,
+    unsignedDeviceHeartbeatJson(heartbeat),
+    heartbeat.signature,
+  );
+  return heartbeat;
+}
+
+export function unsignedDeviceHeartbeatJson(
+  heartbeat: DeviceHeartbeat,
+): string {
+  return JSON.stringify({
+    protocol_version: heartbeat.protocol_version,
+    device_id: heartbeat.device_id,
+    public_key: heartbeat.public_key,
+    sent_at: heartbeat.sent_at,
+  });
 }
 
 export function unsignedDeviceTaskClaimJson(claim: DeviceTaskClaim): string {

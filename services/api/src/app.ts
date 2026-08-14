@@ -7,6 +7,7 @@ import {
   parseAuthSyncBatch,
   parseCreateRemoteTask,
   parseDeviceRegistration,
+  parseDeviceHeartbeat,
   parseDeviceTaskClaim,
   parseDeviceTaskUpdate,
   parseSyncBatch,
@@ -975,6 +976,21 @@ export function createGatewayApp(
     return reply.status(200).send({
       protocol_version: batch.protocol_version,
       device_id: batch.device_id,
+      accepted: result.accepted,
+    });
+  });
+
+  app.post("/v1/devices/heartbeat", async (request, reply) => {
+    const heartbeat = parseDeviceHeartbeat(request.body);
+    const receivedAt = now();
+    assertFreshDeviceTimestamp(heartbeat.sent_at, receivedAt);
+    const result = await store.recordHeartbeat(
+      heartbeat,
+      receivedAt.toISOString(),
+    );
+    return reply.send({
+      protocol_version: heartbeat.protocol_version,
+      device_id: heartbeat.device_id,
       accepted: result.accepted,
     });
   });

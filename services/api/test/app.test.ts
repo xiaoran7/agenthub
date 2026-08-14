@@ -5,11 +5,13 @@ import test from "node:test";
 
 import {
   deviceIdForPublicKey,
+  unsignedDeviceHeartbeatJson,
   unsignedAuthSyncBatchJson,
   parseSyncBatch,
   type SyncBatch,
   type SyncEvent,
   type AuthSyncBatch,
+  type DeviceHeartbeat,
   unsignedBatchJson,
 } from "@agent-pulse/contracts";
 
@@ -70,6 +72,22 @@ function registrationPayload(bindingCode: string): Record<string, unknown> {
   };
 }
 
+function heartbeatPayload(sentAt: string): DeviceHeartbeat {
+  const heartbeat: DeviceHeartbeat = {
+    protocol_version: 1,
+    device_id: fixture.device_id,
+    public_key: fixture.public_key,
+    sent_at: sentAt,
+    signature: "",
+  };
+  heartbeat.signature = sign(
+    null,
+    Buffer.from(unsignedDeviceHeartbeatJson(heartbeat), "utf8"),
+    fixturePrivateKey,
+  ).toString("hex");
+  return heartbeat;
+}
+
 test("registration, signed ingestion, replay, and read queries form a loop", async () => {
   let now = new Date("2026-07-25T00:00:01Z");
   const store = new InMemoryGatewayStore(() => now);
@@ -78,6 +96,7 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
     bindingCodes: new OneTimeBindingCodes(
       new Map([["one-time-code", "user-1"]]),
     ),
+    now: () => now,
   });
 
   const registration = await app.inject({
@@ -93,6 +112,38 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
     payload: registrationPayload("one-time-code"),
   });
   assert.equal(retryRegistration.statusCode, 200);
+
+  const heartbeat = await app.inject({
+    method: "POST",
+    url: "/v1/devices/heartbeat",
+    payload: heartbeatPayload("2026-07-25T00:00:01.000Z"),
+  });
+  assert.deepEqual(heartbeat.json(), {
+    protocol_version: 1,
+    device_id: fixture.device_id,
+    accepted: true,
+  });
+  now = new Date("2026-07-25T00:00:10Z");
+  const replayedHeartbeat = await app.inject({
+    method: "POST",
+    url: "/v1/devices/heartbeat",
+    payload: heartbeatPayload("2026-07-25T00:00:01.000Z"),
+  });
+  assert.equal(replayedHeartbeat.statusCode, 200);
+  assert.equal(replayedHeartbeat.json().accepted, false);
+  const newerHeartbeat = await app.inject({
+    method: "POST",
+    url: "/v1/devices/heartbeat",
+    payload: heartbeatPayload("2026-07-25T00:00:02.000Z"),
+  });
+  assert.equal(newerHeartbeat.statusCode, 200);
+  assert.equal(newerHeartbeat.json().accepted, true);
+  const staleHeartbeat = await app.inject({
+    method: "POST",
+    url: "/v1/devices/heartbeat",
+    payload: heartbeatPayload("2026-07-24T00:00:00.000Z"),
+  });
+  assert.equal(staleHeartbeat.statusCode, 400);
 
   const ingestion = await app.inject({
     method: "POST",
@@ -133,7 +184,7 @@ test("registration, signed ingestion, replay, and read queries form a loop", asy
   });
   assert.equal(otherUser.json().sessions.length, 0);
 
-  now = new Date("2026-07-25T00:00:47Z");
+  now = new Date("2026-07-25T00:01:00Z");
   const devices = await app.inject({
     method: "GET",
     url: "/v1/devices",

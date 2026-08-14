@@ -7,17 +7,20 @@ import {
   ContractError,
   deviceIdForPublicKey,
   parseAuthSyncBatch,
+  parseDeviceHeartbeat,
   parseCreateRemoteTask,
   parseDeviceRegistration,
   parseDeviceTaskClaim,
   parseDeviceTaskUpdate,
   parseSyncBatch,
   unsignedAuthSyncBatchJson,
+  unsignedDeviceHeartbeatJson,
   unsignedDeviceTaskClaimJson,
   unsignedDeviceTaskUpdateJson,
   verifyAuthSyncBatch,
   verifySyncBatch,
   type AuthSyncBatch,
+  type DeviceHeartbeat,
 } from "../src/index.js";
 
 const fixture = JSON.parse(
@@ -60,6 +63,35 @@ test("version 1 cross-language vector validates", () => {
   const batch = parseSyncBatch(fixture);
   verifySyncBatch(batch);
   assert.equal(deviceIdForPublicKey(batch.public_key), batch.device_id);
+});
+
+test("device heartbeats validate signatures and reject tampering", () => {
+  const batch = parseSyncBatch(fixture);
+  const heartbeat: DeviceHeartbeat = {
+    protocol_version: 1,
+    device_id: batch.device_id,
+    public_key: batch.public_key,
+    sent_at: "2026-07-25T00:00:01.000Z",
+    signature: "",
+  };
+  heartbeat.signature = sign(
+    null,
+    Buffer.from(unsignedDeviceHeartbeatJson(heartbeat), "utf8"),
+    fixturePrivateKey,
+  ).toString("hex");
+  assert.deepEqual(parseDeviceHeartbeat(heartbeat), heartbeat);
+
+  const tampered = { ...heartbeat, sent_at: "2026-07-25T00:00:02.000Z" };
+  assert.throws(
+    () => parseDeviceHeartbeat(tampered),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_signature",
+  );
+  assert.throws(
+    () => parseDeviceHeartbeat({ ...heartbeat, extra: true }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "unknown_field",
+  );
 });
 
 test("redacted auth sync batch validates and rejects token fields", () => {

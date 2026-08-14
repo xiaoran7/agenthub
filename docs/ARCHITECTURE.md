@@ -177,8 +177,9 @@ session_key = agent_type + device_id + agent_session_id
 Outbox，采集提交新事件后通过容量为 1 的合并信号立即唤醒；网络失败按独立指数退避，
 退避期间继续采集。同步与采集各持一个 SQLite 连接，依赖 WAL 与 `busy_timeout`
 协调，不共享网络阻塞。失败报告读取磁盘统计并携带 `pending_events`，长时间离线时
-可以持续观察积压量。在途批次持久化、独立设备心跳和 WebSocket 低延迟通道仍属于
-Milestone 2。
+可以持续观察积压量。Runner 同步线程在无事件时按 15 秒周期发送独立的 Ed25519
+设备心跳；Gateway 按设备保存 `last_heartbeat_at`，拒绝旧时间戳重放并仅更新设备
+活跃时间，不改变 Session 事件流。WebSocket 低延迟通道仍属于后续里程碑。
 
 ### 3.2 本地 IPC
 
@@ -264,8 +265,8 @@ Runner 对 Hook 输入执行固定 Schema 校验和字段白名单，不接受�
   在服务端注入令牌，浏览器提供的 `Authorization` 和 `x-user-id` 均不能覆盖它。
 - `x-user-id` 仅在显式开发认证模式下生效，且该模式只能监听回环地址。
 - Runner 已可调用登记与批次接口，并验证有界确认后清理 Outbox。
-- 默认只监听 `127.0.0.1`；尚未实现 TLS WebSocket、心跳、全局 API 速率限制、联合登录
-  和完整令牌生命周期管理。
+- 默认只监听 `127.0.0.1`；尚未实现 TLS WebSocket、全局 API 速率限制、联合登录和完整
+  令牌生命周期管理。
 
 建议：
 
@@ -364,8 +365,8 @@ Pub/Sub。MVP 不必一开始维护两套基础设施。
 当前已实现 `GET /v1/devices`、`GET /v1/sessions` 和 `GET /v1/sessions/events`。
 Session 可按设备、Presence 和 Activity Status 过滤；状态事件时间线按
 `device_id + agent_type + agent_session_id` 定位会话，按 `sequence` 降序返回，
-`limit` 默认 100、上限 500，查询按 owner 隔离。设备在线状态按最近批次接收时间
-和 45 秒阈值计算；心跳尚未接入，因此无新事件的设备会按阈值离线。
+`limit` 默认 100、上限 500，查询按 owner 隔离。设备在线状态按最近批次或独立心跳
+接收时间和 45 秒阈值计算；没有任何联系的设备会按阈值离线。
 
 实时订阅为 `GET /v1/stream`（Server-Sent Events，owner 维度）。批次入库且确实
 产生新事件时推送一帧 `event: sessions`，内容只有 `device_id` 与本批接收数量：
@@ -699,7 +700,7 @@ AgentPulse/
   生命周期待接入）
 - WebSocket Gateway（已完成 Runner→Gateway HTTP 批次闭环，WebSocket 待接入）
 - 后台自动同步（已完成启动排空、新事件唤醒、独立退避与恢复重放）
-- 心跳与离线判断（已完成接收时间阈值，独立心跳待接入）
+- 心跳与离线判断（已完成 15 秒签名心跳、5 分钟时钟窗口、旧时间戳拒绝和 45 秒离线阈值）
 - 幂等事件写入（已完成 Runner 上传/确认、内存与 PostgreSQL 事务存储）
 - Session 查询 API（已完成开发期设备和 Session 读接口）
 
@@ -729,8 +730,7 @@ fetch 处理器也不做离线缓存——引入它是因为 Web Push 强制要�
 权限。点击通知聚焦已打开的面板并用 postMessage 传递会话引用，标识不进 URL。
 
 M3 已全部完成。M4 已完成自动化基线，并在本机 PostgreSQL 18.4 与 Codex CLI
-0.144.2 上补充现场证据；个人部署访问令牌已接入，跨实例广播、心跳、多用户登录
-与令牌生命周期仍在 M2 遗留清单上。
+0.144.2 上补充现场证据；个人部署访问令牌已接入，跨实例广播仍在 M2 遗留清单上。
 
 ### Milestone 5：原生 Android 与跨端视觉统一
 

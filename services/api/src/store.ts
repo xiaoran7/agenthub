@@ -6,6 +6,7 @@ import type {
   AgentType,
   AuthSnapshot,
   AuthSyncBatch,
+  DeviceHeartbeat,
   Presence,
   CreateRemoteTaskInput,
   DeviceTaskClaim,
@@ -123,6 +124,12 @@ export interface AuthIngestResult {
   snapshots: StoredAuthSnapshot[];
 }
 
+export interface HeartbeatResult {
+  accepted: boolean;
+  owner_id: string;
+  last_seen_at: string;
+}
+
 export interface GatewayStore {
   createBindingCode(
     ownerId: string,
@@ -149,6 +156,10 @@ export interface GatewayStore {
   ): Promise<DeviceRegistrationResult>;
   ingestBatch(batch: SyncBatch): Promise<IngestResult>;
   ingestAuthBatch(batch: AuthSyncBatch): Promise<AuthIngestResult>;
+  recordHeartbeat(
+    heartbeat: DeviceHeartbeat,
+    receivedAt: string,
+  ): Promise<HeartbeatResult>;
   listDevices(ownerId: string): Promise<DeviceView[]>;
   listSessions(
     ownerId: string,
@@ -253,6 +264,7 @@ export class InMemoryGatewayStore implements GatewayStore {
   readonly #lastSequenceByDevice = new Map<string, number>();
   readonly #sessions = new Map<string, StoredSession>();
   readonly #authSnapshots = new Map<string, StoredAuthSnapshot>();
+  readonly #heartbeatSentAtByDevice = new Map<string, string>();
   readonly #remoteTasks = new Map<string, RemoteTask & { owner_id: string }>();
   readonly #taskIdsByIdempotencyKey = new Map<string, string>();
   readonly #now: () => Date;
@@ -502,6 +514,39 @@ export class InMemoryGatewayStore implements GatewayStore {
       accepted: newEvents.length,
       owner_id: device.owner_id,
       changes,
+    };
+  }
+
+  async recordHeartbeat(
+    heartbeat: DeviceHeartbeat,
+    receivedAt: string,
+  ): Promise<HeartbeatResult> {
+    const device = this.#devices.get(heartbeat.device_id);
+    if (device === undefined) {
+      throw new GatewayStoreError(
+        "device_not_registered",
+        "device is not registered",
+      );
+    }
+    if (device.revoked_at !== undefined) {
+      throw new GatewayStoreError("device_revoked", "device is revoked");
+    }
+    if (device.public_key !== heartbeat.public_key) {
+      throw new GatewayStoreError(
+        "device_key_mismatch",
+        "heartbeat public key does not match registered device",
+      );
+    }
+    const previous = this.#heartbeatSentAtByDevice.get(heartbeat.device_id);
+    const accepted = previous === undefined || heartbeat.sent_at > previous;
+    if (accepted) {
+      this.#heartbeatSentAtByDevice.set(heartbeat.device_id, heartbeat.sent_at);
+      device.last_seen_at = receivedAt;
+    }
+    return {
+      accepted,
+      owner_id: device.owner_id,
+      last_seen_at: device.last_seen_at,
     };
   }
 

@@ -23,6 +23,7 @@ const STOP_POLL_INTERVAL: Duration = Duration::from_millis(250);
 #[derive(Debug, Clone, Copy)]
 pub struct SyncPolicy {
     pub interval: Duration,
+    pub heartbeat_interval: Duration,
     pub failure_initial: Duration,
     pub failure_max: Duration,
 }
@@ -31,6 +32,7 @@ impl Default for SyncPolicy {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(5),
+            heartbeat_interval: Duration::from_secs(15),
             failure_initial: Duration::from_secs(2),
             failure_max: Duration::from_secs(60),
         }
@@ -98,20 +100,39 @@ impl SyncWorker {
             .name("agent-pulse-sync".into())
             .spawn(move || {
                 let mut outbox = Outbox::open(database_path)?;
+                let mut last_contact = Instant::now()
+                    .checked_sub(policy.heartbeat_interval)
+                    .unwrap_or_else(Instant::now);
                 run_sync_loop(
                     &receiver,
                     &stop,
                     policy,
                     || {
-                        push_outbox(&client, &mut outbox, &identity, limit, max_batches).map_err(
-                            |error| SyncAttemptFailure {
-                                error,
-                                pending_events: outbox
-                                    .stats()
-                                    .ok()
-                                    .map(|stats| stats.pending_events),
-                            },
-                        )
+                        let summary =
+                            push_outbox(&client, &mut outbox, &identity, limit, max_batches)
+                                .map_err(|error| SyncAttemptFailure {
+                                    error,
+                                    pending_events: outbox
+                                        .stats()
+                                        .ok()
+                                        .map(|stats| stats.pending_events),
+                                })?;
+                        if summary.batches_sent > 0 {
+                            last_contact = Instant::now();
+                        }
+                        if last_contact.elapsed() >= policy.heartbeat_interval {
+                            client
+                                .heartbeat(&identity)
+                                .map_err(|error| SyncAttemptFailure {
+                                    error,
+                                    pending_events: outbox
+                                        .stats()
+                                        .ok()
+                                        .map(|stats| stats.pending_events),
+                                })?;
+                            last_contact = Instant::now();
+                        }
+                        Ok(summary)
                     },
                     |report| {
                         eprintln!(
@@ -166,7 +187,7 @@ fn run_sync_loop(
                     next_delay_seconds: delay.as_secs(),
                     error_code: Some("sync_pending_device_mismatch".into()),
                 });
-                (delay, true)
+                (delay.min(policy.heartbeat_interval), true)
             }
             Ok(summary) => {
                 let was_recovering = consecutive_failures > 0;
@@ -183,7 +204,7 @@ fn run_sync_loop(
                         error_code: None,
                     });
                 }
-                (policy.interval, false)
+                (policy.interval.min(policy.heartbeat_interval), false)
             }
             Err(failure) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
@@ -251,6 +272,7 @@ mod tests {
         let (_trigger, receiver) = sync_channel(1);
         let policy = SyncPolicy {
             interval: Duration::from_millis(1),
+            heartbeat_interval: Duration::from_millis(1),
             failure_initial: Duration::from_millis(1),
             failure_max: Duration::from_millis(4),
         };
@@ -306,6 +328,7 @@ mod tests {
             &stop,
             SyncPolicy {
                 interval: Duration::from_millis(1),
+                heartbeat_interval: Duration::from_millis(1),
                 failure_initial: Duration::from_millis(1),
                 failure_max: Duration::from_millis(4),
             },
@@ -431,6 +454,7 @@ mod tests {
             &stop,
             SyncPolicy {
                 interval: Duration::from_millis(1),
+                heartbeat_interval: Duration::from_millis(1),
                 failure_initial: Duration::from_millis(1),
                 failure_max: Duration::from_millis(4),
             },

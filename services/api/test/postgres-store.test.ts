@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { parseSyncBatch } from "@agent-pulse/contracts";
+import { parseSyncBatch, type DeviceHeartbeat } from "@agent-pulse/contracts";
 import postgres from "postgres";
 
 import {
@@ -414,6 +414,30 @@ test(
         fixture.public_key,
       );
       assert.equal(registration.created, true);
+      const heartbeat: DeviceHeartbeat = {
+        protocol_version: 1,
+        device_id: fixture.device_id,
+        public_key: fixture.public_key,
+        sent_at: "2026-08-14T00:00:01.000Z",
+        signature: "0".repeat(128),
+      };
+      assert.deepEqual(
+        await firstStore.recordHeartbeat(heartbeat, "2026-08-14T00:00:02.000Z"),
+        {
+          accepted: true,
+          owner_id: "postgres-user",
+          last_seen_at: "2026-08-14T00:00:02.000Z",
+        },
+      );
+      assert.equal(
+        (
+          await firstStore.recordHeartbeat(
+            heartbeat,
+            "2026-08-14T00:00:03.000Z",
+          )
+        ).accepted,
+        false,
+      );
       const ingestion = await firstStore.ingestBatch(fixture);
       assert.equal(ingestion.accepted, 1);
       assert.equal(ingestion.owner_id, "postgres-user");
