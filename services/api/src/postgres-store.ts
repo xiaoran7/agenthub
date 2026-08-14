@@ -124,6 +124,13 @@ const MIGRATIONS = [
     version: 13,
     url: new URL("../migrations/0013_device_task_audit.sql", import.meta.url),
   },
+  {
+    version: 14,
+    url: new URL(
+      "../migrations/0014_remote_task_receipts.sql",
+      import.meta.url,
+    ),
+  },
 ] as const;
 
 interface DeviceRow {
