@@ -207,6 +207,8 @@ test(
       );
       const deviceId = `dev_${"1".repeat(32)}`;
       await store.registerDevice(userId, deviceId, "2".repeat(64), userId);
+      const taskCreatedAt = new Date();
+      const taskExpiresAt = new Date(taskCreatedAt.getTime() + 3_600_000);
       const remoteTask = await store.createRemoteTask(
         userId,
         {
@@ -217,8 +219,8 @@ test(
           idempotency_key: "postgres-audit-task",
           execution_policy: "local_confirmation",
           expires_in_seconds: 3_600,
-          created_at: "2026-08-13T12:11:00.000Z",
-          expires_at: "2026-08-13T13:11:00.000Z",
+          created_at: taskCreatedAt.toISOString(),
+          expires_at: taskExpiresAt.toISOString(),
           max_concurrent_tasks: 10,
         },
         userId,
