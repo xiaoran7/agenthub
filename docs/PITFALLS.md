@@ -459,6 +459,12 @@ loaded because running scripts is disabled`。
 - **如何避免**：CI 增加 PostgreSQL Service Container，并把该环境变量指向专用测试
   数据库；开发机不要为了单次验证静默安装系统服务或把测试指向生产数据库。
 
+## 2026-08-14 Signed task receipts
+
+- **Pitfall**: A device status update can prove state transition but not that a local process actually ran.
+- **Handling**: Sign bounded execution timestamps, a receipt digest, and an optional exit code. Validate field completeness and timestamp order in both InMemory and PostgreSQL stores.
+- **Privacy boundary**: Never place full CLI output, local paths, environment variables, prompts, or tokens in the receipt or audit metadata.
+
 ## 2026-08-03 筛选器自动选中逻辑造成 React 状态循环
 
 - **现象**：来源筛选排除当前检查器会话后，开发浏览器持续报告

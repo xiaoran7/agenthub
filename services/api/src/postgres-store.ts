@@ -190,6 +190,10 @@ interface RemoteTaskRow {
   agent_session_id: string | null;
   result_summary: string | null;
   error_code: string | null;
+  execution_started_at: unknown | null;
+  execution_finished_at: unknown | null;
+  receipt_digest: string | null;
+  exit_code: number | null;
 }
 
 interface AuditEventRow {
@@ -2613,6 +2617,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           "task transition is invalid",
         );
       }
+      validatePostgresTaskReceipt(update);
       const terminal = ["succeeded", "failed", "canceled"].includes(
         update.status,
       );
@@ -2628,7 +2633,11 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
             completed_at = CASE WHEN ${terminal} THEN ${update.updated_at} ELSE completed_at END,
             agent_session_id = COALESCE(${update.agent_session_id ?? null}, agent_session_id),
             result_summary = COALESCE(${update.result_summary ?? null}, result_summary),
-            error_code = COALESCE(${update.error_code ?? null}, error_code)
+            error_code = COALESCE(${update.error_code ?? null}, error_code),
+            execution_started_at = COALESCE(${update.execution_started_at ?? null}, execution_started_at),
+            execution_finished_at = COALESCE(${update.execution_finished_at ?? null}, execution_finished_at),
+            receipt_digest = COALESCE(${update.receipt_digest ?? null}, receipt_digest),
+            exit_code = COALESCE(${update.exit_code ?? null}, exit_code)
         WHERE task_id = ${update.task_id}
         RETURNING ${remoteTaskColumns(sql)}
       `;
@@ -2849,7 +2858,8 @@ function remoteTaskColumns(
     task_id::text, target_device_id, agent_type, prompt,
     project_fingerprint, idempotency_key, execution_policy, status, version,
     created_at, expires_at, updated_at, delivered_at, started_at, completed_at,
-    agent_session_id, result_summary, error_code
+    agent_session_id, result_summary, error_code,
+    execution_started_at, execution_finished_at, receipt_digest, exit_code
   `;
 }
 
@@ -2885,6 +2895,16 @@ function remoteTask(row: RemoteTaskRow): RemoteTask {
       ? {}
       : { result_summary: row.result_summary }),
     ...(row.error_code === null ? {} : { error_code: row.error_code }),
+    ...(row.execution_started_at === null
+      ? {}
+      : { execution_started_at: isoTimestamp(row.execution_started_at) }),
+    ...(row.execution_finished_at === null
+      ? {}
+      : { execution_finished_at: isoTimestamp(row.execution_finished_at) }),
+    ...(row.receipt_digest === null
+      ? {}
+      : { receipt_digest: row.receipt_digest }),
+    ...(row.exit_code === null ? {} : { exit_code: Number(row.exit_code) }),
   };
 }
 
@@ -2986,8 +3006,44 @@ function samePostgresTaskUpdate(
     task.updated_at === update.updated_at &&
     task.agent_session_id === update.agent_session_id &&
     task.result_summary === update.result_summary &&
-    task.error_code === update.error_code
+    task.error_code === update.error_code &&
+    task.execution_started_at === update.execution_started_at &&
+    task.execution_finished_at === update.execution_finished_at &&
+    task.receipt_digest === update.receipt_digest &&
+    task.exit_code === update.exit_code
   );
+}
+
+function validatePostgresTaskReceipt(update: DeviceTaskUpdate): void {
+  const fields = [
+    update.execution_started_at,
+    update.execution_finished_at,
+    update.receipt_digest,
+  ];
+  if (
+    fields.some((value) => value !== undefined) &&
+    fields.some((value) => value === undefined)
+  ) {
+    throw new GatewayStoreError(
+      "invalid_task_receipt",
+      "execution receipt fields must be provided together",
+    );
+  }
+  if (update.execution_started_at === undefined) return;
+  const started = Date.parse(update.execution_started_at);
+  const finished = Date.parse(update.execution_finished_at!);
+  const updated = Date.parse(update.updated_at);
+  if (
+    !Number.isFinite(started) ||
+    !Number.isFinite(finished) ||
+    started > finished ||
+    finished > updated
+  ) {
+    throw new GatewayStoreError(
+      "invalid_task_receipt",
+      "execution receipt timestamps are inconsistent",
+    );
+  }
 }
 
 function isoTimestamp(value: unknown): string {

@@ -7,6 +7,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
@@ -61,6 +62,10 @@ pub struct RemoteTask {
     pub agent_session_id: Option<String>,
     pub result_summary: Option<String>,
     pub error_code: Option<String>,
+    pub execution_started_at: Option<DateTime<Utc>>,
+    pub execution_finished_at: Option<DateTime<Utc>>,
+    pub receipt_digest: Option<String>,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,6 +121,14 @@ pub struct DeviceTaskUpdate {
     result_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_finished_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    receipt_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
     signature: String,
 }
 
@@ -134,6 +147,22 @@ struct UnsignedDeviceTaskUpdate<'a> {
     result_summary: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_finished_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    receipt_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecutionReceipt {
+    started_at: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    digest: String,
+    exit_code: i32,
 }
 
 impl DeviceTaskUpdate {
@@ -142,6 +171,16 @@ impl DeviceTaskUpdate {
         task: &RemoteTask,
         status: RemoteTaskStatus,
         error_code: Option<&str>,
+    ) -> Result<Self, GatewayError> {
+        Self::signed_with_receipt(identity, task, status, error_code, None)
+    }
+
+    fn signed_with_receipt(
+        identity: &DeviceIdentity,
+        task: &RemoteTask,
+        status: RemoteTaskStatus,
+        error_code: Option<&str>,
+        receipt: Option<&ExecutionReceipt>,
     ) -> Result<Self, GatewayError> {
         let public_key = identity.public_key_hex();
         let updated_at = Utc::now();
@@ -156,6 +195,10 @@ impl DeviceTaskUpdate {
             agent_session_id: None,
             result_summary: None,
             error_code,
+            execution_started_at: receipt.map(|value| value.started_at),
+            execution_finished_at: receipt.map(|value| value.finished_at),
+            receipt_digest: receipt.map(|value| value.digest.as_str()),
+            exit_code: receipt.map(|value| value.exit_code),
         };
         let bytes = serde_json::to_vec(&unsigned).map_err(|_| GatewayError::InvalidResponse)?;
         Ok(Self {
@@ -169,6 +212,10 @@ impl DeviceTaskUpdate {
             agent_session_id: None,
             result_summary: None,
             error_code: error_code.map(str::to_owned),
+            execution_started_at: receipt.map(|value| value.started_at),
+            execution_finished_at: receipt.map(|value| value.finished_at),
+            receipt_digest: receipt.map(|value| value.digest.clone()),
+            exit_code: receipt.map(|value| value.exit_code),
             signature: hex::encode(identity.sign(&bytes).to_bytes()),
         })
     }
@@ -290,6 +337,7 @@ impl<'a> TaskWorker<'a> {
             AgentType::ClaudeCode => &self.claude_binary,
             AgentType::Codex => &self.codex_binary,
         };
+        let execution_started_at = Utc::now();
         match run_agent_task(
             running.agent_type,
             binary,
@@ -298,10 +346,30 @@ impl<'a> TaskWorker<'a> {
             self.execution_timeout,
         ) {
             Ok(()) => {
-                self.transition(&running, RemoteTaskStatus::Succeeded, None)?;
+                let finished = Utc::now();
+                let receipt = execution_receipt(&running, execution_started_at, finished, 0, None);
+                self.transition_with_receipt(
+                    &running,
+                    RemoteTaskStatus::Succeeded,
+                    None,
+                    Some(&receipt),
+                )?;
             }
             Err(error) => {
-                self.transition(&running, RemoteTaskStatus::Failed, Some(error.code()))?;
+                let finished = Utc::now();
+                let receipt = execution_receipt(
+                    &running,
+                    execution_started_at,
+                    finished,
+                    1,
+                    Some(error.code()),
+                );
+                self.transition_with_receipt(
+                    &running,
+                    RemoteTaskStatus::Failed,
+                    Some(error.code()),
+                    Some(&receipt),
+                )?;
             }
         }
         Ok(())
@@ -313,8 +381,48 @@ impl<'a> TaskWorker<'a> {
         status: RemoteTaskStatus,
         error_code: Option<&str>,
     ) -> Result<RemoteTask, GatewayError> {
-        let update = DeviceTaskUpdate::signed(self.identity, task, status, error_code)?;
+        self.transition_with_receipt(task, status, error_code, None)
+    }
+
+    fn transition_with_receipt(
+        &self,
+        task: &RemoteTask,
+        status: RemoteTaskStatus,
+        error_code: Option<&str>,
+        receipt: Option<&ExecutionReceipt>,
+    ) -> Result<RemoteTask, GatewayError> {
+        let update = DeviceTaskUpdate::signed_with_receipt(
+            self.identity,
+            task,
+            status,
+            error_code,
+            receipt,
+        )?;
         self.client.update_task(&update)
+    }
+}
+
+fn execution_receipt(
+    task: &RemoteTask,
+    started_at: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    exit_code: i32,
+    error_code: Option<&str>,
+) -> ExecutionReceipt {
+    let canonical = format!(
+        "{}|{}|{}|{}|{}",
+        task.task_id,
+        task.agent_type.as_str(),
+        started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        error_code.unwrap_or("ok"),
+    );
+    let digest = hex::encode(Sha256::digest(canonical.as_bytes()));
+    ExecutionReceipt {
+        started_at,
+        finished_at,
+        digest,
+        exit_code,
     }
 }
 
@@ -505,6 +613,10 @@ mod tests {
             agent_session_id: None,
             result_summary: None,
             error_code: None,
+            execution_started_at: None,
+            execution_finished_at: None,
+            receipt_digest: None,
+            exit_code: None,
         }
     }
 

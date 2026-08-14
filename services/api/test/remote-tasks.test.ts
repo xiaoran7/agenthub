@@ -62,6 +62,13 @@ function signedUpdate(
   task: RemoteTask,
   status: DeviceTaskUpdate["status"],
   updatedAt: string,
+  receipt?: Pick<
+    DeviceTaskUpdate,
+    | "execution_started_at"
+    | "execution_finished_at"
+    | "receipt_digest"
+    | "exit_code"
+  >,
 ): DeviceTaskUpdate {
   const update: DeviceTaskUpdate = {
     protocol_version: 1,
@@ -71,6 +78,7 @@ function signedUpdate(
     expected_version: task.version,
     status,
     updated_at: updatedAt,
+    ...receipt,
     signature: "",
   };
   update.signature = sign(
@@ -263,6 +271,12 @@ test("remote task relay is tenant scoped, idempotent, signed, and transition saf
     accepted,
     "running",
     current.toISOString(),
+    {
+      execution_started_at: "2026-08-13T11:59:59.000Z",
+      execution_finished_at: current.toISOString(),
+      receipt_digest: "a".repeat(64),
+      exit_code: 0,
+    },
   );
   const runningResponse = await app.inject({
     method: "POST",
@@ -271,6 +285,8 @@ test("remote task relay is tenant scoped, idempotent, signed, and transition saf
   });
   const running = runningResponse.json() as RemoteTask;
   assert.equal(running.status, "running");
+  assert.equal(running.receipt_digest, "a".repeat(64));
+  assert.equal(running.exit_code, 0);
   const canceled = await app.inject({
     method: "POST",
     url: `/v1/tasks/${running.task_id}/cancel`,

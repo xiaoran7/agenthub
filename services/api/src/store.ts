@@ -966,6 +966,7 @@ export class InMemoryGatewayStore implements GatewayStore {
         "task transition is invalid",
       );
     }
+    validateTaskReceipt(update);
     const previousStatus = task.status;
     transitionRemoteTask(task, update.status, update.updated_at, update);
     await this.#recordWorkspaceAudit({
@@ -1130,6 +1131,47 @@ function transitionRemoteTask(
     task.result_summary = update.result_summary;
   }
   if (update?.error_code !== undefined) task.error_code = update.error_code;
+  if (update?.execution_started_at !== undefined) {
+    task.execution_started_at = update.execution_started_at;
+  }
+  if (update?.execution_finished_at !== undefined) {
+    task.execution_finished_at = update.execution_finished_at;
+  }
+  if (update?.receipt_digest !== undefined)
+    task.receipt_digest = update.receipt_digest;
+  if (update?.exit_code !== undefined) task.exit_code = update.exit_code;
+}
+
+function validateTaskReceipt(update: DeviceTaskUpdate): void {
+  const fields = [
+    update.execution_started_at,
+    update.execution_finished_at,
+    update.receipt_digest,
+  ];
+  if (
+    fields.some((value) => value !== undefined) &&
+    fields.some((value) => value === undefined)
+  ) {
+    throw new GatewayStoreError(
+      "invalid_task_receipt",
+      "execution receipt fields must be provided together",
+    );
+  }
+  if (update.execution_started_at === undefined) return;
+  const started = Date.parse(update.execution_started_at);
+  const finished = Date.parse(update.execution_finished_at!);
+  const updated = Date.parse(update.updated_at);
+  if (
+    !Number.isFinite(started) ||
+    !Number.isFinite(finished) ||
+    started > finished ||
+    finished > updated
+  ) {
+    throw new GatewayStoreError(
+      "invalid_task_receipt",
+      "execution receipt timestamps are inconsistent",
+    );
+  }
 }
 
 function publicRemoteTask(
@@ -1160,6 +1202,10 @@ function sameTaskUpdate(task: RemoteTask, update: DeviceTaskUpdate): boolean {
     task.updated_at === update.updated_at &&
     task.agent_session_id === update.agent_session_id &&
     task.result_summary === update.result_summary &&
-    task.error_code === update.error_code
+    task.error_code === update.error_code &&
+    task.execution_started_at === update.execution_started_at &&
+    task.execution_finished_at === update.execution_finished_at &&
+    task.receipt_digest === update.receipt_digest &&
+    task.exit_code === update.exit_code
   );
 }

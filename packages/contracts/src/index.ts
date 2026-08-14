@@ -99,6 +99,10 @@ export interface RemoteTask {
   agent_session_id?: string;
   result_summary?: string;
   error_code?: string;
+  execution_started_at?: string;
+  execution_finished_at?: string;
+  receipt_digest?: string;
+  exit_code?: number;
 }
 
 export interface DeviceTaskClaim {
@@ -128,6 +132,10 @@ export interface DeviceTaskUpdate {
   agent_session_id?: string;
   result_summary?: string;
   error_code?: string;
+  execution_started_at?: string;
+  execution_finished_at?: string;
+  receipt_digest?: string;
+  exit_code?: number;
   signature: string;
 }
 
@@ -402,7 +410,15 @@ export function parseDeviceTaskUpdate(value: unknown): DeviceTaskUpdate {
       "updated_at",
       "signature",
     ],
-    ["agent_session_id", "result_summary", "error_code"],
+    [
+      "agent_session_id",
+      "result_summary",
+      "error_code",
+      "execution_started_at",
+      "execution_finished_at",
+      "receipt_digest",
+      "exit_code",
+    ],
   );
   const status = expectEnum(object.status, remoteTaskStatuses, "status");
   if (status === "queued" || status === "delivered" || status === "expired") {
@@ -439,6 +455,31 @@ export function parseDeviceTaskUpdate(value: unknown): DeviceTaskUpdate {
   if (object.error_code !== undefined) {
     update.error_code = expectSafeCode(object.error_code, "error_code");
   }
+  if (object.execution_started_at !== undefined) {
+    update.execution_started_at = expectTimestamp(
+      object.execution_started_at,
+      "execution_started_at",
+    );
+  }
+  if (object.execution_finished_at !== undefined) {
+    update.execution_finished_at = expectTimestamp(
+      object.execution_finished_at,
+      "execution_finished_at",
+    );
+  }
+  if (object.receipt_digest !== undefined) {
+    update.receipt_digest = expectHex(
+      object.receipt_digest,
+      "receipt_digest",
+      64,
+    );
+  }
+  if (object.exit_code !== undefined) {
+    update.exit_code = expectInteger(object.exit_code, "exit_code", -1);
+    if (update.exit_code > 255) {
+      throw new ContractError("invalid_field", "exit_code must be at most 255");
+    }
+  }
   verifyDeviceSignature(
     update.device_id,
     update.public_key,
@@ -466,6 +507,16 @@ export function unsignedDeviceTaskUpdateJson(update: DeviceTaskUpdate): string {
     ...(update.error_code === undefined
       ? {}
       : { error_code: update.error_code }),
+    ...(update.execution_started_at === undefined
+      ? {}
+      : { execution_started_at: update.execution_started_at }),
+    ...(update.execution_finished_at === undefined
+      ? {}
+      : { execution_finished_at: update.execution_finished_at }),
+    ...(update.receipt_digest === undefined
+      ? {}
+      : { receipt_digest: update.receipt_digest }),
+    ...(update.exit_code === undefined ? {} : { exit_code: update.exit_code }),
   });
 }
 

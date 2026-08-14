@@ -7,6 +7,8 @@
 
 ### Added
 
+- Added signed remote-task execution receipts. Runners can report bounded start/end timestamps, a SHA-256 digest of a restricted receipt, and an optional exit code. The signed fields are persisted in both stores and never include CLI output, paths, prompts, or credentials.
+
 - 新增可选 Stripe 订阅闭环：设置面板显示支付能力，服务端提供当前订阅状态、Pro/Team
   Checkout 和 Customer Portal；Checkout 只使用当前 HttpOnly 会话和服务端 Price ID，
   不接受浏览器提交 Customer/Subscription ID。Stripe webhook 使用原始请求体和官方 SDK
