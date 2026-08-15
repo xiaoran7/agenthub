@@ -155,10 +155,15 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
 - 启动时先执行一次本地元数据扫描并写入 Outbox；桌面读模型将本地快照与云端已确认
   Session 按稳定键合并，因此断网或积压不会被误报为“本机未检测到”。扫描健康、待上传数和
   云端确认是三个独立状态；memory 只统计文件/索引数量与字节，不读取正文。
-- 仪表盘使用用户可配置的 2–60 秒单飞轮询（默认 4 秒）刷新云端与本机元数据；当前不保持
-  长连接。会话详情提供本机控制入口，Prompt 只经 Tauri IPC 写入本机 CLI 的 stdin，不进入
-  Outbox、Gateway、日志或桌面持久化；子进程输出有 2 MiB 上限和 15 分钟硬超时，阻塞执行
-  放入专用线程池，避免冻结 UI。
+- 桌面 Host 使用 OS Keyring 中的 AgentPulse Cookie 主动连接 Gateway `GET /v1/stream`
+  SSE；只把“已连接/数据变化”信号通过 Tauri 事件交给 WebView，Cookie 与 SSE payload
+  不进入前端。流断开后按 2→15 秒退避重连，单行限制 64 KiB；仪表盘同时保留用户可配置的
+  2–60 秒单飞轮询（默认 4 秒）作为兜底，SSE 变化只触发同一个单飞刷新函数，不堆积请求。
+- 会话详情提供本机控制入口，Prompt 只经 Tauri IPC 写入本机 CLI 的 stdin，不进入 Outbox、
+  Gateway、日志或桌面持久化。Claude 使用官方 `stream-json` partial event，Codex 使用
+  `exec --json` JSONL；Tauri Channel 只转发助手可见文本和“调用工具/执行命令”等无参数活动
+  标签，过滤 thinking、命令正文、工具参数和 stderr。子进程输出有 2 MiB 上限和 15 分钟硬
+  超时，阻塞执行放入专用线程池，用户可从控制面板停止当前回合并回收整个子进程树。
 - Claude 会话通过官方 `--resume` 非交互模式继续，Codex 通过 `exec resume` 继续。CLI 可执行
   文件位置和刷新周期只保存在桌面本地配置。控制面板只在当前打开期间保留本轮问答，用户可
   随时清空；关闭或重启应用即丢弃。

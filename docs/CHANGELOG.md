@@ -7,6 +7,12 @@
 
 ### Added
 
+- 桌面 App 新增 Gateway SSE 实时变化通道：Rust Host 使用 OS Keyring Cookie 主动连接
+  `/v1/stream`，WebView 只接收连接状态和刷新信号；断流按 2→15 秒退避重连，2–60 秒单飞
+  轮询继续兜底。会话回合改用 Tauri Channel 增量呈现：Claude `stream-json` 转发文本 delta，
+  Codex JSONL 转发助手消息与无参数活动标签；thinking、命令正文、工具参数和 stderr 均被
+  过滤。新增单会话并发门控、“停止回合”进程树回收、动画帧批量渲染、SSE/事件解析与取消
+  回归测试，并完成 1280×800 和 960×640 浏览器验收。
 - 桌面 App 从只读观测台扩展为本机会话控制台：会话抽屉展示完整元数据，并可通过 stdin
   继续 Claude Code/Codex 会话；回复仅保留在当前前端内存，不进入 Outbox 或 Gateway。
   新增活跃/归档视图、Codex 原生归档/恢复、Claude 本机视图归档，以及可配置的 2–60 秒

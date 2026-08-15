@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   AlertTriangle,
@@ -24,6 +25,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Square,
   X,
 } from "lucide-react";
 import {
@@ -37,11 +39,19 @@ import {
 } from "react";
 
 import { activityTime, relativeTime, statusView } from "./presentation";
+import {
+  appendAssistantDelta,
+  dropTrailingEmptyAssistant,
+  replaceAssistantMessage,
+  type ConversationMessage,
+} from "./turn-stream";
 import type {
   ActivityStatus,
   DesktopPreferences,
+  DashboardRealtimeEvent,
   LocalSource,
   Session,
+  SessionTurnEvent,
   SessionTurnResult,
   Snapshot,
 } from "./types";
@@ -352,6 +362,38 @@ function Dashboard({
     };
   }, [refresh, snapshot.preferences.refresh_interval_seconds]);
 
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<DashboardRealtimeEvent>("dashboard-realtime", (event) => {
+      setSnapshot((current) => ({
+        ...current,
+        realtime_connected: event.payload.connected,
+      }));
+      if (event.payload.changed) void refresh();
+    })
+      .then((nextUnlisten) => {
+        if (disposed) nextUnlisten();
+        else {
+          unlisten = nextUnlisten;
+          void refresh();
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setSnapshot((current) => ({
+            ...current,
+            realtime_connected: false,
+          }));
+        }
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [refresh]);
+
   useEffect(
     () => setVisibleLimit(100),
     [agentFilter, archiveFilter, deferredQuery],
@@ -448,8 +490,17 @@ function Dashboard({
                   : "本地与云端已同步"
                 : "云同步已暂停，本地扫描继续"}
             </p>
-            <span className="live-refresh">
-              <i /> 每 {snapshot.preferences.refresh_interval_seconds} 秒刷新
+            <span
+              className={
+                snapshot.realtime_connected
+                  ? "live-refresh connected"
+                  : "live-refresh"
+              }
+            >
+              <i />
+              {snapshot.realtime_connected
+                ? "SSE 实时连接"
+                : `每 ${snapshot.preferences.refresh_interval_seconds} 秒兜底刷新`}
             </span>
           </div>
           <div className="header-actions">
@@ -800,15 +851,42 @@ function SessionControlPanel({
   onChanged: (archived: boolean) => Promise<void>;
 }) {
   const [prompt, setPrompt] = useState("");
-  const [messages, setMessages] = useState<
-    Array<{ role: "user" | "assistant"; content: string }>
-  >([]);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [agentActivity, setAgentActivity] = useState<string>();
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const pendingDelta = useRef("");
+  const deltaFrame = useRef<number | undefined>(undefined);
+  const conversationEnd = useRef<HTMLDivElement>(null);
   const status = statusView(
     session.payload.state.activity_status,
     session.payload.state.presence,
+  );
+
+  const replaceLastAssistant = (content: string) => {
+    setMessages((current) => replaceAssistantMessage(current, content));
+  };
+
+  const flushPendingDelta = () => {
+    deltaFrame.current = undefined;
+    const delta = pendingDelta.current;
+    pendingDelta.current = "";
+    if (delta === "") return;
+    setMessages((current) => appendAssistantDelta(current, delta));
+  };
+
+  useEffect(() => {
+    conversationEnd.current?.scrollIntoView({ block: "end" });
+  }, [agentActivity, messages]);
+
+  useEffect(
+    () => () => {
+      if (deltaFrame.current !== undefined)
+        window.cancelAnimationFrame(deltaFrame.current);
+    },
+    [],
   );
 
   const sendMessage = async (event: FormEvent) => {
@@ -817,24 +895,76 @@ function SessionControlPanel({
     if (busy || content === "") return;
     setPrompt("");
     setBusy(true);
+    setCancelling(false);
+    setAgentActivity("正在连接本机 CLI");
     setError(undefined);
-    setMessages((current) => [...current, { role: "user", content }]);
+    setMessages((current) => [
+      ...current,
+      { role: "user", content },
+      { role: "assistant", content: "" },
+    ]);
     try {
+      const onEvent = new Channel<SessionTurnEvent>();
+      onEvent.onmessage = (update) => {
+        if (update.type === "started") {
+          setAgentActivity("Agent 正在本机运行");
+        } else if (update.type === "activity") {
+          setAgentActivity(update.label);
+        } else if (update.type === "assistant_message") {
+          pendingDelta.current = "";
+          if (deltaFrame.current !== undefined) {
+            window.cancelAnimationFrame(deltaFrame.current);
+            deltaFrame.current = undefined;
+          }
+          replaceLastAssistant(update.text);
+          setAgentActivity("正在收尾");
+        } else {
+          pendingDelta.current += update.text;
+          setAgentActivity("正在生成回复");
+          if (deltaFrame.current === undefined) {
+            deltaFrame.current =
+              window.requestAnimationFrame(flushPendingDelta);
+          }
+        }
+      };
       const result = await invoke<SessionTurnResult>("send_session_message", {
         input: {
           agent_type: session.agent_type,
           agent_session_id: session.agent_session_id,
           prompt: content,
         },
+        onEvent,
       });
-      setMessages((current) => [
-        ...current,
-        { role: "assistant", content: result.response },
-      ]);
+      pendingDelta.current = "";
+      if (deltaFrame.current !== undefined) {
+        window.cancelAnimationFrame(deltaFrame.current);
+        deltaFrame.current = undefined;
+      }
+      replaceLastAssistant(result.response);
     } catch (nextError) {
       setError(errorMessage(nextError));
+      setMessages(dropTrailingEmptyAssistant);
     } finally {
+      setAgentActivity(undefined);
+      setCancelling(false);
       setBusy(false);
+    }
+  };
+
+  const cancelTurn = async () => {
+    if (!busy || cancelling) return;
+    setCancelling(true);
+    setAgentActivity("正在停止本机回合");
+    try {
+      await invoke("cancel_session_turn", {
+        input: {
+          agent_type: session.agent_type,
+          agent_session_id: session.agent_session_id,
+        },
+      });
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+      setCancelling(false);
     }
   };
 
@@ -863,7 +993,13 @@ function SessionControlPanel({
   };
 
   return (
-    <div className="panel-scrim" onMouseDown={onClose}>
+    <div
+      className="panel-scrim"
+      onMouseDown={() => {
+        if (busy) setError("请先停止当前回合，再关闭会话控制面板。");
+        else onClose();
+      }}
+    >
       <aside
         className="session-control-panel"
         aria-label="会话控制"
@@ -877,6 +1013,7 @@ function SessionControlPanel({
           <button
             className="icon-button"
             aria-label="关闭会话"
+            disabled={busy}
             onClick={onClose}
           >
             <X />
@@ -930,21 +1067,24 @@ function SessionControlPanel({
               </p>
             </div>
           ) : (
-            messages.map((message, index) => (
-              <div
-                className={`turn-message ${message.role}`}
-                key={`${message.role}-${index}`}
-              >
-                <span>{message.role === "user" ? "你" : "Agent"}</span>
-                <p>{message.content}</p>
-              </div>
-            ))
+            messages.map((message, index) =>
+              message.content === "" ? null : (
+                <div
+                  className={`turn-message ${message.role}`}
+                  key={`${message.role}-${index}`}
+                >
+                  <span>{message.role === "user" ? "你" : "Agent"}</span>
+                  <p>{message.content}</p>
+                </div>
+              ),
+            )
           )}
-          {busy && (
+          {busy && agentActivity !== undefined && (
             <div className="agent-thinking">
-              <RefreshCw className="spin" /> Agent 正在本机执行…
+              <RefreshCw className="spin" /> {agentActivity}
             </div>
           )}
+          <div ref={conversationEnd} />
         </section>
 
         {error !== undefined && <p className="panel-error">{error}</p>}
@@ -972,13 +1112,25 @@ function SessionControlPanel({
           <span>
             <ShieldCheck /> 本机直连 · Prompt 不上传
           </span>
-          <button
-            disabled={archiveBusy || busy}
-            onClick={() => void toggleArchive()}
-          >
-            {session.archived ? <RotateCcw /> : <Archive />}
-            {session.archived ? "恢复会话" : "归档会话"}
-          </button>
+          <div className="session-footer-actions">
+            {busy && (
+              <button
+                className="turn-cancel"
+                disabled={cancelling}
+                onClick={() => void cancelTurn()}
+              >
+                <Square />
+                {cancelling ? "停止中" : "停止回合"}
+              </button>
+            )}
+            <button
+              disabled={archiveBusy || busy}
+              onClick={() => void toggleArchive()}
+            >
+              {session.archived ? <RotateCcw /> : <Archive />}
+              {session.archived ? "恢复会话" : "归档会话"}
+            </button>
+          </div>
         </footer>
       </aside>
     </div>
@@ -1247,6 +1399,7 @@ const demoSnapshot: Snapshot = {
     },
   ],
   sync_running: true,
+  realtime_connected: true,
   server_url: "https://platform.tannerlab.xyz",
   local: {
     pending_events: 2,

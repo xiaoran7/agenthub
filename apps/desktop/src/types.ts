@@ -54,6 +54,17 @@ export interface SessionTurnResult {
   completed_at: string;
 }
 
+export type SessionTurnEvent =
+  | { type: "started" }
+  | { type: "assistant_delta"; text: string }
+  | { type: "assistant_message"; text: string }
+  | { type: "activity"; label: string };
+
+export interface DashboardRealtimeEvent {
+  connected: boolean;
+  changed: boolean;
+}
+
 export interface LocalSource {
   agent_type: "claude_code" | "codex";
   session_count: number;
@@ -82,6 +93,7 @@ export interface Snapshot {
   sessions: Session[];
   device: { device_id: string; name: string };
   sync_running: boolean;
+  realtime_connected: boolean;
   server_url: string;
   local: LocalInventory;
   preferences: DesktopPreferences;

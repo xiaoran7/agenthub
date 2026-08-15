@@ -542,6 +542,13 @@ input:focus-visible {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 4px rgba(231, 179, 93, 0.07);
+}
+.live-refresh.connected {
+  color: var(--green);
+}
+.live-refresh.connected i {
   background: var(--green);
   box-shadow: 0 0 0 4px rgba(126, 213, 160, 0.07);
   animation: live-pulse 2s ease-in-out infinite;
@@ -1282,6 +1289,11 @@ input:focus-visible {
 .session-control-panel > footer svg {
   width: 14px;
 }
+.session-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
 .session-control-panel > footer button {
   padding: 8px 10px;
   border: 1px solid var(--line);
@@ -1289,6 +1301,15 @@ input:focus-visible {
   color: var(--muted);
   background: var(--surface);
   cursor: pointer;
+}
+.session-control-panel > footer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.session-control-panel > footer .turn-cancel {
+  border-color: rgba(255, 170, 164, 0.28);
+  color: #ffaaa4;
+  background: rgba(255, 170, 164, 0.06);
 }
 .settings-panel {
   width: min(430px, calc(100vw - 82px));

@@ -77,9 +77,10 @@ Checkout、Customer Portal 和原始 webhook 验签，未配置密钥时支付�
 Windows 桌面 App（`apps/desktop`）已复用同一邮箱注册/登录接口：登录后自动创建或加载
 本机 Ed25519 身份、完成账号设备登记，并在应用进程内启动 Runner 与同步 Worker，无需
 CMD 或手工配对码。桌面会话详情可经本机 CLI 继续 Claude Code/Codex、查看同步元数据并
-归档/恢复，会话列表按 2–60 秒可配置周期刷新。显式发送的 Prompt 与回复只在本机进程和
-当前界面内流转，不进入 Outbox 或 Gateway；AgentPulse 登录 Cookie 保存在 OS Keyring，
-Claude/Codex 登录凭据、历史对话正文和工具载荷不会上传。
+归档/恢复，并以 Tauri Channel 增量显示安全的助手文本/活动状态、支持停止本机回合。桌面
+Host 复用 Gateway SSE 实时变化流，2–60 秒可配置周期刷新作为断流兜底。显式发送的 Prompt
+与回复只在本机进程和当前界面内流转，不进入 Outbox 或 Gateway；AgentPulse 登录 Cookie
+保存在 OS Keyring，Claude/Codex 登录凭据、历史对话正文和工具载荷不会上传。
 M4 安全与稳定性阶段已完成自动化基线；PostgreSQL 18.4 的 12 设备/3000 Session
 并发工作负载、外部不可达后的 Outbox 保留/恢复，以及 Codex CLI 0.144.2 当前版本
 只读采集也已现场通过；本机真实 TLS 握手和私有 CA 恢复已进入回归套件。真实 Agent

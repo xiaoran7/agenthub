@@ -4,7 +4,10 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, TryRecvError},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant, UNIX_EPOCH},
 };
@@ -56,6 +59,8 @@ pub enum CollectorError {
     ProtocolLineTooLarge { program: String, limit: usize },
     #[error("{program} output exceeded {limit} bytes")]
     OutputTooLarge { program: String, limit: usize },
+    #[error("{program} was cancelled")]
+    Cancelled { program: String },
     #[error("{program} did not respond within {timeout_ms} ms")]
     Timeout { program: String, timeout_ms: u128 },
     #[error("{program} output reader stopped unexpectedly")]
@@ -91,6 +96,7 @@ impl CollectorError {
             Self::InvalidUtf8 { .. } => "process_invalid_utf8",
             Self::ProtocolLineTooLarge { .. } => "protocol_line_too_large",
             Self::OutputTooLarge { .. } => "process_output_too_large",
+            Self::Cancelled { .. } => "process_cancelled",
             Self::Timeout { .. } => "collector_timeout",
             Self::ReaderStopped { .. } => "collector_reader_stopped",
             Self::UnexpectedEof { .. } => "protocol_unexpected_eof",
@@ -98,6 +104,13 @@ impl CollectorError {
             Self::Database { .. } => "local_store_failed",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentTurnUpdate {
+    AssistantDelta(String),
+    AssistantMessage(String),
+    Activity(&'static str),
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -500,12 +513,46 @@ pub fn run_agent_session_turn(
     prompt: &str,
     timeout: Duration,
 ) -> Result<String, CollectorError> {
+    run_agent_session_turn_streaming(
+        agent,
+        binary,
+        project_path,
+        session_id,
+        prompt,
+        timeout,
+        &AtomicBool::new(false),
+        |_| {},
+    )
+}
+
+/// Resume an Agent session while forwarding safe, user-visible progress.
+/// Conversation text is never logged or persisted by this function. The
+/// caller owns the callback destination and cancellation flag.
+#[allow(clippy::too_many_arguments)]
+pub fn run_agent_session_turn_streaming(
+    agent: crate::domain::AgentType,
+    binary: impl AsRef<Path>,
+    project_path: Option<&Path>,
+    session_id: &str,
+    prompt: &str,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+    on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
+) -> Result<String, CollectorError> {
     let binary = binary.as_ref();
     let program = binary.display().to_string();
     let mut command = Command::new(binary);
     match agent {
         crate::domain::AgentType::ClaudeCode => {
-            command.args(["--resume", session_id, "-p", "--output-format", "text"]);
+            command.args([
+                "--resume",
+                session_id,
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+            ]);
         }
         crate::domain::AgentType::Codex => {
             command.args([
@@ -567,9 +614,9 @@ pub fn run_agent_session_turn(
         .ok_or_else(|| CollectorError::MissingStdio {
             program: program.clone(),
         })?;
-    let stdout_reader = read_child_output(stdout);
+    let stdout_reader = read_agent_turn_output(stdout, agent, on_update);
     let stderr_reader = read_child_output(stderr);
-    let status = wait_for_child(&mut child, &program, timeout);
+    let status = wait_for_child_with_cancel(&mut child, &program, timeout, Some(cancelled));
     drop(job);
     let stdout = join_child_output(stdout_reader, &program)?;
     // Drain stderr to prevent a full pipe from blocking the child, but never
@@ -588,7 +635,139 @@ pub fn run_agent_session_turn(
             limit: MAX_AGENT_TURN_OUTPUT_BYTES,
         });
     }
-    String::from_utf8(stdout).map_err(|source| CollectorError::InvalidUtf8 { program, source })
+    let output = String::from_utf8(stdout).map_err(|source| CollectorError::InvalidUtf8 {
+        program: program.clone(),
+        source,
+    })?;
+    final_agent_message(agent, &output).ok_or_else(|| CollectorError::Protocol {
+        program,
+        code: "missing_final_message".to_owned(),
+        message: "missing final agent message".to_owned(),
+    })
+}
+
+fn read_agent_turn_output(
+    stream: impl Read + Send + 'static,
+    agent: crate::domain::AgentType,
+    mut on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
+) -> JoinHandle<std::io::Result<Vec<u8>>> {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut output = Vec::with_capacity(MAX_AGENT_TURN_OUTPUT_BYTES + 1);
+        loop {
+            match read_bounded_line(&mut reader) {
+                BoundedLine::Line(line) => {
+                    let may_emit = output
+                        .len()
+                        .checked_add(line.len())
+                        .is_some_and(|size| size <= MAX_AGENT_TURN_OUTPUT_BYTES);
+                    let remaining = (MAX_AGENT_TURN_OUTPUT_BYTES + 1).saturating_sub(output.len());
+                    if remaining > 0 {
+                        output.extend_from_slice(&line.as_bytes()[..line.len().min(remaining)]);
+                    }
+                    if may_emit && let Some(update) = parse_agent_turn_update(agent, &line) {
+                        on_update(update);
+                    }
+                }
+                BoundedLine::Eof => return Ok(output),
+                BoundedLine::TooLarge => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "agent output line exceeded protocol limit",
+                    ));
+                }
+                BoundedLine::Io(error) => return Err(error),
+            }
+        }
+    })
+}
+
+fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Option<AgentTurnUpdate> {
+    let value = serde_json::from_str::<Value>(line).ok()?;
+    match agent {
+        crate::domain::AgentType::ClaudeCode => {
+            if value.get("type").and_then(Value::as_str) == Some("stream_event") {
+                let event = value.get("event")?;
+                if event.get("type").and_then(Value::as_str) == Some("content_block_delta")
+                    && event.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta")
+                {
+                    return event
+                        .pointer("/delta/text")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                        .map(|text| AgentTurnUpdate::AssistantDelta(text.to_owned()));
+                }
+            }
+            let has_tool = value.get("type").and_then(Value::as_str) == Some("assistant")
+                && value
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|content| {
+                        content.iter().any(|block| {
+                            block.get("type").and_then(Value::as_str) == Some("tool_use")
+                        })
+                    });
+            has_tool.then_some(AgentTurnUpdate::Activity("Claude 正在调用工具"))
+        }
+        crate::domain::AgentType::Codex => {
+            let event_type = value.get("type").and_then(Value::as_str)?;
+            let item_type = value.pointer("/item/type").and_then(Value::as_str);
+            if event_type == "item.completed" && item_type == Some("agent_message") {
+                return value
+                    .pointer("/item/text")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.trim().is_empty())
+                    .map(|text| AgentTurnUpdate::AssistantMessage(text.trim().to_owned()));
+            }
+            match (event_type, item_type) {
+                ("turn.started", _) => Some(AgentTurnUpdate::Activity("Codex 正在思考")),
+                ("item.started", Some("command_execution")) => {
+                    Some(AgentTurnUpdate::Activity("Codex 正在执行命令"))
+                }
+                ("item.started", Some("mcp_tool_call")) => {
+                    Some(AgentTurnUpdate::Activity("Codex 正在调用工具"))
+                }
+                ("item.started", Some("web_search")) => {
+                    Some(AgentTurnUpdate::Activity("Codex 正在搜索"))
+                }
+                ("item.completed", Some("file_change")) => {
+                    Some(AgentTurnUpdate::Activity("Codex 已更新文件"))
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+fn final_agent_message(agent: crate::domain::AgentType, output: &str) -> Option<String> {
+    match agent {
+        crate::domain::AgentType::ClaudeCode => output.lines().rev().find_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            if value.get("type").and_then(Value::as_str) != Some("result") {
+                return None;
+            }
+            value
+                .get("result")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+                .map(str::to_owned)
+        }),
+        crate::domain::AgentType::Codex => output.lines().rev().find_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            if value.get("type").and_then(Value::as_str) != Some("item.completed")
+                || value.pointer("/item/type").and_then(Value::as_str) != Some("agent_message")
+            {
+                return None;
+            }
+            value
+                .pointer("/item/text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+                .map(str::to_owned)
+        }),
+    }
 }
 
 fn read_child_output(
@@ -631,6 +810,15 @@ fn wait_for_child(
     program: &str,
     timeout: Duration,
 ) -> Result<std::process::ExitStatus, CollectorError> {
+    wait_for_child_with_cancel(child, program, timeout, None)
+}
+
+fn wait_for_child_with_cancel(
+    child: &mut Child,
+    program: &str,
+    timeout: Duration,
+    cancelled: Option<&AtomicBool>,
+) -> Result<std::process::ExitStatus, CollectorError> {
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait().map_err(|source| CollectorError::Io {
@@ -638,6 +826,13 @@ fn wait_for_child(
             source,
         })? {
             return Ok(status);
+        }
+        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CollectorError::Cancelled {
+                program: program.to_owned(),
+            });
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -1337,6 +1532,76 @@ mod tests {
 
         assert_eq!(output.len(), MAX_AGENT_TURN_OUTPUT_BYTES + 1);
         assert!(output.iter().all(|byte| *byte == b'x'));
+    }
+
+    #[test]
+    fn claude_stream_events_emit_text_without_thinking_or_tool_input() {
+        let text = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}"#;
+        let thinking = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private"}}}"#;
+
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::ClaudeCode, text),
+            Some(AgentTurnUpdate::AssistantDelta("hello".to_owned()))
+        );
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::ClaudeCode, thinking),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_stream_events_emit_safe_activity_and_final_messages() {
+        let command =
+            r#"{"type":"item.started","item":{"type":"command_execution","command":"secret"}}"#;
+        let message =
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":" done "}}"#;
+
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::Codex, command),
+            Some(AgentTurnUpdate::Activity("Codex 正在执行命令"))
+        );
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::Codex, message),
+            Some(AgentTurnUpdate::AssistantMessage("done".to_owned()))
+        );
+        assert_eq!(
+            final_agent_message(crate::domain::AgentType::Codex, message).as_deref(),
+            Some("done")
+        );
+    }
+
+    #[test]
+    fn final_claude_result_uses_the_last_non_empty_message() {
+        let output = concat!(
+            "{\"type\":\"result\",\"result\":\"first\"}\n",
+            "{\"type\":\"result\",\"result\":\" final \"}\n",
+        );
+        assert_eq!(
+            final_agent_message(crate::domain::AgentType::ClaudeCode, output).as_deref(),
+            Some("final")
+        );
+    }
+
+    #[test]
+    fn session_turn_cancellation_stops_the_child_process() {
+        let (_directory, script) = sleeping_script();
+        let cancelled = AtomicBool::new(true);
+        let started = Instant::now();
+
+        let error = run_agent_session_turn_streaming(
+            crate::domain::AgentType::ClaudeCode,
+            script,
+            None,
+            "019abc-session",
+            "private prompt",
+            Duration::from_secs(10),
+            &cancelled,
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CollectorError::Cancelled { .. }));
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]

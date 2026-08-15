@@ -14,8 +14,9 @@ AgentPulse 账号与套餐。记忆区只统计 Claude memory 文件和 Codex me
 
 会话列表现在也是本机控制台：点击会话可查看 ID、项目指纹、最近活动与同步状态，并直接
 继续 Claude Code 或 Codex 会话、清空本次打开期间的显示内容，以及归档/恢复会话。设置面板
-可配置 2–60 秒刷新周期（默认 4 秒）和两个 CLI 的可执行文件路径。当前采用可配置轮询，尚未
-为桌面仪表盘保持 WebSocket/SSE 长连接。
+可配置 2–60 秒刷新周期（默认 4 秒）和两个 CLI 的可执行文件路径。桌面 Host 会使用登录
+Cookie 建立 Gateway SSE 出站连接，云端变化到达即刷新；周期轮询保留为断流兜底。连接状态
+会显示“`SSE 实时连接`”或当前兜底刷新周期。
 
 ## 开发
 
@@ -60,6 +61,12 @@ Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP
 - 用户在会话控制台显式发送时，Prompt 仅通过 Tauri IPC 和 stdin 交给本机 CLI；回复只保留
   在当前前端内存中，不进入桌面配置、SQLite Outbox、Gateway 或日志。单次输入最多 16000
   字符，输出最多 2 MiB，执行最长 15 分钟；stderr 只被排空，不回传到界面。
+- Claude 回复通过 `stream-json` partial event 增量显示；Codex JSONL 会实时显示安全活动标签，
+  并在每条助手消息完成时更新内容。thinking、命令正文、工具参数和 stderr 不进入 WebView。
+  同一会话同时只允许一个本机回合；“停止回合”会终止完整子进程树。运行期间不能关闭会话
+  抽屉，避免丢失仅存在前端内存中的增量内容。
+- SSE Cookie 仍只由 Rust Host 从 OS Keyring 读取；WebView 仅收到连接布尔值和变化信号。
+  SSE 单行上限 64 KiB，断线后指数退避重连，连接不可用不影响周期刷新。
 - Codex 的归档/恢复会同步到本机 Codex app-server。Claude 归档仅是 AgentPulse 本机视图
   标记，不删除或改写 Claude JSONL；归档记录只含 Agent 类型、Session ID、项目显示名/
   指纹和观察时间。

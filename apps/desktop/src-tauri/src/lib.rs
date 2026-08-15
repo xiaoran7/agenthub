@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -16,8 +17,8 @@ use agent_pulse_runner::{
         codex::{self, CodexThreadContext},
     },
     collectors::{
-        CodexAppServer, collect_claude_transcripts, collect_codex_local_threads,
-        run_agent_session_turn,
+        AgentTurnUpdate, CodexAppServer, CollectorError, collect_claude_transcripts,
+        collect_codex_local_threads, run_agent_session_turn_streaming,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -32,7 +33,7 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, ipc::Channel};
 use thiserror::Error;
 use url::{Host, Url};
 
@@ -44,6 +45,9 @@ const DESKTOP_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_TURN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_PROMPT_CHARS: usize = 16_000;
 const MAX_SESSION_ID_CHARS: usize = 160;
+const MAX_SSE_LINE_BYTES: usize = 64 * 1024;
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(25);
+const STREAM_MAX_BACKOFF: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
 enum DesktopError {
@@ -75,6 +79,10 @@ enum DesktopError {
     SessionUnavailable,
     #[error("Agent 执行失败；请检查 CLI 登录状态和控制路径")]
     AgentFailed,
+    #[error("这个会话已有一个回合正在运行")]
+    AgentBusy,
+    #[error("本机会话已停止")]
+    AgentCancelled,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +132,27 @@ struct SessionMessageInput {
 }
 
 #[derive(Debug, Deserialize)]
+struct SessionTurnRef {
+    agent_type: AgentType,
+    agent_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SessionTurnEvent {
+    Started,
+    AssistantDelta { text: String },
+    AssistantMessage { text: String },
+    Activity { label: &'static str },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DashboardRealtimeEvent {
+    connected: bool,
+    changed: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct ArchiveSessionInput {
     agent_type: AgentType,
     agent_session_id: String,
@@ -164,18 +193,41 @@ impl EngineHandle {
     }
 }
 
+struct RealtimeHandle {
+    stop: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
+}
+
+impl RealtimeHandle {
+    fn stop(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.connected.store(false, Ordering::Relaxed);
+    }
+}
+
 struct DesktopState {
     data_dir: PathBuf,
     engine: Mutex<Option<EngineHandle>>,
+    realtime: Mutex<Option<RealtimeHandle>>,
+    active_turns: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 #[tauri::command]
-async fn authenticate(input: AuthInput, state: State<'_, DesktopState>) -> Result<Value, String> {
-    authenticate_inner(input, &state).map_err(|error| error.to_string())
+async fn authenticate(
+    input: AuthInput,
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    let snapshot = authenticate_inner(input, &state).map_err(|error| error.to_string())?;
+    start_dashboard_realtime(&state, &app).map_err(|error| error.to_string())?;
+    Ok(snapshot)
 }
 
 #[tauri::command]
-async fn restore_session(state: State<'_, DesktopState>) -> Result<Option<Value>, String> {
+async fn restore_session(
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<Option<Value>, String> {
     let config = match read_config(&state.data_dir) {
         Ok(config) => config,
         Err(DesktopError::NotAuthenticated) => return Ok(None),
@@ -193,6 +245,7 @@ async fn restore_session(state: State<'_, DesktopState>) -> Result<Option<Value>
     let mut snapshot = dashboard_snapshot(&config.server_url, &cookie, &identity, &state)
         .map_err(|error| error.to_string())?;
     snapshot["sync_running"] = Value::Bool(true);
+    start_dashboard_realtime(&state, &app).map_err(|error| error.to_string())?;
     Ok(Some(snapshot))
 }
 
@@ -208,13 +261,57 @@ async fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, Stri
 #[tauri::command]
 async fn send_session_message(
     input: SessionMessageInput,
+    on_event: Channel<SessionTurnEvent>,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
+    validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
+    if input.prompt.trim().is_empty() || input.prompt.trim().chars().count() > MAX_PROMPT_CHARS {
+        return Err(DesktopError::InvalidAction.to_string());
+    }
+    let key = session_turn_key(input.agent_type, &input.agent_session_id);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    {
+        let mut active_turns = state
+            .active_turns
+            .lock()
+            .map_err(|_| DesktopError::AgentFailed.to_string())?;
+        if active_turns.contains_key(&key) {
+            return Err(DesktopError::AgentBusy.to_string());
+        }
+        active_turns.insert(key.clone(), cancelled.clone());
+    }
+    let _ = on_event.send(SessionTurnEvent::Started);
     let data_dir = state.data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || send_session_message_inner(input, &data_dir))
-        .await
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        send_session_message_inner(input, &data_dir, &cancelled, on_event)
+    })
+    .await;
+    if let Ok(mut active_turns) = state.active_turns.lock() {
+        active_turns.remove(&key);
+    }
+    result
         .map_err(|_| DesktopError::AgentFailed.to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn cancel_session_turn(
+    input: SessionTurnRef,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
+    let key = session_turn_key(input.agent_type, &input.agent_session_id);
+    let cancelled = state
+        .active_turns
+        .lock()
+        .map_err(|_| DesktopError::AgentFailed.to_string())?
+        .get(&key)
+        .cloned();
+    if let Some(cancelled) = cancelled {
+        cancelled.store(true, Ordering::Relaxed);
+        return Ok(json!({ "cancelled": true }));
+    }
+    Ok(json!({ "cancelled": false }))
 }
 
 #[tauri::command]
@@ -277,6 +374,12 @@ async fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
         && let Some(handle) = engine.take()
     {
         handle.stop();
+    }
+    stop_dashboard_realtime(&state);
+    if let Ok(active_turns) = state.active_turns.lock() {
+        for cancelled in active_turns.values() {
+            cancelled.store(true, Ordering::Relaxed);
+        }
     }
     if let Some(config) = config {
         if let Ok(cookie) = load_cookie(&config.server_url) {
@@ -438,6 +541,16 @@ fn dashboard_snapshot(
         .lock()
         .map(|engine| engine.is_some())
         .unwrap_or(false);
+    let realtime_connected = state
+        .realtime
+        .lock()
+        .ok()
+        .and_then(|realtime| {
+            realtime
+                .as_ref()
+                .map(|handle| handle.connected.load(Ordering::Relaxed))
+        })
+        .unwrap_or(false);
     Ok(json!({
         "account": account,
         "devices": devices["devices"],
@@ -457,6 +570,7 @@ fn dashboard_snapshot(
             "refreshed_at": chrono::Utc::now()
         },
         "sync_running": running,
+        "realtime_connected": realtime_connected,
         "server_url": server_url,
         "preferences": preferences_json(&desktop_config)
     }))
@@ -465,6 +579,8 @@ fn dashboard_snapshot(
 fn send_session_message_inner(
     input: SessionMessageInput,
     data_dir: &Path,
+    cancelled: &AtomicBool,
+    on_event: Channel<SessionTurnEvent>,
 ) -> Result<Value, DesktopError> {
     validate_session_id(&input.agent_session_id)?;
     let prompt = input.prompt.trim();
@@ -483,24 +599,34 @@ fn send_session_message_inner(
         ),
         AgentType::Codex => None,
     };
-    let output = run_agent_session_turn(
+    let response = run_agent_session_turn_streaming(
         input.agent_type,
         binary,
         project_path.as_deref(),
         &input.agent_session_id,
         prompt,
         AGENT_TURN_TIMEOUT,
+        cancelled,
+        move |update| {
+            let event = match update {
+                AgentTurnUpdate::AssistantDelta(text) => SessionTurnEvent::AssistantDelta { text },
+                AgentTurnUpdate::AssistantMessage(text) => {
+                    SessionTurnEvent::AssistantMessage { text }
+                }
+                AgentTurnUpdate::Activity(label) => SessionTurnEvent::Activity { label },
+            };
+            let _ = on_event.send(event);
+        },
     )
-    .map_err(|_| DesktopError::AgentFailed)?;
-    let response = match input.agent_type {
-        AgentType::ClaudeCode => output.trim().to_owned(),
-        AgentType::Codex => codex_final_message(&output).ok_or(DesktopError::AgentFailed)?,
-    };
-    if response.is_empty() {
+    .map_err(|error| match error {
+        CollectorError::Cancelled { .. } => DesktopError::AgentCancelled,
+        _ => DesktopError::AgentFailed,
+    })?;
+    if response.trim().is_empty() {
         return Err(DesktopError::AgentFailed);
-    }
+    };
     Ok(json!({
-        "response": response,
+        "response": response.trim(),
         "completed_at": chrono::Utc::now(),
     }))
 }
@@ -573,6 +699,10 @@ fn validate_session_id(value: &str) -> Result<(), DesktopError> {
     Ok(())
 }
 
+fn session_turn_key(agent_type: AgentType, session_id: &str) -> String {
+    format!("{}:{session_id}", agent_type_name(agent_type))
+}
+
 fn find_claude_session_cwd(session_id: &str) -> Result<Option<PathBuf>, DesktopError> {
     let Some(home) = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -605,22 +735,6 @@ fn find_claude_session_cwd(session_id: &str) -> Result<Option<PathBuf>, DesktopE
         }
     }
     Ok(None)
-}
-
-fn codex_final_message(output: &str) -> Option<String> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let value = serde_json::from_str::<Value>(line).ok()?;
-            let item = value.get("item")?;
-            if value.get("type")?.as_str()? != "item.completed"
-                || item.get("type")?.as_str()? != "agent_message"
-            {
-                return None;
-            }
-            Some(item.get("text")?.as_str()?.trim().to_owned())
-        })
-        .rfind(|message| !message.is_empty())
 }
 
 fn start_engine(
@@ -951,6 +1065,189 @@ fn local_memory_summary() -> Value {
     })
 }
 
+fn start_dashboard_realtime(state: &DesktopState, app: &AppHandle) -> Result<(), DesktopError> {
+    let config = read_config(&state.data_dir)?;
+    let cookie = load_cookie(&config.server_url)?;
+    let mut realtime = state.realtime.lock().map_err(|_| DesktopError::Sync)?;
+    if realtime.is_some() {
+        return Ok(());
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let connected = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let thread_connected = connected.clone();
+    let app = app.clone();
+    thread::Builder::new()
+        .name("agent-pulse-desktop-realtime".to_owned())
+        .spawn(move || {
+            dashboard_realtime_loop(
+                &app,
+                &config.server_url,
+                &cookie,
+                &thread_stop,
+                &thread_connected,
+            );
+        })
+        .map_err(|_| DesktopError::Sync)?;
+    *realtime = Some(RealtimeHandle { stop, connected });
+    Ok(())
+}
+
+fn stop_dashboard_realtime(state: &DesktopState) {
+    if let Ok(mut realtime) = state.realtime.lock()
+        && let Some(handle) = realtime.take()
+    {
+        handle.stop();
+    }
+}
+
+fn dashboard_realtime_loop(
+    app: &AppHandle,
+    server_url: &str,
+    cookie: &str,
+    stop: &AtomicBool,
+    connected: &AtomicBool,
+) {
+    let mut attempt = 0_u32;
+    while !stop.load(Ordering::Relaxed) {
+        let result = read_dashboard_stream(app, server_url, cookie, stop, connected);
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        publish_realtime_state(app, connected, false, false);
+        attempt = if result.is_ok() {
+            1
+        } else {
+            attempt.saturating_add(1)
+        };
+        let delay =
+            Duration::from_secs(2_u64.saturating_pow(attempt.min(4))).min(STREAM_MAX_BACKOFF);
+        sleep_until_cancelled(stop, delay);
+    }
+    connected.store(false, Ordering::Relaxed);
+}
+
+fn read_dashboard_stream(
+    app: &AppHandle,
+    server_url: &str,
+    cookie: &str,
+    stop: &AtomicBool,
+    connected: &AtomicBool,
+) -> Result<(), DesktopError> {
+    let url = format!("{server_url}/v1/stream");
+    let response = dashboard_stream_agent()
+        .get(&url)
+        .header("cookie", cookie)
+        .header("accept", "text/event-stream")
+        .call()
+        .map_err(map_http_error)?;
+    if !response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"))
+    {
+        return Err(DesktopError::InvalidResponse);
+    }
+    let mut reader = BufReader::new(response.into_parts().1.into_reader());
+    let mut event = String::new();
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let line = read_sse_line(&mut reader);
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        match line {
+            SseLine::Line(line) if line.is_empty() => {
+                match event.as_str() {
+                    "ready" => publish_realtime_state(app, connected, true, false),
+                    "sessions" => publish_realtime_state(app, connected, true, true),
+                    _ => {}
+                }
+                event.clear();
+            }
+            SseLine::Line(line) => {
+                if let Some(value) = line.strip_prefix("event:") {
+                    event = value.trim_start().to_owned();
+                }
+            }
+            SseLine::Eof => return Ok(()),
+            SseLine::TooLarge | SseLine::InvalidUtf8 | SseLine::Io => {
+                return Err(DesktopError::InvalidResponse);
+            }
+        }
+    }
+}
+
+fn publish_realtime_state(
+    app: &AppHandle,
+    connected: &AtomicBool,
+    next_connected: bool,
+    changed: bool,
+) {
+    let state_changed = connected.swap(next_connected, Ordering::Relaxed) != next_connected;
+    if state_changed || changed {
+        let _ = app.emit(
+            "dashboard-realtime",
+            DashboardRealtimeEvent {
+                connected: next_connected,
+                changed,
+            },
+        );
+    }
+}
+
+fn sleep_until_cancelled(stop: &AtomicBool, duration: Duration) {
+    let deadline = std::time::Instant::now() + duration;
+    while !stop.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+enum SseLine {
+    Line(String),
+    TooLarge,
+    InvalidUtf8,
+    Io,
+    Eof,
+}
+
+fn read_sse_line(reader: &mut impl BufRead) -> SseLine {
+    let mut line = Vec::new();
+    loop {
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(_) => return SseLine::Io,
+        };
+        if buffer.is_empty() {
+            if line.is_empty() {
+                return SseLine::Eof;
+            }
+            break;
+        }
+        let (take, complete) = match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(position) => (position + 1, true),
+            None => (buffer.len(), false),
+        };
+        if line.len() + take > MAX_SSE_LINE_BYTES {
+            return SseLine::TooLarge;
+        }
+        line.extend_from_slice(&buffer[..take]);
+        reader.consume(take);
+        if complete {
+            break;
+        }
+    }
+    while matches!(line.last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    }
+    String::from_utf8(line)
+        .map(SseLine::Line)
+        .unwrap_or(SseLine::InvalidUtf8)
+}
+
 fn request_json(
     method: &str,
     server_url: &str,
@@ -990,6 +1287,17 @@ fn request_json(
 fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
+        .user_agent(concat!("agent-pulse-desktop/", env!("CARGO_PKG_VERSION")))
+        .max_redirects(0)
+        .build()
+        .new_agent()
+}
+
+fn dashboard_stream_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(REQUEST_TIMEOUT))
+        .timeout_recv_response(Some(REQUEST_TIMEOUT))
+        .timeout_recv_body(Some(STREAM_READ_TIMEOUT))
         .user_agent(concat!("agent-pulse-desktop/", env!("CARGO_PKG_VERSION")))
         .max_redirects(0)
         .build()
@@ -1120,6 +1428,8 @@ pub fn run() {
             app.manage(DesktopState {
                 data_dir,
                 engine: Mutex::new(None),
+                realtime: Mutex::new(None),
+                active_turns: Mutex::new(HashMap::new()),
             });
             Ok(())
         })
@@ -1128,6 +1438,7 @@ pub fn run() {
             restore_session,
             refresh_dashboard,
             send_session_message,
+            cancel_session_turn,
             set_session_archived,
             save_desktop_preferences,
             set_sync_paused,
@@ -1138,10 +1449,18 @@ pub fn run() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event
                 && let Some(state) = app_handle.try_state::<DesktopState>()
-                && let Ok(mut engine) = state.engine.lock()
-                && let Some(handle) = engine.take()
             {
-                handle.stop();
+                stop_dashboard_realtime(&state);
+                if let Ok(active_turns) = state.active_turns.lock() {
+                    for cancelled in active_turns.values() {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                }
+                if let Ok(mut engine) = state.engine.lock()
+                    && let Some(handle) = engine.take()
+                {
+                    handle.stop();
+                }
             }
         });
 }
@@ -1169,13 +1488,22 @@ mod tests {
     }
 
     #[test]
-    fn extracts_the_last_codex_agent_message() {
-        let output = concat!(
-            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"first\"}}\n",
-            "{\"type\":\"turn.completed\"}\n",
-            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\" final answer \"}}\n",
-        );
-        assert_eq!(codex_final_message(output).as_deref(), Some("final answer"));
+    fn sse_line_reader_handles_crlf_and_blank_frames() {
+        let mut input = std::io::Cursor::new(b"event: ready\r\n\r\n".to_vec());
+        assert!(matches!(
+            read_sse_line(&mut input),
+            SseLine::Line(line) if line == "event: ready"
+        ));
+        assert!(matches!(
+            read_sse_line(&mut input),
+            SseLine::Line(line) if line.is_empty()
+        ));
+    }
+
+    #[test]
+    fn sse_line_reader_rejects_unbounded_lines() {
+        let mut input = std::io::Cursor::new(vec![b'x'; MAX_SSE_LINE_BYTES + 1]);
+        assert!(matches!(read_sse_line(&mut input), SseLine::TooLarge));
     }
 
     #[test]
