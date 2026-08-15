@@ -155,6 +155,16 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
 - 启动时先执行一次本地元数据扫描并写入 Outbox；桌面读模型将本地快照与云端已确认
   Session 按稳定键合并，因此断网或积压不会被误报为“本机未检测到”。扫描健康、待上传数和
   云端确认是三个独立状态；memory 只统计文件/索引数量与字节，不读取正文。
+- 仪表盘使用用户可配置的 2–60 秒单飞轮询（默认 4 秒）刷新云端与本机元数据；当前不保持
+  长连接。会话详情提供本机控制入口，Prompt 只经 Tauri IPC 写入本机 CLI 的 stdin，不进入
+  Outbox、Gateway、日志或桌面持久化；子进程输出有 2 MiB 上限和 15 分钟硬超时，阻塞执行
+  放入专用线程池，避免冻结 UI。
+- Claude 会话通过官方 `--resume` 非交互模式继续，Codex 通过 `exec resume` 继续。CLI 可执行
+  文件位置和刷新周期只保存在桌面本地配置。控制面板只在当前打开期间保留本轮问答，用户可
+  随时清空；关闭或重启应用即丢弃。
+- Codex 归档/恢复调用 app-server 的 `thread/archive` / `thread/unarchive`。Claude Code 没有
+  对等的稳定归档 CLI，因此其归档只改变 AgentPulse 本机视图，不改写 Claude 的 Session
+  文件。归档标记按本机设备隔离，不会误伤相同 Session ID 的远端设备记录。
 
 #### Normalizer
 

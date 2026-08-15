@@ -12,6 +12,11 @@ Windows Tauri 桌面客户端。用户通过现有 AgentPulse 邮箱账号注册
 AgentPulse 账号与套餐。记忆区只统计 Claude memory 文件和 Codex memory 索引的数量与字节，
 不读取或展示正文。
 
+会话列表现在也是本机控制台：点击会话可查看 ID、项目指纹、最近活动与同步状态，并直接
+继续 Claude Code 或 Codex 会话、清空本次打开期间的显示内容，以及归档/恢复会话。设置面板
+可配置 2–60 秒刷新周期（默认 4 秒）和两个 CLI 的可执行文件路径。当前采用可配置轮询，尚未
+为桌面仪表盘保持 WebSocket/SSE 长连接。
+
 ## 开发
 
 ```powershell
@@ -50,8 +55,14 @@ Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP
 - Codex 优先使用 app-server；不可执行时只读 `CODEX_HOME` 最新状态库的 Thread 元数据。
 - 桌面启动时先执行一次本地元数据扫描（每种来源最多 1000 条），随后进入后台自适应轮询。
 - Claude/Codex memory 只读取文件或索引数量与字节大小，不读取记忆正文。
-- 不读取或同步 Claude/Codex OAuth Token、API Key、消息正文、Prompt、工具参数、命令
-  输出和 rollout 正文。
+- 日常发现与同步不读取 Claude/Codex OAuth Token、API Key、消息正文、Prompt、工具参数、
+  命令输出和 rollout 正文。
+- 用户在会话控制台显式发送时，Prompt 仅通过 Tauri IPC 和 stdin 交给本机 CLI；回复只保留
+  在当前前端内存中，不进入桌面配置、SQLite Outbox、Gateway 或日志。单次输入最多 16000
+  字符，输出最多 2 MiB，执行最长 15 分钟；stderr 只被排空，不回传到界面。
+- Codex 的归档/恢复会同步到本机 Codex app-server。Claude 归档仅是 AgentPulse 本机视图
+  标记，不删除或改写 Claude JSONL；归档记录只含 Agent 类型、Session ID、项目显示名/
+  指纹和观察时间。
 - 退出登录会停止当前同步进程并删除 OS Keyring 中的 AgentPulse Cookie；本地设备身份
   保留，以便同一台机器重新登录时继续使用稳定设备 ID。
 

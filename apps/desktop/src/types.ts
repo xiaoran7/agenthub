@@ -40,6 +40,18 @@ export interface Session {
     last_activity_at?: string;
   };
   sync_state?: "local" | "synced";
+  archived?: boolean;
+}
+
+export interface DesktopPreferences {
+  refresh_interval_seconds: number;
+  claude_binary: string;
+  codex_binary: string;
+}
+
+export interface SessionTurnResult {
+  response: string;
+  completed_at: string;
 }
 
 export interface LocalSource {
@@ -72,4 +84,5 @@ export interface Snapshot {
   sync_running: boolean;
   server_url: string;
   local: LocalInventory;
+  preferences: DesktopPreferences;
 }

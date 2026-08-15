@@ -2,20 +2,27 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
   AlertTriangle,
+  Archive,
   CheckCircle2,
+  ChevronRight,
   CircleUserRound,
   Cloud,
   Code2,
+  Cpu,
   Database,
   Eye,
   EyeOff,
   HardDrive,
   LogOut,
+  MessageSquare,
   Monitor,
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Search,
+  Send,
+  Settings,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -30,7 +37,14 @@ import {
 } from "react";
 
 import { activityTime, relativeTime, statusView } from "./presentation";
-import type { ActivityStatus, LocalSource, Session, Snapshot } from "./types";
+import type {
+  ActivityStatus,
+  DesktopPreferences,
+  LocalSource,
+  Session,
+  SessionTurnResult,
+  Snapshot,
+} from "./types";
 
 type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
@@ -262,8 +276,13 @@ function Dashboard({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
   const [accountOpen, setAccountOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
+  const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">(
+    "active",
+  );
+  const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
   const [visibleLimit, setVisibleLimit] = useState(100);
   const refreshInFlight = useRef(false);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
@@ -280,12 +299,19 @@ function Dashboard({
       sessions.filter((session) => {
         if (agentFilter !== "all" && session.agent_type !== agentFilter)
           return false;
+        if ((session.archived === true) !== (archiveFilter === "archived"))
+          return false;
         if (deferredQuery === "") return true;
         return session.payload.project.display_name
           .toLocaleLowerCase()
           .includes(deferredQuery);
       }),
-    [agentFilter, deferredQuery, sessions],
+    [agentFilter, archiveFilter, deferredQuery, sessions],
+  );
+  const selectedSession = useMemo(
+    () =>
+      sessions.find((session) => sessionKey(session) === selectedSessionKey),
+    [selectedSessionKey, sessions],
   );
   const counts = useMemo(() => {
     const next = { claude_code: 0, codex: 0 };
@@ -314,15 +340,22 @@ function Dashboard({
     let cancelled = false;
     let timer = window.setTimeout(async function poll() {
       await refresh();
-      if (!cancelled) timer = window.setTimeout(poll, 8_000);
-    }, 8_000);
+      if (!cancelled)
+        timer = window.setTimeout(
+          poll,
+          snapshot.preferences.refresh_interval_seconds * 1_000,
+        );
+    }, snapshot.preferences.refresh_interval_seconds * 1_000);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [refresh]);
+  }, [refresh, snapshot.preferences.refresh_interval_seconds]);
 
-  useEffect(() => setVisibleLimit(100), [agentFilter, deferredQuery]);
+  useEffect(
+    () => setVisibleLimit(100),
+    [agentFilter, archiveFilter, deferredQuery],
+  );
 
   const toggleSync = async () => {
     if (actionBusy) return;
@@ -374,6 +407,14 @@ function Dashboard({
             <Activity />
             <span>会话</span>
           </button>
+          <button
+            aria-label="桌面设置"
+            aria-expanded={settingsOpen}
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings />
+            <span>设置</span>
+          </button>
         </nav>
         <button
           className="sidebar-account"
@@ -407,6 +448,9 @@ function Dashboard({
                   : "本地与云端已同步"
                 : "云同步已暂停，本地扫描继续"}
             </p>
+            <span className="live-refresh">
+              <i /> 每 {snapshot.preferences.refresh_interval_seconds} 秒刷新
+            </span>
           </div>
           <div className="header-actions">
             <button
@@ -497,6 +541,20 @@ function Dashboard({
               </p>
             </div>
             <div className="session-tools">
+              <div className="archive-filter" aria-label="归档筛选">
+                <button
+                  aria-pressed={archiveFilter === "active"}
+                  onClick={() => setArchiveFilter("active")}
+                >
+                  活跃
+                </button>
+                <button
+                  aria-pressed={archiveFilter === "archived"}
+                  onClick={() => setArchiveFilter("archived")}
+                >
+                  已归档
+                </button>
+              </div>
               <label className="session-search">
                 <Search />
                 <input
@@ -533,20 +591,30 @@ function Dashboard({
             </div>
             {filteredSessions.length === 0 ? (
               <div className="empty-state">
-                {query === "" && agentFilter === "all" ? (
+                {archiveFilter === "active" &&
+                query === "" &&
+                agentFilter === "all" ? (
                   <Activity />
                 ) : (
                   <Search />
                 )}
                 <h3>
-                  {query === "" && agentFilter === "all"
-                    ? "正在扫描本机会话"
-                    : "没有匹配的会话"}
+                  {archiveFilter === "archived" &&
+                  query === "" &&
+                  agentFilter === "all"
+                    ? "暂无归档会话"
+                    : query === "" && agentFilter === "all"
+                      ? "正在扫描本机会话"
+                      : "没有匹配的会话"}
                 </h3>
                 <p>
-                  {query === "" && agentFilter === "all"
-                    ? "扫描失败时会在上方来源卡片显示原因。"
-                    : "换一个项目名或清除 Agent 筛选。"}
+                  {archiveFilter === "archived" &&
+                  query === "" &&
+                  agentFilter === "all"
+                    ? "在会话控制面板中归档后，会话会移动到这里。"
+                    : query === "" && agentFilter === "all"
+                      ? "扫描失败时会在上方来源卡片显示原因。"
+                      : "换一个项目名或清除 Agent 筛选。"}
                 </p>
               </div>
             ) : (
@@ -556,6 +624,8 @@ function Dashboard({
                   <SessionRow
                     key={`${session.device_id}:${session.agent_type}:${session.agent_session_id}`}
                     session={session}
+                    selected={selectedSessionKey === sessionKey(session)}
+                    onSelect={() => setSelectedSessionKey(sessionKey(session))}
                   />
                 ))
             )}
@@ -584,6 +654,34 @@ function Dashboard({
             busy={actionBusy}
             onClose={() => setAccountOpen(false)}
             onLogout={() => void signOut()}
+          />
+        )}
+        {settingsOpen && (
+          <DesktopSettingsPanel
+            preferences={snapshot.preferences}
+            onClose={() => setSettingsOpen(false)}
+            onSaved={(preferences) =>
+              setSnapshot((current) => ({ ...current, preferences }))
+            }
+          />
+        )}
+        {selectedSession !== undefined && (
+          <SessionControlPanel
+            key={sessionKey(selectedSession)}
+            session={selectedSession}
+            onClose={() => setSelectedSessionKey(undefined)}
+            onChanged={async (archived) => {
+              setSnapshot((current) => ({
+                ...current,
+                sessions: current.sessions.map((session) =>
+                  sessionKey(session) === sessionKey(selectedSession)
+                    ? { ...session, archived }
+                    : session,
+                ),
+              }));
+              setArchiveFilter(archived ? "archived" : "active");
+              await refresh();
+            }}
           />
         )}
         {error !== undefined && (
@@ -645,13 +743,25 @@ function SourceRow({
   );
 }
 
-function SessionRow({ session }: { session: Session }) {
+function SessionRow({
+  session,
+  selected,
+  onSelect,
+}: {
+  session: Session;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const status = statusView(
     session.payload.state.activity_status,
     session.payload.state.presence,
   );
   return (
-    <div className="session-row" role="row">
+    <button
+      className={selected ? "session-row selected" : "session-row"}
+      role="row"
+      onClick={onSelect}
+    >
       <strong title={session.payload.project.display_name}>
         {session.payload.project.display_name || "未命名项目"}
       </strong>
@@ -665,14 +775,324 @@ function SessionRow({ session }: { session: Session }) {
         </em>
       </span>
       <time>{relativeTime(activityTime(session))}</time>
-      <span
-        className={`sync-dot ${session.sync_state ?? "synced"}`}
-        title={
-          session.sync_state === "local"
-            ? "本地已发现，等待云端确认"
-            : "云端已同步"
-        }
-      />
+      <span className="session-row-tail">
+        <i
+          className={`sync-dot ${session.sync_state ?? "synced"}`}
+          title={
+            session.sync_state === "local"
+              ? "本地已发现，等待云端确认"
+              : "云端已同步"
+          }
+        />
+        <ChevronRight />
+      </span>
+    </button>
+  );
+}
+
+function SessionControlPanel({
+  session,
+  onClose,
+  onChanged,
+}: {
+  session: Session;
+  onClose: () => void;
+  onChanged: (archived: boolean) => Promise<void>;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [messages, setMessages] = useState<
+    Array<{ role: "user" | "assistant"; content: string }>
+  >([]);
+  const [busy, setBusy] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const status = statusView(
+    session.payload.state.activity_status,
+    session.payload.state.presence,
+  );
+
+  const sendMessage = async (event: FormEvent) => {
+    event.preventDefault();
+    const content = prompt.trim();
+    if (busy || content === "") return;
+    setPrompt("");
+    setBusy(true);
+    setError(undefined);
+    setMessages((current) => [...current, { role: "user", content }]);
+    try {
+      const result = await invoke<SessionTurnResult>("send_session_message", {
+        input: {
+          agent_type: session.agent_type,
+          agent_session_id: session.agent_session_id,
+          prompt: content,
+        },
+      });
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: result.response },
+      ]);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleArchive = async () => {
+    if (archiveBusy) return;
+    setArchiveBusy(true);
+    setError(undefined);
+    try {
+      const archived = session.archived !== true;
+      await invoke("set_session_archived", {
+        input: {
+          agent_type: session.agent_type,
+          agent_session_id: session.agent_session_id,
+          project_display_name: session.payload.project.display_name,
+          project_fingerprint: session.payload.project.fingerprint,
+          observed_at: session.observed_at,
+          archived,
+        },
+      });
+      await onChanged(archived);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setArchiveBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel-scrim" onMouseDown={onClose}>
+      <aside
+        className="session-control-panel"
+        aria-label="会话控制"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <span className="card-kicker">SESSION CONTROL</span>
+            <h2>{session.payload.project.display_name || "未命名项目"}</h2>
+          </div>
+          <button
+            className="icon-button"
+            aria-label="关闭会话"
+            onClick={onClose}
+          >
+            <X />
+          </button>
+        </header>
+
+        <div className="session-control-summary">
+          <span className="agent-symbol">
+            {session.agent_type === "claude_code" ? <Code2 /> : "◆"}
+          </span>
+          <div>
+            <strong>
+              {session.agent_type === "claude_code" ? "Claude Code" : "Codex"}
+            </strong>
+            <em className={`status-chip ${status.className}`}>
+              <i /> {session.archived ? "已归档" : status.label}
+            </em>
+          </div>
+        </div>
+
+        <dl className="session-metadata">
+          <div>
+            <dt>会话 ID</dt>
+            <dd title={session.agent_session_id}>{session.agent_session_id}</dd>
+          </div>
+          <div>
+            <dt>最近活动</dt>
+            <dd>{relativeTime(activityTime(session))}</dd>
+          </div>
+          <div>
+            <dt>同步状态</dt>
+            <dd>
+              {session.sync_state === "local" ? "等待云端确认" : "已同步"}
+            </dd>
+          </div>
+          <div>
+            <dt>项目指纹</dt>
+            <dd title={session.payload.project.fingerprint}>
+              {session.payload.project.fingerprint.slice(0, 16)}
+            </dd>
+          </div>
+        </dl>
+
+        <section className="conversation-pane" aria-live="polite">
+          {messages.length === 0 ? (
+            <div className="conversation-empty">
+              <MessageSquare />
+              <strong>从这里继续会话</strong>
+              <p>
+                消息直接交给本机 CLI；内容不进入 AgentPulse 云端或本地索引。
+              </p>
+            </div>
+          ) : (
+            messages.map((message, index) => (
+              <div
+                className={`turn-message ${message.role}`}
+                key={`${message.role}-${index}`}
+              >
+                <span>{message.role === "user" ? "你" : "Agent"}</span>
+                <p>{message.content}</p>
+              </div>
+            ))
+          )}
+          {busy && (
+            <div className="agent-thinking">
+              <RefreshCw className="spin" /> Agent 正在本机执行…
+            </div>
+          )}
+        </section>
+
+        {error !== undefined && <p className="panel-error">{error}</p>}
+        <form className="session-composer" onSubmit={sendMessage}>
+          <textarea
+            aria-label="发送给 Agent"
+            maxLength={16_000}
+            placeholder={
+              session.archived ? "恢复会话后再发送" : "继续这个会话…"
+            }
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            disabled={busy || session.archived === true}
+          />
+          <button
+            className="composer-send"
+            type="submit"
+            aria-label="发送"
+            disabled={busy || session.archived === true || prompt.trim() === ""}
+          >
+            <Send />
+          </button>
+        </form>
+        <footer>
+          <span>
+            <ShieldCheck /> 本机直连 · Prompt 不上传
+          </span>
+          <button
+            disabled={archiveBusy || busy}
+            onClick={() => void toggleArchive()}
+          >
+            {session.archived ? <RotateCcw /> : <Archive />}
+            {session.archived ? "恢复会话" : "归档会话"}
+          </button>
+        </footer>
+      </aside>
+    </div>
+  );
+}
+
+function DesktopSettingsPanel({
+  preferences,
+  onClose,
+  onSaved,
+}: {
+  preferences: DesktopPreferences;
+  onClose: () => void;
+  onSaved: (preferences: DesktopPreferences) => void;
+}) {
+  const [refreshSeconds, setRefreshSeconds] = useState(
+    preferences.refresh_interval_seconds,
+  );
+  const [claudeBinary, setClaudeBinary] = useState(preferences.claude_binary);
+  const [codexBinary, setCodexBinary] = useState(preferences.codex_binary);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      const next = await invoke<DesktopPreferences>(
+        "save_desktop_preferences",
+        {
+          input: {
+            refresh_interval_seconds: refreshSeconds,
+            claude_binary: claudeBinary,
+            codex_binary: codexBinary,
+          },
+        },
+      );
+      onSaved(next);
+      onClose();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel-scrim" onMouseDown={onClose}>
+      <aside
+        className="settings-panel"
+        aria-label="桌面设置"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <span className="card-kicker">DESKTOP RUNTIME</span>
+            <h2>连接与控制</h2>
+          </div>
+          <button
+            className="icon-button"
+            aria-label="关闭设置"
+            onClick={onClose}
+          >
+            <X />
+          </button>
+        </header>
+        <div className="settings-intro">
+          <Cpu />
+          <p>扫描和发送都在这台电脑上完成。CLI 路径只保存在本机。</p>
+        </div>
+        <form onSubmit={save}>
+          <label>
+            <span>刷新周期</span>
+            <div className="range-field">
+              <input
+                type="range"
+                min="2"
+                max="60"
+                value={refreshSeconds}
+                onChange={(event) =>
+                  setRefreshSeconds(Number(event.target.value))
+                }
+              />
+              <strong>{refreshSeconds} 秒</strong>
+            </div>
+          </label>
+          <label>
+            <span>Claude CLI</span>
+            <input
+              value={claudeBinary}
+              maxLength={260}
+              onChange={(event) => setClaudeBinary(event.target.value)}
+              placeholder="claude"
+              required
+            />
+          </label>
+          <label>
+            <span>Codex CLI</span>
+            <input
+              value={codexBinary}
+              maxLength={260}
+              onChange={(event) => setCodexBinary(event.target.value)}
+              placeholder="codex"
+              required
+            />
+          </label>
+          {error !== undefined && <p className="panel-error">{error}</p>}
+          <button className="primary-button" disabled={busy} type="submit">
+            {busy ? <RefreshCw className="spin" /> : <CheckCircle2 />}
+            保存设置
+          </button>
+        </form>
+      </aside>
     </div>
   );
 }
@@ -782,6 +1202,10 @@ function errorMessage(error: unknown): string {
   return "操作失败，请稍后重试";
 }
 
+function sessionKey(session: Session): string {
+  return `${session.device_id}:${session.agent_type}:${session.agent_session_id}`;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`;
@@ -848,6 +1272,11 @@ const demoSnapshot: Snapshot = {
       codex_bytes: 1_306_624,
     },
     refreshed_at: new Date().toISOString(),
+  },
+  preferences: {
+    refresh_interval_seconds: 4,
+    claude_binary: "claude",
+    codex_binary: "codex",
   },
   sessions: [
     demoSession("claude_code", "电商平台重构", "WORKING", 2),

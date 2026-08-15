@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -14,7 +15,10 @@ use agent_pulse_runner::{
         claude,
         codex::{self, CodexThreadContext},
     },
-    collectors::{collect_claude_transcripts, collect_codex_local_threads},
+    collectors::{
+        CodexAppServer, collect_claude_transcripts, collect_codex_local_threads,
+        run_agent_session_turn,
+    },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
     gateway::GatewayClient,
@@ -37,6 +41,9 @@ const KEYRING_SERVICE: &str = "AgentPulse Desktop";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const LOCAL_SESSION_LIMIT: u32 = 1_000;
 const DESKTOP_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(5);
+const AGENT_TURN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const MAX_PROMPT_CHARS: usize = 16_000;
+const MAX_SESSION_ID_CHARS: usize = 160;
 
 #[derive(Debug, Error)]
 enum DesktopError {
@@ -62,6 +69,12 @@ enum DesktopError {
     Sync,
     #[error("当前没有登录")]
     NotAuthenticated,
+    #[error("会话参数无效")]
+    InvalidAction,
+    #[error("本机会话已不可用，请刷新后重试")]
+    SessionUnavailable,
+    #[error("Agent 执行失败；请检查 CLI 登录状态和控制路径")]
+    AgentFailed,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +97,59 @@ enum AuthMode {
 #[derive(Debug, Serialize, Deserialize)]
 struct DesktopConfig {
     server_url: String,
+    #[serde(default = "default_refresh_interval_seconds")]
+    refresh_interval_seconds: u64,
+    #[serde(default = "default_claude_binary")]
+    claude_binary: String,
+    #[serde(default = "default_codex_binary")]
+    codex_binary: String,
+    #[serde(default)]
+    archived_sessions: Vec<ArchivedSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ArchivedSession {
+    agent_type: AgentType,
+    agent_session_id: String,
+    project_display_name: String,
+    project_fingerprint: String,
+    observed_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionMessageInput {
+    agent_type: AgentType,
+    agent_session_id: String,
+    prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArchiveSessionInput {
+    agent_type: AgentType,
+    agent_session_id: String,
+    project_display_name: String,
+    project_fingerprint: String,
+    observed_at: String,
+    archived: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DesktopPreferencesInput {
+    refresh_interval_seconds: u64,
+    claude_binary: String,
+    codex_binary: String,
+}
+
+fn default_refresh_interval_seconds() -> u64 {
+    4
+}
+
+fn default_claude_binary() -> String {
+    "claude".to_owned()
+}
+
+fn default_codex_binary() -> String {
+    "codex".to_owned()
 }
 
 struct EngineHandle {
@@ -137,6 +203,49 @@ async fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, Stri
     let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
     dashboard_snapshot(&config.server_url, &cookie, &identity, &state)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn send_session_message(
+    input: SessionMessageInput,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || send_session_message_inner(input, &data_dir))
+        .await
+        .map_err(|_| DesktopError::AgentFailed.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn set_session_archived(
+    input: ArchiveSessionInput,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || set_session_archived_inner(input, &data_dir))
+        .await
+        .map_err(|_| DesktopError::AgentFailed.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn save_desktop_preferences(
+    input: DesktopPreferencesInput,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    let mut config = read_config(&state.data_dir).map_err(|error| error.to_string())?;
+    if !(2..=60).contains(&input.refresh_interval_seconds)
+        || !valid_binary(&input.claude_binary)
+        || !valid_binary(&input.codex_binary)
+    {
+        return Err(DesktopError::InvalidAction.to_string());
+    }
+    config.refresh_interval_seconds = input.refresh_interval_seconds;
+    config.claude_binary = input.claude_binary.trim().to_owned();
+    config.codex_binary = input.codex_binary.trim().to_owned();
+    write_config(&state.data_dir, &config).map_err(|error| error.to_string())?;
+    Ok(preferences_json(&config))
 }
 
 #[tauri::command]
@@ -209,6 +318,10 @@ fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, D
         &state.data_dir,
         &DesktopConfig {
             server_url: server_url.clone(),
+            refresh_interval_seconds: default_refresh_interval_seconds(),
+            claude_binary: default_claude_binary(),
+            codex_binary: default_codex_binary(),
+            archived_sessions: Vec::new(),
         },
     )?;
 
@@ -284,6 +397,7 @@ fn dashboard_snapshot(
     identity: &DeviceIdentity,
     state: &DesktopState,
 ) -> Result<Value, DesktopError> {
+    let desktop_config = read_config(&state.data_dir)?;
     let (account, devices, remote_sessions) = thread::scope(|scope| {
         let account =
             scope.spawn(|| request_json("GET", server_url, "/v1/auth/me", Some(cookie), None));
@@ -313,7 +427,12 @@ fn dashboard_snapshot(
     let codex_health = outbox
         .adapter_health(AgentType::Codex)
         .map_err(|_| DesktopError::Sync)?;
-    let sessions = merge_dashboard_sessions(&remote_sessions["sessions"], &local_sessions);
+    let sessions = merge_dashboard_sessions(
+        &remote_sessions["sessions"],
+        &local_sessions,
+        &desktop_config.archived_sessions,
+        identity.device_id(),
+    );
     let running = state
         .engine
         .lock()
@@ -338,8 +457,170 @@ fn dashboard_snapshot(
             "refreshed_at": chrono::Utc::now()
         },
         "sync_running": running,
-        "server_url": server_url
+        "server_url": server_url,
+        "preferences": preferences_json(&desktop_config)
     }))
+}
+
+fn send_session_message_inner(
+    input: SessionMessageInput,
+    data_dir: &Path,
+) -> Result<Value, DesktopError> {
+    validate_session_id(&input.agent_session_id)?;
+    let prompt = input.prompt.trim();
+    if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
+        return Err(DesktopError::InvalidAction);
+    }
+    let config = read_config(data_dir)?;
+    let binary = match input.agent_type {
+        AgentType::ClaudeCode => &config.claude_binary,
+        AgentType::Codex => &config.codex_binary,
+    };
+    let project_path = match input.agent_type {
+        AgentType::ClaudeCode => Some(
+            find_claude_session_cwd(&input.agent_session_id)?
+                .ok_or(DesktopError::SessionUnavailable)?,
+        ),
+        AgentType::Codex => None,
+    };
+    let output = run_agent_session_turn(
+        input.agent_type,
+        binary,
+        project_path.as_deref(),
+        &input.agent_session_id,
+        prompt,
+        AGENT_TURN_TIMEOUT,
+    )
+    .map_err(|_| DesktopError::AgentFailed)?;
+    let response = match input.agent_type {
+        AgentType::ClaudeCode => output.trim().to_owned(),
+        AgentType::Codex => codex_final_message(&output).ok_or(DesktopError::AgentFailed)?,
+    };
+    if response.is_empty() {
+        return Err(DesktopError::AgentFailed);
+    }
+    Ok(json!({
+        "response": response,
+        "completed_at": chrono::Utc::now(),
+    }))
+}
+
+fn set_session_archived_inner(
+    input: ArchiveSessionInput,
+    data_dir: &Path,
+) -> Result<Value, DesktopError> {
+    validate_session_id(&input.agent_session_id)?;
+    if input.project_display_name.chars().count() > 160
+        || input.project_fingerprint.chars().count() > 160
+        || chrono::DateTime::parse_from_rfc3339(&input.observed_at).is_err()
+    {
+        return Err(DesktopError::InvalidAction);
+    }
+    let mut config = read_config(data_dir)?;
+    if input.agent_type == AgentType::Codex {
+        let mut server =
+            CodexAppServer::start_with_timeout(&config.codex_binary, DESKTOP_COLLECTOR_TIMEOUT)
+                .map_err(|_| DesktopError::AgentFailed)?;
+        server
+            .request(
+                if input.archived {
+                    "thread/archive"
+                } else {
+                    "thread/unarchive"
+                },
+                json!({ "threadId": input.agent_session_id }),
+            )
+            .map_err(|_| DesktopError::AgentFailed)?;
+    }
+    config.archived_sessions.retain(|session| {
+        session.agent_type != input.agent_type || session.agent_session_id != input.agent_session_id
+    });
+    if input.archived {
+        config.archived_sessions.push(ArchivedSession {
+            agent_type: input.agent_type,
+            agent_session_id: input.agent_session_id,
+            project_display_name: input.project_display_name,
+            project_fingerprint: input.project_fingerprint,
+            observed_at: input.observed_at,
+        });
+    }
+    write_config(data_dir, &config)?;
+    Ok(json!({ "archived": input.archived }))
+}
+
+fn preferences_json(config: &DesktopConfig) -> Value {
+    json!({
+        "refresh_interval_seconds": config.refresh_interval_seconds,
+        "claude_binary": config.claude_binary,
+        "codex_binary": config.codex_binary,
+    })
+}
+
+fn valid_binary(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty() && value.chars().count() <= 260 && !value.chars().any(char::is_control)
+}
+
+fn validate_session_id(value: &str) -> Result<(), DesktopError> {
+    if value.is_empty()
+        || value.chars().count() > MAX_SESSION_ID_CHARS
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(DesktopError::InvalidAction);
+    }
+    Ok(())
+}
+
+fn find_claude_session_cwd(session_id: &str) -> Result<Option<PathBuf>, DesktopError> {
+    let Some(home) = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+    else {
+        return Ok(None);
+    };
+    let projects = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"))
+        .join("projects");
+    let filename = format!("{session_id}.jsonl");
+    let entries = fs::read_dir(projects).map_err(|_| DesktopError::SessionUnavailable)?;
+    for project in entries.flatten() {
+        let path = project.path().join(&filename);
+        let Ok(file) = fs::File::open(path) else {
+            continue;
+        };
+        for line in BufReader::new(file).lines().take(128).map_while(Result::ok) {
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let Some(cwd) = value.get("cwd").and_then(Value::as_str) else {
+                continue;
+            };
+            let cwd = PathBuf::from(cwd);
+            if cwd.is_absolute() && cwd.is_dir() {
+                return Ok(Some(cwd));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn codex_final_message(output: &str) -> Option<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            let item = value.get("item")?;
+            if value.get("type")?.as_str()? != "item.completed"
+                || item.get("type")?.as_str()? != "agent_message"
+            {
+                return None;
+            }
+            Some(item.get("text")?.as_str()?.trim().to_owned())
+        })
+        .rfind(|message| !message.is_empty())
 }
 
 fn start_engine(
@@ -497,12 +778,25 @@ fn bootstrap_local_sessions(
     Ok(())
 }
 
-fn merge_dashboard_sessions(remote: &Value, local: &[SessionObservation]) -> Vec<Value> {
+fn merge_dashboard_sessions(
+    remote: &Value,
+    local: &[SessionObservation],
+    archived: &[ArchivedSession],
+    device_id: &str,
+) -> Vec<Value> {
     let mut sessions = std::collections::BTreeMap::new();
     if let Some(remote) = remote.as_array() {
         for session in remote {
             if let Some(key) = dashboard_session_key(session) {
-                sessions.insert(key, session.clone());
+                let mut session = session.clone();
+                session["archived"] = Value::Bool(archived.iter().any(|item| {
+                    session["device_id"].as_str() == Some(device_id)
+                        && agent_type_name(item.agent_type)
+                            == session["agent_type"].as_str().unwrap_or_default()
+                        && item.agent_session_id
+                            == session["agent_session_id"].as_str().unwrap_or_default()
+                }));
+                sessions.insert(key, session);
             }
         }
     }
@@ -530,10 +824,48 @@ fn merge_dashboard_sessions(remote: &Value, local: &[SessionObservation]) -> Vec
                     "last_activity_at": observation.last_activity_at
                 },
                 "sync_state": sync_state
+                ,"archived": archived.iter().any(|item| {
+                    item.agent_type == observation.agent_type
+                        && item.agent_session_id == observation.agent_session_id
+                })
             }),
         );
     }
+    for item in archived {
+        let key = format!(
+            "{}:{}:{}",
+            agent_type_name(item.agent_type),
+            device_id,
+            item.agent_session_id
+        );
+        sessions.entry(key).or_insert_with(|| {
+            json!({
+                "event_id": format!("archived:{}:{}", agent_type_name(item.agent_type), item.agent_session_id),
+                "device_id": device_id,
+                "agent_type": item.agent_type,
+                "agent_session_id": item.agent_session_id,
+                "observed_at": item.observed_at,
+                "payload": {
+                    "project": {
+                        "display_name": item.project_display_name,
+                        "fingerprint": item.project_fingerprint,
+                    },
+                    "state": { "activity_status": "UNKNOWN", "presence": "PERSISTED" },
+                    "last_activity_at": item.observed_at,
+                },
+                "sync_state": "synced",
+                "archived": true,
+            })
+        });
+    }
     sessions.into_values().collect()
+}
+
+fn agent_type_name(agent_type: AgentType) -> &'static str {
+    match agent_type {
+        AgentType::ClaudeCode => "claude_code",
+        AgentType::Codex => "codex",
+    }
 }
 
 fn dashboard_session_key(session: &Value) -> Option<String> {
@@ -795,6 +1127,9 @@ pub fn run() {
             authenticate,
             restore_session,
             refresh_dashboard,
+            send_session_message,
+            set_session_archived,
+            save_desktop_preferences,
             set_sync_paused,
             logout
         ])
@@ -831,5 +1166,22 @@ mod tests {
         assert!(normalize_server_url("https://platform.tannerlab.xyz/").is_ok());
         assert!(normalize_server_url("http://localhost:3000").is_ok());
         assert!(normalize_server_url("http://example.com").is_err());
+    }
+
+    #[test]
+    fn extracts_the_last_codex_agent_message() {
+        let output = concat!(
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"first\"}}\n",
+            "{\"type\":\"turn.completed\"}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\" final answer \"}}\n",
+        );
+        assert_eq!(codex_final_message(output).as_deref(), Some("final answer"));
+    }
+
+    #[test]
+    fn session_ids_reject_paths_and_control_characters() {
+        assert!(validate_session_id("019abc-session_1").is_ok());
+        assert!(validate_session_id("../auth.json").is_err());
+        assert!(validate_session_id("bad\nvalue").is_err());
     }
 }

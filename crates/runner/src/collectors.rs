@@ -20,6 +20,7 @@ pub const DEFAULT_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(15);
 const CHILD_WAIT_INTERVAL: Duration = Duration::from_millis(10);
 const CLAUDE_RECENT_SESSION_LIMIT: usize = 100;
 const CLAUDE_ALL_SESSION_LIMIT: usize = 1_000;
+const MAX_AGENT_TURN_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum CollectorError {
@@ -484,6 +485,145 @@ pub fn run_agent_task(
         });
     }
     Ok(())
+}
+
+/// Resume an existing local Agent session and return only the child process'
+/// bounded stdout. The prompt is always written through stdin so it never
+/// appears in the process list. Callers must keep the returned content local;
+/// unlike normal collection, this function intentionally handles conversation
+/// content after an explicit user action.
+pub fn run_agent_session_turn(
+    agent: crate::domain::AgentType,
+    binary: impl AsRef<Path>,
+    project_path: Option<&Path>,
+    session_id: &str,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, CollectorError> {
+    let binary = binary.as_ref();
+    let program = binary.display().to_string();
+    let mut command = Command::new(binary);
+    match agent {
+        crate::domain::AgentType::ClaudeCode => {
+            command.args(["--resume", session_id, "-p", "--output-format", "text"]);
+        }
+        crate::domain::AgentType::Codex => {
+            command.args([
+                "exec",
+                "resume",
+                session_id,
+                "--json",
+                "--color",
+                "never",
+                "--skip-git-repo-check",
+                "-",
+            ]);
+        }
+    }
+    if let Some(project_path) = project_path {
+        command.current_dir(project_path);
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    let mut child = command.spawn().map_err(|source| CollectorError::Start {
+        program: program.clone(),
+        source,
+    })?;
+    let job = ChildJob::attach(&child).map_err(|source| {
+        let _ = child.kill();
+        let _ = child.wait();
+        CollectorError::Io {
+            program: program.clone(),
+            source,
+        }
+    })?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| CollectorError::MissingStdio {
+            program: program.clone(),
+        })?;
+    stdin
+        .write_all(prompt.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .map_err(|source| CollectorError::Io {
+            program: program.clone(),
+            source,
+        })?;
+    drop(stdin);
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| CollectorError::MissingStdio {
+            program: program.clone(),
+        })?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| CollectorError::MissingStdio {
+            program: program.clone(),
+        })?;
+    let stdout_reader = read_child_output(stdout);
+    let stderr_reader = read_child_output(stderr);
+    let status = wait_for_child(&mut child, &program, timeout);
+    drop(job);
+    let stdout = join_child_output(stdout_reader, &program)?;
+    // Drain stderr to prevent a full pipe from blocking the child, but never
+    // return it: provider diagnostics can contain local paths or prompt text.
+    let _ = join_child_output(stderr_reader, &program)?;
+    let status = status?;
+    if !status.success() {
+        return Err(CollectorError::Exit {
+            program,
+            status: status.to_string(),
+        });
+    }
+    if stdout.len() > MAX_AGENT_TURN_OUTPUT_BYTES {
+        return Err(CollectorError::OutputTooLarge {
+            program,
+            limit: MAX_AGENT_TURN_OUTPUT_BYTES,
+        });
+    }
+    String::from_utf8(stdout).map_err(|source| CollectorError::InvalidUtf8 { program, source })
+}
+
+fn read_child_output(
+    mut stream: impl Read + Send + 'static,
+) -> JoinHandle<std::io::Result<Vec<u8>>> {
+    thread::spawn(move || {
+        let mut output = Vec::with_capacity(MAX_AGENT_TURN_OUTPUT_BYTES + 1);
+        let mut chunk = [0_u8; 8 * 1024];
+        loop {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            let remaining = (MAX_AGENT_TURN_OUTPUT_BYTES + 1).saturating_sub(output.len());
+            if remaining > 0 {
+                output.extend_from_slice(&chunk[..read.min(remaining)]);
+            }
+        }
+        Ok(output)
+    })
+}
+
+fn join_child_output(
+    reader: JoinHandle<std::io::Result<Vec<u8>>>,
+    program: &str,
+) -> Result<Vec<u8>, CollectorError> {
+    reader
+        .join()
+        .map_err(|_| CollectorError::ReaderStopped {
+            program: program.to_owned(),
+        })?
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })
 }
 
 fn wait_for_child(
@@ -1185,6 +1325,18 @@ mod tests {
             BoundedLine::Line(line) if line == "trailing"
         ));
         assert!(matches!(read_bounded_line(&mut reader), BoundedLine::Eof));
+    }
+
+    #[test]
+    fn child_output_reader_drains_but_retains_only_the_bounded_prefix() {
+        let input = vec![b'x'; MAX_AGENT_TURN_OUTPUT_BYTES + 32 * 1024];
+        let output = read_child_output(Cursor::new(input))
+            .join()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(output.len(), MAX_AGENT_TURN_OUTPUT_BYTES + 1);
+        assert!(output.iter().all(|byte| *byte == b'x'));
     }
 
     #[test]
