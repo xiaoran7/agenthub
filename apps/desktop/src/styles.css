@@ -802,6 +802,36 @@ input:focus-visible {
   background: transparent;
   font-size: 12px;
 }
+.device-filter {
+  min-width: 150px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  color: var(--dim);
+  background: #121210;
+}
+.device-filter svg {
+  width: 14px;
+  flex: 0 0 auto;
+}
+.device-filter select {
+  min-width: 0;
+  max-width: 190px;
+  padding: 8px 0;
+  border: 0;
+  outline: 0;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+}
+.device-filter:focus-within {
+  border-color: rgba(232, 103, 145, 0.55);
+  box-shadow: 0 0 0 3px rgba(232, 103, 145, 0.08);
+}
 .agent-filter,
 .archive-filter {
   padding: 3px;

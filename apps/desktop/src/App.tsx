@@ -66,6 +66,7 @@ import type {
 
 type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
+type DeviceFilter = "all" | string;
 
 export function App() {
   const demo =
@@ -297,6 +298,7 @@ function Dashboard({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
+  const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
   const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">(
     "active",
   );
@@ -317,6 +319,8 @@ function Dashboard({
       sessions.filter((session) => {
         if (agentFilter !== "all" && session.agent_type !== agentFilter)
           return false;
+        if (deviceFilter !== "all" && session.device_id !== deviceFilter)
+          return false;
         if ((session.archived === true) !== (archiveFilter === "archived"))
           return false;
         if (deferredQuery === "") return true;
@@ -331,7 +335,7 @@ function Dashboard({
           .toLocaleLowerCase();
         return haystack.includes(deferredQuery);
       }),
-    [agentFilter, archiveFilter, deferredQuery, sessions],
+    [agentFilter, archiveFilter, deferredQuery, deviceFilter, sessions],
   );
   const selectedSession = useMemo(
     () =>
@@ -432,7 +436,7 @@ function Dashboard({
 
   useEffect(
     () => setVisibleLimit(100),
-    [agentFilter, archiveFilter, deferredQuery],
+    [agentFilter, archiveFilter, deferredQuery, deviceFilter],
   );
 
   const toggleSync = async () => {
@@ -651,6 +655,25 @@ function Dashboard({
                   onChange={(event) => setQuery(event.target.value)}
                 />
               </label>
+              {snapshot.devices.length > 1 && (
+                <label className="device-filter">
+                  <Monitor />
+                  <select
+                    aria-label="设备筛选"
+                    value={deviceFilter}
+                    onChange={(event) => setDeviceFilter(event.target.value)}
+                  >
+                    <option value="all">全部设备</option>
+                    {snapshot.devices.map((device) => (
+                      <option key={device.device_id} value={device.device_id}>
+                        {device.device_id === snapshot.device.device_id
+                          ? `当前设备 · ${snapshot.device.name}`
+                          : `设备 · ${shortDeviceId(device.device_id)}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <div className="agent-filter" aria-label="Agent 筛选">
                 {(["all", "claude_code", "codex"] as const).map((value) => (
                   <button
@@ -688,20 +711,30 @@ function Dashboard({
                 <h3>
                   {archiveFilter === "archived" &&
                   query === "" &&
-                  agentFilter === "all"
+                  agentFilter === "all" &&
+                  deviceFilter === "all"
                     ? "暂无归档会话"
-                    : query === "" && agentFilter === "all"
-                      ? "正在扫描本机会话"
-                      : "没有匹配的会话"}
+                    : deviceFilter !== "all" &&
+                        query === "" &&
+                        agentFilter === "all"
+                      ? "该设备暂无会话"
+                      : query === "" && agentFilter === "all"
+                        ? "正在扫描本机会话"
+                        : "没有匹配的会话"}
                 </h3>
                 <p>
                   {archiveFilter === "archived" &&
                   query === "" &&
-                  agentFilter === "all"
+                  agentFilter === "all" &&
+                  deviceFilter === "all"
                     ? "在会话控制面板中归档后，会话会移动到这里。"
-                    : query === "" && agentFilter === "all"
-                      ? "扫描失败时会在上方来源卡片显示原因。"
-                      : "换一个会话名、目录、模型或清除 Agent 筛选。"}
+                    : deviceFilter !== "all" &&
+                        query === "" &&
+                        agentFilter === "all"
+                      ? "切换设备筛选，查看其他设备上的 Session。"
+                      : query === "" && agentFilter === "all"
+                        ? "扫描失败时会在上方来源卡片显示原因。"
+                        : "换一个会话名、目录、模型或清除 Agent 筛选。"}
                 </p>
               </div>
             ) : (
@@ -1593,6 +1626,11 @@ function errorMessage(error: unknown): string {
 
 function sessionKey(session: Session): string {
   return `${session.device_id}:${session.agent_type}:${session.agent_session_id}`;
+}
+
+function shortDeviceId(deviceId: string): string {
+  if (deviceId.length <= 14) return deviceId;
+  return `${deviceId.slice(0, 6)}…${deviceId.slice(-5)}`;
 }
 
 function SessionTimelineView({
