@@ -958,6 +958,507 @@ fn discover_codex_state_database() -> Result<Option<PathBuf>, CollectorError> {
     Ok(candidates.into_iter().next().map(|(_, path)| path))
 }
 
+const GROK_RECENT_SESSION_LIMIT: usize = 100;
+const GROK_ALL_SESSION_LIMIT: usize = 1_000;
+const GROK_SUMMARY_MAX_BYTES: u64 = 64 * 1024;
+const GROK_ACTIVE_MAX_BYTES: u64 = 1024 * 1024;
+const GROK_LIVE_WRITE_WINDOW: Duration = Duration::from_secs(20);
+
+#[derive(Debug, Deserialize)]
+struct GrokActiveSession {
+    session_id: String,
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    opened_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokSummaryFile {
+    #[serde(default)]
+    info: GrokSummaryInfo,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    last_active_at: Option<String>,
+    #[serde(default)]
+    generated_title: Option<String>,
+    #[serde(default)]
+    current_model_id: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    sandbox_profile: Option<String>,
+    #[serde(default)]
+    agent_name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GrokSummaryInfo {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GrokSessionRecord {
+    session_id: String,
+    cwd: String,
+    state: &'static str,
+    pid: Option<u32>,
+    live: bool,
+    source: &'static str,
+    started_at_ms: Option<i64>,
+    last_activity_at_ms: Option<i64>,
+}
+
+/// Enumerates Grok Build session metadata from `GROK_HOME` (default `~/.grok`)
+/// without opening conversation logs. Live presence comes from
+/// `active_sessions.json` plus a process-liveness check; working vs idle is
+/// inferred only from `updates.jsonl` write recency or a lock file.
+pub fn collect_grok_sessions(include_completed: bool) -> Result<String, CollectorError> {
+    let home = discover_grok_home()?;
+    collect_grok_sessions_from(&home, include_completed)
+}
+
+pub fn collect_grok_sessions_from(
+    home: &Path,
+    include_completed: bool,
+) -> Result<String, CollectorError> {
+    let program = "Grok session store".to_owned();
+    let live = read_grok_active_sessions(home, &program)?;
+    let mut records = scan_grok_summaries(home, &live, &program)?;
+    records.sort_by_key(|record| std::cmp::Reverse(record.last_activity_at_ms));
+    records.truncate(if include_completed {
+        GROK_ALL_SESSION_LIMIT
+    } else {
+        GROK_RECENT_SESSION_LIMIT
+    });
+    serde_json::to_string(
+        &records
+            .into_iter()
+            .map(|record| {
+                json!({
+                    "sessionId": record.session_id,
+                    "cwd": record.cwd,
+                    "state": record.state,
+                    "pid": record.pid,
+                    "live": record.live,
+                    "source": record.source,
+                    "startedAt": record.started_at_ms,
+                    "lastActivityAt": record.last_activity_at_ms
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|source| CollectorError::InvalidJson { program, source })
+}
+
+pub fn collect_grok_session_contexts(
+    limit: usize,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let home = discover_grok_home()?;
+    collect_grok_session_contexts_from(&home, limit)
+}
+
+pub fn collect_grok_session_contexts_from(
+    home: &Path,
+    limit: usize,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let program = "Grok session context".to_owned();
+    let sessions_dir = home.join("sessions");
+    if !sessions_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut candidates = Vec::new();
+    for group in read_dir_entries(&sessions_dir, &program)? {
+        if !group.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Ok(children) = fs::read_dir(group.path()) else {
+            continue;
+        };
+        for child in children.flatten() {
+            if !child.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let summary = child.path().join("summary.json");
+            if !summary.is_file() {
+                continue;
+            }
+            let modified = child
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            candidates.push((modified, summary, child.file_name()));
+        }
+    }
+    candidates.sort_by_key(|(modified, _, _)| std::cmp::Reverse(*modified));
+    candidates.truncate(limit);
+
+    let mut contexts = Vec::with_capacity(candidates.len());
+    for (_, summary_path, dir_name) in candidates {
+        if let Some(context) = read_grok_session_context(&summary_path, &dir_name, &program)? {
+            contexts.push(context);
+        }
+    }
+    Ok(contexts)
+}
+
+pub fn find_grok_session_cwd(session_id: &str) -> Result<Option<PathBuf>, CollectorError> {
+    let home = discover_grok_home()?;
+    find_grok_session_cwd_from(&home, session_id)
+}
+
+pub fn find_grok_session_cwd_from(
+    home: &Path,
+    session_id: &str,
+) -> Result<Option<PathBuf>, CollectorError> {
+    let program = "Grok session store".to_owned();
+    let sessions_dir = home.join("sessions");
+    if !sessions_dir.is_dir() {
+        return Ok(None);
+    }
+    for group in read_dir_entries(&sessions_dir, &program)? {
+        if !group.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let summary = group.path().join(session_id).join("summary.json");
+        if !summary.is_file() {
+            continue;
+        }
+        let Some(file) = read_bounded_json_file(&summary, GROK_SUMMARY_MAX_BYTES, &program)? else {
+            continue;
+        };
+        let Ok(summary) = serde_json::from_str::<GrokSummaryFile>(&file) else {
+            continue;
+        };
+        if let Some(cwd) = summary
+            .info
+            .cwd
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .filter(|cwd| cwd.is_absolute() && cwd.is_dir())
+        {
+            return Ok(Some(cwd));
+        }
+    }
+    Ok(None)
+}
+
+fn discover_grok_home() -> Result<PathBuf, CollectorError> {
+    if let Some(path) = env::var_os("GROK_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+    home_dir()
+        .map(|home| home.join(".grok"))
+        .ok_or_else(|| CollectorError::Io {
+            program: "Grok session store".to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "cannot resolve the current user's home directory",
+            ),
+        })
+}
+
+fn read_grok_active_sessions(
+    home: &Path,
+    program: &str,
+) -> Result<std::collections::HashMap<String, GrokActiveSession>, CollectorError> {
+    let path = home.join("active_sessions.json");
+    let Some(contents) = read_bounded_json_file(&path, GROK_ACTIVE_MAX_BYTES, program)? else {
+        return Ok(std::collections::HashMap::new());
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<GrokActiveSession>>(&contents) else {
+        return Ok(std::collections::HashMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter(|entry| !entry.session_id.trim().is_empty())
+        .map(|entry| (entry.session_id.clone(), entry))
+        .collect())
+}
+
+fn scan_grok_summaries(
+    home: &Path,
+    live: &std::collections::HashMap<String, GrokActiveSession>,
+    program: &str,
+) -> Result<Vec<GrokSessionRecord>, CollectorError> {
+    let sessions_dir = home.join("sessions");
+    if !sessions_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut records = Vec::new();
+    for group in read_dir_entries(&sessions_dir, program)? {
+        if !group.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let group_cwd = read_grok_group_cwd(&group.path(), program)?;
+        let Ok(children) = fs::read_dir(group.path()) else {
+            continue;
+        };
+        for child in children.flatten() {
+            if !child.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if let Some(record) =
+                read_grok_session_record(&child.path(), group_cwd.as_deref(), live, program)?
+            {
+                records.push(record);
+            }
+        }
+    }
+    Ok(records)
+}
+
+fn read_grok_group_cwd(group: &Path, program: &str) -> Result<Option<String>, CollectorError> {
+    let marker = group.join(".cwd");
+    let Some(contents) = read_bounded_json_file(&marker, 4_096, program)? else {
+        return Ok(None);
+    };
+    let cwd = contents.trim();
+    Ok((!cwd.is_empty()).then(|| cwd.to_owned()))
+}
+
+fn read_grok_session_record(
+    session_dir: &Path,
+    group_cwd: Option<&str>,
+    live: &std::collections::HashMap<String, GrokActiveSession>,
+    program: &str,
+) -> Result<Option<GrokSessionRecord>, CollectorError> {
+    let summary_path = session_dir.join("summary.json");
+    let Some(contents) = read_bounded_json_file(&summary_path, GROK_SUMMARY_MAX_BYTES, program)?
+    else {
+        return Ok(None);
+    };
+    let Ok(summary) = serde_json::from_str::<GrokSummaryFile>(&contents) else {
+        return Ok(None);
+    };
+    let fallback_id = session_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_owned);
+    let session_id = summary
+        .info
+        .id
+        .filter(|value| !value.trim().is_empty())
+        .or(fallback_id)
+        .filter(|value| !value.trim().is_empty());
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    let active = live.get(&session_id);
+    let pid = active
+        .and_then(|entry| entry.pid)
+        .filter(|pid| process_is_alive(*pid));
+    let live_now = pid.is_some();
+    let recently_written = grok_session_recently_written(session_dir);
+    let (state, source) = if live_now && recently_written {
+        ("working", "active")
+    } else if live_now {
+        ("idle", "active")
+    } else {
+        ("persisted", "sessions")
+    };
+    let cwd = summary
+        .info
+        .cwd
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            active
+                .and_then(|entry| entry.cwd.clone())
+                .filter(|value| !value.trim().is_empty())
+        })
+        .or_else(|| group_cwd.map(str::to_owned))
+        .unwrap_or_default();
+    Ok(Some(GrokSessionRecord {
+        session_id,
+        cwd,
+        state,
+        pid,
+        live: live_now,
+        source,
+        started_at_ms: parse_rfc3339_millis(summary.created_at.as_deref())
+            .or_else(|| parse_rfc3339_millis(active.and_then(|entry| entry.opened_at.as_deref()))),
+        last_activity_at_ms: parse_rfc3339_millis(summary.last_active_at.as_deref())
+            .or_else(|| parse_rfc3339_millis(summary.updated_at.as_deref()))
+            .or_else(|| file_modified_millis(&summary_path)),
+    }))
+}
+
+fn read_grok_session_context(
+    summary_path: &Path,
+    dir_name: &std::ffi::OsString,
+    program: &str,
+) -> Result<Option<LocalSessionContext>, CollectorError> {
+    let Some(contents) = read_bounded_json_file(summary_path, GROK_SUMMARY_MAX_BYTES, program)?
+    else {
+        return Ok(None);
+    };
+    let Ok(summary) = serde_json::from_str::<GrokSummaryFile>(&contents) else {
+        return Ok(None);
+    };
+    let fallback_id = dir_name.to_str().map(str::to_owned);
+    let session_id = summary
+        .info
+        .id
+        .or(fallback_id)
+        .and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    let mut context = LocalSessionContext::new(crate::domain::AgentType::GrokBuild, session_id);
+    context.title = summary
+        .generated_title
+        .and_then(|value| metadata_label(&value, MAX_SESSION_TITLE_CHARS));
+    context.model = summary
+        .current_model_id
+        .and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+    context.reasoning_effort = summary
+        .reasoning_effort
+        .and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+    context.sandbox_mode = summary
+        .sandbox_profile
+        .and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+    context.permission_mode = summary
+        .agent_name
+        .and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+    Ok(Some(context))
+}
+
+fn grok_session_recently_written(session_dir: &Path) -> bool {
+    if session_dir.join("updates.jsonl.lock").is_file()
+        || session_dir.join("chat_history.jsonl.lock").is_file()
+    {
+        return true;
+    }
+    let updates = session_dir.join("updates.jsonl");
+    file_modified_ago(&updates).is_some_and(|age| age <= GROK_LIVE_WRITE_WINDOW)
+}
+
+fn file_modified_ago(path: &Path) -> Option<Duration> {
+    let modified = fs::metadata(path).ok()?.modified().ok()?;
+    modified.elapsed().ok()
+}
+
+fn file_modified_millis(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+}
+
+fn parse_rfc3339_millis(value: Option<&str>) -> Option<i64> {
+    DateTime::parse_from_rfc3339(value?)
+        .ok()
+        .map(|value| value.timestamp_millis())
+}
+
+fn read_dir_entries(path: &Path, program: &str) -> Result<Vec<fs::DirEntry>, CollectorError> {
+    let entries = fs::read_dir(path)
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(entries)
+}
+
+fn read_bounded_json_file(
+    path: &Path,
+    limit: u64,
+    program: &str,
+) -> Result<Option<String>, CollectorError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let length = file
+        .metadata()
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })?
+        .len();
+    if length > limit {
+        return Ok(None);
+    }
+    let mut contents = String::new();
+    let mut reader = BufReader::new(file);
+    reader
+        .read_to_string(&mut contents)
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })?;
+    Ok(Some(contents))
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: the handle is either null or a process handle we close below.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code = 0_u32;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            ok != 0 && code == STILL_ACTIVE as u32
+        }
+    }
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+fn write_prompt_file(prompt: &str) -> Result<tempfile::NamedTempFile, CollectorError> {
+    let mut file = tempfile::NamedTempFile::new().map_err(|source| CollectorError::Io {
+        program: "Grok prompt file".to_owned(),
+        source,
+    })?;
+    file.write_all(prompt.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .map_err(|source| CollectorError::Io {
+            program: "Grok prompt file".to_owned(),
+            source,
+        })?;
+    file.flush().map_err(|source| CollectorError::Io {
+        program: "Grok prompt file".to_owned(),
+        source,
+    })?;
+    Ok(file)
+}
+
 pub fn run_agent_task(
     agent: crate::domain::AgentType,
     binary: impl AsRef<Path>,
@@ -968,17 +1469,42 @@ pub fn run_agent_task(
     let binary = binary.as_ref();
     let program = binary.display().to_string();
     let mut command = Command::new(binary);
-    match agent {
+    let prompt_file = match agent {
         crate::domain::AgentType::ClaudeCode => {
             command.args(["-p", "--output-format", "text"]);
+            None
         }
         crate::domain::AgentType::Codex => {
             command.args(["exec", "-"]);
+            None
         }
-    }
+        crate::domain::AgentType::GrokBuild => {
+            let prompt_file = write_prompt_file(prompt)?;
+            command.args([
+                "--prompt-file",
+                prompt_file
+                    .path()
+                    .to_str()
+                    .ok_or_else(|| CollectorError::Io {
+                        program: program.clone(),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "prompt file path is not valid UTF-8",
+                        ),
+                    })?,
+                "--output-format",
+                "text",
+            ]);
+            Some(prompt_file)
+        }
+    };
     command
         .current_dir(project_path)
-        .stdin(Stdio::piped())
+        .stdin(if prompt_file.is_some() {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        })
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     configure_process_group(&mut command);
@@ -994,22 +1520,25 @@ pub fn run_agent_task(
             source,
         }
     })?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| CollectorError::MissingStdio {
-            program: program.clone(),
-        })?;
-    stdin
-        .write_all(prompt.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .map_err(|source| CollectorError::Io {
-            program: program.clone(),
-            source,
-        })?;
-    drop(stdin);
+    if prompt_file.is_none() {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| CollectorError::MissingStdio {
+                program: program.clone(),
+            })?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .map_err(|source| CollectorError::Io {
+                program: program.clone(),
+                source,
+            })?;
+        drop(stdin);
+    }
     let status = wait_for_child(&mut child, &program, timeout)?;
     drop(job);
+    drop(prompt_file);
     if !status.success() {
         return Err(CollectorError::Exit {
             program,
@@ -1020,10 +1549,11 @@ pub fn run_agent_task(
 }
 
 /// Resume an existing local Agent session and return only the child process'
-/// bounded stdout. The prompt is always written through stdin so it never
-/// appears in the process list. Callers must keep the returned content local;
-/// unlike normal collection, this function intentionally handles conversation
-/// content after an explicit user action.
+/// bounded stdout. Claude/Codex prompts go through stdin; Grok Build uses a
+/// temporary `--prompt-file` so the prompt never appears in the process list.
+/// Callers must keep the returned content local; unlike normal collection, this
+/// function intentionally handles conversation content after an explicit user
+/// action.
 pub fn run_agent_session_turn(
     agent: crate::domain::AgentType,
     binary: impl AsRef<Path>,
@@ -1061,7 +1591,7 @@ pub fn run_agent_session_turn_streaming(
     let binary = binary.as_ref();
     let program = binary.display().to_string();
     let mut command = Command::new(binary);
-    match agent {
+    let prompt_file = match agent {
         crate::domain::AgentType::ClaudeCode => {
             command.args([
                 "--resume",
@@ -1072,6 +1602,7 @@ pub fn run_agent_session_turn_streaming(
                 "--verbose",
                 "--include-partial-messages",
             ]);
+            None
         }
         crate::domain::AgentType::Codex => {
             command.args([
@@ -1084,13 +1615,40 @@ pub fn run_agent_session_turn_streaming(
                 "--skip-git-repo-check",
                 "-",
             ]);
+            None
         }
-    }
+        crate::domain::AgentType::GrokBuild => {
+            let prompt_file = write_prompt_file(prompt)?;
+            let prompt_path = prompt_file
+                .path()
+                .to_str()
+                .ok_or_else(|| CollectorError::Io {
+                    program: program.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "prompt file path is not valid UTF-8",
+                    ),
+                })?;
+            command.args([
+                "--resume",
+                session_id,
+                "--prompt-file",
+                prompt_path,
+                "--output-format",
+                "streaming-json",
+            ]);
+            Some(prompt_file)
+        }
+    };
     if let Some(project_path) = project_path {
         command.current_dir(project_path);
     }
     command
-        .stdin(Stdio::piped())
+        .stdin(if prompt_file.is_some() {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
@@ -1106,20 +1664,22 @@ pub fn run_agent_session_turn_streaming(
             source,
         }
     })?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| CollectorError::MissingStdio {
-            program: program.clone(),
-        })?;
-    stdin
-        .write_all(prompt.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .map_err(|source| CollectorError::Io {
-            program: program.clone(),
-            source,
-        })?;
-    drop(stdin);
+    if prompt_file.is_none() {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| CollectorError::MissingStdio {
+                program: program.clone(),
+            })?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .map_err(|source| CollectorError::Io {
+                program: program.clone(),
+                source,
+            })?;
+        drop(stdin);
+    }
 
     let stdout = child
         .stdout
@@ -1141,6 +1701,7 @@ pub fn run_agent_session_turn_streaming(
     // Drain stderr to prevent a full pipe from blocking the child, but never
     // return it: provider diagnostics can contain local paths or prompt text.
     let _ = join_child_output(stderr_reader, &program)?;
+    drop(prompt_file);
     let status = status?;
     if !status.success() {
         return Err(CollectorError::Exit {
@@ -1255,6 +1816,33 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
                 _ => None,
             }
         }
+        crate::domain::AgentType::GrokBuild => match value.get("type").and_then(Value::as_str) {
+            Some("text") => value
+                .get("data")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(|text| AgentTurnUpdate::AssistantDelta(text.to_owned())),
+            Some("tool_call") => Some(AgentTurnUpdate::Activity(
+                match value
+                    .get("toolName")
+                    .and_then(Value::as_str)
+                    .and_then(|name| crate::adapters::safe_tool_category(Some(name)))
+                    .as_deref()
+                {
+                    Some("shell") => "Grok Build 正在执行命令",
+                    Some("file_change") => "Grok Build 正在修改文件",
+                    Some("file_read") => "Grok Build 正在读取文件",
+                    Some("user_input") => "Grok Build 正在等待输入",
+                    _ => "Grok Build 正在调用工具",
+                },
+            )),
+            Some("tool_call_update")
+                if value.get("status").and_then(Value::as_str) == Some("completed") =>
+            {
+                Some(AgentTurnUpdate::Activity("Grok Build 已完成工具"))
+            }
+            _ => None,
+        },
     }
 }
 
@@ -1286,6 +1874,44 @@ fn final_agent_message(agent: crate::domain::AgentType, output: &str) -> Option<
                 .filter(|message| !message.is_empty())
                 .map(str::to_owned)
         }),
+        crate::domain::AgentType::GrokBuild => {
+            let mut collected = String::new();
+            for line in output.lines() {
+                let Ok(value) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                match value.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(text) = value.get("data").and_then(Value::as_str) {
+                            collected.push_str(text);
+                        }
+                    }
+                    Some("end") => {
+                        if let Some(text) = value
+                            .get("text")
+                            .or_else(|| value.get("data"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|message| !message.is_empty())
+                        {
+                            return Some(text.to_owned());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(output)
+                && let Some(text) = value
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|message| !message.is_empty())
+            {
+                return Some(text.to_owned());
+            }
+            let trimmed = collected.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        }
     }
 }
 
@@ -2145,6 +2771,131 @@ mod tests {
         assert!(arguments.contains("exec"));
         assert!(!arguments.contains(prompt));
         assert_eq!(input.trim_end(), prompt);
+    }
+
+    #[test]
+    fn grok_session_collector_reads_summary_without_conversation() {
+        let directory = tempfile::tempdir().unwrap();
+        let session_dir = directory
+            .path()
+            .join("sessions")
+            .join("encoded-project")
+            .join("01a005b5-5ee8-7013-947b-0140a7b267fa");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("summary.json"),
+            concat!(
+                "{\"info\":{\"id\":\"01a005b5-5ee8-7013-947b-0140a7b267fa\",",
+                "\"cwd\":\"/work/private-project\"},",
+                "\"generated_title\":\"Auth refactor\",",
+                "\"session_summary\":\"TOP_SECRET_SUMMARY\",",
+                "\"last_turn_summary\":\"TOP_SECRET_TURN\",",
+                "\"created_at\":\"2026-08-15T11:45:05Z\",",
+                "\"updated_at\":\"2026-08-15T12:08:42Z\",",
+                "\"last_active_at\":\"2026-08-15T12:08:29Z\",",
+                "\"current_model_id\":\"grok-4.6\"}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            session_dir.join("chat_history.jsonl"),
+            "{\"message\":\"TOP_SECRET_CHAT\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("active_sessions.json"),
+            concat!(
+                "[{\"session_id\":\"01a005b5-5ee8-7013-947b-0140a7b267fa\",",
+                "\"pid\":0,\"cwd\":\"/work/private-project\"}]"
+            ),
+        )
+        .unwrap();
+
+        let payload = collect_grok_sessions_from(directory.path(), true).unwrap();
+        let entries: Value = serde_json::from_str(&payload).unwrap();
+        let entry = &entries.as_array().unwrap()[0];
+
+        assert_eq!(entry["sessionId"], "01a005b5-5ee8-7013-947b-0140a7b267fa");
+        assert_eq!(entry["cwd"], "/work/private-project");
+        assert_eq!(entry["state"], "persisted");
+        assert_eq!(entry["live"], false);
+        assert!(!payload.contains("TOP_SECRET"));
+        assert!(!payload.contains("generated_title"));
+        assert!(!payload.contains("chat_history"));
+    }
+
+    #[test]
+    fn grok_context_collector_keeps_title_and_model_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let session_dir = directory
+            .path()
+            .join("sessions")
+            .join("encoded-project")
+            .join("session-ctx");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("summary.json"),
+            concat!(
+                "{\"info\":{\"id\":\"session-ctx\",\"cwd\":\"/work/demo\"},",
+                "\"generated_title\":\" Auth   refactor \",",
+                "\"session_summary\":\"TOP_SECRET_SUMMARY\",",
+                "\"last_turn_summary\":\"TOP_SECRET_TURN\",",
+                "\"current_model_id\":\"grok-4.6\",",
+                "\"reasoning_effort\":\"high\",",
+                "\"sandbox_profile\":\"off\",",
+                "\"agent_name\":\"grok-build-plan\"}"
+            ),
+        )
+        .unwrap();
+
+        let contexts = collect_grok_session_contexts_from(directory.path(), 10).unwrap();
+        let context = &contexts[0];
+        let serialized = serde_json::to_string(context).unwrap();
+
+        assert_eq!(context.agent_session_id, "session-ctx");
+        assert_eq!(context.title.as_deref(), Some("Auth refactor"));
+        assert_eq!(context.model.as_deref(), Some("grok-4.6"));
+        assert_eq!(context.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(context.sandbox_mode.as_deref(), Some("off"));
+        assert_eq!(context.permission_mode.as_deref(), Some("grok-build-plan"));
+        assert!(!serialized.contains("TOP_SECRET"));
+    }
+
+    #[test]
+    fn grok_stream_events_emit_text_without_thoughts_or_tool_input() {
+        let text = r#"{"type":"text","data":"hello"}"#;
+        let thought = r#"{"type":"thought","data":"private reasoning"}"#;
+        let tool =
+            r#"{"type":"tool_call","toolName":"run_terminal_cmd","rawInput":{"command":"secret"}}"#;
+        let output = concat!(
+            r#"{"type":"text","data":"hello "}"#,
+            "\n",
+            r#"{"type":"end","stopReason":"end_turn"}"#,
+            "\n",
+        );
+
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::GrokBuild, text),
+            Some(AgentTurnUpdate::AssistantDelta("hello".to_owned()))
+        );
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::GrokBuild, thought),
+            None
+        );
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::GrokBuild, tool),
+            Some(AgentTurnUpdate::Activity("Grok Build 正在执行命令"))
+        );
+        assert_eq!(
+            final_agent_message(crate::domain::AgentType::GrokBuild, output).as_deref(),
+            Some("hello")
+        );
+        assert!(
+            !tool.contains("Grok")
+                || !final_agent_message(crate::domain::AgentType::GrokBuild, tool)
+                    .unwrap_or_default()
+                    .contains("secret")
+        );
     }
 
     #[test]

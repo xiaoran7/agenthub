@@ -30,6 +30,24 @@ export function statusView(
   return { label: "未知", className: "history" };
 }
 
+export function agentLabel(type: Session["agent_type"]): string {
+  if (type === "claude_code") return "Claude Code";
+  if (type === "codex") return "Codex";
+  return "Grok Build";
+}
+
+export function agentShortLabel(type: Session["agent_type"]): string {
+  if (type === "claude_code") return "Claude";
+  if (type === "codex") return "Codex";
+  return "Grok";
+}
+
+export function permissionFieldLabel(type: Session["agent_type"]): string {
+  if (type === "claude_code") return "权限模式";
+  if (type === "grok_build") return "Agent 配置";
+  return "审批策略";
+}
+
 export function adjacentItem<T>(
   items: readonly T[],
   index: number,

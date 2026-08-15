@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod grok;
 
 use std::collections::BTreeMap;
 
@@ -16,10 +17,10 @@ pub(crate) fn string_field<'a>(value: &'a Value, path: &[&str]) -> Option<&'a st
 pub(crate) fn safe_tool_category(tool_name: Option<&str>) -> Option<String> {
     let tool_name = tool_name?;
     let category = match tool_name {
-        "Bash" | "exec_command" | "shell_command" => "shell",
-        "Edit" | "Write" | "apply_patch" => "file_change",
-        "Read" | "Glob" | "Grep" => "file_read",
-        "AskUserQuestion" | "request_user_input" => "user_input",
+        "Bash" | "exec_command" | "shell_command" | "run_terminal_cmd" => "shell",
+        "Edit" | "Write" | "apply_patch" | "search_replace" | "write" => "file_change",
+        "Read" | "Glob" | "Grep" | "read_file" | "list_dir" | "grep" => "file_read",
+        "AskUserQuestion" | "request_user_input" | "ask_user_question" => "user_input",
         "ExitPlanMode" => "plan_approval",
         "Agent" | "Task" | "spawn_agent" => "subagent",
         name if name.starts_with("mcp__") => "mcp",

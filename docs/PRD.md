@@ -11,6 +11,7 @@ AgentPulse 是一个支持网页端和移动端的统一平台，用于连接用
 
 - Claude Code
 - OpenAI Codex
+- Grok Build
 
 后续可以扩展其他 Coding Agent。
 
@@ -37,7 +38,7 @@ Agent、多个项目和多个设备的实时工作状态。
 - 支持注册、登录、订阅权益和按用户隔离的设备与 Session
 - 支持邮箱验证、忘记密码、登录后改密和网页登录会话管理
 - 支持个人/Team 工作区切换、成员邀请和 Owner/Admin/Member 角色权限
-- 将 Claude Code 与 Codex 作为一级 Agent 来源分类
+- 将 Claude Code、Codex 与 Grok Build 作为一级 Agent 来源分类
 - 通过服务器可靠中转任务，由用户自己的 Runner 主动领取，并在本机确认后交给 Agent 执行
 
 ### 1.4 当前非目标与后续边界
@@ -116,7 +117,7 @@ ID 和 HTTPS webhook 后，才开放 Checkout、Customer Portal 与订阅事件�
 
 本地客户端需要：
 
-- 检测电脑上是否安装 Claude Code 和 Codex
+- 检测电脑上是否安装 Claude Code、Codex 和 Grok Build
 - 判断 Agent 是否存在可用的本地登录状态
 - 使用现有登录状态调用官方 CLI、SDK 或本地接口
 - 保留 Agent 类型、版本和可用性信息

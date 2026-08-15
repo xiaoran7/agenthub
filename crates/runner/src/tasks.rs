@@ -235,6 +235,7 @@ pub struct TaskWorker<'a> {
     projects: BTreeMap<String, PathBuf>,
     claude_binary: PathBuf,
     codex_binary: PathBuf,
+    grok_binary: PathBuf,
     execution_timeout: Duration,
 }
 
@@ -245,6 +246,7 @@ impl<'a> TaskWorker<'a> {
         projects: BTreeMap<String, PathBuf>,
         claude_binary: PathBuf,
         codex_binary: PathBuf,
+        grok_binary: PathBuf,
         execution_timeout: Duration,
     ) -> Self {
         Self {
@@ -253,6 +255,7 @@ impl<'a> TaskWorker<'a> {
             projects,
             claude_binary,
             codex_binary,
+            grok_binary,
             execution_timeout,
         }
     }
@@ -336,6 +339,7 @@ impl<'a> TaskWorker<'a> {
         let binary: &Path = match running.agent_type {
             AgentType::ClaudeCode => &self.claude_binary,
             AgentType::Codex => &self.codex_binary,
+            AgentType::GrokBuild => &self.grok_binary,
         };
         let execution_started_at = Utc::now();
         match run_agent_task(
@@ -582,6 +586,7 @@ mod tests {
             client,
             identity,
             BTreeMap::from([(PROJECT_FINGERPRINT.to_owned(), project_path.to_owned())]),
+            binary.to_owned(),
             binary.to_owned(),
             binary.to_owned(),
             Duration::from_secs(2),

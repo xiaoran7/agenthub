@@ -15,18 +15,23 @@ use agent_pulse_runner::{
     adapters::{
         claude,
         codex::{self, CodexThreadContext},
+        grok,
     },
     collectors::{
         AgentTurnUpdate, CodexAppServer, CollectorError, LocalSessionContext,
         collect_claude_session_contexts, collect_claude_transcripts, collect_codex_local_threads,
-        collect_codex_session_contexts, run_agent_session_turn_streaming,
+        collect_codex_session_contexts, collect_grok_session_contexts, collect_grok_sessions,
+        find_grok_session_cwd, run_agent_session_turn_streaming,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
     gateway::GatewayClient,
     outbox::Outbox,
     privacy::ProjectRedactor,
-    runtime::{ClaudeSessionSource, CodexSessionSource, PollPolicy, RunnerRuntime, SessionSource},
+    runtime::{
+        ClaudeSessionSource, CodexSessionSource, GrokSessionSource, PollPolicy, RunnerRuntime,
+        SessionSource,
+    },
     sync::MAX_SYNC_BATCH_EVENTS,
     sync_worker::{SyncPolicy, SyncWorker},
 };
@@ -113,6 +118,8 @@ struct DesktopConfig {
     claude_binary: String,
     #[serde(default = "default_codex_binary")]
     codex_binary: String,
+    #[serde(default = "default_grok_binary")]
+    grok_binary: String,
     #[serde(default)]
     archived_sessions: Vec<ArchivedSession>,
 }
@@ -176,6 +183,7 @@ struct DesktopPreferencesInput {
     refresh_interval_seconds: u64,
     claude_binary: String,
     codex_binary: String,
+    grok_binary: String,
 }
 
 fn default_refresh_interval_seconds() -> u64 {
@@ -188,6 +196,10 @@ fn default_claude_binary() -> String {
 
 fn default_codex_binary() -> String {
     "codex".to_owned()
+}
+
+fn default_grok_binary() -> String {
+    "grok".to_owned()
 }
 
 struct EngineHandle {
@@ -363,12 +375,14 @@ async fn save_desktop_preferences(
     if !(2..=60).contains(&input.refresh_interval_seconds)
         || !valid_binary(&input.claude_binary)
         || !valid_binary(&input.codex_binary)
+        || !valid_binary(&input.grok_binary)
     {
         return Err(DesktopError::InvalidAction.to_string());
     }
     config.refresh_interval_seconds = input.refresh_interval_seconds;
     config.claude_binary = input.claude_binary.trim().to_owned();
     config.codex_binary = input.codex_binary.trim().to_owned();
+    config.grok_binary = input.grok_binary.trim().to_owned();
     write_config(&state.data_dir, &config).map_err(|error| error.to_string())?;
     Ok(preferences_json(&config))
 }
@@ -452,6 +466,7 @@ fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, D
             refresh_interval_seconds: default_refresh_interval_seconds(),
             claude_binary: default_claude_binary(),
             codex_binary: default_codex_binary(),
+            grok_binary: default_grok_binary(),
             archived_sessions: Vec::new(),
         },
     )?;
@@ -558,6 +573,9 @@ fn dashboard_snapshot(
     let codex_health = outbox
         .adapter_health(AgentType::Codex)
         .map_err(|_| DesktopError::Sync)?;
+    let grok_health = outbox
+        .adapter_health(AgentType::GrokBuild)
+        .map_err(|_| DesktopError::Sync)?;
     let local_contexts = local_session_contexts(state);
     let sessions = merge_dashboard_sessions(
         &remote_sessions["sessions"],
@@ -594,7 +612,8 @@ fn dashboard_snapshot(
             "session_count": local_sessions.len(),
             "sources": [
                 local_source_summary(AgentType::ClaudeCode, &local_sessions, claude_health),
-                local_source_summary(AgentType::Codex, &local_sessions, codex_health)
+                local_source_summary(AgentType::Codex, &local_sessions, codex_health),
+                local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health)
             ],
             "memory": local_memory_summary(),
             "refreshed_at": chrono::Utc::now()
@@ -621,6 +640,7 @@ fn send_session_message_inner(
     let binary = match input.agent_type {
         AgentType::ClaudeCode => &config.claude_binary,
         AgentType::Codex => &config.codex_binary,
+        AgentType::GrokBuild => &config.grok_binary,
     };
     let project_path = match input.agent_type {
         AgentType::ClaudeCode => Some(
@@ -628,6 +648,11 @@ fn send_session_message_inner(
                 .ok_or(DesktopError::SessionUnavailable)?,
         ),
         AgentType::Codex => None,
+        AgentType::GrokBuild => Some(
+            find_grok_session_cwd(&input.agent_session_id)
+                .map_err(|_| DesktopError::SessionUnavailable)?
+                .ok_or(DesktopError::SessionUnavailable)?,
+        ),
     };
     let response = run_agent_session_turn_streaming(
         input.agent_type,
@@ -750,6 +775,7 @@ fn preferences_json(config: &DesktopConfig) -> Value {
         "refresh_interval_seconds": config.refresh_interval_seconds,
         "claude_binary": config.claude_binary,
         "codex_binary": config.codex_binary,
+        "grok_binary": config.grok_binary,
     })
 }
 
@@ -841,6 +867,7 @@ fn build_engine(
             LOCAL_SESSION_LIMIT,
             DESKTOP_COLLECTOR_TIMEOUT,
         )),
+        Box::new(GrokSessionSource::new(true)),
     ];
     let redactor =
         ProjectRedactor::new(identity.fingerprint_key()).map_err(|_| DesktopError::Sync)?;
@@ -964,6 +991,43 @@ fn bootstrap_local_sessions(
                 .map_err(|_| DesktopError::Sync)?;
         }
     }
+
+    match collect_grok_sessions(true)
+        .map_err(|error| error.code().to_owned())
+        .and_then(|payload| {
+            grok::normalize_sessions_json(&payload, &meta, redactor)
+                .map_err(|_| "grok_payload_invalid".to_owned())
+        }) {
+        Ok(observations) => {
+            for observation in observations {
+                outbox
+                    .enqueue_if_changed(&observation)
+                    .map_err(|_| DesktopError::Sync)?;
+            }
+            outbox
+                .record_adapter_health(
+                    AgentType::GrokBuild,
+                    meta.observed_at,
+                    true,
+                    0,
+                    next_attempt,
+                    None,
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+        Err(code) => {
+            outbox
+                .record_adapter_health(
+                    AgentType::GrokBuild,
+                    meta.observed_at,
+                    false,
+                    1,
+                    next_attempt,
+                    Some(&code),
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+    }
     Ok(())
 }
 
@@ -1074,6 +1138,7 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
 
     let claude = collect_claude_session_contexts(LOCAL_SESSION_LIMIT as usize);
     let codex = collect_codex_session_contexts(LOCAL_SESSION_LIMIT);
+    let grok = collect_grok_session_contexts(LOCAL_SESSION_LIMIT as usize);
     let mut next = HashMap::new();
     match claude {
         Ok(contexts) => insert_session_contexts(&mut next, contexts),
@@ -1092,6 +1157,16 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
                 .entries
                 .iter()
                 .filter(|(_, context)| context.agent_type == AgentType::Codex)
+                .map(|(key, context)| (key.clone(), context.clone())),
+        ),
+    }
+    match grok {
+        Ok(contexts) => insert_session_contexts(&mut next, contexts),
+        Err(_) => next.extend(
+            cache
+                .entries
+                .iter()
+                .filter(|(_, context)| context.agent_type == AgentType::GrokBuild)
                 .map(|(key, context)| (key.clone(), context.clone())),
         ),
     }
@@ -1120,6 +1195,7 @@ fn agent_type_name(agent_type: AgentType) -> &'static str {
     match agent_type {
         AgentType::ClaudeCode => "claude_code",
         AgentType::Codex => "codex",
+        AgentType::GrokBuild => "grok_build",
     }
 }
 
@@ -1156,7 +1232,14 @@ fn local_memory_summary() -> Value {
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
     else {
-        return json!({ "claude_files": 0, "claude_bytes": 0, "codex_indexes": 0, "codex_bytes": 0 });
+        return json!({
+            "claude_files": 0,
+            "claude_bytes": 0,
+            "codex_indexes": 0,
+            "codex_bytes": 0,
+            "grok_sessions": 0,
+            "grok_bytes": 0
+        });
     };
     let claude_projects = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
@@ -1198,11 +1281,39 @@ fn local_memory_summary() -> Value {
             }
         }
     }
+    let grok_home = std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".grok"));
+    let mut grok_sessions = 0_u64;
+    let mut grok_bytes = 0_u64;
+    let grok_sessions_dir = grok_home.join("sessions");
+    if let Ok(groups) = fs::read_dir(grok_sessions_dir) {
+        for group in groups.flatten() {
+            if !group.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let Ok(children) = fs::read_dir(group.path()) else {
+                continue;
+            };
+            for child in children.flatten() {
+                if !child.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                let summary = child.path().join("summary.json");
+                if let Ok(metadata) = fs::metadata(summary) {
+                    grok_sessions = grok_sessions.saturating_add(1);
+                    grok_bytes = grok_bytes.saturating_add(metadata.len());
+                }
+            }
+        }
+    }
     json!({
         "claude_files": claude_files,
         "claude_bytes": claude_bytes,
         "codex_indexes": codex_indexes,
-        "codex_bytes": codex_bytes
+        "codex_bytes": codex_bytes,
+        "grok_sessions": grok_sessions,
+        "grok_bytes": grok_bytes
     })
 }
 

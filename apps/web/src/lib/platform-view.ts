@@ -65,6 +65,7 @@ export const SESSION_FILTERS: ReadonlyArray<{
 export const AGENT_LABELS: Record<AgentType, string> = {
   claude_code: "Claude Code",
   codex: "Codex",
+  grok_build: "Grok Build",
 };
 
 export interface AuthStatusPresentation {

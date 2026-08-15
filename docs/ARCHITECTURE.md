@@ -7,8 +7,8 @@
 
 MVP 只解决一个问题：
 
-> 安全、准确、低延迟地收集用户电脑上的 Claude Code 与 Codex Session
-> 元数据，并在网页和移动界面统一展示。
+> 安全、准确、低延迟地收集用户电脑上的 Claude Code、Codex 与 Grok Build
+> Session 元数据，并在网页和移动界面统一展示。
 
 架构优先级：
 
@@ -26,16 +26,20 @@ flowchart LR
     subgraph Device["用户电脑"]
         Claude["Claude Code"]
         Codex["OpenAI Codex"]
+        Grok["Grok Build"]
         CA["Claude Adapter"]
         OA["Codex Adapter"]
+        GA["Grok Adapter"]
         N["状态标准化器"]
         DB["本地 SQLite Outbox"]
         Sync["HTTPS 批次同步客户端 / 后续 WebSocket"]
 
         Claude -->|"Session JSONL / Hooks"| CA
         Codex -->|"app-server stdio / 本地 DB"| OA
+        Grok -->|"summary.json / active_sessions"| GA
         CA --> N
         OA --> N
+        GA --> N
         N --> DB
         DB --> Sync
     end
@@ -95,7 +99,7 @@ flowchart LR
 
 当前 Runner 已实现：
 
-- Claude 与 Codex 独立持续采集源。
+- Claude、Codex 与 Grok Build 独立持续采集源。
 - 活动 Session 2 秒、空闲 10 秒的自适应轮询。
 - 失败从 2 秒指数退避到最多 60 秒。
 - `Ctrl-C` 协作式退出和诊断用最大尝试次数。
@@ -145,12 +149,28 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
 的元数据事件。官方只保证连接启动或恢复 Thread 后的 Turn/Item 通知，因此当前连接
 对其他客户端 Thread 的实时覆盖不能先验保证，必须由轮询兜底并在真实 CLI 上验证。
 
+#### Grok Build Adapter
+
+数据来源：
+
+1. 扫描 `GROK_HOME` 或默认 `~/.grok/sessions/<encoded-cwd>/<session-id>/summary.json`。
+2. 只读取有界 `summary.json` 中的 Session ID、工作目录、时间戳、生成标题、模型、
+   推理强度、沙箱配置和 agent 名称；不打开 `chat_history.jsonl`、`updates.jsonl`
+   正文、`last_turn_summary` 或 `auth.json`。
+3. 用 `active_sessions.json` 的 PID 做存活探测：进程仍在则标为实时，
+   `updates.jsonl` 最近写入或存在 lock 文件时标为工作中，否则标为空闲。
+4. 接收 AgentPulse Grok Hook 的本地生命周期事件。
+5. 没有实时证据的磁盘记录统一标记为持久化历史，不猜测已完成或失败。
+
+建议查询周期与 Claude 相同。Grok Build 凭据同步尚未接入 AuthManager；采集不依赖
+`grok login` 状态。
+
 #### Desktop Host
 
 - 复用 Gateway 的邮箱注册、密码登录与 HttpOnly 会话接口。
 - 登录成功后自动登记当前 Ed25519 设备身份，不要求用户打开 CMD 或输入配对码。
 - 在同一 Tauri 进程内启动 Runner 与同步 Worker，退出登录时停止同步并清理 AgentPulse
-  Cookie；Claude/Codex 供应商凭据始终留在各自客户端和系统凭据库中。
+  Cookie；Claude/Codex/Grok 供应商凭据始终留在各自客户端和系统凭据库中。
 - 默认只允许 HTTPS Gateway，开发环境仅放行回环 HTTP。
 - 启动时先执行一次本地元数据扫描并写入 Outbox；桌面读模型将本地快照与云端已确认
   Session 按稳定键合并，因此断网或积压不会被误报为“本机未检测到”。扫描健康、待上传数和
@@ -160,7 +180,9 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
   助手响应的模型和 Token 用量；Codex 只读状态库中的
   `title/model/reasoning_effort/approval_mode/sandbox_policy/tokens_used/rollout_path` 白名单列，并在确认
   rollout 路径仍位于 `CODEX_HOME` 后，从最多 2 MiB 尾部提取 `turn_context` 与
-  `token_count`。消息、Prompt、命令和工具内容不进入结果，标题也不从首条 Prompt 推断。
+  `token_count`。Grok Build 只读 `summary.json` 的 `generated_title`、`current_model_id`、
+  `reasoning_effort`、`sandbox_profile` 和 `agent_name`，不读取 `session_summary` 或
+  `last_turn_summary`。消息、Prompt、命令和工具内容不进入结果，标题也不从首条 Prompt 推断。
   运行上下文缓存 15 秒，只附加到当前设备的桌面快照，不进入 Outbox、Gateway 或远端设备。
   会话列表按脱敏后的项目显示名分组，并以供应商保存的标题为主标题；缺失字段明确显示“未提供”。
 - 桌面 Host 使用 OS Keyring 中的 AgentPulse Cookie 主动连接 Gateway `GET /v1/stream`
@@ -170,7 +192,9 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
 - 会话详情提供本机控制入口，Prompt 只经 Tauri IPC 写入本机 CLI 的 stdin，不进入 Outbox、
   Gateway、日志或桌面持久化。Claude 使用官方 `stream-json` partial event，Codex 使用
   `exec --json` JSONL；Tauri Channel 只转发助手可见文本和“调用工具/执行命令”等无参数活动
-  标签，过滤 thinking、命令正文、工具参数和 stderr。子进程输出有 2 MiB 上限和 15 分钟硬
+  标签，过滤 thinking、命令正文、工具参数和 stderr。Grok Build 使用
+  `--prompt-file` 与 `streaming-json`：只转发 `text` 增量，忽略 `thought` 和
+  `rawInput`/`rawOutput`。子进程输出有 2 MiB 上限和 15 分钟硬
   超时，阻塞执行放入专用线程池，用户可从控制面板停止当前回合并回收整个子进程树。
 - 桌面详情的上一条/下一条导航只使用当前筛选结果的稳定排序，不重新查询或扩大数据范围；
   左右方向键在焦点不位于输入控件时生效，正在执行回合时按钮和快捷键均保持禁用。
@@ -179,12 +203,13 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
 - 桌面 Host 还提供只读会话时间线命令：校验设备和 Session 标识后，使用 Keyring Cookie 请求
   `/v1/sessions/events`，按当前账号由 Gateway 做权限隔离，并在返回 WebView 前过滤原始状态详情等
   非展示字段。时间线不写入本地 Outbox，也不读取对话正文。
-- Claude 会话通过官方 `--resume` 非交互模式继续，Codex 通过 `exec resume` 继续。CLI 可执行
-  文件位置和刷新周期只保存在桌面本地配置。控制面板只在当前打开期间保留本轮问答，用户可
-  随时清空；关闭或重启应用即丢弃。
-- Codex 归档/恢复调用 app-server 的 `thread/archive` / `thread/unarchive`。Claude Code 没有
-  对等的稳定归档 CLI，因此其归档只改变 AgentPulse 本机视图，不改写 Claude 的 Session
-  文件。归档标记按本机设备隔离，不会误伤相同 Session ID 的远端设备记录。
+- Claude 会话通过官方 `--resume` 非交互模式继续，Codex 通过 `exec resume` 继续，
+  Grok Build 通过 `grok --resume --prompt-file` 继续。CLI 可执行文件位置和刷新周期
+  只保存在桌面本地配置。控制面板只在当前打开期间保留本轮问答，用户可随时清空；
+  关闭或重启应用即丢弃。
+- Codex 归档/恢复调用 app-server 的 `thread/archive` / `thread/unarchive`。Claude Code
+  与 Grok Build 没有对等的稳定归档 CLI，因此其归档只改变 AgentPulse 本机视图，不改写
+  供应商的 Session 文件。归档标记按本机设备隔离，不会误伤相同 Session ID 的远端设备记录。
 
 #### Normalizer
 

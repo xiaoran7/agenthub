@@ -7,7 +7,7 @@ import {
 export const SYNC_PROTOCOL_VERSION = 1;
 export const MAX_SYNC_BATCH_EVENTS = 1_000;
 
-export const agentTypes = ["claude_code", "codex"] as const;
+export const agentTypes = ["claude_code", "codex", "grok_build"] as const;
 export const presences = ["LIVE", "PERSISTED", "UNKNOWN"] as const;
 export const activityStatuses = [
   "WORKING",
@@ -24,6 +24,9 @@ export const observationSources = [
   "claude_hook",
   "codex_app_server",
   "codex_hook",
+  "grok_sessions",
+  "grok_hook",
+  "grok_active_sessions",
   "process_probe",
   "local_history",
 ] as const;

@@ -29,7 +29,7 @@ export interface Device {
 }
 
 export interface SessionRuntimeContext {
-  agent_type: "claude_code" | "codex";
+  agent_type: "claude_code" | "codex" | "grok_build";
   agent_session_id: string;
   title?: string;
   model?: string;
@@ -45,7 +45,7 @@ export interface SessionRuntimeContext {
 export interface Session {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex";
+  agent_type: "claude_code" | "codex" | "grok_build";
   agent_session_id: string;
   observed_at: string;
   payload: {
@@ -61,7 +61,7 @@ export interface Session {
 export interface SessionTimelineEvent {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex";
+  agent_type: "claude_code" | "codex" | "grok_build";
   agent_session_id: string;
   sequence: number;
   observed_at: string;
@@ -77,6 +77,7 @@ export interface DesktopPreferences {
   refresh_interval_seconds: number;
   claude_binary: string;
   codex_binary: string;
+  grok_binary: string;
 }
 
 export interface SessionTurnResult {
@@ -96,7 +97,7 @@ export interface DashboardRealtimeEvent {
 }
 
 export interface LocalSource {
-  agent_type: "claude_code" | "codex";
+  agent_type: "claude_code" | "codex" | "grok_build";
   session_count: number;
   detected: boolean;
   status: "healthy" | "backoff" | "scanning";
@@ -113,6 +114,8 @@ export interface LocalInventory {
     claude_bytes: number;
     codex_indexes: number;
     codex_bytes: number;
+    grok_sessions: number;
+    grok_bytes: number;
   };
   refreshed_at: string;
 }

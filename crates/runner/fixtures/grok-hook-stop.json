@@ -1,0 +1,8 @@
+{
+  "session_id": "01a005b5-5ee8-7013-947b-0140a7b267fa",
+  "cwd": "C:\\Users\\alice\\source\\agent-pulse",
+  "hook_event_name": "Stop",
+  "tool_name": "run_terminal_cmd",
+  "tool_input": { "command": "echo TOP_SECRET_MARKER" },
+  "prompt": "PRIVATE_PROMPT_MARKER"
+}

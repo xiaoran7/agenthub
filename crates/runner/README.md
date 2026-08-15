@@ -6,8 +6,11 @@
 - Claude 生命周期 Hook 标准化
 - Codex app-server Thread 与实时事件标准化
 - Codex 生命周期 Hook 标准化
+- Grok Build `summary.json` / `active_sessions.json` 元数据发现
+- Grok Build 生命周期 Hook 标准化
 - Claude 配置目录一次性 Session 采集（无需 Claude CLI）
 - Codex app-server stdio 握手与一次性 Thread 采集；不可执行时只读本地状态库兜底
+- Grok Build 一次性 Session 采集（无需 `grok` 在 PATH 中）
 - Codex app-server 被动状态通知采集与轮询状态合并
 - Claude/Codex 持续采集、活动/空闲自适应间隔与失败指数退避
 - 采集命令和协议响应强制超时；Windows 下终止完整子进程树
@@ -17,7 +20,7 @@
 - Ed25519 本地设备身份、签名同步批次和有界确认
 - 独立后台同步、启动排空、新事件唤醒与网络失败指数退避
 - Fixture 驱动的隐私回归测试
-- Pro/Team 远程任务主动领取、本机项目指纹 allow-list、本地确认与 Claude/Codex CLI 执行
+- Pro/Team 远程任务主动领取、本机项目指纹 allow-list、本地确认与 Claude/Codex/Grok CLI 执行
 
 ## 远程任务
 
@@ -77,7 +80,7 @@ Get-Content -Raw crates/runner/fixtures/claude-hook-permission.json |
     --db runner.db
 ```
 
-从本机 Claude 或 Codex 采集一次，并写入本地 Outbox：
+从本机 Claude、Codex 或 Grok Build 采集一次，并写入本地 Outbox：
 
 ```powershell
 cargo run -p agent-pulse-runner -- `
@@ -90,6 +93,11 @@ cargo run -p agent-pulse-runner -- `
   collect-once codex `
   --db runner.db `
   --limit 100
+
+cargo run -p agent-pulse-runner -- `
+  --identity runner-identity.json `
+  collect-once grok `
+  --db runner.db
 ```
 
 Claude 默认扫描 `CLAUDE_CONFIG_DIR`，未设置时扫描 `~/.claude/projects`，不要求
@@ -97,7 +105,9 @@ Claude 默认扫描 `CLAUDE_CONFIG_DIR`，未设置时扫描 `~/.claude/projects
 扫描只反序列化顶层 Session ID、工作目录与时间，不保留消息或工具载荷。Codex 优先
 使用 app-server；其可执行文件不在 `PATH` 时可通过 `--binary` 指定，启动失败则自动
 只读查询 `CODEX_HOME`（默认 `~/.codex`）最新状态库的 Thread 元数据。该兜底不读取
-rollout 正文或 `auth.json`。一次性采集默认在 15 秒后超时，可通过
+rollout 正文或 `auth.json`。Grok Build 扫描 `GROK_HOME`（默认 `~/.grok`）下的
+`summary.json` 与 `active_sessions.json`，不读取对话正文、`auth.json` 或
+`last_turn_summary`。一次性采集默认在 15 秒后超时，可通过
 `--timeout-seconds` 调整。
 
 持续运行两个 Adapter：

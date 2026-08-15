@@ -1,0 +1,20 @@
+[
+  {
+    "sessionId": "01a005b5-5ee8-7013-947b-0140a7b267fa",
+    "cwd": "C:\\Users\\alice\\source\\agent-pulse",
+    "state": "working",
+    "pid": 4888,
+    "live": true,
+    "source": "active",
+    "startedAt": 1786794967000,
+    "lastActivityAt": 1786795000000
+  },
+  {
+    "sessionId": "01a0053d-6944-7311-9278-91fccfc916ed",
+    "cwd": "C:\\Users\\alice\\source\\agent-pulse",
+    "state": "persisted",
+    "source": "sessions",
+    "startedAt": 1786789505000,
+    "lastActivityAt": 1786790922000
+  }
+]

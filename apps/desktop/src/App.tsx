@@ -43,6 +43,9 @@ import {
 import {
   activityTime,
   adjacentItem,
+  agentLabel,
+  agentShortLabel,
+  permissionFieldLabel,
   relativeTime,
   statusView,
 } from "./presentation";
@@ -179,8 +182,8 @@ function AuthScreen({
             本地 Agent 脉搏
           </h1>
           <p>
-            Claude
-            Code、Codex、历史会话与记忆索引会在登录后自动盘点。只同步状态和脱敏后的项目名。
+            Claude Code、Codex、Grok
+            Build、历史会话与记忆索引会在登录后自动盘点。只同步状态和脱敏后的项目名。
           </p>
         </div>
         <LocalCloudDiagram />
@@ -364,7 +367,11 @@ function Dashboard({
     return [...groups.entries()];
   }, [filteredSessions, visibleLimit]);
   const counts = useMemo(() => {
-    const next = { claude_code: 0, codex: 0 };
+    const next: Record<Session["agent_type"], number> = {
+      claude_code: 0,
+      codex: 0,
+      grok_build: 0,
+    };
     for (const session of sessions) next[session.agent_type] += 1;
     return next;
   }, [sessions]);
@@ -598,6 +605,14 @@ function Dashboard({
                 (item) => item.agent_type === "codex",
               )}
             />
+            <SourceRow
+              icon={<span className="grok-mark">✦</span>}
+              name="Grok Build"
+              fallbackCount={counts.grok_build}
+              source={snapshot.local.sources.find(
+                (item) => item.agent_type === "grok_build",
+              )}
+            />
           </div>
           <div className="memory-card">
             <span className="memory-icon">
@@ -607,12 +622,14 @@ function Dashboard({
               <span className="card-kicker">本地记忆索引</span>
               <strong>
                 {snapshot.local.memory.claude_files} 个 Claude 文件 ·{" "}
-                {snapshot.local.memory.codex_indexes} 个 Codex 索引
+                {snapshot.local.memory.codex_indexes} 个 Codex 索引 ·{" "}
+                {snapshot.local.memory.grok_sessions} 个 Grok 会话
               </strong>
               <p>
                 {formatBytes(
                   snapshot.local.memory.claude_bytes +
-                    snapshot.local.memory.codex_bytes,
+                    snapshot.local.memory.codex_bytes +
+                    snapshot.local.memory.grok_bytes,
                 )}
                 ，只读取数量和大小
               </p>
@@ -675,19 +692,17 @@ function Dashboard({
                 </label>
               )}
               <div className="agent-filter" aria-label="Agent 筛选">
-                {(["all", "claude_code", "codex"] as const).map((value) => (
-                  <button
-                    key={value}
-                    aria-pressed={agentFilter === value}
-                    onClick={() => setAgentFilter(value)}
-                  >
-                    {value === "all"
-                      ? "全部"
-                      : value === "claude_code"
-                        ? "Claude"
-                        : "Codex"}
-                  </button>
-                ))}
+                {(["all", "claude_code", "codex", "grok_build"] as const).map(
+                  (value) => (
+                    <button
+                      key={value}
+                      aria-pressed={agentFilter === value}
+                      onClick={() => setAgentFilter(value)}
+                    >
+                      {value === "all" ? "全部" : agentShortLabel(value)}
+                    </button>
+                  ),
+                )}
               </div>
             </div>
           </div>
@@ -901,9 +916,7 @@ function SessionRow({
         <small>{session.payload.project.display_name || "未分类项目"}</small>
       </span>
       <span className="session-runtime">
-        <strong>
-          {session.agent_type === "claude_code" ? "Claude Code" : "Codex"}
-        </strong>
+        <strong>{agentLabel(session.agent_type)}</strong>
         <small>{runtime?.model ?? "模型未提供"}</small>
       </span>
       <span>
@@ -967,9 +980,9 @@ function SessionControlPanel({
   const runtime = session.payload.runtime;
   const title = runtime?.title || "未命名会话";
   const permission =
-    session.agent_type === "claude_code"
-      ? runtime?.permission_mode
-      : (runtime?.permission_mode ?? runtime?.approval_policy);
+    session.agent_type === "codex"
+      ? (runtime?.permission_mode ?? runtime?.approval_policy)
+      : runtime?.permission_mode;
 
   useEffect(() => {
     if (panelView !== "timeline") return;
@@ -1224,12 +1237,16 @@ function SessionControlPanel({
 
         <div className="session-control-summary">
           <span className="agent-symbol">
-            {session.agent_type === "claude_code" ? <Code2 /> : "◆"}
+            {session.agent_type === "claude_code" ? (
+              <Code2 />
+            ) : session.agent_type === "codex" ? (
+              "◆"
+            ) : (
+              "✦"
+            )}
           </span>
           <div>
-            <strong>
-              {session.agent_type === "claude_code" ? "Claude Code" : "Codex"}
-            </strong>
+            <strong>{agentLabel(session.agent_type)}</strong>
             <span>{session.payload.project.display_name || "未分类项目"}</span>
             <em className={`status-chip ${status.className}`}>
               <i /> {session.archived ? "已归档" : status.label}
@@ -1280,11 +1297,7 @@ function SessionControlPanel({
                 <dd>{runtime?.reasoning_effort ?? "未提供"}</dd>
               </div>
               <div>
-                <dt>
-                  {session.agent_type === "claude_code"
-                    ? "权限模式"
-                    : "审批策略"}
-                </dt>
+                <dt>{permissionFieldLabel(session.agent_type)}</dt>
                 <dd>{permission ?? "未提供"}</dd>
               </div>
               <div>
@@ -1421,6 +1434,7 @@ function DesktopSettingsPanel({
   );
   const [claudeBinary, setClaudeBinary] = useState(preferences.claude_binary);
   const [codexBinary, setCodexBinary] = useState(preferences.codex_binary);
+  const [grokBinary, setGrokBinary] = useState(preferences.grok_binary);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -1436,6 +1450,7 @@ function DesktopSettingsPanel({
             refresh_interval_seconds: refreshSeconds,
             claude_binary: claudeBinary,
             codex_binary: codexBinary,
+            grok_binary: grokBinary,
           },
         },
       );
@@ -1505,6 +1520,16 @@ function DesktopSettingsPanel({
               maxLength={260}
               onChange={(event) => setCodexBinary(event.target.value)}
               placeholder="codex"
+              required
+            />
+          </label>
+          <label>
+            <span>Grok Build CLI</span>
+            <input
+              value={grokBinary}
+              maxLength={260}
+              onChange={(event) => setGrokBinary(event.target.value)}
+              placeholder="grok"
               required
             />
           </label>
@@ -1818,12 +1843,20 @@ const demoSnapshot: Snapshot = {
         detected: true,
         status: "healthy",
       },
+      {
+        agent_type: "grok_build",
+        session_count: 4,
+        detected: true,
+        status: "healthy",
+      },
     ],
     memory: {
       claude_files: 4,
       claude_bytes: 4_909,
       codex_indexes: 1,
       codex_bytes: 1_306_624,
+      grok_sessions: 4,
+      grok_bytes: 18_432,
     },
     refreshed_at: new Date().toISOString(),
   },
@@ -1831,6 +1864,7 @@ const demoSnapshot: Snapshot = {
     refresh_interval_seconds: 4,
     claude_binary: "claude",
     codex_binary: "codex",
+    grok_binary: "grok",
   },
   sessions: [
     demoSession("claude_code", "电商平台重构", "WORKING", 2),
@@ -1838,6 +1872,7 @@ const demoSnapshot: Snapshot = {
     demoSession("claude_code", "用户增长分析", "IDLE", 25),
     demoSession("codex", "API 网关开发", "WORKING", 1),
     demoSession("codex", "数据导出工具", "UNKNOWN", 180, "PERSISTED"),
+    demoSession("grok_build", "AgentPulse 采集", "WORKING", 3),
   ],
 };
 
@@ -1866,15 +1901,47 @@ function demoSession(
         title:
           agent === "claude_code"
             ? `${project}实施计划`
-            : `${project}接口与测试`,
-        model: agent === "claude_code" ? "claude-opus-4-7" : "gpt-5.5-codex",
-        reasoning_effort: agent === "claude_code" ? "high" : "medium",
-        permission_mode: agent === "claude_code" ? "acceptEdits" : undefined,
+            : agent === "grok_build"
+              ? `${project}采集适配`
+              : `${project}接口与测试`,
+        model:
+          agent === "claude_code"
+            ? "claude-opus-4-7"
+            : agent === "grok_build"
+              ? "grok-4.6"
+              : "gpt-5.5-codex",
+        reasoning_effort: agent === "codex" ? "medium" : "high",
+        permission_mode:
+          agent === "claude_code"
+            ? "acceptEdits"
+            : agent === "grok_build"
+              ? "grok-build-plan"
+              : undefined,
         approval_policy: agent === "codex" ? "on-request" : undefined,
-        sandbox_mode: agent === "codex" ? "workspace-write" : undefined,
-        context_window_tokens: agent === "claude_code" ? 200_000 : 258_400,
-        context_used_tokens: agent === "claude_code" ? 64_800 : 92_300,
-        session_total_tokens: agent === "claude_code" ? 91_200 : 184_600,
+        sandbox_mode:
+          agent === "codex"
+            ? "workspace-write"
+            : agent === "grok_build"
+              ? "off"
+              : undefined,
+        context_window_tokens:
+          agent === "claude_code"
+            ? 200_000
+            : agent === "grok_build"
+              ? 256_000
+              : 258_400,
+        context_used_tokens:
+          agent === "claude_code"
+            ? 64_800
+            : agent === "grok_build"
+              ? 48_200
+              : 92_300,
+        session_total_tokens:
+          agent === "claude_code"
+            ? 91_200
+            : agent === "grok_build"
+              ? 72_400
+              : 184_600,
       },
     },
   };

@@ -7,6 +7,15 @@
 
 ### Added
 
+- 桌面端在 Claude Code、Codex 之后新增 Grok Build 采集：扫描 `GROK_HOME`（默认
+  `~/.grok`）下的 `summary.json` 与 `active_sessions.json`，用 PID 存活和
+  `updates.jsonl` 写入时效推断 LIVE/WORKING/IDLE，不读取对话正文、`last_turn_summary`
+  或 `auth.json`。同步契约增加 `grok_build` 与 `grok_sessions`/`grok_hook`/
+  `grok_active_sessions` 来源。桌面来源卡、筛选、详情、运行上下文、记忆统计、
+  CLI 路径和本机继续会话均已适配；Grok 回合使用 `--prompt-file` 与
+  `streaming-json`，只转发文本增量。网页端/移动端界面暂不改筛选与任务入口，
+  协议层可接收该来源以便桌面先上线。
+
 - 桌面会话索引新增设备下拉筛选：账号连接多台设备时可按当前设备或远端设备查看 Session，
   筛选与 Agent、归档和搜索条件组合，设备不存在会话时展示明确空状态，不改变本地扫描和云端
   同步边界。

@@ -1,7 +1,7 @@
 # AgentPulse（智能体脉搏）
 
-一个跨 Claude Code、OpenAI Codex 等本地 Coding Agent 的统一 Session
-监控与远程接入平台。
+一个跨 Claude Code、OpenAI Codex、Grok Build 等本地 Coding Agent 的统一
+Session 监控与远程接入平台。
 
 用户在电脑上安装轻量级本地客户端后，可以通过网页端或移动端统一查看：
 
@@ -13,9 +13,9 @@
 ## 当前阶段
 
 当前产品以安全、准确、低延迟的 Session 监控为数据基础，正在扩展为订阅制多用户
-Agent 平台。用户通过邮箱注册/登录管理自己的设备；Claude Code 与 Codex 是一级来源
-分类。Pro/Team 用户可通过服务器可靠中转远程任务，由 Runner 主动领取并在本机显示
-完整提示词，经用户确认后调用 Claude Code 或 Codex；不提供模型转售，也不上传完整
+Agent 平台。用户通过邮箱注册/登录管理自己的设备；Claude Code、Codex 与 Grok Build
+是一级来源分类。Pro/Team 用户可通过服务器可靠中转远程任务，由 Runner 主动领取并
+在本机显示完整提示词，经用户确认后调用本机 Agent CLI；不提供模型转售，也不上传完整
 代码、对话、命令输出或本机路径。
 
 ## 文档
@@ -37,8 +37,8 @@ Agent 平台。用户通过邮箱注册/登录管理自己的设备；Claude Cod
 - [Gateway API 开发说明](services/api/README.md)
 - [共享同步契约](packages/contracts/README.md)
 
-当前 Runner 已支持 Claude 本地 Session JSONL 与 Codex app-server/本地状态库的一次性
-和持续采集、状态标准化、隐私脱敏、
+当前 Runner 已支持 Claude 本地 Session JSONL、Codex app-server/本地状态库，以及
+Grok Build `summary.json`/`active_sessions.json` 的一次性和持续采集、状态标准化、隐私脱敏、
 SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签名同步批次。
 常驻 `run` 配置 Gateway 后会在独立线程自动排空 Outbox；新事件立即唤醒同步，
 网络失败按独立退避恢复，不阻塞 Agent 采集。

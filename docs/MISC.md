@@ -2,6 +2,20 @@
 
 > 记录不属于功能变更、但值得保留的方案取舍与非功能性观察。
 
+## 2026-08-15 发布顺序与 Grok Build 采集边界
+
+- **先桌面，后网页/移动。** 新 Agent 来源和桌面控制台能力先在桌面端做完并推送到
+  Gitea 生产，确认采集与同步无问题后再改网页端和移动端界面。本次只为协议与类型
+  地图补上 `grok_build` 标签，避免契约编译失败；Web/Android 的筛选和任务入口保持
+  Claude/Codex 两档。
+- **Grok 先做文件元数据，不做凭据管理。** `~/.grok/auth.json` 含 access token，
+  默认不得读取。活动状态只来自 `active_sessions.json` 的 PID 存活和
+  `updates.jsonl` 的 mtime/lock，不打开对话日志。
+- **标题只用 `generated_title`。** `session_summary` 和 `last_turn_summary` 可能是
+  对话摘要，不能进入 Outbox 或桌面运行上下文。
+- **继续会话用 `--prompt-file`。** Grok headless 的 `-p` 必须带提示词参数，stdin
+  不能替代；临时文件在子进程退出后删除，避免 Prompt 进入进程列表。
+
 ## 2026-07-29 原生 Compose 动效取舍
 
 - **共享动效语义，不共享运行时。** Web/桌面继续使用 GSAP；原生 Android 用

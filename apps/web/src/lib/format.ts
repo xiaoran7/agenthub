@@ -30,6 +30,7 @@ export const PRESENCE_LABELS: Record<Presence, string> = {
 export const AGENT_LABELS: Record<AgentType, string> = {
   claude_code: "Claude Code",
   codex: "Codex",
+  grok_build: "Grok Build",
 };
 
 export const WAITING_REASON_LABELS: Record<WaitingReason, string> = {
@@ -54,6 +55,9 @@ export const SOURCE_LABELS: Record<ObservationSource, string> = {
   claude_hook: "Claude Hook",
   codex_app_server: "Codex app-server",
   codex_hook: "Codex Hook",
+  grok_sessions: "Grok Build 会话",
+  grok_hook: "Grok Build Hook",
+  grok_active_sessions: "Grok Build 活动会话",
   process_probe: "进程探测",
   local_history: "本地历史",
 };

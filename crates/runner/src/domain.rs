@@ -11,6 +11,7 @@ pub const SCHEMA_VERSION: u16 = 1;
 pub enum AgentType {
     ClaudeCode,
     Codex,
+    GrokBuild,
 }
 
 impl AgentType {
@@ -18,6 +19,7 @@ impl AgentType {
         match self {
             Self::ClaudeCode => "claude_code",
             Self::Codex => "codex",
+            Self::GrokBuild => "grok_build",
         }
     }
 }
@@ -59,6 +61,9 @@ pub enum ObservationSource {
     ClaudeHook,
     CodexAppServer,
     CodexHook,
+    GrokSessions,
+    GrokHook,
+    GrokActiveSessions,
     ProcessProbe,
     LocalHistory,
 }

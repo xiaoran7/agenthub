@@ -4,6 +4,7 @@ use agent_pulse_runner::{
     adapters::{
         claude,
         codex::{self, CodexThreadContext},
+        grok,
     },
     device::DeviceIdentity,
     domain::{
@@ -81,9 +82,18 @@ fn future_agent_payloads_keep_known_states_and_degrade_unknown_states() {
     assert_eq!(codex[1].state.activity_status, ActivityStatus::Unknown);
     assert_eq!(codex[1].confidence, Confidence::Inferred);
 
+    let grok = grok::normalize_sessions_json(&fixture("grok-sessions.json"), &meta(), &redactor())
+        .unwrap();
+    assert_eq!(grok.len(), 2);
+    assert_eq!(grok[0].state.activity_status, ActivityStatus::Working);
+    assert_eq!(grok[0].state.presence, Presence::Live);
+    assert_eq!(grok[1].state.presence, Presence::Persisted);
+    assert_eq!(grok[1].confidence, Confidence::Inferred);
+
     claude
         .iter()
         .chain(codex.iter())
+        .chain(grok.iter())
         .for_each(assert_no_sensitive_payload);
 }
 
@@ -120,8 +130,20 @@ fn unknown_hooks_degrade_and_malformed_hooks_are_rejected() {
     assert_eq!(session_end.state.presence, Presence::Persisted);
     assert_eq!(session_end.confidence, Confidence::Observed);
 
+    let grok_input = r#"{
+      "session_id": "grok-new-hook",
+      "cwd": "C:\\Users\\alice\\source\\future-hook",
+      "hook_event_name": "FutureApprovalWorkflow",
+      "prompt": "FUTURE_PRIVATE_GROK_PROMPT"
+    }"#;
+    let grok = grok::normalize_hook(grok_input, &meta(), &redactor()).unwrap();
+    assert_eq!(grok.state.activity_status, ActivityStatus::Unknown);
+    assert_eq!(grok.confidence, Confidence::Inferred);
+    assert_no_sensitive_payload(&grok);
+
     assert!(claude::normalize_hook(r#"{"hook_event_name":"Stop"}"#, &meta(), &redactor()).is_err());
     assert!(codex::normalize_hook(r#"{"hook_event_name":"Stop"}"#, &meta(), &redactor()).is_err());
+    assert!(grok::normalize_hook(r#"{"hook_event_name":"Stop"}"#, &meta(), &redactor()).is_err());
 }
 
 #[test]
@@ -222,6 +244,8 @@ fn hook_and_approval_fixtures_drop_unapproved_content() {
     .unwrap();
     let codex_hook =
         codex::normalize_hook(&fixture("codex-hook-stop.json"), &meta(), &redactor()).unwrap();
+    let grok_hook =
+        grok::normalize_hook(&fixture("grok-hook-stop.json"), &meta(), &redactor()).unwrap();
 
     assert_eq!(
         claude.state.activity_status,
@@ -232,9 +256,11 @@ fn hook_and_approval_fixtures_drop_unapproved_content() {
         ActivityStatus::WaitingPermission
     );
     assert_eq!(codex_hook.state.activity_status, ActivityStatus::Completed);
+    assert_eq!(grok_hook.state.activity_status, ActivityStatus::Completed);
     assert_no_sensitive_payload(&claude);
     assert_no_sensitive_payload(&codex);
     assert_no_sensitive_payload(&codex_hook);
+    assert_no_sensitive_payload(&grok_hook);
 }
 
 #[test]

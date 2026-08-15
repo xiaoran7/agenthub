@@ -17,10 +17,11 @@ use crate::{
     adapters::{
         claude::{self, ClaudeAdapterError},
         codex::{self, CodexAdapterError, CodexThreadContext},
+        grok::{self, GrokAdapterError},
     },
     collectors::{
         CodexAppServer, CollectorError, DEFAULT_COLLECTOR_TIMEOUT, collect_claude_transcripts,
-        collect_codex_local_threads,
+        collect_codex_local_threads, collect_grok_sessions,
     },
     domain::{ActivityStatus, AgentType, ObservationMeta, Presence, SessionObservation},
     outbox::{Outbox, OutboxError},
@@ -38,6 +39,8 @@ pub enum SourceError {
     #[error(transparent)]
     CodexAdapter(#[from] CodexAdapterError),
     #[error(transparent)]
+    GrokAdapter(#[from] GrokAdapterError),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
 
@@ -47,6 +50,7 @@ impl SourceError {
             Self::Collector(error) => error.code(),
             Self::ClaudeAdapter(_) => "claude_payload_invalid",
             Self::CodexAdapter(_) => "codex_payload_invalid",
+            Self::GrokAdapter(_) => "grok_payload_invalid",
             Self::Json(_) => "internal_json_failed",
         }
     }
@@ -158,6 +162,31 @@ impl SessionSource for CodexSessionSource {
     ) -> Result<Vec<SessionObservation>, SourceError> {
         let (result, messages, local) = self.collect_result()?;
         normalize_codex_collection(&result, messages, meta, redactor, &mut self.context, local)
+    }
+}
+
+pub struct GrokSessionSource {
+    include_completed: bool,
+}
+
+impl GrokSessionSource {
+    pub fn new(include_completed: bool) -> Self {
+        Self { include_completed }
+    }
+}
+
+impl SessionSource for GrokSessionSource {
+    fn agent_type(&self) -> AgentType {
+        AgentType::GrokBuild
+    }
+
+    fn collect(
+        &mut self,
+        meta: &ObservationMeta,
+        redactor: &ProjectRedactor,
+    ) -> Result<Vec<SessionObservation>, SourceError> {
+        let payload = collect_grok_sessions(self.include_completed)?;
+        Ok(grok::normalize_sessions_json(&payload, meta, redactor)?)
     }
 }
 

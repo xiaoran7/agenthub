@@ -16,6 +16,9 @@
   CLI 没有 `claude agents --json`，不得依赖该命令。
 - Codex：`codex app-server` 为历史与 Runner 托管 Session 的主接口，Codex
   本地状态数据库作为 app-server 不可执行时的只读历史兜底。
+- Grok Build：`GROK_HOME`（默认 `~/.grok`）下的 `summary.json` 用于历史发现，
+  `active_sessions.json` 加 PID 存活用于实时 Presence；`updates.jsonl` 只看
+  mtime/lock，不打开正文。`grok sessions list` 不作为采集接口。
 - 本地 JSONL/SQLite 只读取白名单元数据，不把内部格式当作稳定协议，也不读取或
   上传对话正文、工具参数和供应商登录凭据。
 

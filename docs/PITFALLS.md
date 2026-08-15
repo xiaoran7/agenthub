@@ -2,6 +2,19 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-08-15 Grok Build 采集不能读对话日志或 auth.json
+
+- **现象**：`~/.grok/sessions/<cwd>/<id>/` 里同时有 `summary.json`、`chat_history.jsonl`、
+  `updates.jsonl` 和 `last_turn_summary`；`active_sessions.json` 可能残留已退出进程的 PID。
+- **根因**：Grok 没有类似 Codex app-server 的元数据接口；会话内容与状态混在同一目录。
+  直接读 JSONL 或 `last_turn_summary` 会把 Prompt/回复带进 Outbox。`grok sessions list`
+  依赖 PATH 且摘要字段可能含对话内容。
+- **解决方式**：只解析有界 `summary.json` 和 `active_sessions.json`；PID 必须经
+  `OpenProcess`/`kill(0)` 确认仍存活；WORKING 只看 `updates.jsonl` 的 mtime 或 lock 文件。
+  标题只用 `generated_title`。
+- **如何避免**：为 Grok fixture 故意放入 `TOP_SECRET_*` 正文，断言采集结果不含这些字段。
+  不要把 `session_summary`/`last_turn_summary` 当作安全标题。
+
 ## 2026-08-15 桌面端不能用云端列表代表本地发现结果
 
 - **现象**：本机 Outbox 已有大量 Claude/Codex Session，但同步网络暂时失败时，桌面端仍

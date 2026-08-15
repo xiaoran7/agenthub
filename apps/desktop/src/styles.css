@@ -682,6 +682,10 @@ input:focus-visible {
   color: var(--text);
   font-size: 23px;
 }
+.grok-mark {
+  color: var(--amber);
+  font-size: 21px;
+}
 .source-copy {
   min-width: 0;
   display: grid;

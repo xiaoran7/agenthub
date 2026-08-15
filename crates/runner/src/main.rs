@@ -14,16 +14,23 @@ use agent_pulse_runner::{
     adapters::{
         claude,
         codex::{self, CodexThreadContext},
+        grok,
     },
     auth::{AuthManager, AuthProvider},
     auth_worker::AuthWorker,
-    collectors::{CodexAppServer, collect_claude_transcripts, collect_codex_local_threads},
+    collectors::{
+        CodexAppServer, collect_claude_transcripts, collect_codex_local_threads,
+        collect_grok_sessions,
+    },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
     gateway::{GatewayClient, push_outbox},
     outbox::Outbox,
     privacy::ProjectRedactor,
-    runtime::{ClaudeSessionSource, CodexSessionSource, PollPolicy, RunnerRuntime, SessionSource},
+    runtime::{
+        ClaudeSessionSource, CodexSessionSource, GrokSessionSource, PollPolicy, RunnerRuntime,
+        SessionSource,
+    },
     sync::{MAX_SYNC_BATCH_EVENTS, SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
     sync_worker::{SyncPolicy, SyncWorker},
     tasks::{TaskWorker, parse_project_mapping},
@@ -89,7 +96,7 @@ enum Command {
         agent: Agent,
         #[arg(long)]
         db: PathBuf,
-        #[arg(long, help = "Override the Codex executable path")]
+        #[arg(long, help = "Override the Codex or Grok executable path")]
         binary: Option<PathBuf>,
         #[arg(long, help = "Scan up to 1000 Claude history sessions instead of 100")]
         include_completed: bool,
@@ -107,6 +114,8 @@ enum Command {
         claude_binary: Option<PathBuf>,
         #[arg(long, help = "Override the Codex executable path")]
         codex_binary: Option<PathBuf>,
+        #[arg(long, help = "Override the Grok Build executable path")]
+        grok_binary: Option<PathBuf>,
         #[arg(long, help = "Scan up to 1000 Claude history sessions instead of 100")]
         include_completed: bool,
         #[arg(long, default_value_t = 100)]
@@ -207,6 +216,8 @@ enum TasksCommand {
         claude_binary: PathBuf,
         #[arg(long, default_value = "codex")]
         codex_binary: PathBuf,
+        #[arg(long, default_value = "grok")]
+        grok_binary: PathBuf,
         #[arg(long, default_value_t = 5)]
         poll_interval_seconds: u64,
         #[arg(long, default_value_t = 14_400)]
@@ -268,12 +279,15 @@ enum InputFormat {
     CodexMessage,
     CodexThreadList,
     CodexHook,
+    GrokSessions,
+    GrokHook,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Agent {
     Claude,
     Codex,
+    Grok,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -281,6 +295,7 @@ enum AgentSelection {
     All,
     Claude,
     Codex,
+    Grok,
 }
 
 impl std::fmt::Display for AgentSelection {
@@ -289,6 +304,7 @@ impl std::fmt::Display for AgentSelection {
             Self::All => "all",
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Grok => "grok",
         })
     }
 }
@@ -434,6 +450,7 @@ fn main() -> Result<()> {
             let observation = match agent {
                 Agent::Claude => claude::normalize_hook(&input, &meta, &redactor)?,
                 Agent::Codex => codex::normalize_hook(&input, &meta, &redactor)?,
+                Agent::Grok => grok::normalize_hook(&input, &meta, &redactor)?,
             };
             let mut outbox = Outbox::open(db)?;
             let sequence = outbox.enqueue(&observation)?;
@@ -489,6 +506,11 @@ fn main() -> Result<()> {
                         )?
                     }
                 }
+                Agent::Grok => {
+                    let _ = binary;
+                    let payload = collect_grok_sessions(include_completed)?;
+                    grok::normalize_sessions_json(&payload, &meta, &redactor)?
+                }
             };
             let mut outbox = Outbox::open(db)?;
             let sequences = enqueue_all(&mut outbox, &observations)?;
@@ -506,6 +528,7 @@ fn main() -> Result<()> {
             db,
             claude_binary,
             codex_binary,
+            grok_binary,
             include_completed,
             codex_limit,
             active_interval_seconds,
@@ -575,6 +598,7 @@ fn main() -> Result<()> {
 
             let claude_binary = claude_binary.unwrap_or_else(|| PathBuf::from("claude"));
             let codex_binary = codex_binary.unwrap_or_else(|| PathBuf::from("codex"));
+            let _grok_binary = grok_binary.unwrap_or_else(|| PathBuf::from("grok"));
 
             let mut sources: Vec<Box<dyn SessionSource>> = Vec::new();
             if matches!(agent, AgentSelection::All | AgentSelection::Claude) {
@@ -586,6 +610,9 @@ fn main() -> Result<()> {
                     codex_limit,
                     collector_timeout,
                 )));
+            }
+            if matches!(agent, AgentSelection::All | AgentSelection::Grok) {
+                sources.push(Box::new(GrokSessionSource::new(include_completed)));
             }
 
             let stop = Arc::new(AtomicBool::new(false));
@@ -686,7 +713,11 @@ fn main() -> Result<()> {
             OutboxCommand::Health { db } => {
                 let outbox = Outbox::open(db)?;
                 let mut health = Vec::new();
-                for agent_type in [AgentType::ClaudeCode, AgentType::Codex] {
+                for agent_type in [
+                    AgentType::ClaudeCode,
+                    AgentType::Codex,
+                    AgentType::GrokBuild,
+                ] {
                     if let Some(adapter_health) = outbox.adapter_health(agent_type)? {
                         health.push(adapter_health);
                     }
@@ -820,13 +851,13 @@ fn main() -> Result<()> {
                 }
                 AuthCommand::Login { agent } => {
                     let result = manager
-                        .login(auth_provider(agent))
+                        .login(auth_provider(agent)?)
                         .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
                 AuthCommand::Logout { agent } => {
                     let result = manager
-                        .logout(auth_provider(agent))
+                        .logout(auth_provider(agent)?)
                         .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
@@ -844,12 +875,12 @@ fn main() -> Result<()> {
                         bail!("raw token output requires --reveal and --allow-credential-access");
                     }
                     let result = manager
-                        .tokens(auth_provider(agent))
+                        .tokens(auth_provider(agent)?)
                         .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
                 AuthCommand::ClearCache { agent } => {
-                    for provider in auth_providers(agent) {
+                    for provider in auth_providers(agent)? {
                         manager
                             .clear_cache(provider)
                             .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
@@ -865,6 +896,7 @@ fn main() -> Result<()> {
                 projects,
                 claude_binary,
                 codex_binary,
+                grok_binary,
                 poll_interval_seconds,
                 execution_timeout_seconds,
                 gateway_timeout_seconds,
@@ -892,6 +924,7 @@ fn main() -> Result<()> {
                     project_map,
                     claude_binary,
                     codex_binary,
+                    grok_binary,
                     nonzero_duration("execution timeout", execution_timeout_seconds)?,
                 );
                 let poll_interval = nonzero_duration("task poll interval", poll_interval_seconds)?;
@@ -927,18 +960,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn auth_provider(agent: Agent) -> AuthProvider {
+fn auth_provider(agent: Agent) -> Result<AuthProvider> {
     match agent {
-        Agent::Claude => AuthProvider::ClaudeCode,
-        Agent::Codex => AuthProvider::Codex,
+        Agent::Claude => Ok(AuthProvider::ClaudeCode),
+        Agent::Codex => Ok(AuthProvider::Codex),
+        Agent::Grok => bail!("Grok Build credential sync is not enabled"),
     }
 }
 
-fn auth_providers(selection: AgentSelection) -> Vec<AuthProvider> {
+fn auth_providers(selection: AgentSelection) -> Result<Vec<AuthProvider>> {
     match selection {
-        AgentSelection::All => vec![AuthProvider::ClaudeCode, AuthProvider::Codex],
-        AgentSelection::Claude => vec![AuthProvider::ClaudeCode],
-        AgentSelection::Codex => vec![AuthProvider::Codex],
+        AgentSelection::All => Ok(vec![AuthProvider::ClaudeCode, AuthProvider::Codex]),
+        AgentSelection::Claude => Ok(vec![AuthProvider::ClaudeCode]),
+        AgentSelection::Codex => Ok(vec![AuthProvider::Codex]),
+        AgentSelection::Grok => bail!("Grok Build credential sync is not enabled"),
     }
 }
 
@@ -948,7 +983,7 @@ fn print_auth_snapshots(
     refresh: bool,
 ) -> Result<()> {
     let mut snapshots = Vec::new();
-    for provider in auth_providers(selection) {
+    for provider in auth_providers(selection)? {
         let snapshot = if refresh {
             manager.refresh(provider)
         } else {
@@ -1034,6 +1069,8 @@ fn normalize(
             )?)
         }
         InputFormat::CodexHook => Ok(vec![codex::normalize_hook(input, meta, redactor)?]),
+        InputFormat::GrokSessions => Ok(grok::normalize_sessions_json(input, meta, redactor)?),
+        InputFormat::GrokHook => Ok(vec![grok::normalize_hook(input, meta, redactor)?]),
     }
     .and_then(|observations| {
         if observations.is_empty() {
