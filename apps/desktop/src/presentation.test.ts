@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { activityTime, relativeTime, statusView } from "./presentation";
+import {
+  activityTime,
+  adjacentItem,
+  relativeTime,
+  statusView,
+} from "./presentation";
 import type { Session } from "./types";
 
 describe("desktop presentation", () => {
@@ -30,5 +35,14 @@ describe("desktop presentation", () => {
     expect(relativeTime("2026-08-14T09:52:00.000Z", now)).toBe("8 分钟前");
     expect(relativeTime("2026-08-12T10:00:00.000Z", now)).toBe("2 天前");
     expect(relativeTime("not-a-date", now)).toBe("时间未知");
+  });
+
+  it("moves within the current ordered result and stops at both boundaries", () => {
+    const items = ["newest", "middle", "oldest"];
+    expect(adjacentItem(items, 1, -1)).toBe("newest");
+    expect(adjacentItem(items, 1, 1)).toBe("oldest");
+    expect(adjacentItem(items, 0, -1)).toBeUndefined();
+    expect(adjacentItem(items, 2, 1)).toBeUndefined();
+    expect(adjacentItem(items, -1, 1)).toBeUndefined();
   });
 });

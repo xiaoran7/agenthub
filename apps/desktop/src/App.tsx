@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Archive,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   CircleUserRound,
   Cloud,
@@ -39,7 +40,12 @@ import {
   type FormEvent,
 } from "react";
 
-import { activityTime, relativeTime, statusView } from "./presentation";
+import {
+  activityTime,
+  adjacentItem,
+  relativeTime,
+  statusView,
+} from "./presentation";
 import {
   appendAssistantDelta,
   dropTrailingEmptyAssistant,
@@ -332,6 +338,17 @@ function Dashboard({
       sessions.find((session) => sessionKey(session) === selectedSessionKey),
     [selectedSessionKey, sessions],
   );
+  const selectedFilteredIndex = selectedSessionKey
+    ? filteredSessions.findIndex(
+        (session) => sessionKey(session) === selectedSessionKey,
+      )
+    : -1;
+  const previousSession = adjacentItem(
+    filteredSessions,
+    selectedFilteredIndex,
+    -1,
+  );
+  const nextSession = adjacentItem(filteredSessions, selectedFilteredIndex, 1);
   const groupedSessions = useMemo(() => {
     const groups = new Map<string, Session[]>();
     for (const session of filteredSessions.slice(0, visibleLimit)) {
@@ -748,6 +765,9 @@ function Dashboard({
           <SessionControlPanel
             key={sessionKey(selectedSession)}
             session={selectedSession}
+            previousSession={previousSession}
+            nextSession={nextSession}
+            onNavigate={(next) => setSelectedSessionKey(sessionKey(next))}
             onClose={() => setSelectedSessionKey(undefined)}
             onChanged={async (archived) => {
               setSnapshot((current) => ({
@@ -877,10 +897,16 @@ function SessionRow({
 
 function SessionControlPanel({
   session,
+  previousSession,
+  nextSession,
+  onNavigate,
   onClose,
   onChanged,
 }: {
   session: Session;
+  previousSession?: Session;
+  nextSession?: Session;
+  onNavigate: (session: Session) => void;
   onClose: () => void;
   onChanged: (archived: boolean) => Promise<void>;
 }) {
@@ -968,6 +994,37 @@ function SessionControlPanel({
     },
     [],
   );
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
+        return;
+      }
+      if (event.key === "Escape") {
+        if (!busy) {
+          event.preventDefault();
+          onClose();
+        }
+        return;
+      }
+      if (event.key === "ArrowLeft" && previousSession !== undefined) {
+        event.preventDefault();
+        onNavigate(previousSession);
+      } else if (event.key === "ArrowRight" && nextSession !== undefined) {
+        event.preventDefault();
+        onNavigate(nextSession);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [busy, nextSession, onClose, onNavigate, previousSession]);
 
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
@@ -1090,14 +1147,46 @@ function SessionControlPanel({
             <span className="card-kicker">SESSION CONTROL</span>
             <h2 title={title}>{title}</h2>
           </div>
-          <button
-            className="icon-button"
-            aria-label="关闭会话"
-            disabled={busy}
-            onClick={onClose}
-          >
-            <X />
-          </button>
+          <div className="session-header-actions">
+            <button
+              className="icon-button"
+              aria-label="上一条会话"
+              title={
+                previousSession === undefined
+                  ? "已经是筛选结果中的第一条"
+                  : "上一条会话"
+              }
+              disabled={previousSession === undefined || busy}
+              onClick={() =>
+                previousSession !== undefined && onNavigate(previousSession)
+              }
+            >
+              <ChevronLeft />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="下一条会话"
+              title={
+                nextSession === undefined
+                  ? "已经是筛选结果中的最后一条"
+                  : "下一条会话"
+              }
+              disabled={nextSession === undefined || busy}
+              onClick={() =>
+                nextSession !== undefined && onNavigate(nextSession)
+              }
+            >
+              <ChevronRight />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="关闭会话"
+              disabled={busy}
+              onClick={onClose}
+            >
+              <X />
+            </button>
+          </div>
         </header>
 
         <div className="session-control-summary">

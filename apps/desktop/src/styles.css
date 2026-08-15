@@ -1126,6 +1126,19 @@ input:focus-visible {
   font-size: 25px;
   letter-spacing: -0.04em;
 }
+.session-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+.session-header-actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+.session-header-actions .icon-button svg {
+  width: 15px;
+}
 .session-control-summary {
   margin: 20px 24px 4px;
   padding: 15px;

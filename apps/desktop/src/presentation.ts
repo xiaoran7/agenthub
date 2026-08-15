@@ -29,3 +29,12 @@ export function statusView(
     return { label: "历史会话", className: "history" };
   return { label: "未知", className: "history" };
 }
+
+export function adjacentItem<T>(
+  items: readonly T[],
+  index: number,
+  offset: -1 | 1,
+): T | undefined {
+  if (index < 0) return undefined;
+  return items[index + offset];
+}
