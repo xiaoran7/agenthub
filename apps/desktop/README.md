@@ -12,8 +12,9 @@ Windows Tauri 桌面客户端。用户通过现有 AgentPulse 邮箱账号注册
 AgentPulse 账号与套餐。记忆区只统计 Claude memory 文件和 Codex memory 索引的数量与字节，
 不读取或展示正文。
 
-会话列表现在也是本机控制台：点击会话可查看 ID、项目指纹、最近活动与同步状态，并直接
-继续 Claude Code 或 Codex 会话、清空本次打开期间的显示内容，以及归档/恢复会话。设置面板
+会话列表现在也是本机控制台：按脱敏项目目录分组并显示供应商的显式会话名；点击会话可查看
+模型、推理强度、权限/审批策略、沙箱、上下文窗口与 Token 用量，并直接继续 Claude Code 或
+Codex 会话、清空本次打开期间的显示内容，以及归档/恢复会话。设置面板
 可配置 2–60 秒刷新周期（默认 4 秒）和两个 CLI 的可执行文件路径。桌面 Host 会使用登录
 Cookie 建立 Gateway SSE 出站连接，云端变化到达即刷新；周期轮询保留为断流兜底。连接状态
 会显示“`SSE 实时连接`”或当前兜底刷新周期。
@@ -56,8 +57,13 @@ Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP
 - Codex 优先使用 app-server；不可执行时只读 `CODEX_HOME` 最新状态库的 Thread 元数据。
 - 桌面启动时先执行一次本地元数据扫描（每种来源最多 1000 条），随后进入后台自适应轮询。
 - Claude/Codex memory 只读取文件或索引数量与字节大小，不读取记忆正文。
-- 日常发现与同步不读取 Claude/Codex OAuth Token、API Key、消息正文、Prompt、工具参数、
-  命令输出和 rollout 正文。
+- 日常发现与同步不读取 Claude/Codex OAuth Token、API Key、消息正文、Prompt、工具参数或
+  命令输出。桌面运行上下文是独立的本机增强层：Claude 只扫描有界 JSONL 头尾的供应商标题事件、
+  权限模式、模型和用量字段；Codex 只读状态库白名单列和受 `CODEX_HOME` 路径约束的 rollout
+  最多 2 MiB 尾部，并只接受 `turn_context`/`token_count`。结果缓存 15 秒，不进入同步协议。
+- 会话标题只接受 Claude `/rename`/`custom-title`、Claude 自带 `ai-title` 或 Codex 本地状态库
+  保存的标题；自定义标题优先，且不会自行读取首条 Prompt 推断标题。远端设备未同步这些本机字段时
+  明确显示“未提供”。
 - 用户在会话控制台显式发送时，Prompt 仅通过 Tauri IPC 和 stdin 交给本机 CLI；回复只保留
   在当前前端内存中，不进入桌面配置、SQLite Outbox、Gateway 或日志。单次输入最多 16000
   字符，输出最多 2 MiB，执行最长 15 分钟；stderr 只被排空，不回传到界面。

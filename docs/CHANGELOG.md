@@ -7,6 +7,13 @@
 
 ### Added
 
+- 桌面会话索引新增供应商显式名称与项目目录分组，详情面板展示模型、推理强度、Claude 权限
+  模式、Codex 审批/沙箱策略、上下文窗口、当前用量和累计 Token。Claude 仅扫描有界 JSONL
+  头尾的 `custom-title`/`ai-title`/`mode`/助手元数据；Codex 只读状态库白名单列（包括审批与
+  沙箱策略）以及限定在
+  `CODEX_HOME` 内的 rollout 2 MiB 尾部 `turn_context`/`token_count`。运行上下文缓存 15 秒，
+  只附加当前设备桌面快照，不进入 Outbox/Gateway，不读取首条 Prompt 推断标题。搜索现支持
+  会话名、分类目录和模型，并新增采集器隐私回归测试与本地/远端合并隔离测试。
 - 桌面 App 新增 Gateway SSE 实时变化通道：Rust Host 使用 OS Keyring Cookie 主动连接
   `/v1/stream`，WebView 只接收连接状态和刷新信号；断流按 2→15 秒退避重连，2–60 秒单飞
   轮询继续兜底。会话回合改用 Tauri Channel 增量呈现：Claude `stream-json` 转发文本 delta，

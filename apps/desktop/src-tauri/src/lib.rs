@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use agent_pulse_runner::{
@@ -17,8 +17,9 @@ use agent_pulse_runner::{
         codex::{self, CodexThreadContext},
     },
     collectors::{
-        AgentTurnUpdate, CodexAppServer, CollectorError, collect_claude_transcripts,
-        collect_codex_local_threads, run_agent_session_turn_streaming,
+        AgentTurnUpdate, CodexAppServer, CollectorError, LocalSessionContext,
+        collect_claude_session_contexts, collect_claude_transcripts, collect_codex_local_threads,
+        collect_codex_session_contexts, run_agent_session_turn_streaming,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -48,6 +49,7 @@ const MAX_SESSION_ID_CHARS: usize = 160;
 const MAX_SSE_LINE_BYTES: usize = 64 * 1024;
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(25);
 const STREAM_MAX_BACKOFF: Duration = Duration::from_secs(15);
+const SESSION_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
 enum DesktopError {
@@ -198,6 +200,12 @@ struct RealtimeHandle {
     connected: Arc<AtomicBool>,
 }
 
+#[derive(Default)]
+struct SessionContextCache {
+    refreshed_at: Option<Instant>,
+    entries: HashMap<String, LocalSessionContext>,
+}
+
 impl RealtimeHandle {
     fn stop(self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -210,6 +218,7 @@ struct DesktopState {
     engine: Mutex<Option<EngineHandle>>,
     realtime: Mutex<Option<RealtimeHandle>>,
     active_turns: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    session_contexts: Mutex<SessionContextCache>,
 }
 
 #[tauri::command]
@@ -530,11 +539,13 @@ fn dashboard_snapshot(
     let codex_health = outbox
         .adapter_health(AgentType::Codex)
         .map_err(|_| DesktopError::Sync)?;
+    let local_contexts = local_session_contexts(state);
     let sessions = merge_dashboard_sessions(
         &remote_sessions["sessions"],
         &local_sessions,
         &desktop_config.archived_sessions,
         identity.device_id(),
+        &local_contexts,
     );
     let running = state
         .engine
@@ -897,6 +908,7 @@ fn merge_dashboard_sessions(
     local: &[SessionObservation],
     archived: &[ArchivedSession],
     device_id: &str,
+    contexts: &HashMap<String, LocalSessionContext>,
 ) -> Vec<Value> {
     let mut sessions = std::collections::BTreeMap::new();
     if let Some(remote) = remote.as_array() {
@@ -916,6 +928,10 @@ fn merge_dashboard_sessions(
     }
     for observation in local {
         let key = observation.session_key();
+        let context = contexts.get(&session_context_key(
+            observation.agent_type,
+            &observation.agent_session_id,
+        ));
         let sync_state = if sessions.contains_key(&key) {
             "synced"
         } else {
@@ -935,7 +951,8 @@ fn merge_dashboard_sessions(
                     "source": observation.source,
                     "confidence": observation.confidence,
                     "started_at": observation.started_at,
-                    "last_activity_at": observation.last_activity_at
+                    "last_activity_at": observation.last_activity_at,
+                    "runtime": context
                 },
                 "sync_state": sync_state
                 ,"archived": archived.iter().any(|item| {
@@ -953,6 +970,10 @@ fn merge_dashboard_sessions(
             item.agent_session_id
         );
         sessions.entry(key).or_insert_with(|| {
+            let context = contexts.get(&session_context_key(
+                item.agent_type,
+                &item.agent_session_id,
+            ));
             json!({
                 "event_id": format!("archived:{}:{}", agent_type_name(item.agent_type), item.agent_session_id),
                 "device_id": device_id,
@@ -966,6 +987,7 @@ fn merge_dashboard_sessions(
                     },
                     "state": { "activity_status": "UNKNOWN", "presence": "PERSISTED" },
                     "last_activity_at": item.observed_at,
+                    "runtime": context,
                 },
                 "sync_state": "synced",
                 "archived": true,
@@ -973,6 +995,61 @@ fn merge_dashboard_sessions(
         });
     }
     sessions.into_values().collect()
+}
+
+fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionContext> {
+    let Ok(mut cache) = state.session_contexts.lock() else {
+        return HashMap::new();
+    };
+    if cache
+        .refreshed_at
+        .is_some_and(|updated| updated.elapsed() < SESSION_CONTEXT_CACHE_TTL)
+    {
+        return cache.entries.clone();
+    }
+
+    let claude = collect_claude_session_contexts(LOCAL_SESSION_LIMIT as usize);
+    let codex = collect_codex_session_contexts(LOCAL_SESSION_LIMIT);
+    let mut next = HashMap::new();
+    match claude {
+        Ok(contexts) => insert_session_contexts(&mut next, contexts),
+        Err(_) => next.extend(
+            cache
+                .entries
+                .iter()
+                .filter(|(_, context)| context.agent_type == AgentType::ClaudeCode)
+                .map(|(key, context)| (key.clone(), context.clone())),
+        ),
+    }
+    match codex {
+        Ok(contexts) => insert_session_contexts(&mut next, contexts),
+        Err(_) => next.extend(
+            cache
+                .entries
+                .iter()
+                .filter(|(_, context)| context.agent_type == AgentType::Codex)
+                .map(|(key, context)| (key.clone(), context.clone())),
+        ),
+    }
+    cache.entries = next.clone();
+    cache.refreshed_at = Some(Instant::now());
+    next
+}
+
+fn insert_session_contexts(
+    target: &mut HashMap<String, LocalSessionContext>,
+    contexts: Vec<LocalSessionContext>,
+) {
+    for context in contexts {
+        target.insert(
+            session_context_key(context.agent_type, &context.agent_session_id),
+            context,
+        );
+    }
+}
+
+fn session_context_key(agent_type: AgentType, session_id: &str) -> String {
+    format!("{}:{session_id}", agent_type_name(agent_type))
 }
 
 fn agent_type_name(agent_type: AgentType) -> &'static str {
@@ -1430,6 +1507,7 @@ pub fn run() {
                 engine: Mutex::new(None),
                 realtime: Mutex::new(None),
                 active_turns: Mutex::new(HashMap::new()),
+                session_contexts: Mutex::new(SessionContextCache::default()),
             });
             Ok(())
         })
@@ -1511,5 +1589,50 @@ mod tests {
         assert!(validate_session_id("019abc-session_1").is_ok());
         assert!(validate_session_id("../auth.json").is_err());
         assert!(validate_session_id("bad\nvalue").is_err());
+    }
+
+    #[test]
+    fn dashboard_attaches_runtime_context_only_to_local_sessions() {
+        let redactor = ProjectRedactor::new(b"desktop-test-key").unwrap();
+        let observations = claude::normalize_agents_json(
+            r#"[{"sessionId":"session-1","cwd":"/work/project","state":"done"}]"#,
+            &ObservationMeta::now("device-local"),
+            &redactor,
+        )
+        .unwrap();
+        let context = LocalSessionContext {
+            agent_type: AgentType::ClaudeCode,
+            agent_session_id: "session-1".to_owned(),
+            title: Some("Explicit local title".to_owned()),
+            model: Some("claude-opus-4-7".to_owned()),
+            reasoning_effort: None,
+            permission_mode: Some("acceptEdits".to_owned()),
+            approval_policy: None,
+            sandbox_mode: None,
+            context_window_tokens: Some(200_000),
+            context_used_tokens: Some(40_000),
+            session_total_tokens: None,
+        };
+        let contexts = HashMap::from([("claude_code:session-1".to_owned(), context)]);
+        let remote = json!([{
+            "agent_type": "codex",
+            "device_id": "device-remote",
+            "agent_session_id": "session-1",
+            "payload": {"project": {"display_name": "remote", "fingerprint": "fp"}}
+        }]);
+
+        let merged =
+            merge_dashboard_sessions(&remote, &observations, &[], "device-local", &contexts);
+        let local = merged
+            .iter()
+            .find(|session| session["device_id"] == "device-local")
+            .unwrap();
+        let remote = merged
+            .iter()
+            .find(|session| session["device_id"] == "device-remote")
+            .unwrap();
+
+        assert_eq!(local["payload"]["runtime"]["title"], "Explicit local title");
+        assert!(remote["payload"].get("runtime").is_none());
     }
 }

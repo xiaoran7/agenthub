@@ -28,6 +28,20 @@ export interface Device {
   last_seen_at: string;
 }
 
+export interface SessionRuntimeContext {
+  agent_type: "claude_code" | "codex";
+  agent_session_id: string;
+  title?: string;
+  model?: string;
+  reasoning_effort?: string;
+  permission_mode?: string;
+  approval_policy?: string;
+  sandbox_mode?: string;
+  context_window_tokens?: number;
+  context_used_tokens?: number;
+  session_total_tokens?: number;
+}
+
 export interface Session {
   event_id: string;
   device_id: string;
@@ -38,6 +52,7 @@ export interface Session {
     project: { display_name: string; fingerprint: string };
     state: { activity_status: ActivityStatus; presence: string };
     last_activity_at?: string;
+    runtime?: SessionRuntimeContext | null;
   };
   sync_state?: "local" | "synced";
   archived?: boolean;

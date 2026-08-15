@@ -13,6 +13,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  FolderTree,
   HardDrive,
   LogOut,
   MessageSquare,
@@ -312,9 +313,16 @@ function Dashboard({
         if ((session.archived === true) !== (archiveFilter === "archived"))
           return false;
         if (deferredQuery === "") return true;
-        return session.payload.project.display_name
-          .toLocaleLowerCase()
-          .includes(deferredQuery);
+        const haystack = [
+          session.payload.runtime?.title,
+          session.payload.project.display_name,
+          session.payload.runtime?.model,
+          session.agent_type,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLocaleLowerCase();
+        return haystack.includes(deferredQuery);
       }),
     [agentFilter, archiveFilter, deferredQuery, sessions],
   );
@@ -323,6 +331,16 @@ function Dashboard({
       sessions.find((session) => sessionKey(session) === selectedSessionKey),
     [selectedSessionKey, sessions],
   );
+  const groupedSessions = useMemo(() => {
+    const groups = new Map<string, Session[]>();
+    for (const session of filteredSessions.slice(0, visibleLimit)) {
+      const group = session.payload.project.display_name || "未分类项目";
+      const entries = groups.get(group);
+      if (entries === undefined) groups.set(group, [session]);
+      else entries.push(session);
+    }
+    return [...groups.entries()];
+  }, [filteredSessions, visibleLimit]);
   const counts = useMemo(() => {
     const next = { claude_code: 0, codex: 0 };
     for (const session of sessions) next[session.agent_type] += 1;
@@ -609,8 +627,8 @@ function Dashboard({
               <label className="session-search">
                 <Search />
                 <input
-                  aria-label="搜索项目"
-                  placeholder="搜索项目"
+                  aria-label="搜索会话、目录或模型"
+                  placeholder="搜索会话、目录或模型"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                 />
@@ -634,8 +652,8 @@ function Dashboard({
           </div>
           <div className="session-table" role="table" aria-label="会话列表">
             <div className="session-table-head" role="row">
-              <span>项目</span>
-              <span>Agent</span>
+              <span>会话</span>
+              <span>运行环境</span>
               <span>状态</span>
               <span>最近活动</span>
               <span>同步</span>
@@ -665,20 +683,29 @@ function Dashboard({
                     ? "在会话控制面板中归档后，会话会移动到这里。"
                     : query === "" && agentFilter === "all"
                       ? "扫描失败时会在上方来源卡片显示原因。"
-                      : "换一个项目名或清除 Agent 筛选。"}
+                      : "换一个会话名、目录、模型或清除 Agent 筛选。"}
                 </p>
               </div>
             ) : (
-              filteredSessions
-                .slice(0, visibleLimit)
-                .map((session) => (
-                  <SessionRow
-                    key={`${session.device_id}:${session.agent_type}:${session.agent_session_id}`}
-                    session={session}
-                    selected={selectedSessionKey === sessionKey(session)}
-                    onSelect={() => setSelectedSessionKey(sessionKey(session))}
-                  />
-                ))
+              groupedSessions.map(([group, groupSessions]) => (
+                <div className="session-group" role="rowgroup" key={group}>
+                  <div className="session-group-label" role="row">
+                    <FolderTree />
+                    <strong>{group}</strong>
+                    <span>{groupSessions.length} 个会话</span>
+                  </div>
+                  {groupSessions.map((session) => (
+                    <SessionRow
+                      key={`${session.device_id}:${session.agent_type}:${session.agent_session_id}`}
+                      session={session}
+                      selected={selectedSessionKey === sessionKey(session)}
+                      onSelect={() =>
+                        setSelectedSessionKey(sessionKey(session))
+                      }
+                    />
+                  ))}
+                </div>
+              ))
             )}
           </div>
           {filteredSessions.length > visibleLimit && (
@@ -807,17 +834,23 @@ function SessionRow({
     session.payload.state.activity_status,
     session.payload.state.presence,
   );
+  const runtime = session.payload.runtime;
+  const title = runtime?.title || "未命名会话";
   return (
     <button
       className={selected ? "session-row selected" : "session-row"}
       role="row"
       onClick={onSelect}
     >
-      <strong title={session.payload.project.display_name}>
-        {session.payload.project.display_name || "未命名项目"}
-      </strong>
-      <span>
-        {session.agent_type === "claude_code" ? "Claude Code" : "Codex"}
+      <span className="session-identity">
+        <strong title={title}>{title}</strong>
+        <small>{session.payload.project.display_name || "未分类项目"}</small>
+      </span>
+      <span className="session-runtime">
+        <strong>
+          {session.agent_type === "claude_code" ? "Claude Code" : "Codex"}
+        </strong>
+        <small>{runtime?.model ?? "模型未提供"}</small>
       </span>
       <span>
         <em className={`status-chip ${status.className}`}>
@@ -857,6 +890,9 @@ function SessionControlPanel({
   const [agentActivity, setAgentActivity] = useState<string>();
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [panelView, setPanelView] = useState<"context" | "conversation">(
+    "context",
+  );
   const pendingDelta = useRef("");
   const deltaFrame = useRef<number | undefined>(undefined);
   const conversationEnd = useRef<HTMLDivElement>(null);
@@ -864,6 +900,12 @@ function SessionControlPanel({
     session.payload.state.activity_status,
     session.payload.state.presence,
   );
+  const runtime = session.payload.runtime;
+  const title = runtime?.title || "未命名会话";
+  const permission =
+    session.agent_type === "claude_code"
+      ? runtime?.permission_mode
+      : (runtime?.permission_mode ?? runtime?.approval_policy);
 
   const replaceLastAssistant = (content: string) => {
     setMessages((current) => replaceAssistantMessage(current, content));
@@ -1008,7 +1050,7 @@ function SessionControlPanel({
         <header>
           <div>
             <span className="card-kicker">SESSION CONTROL</span>
-            <h2>{session.payload.project.display_name || "未命名项目"}</h2>
+            <h2 title={title}>{title}</h2>
           </div>
           <button
             className="icon-button"
@@ -1028,86 +1070,141 @@ function SessionControlPanel({
             <strong>
               {session.agent_type === "claude_code" ? "Claude Code" : "Codex"}
             </strong>
+            <span>{session.payload.project.display_name || "未分类项目"}</span>
             <em className={`status-chip ${status.className}`}>
               <i /> {session.archived ? "已归档" : status.label}
             </em>
           </div>
         </div>
 
-        <dl className="session-metadata">
-          <div>
-            <dt>会话 ID</dt>
-            <dd title={session.agent_session_id}>{session.agent_session_id}</dd>
-          </div>
-          <div>
-            <dt>最近活动</dt>
-            <dd>{relativeTime(activityTime(session))}</dd>
-          </div>
-          <div>
-            <dt>同步状态</dt>
-            <dd>
-              {session.sync_state === "local" ? "等待云端确认" : "已同步"}
-            </dd>
-          </div>
-          <div>
-            <dt>项目指纹</dt>
-            <dd title={session.payload.project.fingerprint}>
-              {session.payload.project.fingerprint.slice(0, 16)}
-            </dd>
-          </div>
-        </dl>
+        <nav className="session-panel-tabs" aria-label="会话面板视图">
+          <button
+            aria-pressed={panelView === "context"}
+            onClick={() => setPanelView("context")}
+          >
+            运行上下文
+          </button>
+          <button
+            aria-pressed={panelView === "conversation"}
+            onClick={() => setPanelView("conversation")}
+          >
+            会话对话
+          </button>
+        </nav>
 
-        <section className="conversation-pane" aria-live="polite">
-          {messages.length === 0 ? (
-            <div className="conversation-empty">
-              <MessageSquare />
-              <strong>从这里继续会话</strong>
-              <p>
-                消息直接交给本机 CLI；内容不进入 AgentPulse 云端或本地索引。
-              </p>
-            </div>
-          ) : (
-            messages.map((message, index) =>
-              message.content === "" ? null : (
-                <div
-                  className={`turn-message ${message.role}`}
-                  key={`${message.role}-${index}`}
-                >
-                  <span>{message.role === "user" ? "你" : "Agent"}</span>
-                  <p>{message.content}</p>
-                </div>
-              ),
-            )
-          )}
-          {busy && agentActivity !== undefined && (
-            <div className="agent-thinking">
-              <RefreshCw className="spin" /> {agentActivity}
-            </div>
-          )}
-          <div ref={conversationEnd} />
-        </section>
+        {panelView === "context" ? (
+          <section className="runtime-context-view">
+            <dl className="session-metadata">
+              <div>
+                <dt>分类目录</dt>
+                <dd>{session.payload.project.display_name || "未分类项目"}</dd>
+              </div>
+              <div>
+                <dt>会话 ID</dt>
+                <dd title={session.agent_session_id}>
+                  {session.agent_session_id}
+                </dd>
+              </div>
+              <div>
+                <dt>模型</dt>
+                <dd title={runtime?.model}>{runtime?.model ?? "未提供"}</dd>
+              </div>
+              <div>
+                <dt>推理强度</dt>
+                <dd>{runtime?.reasoning_effort ?? "未提供"}</dd>
+              </div>
+              <div>
+                <dt>
+                  {session.agent_type === "claude_code"
+                    ? "权限模式"
+                    : "审批策略"}
+                </dt>
+                <dd>{permission ?? "未提供"}</dd>
+              </div>
+              <div>
+                <dt>沙箱模式</dt>
+                <dd>{runtime?.sandbox_mode ?? "未提供"}</dd>
+              </div>
+              <div>
+                <dt>上下文窗口</dt>
+                <dd>{formatContextUsage(runtime)}</dd>
+              </div>
+              <div>
+                <dt>会话累计 Token</dt>
+                <dd>{formatTokenCount(runtime?.session_total_tokens)}</dd>
+              </div>
+              <div>
+                <dt>最近活动</dt>
+                <dd>{relativeTime(activityTime(session))}</dd>
+              </div>
+              <div>
+                <dt>同步状态</dt>
+                <dd>
+                  {session.sync_state === "local" ? "等待云端确认" : "已同步"}
+                </dd>
+              </div>
+            </dl>
+            <p className="runtime-privacy-note">
+              <ShieldCheck /> 运行上下文来自本机元数据，不同步会话标题或配置。
+            </p>
+          </section>
+        ) : (
+          <section className="conversation-pane" aria-live="polite">
+            {messages.length === 0 ? (
+              <div className="conversation-empty">
+                <MessageSquare />
+                <strong>从这里继续会话</strong>
+                <p>
+                  消息直接交给本机 CLI；内容不进入 AgentPulse 云端或本地索引。
+                </p>
+              </div>
+            ) : (
+              messages.map((message, index) =>
+                message.content === "" ? null : (
+                  <div
+                    className={`turn-message ${message.role}`}
+                    key={`${message.role}-${index}`}
+                  >
+                    <span>{message.role === "user" ? "你" : "Agent"}</span>
+                    <p>{message.content}</p>
+                  </div>
+                ),
+              )
+            )}
+            {busy && agentActivity !== undefined && (
+              <div className="agent-thinking">
+                <RefreshCw className="spin" /> {agentActivity}
+              </div>
+            )}
+            <div ref={conversationEnd} />
+          </section>
+        )}
 
         {error !== undefined && <p className="panel-error">{error}</p>}
-        <form className="session-composer" onSubmit={sendMessage}>
-          <textarea
-            aria-label="发送给 Agent"
-            maxLength={16_000}
-            placeholder={
-              session.archived ? "恢复会话后再发送" : "继续这个会话…"
-            }
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            disabled={busy || session.archived === true}
-          />
-          <button
-            className="composer-send"
-            type="submit"
-            aria-label="发送"
-            disabled={busy || session.archived === true || prompt.trim() === ""}
-          >
-            <Send />
-          </button>
-        </form>
+        {panelView === "conversation" && (
+          <form className="session-composer" onSubmit={sendMessage}>
+            <textarea
+              aria-label="发送给 Agent"
+              maxLength={16_000}
+              placeholder={
+                session.archived ? "恢复会话后再发送" : "继续这个会话…"
+              }
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              disabled={busy || session.archived === true}
+            />
+            <button
+              className="composer-send"
+              type="submit"
+              aria-label="发送"
+              disabled={
+                busy || session.archived === true || prompt.trim() === ""
+              }
+            >
+              <Send />
+            </button>
+          </form>
+        )}
         <footer>
           <span>
             <ShieldCheck /> 本机直连 · Prompt 不上传
@@ -1364,6 +1461,25 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }
 
+function formatTokenCount(tokens: number | undefined): string {
+  if (tokens === undefined) return "未提供";
+  if (tokens < 1_000) return `${tokens} tokens`;
+  if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(1)}K tokens`;
+  return `${(tokens / 1_000_000).toFixed(2)}M tokens`;
+}
+
+function formatContextUsage(runtime: Session["payload"]["runtime"]): string {
+  const used = runtime?.context_used_tokens;
+  const window = runtime?.context_window_tokens;
+  if (used !== undefined && window !== undefined && window > 0) {
+    const percentage = Math.min(100, Math.round((used / window) * 100));
+    return `${formatTokenCount(used)} / ${formatTokenCount(window)} · ${percentage}%`;
+  }
+  if (window !== undefined) return `${formatTokenCount(window)} 上限`;
+  if (used !== undefined) return `${formatTokenCount(used)} 已用 · 上限未提供`;
+  return "未提供";
+}
+
 function planLabel(plan: string): string {
   if (plan === "pro") return "Pro";
   if (plan === "team") return "Team";
@@ -1459,6 +1575,22 @@ function demoSession(
       project: { display_name: project, fingerprint: "demo" },
       state: { activity_status: activity, presence },
       last_activity_at: observedAt,
+      runtime: {
+        agent_type: agent,
+        agent_session_id: `${agent}-${project}`,
+        title:
+          agent === "claude_code"
+            ? `${project}实施计划`
+            : `${project}接口与测试`,
+        model: agent === "claude_code" ? "claude-opus-4-7" : "gpt-5.5-codex",
+        reasoning_effort: agent === "claude_code" ? "high" : "medium",
+        permission_mode: agent === "claude_code" ? "acceptEdits" : undefined,
+        approval_policy: agent === "codex" ? "on-request" : undefined,
+        sandbox_mode: agent === "codex" ? "workspace-write" : undefined,
+        context_window_tokens: agent === "claude_code" ? 200_000 : 258_400,
+        context_used_tokens: agent === "claude_code" ? 64_800 : 92_300,
+        session_total_tokens: agent === "claude_code" ? 91_200 : 184_600,
+      },
     },
   };
 }

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     env, fs,
-    io::{BufRead, BufReader, BufWriter, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -14,7 +14,7 @@ use std::{
 
 use chrono::DateTime;
 use rusqlite::{Connection, OpenFlags};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -24,6 +24,10 @@ const CHILD_WAIT_INTERVAL: Duration = Duration::from_millis(10);
 const CLAUDE_RECENT_SESSION_LIMIT: usize = 100;
 const CLAUDE_ALL_SESSION_LIMIT: usize = 1_000;
 const MAX_AGENT_TURN_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+const LOCAL_CONTEXT_HEAD_BYTES: u64 = 512 * 1024;
+const LOCAL_CONTEXT_TAIL_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_SESSION_TITLE_CHARS: usize = 160;
+const MAX_CONFIG_VALUE_CHARS: usize = 96;
 
 #[derive(Debug, Error)]
 pub enum CollectorError {
@@ -111,6 +115,48 @@ pub enum AgentTurnUpdate {
     AssistantDelta(String),
     AssistantMessage(String),
     Activity(&'static str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LocalSessionContext {
+    pub agent_type: crate::domain::AgentType,
+    pub agent_session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_used_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_total_tokens: Option<u64>,
+}
+
+impl LocalSessionContext {
+    fn new(agent_type: crate::domain::AgentType, agent_session_id: String) -> Self {
+        Self {
+            agent_type,
+            agent_session_id,
+            title: None,
+            model: None,
+            reasoning_effort: None,
+            permission_mode: None,
+            approval_policy: None,
+            sandbox_mode: None,
+            context_window_tokens: None,
+            context_used_tokens: None,
+            session_total_tokens: None,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -206,6 +252,224 @@ pub fn collect_claude_transcripts_from(
             .collect::<Vec<_>>(),
     )
     .map_err(|source| CollectorError::InvalidJson { program, source })
+}
+
+/// Reads only explicit, bounded session metadata for the desktop detail view.
+/// Titles come only from provider-owned title events, are never inferred from
+/// user messages, and are intentionally kept separate from SessionObservation
+/// so they cannot enter the sync outbox.
+pub fn collect_claude_session_contexts(
+    limit: usize,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let config_dir = discover_claude_config_dir()?;
+    collect_claude_session_contexts_from(&config_dir, limit)
+}
+
+pub fn collect_claude_session_contexts_from(
+    config_dir: &Path,
+    limit: usize,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let projects_dir = config_dir.join("projects");
+    if !projects_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let program = "Claude transcript context".to_owned();
+    let mut candidates = Vec::new();
+    for project in fs::read_dir(&projects_dir).map_err(|source| CollectorError::Io {
+        program: program.clone(),
+        source,
+    })? {
+        let Ok(project) = project else { continue };
+        if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(project.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+                || !file.file_type().is_ok_and(|kind| kind.is_file())
+            {
+                continue;
+            }
+            let modified = file
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            candidates.push((modified, path));
+        }
+    }
+    candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    candidates.truncate(limit);
+
+    let mut contexts = Vec::with_capacity(candidates.len());
+    for (_, path) in candidates {
+        if let Some(context) = read_claude_session_context(&path, &program)? {
+            contexts.push(context);
+        }
+    }
+    Ok(contexts)
+}
+
+fn read_claude_session_context(
+    path: &Path,
+    program: &str,
+) -> Result<Option<LocalSessionContext>, CollectorError> {
+    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let length = file
+        .metadata()
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })?
+        .len();
+    let fallback_id = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS));
+    let mut context = LocalSessionContext::new(
+        crate::domain::AgentType::ClaudeCode,
+        fallback_id.unwrap_or_default(),
+    );
+    let mut reader = BufReader::new(file);
+    scan_claude_context_region(
+        &mut reader,
+        LOCAL_CONTEXT_HEAD_BYTES.min(length),
+        &mut context,
+        program,
+    )?;
+    if length > LOCAL_CONTEXT_HEAD_BYTES {
+        let tail_start = length.saturating_sub(LOCAL_CONTEXT_TAIL_BYTES);
+        reader
+            .seek(SeekFrom::Start(tail_start))
+            .map_err(|source| CollectorError::Io {
+                program: program.to_owned(),
+                source,
+            })?;
+        scan_claude_context_region(
+            &mut reader,
+            length.saturating_sub(tail_start),
+            &mut context,
+            program,
+        )?;
+    }
+    if context.agent_session_id.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(context))
+    }
+}
+
+fn scan_claude_context_region(
+    reader: &mut impl BufRead,
+    byte_limit: u64,
+    context: &mut LocalSessionContext,
+    program: &str,
+) -> Result<(), CollectorError> {
+    let mut consumed = 0_u64;
+    while consumed < byte_limit {
+        let line = match read_bounded_line(reader) {
+            BoundedLine::Line(line) => line,
+            BoundedLine::Eof => break,
+            BoundedLine::TooLarge => continue,
+            BoundedLine::Io(source) => {
+                return Err(CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                });
+            }
+        };
+        consumed = consumed.saturating_add(line.len() as u64);
+        apply_claude_context_line(&line, context);
+    }
+    Ok(())
+}
+
+fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return;
+    };
+    if context.agent_session_id.is_empty()
+        && let Some(session_id) = value
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
+    {
+        context.agent_session_id = session_id;
+    }
+    match value.get("type").and_then(Value::as_str) {
+        Some("custom-title") => {
+            context.title = ["customTitle", "title", "name"]
+                .into_iter()
+                .find_map(|field| value.get(field).and_then(Value::as_str))
+                .and_then(|value| metadata_label(value, MAX_SESSION_TITLE_CHARS));
+        }
+        Some("ai-title") if context.title.is_none() => {
+            context.title = value
+                .get("aiTitle")
+                .and_then(Value::as_str)
+                .and_then(|value| metadata_label(value, MAX_SESSION_TITLE_CHARS));
+        }
+        Some("permission-mode" | "mode") => {
+            context.permission_mode = ["mode", "permissionMode"]
+                .into_iter()
+                .find_map(|field| value.get(field).and_then(Value::as_str))
+                .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS));
+        }
+        Some("assistant") => {
+            context.model = value
+                .pointer("/message/model")
+                .or_else(|| value.get("model"))
+                .and_then(Value::as_str)
+                .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
+                .or_else(|| context.model.clone());
+            context.reasoning_effort = value
+                .pointer("/message/effort")
+                .or_else(|| value.get("effort"))
+                .and_then(Value::as_str)
+                .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
+                .or_else(|| context.reasoning_effort.clone());
+            if let Some(usage) = value.pointer("/message/usage") {
+                let input = usage_u64(usage, "input_tokens")
+                    .saturating_add(usage_u64(usage, "cache_creation_input_tokens"))
+                    .saturating_add(usage_u64(usage, "cache_read_input_tokens"));
+                if input > 0 {
+                    context.context_used_tokens = Some(input);
+                }
+            }
+        }
+        _ => {}
+    }
+    context.context_window_tokens = [
+        "/context_window/context_window_size",
+        "/contextWindow/contextWindowSize",
+        "/message/usage/context_window",
+    ]
+    .into_iter()
+    .find_map(|path| value.pointer(path).and_then(Value::as_u64))
+    .or(context.context_window_tokens);
+}
+
+fn usage_u64(value: &Value, field: &str) -> u64 {
+    value.get(field).and_then(Value::as_u64).unwrap_or_default()
+}
+
+fn metadata_label(value: &str, limit: usize) -> Option<String> {
+    let normalized = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(limit)
+        .collect::<String>();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn discover_claude_config_dir() -> Result<PathBuf, CollectorError> {
@@ -391,6 +655,261 @@ pub fn collect_codex_local_threads_from(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|source| CollectorError::Database { program, source })?;
     Ok(json!({ "data": rows, "nextCursor": null }))
+}
+
+/// Reads Codex's metadata-only SQLite columns and a bounded tail of each
+/// rollout for configuration/token events. Message and command payloads are
+/// ignored, and the result is not part of the synchronized observation model.
+pub fn collect_codex_session_contexts(
+    limit: u32,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let Some(database) = discover_codex_state_database()? else {
+        return Ok(Vec::new());
+    };
+    collect_codex_session_contexts_from(&database, limit)
+}
+
+pub fn collect_codex_session_contexts_from(
+    database: &Path,
+    limit: u32,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let program = "Codex local context".to_owned();
+    let connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|source| CollectorError::Database {
+        program: program.clone(),
+        source,
+    })?;
+    let columns = connection
+        .prepare("PRAGMA table_info(threads)")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<HashSet<_>, _>>()
+        })
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
+    if !columns.contains("id") {
+        return Ok(Vec::new());
+    }
+    let title = optional_column(&columns, &["title", "name"]);
+    let model = optional_column(&columns, &["model"]);
+    let effort = optional_column(&columns, &["reasoning_effort"]);
+    let approval = optional_column(&columns, &["approval_mode", "approval_policy"]);
+    let sandbox = optional_column(&columns, &["sandbox_policy", "sandbox_mode"]);
+    let tokens = optional_column(&columns, &["tokens_used"]);
+    let rollout = optional_column(&columns, &["rollout_path"]);
+    let archived_filter = if columns.contains("archived") {
+        " WHERE archived = 0"
+    } else {
+        ""
+    };
+    let order_by = ["recency_at_ms", "recency_at", "updated_at_ms", "updated_at"]
+        .into_iter()
+        .find(|column| columns.contains(*column))
+        .unwrap_or("id");
+    let sql = format!(
+        "SELECT id, {title}, {model}, {effort}, {approval}, {sandbox}, {tokens}, {rollout} FROM threads{archived_filter} ORDER BY {order_by} DESC LIMIT ?1"
+    );
+    let root = database.parent().unwrap_or_else(|| Path::new("."));
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
+    let rows = statement
+        .query_map([i64::from(limit)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1).unwrap_or_default(),
+                row.get::<_, Option<String>>(2).unwrap_or_default(),
+                row.get::<_, Option<String>>(3).unwrap_or_default(),
+                row.get::<_, Option<String>>(4).unwrap_or_default(),
+                row.get::<_, Option<String>>(5).unwrap_or_default(),
+                row.get::<_, Option<i64>>(6).unwrap_or_default(),
+                row.get::<_, Option<String>>(7).unwrap_or_default(),
+            ))
+        })
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
+
+    let mut contexts = Vec::with_capacity(rows.len());
+    for (session_id, title, model, effort, approval, sandbox, tokens, rollout_path) in rows {
+        let Some(session_id) = metadata_label(&session_id, MAX_CONFIG_VALUE_CHARS) else {
+            continue;
+        };
+        let mut context = LocalSessionContext::new(crate::domain::AgentType::Codex, session_id);
+        context.title = title.and_then(|value| metadata_label(&value, MAX_SESSION_TITLE_CHARS));
+        context.model = model.and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+        context.reasoning_effort =
+            effort.and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+        context.approval_policy =
+            approval.and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
+        context.sandbox_mode = sandbox.and_then(|value| codex_sandbox_label(&value));
+        context.session_total_tokens = tokens
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0);
+        if let Some(rollout_path) = rollout_path {
+            apply_codex_rollout_context(root, Path::new(&rollout_path), &mut context, &program)?;
+        }
+        contexts.push(context);
+    }
+    Ok(contexts)
+}
+
+fn codex_sandbox_label(value: &str) -> Option<String> {
+    serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|value| {
+            ["type", "mode"]
+                .into_iter()
+                .find_map(|field| value.get(field).and_then(Value::as_str))
+                .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
+        })
+        .or_else(|| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
+}
+
+fn optional_column<'a>(columns: &HashSet<String>, candidates: &'a [&str]) -> &'a str {
+    candidates
+        .iter()
+        .copied()
+        .find(|column| columns.contains(*column))
+        .unwrap_or("NULL")
+}
+
+fn apply_codex_rollout_context(
+    root: &Path,
+    rollout_path: &Path,
+    context: &mut LocalSessionContext,
+    program: &str,
+) -> Result<(), CollectorError> {
+    let root = fs::canonicalize(root).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let candidate = if rollout_path.is_absolute() {
+        rollout_path.to_owned()
+    } else {
+        root.join(rollout_path)
+    };
+    let Ok(candidate) = fs::canonicalize(candidate) else {
+        return Ok(());
+    };
+    if !candidate.starts_with(&root) || !candidate.is_file() {
+        return Ok(());
+    }
+    let file = fs::File::open(&candidate).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let length = file
+        .metadata()
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })?
+        .len();
+    let start = length.saturating_sub(LOCAL_CONTEXT_TAIL_BYTES);
+    let mut reader = BufReader::new(file);
+    reader
+        .seek(SeekFrom::Start(start))
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })?;
+    let mut consumed = 0_u64;
+    while consumed < length.saturating_sub(start) {
+        let line = match read_bounded_line(&mut reader) {
+            BoundedLine::Line(line) => line,
+            BoundedLine::Eof => break,
+            BoundedLine::TooLarge => continue,
+            BoundedLine::Io(source) => {
+                return Err(CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                });
+            }
+        };
+        consumed = consumed.saturating_add(line.len() as u64);
+        apply_codex_context_line(&line, context);
+    }
+    Ok(())
+}
+
+fn apply_codex_context_line(line: &str, context: &mut LocalSessionContext) {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return;
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("turn_context") => {
+            let payload = &value["payload"];
+            context.model = config_value(payload, &["model"]).or_else(|| context.model.clone());
+            context.reasoning_effort = config_value(payload, &["effort", "reasoning_effort"])
+                .or_else(|| context.reasoning_effort.clone());
+            context.approval_policy = config_value(payload, &["approval_policy", "approvalPolicy"])
+                .or_else(|| context.approval_policy.clone());
+            context.permission_mode =
+                config_value(payload, &["permissions"]).or_else(|| context.permission_mode.clone());
+            context.sandbox_mode = ["sandbox_policy", "sandboxPolicy", "sandbox"]
+                .into_iter()
+                .find_map(|field| payload.get(field).and_then(config_object_label))
+                .or_else(|| context.sandbox_mode.clone());
+        }
+        Some("event_msg")
+            if value.pointer("/payload/type").and_then(Value::as_str) == Some("token_count") =>
+        {
+            let info = &value["payload"]["info"];
+            context.context_window_tokens = info
+                .get("model_context_window")
+                .and_then(Value::as_u64)
+                .or(context.context_window_tokens);
+            if let Some(last) = info.get("last_token_usage") {
+                let used = usage_u64(last, "total_tokens").max(usage_u64(last, "input_tokens"));
+                if used > 0 {
+                    context.context_used_tokens = Some(used);
+                }
+            }
+            context.session_total_tokens = info
+                .pointer("/total_token_usage/total_tokens")
+                .and_then(Value::as_u64)
+                .or(context.session_total_tokens);
+        }
+        Some("event_msg")
+            if value.pointer("/payload/type").and_then(Value::as_str) == Some("task_started") =>
+        {
+            context.context_window_tokens = value
+                .pointer("/payload/model_context_window")
+                .and_then(Value::as_u64)
+                .or(context.context_window_tokens);
+        }
+        _ => {}
+    }
+}
+
+fn config_value(value: &Value, fields: &[&str]) -> Option<String> {
+    fields
+        .iter()
+        .find_map(|field| value.get(*field).and_then(Value::as_str))
+        .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
+}
+
+fn config_object_label(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .or_else(|| value.get("type").and_then(Value::as_str))
+        .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
 }
 
 fn seconds_expression(columns: &HashSet<String>, millis: &str, seconds: &str) -> String {
@@ -1657,6 +2176,67 @@ mod tests {
     }
 
     #[test]
+    fn claude_context_collector_keeps_explicit_runtime_metadata_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("projects").join("encoded-project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("session-ctx.jsonl"),
+            concat!(
+                "{\"type\":\"user\",\"sessionId\":\"session-ctx\",",
+                "\"message\":{\"content\":\"TOP_SECRET_PROMPT\"}}\n",
+                "{\"type\":\"custom-title\",\"customTitle\":\" Auth   refactor \"}\n",
+                "{\"type\":\"permission-mode\",\"mode\":\"acceptEdits\"}\n",
+                "{\"type\":\"assistant\",\"message\":{",
+                "\"model\":\"claude-opus-4-7\",",
+                "\"content\":[{\"type\":\"text\",\"text\":\"TOP_SECRET_REPLY\"}],",
+                "\"usage\":{\"input_tokens\":100,",
+                "\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30}},",
+                "\"context_window\":{\"context_window_size\":200000}}\n"
+            ),
+        )
+        .unwrap();
+
+        let contexts = collect_claude_session_contexts_from(directory.path(), 10).unwrap();
+        let context = &contexts[0];
+        let serialized = serde_json::to_string(context).unwrap();
+
+        assert_eq!(context.agent_session_id, "session-ctx");
+        assert_eq!(context.title.as_deref(), Some("Auth refactor"));
+        assert_eq!(context.model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(context.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(context.context_used_tokens, Some(150));
+        assert_eq!(context.context_window_tokens, Some(200_000));
+        assert!(!serialized.contains("TOP_SECRET"));
+    }
+
+    #[test]
+    fn claude_context_supports_current_title_and_mode_events() {
+        let mut context = LocalSessionContext::new(
+            crate::domain::AgentType::ClaudeCode,
+            "session-current".to_owned(),
+        );
+
+        apply_claude_context_line(
+            r#"{"type":"ai-title","aiTitle":" Provider generated title "}"#,
+            &mut context,
+        );
+        apply_claude_context_line(r#"{"type":"mode","mode":"plan"}"#, &mut context);
+        assert_eq!(context.title.as_deref(), Some("Provider generated title"));
+        assert_eq!(context.permission_mode.as_deref(), Some("plan"));
+
+        apply_claude_context_line(
+            r#"{"type":"custom-title","customTitle":" User title "}"#,
+            &mut context,
+        );
+        apply_claude_context_line(
+            r#"{"type":"ai-title","aiTitle":" Later generated title "}"#,
+            &mut context,
+        );
+        assert_eq!(context.title.as_deref(), Some("User title"));
+    }
+
+    #[test]
     fn codex_local_store_collector_selects_metadata_only() {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("state_5.sqlite");
@@ -1692,6 +2272,104 @@ mod tests {
         assert_eq!(thread["status"]["type"], "persisted");
         assert!(!serialized.contains("TOP_SECRET_TITLE"));
         assert!(!serialized.contains("TOP_SECRET_PREVIEW"));
+    }
+
+    #[test]
+    fn codex_context_collector_reads_configuration_without_message_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let rollout = directory.path().join("rollout-thread-ctx.jsonl");
+        fs::write(
+            &rollout,
+            concat!(
+                "{\"type\":\"response_item\",\"payload\":{",
+                "\"content\":\"TOP_SECRET_TRANSCRIPT\"}}\n",
+                "{\"type\":\"turn_context\",\"payload\":{",
+                "\"model\":\"gpt-5.5-codex\",\"effort\":\"high\",",
+                "\"approval_policy\":\"on-request\",",
+                "\"sandbox_policy\":{\"type\":\"workspace-write\"}}}\n",
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",",
+                "\"info\":{\"model_context_window\":258400,",
+                "\"last_token_usage\":{\"input_tokens\":42000,\"total_tokens\":42100},",
+                "\"total_token_usage\":{\"total_tokens\":88000}}}}\n"
+            ),
+        )
+        .unwrap();
+        let database = directory.path().join("state_5.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE threads (
+                    id TEXT PRIMARY KEY, title TEXT, model TEXT,
+                    reasoning_effort TEXT, approval_mode TEXT,
+                    sandbox_policy TEXT, tokens_used INTEGER,
+                    rollout_path TEXT, updated_at INTEGER, archived INTEGER
+                );
+                INSERT INTO threads VALUES (
+                    'thread-ctx', ' Review checkout ', 'gpt-old', 'medium',
+                    'unless-trusted', '{{\"type\":\"read-only\"}}',
+                    70000, '{}', 200, 0
+                );",
+                rollout.display().to_string().replace('\\', "\\\\")
+            ))
+            .unwrap();
+        drop(connection);
+
+        let contexts = collect_codex_session_contexts_from(&database, 10).unwrap();
+        let context = &contexts[0];
+        let serialized = serde_json::to_string(context).unwrap();
+
+        assert_eq!(context.title.as_deref(), Some("Review checkout"));
+        assert_eq!(context.model.as_deref(), Some("gpt-5.5-codex"));
+        assert_eq!(context.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(context.approval_policy.as_deref(), Some("on-request"));
+        assert_eq!(context.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(context.context_window_tokens, Some(258_400));
+        assert_eq!(context.context_used_tokens, Some(42_100));
+        assert_eq!(context.session_total_tokens, Some(88_000));
+        assert!(!serialized.contains("TOP_SECRET"));
+    }
+
+    #[test]
+    fn codex_context_collector_rejects_rollouts_outside_state_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let state_root = directory.path().join("codex-home");
+        fs::create_dir(&state_root).unwrap();
+        let escaped_rollout = directory.path().join("outside-rollout.jsonl");
+        fs::write(
+            &escaped_rollout,
+            concat!(
+                "{\"type\":\"turn_context\",\"payload\":{",
+                "\"model\":\"TOP_SECRET_MODEL\",",
+                "\"approval_policy\":\"bypassPermissions\"}}\n"
+            ),
+        )
+        .unwrap();
+        let database = state_root.join("state_5.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE threads (
+                    id TEXT PRIMARY KEY, title TEXT, model TEXT,
+                    approval_mode TEXT, sandbox_policy TEXT,
+                    rollout_path TEXT, updated_at INTEGER
+                );
+                INSERT INTO threads VALUES (
+                    'thread-contained', 'Safe title', 'safe-model',
+                    'on-request', '{{\"type\":\"workspace-write\"}}', '{}', 200
+                );",
+                escaped_rollout.display().to_string().replace('\\', "\\\\")
+            ))
+            .unwrap();
+        drop(connection);
+
+        let contexts = collect_codex_session_contexts_from(&database, 10).unwrap();
+        let context = &contexts[0];
+        let serialized = serde_json::to_string(context).unwrap();
+
+        assert_eq!(context.model.as_deref(), Some("safe-model"));
+        assert_eq!(context.approval_policy.as_deref(), Some("on-request"));
+        assert_eq!(context.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert!(!serialized.contains("TOP_SECRET"));
     }
 
     #[test]

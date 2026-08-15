@@ -155,6 +155,14 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
 - 启动时先执行一次本地元数据扫描并写入 Outbox；桌面读模型将本地快照与云端已确认
   Session 按稳定键合并，因此断网或积压不会被误报为“本机未检测到”。扫描健康、待上传数和
   云端确认是三个独立状态；memory 只统计文件/索引数量与字节，不读取正文。
+- 桌面详情另有一层不进入 `SessionObservation` 的本机运行上下文：Claude 只从有界 JSONL
+  头部/尾部提取供应商标题事件（`custom-title` 优先于 `ai-title`）、`mode`/`permission-mode`、
+  助手响应的模型和 Token 用量；Codex 只读状态库中的
+  `title/model/reasoning_effort/approval_mode/sandbox_policy/tokens_used/rollout_path` 白名单列，并在确认
+  rollout 路径仍位于 `CODEX_HOME` 后，从最多 2 MiB 尾部提取 `turn_context` 与
+  `token_count`。消息、Prompt、命令和工具内容不进入结果，标题也不从首条 Prompt 推断。
+  运行上下文缓存 15 秒，只附加到当前设备的桌面快照，不进入 Outbox、Gateway 或远端设备。
+  会话列表按脱敏后的项目显示名分组，并以供应商保存的标题为主标题；缺失字段明确显示“未提供”。
 - 桌面 Host 使用 OS Keyring 中的 AgentPulse Cookie 主动连接 Gateway `GET /v1/stream`
   SSE；只把“已连接/数据变化”信号通过 Tauri 事件交给 WebView，Cookie 与 SSE payload
   不进入前端。流断开后按 2→15 秒退避重连，单行限制 64 KiB；仪表盘同时保留用户可配置的

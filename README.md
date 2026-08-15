@@ -81,6 +81,8 @@ CMD 或手工配对码。桌面会话详情可经本机 CLI 继续 Claude Code/C
 Host 复用 Gateway SSE 实时变化流，2–60 秒可配置周期刷新作为断流兜底。显式发送的 Prompt
 与回复只在本机进程和当前界面内流转，不进入 Outbox 或 Gateway；AgentPulse 登录 Cookie
 保存在 OS Keyring，Claude/Codex 登录凭据、历史对话正文和工具载荷不会上传。
+会话索引按脱敏项目目录分组，并在本机显示显式会话名、模型、推理强度、权限/审批与沙箱策略、
+上下文窗口和 Token 用量；这层运行上下文不进入同步协议，也不会从首条 Prompt 猜测标题。
 M4 安全与稳定性阶段已完成自动化基线；PostgreSQL 18.4 的 12 设备/3000 Session
 并发工作负载、外部不可达后的 Outbox 保留/恢复，以及 Codex CLI 0.144.2 当前版本
 只读采集也已现场通过；本机真实 TLS 握手和私有 CA 恢复已进入回归套件。真实 Agent
