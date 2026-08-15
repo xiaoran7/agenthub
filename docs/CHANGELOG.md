@@ -7,6 +7,11 @@
 
 ### Added
 
+- 桌面会话详情新增只读状态时间线：通过 Tauri Host 携带 OS Keyring Cookie 请求当前账号的
+  `/v1/sessions/events`，按设备、供应商和 Session ID 隔离查询，展示序列、观察时间、接收时间、
+  项目名与状态变化。Host 会过滤原始状态详情等非展示字段；本地未同步会话明确显示暂无云端记录，
+  不把空结果误报为采集失败。
+
 - 桌面会话索引新增供应商显式名称与项目目录分组，详情面板展示模型、推理强度、Claude 权限
   模式、Codex 审批/沙箱策略、上下文窗口、当前用量和累计 Token。Claude 仅扫描有界 JSONL
   头尾的 `custom-title`/`ai-title`/`mode`/助手元数据；Codex 只读状态库白名单列（包括审批与

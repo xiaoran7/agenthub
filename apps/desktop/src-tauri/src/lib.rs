@@ -139,6 +139,13 @@ struct SessionTurnRef {
     agent_session_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct SessionTimelineInput {
+    device_id: String,
+    agent_type: AgentType,
+    agent_session_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SessionTurnEvent {
@@ -264,6 +271,18 @@ async fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, Stri
     let cookie = load_cookie(&config.server_url).map_err(|error| error.to_string())?;
     let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
     dashboard_snapshot(&config.server_url, &cookie, &identity, &state)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn load_session_timeline(
+    input: SessionTimelineInput,
+    state: State<'_, DesktopState>,
+) -> Result<Vec<Value>, String> {
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || load_session_timeline_inner(input, &data_dir))
+        .await
+        .map_err(|_| DesktopError::Unreachable.to_string())?
         .map_err(|error| error.to_string())
 }
 
@@ -685,6 +704,47 @@ fn set_session_archived_inner(
     Ok(json!({ "archived": input.archived }))
 }
 
+fn load_session_timeline_inner(
+    input: SessionTimelineInput,
+    data_dir: &Path,
+) -> Result<Vec<Value>, DesktopError> {
+    validate_identifier(&input.device_id)?;
+    validate_session_id(&input.agent_session_id)?;
+    let config = read_config(data_dir)?;
+    let cookie = load_cookie(&config.server_url)?;
+    let path = format!(
+        "/v1/sessions/events?device_id={}&agent_type={}&agent_session_id={}&limit=100",
+        input.device_id,
+        agent_type_name(input.agent_type),
+        input.agent_session_id
+    );
+    let response = request_json("GET", &config.server_url, &path, Some(&cookie), None)?;
+    let events = response["events"]
+        .as_array()
+        .ok_or(DesktopError::InvalidResponse)?;
+    Ok(events.iter().map(sanitize_timeline_event).collect())
+}
+
+fn sanitize_timeline_event(event: &Value) -> Value {
+    json!({
+        "event_id": event["event_id"],
+        "device_id": event["device_id"],
+        "agent_type": event["agent_type"],
+        "agent_session_id": event["agent_session_id"],
+        "sequence": event["sequence"],
+        "observed_at": event["observed_at"],
+        "received_at": event["received_at"],
+        "payload": {
+            "project": event["payload"]["project"],
+            "state": {
+                "presence": event["payload"]["state"]["presence"],
+                "activity_status": event["payload"]["state"]["activity_status"]
+            },
+            "last_activity_at": event["payload"]["last_activity_at"]
+        }
+    })
+}
+
 fn preferences_json(config: &DesktopConfig) -> Value {
     json!({
         "refresh_interval_seconds": config.refresh_interval_seconds,
@@ -699,6 +759,10 @@ fn valid_binary(value: &str) -> bool {
 }
 
 fn validate_session_id(value: &str) -> Result<(), DesktopError> {
+    validate_identifier(value)
+}
+
+fn validate_identifier(value: &str) -> Result<(), DesktopError> {
     if value.is_empty()
         || value.chars().count() > MAX_SESSION_ID_CHARS
         || !value
@@ -1520,6 +1584,7 @@ pub fn run() {
             set_session_archived,
             save_desktop_preferences,
             set_sync_paused,
+            load_session_timeline,
             logout
         ])
         .build(tauri::generate_context!())
@@ -1589,6 +1654,39 @@ mod tests {
         assert!(validate_session_id("019abc-session_1").is_ok());
         assert!(validate_session_id("../auth.json").is_err());
         assert!(validate_session_id("bad\nvalue").is_err());
+        assert!(validate_identifier("device-remote_1").is_ok());
+        assert!(validate_identifier("device/remote").is_err());
+    }
+
+    #[test]
+    fn timeline_sanitizer_keeps_status_metadata_only() {
+        let event = json!({
+            "event_id": "event-1",
+            "device_id": "device-1",
+            "agent_type": "codex",
+            "agent_session_id": "session-1",
+            "sequence": 7,
+            "observed_at": "2026-08-15T05:00:00Z",
+            "received_at": "2026-08-15T05:00:01Z",
+            "payload": {
+                "project": {"display_name": "demo", "fingerprint": "fp"},
+                "state": {
+                    "presence": "LIVE",
+                    "activity_status": "WAITING_INPUT",
+                    "raw_status": "secret raw status",
+                    "raw_status_detail": {"prompt": "do not expose"}
+                },
+                "last_activity_at": "2026-08-15T05:00:00Z",
+                "prompt": "never return this"
+            }
+        });
+        let sanitized = sanitize_timeline_event(&event);
+        assert_eq!(
+            sanitized["payload"]["state"]["activity_status"],
+            "WAITING_INPUT"
+        );
+        assert!(sanitized["payload"]["state"].get("raw_status").is_none());
+        assert!(sanitized["payload"].get("prompt").is_none());
     }
 
     #[test]

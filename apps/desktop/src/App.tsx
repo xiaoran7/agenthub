@@ -52,6 +52,7 @@ import type {
   DashboardRealtimeEvent,
   LocalSource,
   Session,
+  SessionTimelineEvent,
   SessionTurnEvent,
   SessionTurnResult,
   Snapshot,
@@ -890,9 +891,13 @@ function SessionControlPanel({
   const [agentActivity, setAgentActivity] = useState<string>();
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [panelView, setPanelView] = useState<"context" | "conversation">(
-    "context",
-  );
+  const [panelView, setPanelView] = useState<
+    "context" | "conversation" | "timeline"
+  >("context");
+  const [timeline, setTimeline] = useState<SessionTimelineEvent[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string>();
+  const [timelineReload, setTimelineReload] = useState(0);
   const pendingDelta = useRef("");
   const deltaFrame = useRef<number | undefined>(undefined);
   const conversationEnd = useRef<HTMLDivElement>(null);
@@ -906,6 +911,39 @@ function SessionControlPanel({
     session.agent_type === "claude_code"
       ? runtime?.permission_mode
       : (runtime?.permission_mode ?? runtime?.approval_policy);
+
+  useEffect(() => {
+    if (panelView !== "timeline") return;
+    let disposed = false;
+    setTimelineLoading(true);
+    setTimelineError(undefined);
+    setTimeline([]);
+    invoke<SessionTimelineEvent[]>("load_session_timeline", {
+      input: {
+        device_id: session.device_id,
+        agent_type: session.agent_type,
+        agent_session_id: session.agent_session_id,
+      },
+    })
+      .then((next) => {
+        if (!disposed) setTimeline(next);
+      })
+      .catch((nextError) => {
+        if (!disposed) setTimelineError(errorMessage(nextError));
+      })
+      .finally(() => {
+        if (!disposed) setTimelineLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    panelView,
+    session.agent_session_id,
+    session.agent_type,
+    session.device_id,
+    timelineReload,
+  ]);
 
   const replaceLastAssistant = (content: string) => {
     setMessages((current) => replaceAssistantMessage(current, content));
@@ -1090,6 +1128,12 @@ function SessionControlPanel({
           >
             会话对话
           </button>
+          <button
+            aria-pressed={panelView === "timeline"}
+            onClick={() => setPanelView("timeline")}
+          >
+            时间线
+          </button>
         </nav>
 
         {panelView === "context" ? (
@@ -1148,6 +1192,13 @@ function SessionControlPanel({
               <ShieldCheck /> 运行上下文来自本机元数据，不同步会话标题或配置。
             </p>
           </section>
+        ) : panelView === "timeline" ? (
+          <SessionTimelineView
+            events={timeline}
+            loading={timelineLoading}
+            error={timelineError}
+            onReload={() => setTimelineReload((value) => value + 1)}
+          />
         ) : (
           <section className="conversation-pane" aria-live="polite">
             {messages.length === 0 ? (
@@ -1455,10 +1506,117 @@ function sessionKey(session: Session): string {
   return `${session.device_id}:${session.agent_type}:${session.agent_session_id}`;
 }
 
+function SessionTimelineView({
+  events,
+  loading,
+  error,
+  onReload,
+}: {
+  events: SessionTimelineEvent[];
+  loading: boolean;
+  error?: string;
+  onReload: () => void;
+}) {
+  if (loading) {
+    return (
+      <section className="timeline-view timeline-state" aria-live="polite">
+        <RefreshCw className="spin" />
+        <strong>正在读取状态时间线</strong>
+        <p>只读取这一个会话的状态观察，不读取对话正文。</p>
+      </section>
+    );
+  }
+  if (error !== undefined) {
+    return (
+      <section className="timeline-view timeline-state" aria-live="polite">
+        <AlertTriangle />
+        <strong>时间线暂时不可用</strong>
+        <p>{error}</p>
+      </section>
+    );
+  }
+  if (events.length === 0) {
+    return (
+      <section className="timeline-view timeline-state">
+        <Activity />
+        <strong>还没有云端状态记录</strong>
+        <p>本地会话可能尚未完成一次同步，当前状态仍可在运行上下文中查看。</p>
+      </section>
+    );
+  }
+  return (
+    <section className="timeline-view" aria-label="会话状态时间线">
+      <header className="timeline-heading">
+        <div>
+          <span className="card-kicker">SESSION HISTORY</span>
+          <strong>{events.length} 条状态观察</strong>
+        </div>
+        <div className="timeline-heading-actions">
+          <span>最新在上</span>
+          <button
+            className="icon-button"
+            aria-label="刷新时间线"
+            title="刷新时间线"
+            disabled={loading}
+            onClick={onReload}
+          >
+            <RefreshCw />
+          </button>
+        </div>
+      </header>
+      <ol className="timeline-list">
+        {events.map((event) => {
+          const status = statusView(
+            event.payload.state.activity_status,
+            event.payload.state.presence,
+          );
+          return (
+            <li className="timeline-item" key={event.event_id}>
+              <span className={`timeline-marker ${status.className}`}>
+                <i />
+              </span>
+              <div className="timeline-event">
+                <header>
+                  <strong>{status.label}</strong>
+                  <span>序列 #{event.sequence}</span>
+                  <time title={event.observed_at}>
+                    {formatTimelineTimestamp(event.observed_at)}
+                  </time>
+                </header>
+                <p>
+                  {event.payload.project.display_name || "未分类项目"}
+                  <span> · </span>
+                  {event.payload.state.presence === "LIVE"
+                    ? "实时观察"
+                    : "历史观察"}
+                </p>
+                <small>接收于 {relativeTime(event.received_at)}</small>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`;
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
+}
+
+function formatTimelineTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(timestamp);
 }
 
 function formatTokenCount(tokens: number | undefined): string {

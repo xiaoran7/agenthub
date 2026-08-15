@@ -172,6 +172,9 @@ Runner 不监听公网端口，也不使用 app-server 的实验性 WebSocket tr
   `exec --json` JSONL；Tauri Channel 只转发助手可见文本和“调用工具/执行命令”等无参数活动
   标签，过滤 thinking、命令正文、工具参数和 stderr。子进程输出有 2 MiB 上限和 15 分钟硬
   超时，阻塞执行放入专用线程池，用户可从控制面板停止当前回合并回收整个子进程树。
+- 桌面 Host 还提供只读会话时间线命令：校验设备和 Session 标识后，使用 Keyring Cookie 请求
+  `/v1/sessions/events`，按当前账号由 Gateway 做权限隔离，并在返回 WebView 前过滤原始状态详情等
+  非展示字段。时间线不写入本地 Outbox，也不读取对话正文。
 - Claude 会话通过官方 `--resume` 非交互模式继续，Codex 通过 `exec resume` 继续。CLI 可执行
   文件位置和刷新周期只保存在桌面本地配置。控制面板只在当前打开期间保留本轮问答，用户可
   随时清空；关闭或重启应用即丢弃。

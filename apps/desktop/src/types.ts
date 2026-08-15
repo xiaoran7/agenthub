@@ -58,6 +58,21 @@ export interface Session {
   archived?: boolean;
 }
 
+export interface SessionTimelineEvent {
+  event_id: string;
+  device_id: string;
+  agent_type: "claude_code" | "codex";
+  agent_session_id: string;
+  sequence: number;
+  observed_at: string;
+  received_at: string;
+  payload: {
+    project: { display_name: string; fingerprint: string };
+    state: { activity_status: ActivityStatus; presence: string };
+    last_activity_at?: string;
+  };
+}
+
 export interface DesktopPreferences {
   refresh_interval_seconds: number;
   claude_binary: string;

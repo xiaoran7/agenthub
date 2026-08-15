@@ -1173,7 +1173,7 @@ input:focus-visible {
   border: 1px solid var(--line-soft);
   border-radius: 13px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 3px;
   background: #121210;
 }
@@ -1195,6 +1195,147 @@ input:focus-visible {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+.timeline-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 24px;
+}
+.timeline-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.timeline-heading > div {
+  display: grid;
+  gap: 5px;
+}
+.timeline-heading strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.timeline-heading > span {
+  color: var(--dim);
+  font-size: 10px;
+}
+.timeline-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.timeline-heading-actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.timeline-heading-actions .icon-button svg {
+  width: 13px;
+}
+.timeline-list {
+  position: relative;
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+}
+.timeline-list::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 6px;
+  width: 1px;
+  background: var(--line-soft);
+  content: "";
+}
+.timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 13px 1fr;
+  gap: 13px;
+  padding-bottom: 18px;
+}
+.timeline-marker {
+  z-index: 1;
+  width: 13px;
+  height: 13px;
+  margin-top: 3px;
+  border: 3px solid #181815;
+  border-radius: 50%;
+  background: var(--dim);
+  box-shadow: 0 0 0 1px var(--line-soft);
+}
+.timeline-marker.working {
+  background: var(--signal);
+}
+.timeline-marker.waiting {
+  background: #e8c36a;
+}
+.timeline-marker.failed {
+  background: #ffaaa4;
+}
+.timeline-event {
+  min-width: 0;
+  padding: 1px 0 0;
+}
+.timeline-event > header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.timeline-event > header strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.timeline-event > header span,
+.timeline-event > header time {
+  color: var(--dim);
+  font-size: 9px;
+}
+.timeline-event > header time {
+  margin-left: auto;
+  white-space: nowrap;
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+.timeline-event > p {
+  margin: 6px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.timeline-event > p span {
+  color: var(--dim);
+}
+.timeline-event > small {
+  display: block;
+  margin-top: 5px;
+  color: var(--dim);
+  font-size: 9px;
+}
+.timeline-state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 220px;
+  text-align: center;
+  color: var(--dim);
+}
+.timeline-state svg {
+  width: 25px;
+  margin-bottom: 12px;
+  color: var(--signal);
+}
+.timeline-state strong {
+  color: var(--text);
+  font-size: 14px;
+}
+.timeline-state p {
+  max-width: 310px;
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
 }
 .session-metadata {
   margin: 12px 24px 16px;
