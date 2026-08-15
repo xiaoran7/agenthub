@@ -5,8 +5,8 @@
 ## 2026-08-15 发布顺序与 Grok Build 采集边界
 
 - **先桌面，后网页/移动。** 新 Agent 来源和桌面控制台能力先在桌面端做完并推送到
-  Gitea 生产，确认采集与同步无问题后再改网页端和移动端界面。本次只为协议与类型
-  地图补上 `grok_build` 标签，避免契约编译失败；Web/Android 的筛选和任务入口保持
+  Gitea，生产确认没问题后再改网页端和移动端界面。本次只为协议与类型地图补上
+  `grok_build` 标签，避免契约编译失败；Web/Android 的筛选和任务入口保持
   Claude/Codex 两档。
 - **Grok 先做文件元数据，不做凭据管理。** `~/.grok/auth.json` 含 access token，
   默认不得读取。活动状态只来自 `active_sessions.json` 的 PID 存活和
@@ -15,6 +15,25 @@
   对话摘要，不能进入 Outbox 或桌面运行上下文。
 - **继续会话用 `--prompt-file`。** Grok headless 的 `-p` 必须带提示词参数，stdin
   不能替代；临时文件在子进程退出后删除，避免 Prompt 进入进程列表。
+
+### 2026-08-15 当前进度（Grok Build）
+
+已完成：
+
+- 桌面 Runner / Host 采集、展示、筛选、详情、记忆统计、本机继续会话与归档视图。
+- 本机 `collect-once grok` 实测 7 条：1 LIVE/WORKING、3 LIVE/IDLE、3 PERSISTED。
+- 质量门：`cargo test --workspace`、`clippy -D warnings`、`npm test`、`typecheck`、
+  `format:check`。
+- 本地提交并推送 Gitea：`ea7aba03ff259e7885490520cca1968e5639073c`
+  （`feat(desktop): collect Grok Build sessions after Claude and Codex`）。
+
+未做、待拍板：
+
+- 生产仍是 `/opt/1panel/apps/agent-pulse` 的 `4ff3082`；api `c0464b64210e`、
+  web `62a7638f1b5c` 健康。未重建容器，桌面同步的 `grok_build` 事件还不能进云端。
+- 发布选项已列出、尚未选择：1 发布 API+Web；2 只发布 API；3 暂不部署。
+- 生产通过后再适配网页端和移动端筛选/任务入口。
+- Grok Build 凭据管理（`auth.json` / `grok login`）明确不做。
 
 ## 2026-07-29 原生 Compose 动效取舍
 
