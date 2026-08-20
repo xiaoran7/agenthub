@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- 收敛文档入口，明确里程碑证据、当前源码和生产部署是三个不同状态；Grok Build 已进 Gitea 但不能据此声明生产已更新。
+
 ### Added
 
 - 桌面端在 Claude Code、Codex 之后新增 Grok Build 采集：扫描 `GROK_HOME`（默认
