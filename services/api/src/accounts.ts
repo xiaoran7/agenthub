@@ -21,7 +21,7 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const LOCAL_COOKIE_NAME = "agent_pulse_session";
 const SECURE_COOKIE_NAME = "__Host-agent_pulse_session";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
-const DUMMY_PASSWORD_HASH = [
+export const DUMMY_PASSWORD_HASH = [
   "scrypt",
   SCRYPT_N,
   SCRYPT_R,

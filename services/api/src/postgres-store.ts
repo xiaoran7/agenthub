@@ -17,6 +17,7 @@ import postgres from "postgres";
 
 import {
   AccountError,
+  DUMMY_PASSWORD_HASH,
   accountView,
   auditMetadata,
   entitlementsFor,
@@ -131,7 +132,14 @@ const MIGRATIONS = [
       import.meta.url,
     ),
   },
-] as const;
+  {
+    version: 15,
+    url: new URL(
+      "../migrations/0015_oauth_accounts.sql",
+      import.meta.url,
+    ),
+  },
+];
 
 interface DeviceRow {
   device_id: string;
@@ -322,6 +330,8 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         password_hash,
         status,
         email_verified_at,
+        oauth_provider,
+        oauth_sub,
         created_at
       FROM agent_pulse_users
       WHERE lower(email) = ${email}
@@ -331,10 +341,25 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
   }
 
   async findAccountByOAuth(
-    _provider: string,
-    _sub: string,
+    provider: string,
+    sub: string,
   ): Promise<AccountUser | undefined> {
-    return undefined;
+    const rows = await this.#sql<AccountUser[]>`
+      SELECT
+        user_id::text,
+        email,
+        display_name,
+        password_hash,
+        status,
+        email_verified_at,
+        oauth_provider,
+        oauth_sub,
+        created_at
+      FROM agent_pulse_users
+      WHERE oauth_provider = ${provider} AND oauth_sub = ${sub}
+      LIMIT 1
+    `;
+    return rows[0] === undefined ? undefined : normalizeAccountUser(rows[0]);
   }
 
   async upsertOAuthAccount(input: {
@@ -345,16 +370,111 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     emailVerified?: boolean;
     now?: string;
   }): Promise<AccountView> {
-    const existing = await this.findAccountByEmail(input.email);
-    if (existing !== undefined) {
-      const view = await this.accountView(existing.user_id);
-      if (view !== undefined) return view;
-    }
-    return this.createAccount({
-      userId: randomUUID(),
-      email: input.email,
-      displayName: input.displayName,
-      passwordHash: "",
+    const timestamp = input.now ?? new Date().toISOString();
+    return this.#sql.begin(async (sql) => {
+      const byOAuth = await sql<AccountUser[]>`
+        SELECT
+          user_id::text,
+          email,
+          display_name,
+          password_hash,
+          status,
+          email_verified_at,
+          oauth_provider,
+          oauth_sub,
+          created_at
+        FROM agent_pulse_users
+        WHERE oauth_provider = ${input.provider} AND oauth_sub = ${input.sub}
+        LIMIT 1
+        FOR UPDATE
+      `;
+      if (byOAuth[0] !== undefined) {
+        const user = byOAuth[0];
+        if (input.emailVerified && !user.email_verified_at) {
+          await sql`
+            UPDATE agent_pulse_users
+            SET email_verified_at = ${timestamp}::timestamptz, updated_at = clock_timestamp()
+            WHERE user_id = ${user.user_id}
+          `;
+        }
+        if (input.displayName && user.display_name !== input.displayName) {
+          await sql`
+            UPDATE agent_pulse_users
+            SET display_name = ${input.displayName}, updated_at = clock_timestamp()
+            WHERE user_id = ${user.user_id}
+          `;
+        }
+        const view = await postgresAccountView(sql, user.user_id);
+        if (view !== undefined) return view;
+      }
+
+      const byEmail = await sql<AccountUser[]>`
+        SELECT
+          user_id::text,
+          email,
+          display_name,
+          password_hash,
+          status,
+          email_verified_at,
+          oauth_provider,
+          oauth_sub,
+          created_at
+        FROM agent_pulse_users
+        WHERE lower(email) = ${input.email}
+        LIMIT 1
+        FOR UPDATE
+      `;
+      if (byEmail[0] !== undefined) {
+        const user = byEmail[0];
+        await sql`
+          UPDATE agent_pulse_users
+          SET oauth_provider = ${input.provider},
+              oauth_sub = ${input.sub},
+              email_verified_at = COALESCE(email_verified_at, ${input.emailVerified ? timestamp : null}::timestamptz),
+              updated_at = clock_timestamp()
+          WHERE user_id = ${user.user_id}
+        `;
+        const view = await postgresAccountView(sql, user.user_id);
+        if (view !== undefined) return view;
+      }
+
+      const userId = randomUUID();
+      const newUser = await sql<AccountUser[]>`
+        INSERT INTO agent_pulse_users (
+          user_id, email, password_hash, display_name, status, oauth_provider, oauth_sub, email_verified_at, created_at, updated_at
+        ) VALUES (
+          ${userId}, ${input.email}, ${DUMMY_PASSWORD_HASH}, ${input.displayName || input.email.split("@")[0] || "User"},
+          'active', ${input.provider}, ${input.sub}, ${input.emailVerified ? timestamp : null}::timestamptz, ${timestamp}::timestamptz, ${timestamp}::timestamptz
+        )
+        RETURNING user_id::text, email, display_name, password_hash, status, email_verified_at, oauth_provider, oauth_sub, created_at
+      `;
+      const normalizedUser = normalizeAccountUser(newUser[0]!);
+      const subscription = await sql<SubscriptionRecord[]>`
+        INSERT INTO agent_pulse_subscriptions (
+          user_id, plan, status, created_at, updated_at
+        ) VALUES (
+          ${userId}, 'free', 'active', ${timestamp}::timestamptz, ${timestamp}::timestamptz
+        )
+        RETURNING user_id::text, plan, status, provider, provider_customer_id, provider_subscription_id, current_period_end, created_at, updated_at
+      `;
+      await sql`
+        INSERT INTO agent_pulse_workspace_members (
+          workspace_owner_id, user_id, role, created_at
+        ) VALUES (
+          ${userId}, ${userId}, 'owner', ${timestamp}::timestamptz
+        )
+      `;
+      await insertAuditEvent(sql, {
+        scope: "account",
+        accountUserId: userId,
+        actorUserId: userId,
+        action: "account.created",
+        targetType: "account",
+        targetId: userId,
+        metadata: { plan: "free", reason: "oauth", provider: input.provider },
+        createdAt: timestamp,
+      });
+      return accountView(normalizedUser, normalizeSubscription(subscription[0]!));
     });
   }
 
@@ -3268,6 +3388,8 @@ async function postgresAccountView(
       users.password_hash,
       users.status,
       users.email_verified_at,
+      users.oauth_provider,
+      users.oauth_sub,
       users.created_at,
       subscriptions.plan,
       subscriptions.status AS subscription_status,
@@ -3330,6 +3452,12 @@ function normalizeAccountUser(row: AccountUser): AccountUser {
     ...(row.email_verified_at === undefined || row.email_verified_at === null
       ? {}
       : { email_verified_at: isoTimestamp(row.email_verified_at) }),
+    ...(row.oauth_provider === undefined || row.oauth_provider === null
+      ? {}
+      : { oauth_provider: row.oauth_provider }),
+    ...(row.oauth_sub === undefined || row.oauth_sub === null
+      ? {}
+      : { oauth_sub: row.oauth_sub }),
     created_at: isoTimestamp(row.created_at),
   };
 }

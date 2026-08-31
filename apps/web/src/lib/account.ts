@@ -17,6 +17,8 @@ export interface AccountView {
     email: string;
     display_name: string;
     status: "active" | "suspended" | "deleted";
+    oauth_provider?: string;
+    oauth_sub?: string;
     email_verified_at?: string;
     created_at: string;
   };

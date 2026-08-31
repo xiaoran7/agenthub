@@ -690,6 +690,9 @@ export function SettingsPanel({
                 <span>
                   <strong>{account.user.email}</strong>
                   <small>
+                    {account.user.oauth_provider === "tg_oauth"
+                      ? "已关联 TannerLab 统一身份 · "
+                      : ""}
                     {account.user.email_verified_at === undefined
                       ? "邮箱尚未验证"
                       : `已验证 · ${formatClock(account.user.email_verified_at)}`}

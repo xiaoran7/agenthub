@@ -8,7 +8,11 @@
 ### Added
 
 - **Antigravity 智能体适配与观测支持**：Runner 新增对 Antigravity（Google AGY / Gemini CLI）的会话采集、Transcript JSONL 解析与实时状态映射，支持 `USER_INPUT`、`PLANNER_RESPONSE`、工具调用与规划状态标准化识别；集成本地工作区路径脱敏与快照合并，完全遵循不读取/不上传对话正文或代码的安全边界。
-- **Telegram OAuth 授权与多端接入**：Gateway API 新增基于 PKCE 规范与 Telegram Web 授权的 SSO 流程，支持授权链接生成、回调验证、用户绑定与 Device Flow 轮询；Web 端与桌面端均提供一键授权登录入口。
+- **TannerLab / Tg-oauth 统一身份认证深度接入与持久化支持**：
+  - Gateway API 基于 PKCE S256 规范深度集成 TannerLab 统一身份认证（`tg-oauth`），提供授权地址生成、回调验证、用户信息解析与多会话绑定；
+  - 数据库新增 `0015_oauth_accounts.sql` 迁移，用户表扩展 `oauth_provider` 与 `oauth_sub` 列及联合唯一索引，`PostgresGatewayStore` 完整实现 OAuth 账号查询与原子 upsert 绑定；
+  - Web 控制台 `SettingsPanel` 账户安全面板实时识别并展示 TannerLab SSO 关联状态；
+  - 桌面端无缝支持 Device Flow（RFC 8628）设备码流并完成本地与云端自动同步。
 - **Agent Hub 全端品牌升级与美术素材/图标替换**：
   - 接入全新发光六边形拓扑网络图标与「Agent Hub 智能体集成中心」主视觉横幅；
   - 重新生成 Windows 桌面端 (Tauri) 全尺寸图标集（`32x32`, `64x64`, `128x128`, `Square*Logo.png`, `icon.ico`, `icon.png`）；
