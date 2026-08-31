@@ -1,4 +1,5 @@
-# AgentPulse 单机上线说明
+# AgentHub 单机上线说明
+
 
 这份方案适用于一台 Linux 服务器上的个人部署：PostgreSQL 持久化数据，Gateway API 只监听本机，Next.js Web 通过同源 `/v1` 代理访问 API，Nginx 或 Caddy 对外提供 HTTPS。
 

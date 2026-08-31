@@ -1,30 +1,17 @@
-# AgentPulse 技术可行性报告
+# AgentHub 技术可行性报告
 
-调研日期：2026-07-25；2026-08-14 按当前官方文档与本机数据复核
+调研日期：2026-07-25；2026-08-14 官方文档与本机数据复核；2026-09-01 v2.0 架构重新定界
 
 ## 1. 结论
 
-第一阶段的只读 Session 监控整体可行，但需要区分三种能力：
+在 v2.0 阶段，AgentHub 正式升级为**多 Coding Agent 统一远程控制平面（Unified Multi-Agent Remote Plane）**。经多维度技术评估与官方接口对齐，全系统可行性结论如下：
 
-1. **历史发现**：发现本机已保存的 Session 及基础元数据。
-2. **实时监控**：准确判断 Session 正在工作、等待输入、等待审批或已经结束。
-3. **进程接管**：由 Runner 启动或承载 Agent，从而获得最完整的事件流。
+1. **统一控制与进程承载**：Runner 通过 stdio / app-server 托管 Claude Code 与 OpenAI Codex 等 Agent 进程，单 WebSocket 连接多路复用承载所有 Session 的全双工控制与流式输出，完全可行。
+2. **会话内容持久化**：服务端采用规范化事件与 Provider 原始事件的双层存储模型（Dual-Layer Event Store），支持全端高保真会话回放与历史查询。
+3. **零凭据采集与安全边界**：Runner 本地运行沿用用户系统身份环境，AgentHub 绝不主动采集、窃取或集中管理 Provider Credential Store（如 `~/.claude/.credentials.json` 或 OpenAI auth 文件），免责与责任边界清晰。
+4. **状态同步与可靠传输**：基于官方生命周期 Hook / app-server JSON-RPC 事件，结合滑动窗口 ACK + Replay 机制与 30s 状态指纹 Reconcile 自愈巡检，可实现工业级零丢失同步。
+5. **动态能力发现与 Slash 路由**：Runner 启动自检 CLI 特性并动态上报 Capabilities，构建强类型 `LaunchProfile`，并在控制面对 `/` 指令实现三层拦截分发。
 
-建议 MVP 采用“官方查询接口 + 生命周期 Hook + 本地缓存”的组合：
-
-- Claude Code：本地 Session JSONL 用于历史发现，Hooks 用于实时状态补充。当前官方
-  CLI 没有 `claude agents --json`，不得依赖该命令。
-- Codex：`codex app-server` 为历史与 Runner 托管 Session 的主接口，Codex
-  本地状态数据库作为 app-server 不可执行时的只读历史兜底。
-- Grok Build：`GROK_HOME`（默认 `~/.grok`）下的 `summary.json` 用于历史发现，
-  `active_sessions.json` 加 PID 存活用于实时 Presence；`updates.jsonl` 只看
-  mtime/lock，不打开正文。`grok sessions list` 不作为采集接口。
-- 本地 JSONL/SQLite 只读取白名单元数据，不把内部格式当作稳定协议，也不读取或
-  上传对话正文、工具参数和供应商登录凭据。
-
-在用户安装 Runner 后新建或恢复的 Session，可以实现较准确、低延迟的状态监控。
-安装 Runner 之前已经运行、且没有接入 Hook 或 Runner app-server 的 Codex
-Session，只能做尽力识别，不能保证实时状态完全准确。
 
 ## 2. Claude Code 可用能力
 
@@ -240,23 +227,15 @@ Codex 在 `CODEX_HOME`（默认 `~/.codex`）保存配置、Session 和其他本
 
 UI 必须显示数据来源、最后观察时间和状态置信度，避免把推断结果伪装成事实。
 
-## 7. 安全结论
+## 7. 安全与持久化结论
 
-该方案符合产品的基本安全边界：
+该方案符合 AgentHub 2.0 的核心安全与持久化边界：
 
-- Runner 主动连接云端，不开放公网端口。
-- 使用本机 Agent 的合法接口；授权模式可在本机读取凭据，但不复制或上传 OAuth Token。
-- 只同步白名单元数据。
-- 原始工作目录默认转换为显示名和不可逆设备内指纹。
-- transcript 只保留在本机，除非用户未来明确开启更高级功能。
-- 远程控制、回复和审批能力与只读监控使用独立权限开关。
+- **单长连接主动出站**：Runner 主动连接云端 WebSocket Event Bus，不开放公网端口，无公网暴露面。
+- **零凭据采集（Zero Credential Harvesting）**：AgentHub 绝不主动采集、解析或集中管理 Provider Credential Store（如 `auth.json`、`.credentials.json` 或 OS Keychain 凭据）。Agent 原生鉴权在 Agent 内部完成。
+- **全量会话持久化与免责声明**：服务端允许并完整持久化 Session 历史正文、工具调用与执行时间线，用于全端回放；明确不对用户或 Agent 在 Transcript 中自主打印的机密信息承担过滤保证。
+- **会话级精细权限**：审批模式（Ask / Plan / Accept Edits / Bypass）与工具规则属于 Session 作用域，由用户在控制台显式配置。
 
-授权模式补充：默认监控仍不读取敏感凭据；用户显式打开本地凭据管理后，Runner 可以
-读取 `auth.json`、`.credentials.json`、OS Keychain/Keyring 和授权环境变量。原始值只
-进入本机加密缓存，不进入同步协议。Codex 优先使用 App Server 的
-`account/read`、`account/rateLimits/read`、`account/login/start` 与 `account/logout`；
-Claude 优先委托 `claude auth status/login/logout`，不在 Runner 中复制私有 OAuth client
-secret 或猜测未公开刷新端点。
 
 ## 8. 官方资料
 
