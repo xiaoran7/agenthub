@@ -19,6 +19,7 @@ import {
 } from "@agent-pulse/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyRawBody from "fastify-raw-body";
+import fastifyWebsocket from "@fastify/websocket";
 import { V2SessionManager } from "./v2-session-manager.js";
 import { DualLayerEventStore } from "./v2-event-store.js";
 
@@ -215,6 +216,8 @@ export function createGatewayApp(
     app.log.error(error);
     void reply.status(500).send({ error: "internal_error" });
   });
+
+  void app.register(fastifyWebsocket);
 
   if (options.billingProvider !== undefined) {
     const provider = options.billingProvider;
@@ -1728,6 +1731,35 @@ export function createGatewayApp(
   });
 
   const v2Manager = options.v2Manager ?? new V2SessionManager();
+
+  // v2 WebSocket Multiplexing Bus for Runners
+  void app.register(async (v2WsApp) => {
+    v2WsApp.get("/v2/ws", { websocket: true }, (socket, _request) => {
+      let runnerConn: any;
+
+      socket.on("message", (data: any) => {
+        try {
+          const frame = JSON.parse(data.toString("utf8"));
+          if (!runnerConn && frame.type === "handshake") {
+            const runnerId =
+              frame.payload?.runner_id || `runner_${randomUUID()}`;
+            runnerConn = v2Manager.registerRunner(runnerId, socket as any);
+          }
+          if (runnerConn) {
+            v2Manager.handleIncomingFrame(runnerConn, frame);
+          }
+        } catch {
+          // ignore parse error
+        }
+      });
+
+      socket.on("close", () => {
+        if (runnerConn) {
+          v2Manager.unregisterRunner(runnerConn.runner_id);
+        }
+      });
+    });
+  });
 
   // v2 Dynamic Capabilities
   app.get("/v2/capabilities", async (request) => {

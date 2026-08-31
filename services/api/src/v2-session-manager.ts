@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AgentHub v2 Session Manager & WebSocket Multiplexing Bus
  *
  * Reference: docs/ARCHITECTURE.md & docs/SYNC_PROTOCOL.md
@@ -55,9 +55,10 @@ export class V2SessionManager {
       ws,
       authenticated: true,
       handshake_completed: false,
-      client_version: "2.0.0",
+      client_version: existing ? existing.client_version : "2.0.0",
       last_received_seq: existing ? existing.last_received_seq : 0,
       last_sent_seq: existing ? existing.last_sent_seq : 0,
+      capabilities: existing?.capabilities,
       outbox_buffer: initialBuffer,
       last_heartbeat_at: Date.now(),
     };
@@ -69,12 +70,14 @@ export class V2SessionManager {
   unregisterRunner(runner_id: string): void {
     const conn = this.runners.get(runner_id);
     if (conn) {
+      conn.handshake_completed = false;
       try {
-        conn.ws.close();
+        if (conn.ws.readyState === 1 || conn.ws.readyState === 0) {
+          conn.ws.close();
+        }
       } catch {
         // ignore close errors
       }
-      this.runners.delete(runner_id);
     }
   }
 
