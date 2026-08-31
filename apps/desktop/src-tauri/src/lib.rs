@@ -45,7 +45,7 @@ use thiserror::Error;
 use url::{Host, Url};
 
 const DEFAULT_SERVER_URL: &str = "https://platform.tannerlab.xyz";
-const KEYRING_SERVICE: &str = "AgentPulse Desktop";
+const KEYRING_SERVICE: &str = "AgentHub Desktop";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const LOCAL_SESSION_LIMIT: u32 = 1_000;
 const DESKTOP_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,7 +61,7 @@ const SESSION_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(15);
 enum DesktopError {
     #[error("服务器地址无效")]
     InvalidServer,
-    #[error("无法连接 AgentPulse 服务器")]
+    #[error("无法连接 AgentHub 服务器")]
     Unreachable,
     #[error("服务器返回了无效响应")]
     InvalidResponse,
@@ -1789,7 +1789,7 @@ pub fn run() {
             logout
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build AgentPulse desktop app")
+        .expect("failed to build AgentHub desktop app")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event
                 && let Some(state) = app_handle.try_state::<DesktopState>()

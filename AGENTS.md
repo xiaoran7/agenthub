@@ -1,4 +1,4 @@
-# AgentPulse（智能体脉搏）工作规范
+# AgentHub（智能体集成中心）工作规范
 
 > 适用于在本仓库工作的 Claude Code、Codex、其他智能体及人类协作者。
 
@@ -61,7 +61,7 @@
 7. 提交前检查 `git status`，只暂存本次任务文件，不使用会误收其他改动的
    `git add -A`。
 8. 如实汇报未验证项和环境阻塞，不能把 Fixture 通过写成真实 CLI 已通过。
-9. **打包发版铁律**：凡执行 Android APK、Tauri 桌面包或发版编译时，必须同步递增 `versionCode` 与 `versionName`（以及 `package.json` / `tauri.conf.json` / `Cargo.toml` 版本），产物带显式版本后缀（如 `AgentPulse-vX.Y.Z.apk` / `.exe`），严禁覆盖旧版本。
+9. **打包发版铁律**：凡执行 Android APK、Tauri 桌面包或发版编译时，必须同步递增 `versionCode` 与 `versionName`（以及 `package.json` / `tauri.conf.json` / `Cargo.toml` 版本），产物带显式版本后缀（如 `AgentHub-vX.Y.Z.apk` / `.exe`），严禁覆盖旧版本。
 
 ## 凭据管理扩展（用户明确授权后适用）
 

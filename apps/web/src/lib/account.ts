@@ -432,7 +432,7 @@ export function accountErrorMessage(error: unknown): string {
     oauth_unsupported: "OAuth 身份认证暂未启用",
     invalid_device_code: "设备授权码无效或已过期",
     team_plan_required: "需要 Team 方案才能邀请成员",
-    team_invitee_unavailable: "这个邮箱尚未注册 AgentPulse",
+    team_invitee_unavailable: "这个邮箱尚未注册 AgentHub",
     team_member_exists: "这个用户已经在当前工作区",
     team_invitation_exists: "这个用户已有待接受邀请",
     team_member_limit_reached: "团队席位已用完",

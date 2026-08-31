@@ -1,4 +1,4 @@
-# AgentPulse Android
+# AgentHub Android
 
 独立 Kotlin + Jetpack Compose 只读客户端。它不是 WebView，也不包含 Runner 或任何
 Claude/OpenAI 登录凭据。

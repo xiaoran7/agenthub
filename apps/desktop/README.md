@@ -1,15 +1,15 @@
-# AgentPulse Desktop
+# AgentHub Desktop
 
-Windows Tauri 桌面客户端。用户通过现有 AgentPulse 邮箱账号注册或登录后，应用会自动：
+Windows Tauri 桌面客户端。用户通过现有 AgentHub 邮箱账号注册或登录后，应用会自动：
 
 1. 创建或加载本机 Ed25519 设备身份。
 2. 使用当前登录会话完成设备登记，不展示一次性配对码。
-3. 启动内嵌 Runner，发现 Claude Code、Codex 与 Grok Build Session 元数据。
+3. 启动内嵌 Runner，发现 Claude Code、Codex、Antigravity 与 Grok Build Session 元数据。
 4. 通过现有签名同步协议把白名单状态同步到当前账号。
 
 仪表盘采用本地优先读模型：本机已发现的 Session 会立即显示，云端同步暂时不可用时也不会
 错误显示为“未检测到”。来源卡分别显示扫描健康、会话数和待上传数量；账号面板显示当前
-AgentPulse 账号与套餐。记忆区只统计 Claude memory 文件、Codex memory 索引和 Grok
+AgentHub 账号与套餐。记忆区只统计 Claude memory 文件、Codex memory 索引和 Grok
 `summary.json` 的数量与字节，不读取或展示正文。
 
 会话列表现在也是本机控制台：按脱敏项目目录分组并显示供应商的显式会话名；点击会话可查看
@@ -52,7 +52,7 @@ Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP
 
 ## 本地数据与安全边界
 
-- AgentPulse 的登录 Cookie 只保存在 OS Keyring，前端 JavaScript 不接触 Cookie。
+- AgentHub 的登录 Cookie 只保存在 OS Keyring，前端 JavaScript 不接触 Cookie。
 - 设备私钥保存在应用数据目录的 Runner 身份文件中，不上传私钥。
 - Claude 历史发现只读取 `CLAUDE_CONFIG_DIR` 或 `~/.claude/projects` 中的白名单元数据。
 - Codex 优先使用 app-server；不可执行时只读 `CODEX_HOME` 最新状态库的 Thread 元数据。
@@ -74,10 +74,10 @@ Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP
   抽屉，避免丢失仅存在前端内存中的增量内容。
 - SSE Cookie 仍只由 Rust Host 从 OS Keyring 读取；WebView 仅收到连接布尔值和变化信号。
   SSE 单行上限 64 KiB，断线后指数退避重连，连接不可用不影响周期刷新。
-- Codex 的归档/恢复会同步到本机 Codex app-server。Claude 归档仅是 AgentPulse 本机视图
+- Codex 的归档/恢复会同步到本机 Codex app-server。Claude 归档仅是 AgentHub 本机视图
   标记，不删除或改写 Claude JSONL；归档记录只含 Agent 类型、Session ID、项目显示名/
   指纹和观察时间。
-- 退出登录会停止当前同步进程并删除 OS Keyring 中的 AgentPulse Cookie；本地设备身份
+- 退出登录会停止当前同步进程并删除 OS Keyring 中的 AgentHub Cookie；本地设备身份
   保留，以便同一台机器重新登录时继续使用稳定设备 ID。
 
 ## 验证

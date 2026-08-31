@@ -974,7 +974,7 @@ export function HelpView({
     <>
       <ViewHeader
         title="帮助"
-        description="用一份简短指南了解 AgentPulse，同时保持当前位置。"
+        description="用一份简短指南了解 AgentHub，同时保持当前位置。"
       />
       <section className="help-grid">
         <article className="help-card">
@@ -1009,7 +1009,7 @@ export function HelpView({
           <span className="help-number">03</span>
           <h2>相信未知状态</h2>
           <p>
-            未上报或推断出的信号会保持为未知。AgentPulse
+            未上报或推断出的信号会保持为未知。AgentHub
             不会把缺失的遥测数据伪装成绿色健康状态。
           </p>
           <button

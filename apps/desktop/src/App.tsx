@@ -309,7 +309,7 @@ function AuthScreen({
         ) : (
           <form onSubmit={submit} className="auth-form">
             <header>
-              <span className="card-kicker">AgentPulse Desktop</span>
+              <span className="card-kicker">AgentHub Desktop</span>
               <h2>{mode === "login" ? "连接这台电脑" : "创建账号"}</h2>
               <p>
                 {mode === "login"
@@ -731,7 +731,7 @@ function Dashboard({
               </span>
               <div>
                 <strong>
-                  {snapshot.account.user.display_name || "AgentPulse 用户"}
+                  {snapshot.account.user.display_name || "AgentHub 用户"}
                 </strong>
                 <small>{snapshot.account.user.email}</small>
               </div>
@@ -1523,7 +1523,7 @@ function SessionControlPanel({
                 <MessageSquare />
                 <strong>从这里继续会话</strong>
                 <p>
-                  消息直接交给本机 CLI；内容不进入 AgentPulse 云端或本地索引。
+                  消息直接交给本机 CLI；内容不进入 AgentHub 云端或本地索引。
                 </p>
               </div>
             ) : (
@@ -1741,7 +1741,7 @@ function AccountPanel({
     <aside className="account-panel" aria-label="账号信息">
       <header>
         <div>
-          <span className="card-kicker">AgentPulse 账号</span>
+          <span className="card-kicker">AgentHub 账号</span>
           <h2>{snapshot.account.user.display_name || "未设置名称"}</h2>
         </div>
         <button
@@ -2125,7 +2125,7 @@ const demoSnapshot: Snapshot = {
     demoSession("claude_code", "用户增长分析", "IDLE", 25),
     demoSession("codex", "API 网关开发", "WORKING", 1),
     demoSession("codex", "数据导出工具", "UNKNOWN", 180, "PERSISTED"),
-    demoSession("grok_build", "AgentPulse 采集", "WORKING", 3),
+    demoSession("grok_build", "AgentHub 采集", "WORKING", 3),
   ],
 };
 

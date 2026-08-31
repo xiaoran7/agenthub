@@ -81,7 +81,7 @@ export function DeviceConnectDialog({
   }
 
   const connectionText = binding
-    ? `AgentPulse 设备接入\n平台地址：${gatewayOrigin}\n连接码：${binding.binding_code}`
+    ? `AgentHub 设备接入\n平台地址：${gatewayOrigin}\n连接码：${binding.binding_code}`
     : "";
 
   return (
@@ -222,7 +222,7 @@ export function DeviceConnectDialog({
           <ol className="device-connect-instructions">
             <li>
               <span>1</span>
-              <p>在目标电脑双击 Windows 接入包里的 Connect-AgentPulse.cmd。</p>
+              <p>在目标电脑双击 Windows 接入包里的 Connect-AgentHub.cmd。</p>
             </li>
             <li>
               <span>2</span>

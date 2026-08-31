@@ -1365,7 +1365,7 @@ export function SettingsPanel({
               </span>
               <div>
                 <h3 id="install-settings">安装到设备</h3>
-                <p>以独立 PWA 窗口打开 AgentPulse。</p>
+                <p>以独立 PWA 窗口打开 AgentHub。</p>
               </div>
             </div>
             <div className="settings-toggle">

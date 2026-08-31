@@ -225,7 +225,7 @@ export function AccountGate({
               {mode === "login"
                 ? "进入控制台"
                 : mode === "register"
-                  ? "创建 AgentPulse 账户"
+                  ? "创建 AgentHub 账户"
                   : "重置账户密码"}
             </h2>
             <p>

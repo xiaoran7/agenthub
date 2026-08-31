@@ -1,4 +1,4 @@
-# AgentPulse Runner
+# AgentHub Runner
 
 本地只读 Session 元数据采集器。目前实现：
 

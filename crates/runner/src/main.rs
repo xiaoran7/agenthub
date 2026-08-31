@@ -39,8 +39,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
-#[command(name = "agent-pulse-runner")]
-#[command(about = "Local metadata collector for Coding Agent sessions")]
+#[command(name = "agenthub-runner")]
+#[command(about = "Local metadata collector for AgentHub sessions")]
 struct Cli {
     #[arg(long, env = "AGENT_PLATFORM_DEVICE_ID", default_value = "local-dev")]
     device_id: String,

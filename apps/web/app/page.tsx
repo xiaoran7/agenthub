@@ -75,11 +75,7 @@ const STREAMING_POLL_INTERVAL_MS = 30_000;
 
 function LoadingView() {
   return (
-    <div
-      className="loading-view"
-      role="status"
-      aria-label="正在加载 AgentPulse"
-    >
+    <div className="loading-view" role="status" aria-label="正在加载 AgentHub">
       <div className="loading-title" />
       <div className="loading-copy" />
       <div className="loading-metrics">

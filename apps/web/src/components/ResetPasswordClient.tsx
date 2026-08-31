@@ -50,7 +50,7 @@ export function ResetPasswordClient() {
             <i />
             <i />
           </span>
-          <strong>AgentPulse</strong>
+          <strong>AgentHub</strong>
         </div>
         <span
           className="verification-signal"

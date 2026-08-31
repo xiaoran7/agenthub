@@ -345,7 +345,7 @@ private fun ProductHeader(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                "AgentPulse",
+                "AgentHub",
                 style = MaterialTheme.typography.titleLarge,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -862,7 +862,7 @@ private fun SettingsScreen(
     ) {
         ProductHeader(
             title = "设置",
-            subtitle = "连接你的 AgentPulse Gateway，凭据只保存在本机。",
+            subtitle = "连接你的 AgentHub Gateway，凭据只保存在本机。",
             loading = false,
             onRefresh = null,
         )

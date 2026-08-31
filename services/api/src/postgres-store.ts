@@ -134,10 +134,7 @@ const MIGRATIONS = [
   },
   {
     version: 15,
-    url: new URL(
-      "../migrations/0015_oauth_accounts.sql",
-      import.meta.url,
-    ),
+    url: new URL("../migrations/0015_oauth_accounts.sql", import.meta.url),
   },
 ];
 
@@ -474,7 +471,10 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         metadata: { plan: "free", reason: "oauth", provider: input.provider },
         createdAt: timestamp,
       });
-      return accountView(normalizedUser, normalizeSubscription(subscription[0]!));
+      return accountView(
+        normalizedUser,
+        normalizeSubscription(subscription[0]!),
+      );
     });
   }
 

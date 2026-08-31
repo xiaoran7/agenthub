@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AgentPulse",
-  description: "安静、清晰、高信息密度的跨设备 Coding Agent 会话监控面板。",
+  title: "AgentHub - 智能体集成中心",
+  description: "跨设备 Coding Agent 统一监控与远程接入平台。",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [

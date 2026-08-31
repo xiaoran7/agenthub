@@ -13,12 +13,9 @@
   - 数据库新增 `0015_oauth_accounts.sql` 迁移，用户表扩展 `oauth_provider` 与 `oauth_sub` 列及联合唯一索引，`PostgresGatewayStore` 完整实现 OAuth 账号查询与原子 upsert 绑定；
   - Web 控制台 `SettingsPanel` 账户安全面板实时识别并展示 TannerLab SSO 关联状态；
   - 桌面端无缝支持 Device Flow（RFC 8628）设备码流并完成本地与云端自动同步。
-- **Agent Hub 全端品牌升级与美术素材/图标替换**：
-  - 接入全新发光六边形拓扑网络图标与「Agent Hub 智能体集成中心」主视觉横幅；
-  - 重新生成 Windows 桌面端 (Tauri) 全尺寸图标集（`32x32`, `64x64`, `128x128`, `Square*Logo.png`, `icon.ico`, `icon.png`）；
-  - 重新生成 Web 端 PWA 图标（`icon.svg`, `icon-192.png`, `icon-512.png`, `brand-banner.png`）与 `manifest.webmanifest`；
-  - 重绘 Android 原生端矢量图标 `ic_agent_platform.xml` 与 mipmap 资源；
-  - 全面升级 Web 控制台（`AccountGate`, `PlatformShell`）、桌面端与移动端的 Logo 动效、发光拓扑组件及品牌标识。
+- **项目全平台正式更名为 AgentHub**：
+  - 项目名称由 AgentPulse 全面升级更名为 **AgentHub（智能体集成中心）**；
+  - 同步更新 Web 元数据、Tauri 桌面端应用名称/窗口标题/权限配置、Android 原生端配置、Runner CLI 帮助名、部署脚本及所有用户端文案与文档。
 
 ### Documentation
 

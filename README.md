@@ -1,6 +1,6 @@
-# AgentPulse（智能体脉搏）
+# AgentHub（智能体集成中心）
 
-一个跨 Claude Code、OpenAI Codex、Grok Build 等本地 Coding Agent 的统一
+一个跨 Claude Code、OpenAI Codex、Antigravity、Grok Build 等本地 Coding Agent 的统一
 Session 监控与远程接入平台。
 
 用户在电脑上安装轻量级本地客户端后，可以通过网页端或移动端统一查看：
@@ -79,7 +79,7 @@ Windows 桌面 App（`apps/desktop`）已复用同一邮箱注册/登录接口�
 CMD 或手工配对码。桌面会话详情可经本机 CLI 继续 Claude Code/Codex、查看同步元数据并
 归档/恢复，并以 Tauri Channel 增量显示安全的助手文本/活动状态、支持停止本机回合。桌面
 Host 复用 Gateway SSE 实时变化流，2–60 秒可配置周期刷新作为断流兜底。显式发送的 Prompt
-与回复只在本机进程和当前界面内流转，不进入 Outbox 或 Gateway；AgentPulse 登录 Cookie
+与回复只在本机进程和当前界面内流转，不进入 Outbox 或 Gateway；AgentHub 登录 Cookie
 保存在 OS Keyring，Claude/Codex 登录凭据、历史对话正文和工具载荷不会上传。
 会话索引按脱敏项目目录分组，并在本机显示显式会话名、模型、推理强度、权限/审批与沙箱策略、
 上下文窗口和 Token 用量；这层运行上下文不进入同步协议，也不会从首条 Prompt 猜测标题。
