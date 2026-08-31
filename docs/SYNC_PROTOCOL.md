@@ -1,168 +1,333 @@
-# 设备同步协议
+# AgentHub 多路复用事件总线与同步协议规范 (Sync Protocol v2.0)
 
-> 当前文档描述 Runner 和开发期 Gateway 已实现的协议版本 1。它已可通过本地 HTTP
-> 完成真实同步闭环，但不是已经上线的生产网络服务。
+> **版本**：2.0.0-spec  
+> **更新日期**：2026-09-01  
+> **协议地位**：AgentHub Runner 与 Server 之间单长连接多路复用通信的权威二进制/JSON 格式契约。
 
-## 1. 设备身份
+---
 
-Runner 使用 Ed25519 密钥对：
+## 1. 协议核心设计与连接模型
 
-- 私钥只保存在本地身份文件。
-- 公钥随同步批次发送，供首次绑定和签名验证使用。
-- `device_id = "dev_" + hex(SHA-256(public_key)[0..16])`。
-- 项目路径 HMAC 密钥由私钥和固定域分隔标签派生，不进入同步批次。
+1. **单物理连接多路复用**：Runner 节点与云端 Server 之间维持且仅维持**一条 WebSocket 物理长连接**。
+2. **统一 Frame Envelope**：所有控制命令（Commands）、业务事件（Events）、流式 Token（Stream Deltas）、状态确认（ACKs）及心跳巡检均封装在标准帧中。
+3. **强制 ACK + Replay**：引入基于有序序列号（`seq`）与滑动窗口的双向确认和断线自动重放协议，确保零丢失。
+4. **版本协商（Version Negotiation）**：连接握手阶段显式协商协议版本与能力集，向后兼容。
 
-`device init` 使用仅新建语义，不覆盖已有身份；写入通过同目录临时文件加不覆盖式
-落位保证原子性。Unix 新文件权限为 `0600`；Windows 当前继承身份文件所在目录的
-ACL，因此身份应放在仅当前用户可读的应用数据目录。
+---
 
-## 2. SyncBatch
+## 2. 帧封装结构（Frame Envelope）
 
-批次顶层字段：
+所有帧均为 UTF-8 编码的 JSON 对象（二进制传输模式预留），通用结构如下：
 
-| 字段               | 含义                               |
-| ------------------ | ---------------------------------- |
-| `protocol_version` | 当前固定为 `1`                     |
-| `batch_id`         | 每个发送批次的 UUID                |
-| `device_id`        | 由公钥派生的设备 ID                |
-| `public_key`       | 32 字节 Ed25519 公钥的十六进制编码 |
-| `created_at`       | Runner 创建批次的 RFC 3339 时间    |
-| `first_sequence`   | 本批次首个 Outbox 序列             |
-| `last_sequence`    | 本批次最后一个 Outbox 序列         |
-| `events`           | 1 到 1000 个连续、升序事件         |
-| `signature`        | 64 字节 Ed25519 签名的十六进制编码 |
-
-每个事件是固定结构：
-
-```text
-sequence
-event_id
-schema_version
-device_id
-agent_type
-agent_session_id
-event_type = session_observed
-observed_at
-source
-confidence
-adapter_version
-payload
-```
-
-`payload` 只包含项目显示名与指纹、统一状态、白名单原始状态、等待原因以及允许的时间
-字段。它不包含 Prompt、Assistant 消息、命令、工具输入输出、代码、Diff、完整路径、
-环境变量、transcript、Agent 名称、Thread 标题或任务摘要。
-
-字段约束（网关强制执行；Runner 侧对 `raw_status` 与 detail 值在标准化时主动
-钳制，其余字段由数据源天然有界）：
-
-- UUID（`batch_id`、`event_id`）只接受小写；PostgreSQL 会把 uuid 归一化为小写，
-  大写变体会破坏重放幂等。
-- 字符串必须是良构 UTF-16（无孤立代理项）、无控制字符，且各有长度上限
-  （`raw_status` ≤ 128，`agent_session_id` ≤ 512，显示名 ≤ 256）。
-- `raw_status_detail` 若出现必须含 1–16 个条目；键限定
-  `^[a-z][a-z0-9_]{0,63}$`，值 ≤ 256 字符。空对象非法（Rust 侧空 map 直接省略
-  字段，空对象只可能来自签名可塑性攻击面）。
-- 双方反序列化均拒绝未声明字段（Rust `deny_unknown_fields` / Node 字段白名单），
-  签名保护的是结构完全匹配的字节，不是已知字段投影。
-
-## 3. 签名
-
-签名输入是删除 `signature` 字段后，按上述结构声明顺序生成的紧凑 UTF-8 JSON。
-所有 Map 按键名 **Unicode 码点升序**（等价于 UTF-8 字节序；Rust `BTreeMap`
-的自然序）。禁止使用 locale 相关比较（如 `localeCompare`）——detail 键字符集
-已限定为小写 ASCII，使 UTF-16 码元序与码点序在合法键上不可能分歧。签名覆盖
-批次元数据和全部事件。
-
-验证顺序：
-
-1. 拒绝未知 `protocol_version`。
-2. 验证事件非空、设备一致、序列连续且首末序列匹配。
-3. 从公钥重新派生 `device_id` 并比较。
-4. 验证 Ed25519 签名。
-5. 执行服务端字段白名单和业务约束。
-
-版本 1 已包含由 TypeScript 生成、Rust Runner 验证的固定跨语言签名向量，Node 与
-Rust 的质量门都会读取同一 Fixture。任何规范化规则变化都必须升级协议版本，不能让
-相同版本产生不同签名字节。
-
-## 4. SyncAck
-
-服务端成功持久化事件后返回：
-
-```json
-{
-  "protocol_version": 1,
-  "batch_id": "00000000-0000-0000-0000-000000000000",
-  "device_id": "dev_example",
-  "accepted_through": 42
+```typescript
+export interface FrameEnvelope<T = any> {
+  /** 协议大版本号，当前为 2 */
+  ver: 2;
+  /** 帧唯一 ID (UUID v4 或 ULID) */
+  frame_id: string;
+  /** 帧类型 */
+  type: 
+    | "handshake"
+    | "handshake_ack"
+    | "heartbeat"
+    | "heartbeat_ack"
+    | "event"
+    | "cmd"
+    | "cmd_ack"
+    | "ack"
+    | "reconcile_check"
+    | "reconcile_sync"
+    | "presence";
+  /** 发送方递增的全局序列号 (1, 2, 3...) */
+  seq: number;
+  /** 发送方当前已确认接收到的对方最大连续序列号 */
+  ack_seq: number;
+  /** 多路复用会话包装 ID (Runner 级帧此字段为 null) */
+  hub_session_id?: string | null;
+  /** 客户端发起的幂等命令追踪 ID (仅在 cmd / cmd_ack / 关联 event 中出现) */
+  cmd_id?: string | null;
+  /** 发送时间戳 (Unix 毫秒) */
+  timestamp: number;
+  /** 具体业务负载 */
+  payload: T;
 }
 ```
 
-Runner 只有在以下条件全部成立时才清理 Outbox：
+---
 
-- 协议版本受支持。
-- `batch_id` 和 `device_id` 与已发送批次一致。
-- `accepted_through` 位于 `[first_sequence, last_sequence]`。
-- 原批次签名仍然有效。
+## 3. 连接握手与版本协商机制 (Handshake)
 
-重复确认是幂等操作，第二次删除数量为零。服务端不得确认尚未持久化或未包含在批次中
-的序列。
+### 3.1 握手请求 (`handshake`)
 
-## 5. HTTP 传输
+Runner 连接建立后必须发送的第一帧：
 
-Runner 使用以下接口：
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8A001",
+  "type": "handshake",
+  "seq": 1,
+  "ack_seq": 0,
+  "timestamp": 1725148800000,
+  "payload": {
+    "runner_id": "run_01J6XYZ...",
+    "client_version": "2.0.0",
+    "min_supported_protocol": 1,
+    "max_supported_protocol": 2,
+    "last_seen_server_seq": 450,
+    "capabilities": {
+      "providers": ["claude_code", "codex_app_server"],
+      "supports_stream_compression": true,
+      "max_replay_window": 2000
+    }
+  }
+}
+```
 
-- `POST /v1/device-bindings`：经用户认证后生成一次性绑定码；默认 10 分钟有效，
-  服务端只保存 SHA-256 摘要并只在签发响应中返回原码。
-- `POST /v1/devices/register`：提交一次性绑定码、设备 ID、公钥和持有证明签名。
-  签名输入是 `{binding_code, device_id, public_key}` 按此声明顺序的紧凑 UTF-8
-  JSON，由设备私钥 Ed25519 签名；网关验签失败拒绝注册，公开可见的公钥无法被
-  第三方抢注。
-- `POST /v1/sync/batches`：提交完整 `SyncBatch` 并接收 `SyncAck`。
-- `POST /v1/device-auth`：提交独立的 Ed25519 签名认证/配额安全快照批次；只允许
-  `AuthSnapshot` 白名单字段，原始 access/refresh token 不得出现。
-- `GET /v1/device-auth`：按已认证 owner 查询脱敏认证/配额快照，供 Web 和移动端只读展示。
-- `DELETE /v1/devices/:deviceId`：经用户认证后软撤销设备；保留历史事件和 Session，
-  但后续登记与批次同步均返回 `device_revoked`。
-- `POST /v1/tasks` / `GET /v1/tasks` / `POST /v1/tasks/:taskId/cancel`：登录用户创建、
-  查询和取消租户隔离任务；Free、设备归属和 Pro/Team 并发额度均由服务端强制检查。
-- `POST /v1/device-tasks/claim`：设备以 Ed25519 签名领取最早任务；未确认响应可重复领取
-  同一未完成任务，过期或取消任务不会再次下发。
-- `POST /v1/device-tasks/:taskId/status`：设备签名回报预期版本与新状态；只接受合法状态
-  迁移，完全相同的回报重放幂等。
+### 3.2 握手确认 (`handshake_ack`)
 
-任务请求只包含 Agent 类型、提示词、可选项目指纹、幂等键、过期时间与执行策略，明确
-禁止服务端路径和任意 shell 命令。当前 API 只开放 `local_confirmation`；Runner 必须用
-本地 allow-list 解析项目指纹，并把提示词经 stdin 交给 CLI，避免进入进程参数列表。
+Server 验证后应答：
 
-绑定码长度和控制字符在发出请求前校验。手工 `sync push` 与 `run` 的后台同步共用
-同一套有界批次和 ACK 校验；只在响应能反序列化且通过第 4 节全部确认约束后清理
-Outbox。4xx/5xx、超时、连接失败、TLS 失败、无效 JSON 或设备不匹配均保留原事件，
-Runner 只报告稳定错误分类，不回显服务端响应正文。
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8A002",
+  "type": "handshake_ack",
+  "seq": 1,
+  "ack_seq": 1,
+  "timestamp": 1725148800050,
+  "payload": {
+    "status": "accepted",
+    "negotiated_protocol": 2,
+    "server_version": "2.0.0",
+    "last_seen_runner_seq": 1024,
+    "replay_from_seq": 451,
+    "active_hub_sessions": ["hub_sess_01", "hub_sess_02"]
+  }
+}
+```
 
-后台同步启动时立即重放磁盘 Outbox，采集到新事件后立即唤醒；失败按独立指数退避，
-退避期间不会停止 Agent 采集。唤醒信号是容量为 1 的合并通知，长时间离线不会因每次
-轮询都排队一个通知而无界占用内存。当前不持久化“正在发送的 batch_id”；进程在响应
-到达前退出时，下次会为相同事件生成新批次，服务端仍按事件 ID 幂等接收。
+若 `replay_from_seq` 小于 Server 当前最新序列号，Server 立即启动滑动窗口重放逻辑。
 
-生产和远程地址必须使用 HTTPS。仅为本地开发允许 `localhost`、IPv4 回环网段和
-IPv6 回环地址使用 HTTP；URL 不允许嵌入用户名、密码、查询参数或片段。客户端不
-跟随任何 HTTP 重定向，避免请求被转发到未经上述校验的地址。私有部署可显式配置
-一个 CA 根证书 PEM；这只替换该 Gateway 客户端的信任根，不会关闭证书链、主机名
-或有效期验证。
+---
 
-## 6. 尚未实现
+## 4. 可靠传输与滑动窗口重放协议 (ACK + Replay)
 
-- TLS WebSocket Device Gateway
-- 服务端公钥轮换、设备恢复绑定和完整审计日志
-- 心跳与可靠离线判断
-- 在途批次持久化
-- Windows ACL 主动加固或系统密钥库托管
-- SyncAck 的服务端签名（文件式 `sync ack` 诊断流程因此只应在本地信任环境使用）
-- Outbox 事件与会话快照的本地保留/清理策略（长期不同步时数据库单调增长）
-- `observe_only` / `trusted_execution` 策略、任务执行本地持久收据与崩溃后自动续跑
+```mermaid
+stateDiagram-v2
+    [*] --> Connected
+    Connected --> OutboxBuffering : Send Frame (seq: N)
+    OutboxBuffering --> OutboxEvicted : Receive ACK (ack_seq >= N)
+    Connected --> Disconnected : Network Drop
+    Disconnected --> Reconnecting : Auto-Retry (Backoff + Jitter)
+    Reconnecting --> HandshakeWithGap : Connected, Send Handshake(last_seen_seq)
+    HandshakeWithGap --> Replaying : Server/Runner Detects Gap
+    Replaying --> NormalEventLoop : Gap Replayed & ACKed
+    NormalEventLoop --> Connected
+```
 
-Gateway 已实现受认证签发、过期、摘要持久化、并发单次领取、同设备幂等重试和软
-撤销；未配置 PostgreSQL 时这些状态只保存在进程内。多用户联合登录、恢复绑定、
-密钥轮换和完整审计仍属于后续账号体系。
+### 4.1 确认与重放规则
+1. **累计确认（Cumulative ACK）**：`ack_seq = N` 表示接收方已完整无误接收到序列号 `<= N` 的所有帧。
+2. **滑动窗口缓冲（Outbox Buffer）**：双方均在内存及本地磁盘（SQLite/WAL）中保留最近 2000 个未被对方 ACK 的帧。
+3. **断线重放（Replay Trigger）**：
+   - 握手阶段比对双方 `last_seen_seq`。
+   - 若发送方最新序列号大于对方 `last_seen_seq`，按顺序重放差额帧（Frame 中的 `is_replay: true` 标记可选置位）。
+   - 接收方根据 `seq` 严格去重，确保数据流绝无重复与遗漏。
+
+---
+
+## 5. 控制命令集 (Commands) 与幂等处理
+
+所有控制命令均通过 `type: "cmd"` 发送，且强制携带 `cmd_id`。
+
+### 5.1 启动会话 (`launch_session`)
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8B001",
+  "type": "cmd",
+  "seq": 1025,
+  "ack_seq": 451,
+  "hub_session_id": "hub_sess_999",
+  "cmd_id": "cmd_create_001",
+  "timestamp": 1725148805000,
+  "payload": {
+    "action": "launch_session",
+    "launch_profile": {
+      "workspace_path": "d:/ClaudeSpace/Project/solum",
+      "provider": "claude_code",
+      "model": {
+        "model_id": "claude-3-7-sonnet-20250219",
+        "reasoning": { "effort_level": "high", "budget_tokens": 16000 }
+      },
+      "permissions": { "approval_mode": "ask_all_edits" }
+    }
+  }
+}
+```
+
+### 5.2 提交用户 Prompt (`send_prompt`)
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8B002",
+  "type": "cmd",
+  "seq": 1026,
+  "ack_seq": 451,
+  "hub_session_id": "hub_sess_999",
+  "cmd_id": "cmd_prompt_002",
+  "timestamp": 1725148810000,
+  "payload": {
+    "action": "send_prompt",
+    "text": "优化 WebSocket 帧的序列化开销",
+    "client_turn_id": "turn_1"
+  }
+}
+```
+
+### 5.3 审批工具执行 (`resolve_approval`)
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8B003",
+  "type": "cmd",
+  "seq": 1027,
+  "ack_seq": 451,
+  "hub_session_id": "hub_sess_999",
+  "cmd_id": "cmd_appr_003",
+  "timestamp": 1725148815000,
+  "payload": {
+    "action": "resolve_approval",
+    "approval_id": "appr_01J8...",
+    "decision": "approved", // "approved" | "rejected"
+    "custom_feedback": ""
+  }
+}
+```
+
+### 5.4 中断执行 (`interrupt_turn`)
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8B004",
+  "type": "cmd",
+  "seq": 1028,
+  "ack_seq": 451,
+  "hub_session_id": "hub_sess_999",
+  "cmd_id": "cmd_stop_004",
+  "timestamp": 1725148820000,
+  "payload": {
+    "action": "interrupt_turn",
+    "reason": "user_cancelled"
+  }
+}
+```
+
+### 5.5 导入本地原生会话 (`import_native_session`)
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8B005",
+  "type": "cmd",
+  "seq": 1029,
+  "ack_seq": 451,
+  "hub_session_id": "hub_sess_import_001",
+  "cmd_id": "cmd_import_005",
+  "timestamp": 1725148825000,
+  "payload": {
+    "action": "import_native_session",
+    "provider": "claude_code",
+    "native_session_id": "d0f8a8b1-...",
+    "workspace_path": "d:/ClaudeSpace/Project/solum"
+  }
+}
+```
+
+---
+
+## 6. 事件集 (Events) 与流式输出优化
+
+所有 Agent 状态变化与内容输出均通过 `type: "event"` 由 Runner 上报。
+
+### 6.1 高频流式分块 (`stream_delta`)
+
+为了平衡 60fps 实时流畅度与网络 I/O 开销，Runner 将 50ms 窗口内的 Token 聚合为一个 Delta 帧：
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8E001",
+  "type": "event",
+  "seq": 2048,
+  "ack_seq": 1029,
+  "hub_session_id": "hub_sess_999",
+  "timestamp": 1725148830000,
+  "payload": {
+    "event_type": "stream_delta",
+    "turn_id": "turn_1",
+    "block_index": 0,
+    "delta_type": "text | thinking | tool_input",
+    "delta_content": "正在对网络帧做性能分析..."
+  }
+}
+```
+
+### 6.2 状态流转事件 (`session_state_changed`)
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8E002",
+  "type": "event",
+  "seq": 2049,
+  "ack_seq": 1029,
+  "hub_session_id": "hub_sess_999",
+  "timestamp": 1725148831000,
+  "payload": {
+    "event_type": "session_state_changed",
+    "previous_state": "running",
+    "current_state": "awaiting_permission",
+    "reason": {
+      "waiting_for": "tool_approval",
+      "approval_id": "appr_01J8...",
+      "tool_name": "Bash",
+      "tool_params": { "command": "git commit -m 'feat: sync'" }
+    }
+  }
+}
+```
+
+---
+
+## 7. 状态校验巡检协议 (Reconcile Protocol)
+
+Runner 默认每 30 秒向 Server 发送 `reconcile_check` 帧，比对活跃会话状态摘要：
+
+```json
+{
+  "ver": 2,
+  "frame_id": "frm_01J8R001",
+  "type": "reconcile_check",
+  "seq": 2100,
+  "ack_seq": 1035,
+  "timestamp": 1725148860000,
+  "payload": {
+    "runner_id": "run_01J6XYZ...",
+    "sessions_digest": [
+      {
+        "hub_session_id": "hub_sess_999",
+        "execution_state": "idle",
+        "current_turn": 3,
+        "state_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  }
+}
+```
+
+若 Server 检测到状态指纹不匹配，返回 `reconcile_sync` 帧要求全量校准对应会话的最新快照。

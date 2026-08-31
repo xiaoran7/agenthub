@@ -5,7 +5,21 @@
 
 ## [Unreleased]
 
+### Changed (2.0.0-spec 架构重定界)
+
+- **28 项核心架构重定界与统一多 Agent 远程控制平面演进**：
+  - **产品定位重构**：从「只读 Session 元数据监控器」升级为「统一多 Agent 远程控制平面（Unified Multi-Agent Remote Plane）」，合并多 Agent 各自的 Remote 守护，单 Runner 维系一条 WebSocket 长连接多路复用所有会话。
+  - **会话持久化与凭据免责**：服务端开放全量会话正文与工具流持久化存储；明确保留零 Provider 凭据采集原则，对用户/Agent 自行写入 Transcript 的敏感信息明确免责边界。
+  - **Provider 严格隔离**：Claude 的 session 永远是 Claude 的，Codex 的 session 永远是 Codex 的，严禁跨 Provider 伪造或混淆执行上下文。
+  - **工作区优先（Workspace-First）**：重构组织模型，以工作目录为一级组织维度，在工作区下挂载不同 Provider 会话；同目录支持多会话并发并提示热点文件冲突。
+  - **多路复用 Event Bus 与可靠传输**：制定 Sync Protocol v2.0，基于 Envelope 帧路由与滑动窗口（Sliding Window Buffer），强制从 v1 实现全局 ACK + Replay 机制与断线自愈。
+  - **双层事件存储与流式优化**：服务端持久化分离「规范化事件（Normalized）」与「Provider 原始事件（Raw）」；高频 Token Delta 仅在内存 Stream Bus 实时推送，按 Turn/Block 聚合落库。
+  - **动态能力发现与 Launch Profile**：新增 `CAPABILITY_AND_LAUNCH_SPEC.md`，基于 Runner 本地探测动态上报 Capabilities，引入强类型 `LaunchProfile` 与会话级作用域权限模型。
+  - **原生会话导入与 Slash 路由**：支持扫描并一键导入本地已有 `.claude` / Codex 原生会话；智能拦截分发 `/` Slash 控制指令。
+  - **状态解耦与 Reconcile**：Runner 节点物理状态、Session 会话生命周期状态与 Client Presence 三者解耦；引入 30s 周期性状态指纹 Reconcile 自愈巡检。
+
 ### Added
+
 
 - **Antigravity 智能体适配与观测支持**：Runner 新增对 Antigravity（Google AGY / Gemini CLI）的会话采集、Transcript JSONL 解析与实时状态映射，支持 `USER_INPUT`、`PLANNER_RESPONSE`、工具调用与规划状态标准化识别；集成本地工作区路径脱敏与快照合并，完全遵循不读取/不上传对话正文或代码的安全边界。
 - **TannerLab / Tg-oauth 统一身份认证深度接入与持久化支持**：

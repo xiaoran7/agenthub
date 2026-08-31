@@ -2,6 +2,22 @@
 
 > 记录调试耗时、失败尝试和环境陷阱。每条包含现象、根因、解决方式和规避方法。
 
+## 2026-09-01 Token 流式洪峰导致数据库与网络队列堵塞
+
+- **现象**：当多会话高并发输出或 Agent 产生密集 Thinking Token 时，单 WebSocket 队列堆积，PostgreSQL 写入 IOPS 激增，导致前端控制台卡顿。
+- **根因**：把每个 Token Delta 当作最小数据库存储事件；且没有对高频流式帧做发送端时间窗口批处理。
+- **解决方式**：在 Runner 引入 50ms 聚合分块窗口（WS Chunking）；在服务端实现内存 Stream Bus 与存储聚合器，Token Delta 仅在内存广播推流，数据库仅在 Turn 结束或达到 4KB Block 边界时持久化完整 Message/Tool 记录。
+- **如何避免**：坚决贯彻原则 26——「不要把 Token Delta 当数据库的最小事件」。
+
+## 2026-09-01 长时间断网导致 ACK 滑动窗口越界
+
+- **现象**：Runner 离线数小时后重连，Server 无法通过重放恢复未确认序列，产生序列断层。
+- **根因**：滑动窗口容量有限（默认 2000 帧），超长离线期间生成的事件超出缓冲区最大上限。
+- **解决方式**：握手阶段增加序列差值校验。当 `gap > max_replay_window` 时，自动降级为全量快照同步（Snapshot Sync）与 Reconcile 状态对齐，清空旧窗口并重新基准化序列号。
+- **如何避免**：重放协议必须具备超出窗口上限时的安全降级兜底方案。
+
+
+
 ## 2026-08-15 Grok Build 采集不能读对话日志或 auth.json
 
 - **现象**：`~/.grok/sessions/<cwd>/<id>/` 里同时有 `summary.json`、`chat_history.jsonl`、

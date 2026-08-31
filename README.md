@@ -1,34 +1,31 @@
 # AgentHub（智能体集成中心）
 
-一个跨 Claude Code、OpenAI Codex、Antigravity、Grok Build 等本地 Coding Agent 的统一
-Session 监控与远程接入平台。
+面向 Claude Code、OpenAI Codex、Antigravity 等本地 Coding Agent 的**统一多 Agent 远程控制平面（Unified Multi-Agent Remote Plane）**。
 
-用户在电脑上安装轻量级本地客户端后，可以通过网页端或移动端统一查看：
+用户只需在电脑上运行单一轻量级 Runner，即可通过一条多路复用 WebSocket 长连接将本机所有 Coding Agent 会话接入云端控制中心，在网页端和移动端实现全功能远程控制、实时流式会话交互、工具审批与状态感知。
 
-- 多台电脑的在线状态
-- 每台电脑已观测到的 Coding Agent
-- 多个项目和 Session 的实时状态
-- 等待用户处理、最近完成及历史 Session
+## 核心架构原则 (v2.0)
 
-## 当前阶段
+- **工作区优先（Workspace-First）**：以工作目录为一级组织维度，支持同目录多会话并发与冲突感知。
+- **合并多 Agent Remote**：单 Runner 维持一条长连接，多路复用所有 Claude/Codex/Antigravity 会话。
+- **可靠传输（ACK + Replay）**：滑动窗口双向确认与断线重放机制，杜绝丢包。
+- **双层事件存储**：服务端持久化全量会话正文（规范化统一事件 + Provider 原始事件），同时对高频 Token 流进行存储聚合优化。
+- **动态能力发现与 Launch Profile**：启动自动探测本机 Agent 特性，强类型 Profile 发起会话，权限控制按会话精细化隔离。
+- **原生 Slash 路由与会话导入**：智能拦截分发 `/` 指令，支持扫描导入本地已有历史原生会话。
+- **零凭据窃取**：AgentHub 绝不主动采集 Provider Credential Store，责任边界清晰。
 
-当前产品以安全、准确、低延迟的 Session 监控为数据基础，正在扩展为订阅制多用户
-Agent 平台。用户通过邮箱注册/登录管理自己的设备；Claude Code、Codex 与 Grok Build
-是一级来源分类。Pro/Team 用户可通过服务器可靠中转远程任务，由 Runner 主动领取并
-在本机显示完整提示词，经用户确认后调用本机 Agent CLI；不提供模型转售，也不上传完整
-代码、对话、命令输出或本机路径。
+## 文档体系
 
-## 文档
-
-- [产品需求文档](docs/PRD.md)
+- [产品需求文档 (PRD v2.0)](docs/PRD.md)
+- [系统架构设计规范 (Architecture v2.0)](docs/ARCHITECTURE.md)
+- [多路复用事件总线与同步协议 (Sync Protocol v2.0)](docs/SYNC_PROTOCOL.md)
+- [Launch Profile、能力发现与权限模型规范](docs/CAPABILITY_AND_LAUNCH_SPEC.md)
 - [技术可行性报告](docs/TECHNICAL_FEASIBILITY.md)
-- [MVP 系统架构](docs/ARCHITECTURE.md)
-- [设备同步协议](docs/SYNC_PROTOCOL.md)
 - [跨端设计系统](docs/DESIGN_SYSTEM.md)
-- [Android 验收记录](docs/ANDROID_VALIDATION.md)
 - [变更日志](docs/CHANGELOG.md)
-- [设计取舍](docs/MISC.md)
 - [踩坑集](docs/PITFALLS.md)
+- [设计取舍备忘](docs/MISC.md)
+
 
 ## 开发
 
