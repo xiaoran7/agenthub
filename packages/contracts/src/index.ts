@@ -1433,3 +1433,10 @@ function expectTimestamp(value: unknown, name: string): string {
   }
   return value;
 }
+
+export * from "./v2-frames.js";
+export * from "./v2-launch.js";
+export * from "./v2-capabilities.js";
+export * from "./v2-commands.js";
+export * from "./v2-events.js";
+export * from "./v2-slash.js";

@@ -326,6 +326,92 @@ export async function cancelTask(
   );
 }
 
+// --- AgentHub v2 API Endpoints ---
+
+export async function fetchV2Capabilities(config: PanelConfig): Promise<any[]> {
+  return fetchJson<any[]>(
+    `${config.gatewayBase}/v2/capabilities`,
+    config.userId,
+  );
+}
+
+export async function fetchV2Sessions(
+  config: PanelConfig,
+  filter?: { runner_id?: string; workspace_path?: string },
+): Promise<any[]> {
+  const query = filter
+    ? `?${new URLSearchParams(filter as Record<string, string>).toString()}`
+    : "";
+  return fetchJson<any[]>(
+    `${config.gatewayBase}/v2/sessions${query}`,
+    config.userId,
+  );
+}
+
+export async function fetchV2Session(
+  config: PanelConfig,
+  sessionId: string,
+): Promise<any> {
+  return fetchJson<any>(
+    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}`,
+    config.userId,
+  );
+}
+
+export async function launchV2Session(
+  config: PanelConfig,
+  launch_profile: any,
+): Promise<{ hub_session_id: string; cmd_id: string }> {
+  return sendJsonResponse<{ hub_session_id: string; cmd_id: string }>(
+    `${config.gatewayBase}/v2/sessions/launch`,
+    config.userId,
+    "POST",
+    { launch_profile },
+  );
+}
+
+export async function sendV2Prompt(
+  config: PanelConfig,
+  sessionId: string,
+  text: string,
+  client_turn_id?: string,
+): Promise<{ status: string; cmd_id: string }> {
+  return sendJsonResponse<{ status: string; cmd_id: string }>(
+    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}/prompt`,
+    config.userId,
+    "POST",
+    { text, client_turn_id },
+  );
+}
+
+export async function resolveV2Approval(
+  config: PanelConfig,
+  sessionId: string,
+  approval_id: string,
+  decision: "approved" | "rejected",
+  custom_feedback?: string,
+): Promise<{ status: string; cmd_id: string }> {
+  return sendJsonResponse<{ status: string; cmd_id: string }>(
+    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}/approve`,
+    config.userId,
+    "POST",
+    { approval_id, decision, custom_feedback },
+  );
+}
+
+export async function interruptV2Turn(
+  config: PanelConfig,
+  sessionId: string,
+  reason?: string,
+): Promise<{ status: string; cmd_id: string }> {
+  return sendJsonResponse<{ status: string; cmd_id: string }>(
+    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+    config.userId,
+    "POST",
+    { reason },
+  );
+}
+
 async function sendJsonResponse<T>(
   url: string,
   userId: string,

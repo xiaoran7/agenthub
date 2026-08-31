@@ -14,9 +14,13 @@ import {
   presences,
   remoteTaskStatuses,
   verifySyncBatch,
+  validateCapabilityReport,
+  validateLaunchProfile,
 } from "@agent-pulse/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyRawBody from "fastify-raw-body";
+import { V2SessionManager } from "./v2-session-manager.js";
+import { DualLayerEventStore } from "./v2-event-store.js";
 
 import {
   AccountError,
@@ -128,6 +132,7 @@ export interface GatewayAppOptions {
   billingVerifier?: BillingEventVerifier;
   billingProvider?: BillingProvider;
   tgOAuthClient?: TgOAuthClient;
+  v2Manager?: V2SessionManager;
   loginRateLimitSecret?: Buffer;
   trustProxy?: boolean;
   bindingCodeFactory?: () => string;
@@ -1718,6 +1723,196 @@ export function createGatewayApp(
       raw.end();
     };
     openStreams.add(close);
+    raw.on("close", close);
+    raw.on("error", close);
+  });
+
+  const v2Manager = options.v2Manager ?? new V2SessionManager();
+
+  // v2 Dynamic Capabilities
+  app.get("/v2/capabilities", async (request) => {
+    await authenticator.authenticate(request);
+    return { capabilities: v2Manager.listAllCapabilities() };
+  });
+
+  app.get("/v2/runners/:runnerId/capabilities", async (request, reply) => {
+    await authenticator.authenticate(request);
+    const { runnerId } = request.params as { runnerId: string };
+    const caps = v2Manager.getCapabilities(runnerId);
+    if (!caps) {
+      void reply.status(404).send({ error: "runner_not_found" });
+      return;
+    }
+    return { capabilities: caps };
+  });
+
+  app.post("/v2/capabilities", async (request) => {
+    const report = validateCapabilityReport(request.body);
+    v2Manager.saveCapabilities(report);
+    return { status: "recorded" };
+  });
+
+  // v2 Workspace-First Sessions
+  app.get("/v2/sessions", async (request) => {
+    await authenticator.authenticate(request);
+    const query = request.query as {
+      runner_id?: string;
+      workspace_path?: string;
+    };
+    return { sessions: v2Manager.eventStore.listSessions(query) };
+  });
+
+  app.get("/v2/sessions/:sessionId", async (request, reply) => {
+    await authenticator.authenticate(request);
+    const { sessionId } = request.params as { sessionId: string };
+    const session = v2Manager.eventStore.getSession(sessionId);
+    if (!session) {
+      void reply.status(404).send({ error: "session_not_found" });
+      return;
+    }
+    return { session };
+  });
+
+  // v2 Interactive Control Commands
+  app.post("/v2/sessions/launch", async (request, reply) => {
+    await authenticator.authenticate(request);
+    const body = expectObject(request.body);
+    const profile = validateLaunchProfile(body.launch_profile);
+    const cmdId =
+      typeof body.cmd_id === "string"
+        ? body.cmd_id
+        : `cmd_${Date.now().toString(36)}`;
+    const hubSessionId = `hub_${randomUUID()}`;
+
+    try {
+      v2Manager.sendCommand(profile.target_runner_id, hubSessionId, cmdId, {
+        action: "launch_session",
+        launch_profile: profile,
+      });
+      return { hub_session_id: hubSessionId, cmd_id: cmdId };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "launch_failed";
+      void reply.status(400).send({ error: msg });
+    }
+  });
+
+  app.post("/v2/sessions/:sessionId/prompt", async (request, reply) => {
+    await authenticator.authenticate(request);
+    const { sessionId } = request.params as { sessionId: string };
+    const session = v2Manager.eventStore.getSession(sessionId);
+    if (!session) {
+      void reply.status(404).send({ error: "session_not_found" });
+      return;
+    }
+    const body = expectObject(request.body);
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!text.trim()) {
+      void reply.status(400).send({ error: "prompt_text_required" });
+      return;
+    }
+    const cmdId =
+      typeof body.cmd_id === "string"
+        ? body.cmd_id
+        : `cmd_${Date.now().toString(36)}`;
+
+    v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
+      action: "send_prompt",
+      text,
+      client_turn_id:
+        typeof body.client_turn_id === "string"
+          ? body.client_turn_id
+          : undefined,
+    });
+    return { status: "queued", cmd_id: cmdId };
+  });
+
+  app.post("/v2/sessions/:sessionId/approve", async (request, reply) => {
+    await authenticator.authenticate(request);
+    const { sessionId } = request.params as { sessionId: string };
+    const session = v2Manager.eventStore.getSession(sessionId);
+    if (!session) {
+      void reply.status(404).send({ error: "session_not_found" });
+      return;
+    }
+    const body = expectObject(request.body);
+    const approvalId =
+      typeof body.approval_id === "string" ? body.approval_id : "";
+    const decision =
+      body.decision === "approved" || body.decision === "rejected"
+        ? body.decision
+        : "rejected";
+    const cmdId =
+      typeof body.cmd_id === "string"
+        ? body.cmd_id
+        : `cmd_${Date.now().toString(36)}`;
+
+    v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
+      action: "resolve_approval",
+      approval_id: approvalId,
+      decision,
+      custom_feedback:
+        typeof body.custom_feedback === "string"
+          ? body.custom_feedback
+          : undefined,
+    });
+    return { status: "sent", cmd_id: cmdId };
+  });
+
+  app.post("/v2/sessions/:sessionId/interrupt", async (request, reply) => {
+    await authenticator.authenticate(request);
+    const { sessionId } = request.params as { sessionId: string };
+    const session = v2Manager.eventStore.getSession(sessionId);
+    if (!session) {
+      void reply.status(404).send({ error: "session_not_found" });
+      return;
+    }
+    const body = expectObject(request.body);
+    const cmdId =
+      typeof body.cmd_id === "string"
+        ? body.cmd_id
+        : `cmd_${Date.now().toString(36)}`;
+
+    v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
+      action: "interrupt_turn",
+      reason: typeof body.reason === "string" ? body.reason : "user_cancelled",
+    });
+    return { status: "sent", cmd_id: cmdId };
+  });
+
+  // v2 Live Stream Delta SSE for Session
+  app.get("/v2/sessions/:sessionId/stream", async (request, reply) => {
+    await authenticator.authenticate(request);
+    const { sessionId } = request.params as { sessionId: string };
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    request.raw.socket.setNoDelay(true);
+    request.raw.socket.setTimeout(0);
+
+    const write = (chunk: string): void => {
+      if (!raw.writableEnded) {
+        raw.write(chunk);
+      }
+    };
+    write(`retry: ${STREAM_RETRY_MS}\n\n`);
+    write("event: ready\ndata: {}\n\n");
+
+    const unsubscribe = v2Manager.eventStore.subscribeDeltas(
+      sessionId,
+      (delta) => {
+        write(`event: delta\ndata: ${JSON.stringify(delta)}\n\n`);
+      },
+    );
+
+    const close = (): void => {
+      unsubscribe();
+      raw.end();
+    };
     raw.on("close", close);
     raw.on("error", close);
   });

@@ -246,10 +246,14 @@ function generateVapidKeys(): {
   subject: string;
 } {
   const key = createECDH("prime256v1");
-  key.generateKeys();
+  let priv: Buffer;
+  do {
+    key.generateKeys();
+    priv = key.getPrivateKey();
+  } while (priv.length !== 32);
   return {
     publicKey: key.getPublicKey().toString("base64url"),
-    privateKey: key.getPrivateKey().toString("base64url"),
+    privateKey: priv.toString("base64url"),
     subject: "mailto:operator@example.com",
   };
 }

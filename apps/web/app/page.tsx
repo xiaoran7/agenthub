@@ -11,6 +11,7 @@ import {
 
 import { SettingsPanel } from "../src/components/SettingsPanel";
 import { DeviceConnectDialog } from "../src/components/DeviceConnectDialog";
+import { LaunchSessionDialog } from "../src/components/LaunchSessionDialog";
 import { SessionInspector } from "../src/components/SessionInspector";
 import {
   ActivityView,
@@ -146,6 +147,7 @@ export default function PanelPage() {
   const [timelineError, setTimelineError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deviceConnectOpen, setDeviceConnectOpen] = useState(false);
+  const [launchSessionOpen, setLaunchSessionOpen] = useState(false);
   const [fullSession, setFullSession] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
   const [browserOnline, setBrowserOnline] = useState(true);
@@ -502,6 +504,7 @@ export default function PanelPage() {
         nowMs={nowMs}
         onFilterChange={setSessionFilter}
         onSelect={handleSelectSession}
+        onLaunchSession={() => setLaunchSessionOpen(true)}
         selectedKey={selectedKey}
         sessions={baseSessions}
       />
@@ -671,6 +674,16 @@ export default function PanelPage() {
         <DeviceConnectDialog
           config={config}
           onClose={() => setDeviceConnectOpen(false)}
+        />
+      )}
+      {launchSessionOpen && config !== undefined && (
+        <LaunchSessionDialog
+          config={config}
+          onClose={() => setLaunchSessionOpen(false)}
+          onLaunched={(_sessionId) => {
+            setLaunchSessionOpen(false);
+            void refresh();
+          }}
         />
       )}
     </>

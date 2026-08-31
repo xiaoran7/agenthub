@@ -7,16 +7,26 @@
 
 ### Changed (2.0.0-spec 架构重定界)
 
-- **28 项核心架构重定界与统一多 Agent 远程控制平面演进**：
-  - **产品定位重构**：从「只读 Session 元数据监控器」升级为「统一多 Agent 远程控制平面（Unified Multi-Agent Remote Plane）」，合并多 Agent 各自的 Remote 守护，单 Runner 维系一条 WebSocket 长连接多路复用所有会话。
-  - **会话持久化与凭据免责**：服务端开放全量会话正文与工具流持久化存储；明确保留零 Provider 凭据采集原则，对用户/Agent 自行写入 Transcript 的敏感信息明确免责边界。
-  - **Provider 严格隔离**：Claude 的 session 永远是 Claude 的，Codex 的 session 永远是 Codex 的，严禁跨 Provider 伪造或混淆执行上下文。
-  - **工作区优先（Workspace-First）**：重构组织模型，以工作目录为一级组织维度，在工作区下挂载不同 Provider 会话；同目录支持多会话并发并提示热点文件冲突。
-  - **多路复用 Event Bus 与可靠传输**：制定 Sync Protocol v2.0，基于 Envelope 帧路由与滑动窗口（Sliding Window Buffer），强制从 v1 实现全局 ACK + Replay 机制与断线自愈。
-  - **双层事件存储与流式优化**：服务端持久化分离「规范化事件（Normalized）」与「Provider 原始事件（Raw）」；高频 Token Delta 仅在内存 Stream Bus 实时推送，按 Turn/Block 聚合落库。
-  - **动态能力发现与 Launch Profile**：新增 `CAPABILITY_AND_LAUNCH_SPEC.md`，基于 Runner 本地探测动态上报 Capabilities，引入强类型 `LaunchProfile` 与会话级作用域权限模型。
-  - **原生会话导入与 Slash 路由**：支持扫描并一键导入本地已有 `.claude` / Codex 原生会话；智能拦截分发 `/` Slash 控制指令。
-  - **状态解耦与 Reconcile**：Runner 节点物理状态、Session 会话生命周期状态与 Client Presence 三者解耦；引入 30s 周期性状态指纹 Reconcile 自愈巡检。
+- **AgentHub v2.0 统一多 Agent 远程控制平面全栈核心实现与落地**：
+  - **共享契约协议扩展 (`packages/contracts`)**：
+    - 完整实现 Frame Envelope (`ver: 2`, `seq`, `ack_seq`, `hub_session_id`, `cmd_id`, `is_replay`) 帧封装与校验；
+    - 制定并实现 `LaunchProfile`、`SessionPermissions`（`plan_only` / `ask_all_edits` / `accept_edits` / `bypass_permissions`）、`CapabilityReport` 强类型契约；
+    - 制定控制命令集（`launch_session`, `send_prompt`, `resolve_approval`, `interrupt_turn`, `import_native_session`）与事件集（`stream_delta`, `session_state_changed`, `tool_approval_requested`, `turn_started`, `turn_completed`）Payload 校验；
+    - 实现 Slash 指令三层智能解析分类器（`parseSlashCommand`），精准分类 HubCommand、NativeCommand 与 PromptFallback。
+  - **云端多路复用网关与双层事件存储 (`services/api`)**：
+    - 实现 `V2SessionManager`：管理 Runner 长连接生命周期、握手与版本协商、滑动窗口 Outbox 缓冲与断网重放（Gap Replay）；
+    - 实现 `DualLayerEventStore`：持久化 Turn 规范化事件与 Provider 原始事件，集成 50ms Token Delta 实时分发与落库聚合；
+    - 扩展 v2 REST 与 SSE 端点：`GET/POST /v2/capabilities`、`GET /v2/sessions`、`POST /v2/sessions/launch`、`POST /v2/sessions/:id/prompt`、`POST /v2/sessions/:id/approve`、`POST /v2/sessions/:id/interrupt`、`GET /v2/sessions/:id/stream`。
+  - **Runner 本地能力探测与命令分发 (`crates/runner`)**：
+    - 实现 `capabilities.rs`：动态探测本机 Claude Code、OpenAI Codex、Antigravity 模型列表、思考预算与 Slash 支持；
+    - 实现 `command_router.rs`：分发执行控制命令并触发会话生命周期事件；
+    - 实现 `v2_protocol.rs`：Rust 端完整的 Envelope 序列化与 Slash 指令解析。
+  - **Web 控制台交互控制与审批组件 (`apps/web`)**：
+    - 新增 `LaunchSessionDialog`：基于动态能力发现表单发起会话；
+    - 新增 `ToolApprovalModal`：拦截并高保真呈现高危工具调用与 Diff 预览，支持一键放行与拒绝反馈；
+    - 新增 `SlashCommandMenu`：智能 Slash 指令补全下拉面板；
+    - 扩展 `apps/web/src/lib/api.ts` v2 交互控制 API 客户端方法。
+
 
 ### Added
 

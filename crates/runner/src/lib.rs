@@ -1,7 +1,9 @@
 pub mod adapters;
 pub mod auth;
 pub mod auth_worker;
+pub mod capabilities;
 pub mod collectors;
+pub mod command_router;
 pub mod device;
 pub mod domain;
 pub mod gateway;
@@ -11,3 +13,4 @@ pub mod runtime;
 pub mod sync;
 pub mod sync_worker;
 pub mod tasks;
+pub mod v2_protocol;
