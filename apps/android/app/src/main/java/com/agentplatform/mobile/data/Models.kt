@@ -6,6 +6,8 @@ import java.time.Instant
 enum class AgentType(val wireValue: String, val label: String) {
     CLAUDE_CODE("claude_code", "Claude Code"),
     CODEX("codex", "Codex"),
+    ANTIGRAVITY("antigravity", "Google Antigravity"),
+    GROK_BUILD("grok_build", "Grok Build"),
     UNKNOWN("unknown", "未知 Agent");
 
     companion object {

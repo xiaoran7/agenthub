@@ -15,13 +15,14 @@ use thiserror::Error;
 
 use crate::{
     adapters::{
+        antigravity::AntigravityAdapterError,
         claude::{self, ClaudeAdapterError},
         codex::{self, CodexAdapterError, CodexThreadContext},
         grok::{self, GrokAdapterError},
     },
     collectors::{
-        CodexAppServer, CollectorError, DEFAULT_COLLECTOR_TIMEOUT, collect_claude_transcripts,
-        collect_codex_local_threads, collect_grok_sessions,
+        CodexAppServer, CollectorError, DEFAULT_COLLECTOR_TIMEOUT, collect_antigravity_sessions,
+        collect_claude_transcripts, collect_codex_local_threads, collect_grok_sessions,
     },
     domain::{ActivityStatus, AgentType, ObservationMeta, Presence, SessionObservation},
     outbox::{Outbox, OutboxError},
@@ -39,6 +40,8 @@ pub enum SourceError {
     #[error(transparent)]
     CodexAdapter(#[from] CodexAdapterError),
     #[error(transparent)]
+    AntigravityAdapter(#[from] AntigravityAdapterError),
+    #[error(transparent)]
     GrokAdapter(#[from] GrokAdapterError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
@@ -50,6 +53,7 @@ impl SourceError {
             Self::Collector(error) => error.code(),
             Self::ClaudeAdapter(_) => "claude_payload_invalid",
             Self::CodexAdapter(_) => "codex_payload_invalid",
+            Self::AntigravityAdapter(_) => "antigravity_payload_invalid",
             Self::GrokAdapter(_) => "grok_payload_invalid",
             Self::Json(_) => "internal_json_failed",
         }
@@ -162,6 +166,74 @@ impl SessionSource for CodexSessionSource {
     ) -> Result<Vec<SessionObservation>, SourceError> {
         let (result, messages, local) = self.collect_result()?;
         normalize_codex_collection(&result, messages, meta, redactor, &mut self.context, local)
+    }
+}
+
+pub struct AntigravitySessionSource {
+    include_completed: bool,
+}
+
+impl AntigravitySessionSource {
+    pub fn new(include_completed: bool) -> Self {
+        Self { include_completed }
+    }
+}
+
+impl SessionSource for AntigravitySessionSource {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Antigravity
+    }
+
+    fn collect(
+        &mut self,
+        meta: &ObservationMeta,
+        redactor: &ProjectRedactor,
+    ) -> Result<Vec<SessionObservation>, SourceError> {
+        let payload = collect_antigravity_sessions(self.include_completed)?;
+        let sessions: Vec<serde_json::Value> = serde_json::from_str(&payload)?;
+        let mut observations = Vec::new();
+        for session in sessions {
+            let session_id = session
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let cwd = session
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let started_at = session
+                .get("startedAt")
+                .and_then(|v| v.as_i64())
+                .and_then(DateTime::from_timestamp_millis);
+            let last_activity_at = session
+                .get("lastActivityAt")
+                .and_then(|v| v.as_i64())
+                .and_then(DateTime::from_timestamp_millis);
+            let steps_val = session
+                .get("steps")
+                .cloned()
+                .unwrap_or(serde_json::json!([]));
+            let steps: Vec<crate::adapters::antigravity::AntigravityStep> =
+                serde_json::from_value(steps_val).unwrap_or_default();
+            let session_meta = crate::adapters::antigravity::AntigravitySessionMetadata {
+                session_id,
+                cwd,
+                is_process_alive: true,
+                started_at,
+                last_activity_at,
+            };
+            if let Some(obs) = crate::adapters::antigravity::normalize_transcript_steps(
+                &steps,
+                &session_meta,
+                meta,
+                redactor,
+            ) {
+                observations.push(obs);
+            }
+        }
+        Ok(observations)
     }
 }
 

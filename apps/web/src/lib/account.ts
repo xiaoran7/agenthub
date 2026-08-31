@@ -349,6 +349,61 @@ export async function switchWorkspace(
   return response.workspaces;
 }
 
+export interface TgOAuthAuthorizeResponse {
+  authorize_url: string;
+  code_verifier: string;
+  state: string;
+}
+
+export interface TgDeviceCodeResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete?: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface TgDevicePollResponse {
+  status: "pending" | "success";
+  slow_down?: boolean;
+  account?: AccountView;
+}
+
+export async function getTgOAuthAuthorizeUrl(
+  params: { redirect_uri?: string; scope?: string } = {},
+): Promise<TgOAuthAuthorizeResponse> {
+  return accountRequest<TgOAuthAuthorizeResponse>(
+    "/v1/auth/oauth/tg/authorize-url",
+    params,
+  );
+}
+
+export async function completeTgOAuthCallback(input: {
+  code: string;
+  code_verifier: string;
+  redirect_uri?: string;
+}): Promise<AccountView> {
+  return accountRequest<AccountView>("/v1/auth/oauth/tg/callback", input);
+}
+
+export async function startTgDeviceAuth(
+  params: { scope?: string } = {},
+): Promise<TgDeviceCodeResponse> {
+  return accountRequest<TgDeviceCodeResponse>(
+    "/v1/auth/oauth/tg/device/code",
+    params,
+  );
+}
+
+export async function pollTgDeviceAuth(
+  deviceCode: string,
+): Promise<TgDevicePollResponse> {
+  return accountRequest<TgDevicePollResponse>("/v1/auth/oauth/tg/device/poll", {
+    device_code: deviceCode,
+  });
+}
+
 export function accountErrorMessage(error: unknown): string {
   if (!(error instanceof AccountApiError)) return "账户服务暂时不可用";
   const messages: Record<string, string> = {
@@ -368,6 +423,12 @@ export function accountErrorMessage(error: unknown): string {
     login_rate_limited: "登录尝试过多，请稍后再试",
     invalid_session_id: "登录会话标识无效",
     session_not_found: "登录会话不存在或已撤销",
+    invalid_oauth_code: "OAuth 授权码无效或已过期",
+    invalid_code_verifier: "PKCE 校验码无效",
+    token_exchange_failed: "OAuth Token 换取失败",
+    userinfo_failed: "读取 OAuth 用户资料失败",
+    oauth_unsupported: "OAuth 身份认证暂未启用",
+    invalid_device_code: "设备授权码无效或已过期",
     team_plan_required: "需要 Team 方案才能邀请成员",
     team_invitee_unavailable: "这个邮箱尚未注册 AgentPulse",
     team_member_exists: "这个用户已经在当前工作区",

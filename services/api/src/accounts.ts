@@ -48,6 +48,8 @@ export interface AccountUser {
   display_name: string;
   password_hash: string;
   status: "active" | "suspended" | "deleted";
+  oauth_provider?: string;
+  oauth_sub?: string;
   email_verified_at?: string;
   created_at: string;
 }
@@ -240,6 +242,18 @@ export interface AccountStore {
     passwordHash: string;
   }): Promise<AccountView>;
   findAccountByEmail(email: string): Promise<AccountUser | undefined>;
+  findAccountByOAuth?(
+    provider: string,
+    sub: string,
+  ): Promise<AccountUser | undefined>;
+  upsertOAuthAccount?(input: {
+    provider: string;
+    sub: string;
+    email: string;
+    displayName: string;
+    emailVerified?: boolean;
+    now?: string;
+  }): Promise<AccountView>;
   accountView(userId: string): Promise<AccountView | undefined>;
   createWebSession(input: {
     sessionId: string;
@@ -460,6 +474,86 @@ export class InMemoryAccountStore implements AccountStore {
   async findAccountByEmail(email: string): Promise<AccountUser | undefined> {
     const userId = this.#userIdsByEmail.get(email);
     return userId === undefined ? undefined : this.#users.get(userId);
+  }
+
+  async findAccountByOAuth(
+    provider: string,
+    sub: string,
+  ): Promise<AccountUser | undefined> {
+    return [...this.#users.values()].find(
+      (user) => user.oauth_provider === provider && user.oauth_sub === sub,
+    );
+  }
+
+  async upsertOAuthAccount(input: {
+    provider: string;
+    sub: string;
+    email: string;
+    displayName: string;
+    emailVerified?: boolean;
+    now?: string;
+  }): Promise<AccountView> {
+    const timestamp = input.now ?? new Date().toISOString();
+    const existing = await this.findAccountByOAuth(input.provider, input.sub);
+    if (existing !== undefined) {
+      if (input.emailVerified && !existing.email_verified_at) {
+        existing.email_verified_at = timestamp;
+      }
+      if (input.displayName && existing.display_name !== input.displayName) {
+        existing.display_name = input.displayName;
+      }
+      const view = await this.accountView(existing.user_id);
+      if (view !== undefined) return view;
+    }
+
+    const byEmail = await this.findAccountByEmail(input.email);
+    if (byEmail !== undefined) {
+      byEmail.oauth_provider = input.provider;
+      byEmail.oauth_sub = input.sub;
+      if (input.emailVerified && !byEmail.email_verified_at) {
+        byEmail.email_verified_at = timestamp;
+      }
+      const view = await this.accountView(byEmail.user_id);
+      if (view !== undefined) return view;
+    }
+
+    const userId = newUserId();
+    const newUser: AccountUser = {
+      user_id: userId,
+      email: input.email,
+      display_name: input.displayName || input.email.split("@")[0] || "User",
+      password_hash: DUMMY_PASSWORD_HASH,
+      status: "active",
+      oauth_provider: input.provider,
+      oauth_sub: input.sub,
+      created_at: timestamp,
+      ...(input.emailVerified ? { email_verified_at: timestamp } : {}),
+    };
+    this.#users.set(userId, newUser);
+    this.#userIdsByEmail.set(input.email, userId);
+    this.#subscriptions.set(userId, {
+      plan: "free",
+      status: "active",
+    });
+    this.#workspaceMembers.set(
+      userId,
+      new Map([[userId, { role: "owner", createdAt: timestamp }]]),
+    );
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: userId,
+      action: "account.created",
+      target_type: "account",
+      target_id: userId,
+      metadata: { plan: "free", reason: "oauth", provider: input.provider },
+      created_at: timestamp,
+    });
+
+    const view = await this.accountView(userId);
+    if (view === undefined) {
+      throw new Error("failed to generate account view for new OAuth user");
+    }
+    return view;
   }
 
   async accountView(userId: string): Promise<AccountView | undefined> {
@@ -1531,40 +1625,51 @@ export function entitlementsFor(
   subscription: SubscriptionRecord,
   now: Date = new Date(),
 ): Entitlements {
-  const paidThrough =
-    subscription.current_period_end !== undefined &&
-    Date.parse(subscription.current_period_end) > now.getTime();
-  const active =
-    subscription.status === "active" ||
-    subscription.status === "trialing" ||
-    ((subscription.status === "past_due" ||
-      subscription.status === "canceled") &&
-      paidThrough);
-  const plan = active ? subscription.plan : "free";
-  if (plan === "team") {
+  if (process.env.AGENT_PULSE_ENFORCE_ENTITLEMENTS === "true") {
+    const paidThrough =
+      subscription.current_period_end !== undefined &&
+      Date.parse(subscription.current_period_end) > now.getTime();
+    const active =
+      subscription.status === "active" ||
+      subscription.status === "trialing" ||
+      ((subscription.status === "past_due" ||
+        subscription.status === "canceled") &&
+        paidThrough);
+    const plan = active ? subscription.plan : "free";
+    if (plan === "team") {
+      return {
+        max_devices: 25,
+        max_concurrent_tasks: 10,
+        history_days: 365,
+        remote_tasks: true,
+        team_members: 10,
+      };
+    }
+    if (plan === "pro") {
+      return {
+        max_devices: 5,
+        max_concurrent_tasks: 3,
+        history_days: 90,
+        remote_tasks: true,
+        team_members: 1,
+      };
+    }
     return {
-      max_devices: 25,
-      max_concurrent_tasks: 10,
-      history_days: 365,
-      remote_tasks: true,
-      team_members: 10,
-    };
-  }
-  if (plan === "pro") {
-    return {
-      max_devices: 5,
-      max_concurrent_tasks: 3,
-      history_days: 90,
-      remote_tasks: true,
+      max_devices: 1,
+      max_concurrent_tasks: 0,
+      history_days: 7,
+      remote_tasks: false,
       team_members: 1,
     };
   }
+
+  // 测试阶段全量解锁：所有方案默认开放完整设备数、并发任务数与历史回溯
   return {
-    max_devices: 1,
-    max_concurrent_tasks: 0,
-    history_days: 7,
-    remote_tasks: false,
-    team_members: 1,
+    max_devices: 999,
+    max_concurrent_tasks: 100,
+    history_days: 3650,
+    remote_tasks: true,
+    team_members: 100,
   };
 }
 

@@ -330,6 +330,34 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     return rows[0] === undefined ? undefined : normalizeAccountUser(rows[0]);
   }
 
+  async findAccountByOAuth(
+    _provider: string,
+    _sub: string,
+  ): Promise<AccountUser | undefined> {
+    return undefined;
+  }
+
+  async upsertOAuthAccount(input: {
+    provider: string;
+    sub: string;
+    email: string;
+    displayName: string;
+    emailVerified?: boolean;
+    now?: string;
+  }): Promise<AccountView> {
+    const existing = await this.findAccountByEmail(input.email);
+    if (existing !== undefined) {
+      const view = await this.accountView(existing.user_id);
+      if (view !== undefined) return view;
+    }
+    return this.createAccount({
+      userId: randomUUID(),
+      email: input.email,
+      displayName: input.displayName,
+      passwordHash: "",
+    });
+  }
+
   async accountView(userId: string): Promise<AccountView | undefined> {
     return postgresAccountView(this.#sql, userId);
   }

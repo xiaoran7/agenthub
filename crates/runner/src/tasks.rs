@@ -339,6 +339,7 @@ impl<'a> TaskWorker<'a> {
         let binary: &Path = match running.agent_type {
             AgentType::ClaudeCode => &self.claude_binary,
             AgentType::Codex => &self.codex_binary,
+            AgentType::Antigravity => &self.claude_binary,
             AgentType::GrokBuild => &self.grok_binary,
         };
         let execution_started_at = Utc::now();

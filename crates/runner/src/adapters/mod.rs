@@ -1,3 +1,4 @@
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod grok;
@@ -17,13 +18,22 @@ pub(crate) fn string_field<'a>(value: &'a Value, path: &[&str]) -> Option<&'a st
 pub(crate) fn safe_tool_category(tool_name: Option<&str>) -> Option<String> {
     let tool_name = tool_name?;
     let category = match tool_name {
-        "Bash" | "exec_command" | "shell_command" | "run_terminal_cmd" => "shell",
-        "Edit" | "Write" | "apply_patch" | "search_replace" | "write" => "file_change",
-        "Read" | "Glob" | "Grep" | "read_file" | "list_dir" | "grep" => "file_read",
-        "AskUserQuestion" | "request_user_input" | "ask_user_question" => "user_input",
+        "Bash" | "exec_command" | "shell_command" | "run_terminal_cmd" | "run_command" => "shell",
+        "Edit"
+        | "Write"
+        | "apply_patch"
+        | "search_replace"
+        | "write"
+        | "write_to_file"
+        | "replace_file_content" => "file_change",
+        "Read" | "Glob" | "Grep" | "read_file" | "list_dir" | "grep" | "view_file"
+        | "grep_search" | "find_by_name" => "file_read",
+        "AskUserQuestion" | "request_user_input" | "ask_user_question" | "ask_question" => {
+            "user_input"
+        }
         "ExitPlanMode" => "plan_approval",
-        "Agent" | "Task" | "spawn_agent" => "subagent",
-        name if name.starts_with("mcp__") => "mcp",
+        "Agent" | "Task" | "spawn_agent" | "invoke_subagent" | "manage_subagents" => "subagent",
+        name if name.starts_with("mcp__") || name.starts_with("call_mcp_tool") => "mcp",
         _ => "other",
     };
     Some(category.to_owned())

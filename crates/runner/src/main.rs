@@ -19,8 +19,8 @@ use agent_pulse_runner::{
     auth::{AuthManager, AuthProvider},
     auth_worker::AuthWorker,
     collectors::{
-        CodexAppServer, collect_claude_transcripts, collect_codex_local_threads,
-        collect_grok_sessions,
+        CodexAppServer, collect_antigravity_sessions, collect_claude_transcripts,
+        collect_codex_local_threads, collect_grok_sessions,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -28,8 +28,8 @@ use agent_pulse_runner::{
     outbox::Outbox,
     privacy::ProjectRedactor,
     runtime::{
-        ClaudeSessionSource, CodexSessionSource, GrokSessionSource, PollPolicy, RunnerRuntime,
-        SessionSource,
+        AntigravitySessionSource, ClaudeSessionSource, CodexSessionSource, GrokSessionSource,
+        PollPolicy, RunnerRuntime, SessionSource,
     },
     sync::{MAX_SYNC_BATCH_EVENTS, SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
     sync_worker::{SyncPolicy, SyncWorker},
@@ -279,6 +279,8 @@ enum InputFormat {
     CodexMessage,
     CodexThreadList,
     CodexHook,
+    AntigravityBrain,
+    AntigravityHook,
     GrokSessions,
     GrokHook,
 }
@@ -287,6 +289,7 @@ enum InputFormat {
 enum Agent {
     Claude,
     Codex,
+    Antigravity,
     Grok,
 }
 
@@ -295,6 +298,7 @@ enum AgentSelection {
     All,
     Claude,
     Codex,
+    Antigravity,
     Grok,
 }
 
@@ -304,6 +308,7 @@ impl std::fmt::Display for AgentSelection {
             Self::All => "all",
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
             Self::Grok => "grok",
         })
     }
@@ -450,6 +455,9 @@ fn main() -> Result<()> {
             let observation = match agent {
                 Agent::Claude => claude::normalize_hook(&input, &meta, &redactor)?,
                 Agent::Codex => codex::normalize_hook(&input, &meta, &redactor)?,
+                Agent::Antigravity => agent_pulse_runner::adapters::antigravity::normalize_hook(
+                    &input, &meta, &redactor,
+                )?,
                 Agent::Grok => grok::normalize_hook(&input, &meta, &redactor)?,
             };
             let mut outbox = Outbox::open(db)?;
@@ -505,6 +513,57 @@ fn main() -> Result<()> {
                             &mut context,
                         )?
                     }
+                }
+                Agent::Antigravity => {
+                    let _ = binary;
+                    let payload = collect_antigravity_sessions(include_completed)?;
+                    let sessions: Vec<serde_json::Value> = serde_json::from_str(&payload)?;
+                    let mut observations = Vec::new();
+                    for session in sessions {
+                        let session_id = session
+                            .get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_owned();
+                        let cwd = session
+                            .get("cwd")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_owned();
+                        let started_at = session
+                            .get("startedAt")
+                            .and_then(|v| v.as_i64())
+                            .and_then(chrono::DateTime::from_timestamp_millis);
+                        let last_activity_at = session
+                            .get("lastActivityAt")
+                            .and_then(|v| v.as_i64())
+                            .and_then(chrono::DateTime::from_timestamp_millis);
+                        let steps_val = session
+                            .get("steps")
+                            .cloned()
+                            .unwrap_or(serde_json::json!([]));
+                        let steps: Vec<agent_pulse_runner::adapters::antigravity::AntigravityStep> =
+                            serde_json::from_value(steps_val).unwrap_or_default();
+                        let session_meta =
+                            agent_pulse_runner::adapters::antigravity::AntigravitySessionMetadata {
+                                session_id,
+                                cwd,
+                                is_process_alive: true,
+                                started_at,
+                                last_activity_at,
+                            };
+                        if let Some(obs) =
+                            agent_pulse_runner::adapters::antigravity::normalize_transcript_steps(
+                                &steps,
+                                &session_meta,
+                                &meta,
+                                &redactor,
+                            )
+                        {
+                            observations.push(obs);
+                        }
+                    }
+                    observations
                 }
                 Agent::Grok => {
                     let _ = binary;
@@ -610,6 +669,9 @@ fn main() -> Result<()> {
                     codex_limit,
                     collector_timeout,
                 )));
+            }
+            if matches!(agent, AgentSelection::All | AgentSelection::Antigravity) {
+                sources.push(Box::new(AntigravitySessionSource::new(include_completed)));
             }
             if matches!(agent, AgentSelection::All | AgentSelection::Grok) {
                 sources.push(Box::new(GrokSessionSource::new(include_completed)));
@@ -964,16 +1026,23 @@ fn auth_provider(agent: Agent) -> Result<AuthProvider> {
     match agent {
         Agent::Claude => Ok(AuthProvider::ClaudeCode),
         Agent::Codex => Ok(AuthProvider::Codex),
-        Agent::Grok => bail!("Grok Build credential sync is not enabled"),
+        Agent::Antigravity => Ok(AuthProvider::Antigravity),
+        Agent::Grok => Ok(AuthProvider::GrokBuild),
     }
 }
 
 fn auth_providers(selection: AgentSelection) -> Result<Vec<AuthProvider>> {
     match selection {
-        AgentSelection::All => Ok(vec![AuthProvider::ClaudeCode, AuthProvider::Codex]),
+        AgentSelection::All => Ok(vec![
+            AuthProvider::ClaudeCode,
+            AuthProvider::Codex,
+            AuthProvider::Antigravity,
+            AuthProvider::GrokBuild,
+        ]),
         AgentSelection::Claude => Ok(vec![AuthProvider::ClaudeCode]),
         AgentSelection::Codex => Ok(vec![AuthProvider::Codex]),
-        AgentSelection::Grok => bail!("Grok Build credential sync is not enabled"),
+        AgentSelection::Antigravity => Ok(vec![AuthProvider::Antigravity]),
+        AgentSelection::Grok => Ok(vec![AuthProvider::GrokBuild]),
     }
 }
 
@@ -1069,6 +1138,30 @@ fn normalize(
             )?)
         }
         InputFormat::CodexHook => Ok(vec![codex::normalize_hook(input, meta, redactor)?]),
+        InputFormat::AntigravityBrain => {
+            let steps = agent_pulse_runner::adapters::antigravity::parse_transcript_lines(input)?;
+            let meta_session =
+                agent_pulse_runner::adapters::antigravity::AntigravitySessionMetadata {
+                    session_id: "preview-session".into(),
+                    cwd: ".".into(),
+                    is_process_alive: true,
+                    started_at: None,
+                    last_activity_at: None,
+                };
+            Ok(
+                agent_pulse_runner::adapters::antigravity::normalize_transcript_steps(
+                    &steps,
+                    &meta_session,
+                    meta,
+                    redactor,
+                )
+                .into_iter()
+                .collect(),
+            )
+        }
+        InputFormat::AntigravityHook => Ok(vec![
+            agent_pulse_runner::adapters::antigravity::normalize_hook(input, meta, redactor)?,
+        ]),
         InputFormat::GrokSessions => Ok(grok::normalize_sessions_json(input, meta, redactor)?),
         InputFormat::GrokHook => Ok(vec![grok::normalize_hook(input, meta, redactor)?]),
     }

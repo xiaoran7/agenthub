@@ -65,6 +65,8 @@ import type {
   SessionTurnEvent,
   SessionTurnResult,
   Snapshot,
+  TgDeviceCodeResponse,
+  TgDevicePollResponse,
 } from "./types";
 
 type AuthMode = "login" | "register";
@@ -147,6 +149,60 @@ function AuthScreen({
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
+  const [deviceFlow, setDeviceFlow] = useState<
+    TgDeviceCodeResponse | undefined
+  >();
+  const [polling, setPolling] = useState(false);
+
+  const startDeviceAuth = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const codeRes = await invoke<TgDeviceCodeResponse>(
+        "start_tg_device_auth",
+        { server_url: null },
+      );
+      setDeviceFlow(codeRes);
+      setPolling(true);
+      const targetUrl =
+        codeRes.verification_uri_complete || codeRes.verification_uri;
+      window.open(targetUrl, "_blank");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!polling || !deviceFlow) return;
+    let cancelled = false;
+    const interval = Math.max(3, deviceFlow.interval || 5) * 1000;
+    const timer = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const res = await invoke<TgDevicePollResponse>("poll_tg_device_auth", {
+          server_url: null,
+          device_code: deviceFlow.device_code,
+        });
+        if (res.status === "success" && res.snapshot) {
+          clearInterval(timer);
+          setPolling(false);
+          onAuthenticated(res.snapshot);
+        }
+      } catch (err) {
+        clearInterval(timer);
+        setPolling(false);
+        setBusy(false);
+        setError(errorMessage(err));
+      }
+    }, interval);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [polling, deviceFlow, onAuthenticated]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -182,105 +238,216 @@ function AuthScreen({
             本地 Agent 脉搏
           </h1>
           <p>
-            Claude Code、Codex、Grok
+            Claude Code、Codex、Antigravity、Grok
             Build、历史会话与记忆索引会在登录后自动盘点。只同步状态和脱敏后的项目名。
           </p>
         </div>
         <LocalCloudDiagram />
       </section>
       <section className="auth-panel">
-        <form onSubmit={submit} className="auth-form">
-          <header>
-            <span className="card-kicker">AgentPulse Desktop</span>
-            <h2>{mode === "login" ? "连接这台电脑" : "创建账号"}</h2>
-            <p>
-              {mode === "login"
-                ? "登录后立即扫描本机，不必打开终端。"
-                : "一个账号连接你的所有开发设备。"}
-            </p>
-          </header>
-          <div className="mode-switch" aria-label="账号操作">
-            <button
-              type="button"
-              aria-current={mode === "login"}
-              onClick={() => setMode("login")}
+        {deviceFlow ? (
+          <div
+            className="auth-form"
+            style={{ textAlign: "center", gap: "20px" }}
+          >
+            <header>
+              <span className="card-kicker">TannerLab SSO</span>
+              <h2>正在等待授权确认</h2>
+              <p>请在浏览器中完成授权登录，或核对以下验证码：</p>
+            </header>
+            <div
+              style={{
+                fontSize: "28px",
+                fontWeight: 800,
+                letterSpacing: "4px",
+                padding: "20px",
+                background: "rgba(255, 255, 255, 0.05)",
+                borderRadius: "12px",
+                border: "1px dashed rgba(255, 255, 255, 0.2)",
+                color: "#7ed5a0",
+                fontFamily: "monospace",
+              }}
             >
-              登录
-            </button>
-            <button
-              type="button"
-              aria-current={mode === "register"}
-              onClick={() => setMode("register")}
+              {deviceFlow.user_code}
+            </div>
+            <div
+              style={{ display: "flex", gap: "12px", justifyContent: "center" }}
             >
-              注册
-            </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() =>
+                  window.open(
+                    deviceFlow.verification_uri_complete ||
+                      deviceFlow.verification_uri,
+                    "_blank",
+                  )
+                }
+              >
+                打开授权网页
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeviceFlow(undefined);
+                  setPolling(false);
+                  setBusy(false);
+                }}
+                style={{
+                  background: "transparent",
+                  border: "1px solid rgba(255, 255, 255, 0.15)",
+                  color: "#aaa",
+                  padding: "10px 18px",
+                  borderRadius: "10px",
+                  cursor: "pointer",
+                }}
+              >
+                取消
+              </button>
+            </div>
           </div>
-          {mode === "register" && (
+        ) : (
+          <form onSubmit={submit} className="auth-form">
+            <header>
+              <span className="card-kicker">AgentPulse Desktop</span>
+              <h2>{mode === "login" ? "连接这台电脑" : "创建账号"}</h2>
+              <p>
+                {mode === "login"
+                  ? "登录后立即扫描本机，不必打开终端。"
+                  : "一个账号连接你的所有开发设备。"}
+              </p>
+            </header>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={startDeviceAuth}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "10px",
+                padding: "12px",
+                borderRadius: "10px",
+                background: "rgba(255, 255, 255, 0.08)",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                color: "#f5f2ec",
+                fontWeight: 700,
+                fontSize: "14px",
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ color: "#ff4f87" }}>◆</span>
+              <span>使用 TannerLab 账号一键登录</span>
+            </button>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                textAlign: "center",
+                color: "#777",
+                fontSize: "12px",
+                margin: "4px 0",
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  height: "1px",
+                  background: "rgba(255, 255, 255, 0.1)",
+                }}
+              />
+              <span style={{ padding: "0 10px" }}>或使用邮箱密码</span>
+              <div
+                style={{
+                  flex: 1,
+                  height: "1px",
+                  background: "rgba(255, 255, 255, 0.1)",
+                }}
+              />
+            </div>
+            <div className="mode-switch" aria-label="账号操作">
+              <button
+                type="button"
+                aria-current={mode === "login"}
+                onClick={() => setMode("login")}
+              >
+                登录
+              </button>
+              <button
+                type="button"
+                aria-current={mode === "register"}
+                onClick={() => setMode("register")}
+              >
+                注册
+              </button>
+            </div>
+            {mode === "register" && (
+              <label>
+                <span>显示名称</span>
+                <input
+                  autoComplete="name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  required
+                />
+              </label>
+            )}
             <label>
-              <span>显示名称</span>
+              <span>邮箱</span>
               <input
-                autoComplete="name"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
+                autoFocus
+                autoComplete="email"
+                type="email"
+                placeholder="name@example.com"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
                 required
               />
             </label>
-          )}
-          <label>
-            <span>邮箱</span>
-            <input
-              autoFocus
-              autoComplete="email"
-              type="email"
-              placeholder="name@example.com"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            <span>密码</span>
-            <div className="password-field">
-              <input
-                autoComplete={
-                  mode === "login" ? "current-password" : "new-password"
-                }
-                minLength={10}
-                type={showPassword ? "text" : "password"}
-                placeholder="至少 10 个字符"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
-              <button
-                type="button"
-                aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                onClick={() => setShowPassword((value) => !value)}
-              >
-                {showPassword ? <EyeOff /> : <Eye />}
-              </button>
-            </div>
-          </label>
-          {error !== undefined && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
-          <button className="primary-button" disabled={busy} type="submit">
-            {busy ? (
-              <>
-                <RefreshCw className="spin" /> 正在扫描并连接
-              </>
-            ) : mode === "login" ? (
-              "登录并扫描本机"
-            ) : (
-              "注册并扫描本机"
+            <label>
+              <span>密码</span>
+              <div className="password-field">
+                <input
+                  autoComplete={
+                    mode === "login" ? "current-password" : "new-password"
+                  }
+                  minLength={10}
+                  type={showPassword ? "text" : "password"}
+                  placeholder="至少 10 个字符"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                  onClick={() => setShowPassword((value) => !value)}
+                >
+                  {showPassword ? <EyeOff /> : <Eye />}
+                </button>
+              </div>
+            </label>
+            {error !== undefined && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
             )}
-          </button>
-          <p className="privacy-note">
-            <ShieldCheck /> 不上传对话、Prompt、命令、Token 或记忆正文
-          </p>
-        </form>
+            <button className="primary-button" disabled={busy} type="submit">
+              {busy ? (
+                <>
+                  <RefreshCw className="spin" /> 正在扫描并连接
+                </>
+              ) : mode === "login" ? (
+                "登录并扫描本机"
+              ) : (
+                "注册并扫描本机"
+              )}
+            </button>
+            <p className="privacy-note">
+              <ShieldCheck /> 不上传对话、Prompt、命令、Token 或记忆正文
+            </p>
+          </form>
+        )}
       </section>
     </main>
   );
@@ -370,6 +537,7 @@ function Dashboard({
     const next: Record<Session["agent_type"], number> = {
       claude_code: 0,
       codex: 0,
+      antigravity: 0,
       grok_build: 0,
     };
     for (const session of sessions) next[session.agent_type] += 1;
@@ -606,6 +774,14 @@ function Dashboard({
               )}
             />
             <SourceRow
+              icon={<span className="antigravity-mark">▲</span>}
+              name="Antigravity"
+              fallbackCount={counts.antigravity}
+              source={snapshot.local.sources.find(
+                (item) => item.agent_type === "antigravity",
+              )}
+            />
+            <SourceRow
               icon={<span className="grok-mark">✦</span>}
               name="Grok Build"
               fallbackCount={counts.grok_build}
@@ -692,17 +868,23 @@ function Dashboard({
                 </label>
               )}
               <div className="agent-filter" aria-label="Agent 筛选">
-                {(["all", "claude_code", "codex", "grok_build"] as const).map(
-                  (value) => (
-                    <button
-                      key={value}
-                      aria-pressed={agentFilter === value}
-                      onClick={() => setAgentFilter(value)}
-                    >
-                      {value === "all" ? "全部" : agentShortLabel(value)}
-                    </button>
-                  ),
-                )}
+                {(
+                  [
+                    "all",
+                    "claude_code",
+                    "codex",
+                    "antigravity",
+                    "grok_build",
+                  ] as const
+                ).map((value) => (
+                  <button
+                    key={value}
+                    aria-pressed={agentFilter === value}
+                    onClick={() => setAgentFilter(value)}
+                  >
+                    {value === "all" ? "全部" : agentShortLabel(value)}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -1607,23 +1789,94 @@ function AccountPanel({
   );
 }
 
-function Brand() {
+function Brand({ size = 26 }: { size?: number }) {
   return (
-    <div className="brand">
-      <PulseMark />
-      <strong>AgentPulse</strong>
+    <div
+      className="brand"
+      style={{ display: "flex", alignItems: "center", gap: "10px" }}
+    >
+      <PulseMark size={size} />
+      <div
+        style={{ display: "flex", flexDirection: "column", lineHeight: 1.15 }}
+      >
+        <span
+          style={{
+            fontWeight: 800,
+            fontSize: "15px",
+            letterSpacing: "0.02em",
+            color: "#f8fafc",
+          }}
+        >
+          Agent{" "}
+          <span
+            style={{
+              background: "linear-gradient(90deg, #00f5d4, #00bbf9, #a855f7)",
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+            }}
+          >
+            Hub
+          </span>
+        </span>
+        <span
+          style={{
+            fontSize: "10px",
+            color: "#94a3b8",
+            letterSpacing: "0.06em",
+          }}
+        >
+          智能体集成中心
+        </span>
+      </div>
     </div>
   );
 }
 
-function PulseMark() {
+function PulseMark({ size = 24 }: { size?: number }) {
   return (
-    <span className="pulse-mark" aria-hidden="true">
-      <i />
-      <i />
-      <i />
-      <i />
-      <i />
+    <span
+      className="pulse-mark"
+      aria-hidden="true"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: size,
+        height: size,
+      }}
+    >
+      <svg
+        viewBox="0 0 512 512"
+        width={size}
+        height={size}
+        style={{ filter: "drop-shadow(0 0 6px rgba(0, 229, 255, 0.7))" }}
+      >
+        <g
+          stroke="#00e5ff"
+          strokeWidth="20"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        >
+          <line x1="256" y1="256" x2="256" y2="136" />
+          <line x1="256" y1="256" x2="360" y2="196" />
+          <line x1="256" y1="256" x2="360" y2="316" />
+          <line x1="256" y1="256" x2="256" y2="376" />
+          <line x1="256" y1="256" x2="152" y2="316" />
+          <line x1="256" y1="256" x2="152" y2="196" />
+          <polygon points="256,136 360,196 360,316 256,376 152,316 152,196" />
+        </g>
+        <g stroke="#00e5ff" strokeWidth="14" fill="#0b0f19">
+          <circle cx="256" cy="136" r="22" />
+          <circle cx="360" cy="196" r="22" />
+          <circle cx="360" cy="316" r="22" />
+          <circle cx="256" cy="376" r="22" />
+          <circle cx="152" cy="316" r="22" />
+          <circle cx="152" cy="196" r="22" />
+        </g>
+        <circle cx="256" cy="256" r="42" fill="#00e5ff" opacity="0.4" />
+        <circle cx="256" cy="256" r="26" fill="#ffffff" />
+      </svg>
     </span>
   );
 }
@@ -1636,7 +1889,7 @@ function LocalCloudDiagram() {
       <div className="laptop">
         <Monitor />
         <span>
-          <Code2 /> ◆
+          <Code2 /> <PulseMark size={14} />
         </span>
       </div>
     </div>

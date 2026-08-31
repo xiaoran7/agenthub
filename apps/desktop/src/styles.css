@@ -682,6 +682,10 @@ input:focus-visible {
   color: var(--text);
   font-size: 23px;
 }
+.antigravity-mark {
+  color: #a78bfa;
+  font-size: 22px;
+}
 .grok-mark {
   color: var(--amber);
   font-size: 21px;

@@ -29,7 +29,7 @@ export interface Device {
 }
 
 export interface SessionRuntimeContext {
-  agent_type: "claude_code" | "codex" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
   agent_session_id: string;
   title?: string;
   model?: string;
@@ -45,7 +45,7 @@ export interface SessionRuntimeContext {
 export interface Session {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
   agent_session_id: string;
   observed_at: string;
   payload: {
@@ -61,7 +61,7 @@ export interface Session {
 export interface SessionTimelineEvent {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
   agent_session_id: string;
   sequence: number;
   observed_at: string;
@@ -97,7 +97,7 @@ export interface DashboardRealtimeEvent {
 }
 
 export interface LocalSource {
-  agent_type: "claude_code" | "codex" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
   session_count: number;
   detected: boolean;
   status: "healthy" | "backoff" | "scanning";
@@ -130,4 +130,19 @@ export interface Snapshot {
   server_url: string;
   local: LocalInventory;
   preferences: DesktopPreferences;
+}
+
+export interface TgDeviceCodeResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete?: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface TgDevicePollResponse {
+  status: "pending" | "success";
+  slow_down?: boolean;
+  snapshot?: Snapshot;
 }

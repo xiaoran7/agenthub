@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 
+process.env.AGENT_PULSE_ENFORCE_ENTITLEMENTS = "true";
+
 import { createGatewayApp } from "../src/app.js";
 import {
   InMemoryAccountStore,

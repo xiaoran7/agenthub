@@ -19,8 +19,9 @@ use agent_pulse_runner::{
     },
     collectors::{
         AgentTurnUpdate, CodexAppServer, CollectorError, LocalSessionContext,
-        collect_claude_session_contexts, collect_claude_transcripts, collect_codex_local_threads,
-        collect_codex_session_contexts, collect_grok_session_contexts, collect_grok_sessions,
+        collect_antigravity_session_contexts, collect_claude_session_contexts,
+        collect_claude_transcripts, collect_codex_local_threads, collect_codex_session_contexts,
+        collect_grok_session_contexts, collect_grok_sessions, find_antigravity_session_cwd,
         find_grok_session_cwd, run_agent_session_turn_streaming,
     },
     device::DeviceIdentity,
@@ -439,6 +440,33 @@ async fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
     Ok(())
 }
 
+fn finish_login(
+    server_url: &str,
+    cookie: &str,
+    account: Value,
+    state: &DesktopState,
+) -> Result<Value, DesktopError> {
+    store_cookie(server_url, cookie)?;
+    write_config(
+        &state.data_dir,
+        &DesktopConfig {
+            server_url: server_url.to_owned(),
+            refresh_interval_seconds: default_refresh_interval_seconds(),
+            claude_binary: default_claude_binary(),
+            codex_binary: default_codex_binary(),
+            grok_binary: default_grok_binary(),
+            archived_sessions: Vec::new(),
+        },
+    )?;
+
+    let identity = load_or_create_identity(&state.data_dir)?;
+    ensure_device_bound(server_url, cookie, &identity)?;
+    start_engine(state, server_url, &identity)?;
+    let mut snapshot = dashboard_snapshot(server_url, cookie, &identity, state)?;
+    snapshot["account"] = account;
+    Ok(snapshot)
+}
+
 fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, DesktopError> {
     let configured_server = input
         .server_url
@@ -458,25 +486,70 @@ fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, D
         }),
     };
     let (account, cookie) = authenticate_request(&server_url, path, &body)?;
-    store_cookie(&server_url, &cookie)?;
-    write_config(
-        &state.data_dir,
-        &DesktopConfig {
-            server_url: server_url.clone(),
-            refresh_interval_seconds: default_refresh_interval_seconds(),
-            claude_binary: default_claude_binary(),
-            codex_binary: default_codex_binary(),
-            grok_binary: default_grok_binary(),
-            archived_sessions: Vec::new(),
-        },
-    )?;
+    finish_login(&server_url, &cookie, account, state)
+}
 
-    let identity = load_or_create_identity(&state.data_dir)?;
-    ensure_device_bound(&server_url, &cookie, &identity)?;
-    start_engine(state, &server_url, &identity)?;
-    let mut snapshot = dashboard_snapshot(&server_url, &cookie, &identity, state)?;
-    snapshot["account"] = account;
-    Ok(snapshot)
+#[tauri::command]
+async fn start_tg_device_auth(server_url: Option<String>) -> Result<Value, String> {
+    let configured_server = server_url.or_else(|| std::env::var("AGENT_PULSE_SERVER_URL").ok());
+    let server_url =
+        normalize_server_url(configured_server.as_deref().unwrap_or(DEFAULT_SERVER_URL))
+            .map_err(|e| e.to_string())?;
+    request_json(
+        "POST",
+        &server_url,
+        "/v1/auth/oauth/tg/device/code",
+        None,
+        Some(&json!({})),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn poll_tg_device_auth(
+    server_url: Option<String>,
+    device_code: String,
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    let configured_server = server_url.or_else(|| std::env::var("AGENT_PULSE_SERVER_URL").ok());
+    let server_url =
+        normalize_server_url(configured_server.as_deref().unwrap_or(DEFAULT_SERVER_URL))
+            .map_err(|e| e.to_string())?;
+    let agent = http_agent();
+    let url = format!("{server_url}/v1/auth/oauth/tg/device/poll");
+    let mut response = agent
+        .post(&url)
+        .send_json(json!({ "device_code": device_code }))
+        .map_err(map_http_error)
+        .map_err(|e| e.to_string())?;
+
+    let cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(extract_session_cookie);
+
+    let body = response
+        .body_mut()
+        .read_json::<Value>()
+        .map_err(|_| DesktopError::InvalidResponse.to_string())?;
+
+    if body["status"].as_str() == Some("pending") {
+        return Ok(body);
+    }
+
+    if body["status"].as_str() == Some("success") {
+        let cookie = cookie.ok_or_else(|| DesktopError::InvalidResponse.to_string())?;
+        let account = body["account"].clone();
+        let snapshot =
+            finish_login(&server_url, &cookie, account, &state).map_err(|e| e.to_string())?;
+        start_dashboard_realtime(&state, &app).map_err(|error| error.to_string())?;
+        return Ok(json!({ "status": "success", "snapshot": snapshot }));
+    }
+
+    Err(DesktopError::InvalidResponse.to_string())
 }
 
 fn authenticate_request(
@@ -640,6 +713,7 @@ fn send_session_message_inner(
     let binary = match input.agent_type {
         AgentType::ClaudeCode => &config.claude_binary,
         AgentType::Codex => &config.codex_binary,
+        AgentType::Antigravity => &config.claude_binary,
         AgentType::GrokBuild => &config.grok_binary,
     };
     let project_path = match input.agent_type {
@@ -648,6 +722,8 @@ fn send_session_message_inner(
                 .ok_or(DesktopError::SessionUnavailable)?,
         ),
         AgentType::Codex => None,
+        AgentType::Antigravity => find_antigravity_session_cwd(&input.agent_session_id)
+            .map_err(|_| DesktopError::SessionUnavailable)?,
         AgentType::GrokBuild => Some(
             find_grok_session_cwd(&input.agent_session_id)
                 .map_err(|_| DesktopError::SessionUnavailable)?
@@ -1138,6 +1214,7 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
 
     let claude = collect_claude_session_contexts(LOCAL_SESSION_LIMIT as usize);
     let codex = collect_codex_session_contexts(LOCAL_SESSION_LIMIT);
+    let antigravity = collect_antigravity_session_contexts(LOCAL_SESSION_LIMIT as usize);
     let grok = collect_grok_session_contexts(LOCAL_SESSION_LIMIT as usize);
     let mut next = HashMap::new();
     match claude {
@@ -1157,6 +1234,16 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
                 .entries
                 .iter()
                 .filter(|(_, context)| context.agent_type == AgentType::Codex)
+                .map(|(key, context)| (key.clone(), context.clone())),
+        ),
+    }
+    match antigravity {
+        Ok(contexts) => insert_session_contexts(&mut next, contexts),
+        Err(_) => next.extend(
+            cache
+                .entries
+                .iter()
+                .filter(|(_, context)| context.agent_type == AgentType::Antigravity)
                 .map(|(key, context)| (key.clone(), context.clone())),
         ),
     }
@@ -1195,6 +1282,7 @@ fn agent_type_name(agent_type: AgentType) -> &'static str {
     match agent_type {
         AgentType::ClaudeCode => "claude_code",
         AgentType::Codex => "codex",
+        AgentType::Antigravity => "antigravity",
         AgentType::GrokBuild => "grok_build",
     }
 }
@@ -1688,6 +1776,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             authenticate,
+            start_tg_device_auth,
+            poll_tg_device_auth,
             restore_session,
             refresh_dashboard,
             send_session_message,

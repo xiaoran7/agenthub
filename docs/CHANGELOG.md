@@ -5,6 +5,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Antigravity 智能体适配与观测支持**：Runner 新增对 Antigravity（Google AGY / Gemini CLI）的会话采集、Transcript JSONL 解析与实时状态映射，支持 `USER_INPUT`、`PLANNER_RESPONSE`、工具调用与规划状态标准化识别；集成本地工作区路径脱敏与快照合并，完全遵循不读取/不上传对话正文或代码的安全边界。
+- **Telegram OAuth 授权与多端接入**：Gateway API 新增基于 PKCE 规范与 Telegram Web 授权的 SSO 流程，支持授权链接生成、回调验证、用户绑定与 Device Flow 轮询；Web 端与桌面端均提供一键授权登录入口。
+- **Agent Hub 全端品牌升级与美术素材/图标替换**：
+  - 接入全新发光六边形拓扑网络图标与「Agent Hub 智能体集成中心」主视觉横幅；
+  - 重新生成 Windows 桌面端 (Tauri) 全尺寸图标集（`32x32`, `64x64`, `128x128`, `Square*Logo.png`, `icon.ico`, `icon.png`）；
+  - 重新生成 Web 端 PWA 图标（`icon.svg`, `icon-192.png`, `icon-512.png`, `brand-banner.png`）与 `manifest.webmanifest`；
+  - 重绘 Android 原生端矢量图标 `ic_agent_platform.xml` 与 mipmap 资源；
+  - 全面升级 Web 控制台（`AccountGate`, `PlatformShell`）、桌面端与移动端的 Logo 动效、发光拓扑组件及品牌标识。
+
 ### Documentation
 
 - 收敛文档入口，明确里程碑证据、当前源码和生产部署是三个不同状态；Grok Build 已进 Gitea 但不能据此声明生产已更新。

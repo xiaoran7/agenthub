@@ -54,6 +54,7 @@ import {
   RejectingAuthenticator,
   type OwnerAuthenticator,
 } from "./auth.js";
+import { generatePkcePair, TgOAuthClient, TgOAuthError } from "./tg-oauth.js";
 import { ChangeBroker } from "./events.js";
 import type { PushSender, PushSubscription } from "./push.js";
 import {
@@ -126,6 +127,7 @@ export interface GatewayAppOptions {
   };
   billingVerifier?: BillingEventVerifier;
   billingProvider?: BillingProvider;
+  tgOAuthClient?: TgOAuthClient;
   loginRateLimitSecret?: Buffer;
   trustProxy?: boolean;
   bindingCodeFactory?: () => string;
@@ -139,6 +141,7 @@ export function createGatewayApp(
   const store: GatewayStore = options.store ?? new InMemoryGatewayStore();
   const bindingCodes = options.bindingCodes;
   const now = options.now ?? (() => new Date());
+  const tgOAuth = options.tgOAuthClient ?? new TgOAuthClient();
   const bindingCodeFactory =
     options.bindingCodeFactory ?? (() => randomBytes(32).toString("base64url"));
   const broker = options.broker ?? new ChangeBroker();
@@ -157,6 +160,12 @@ export function createGatewayApp(
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof AccountError) {
       void reply.status(error.statusCode).send({ error: error.code });
+      return;
+    }
+    if (error instanceof TgOAuthError) {
+      void reply
+        .status(error.statusCode)
+        .send({ error: error.code, message: error.message });
       return;
     }
     if (error instanceof ContractError) {
@@ -343,6 +352,158 @@ export function createGatewayApp(
       options.secureCookies ?? false,
     );
     return reply.status(204).send();
+  });
+
+  app.post("/v1/auth/oauth/tg/authorize-url", async (request, reply) => {
+    const body =
+      request.body && typeof request.body === "object"
+        ? (request.body as Record<string, unknown>)
+        : {};
+    const redirectUri =
+      typeof body.redirect_uri === "string" ? body.redirect_uri : undefined;
+    const scope = typeof body.scope === "string" ? body.scope : undefined;
+    const state = randomBytes(24).toString("base64url");
+    const pkce = generatePkcePair();
+    const authorizeUrl = await tgOAuth.buildAuthorizeUrl({
+      state,
+      codeChallenge: pkce.codeChallenge,
+      ...(redirectUri ? { redirectUri } : {}),
+      ...(scope ? { scope } : {}),
+    });
+    return reply.send({
+      authorize_url: authorizeUrl,
+      code_verifier: pkce.codeVerifier,
+      state,
+    });
+  });
+
+  app.post("/v1/auth/oauth/tg/callback", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["code", "code_verifier", "redirect_uri"]);
+    if (typeof body.code !== "string" || !body.code) {
+      throw new AccountError(
+        "invalid_oauth_code",
+        "authorization code is required",
+        400,
+      );
+    }
+    if (typeof body.code_verifier !== "string" || !body.code_verifier) {
+      throw new AccountError(
+        "invalid_code_verifier",
+        "code verifier is required",
+        400,
+      );
+    }
+    const redirectUri =
+      typeof body.redirect_uri === "string" ? body.redirect_uri : undefined;
+
+    const tokens = await tgOAuth.exchangeCodeForTokens({
+      code: body.code,
+      codeVerifier: body.code_verifier,
+      ...(redirectUri ? { redirectUri } : {}),
+    });
+    const userinfo = await tgOAuth.fetchUserInfo(tokens.access_token);
+    const email = normalizeEmail(
+      userinfo.email || `${userinfo.sub}@tg.oauth.local`,
+    );
+    const displayName = normalizeDisplayName(userinfo.name, email);
+
+    if (accounts.upsertOAuthAccount === undefined) {
+      throw new AccountError(
+        "oauth_unsupported",
+        "OAuth account storage not supported",
+        500,
+      );
+    }
+
+    const account = await accounts.upsertOAuthAccount({
+      provider: "tg_oauth",
+      sub: userinfo.sub,
+      email,
+      displayName,
+      emailVerified: userinfo.email_verified ?? true,
+      now: now().toISOString(),
+    });
+
+    await createLoginSession(
+      accounts,
+      account.user.user_id,
+      reply,
+      options.secureCookies ?? false,
+      now(),
+      "login",
+    );
+    return reply.send(account);
+  });
+
+  app.post("/v1/auth/oauth/tg/device/code", async (request, reply) => {
+    const body =
+      request.body && typeof request.body === "object"
+        ? (request.body as Record<string, unknown>)
+        : {};
+    const scope = typeof body.scope === "string" ? body.scope : undefined;
+    const deviceFlow = await tgOAuth.startDeviceFlow(scope ? { scope } : {});
+    return reply.send(deviceFlow);
+  });
+
+  app.post("/v1/auth/oauth/tg/device/poll", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["device_code"]);
+    if (typeof body.device_code !== "string" || !body.device_code) {
+      throw new AccountError(
+        "invalid_device_code",
+        "device_code is required",
+        400,
+      );
+    }
+
+    const pollResult = await tgOAuth.pollDeviceToken(body.device_code);
+    if (pollResult.status === "pending") {
+      return reply.send({
+        status: "pending",
+        slow_down: pollResult.slowDown ?? false,
+      });
+    }
+
+    const userinfo = await tgOAuth.fetchUserInfo(
+      pollResult.tokens.access_token,
+    );
+    const email = normalizeEmail(
+      userinfo.email || `${userinfo.sub}@tg.oauth.local`,
+    );
+    const displayName = normalizeDisplayName(userinfo.name, email);
+
+    if (accounts.upsertOAuthAccount === undefined) {
+      throw new AccountError(
+        "oauth_unsupported",
+        "OAuth account storage not supported",
+        500,
+      );
+    }
+
+    const account = await accounts.upsertOAuthAccount({
+      provider: "tg_oauth",
+      sub: userinfo.sub,
+      email,
+      displayName,
+      emailVerified: userinfo.email_verified ?? true,
+      now: now().toISOString(),
+    });
+
+    await createLoginSession(
+      accounts,
+      account.user.user_id,
+      reply,
+      options.secureCookies ?? false,
+      now(),
+      "login",
+    );
+    return reply.send({
+      status: "success",
+      account,
+    });
   });
 
   app.get("/v1/auth/me", async (request, reply) => {

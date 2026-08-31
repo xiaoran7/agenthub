@@ -33,17 +33,20 @@ export function statusView(
 export function agentLabel(type: Session["agent_type"]): string {
   if (type === "claude_code") return "Claude Code";
   if (type === "codex") return "Codex";
+  if (type === "antigravity") return "Google Antigravity";
   return "Grok Build";
 }
 
 export function agentShortLabel(type: Session["agent_type"]): string {
   if (type === "claude_code") return "Claude";
   if (type === "codex") return "Codex";
+  if (type === "antigravity") return "Antigravity";
   return "Grok";
 }
 
 export function permissionFieldLabel(type: Session["agent_type"]): string {
   if (type === "claude_code") return "权限模式";
+  if (type === "antigravity") return "安全级别";
   if (type === "grok_build") return "Agent 配置";
   return "审批策略";
 }

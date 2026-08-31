@@ -78,6 +78,7 @@ export function sessionKey(ref: SessionRef): string {
 const AGENT_TYPES: Record<AgentType, true> = {
   claude_code: true,
   codex: true,
+  antigravity: true,
   grok_build: true,
 };
 

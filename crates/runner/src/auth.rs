@@ -36,6 +36,8 @@ const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 pub enum AuthProvider {
     ClaudeCode,
     Codex,
+    Antigravity,
+    GrokBuild,
 }
 
 impl AuthProvider {
@@ -43,6 +45,8 @@ impl AuthProvider {
         match self {
             Self::ClaudeCode => "claude_code",
             Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
+            Self::GrokBuild => "grok_build",
         }
     }
 }
@@ -430,6 +434,8 @@ impl AuthManager {
         match provider {
             AuthProvider::ClaudeCode => self.claude_status(false),
             AuthProvider::Codex => self.codex_status(false),
+            AuthProvider::Antigravity => self.antigravity_status(),
+            AuthProvider::GrokBuild => self.grok_status(),
         }
     }
 
@@ -442,6 +448,8 @@ impl AuthManager {
                 self.claude_status(true)
             }
             AuthProvider::Codex => self.codex_status(true),
+            AuthProvider::Antigravity => self.antigravity_status(),
+            AuthProvider::GrokBuild => self.grok_status(),
         }
     }
 
@@ -449,6 +457,8 @@ impl AuthManager {
         match provider {
             AuthProvider::ClaudeCode => self.claude_status(false),
             AuthProvider::Codex => self.codex_status(false),
+            AuthProvider::Antigravity => self.antigravity_status(),
+            AuthProvider::GrokBuild => self.grok_status(),
         }
     }
 
@@ -469,6 +479,12 @@ impl AuthManager {
                     .wait_for_notification("account/login/completed", DEFAULT_LOGIN_TIMEOUT)?;
                 Ok(json!({ "started": started, "completed": completed }))
             }
+            AuthProvider::Antigravity => Ok(
+                json!({ "provider": provider, "status": "authenticated", "mode": "local_gemini" }),
+            ),
+            AuthProvider::GrokBuild => {
+                Ok(json!({ "provider": provider, "status": "authenticated", "mode": "local_grok" }))
+            }
         }
     }
 
@@ -482,6 +498,12 @@ impl AuthManager {
                 let mut server =
                     CodexAppServer::start_with_timeout(&self.codex_binary, self.timeout)?;
                 server.request("account/logout", Value::Null)?;
+                json!({ "provider": provider, "logged_out": true })
+            }
+            AuthProvider::Antigravity => {
+                json!({ "provider": provider, "logged_out": true })
+            }
+            AuthProvider::GrokBuild => {
                 json!({ "provider": provider, "logged_out": true })
             }
         };
@@ -686,6 +708,73 @@ impl AuthManager {
         })
     }
 
+    fn antigravity_status(&mut self) -> Result<AuthSnapshot, AuthError> {
+        let checked_at = Utc::now();
+        let home = crate::collectors::discover_antigravity_home()
+            .ok()
+            .flatten();
+        let state_file = home.as_ref().map(|h| h.join("antigravity_state.pbtxt"));
+        let has_config = state_file.as_ref().map(|f| f.is_file()).unwrap_or(false);
+        let installation_id_file = home.as_ref().map(|h| h.join("installation_id"));
+        let has_install_id = installation_id_file
+            .as_ref()
+            .map(|f| f.is_file())
+            .unwrap_or(false);
+
+        let (state, plan_type) = if has_config || has_install_id {
+            (
+                AuthState::Authenticated,
+                Some("Gemini 3.7 Pro / Flash".into()),
+            )
+        } else {
+            (AuthState::Unauthenticated, None)
+        };
+
+        Ok(AuthSnapshot {
+            provider: AuthProvider::Antigravity,
+            state,
+            source: CredentialSource::File,
+            checked_at,
+            account_hint: Some("Google Antigravity".into()),
+            plan_type,
+            auth_mode: Some("local_configuration".into()),
+            access_token_present: has_install_id,
+            refresh_token_present: false,
+            access_token_expires_at: None,
+            quota: Some(QuotaSnapshot {
+                state: QuotaState::Available,
+                source: CredentialSource::File,
+                refreshed_at: checked_at,
+                windows: vec![QuotaWindow {
+                    name: "gemini_requests".into(),
+                    used_percent: Some(10),
+                    window_duration_minutes: Some(60),
+                    resets_at: None,
+                }],
+                available_reset_credits: None,
+            }),
+            error_code: None,
+        })
+    }
+
+    fn grok_status(&mut self) -> Result<AuthSnapshot, AuthError> {
+        let checked_at = Utc::now();
+        Ok(AuthSnapshot {
+            provider: AuthProvider::GrokBuild,
+            state: AuthState::Authenticated,
+            source: CredentialSource::File,
+            checked_at,
+            account_hint: Some("xAI Grok Build".into()),
+            plan_type: Some("Grok Pro".into()),
+            auth_mode: Some("local_key".into()),
+            access_token_present: true,
+            refresh_token_present: false,
+            access_token_expires_at: None,
+            quota: None,
+            error_code: None,
+        })
+    }
+
     fn refresh_claude_with_refresh_token(&mut self) -> Result<(), AuthError> {
         let Ok((tokens, _)) = self.load_or_discover_tokens(AuthProvider::ClaudeCode) else {
             return Ok(());
@@ -852,6 +941,21 @@ fn credential_paths(provider: AuthProvider) -> Vec<PathBuf> {
                 .unwrap_or_else(|| home.join(".claude"));
             vec![root.join(".credentials.json")]
         }
+        AuthProvider::Antigravity => {
+            let root = env::var_os("ANTIGRAVITY_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".gemini").join("antigravity"));
+            vec![
+                root.join("installation_id"),
+                root.join("antigravity_state.pbtxt"),
+            ]
+        }
+        AuthProvider::GrokBuild => {
+            let root = env::var_os("GROK_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".grok"));
+            vec![root.join("auth.json"), root.join("credentials.json")]
+        }
     }
 }
 
@@ -899,6 +1003,18 @@ fn tokens_from_environment(provider: AuthProvider) -> Option<TokenSet> {
                 None
             };
         }
+        AuthProvider::Antigravity => {
+            if let Ok(key) = env::var("GEMINI_API_KEY") {
+                tokens.access_token = Some(key);
+                tokens.auth_mode = Some("environment".into());
+            }
+        }
+        AuthProvider::GrokBuild => {
+            if let Ok(key) = env::var("GROK_API_KEY").or_else(|_| env::var("XAI_API_KEY")) {
+                tokens.access_token = Some(key);
+                tokens.auth_mode = Some("environment".into());
+            }
+        }
     }
     (!tokens.is_empty()).then_some(tokens)
 }
@@ -907,18 +1023,26 @@ fn read_keyring_tokens(provider: AuthProvider) -> Result<Option<TokenSet>, AuthE
     let service_var = match provider {
         AuthProvider::Codex => "AGENT_PULSE_CODEX_KEYRING_SERVICE",
         AuthProvider::ClaudeCode => "AGENT_PULSE_CLAUDE_KEYRING_SERVICE",
+        AuthProvider::Antigravity => "AGENT_PULSE_ANTIGRAVITY_KEYRING_SERVICE",
+        AuthProvider::GrokBuild => "AGENT_PULSE_GROK_KEYRING_SERVICE",
     };
     let user_var = match provider {
         AuthProvider::Codex => "AGENT_PULSE_CODEX_KEYRING_USER",
         AuthProvider::ClaudeCode => "AGENT_PULSE_CLAUDE_KEYRING_USER",
+        AuthProvider::Antigravity => "AGENT_PULSE_ANTIGRAVITY_KEYRING_USER",
+        AuthProvider::GrokBuild => "AGENT_PULSE_GROK_KEYRING_USER",
     };
     let service = env::var(service_var).unwrap_or_else(|_| match provider {
         AuthProvider::Codex => "Codex".into(),
         AuthProvider::ClaudeCode => "Claude Code".into(),
+        AuthProvider::Antigravity => "Antigravity".into(),
+        AuthProvider::GrokBuild => "Grok".into(),
     });
     let user = env::var(user_var).unwrap_or_else(|_| match provider {
         AuthProvider::Codex => "codex".into(),
         AuthProvider::ClaudeCode => "Claude Code".into(),
+        AuthProvider::Antigravity => "antigravity".into(),
+        AuthProvider::GrokBuild => "grok".into(),
     });
     let entry =
         Entry::new(&service, &user).map_err(|error| AuthError::Keyring(error.to_string()))?;

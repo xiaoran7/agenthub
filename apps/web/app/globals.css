@@ -219,10 +219,69 @@
   margin: 0;
 }
 
+.account-oauth-box {
+  margin-top: 28px;
+  display: grid;
+  gap: 18px;
+}
+
+.account-oauth-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 50px;
+  padding: 0 20px;
+  border-radius: 8px;
+  border: 1px solid #2a2a26;
+  background: #171718;
+  color: #f7f7f4;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.account-oauth-submit:hover:not(:disabled) {
+  background: #232326;
+  border-color: #3e3e42;
+  transform: translateY(-1px);
+}
+
+.account-oauth-submit:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.oauth-icon {
+  color: #ff4f87;
+  font-size: 16px;
+}
+
+.account-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: #858582;
+  font-size: 12px;
+}
+
+.account-divider::before,
+.account-divider::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid #d8d8d3;
+}
+
+.account-divider span {
+  padding: 0 14px;
+}
+
 .account-form {
   display: grid;
   gap: 18px;
-  margin-top: 32px;
+  margin-top: 18px;
 }
 
 .account-form label {

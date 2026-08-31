@@ -1459,6 +1459,298 @@ fn write_prompt_file(prompt: &str) -> Result<tempfile::NamedTempFile, CollectorE
     Ok(file)
 }
 
+const ANTIGRAVITY_RECENT_SESSION_LIMIT: usize = 100;
+const ANTIGRAVITY_ALL_SESSION_LIMIT: usize = 1_000;
+
+pub fn discover_antigravity_home() -> Result<Option<PathBuf>, CollectorError> {
+    if let Some(path) = env::var_os("ANTIGRAVITY_HOME").filter(|v| !v.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_dir() {
+            return Ok(Some(path));
+        }
+    }
+    if let Some(home) = home_dir() {
+        let gemini_antigravity = home.join(".gemini").join("antigravity");
+        if gemini_antigravity.is_dir() {
+            return Ok(Some(gemini_antigravity));
+        }
+        let direct_antigravity = home.join(".antigravity");
+        if direct_antigravity.is_dir() {
+            return Ok(Some(direct_antigravity));
+        }
+    }
+    Ok(None)
+}
+
+pub fn collect_antigravity_sessions(include_completed: bool) -> Result<String, CollectorError> {
+    let Some(home) = discover_antigravity_home()? else {
+        return Ok("[]".to_owned());
+    };
+    collect_antigravity_sessions_from(&home, include_completed)
+}
+
+pub fn collect_antigravity_sessions_from(
+    home: &Path,
+    include_completed: bool,
+) -> Result<String, CollectorError> {
+    let program = "Antigravity session store".to_owned();
+    let brain_dir = home.join("brain");
+    if !brain_dir.is_dir() {
+        return Ok("[]".to_owned());
+    }
+    let mut sessions = Vec::new();
+    let entries = fs::read_dir(&brain_dir).map_err(|source| CollectorError::Io {
+        program: program.clone(),
+        source,
+    })?;
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|k| k.is_dir()) {
+            continue;
+        }
+        let session_id = entry.file_name().to_string_lossy().to_string();
+        if session_id.starts_with('.') {
+            continue;
+        }
+        let transcript_path = entry
+            .path()
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        if !transcript_path.is_file() {
+            continue;
+        }
+        let modified_at_ms = file_modified_millis(&transcript_path);
+        let (started_at_ms, cwd, steps) =
+            read_antigravity_transcript_sample(&transcript_path, &program)?;
+
+        let last_activity_at_ms = modified_at_ms.or(started_at_ms);
+        sessions.push(json!({
+            "sessionId": session_id,
+            "cwd": cwd.unwrap_or_default(),
+            "startedAt": started_at_ms,
+            "lastActivityAt": last_activity_at_ms,
+            "steps": steps,
+        }));
+    }
+
+    sessions.sort_by_key(|s| std::cmp::Reverse(s["lastActivityAt"].as_i64().unwrap_or(0)));
+    sessions.truncate(if include_completed {
+        ANTIGRAVITY_ALL_SESSION_LIMIT
+    } else {
+        ANTIGRAVITY_RECENT_SESSION_LIMIT
+    });
+
+    serde_json::to_string(&sessions)
+        .map_err(|source| CollectorError::InvalidJson { program, source })
+}
+
+fn extract_antigravity_cwd(value: &Value) -> Option<String> {
+    if let Some(tool_calls) = value.get("tool_calls").and_then(Value::as_array) {
+        for tc in tool_calls {
+            if let Some(params) = tc.get("parameters") {
+                if let Some(cwd) = params.get("Cwd").and_then(Value::as_str) {
+                    let trimmed = cwd.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_owned());
+                    }
+                }
+                for field in &["SearchDirectory", "TargetFile", "AbsolutePath"] {
+                    if let Some(path_str) = params.get(*field).and_then(Value::as_str) {
+                        let path = Path::new(path_str);
+                        if let Some(parent) = path.parent() {
+                            let s = parent.to_string_lossy();
+                            if !s.trim().is_empty() {
+                                return Some(s.trim().to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(content) = value.get("content").and_then(Value::as_str) {
+        if let Some(pos) =
+            content.find("The mapping is shown as follows in the format [URI] -> [CorpusName]:")
+        {
+            let tail = &content[pos..];
+            if let Some(line) = tail.lines().nth(1) {
+                let parts: Vec<&str> = line.split("->").collect();
+                if let Some(first) = parts.first() {
+                    let cleaned = first.trim().trim_matches(|c| c == '[' || c == ']');
+                    if !cleaned.is_empty() {
+                        return Some(cleaned.to_owned());
+                    }
+                }
+            }
+        }
+        for prefix in &[
+            "d:/", "D:/", "c:/", "C:/", "d:\\", "D:\\", "c:\\", "C:\\", "/Users/", "/home/",
+        ] {
+            if let Some(pos) = content.find(prefix) {
+                let tail = &content[pos..];
+                let end_pos = tail
+                    .find(['\n', '\r', ' ', '"', '\'', '>', '`', ']'])
+                    .unwrap_or(tail.len());
+                let extracted = tail[..end_pos].trim();
+                if !extracted.is_empty() {
+                    return Some(extracted.to_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+type AntigravitySampleResult = (Option<i64>, Option<String>, Vec<Value>);
+
+fn read_antigravity_transcript_sample(
+    path: &Path,
+    program: &str,
+) -> Result<AntigravitySampleResult, CollectorError> {
+    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let mut reader = BufReader::new(file);
+    let mut started_at_ms = None;
+    let mut cwd = None;
+    let mut recent_steps: std::collections::VecDeque<Value> =
+        std::collections::VecDeque::with_capacity(32);
+
+    let mut line_count = 0;
+    while line_count < 10_000 {
+        line_count += 1;
+        let line = match read_bounded_line(&mut reader) {
+            BoundedLine::Line(line) => line,
+            BoundedLine::Eof => break,
+            BoundedLine::TooLarge => continue,
+            BoundedLine::Io(source) => {
+                return Err(CollectorError::Io {
+                    program: program.to_owned(),
+                    source,
+                });
+            }
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if started_at_ms.is_none() {
+            started_at_ms = parse_rfc3339_millis(value.get("created_at").and_then(Value::as_str));
+        }
+        if cwd.is_none() {
+            cwd = extract_antigravity_cwd(&value);
+        }
+        if recent_steps.len() >= 32 {
+            recent_steps.pop_front();
+        }
+        recent_steps.push_back(value);
+    }
+
+    if cwd.is_none() {
+        for step in recent_steps.iter().rev() {
+            if let Some(found_cwd) = extract_antigravity_cwd(step) {
+                cwd = Some(found_cwd);
+                break;
+            }
+        }
+    }
+
+    let steps = recent_steps.into_iter().collect();
+    Ok((started_at_ms, cwd, steps))
+}
+
+pub fn collect_antigravity_session_contexts(
+    limit: usize,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let Some(home) = discover_antigravity_home()? else {
+        return Ok(Vec::new());
+    };
+    collect_antigravity_session_contexts_from(&home, limit)
+}
+
+pub fn collect_antigravity_session_contexts_from(
+    home: &Path,
+    limit: usize,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let program = "Antigravity session context".to_owned();
+    let brain_dir = home.join("brain");
+    if !brain_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut candidates = Vec::new();
+    for entry in read_dir_entries(&brain_dir, &program)? {
+        if !entry.file_type().map(|k| k.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let transcript = entry
+            .path()
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        if !transcript.is_file() {
+            continue;
+        }
+        let modified = file_modified_millis(&transcript).unwrap_or(0);
+        candidates.push((modified, transcript, entry.file_name()));
+    }
+    candidates.sort_by_key(|(m, _, _)| std::cmp::Reverse(*m));
+    candidates.truncate(limit);
+
+    let mut contexts = Vec::with_capacity(candidates.len());
+    for (_, transcript, dir_name) in candidates {
+        let session_id = dir_name.to_string_lossy().to_string();
+        let mut context =
+            LocalSessionContext::new(crate::domain::AgentType::Antigravity, session_id);
+        context.model = Some("Gemini 3.7 Pro / Flash".into());
+        context.permission_mode = Some("local_confirmation".into());
+
+        if let Ok(file) = fs::File::open(&transcript) {
+            let mut reader = BufReader::new(file);
+            for _ in 0..16 {
+                let line = match read_bounded_line(&mut reader) {
+                    BoundedLine::Line(line) => line,
+                    _ => break,
+                };
+                let Ok(val) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if val.get("type").and_then(Value::as_str) == Some("USER_INPUT") {
+                    let content = val.get("content").and_then(Value::as_str).unwrap_or("");
+                    let first_line = content.lines().next().unwrap_or("").trim();
+                    let clean = first_line
+                        .trim_start_matches("<USER_REQUEST>")
+                        .trim_end_matches("</USER_REQUEST>")
+                        .trim();
+                    if !clean.is_empty() {
+                        context.title = metadata_label(clean, MAX_SESSION_TITLE_CHARS);
+                        break;
+                    }
+                }
+            }
+        }
+
+        contexts.push(context);
+    }
+    Ok(contexts)
+}
+
+pub fn find_antigravity_session_cwd(session_id: &str) -> Result<Option<PathBuf>, CollectorError> {
+    let Some(home) = discover_antigravity_home()? else {
+        return Ok(None);
+    };
+    let transcript = home
+        .join("brain")
+        .join(session_id)
+        .join(".system_generated")
+        .join("logs")
+        .join("transcript.jsonl");
+    if !transcript.is_file() {
+        return Ok(None);
+    }
+    let (_, cwd, _) = read_antigravity_transcript_sample(&transcript, "Antigravity session store")?;
+    Ok(cwd.map(PathBuf::from))
+}
+
 pub fn run_agent_task(
     agent: crate::domain::AgentType,
     binary: impl AsRef<Path>,
@@ -1476,6 +1768,10 @@ pub fn run_agent_task(
         }
         crate::domain::AgentType::Codex => {
             command.args(["exec", "-"]);
+            None
+        }
+        crate::domain::AgentType::Antigravity => {
+            command.args(["run", "--prompt", prompt]);
             None
         }
         crate::domain::AgentType::GrokBuild => {
@@ -1614,6 +1910,17 @@ pub fn run_agent_session_turn_streaming(
                 "never",
                 "--skip-git-repo-check",
                 "-",
+            ]);
+            None
+        }
+        crate::domain::AgentType::Antigravity => {
+            command.args([
+                "--conversation",
+                session_id,
+                "--prompt",
+                prompt,
+                "--output-format",
+                "stream-json",
             ]);
             None
         }
@@ -1816,6 +2123,27 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
                 _ => None,
             }
         }
+        crate::domain::AgentType::Antigravity => {
+            let delta = value
+                .get("text")
+                .or_else(|| value.get("content"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !delta.is_empty() {
+                return Some(AgentTurnUpdate::AssistantDelta(delta.to_owned()));
+            }
+            if value
+                .get("tool_name")
+                .or_else(|| value.get("toolName"))
+                .is_some()
+            {
+                return Some(AgentTurnUpdate::Activity("Antigravity 正在调用工具"));
+            }
+            if value.get("type").and_then(Value::as_str) == Some("PLANNER_RESPONSE") {
+                return Some(AgentTurnUpdate::Activity("Antigravity 正在规划"));
+            }
+            None
+        }
         crate::domain::AgentType::GrokBuild => match value.get("type").and_then(Value::as_str) {
             Some("text") => value
                 .get("data")
@@ -1874,6 +2202,30 @@ fn final_agent_message(agent: crate::domain::AgentType, output: &str) -> Option<
                 .filter(|message| !message.is_empty())
                 .map(str::to_owned)
         }),
+        crate::domain::AgentType::Antigravity => {
+            for line in output.lines().rev() {
+                if let Ok(value) = serde_json::from_str::<Value>(line) {
+                    if let Some(content) = value.get("content").and_then(Value::as_str) {
+                        let trimmed = content.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_owned());
+                        }
+                    }
+                    if let Some(res) = value.get("result").and_then(Value::as_str) {
+                        let trimmed = res.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_owned());
+                        }
+                    }
+                }
+            }
+            let trimmed = output.trim();
+            if !trimmed.is_empty() {
+                Some(trimmed.to_owned())
+            } else {
+                None
+            }
+        }
         crate::domain::AgentType::GrokBuild => {
             let mut collected = String::new();
             for line in output.lines() {

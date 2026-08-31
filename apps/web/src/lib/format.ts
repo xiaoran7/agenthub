@@ -30,6 +30,7 @@ export const PRESENCE_LABELS: Record<Presence, string> = {
 export const AGENT_LABELS: Record<AgentType, string> = {
   claude_code: "Claude Code",
   codex: "Codex",
+  antigravity: "Antigravity (Google)",
   grok_build: "Grok Build",
 };
 
@@ -55,6 +56,9 @@ export const SOURCE_LABELS: Record<ObservationSource, string> = {
   claude_hook: "Claude Hook",
   codex_app_server: "Codex app-server",
   codex_hook: "Codex Hook",
+  antigravity_brain: "Antigravity Brain",
+  antigravity_cli: "Antigravity CLI",
+  antigravity_hook: "Antigravity Hook",
   grok_sessions: "Grok Build 会话",
   grok_hook: "Grok Build Hook",
   grok_active_sessions: "Grok Build 活动会话",

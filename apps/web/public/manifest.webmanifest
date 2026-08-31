@@ -1,15 +1,15 @@
 {
-  "name": "AgentPulse",
-  "short_name": "AgentPulse",
-  "description": "跨设备 Coding Agent Session 只读监控面板",
+  "name": "Agent Hub 智能体集成中心",
+  "short_name": "Agent Hub",
+  "description": "跨设备 Coding Agent 统一监控与远程接入平台",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "lang": "zh-CN",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#101216",
-  "theme_color": "#101216",
+  "background_color": "#0d111a",
+  "theme_color": "#0d111a",
   "categories": ["productivity", "utilities"],
   "icons": [
     {

@@ -65,6 +65,7 @@ export const SESSION_FILTERS: ReadonlyArray<{
 export const AGENT_LABELS: Record<AgentType, string> = {
   claude_code: "Claude Code",
   codex: "Codex",
+  antigravity: "Antigravity (Google)",
   grok_build: "Grok Build",
 };
 
