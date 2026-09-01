@@ -3,6 +3,14 @@
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.0.2] - 2026-09-01
+
+### Fixed
+
+- **Windows 默认浏览器调用 URL 参数截断缺陷修复**：
+  - 修复 Windows 环境下使用 `cmd /c start` 拉起默认浏览器时，`&` 字符被 cmd 命令行解释为命令分隔符导致 URL 查询参数（如 `&client_id=agent-pulse` 等）被全部截断抛弃的致命 Bug；
+  - 升级为 `rundll32 url.dll,FileProtocolHandler` 与 PowerShell `Start-Process` 双重直调机制，保证完整 URL 及其 PKCE/Client/Scope 查询参数 100% 完整传递至系统默认浏览器。
+
 ## [2.0.1] - 2026-09-01
 
 ### Fixed

@@ -497,15 +497,30 @@ async fn open_external_url(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", &target])
-            .spawn();
+        let status = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &target])
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        &format!("Start-Process -FilePath '{}'", target.replace('\'', "''")),
+                    ])
+                    .spawn()
+            });
+        if let Err(e) = status {
+            return Err(format!("Failed to open browser: {e}"));
+        }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(&target)
-            .spawn();
+        let _ = std::process::Command::new("open").arg(&target).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&target).spawn();
     }
     Ok(())
 }
