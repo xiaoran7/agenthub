@@ -3,6 +3,14 @@
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.0.3] - 2026-09-01
+
+### Fixed
+
+- **消除 Windows 浏览器调起时的黑框控制台闪烁**：
+  - 彻底移除 `rundll32` / `powershell` 等子进程包装，重构为直接调用 Windows 原生 `ShellExecuteW` API（`shell32.dll`）；
+  - 实现零子进程、零黑框控制台闪烁、毫秒级静默直调系统默认浏览器。
+
 ## [2.0.2] - 2026-09-01
 
 ### Fixed

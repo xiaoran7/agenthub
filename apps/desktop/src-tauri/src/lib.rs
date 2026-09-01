@@ -497,21 +497,37 @@ async fn open_external_url(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let status = std::process::Command::new("rundll32")
-            .args(["url.dll,FileProtocolHandler", &target])
-            .spawn()
-            .or_else(|_| {
-                std::process::Command::new("powershell")
-                    .args([
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-Command",
-                        &format!("Start-Process -FilePath '{}'", target.replace('\'', "''")),
-                    ])
-                    .spawn()
-            });
-        if let Err(e) = status {
-            return Err(format!("Failed to open browser: {e}"));
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut std::ffi::c_void,
+                lpOperation: *const u16,
+                lpFile: *const u16,
+                lpParameters: *const u16,
+                lpDirectory: *const u16,
+                nShowCmd: i32,
+            ) -> isize;
+        }
+
+        let operation: Vec<u16> = OsStr::new("open").encode_wide().chain(Some(0)).collect();
+        let file: Vec<u16> = OsStr::new(&target).encode_wide().chain(Some(0)).collect();
+
+        let res = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // SW_SHOWNORMAL
+            )
+        };
+
+        if res <= 32 {
+            return Err(format!("ShellExecuteW failed with code {res}"));
         }
     }
     #[cfg(target_os = "macos")]
