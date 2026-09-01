@@ -445,6 +445,27 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 }
             }
         }
+        Some("user") if context.title.is_none() => {
+            let prompt_text = value
+                .pointer("/message/content")
+                .and_then(|c| {
+                    if let Some(text) = c.as_str() {
+                        Some(text)
+                    } else if let Some(arr) = c.as_array() {
+                        arr.iter().find_map(|item| item.get("text").and_then(Value::as_str))
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| value.get("prompt").and_then(Value::as_str));
+            if let Some(text) = prompt_text {
+                let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                let clean = first_line.trim_start_matches(|c| c == '#' || c == ' ' || c == '>').trim();
+                if !clean.is_empty() {
+                    context.title = metadata_label(clean, MAX_SESSION_TITLE_CHARS);
+                }
+            }
+        }
         _ => {}
     }
     context.context_window_tokens = [
@@ -1498,11 +1519,11 @@ pub fn collect_antigravity_sessions_from(
     if !brain_dir.is_dir() {
         return Ok("[]".to_owned());
     }
-    let mut sessions = Vec::new();
     let entries = fs::read_dir(&brain_dir).map_err(|source| CollectorError::Io {
         program: program.clone(),
         source,
     })?;
+    let mut candidate_transcripts = Vec::new();
     for entry in entries.flatten() {
         if !entry.file_type().is_ok_and(|k| k.is_dir()) {
             continue;
@@ -1519,11 +1540,28 @@ pub fn collect_antigravity_sessions_from(
         if !transcript_path.is_file() {
             continue;
         }
-        let modified_at_ms = file_modified_millis(&transcript_path);
+        let modified_at_ms = file_modified_millis(&transcript_path).unwrap_or(0);
+        candidate_transcripts.push((modified_at_ms, session_id, transcript_path));
+    }
+
+    candidate_transcripts.sort_by_key(|(m, _, _)| std::cmp::Reverse(*m));
+    let max_limit = if include_completed {
+        ANTIGRAVITY_ALL_SESSION_LIMIT
+    } else {
+        ANTIGRAVITY_RECENT_SESSION_LIMIT
+    };
+    candidate_transcripts.truncate(max_limit);
+
+    let mut sessions = Vec::with_capacity(candidate_transcripts.len());
+    for (modified_at_ms, session_id, transcript_path) in candidate_transcripts {
         let (started_at_ms, cwd, steps) =
             read_antigravity_transcript_sample(&transcript_path, &program)?;
 
-        let last_activity_at_ms = modified_at_ms.or(started_at_ms);
+        let last_activity_at_ms = if modified_at_ms > 0 {
+            Some(modified_at_ms)
+        } else {
+            started_at_ms
+        };
         sessions.push(json!({
             "sessionId": session_id,
             "cwd": cwd.unwrap_or_default(),
@@ -1532,13 +1570,6 @@ pub fn collect_antigravity_sessions_from(
             "steps": steps,
         }));
     }
-
-    sessions.sort_by_key(|s| std::cmp::Reverse(s["lastActivityAt"].as_i64().unwrap_or(0)));
-    sessions.truncate(if include_completed {
-        ANTIGRAVITY_ALL_SESSION_LIMIT
-    } else {
-        ANTIGRAVITY_RECENT_SESSION_LIMIT
-    });
 
     serde_json::to_string(&sessions)
         .map_err(|source| CollectorError::InvalidJson { program, source })
@@ -1618,7 +1649,7 @@ fn read_antigravity_transcript_sample(
         std::collections::VecDeque::with_capacity(32);
 
     let mut line_count = 0;
-    while line_count < 10_000 {
+    while line_count < 64 {
         line_count += 1;
         let line = match read_bounded_line(&mut reader) {
             BoundedLine::Line(line) => line,
@@ -1706,7 +1737,7 @@ pub fn collect_antigravity_session_contexts_from(
 
         if let Ok(file) = fs::File::open(&transcript) {
             let mut reader = BufReader::new(file);
-            for _ in 0..16 {
+            for _ in 0..32 {
                 let line = match read_bounded_line(&mut reader) {
                     BoundedLine::Line(line) => line,
                     _ => break,
@@ -1716,12 +1747,22 @@ pub fn collect_antigravity_session_contexts_from(
                 };
                 if val.get("type").and_then(Value::as_str) == Some("USER_INPUT") {
                     let content = val.get("content").and_then(Value::as_str).unwrap_or("");
-                    let first_line = content.lines().next().unwrap_or("").trim();
+                    if let Some(start) = content.find("<USER_REQUEST>") {
+                        let req_content = &content[start + "<USER_REQUEST>".len()..];
+                        let end = req_content.find("</USER_REQUEST>").unwrap_or(req_content.len());
+                        let req_text = req_content[..end].trim();
+                        let first_line = req_text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                        if !first_line.is_empty() {
+                            context.title = metadata_label(first_line, MAX_SESSION_TITLE_CHARS);
+                            break;
+                        }
+                    }
+                    let first_line = content.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
                     let clean = first_line
                         .trim_start_matches("<USER_REQUEST>")
                         .trim_end_matches("</USER_REQUEST>")
                         .trim();
-                    if !clean.is_empty() {
+                    if !clean.is_empty() && !clean.starts_with('<') {
                         context.title = metadata_label(clean, MAX_SESSION_TITLE_CHARS);
                         break;
                     }

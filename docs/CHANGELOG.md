@@ -3,6 +3,27 @@
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.0.4] - 2026-09-01
+
+### Added
+
+- **Claude Desktop 级全功能 Agent 交互工作台壳**：
+  - 支持会话面板全屏沉浸模式与分屏抽屉自由切换；
+  - 增加「➕ 发起新会话」原生弹窗与快捷指令，支持一键在任意本地目录拉起 Claude Code / OpenAI Codex / Google Antigravity / Grok Build；
+  - 集成快捷 Slash 指令栏（`/help`, `/clear`, `/compact`, `/cost`, `/review`, `/test`）与 Enter 快捷键发送；
+  - 优化 Thinking 思考折叠块、工具调用卡片与富文本消息气泡呈现。
+
+### Fixed
+
+- **OAuth 丢失 URL & 客户端阻塞问题彻底解决**：
+  - 登录界面监听并在 OAuth 发起后展示重试控制面板；
+  - 新增「重新打开授权网页」和「取消并重新登录」按钮，彻底解决误关网页后客户端卡死阻塞问题。
+- **智能会话命名杜绝“未命名会话”**：
+  - 采集器自动提取第一条 User Prompt / Request 摘要作为标题；
+  - 前端增加 `sessionDisplayTitle` 智能多级回退机制（显式标题 $\rightarrow$ 指令摘要 $\rightarrow$ Agent · 项目目录 $\rightarrow$ 会话短ID），100% 杜绝“未命名会话”。
+- **反重力（Google Antigravity）扫描阻塞彻底解除**：
+  - 重构 Antigravity 采集器，由全量遍历磁盘改为基于修改时间快速排序 + 前 64 行高效采样，消除磁盘 IO 阻塞。
+
 ## [2.0.3] - 2026-09-01
 
 ### Fixed

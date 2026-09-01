@@ -59,3 +59,17 @@ export function adjacentItem<T>(
   if (index < 0) return undefined;
   return items[index + offset];
 }
+
+export function sessionDisplayTitle(session: Session): string {
+  const explicit = session.payload.runtime?.title?.trim();
+  if (explicit && explicit !== "未命名会话" && explicit !== "Untitled") {
+    return explicit;
+  }
+  const project = session.payload.project.display_name?.trim();
+  const agent = agentShortLabel(session.agent_type);
+  if (project && project !== "未分类项目" && project !== "unknown") {
+    return `${agent} · ${project}`;
+  }
+  const shortId = session.agent_session_id.slice(0, 8);
+  return `${agent} 会话 (${shortId})`;
+}

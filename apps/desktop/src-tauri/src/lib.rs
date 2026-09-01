@@ -142,6 +142,13 @@ struct SessionMessageInput {
 }
 
 #[derive(Debug, Deserialize)]
+struct LaunchSessionInput {
+    agent_type: AgentType,
+    cwd: Option<String>,
+    prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct SessionTurnRef {
     agent_type: AgentType,
     agent_session_id: String,
@@ -333,6 +340,54 @@ async fn send_session_message(
     result
         .map_err(|_| DesktopError::AgentFailed.to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn launch_new_session(
+    input: LaunchSessionInput,
+    on_event: Channel<SessionTurnEvent>,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    let prompt = input.prompt.trim();
+    if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
+        return Err(DesktopError::InvalidAction.to_string());
+    }
+    let session_id = format!("session-{}", chrono::Utc::now().timestamp_millis());
+    let key = session_turn_key(input.agent_type, &session_id);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    {
+        let mut active_turns = state
+            .active_turns
+            .lock()
+            .map_err(|_| DesktopError::AgentFailed.to_string())?;
+        active_turns.insert(key.clone(), cancelled.clone());
+    }
+    let _ = on_event.send(SessionTurnEvent::Started);
+    let data_dir = state.data_dir.clone();
+    let agent_type = input.agent_type;
+    let agent_session_id = session_id.clone();
+    let input_msg = SessionMessageInput {
+        agent_type,
+        agent_session_id: agent_session_id.clone(),
+        prompt: prompt.to_owned(),
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        send_session_message_inner(input_msg, &data_dir, &cancelled, on_event)
+    })
+    .await;
+    if let Ok(mut active_turns) = state.active_turns.lock() {
+        active_turns.remove(&key);
+    }
+    let val = result
+        .map_err(|_| DesktopError::AgentFailed.to_string())?
+        .map_err(|error| error.to_string())?;
+
+    Ok(json!({
+        "agent_session_id": session_id,
+        "agent_type": agent_type_name(agent_type),
+        "response": val["response"],
+        "completed_at": val["completed_at"]
+    }))
 }
 
 #[tauri::command]
@@ -587,6 +642,9 @@ async fn start_tg_browser_oauth(
         .as_str()
         .ok_or_else(|| "Missing state in response".to_owned())?
         .to_owned();
+
+    // Emit event so frontend has the URL immediately for retry/reopen button
+    let _ = app.emit("oauth_url_ready", json!({ "url": &authorize_url }));
 
     // Open user's system default browser
     let _ = open_external_url(authorize_url).await;
@@ -2031,6 +2089,7 @@ pub fn run() {
             restore_session,
             refresh_dashboard,
             send_session_message,
+            launch_new_session,
             cancel_session_turn,
             set_session_archived,
             save_desktop_preferences,

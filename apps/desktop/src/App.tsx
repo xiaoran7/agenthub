@@ -17,17 +17,22 @@ import {
   FolderTree,
   HardDrive,
   LogOut,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   Monitor,
   Pause,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   Search,
   Send,
   Settings,
   ShieldCheck,
+  Sparkles,
   Square,
+  Terminal,
   X,
 } from "lucide-react";
 import {
@@ -47,6 +52,7 @@ import {
   agentShortLabel,
   permissionFieldLabel,
   relativeTime,
+  sessionDisplayTitle,
   statusView,
 } from "./presentation";
 import {
@@ -149,6 +155,7 @@ function AuthScreen({
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthUrl, setOauthUrl] = useState<string>();
   const [error, setError] = useState(initialError);
   const [deviceFlow, setDeviceFlow] = useState<
     TgDeviceCodeResponse | undefined
@@ -157,6 +164,18 @@ function AuthScreen({
 
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ url: string }>("oauth_url_ready", (event) => {
+      setOauthUrl(event.payload.url);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   const openUrl = async (url: string) => {
     try {
@@ -179,6 +198,7 @@ function AuthScreen({
       setError(errorMessage(nextError));
     } finally {
       setOauthLoading(false);
+      setOauthUrl(undefined);
     }
   };
 
@@ -430,42 +450,109 @@ function AuthScreen({
                   : "一个账号连接你的所有开发设备。"}
               </p>
             </header>
-            <button
-              type="button"
-              disabled={busy || oauthLoading}
-              onClick={startBrowserOAuth}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "10px",
-                padding: "12px",
-                borderRadius: "10px",
-                background: "rgba(255, 255, 255, 0.08)",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
-                color: "#f5f2ec",
-                fontWeight: 700,
-                fontSize: "14px",
-                cursor: busy || oauthLoading ? "not-allowed" : "pointer",
-                transition: "all 0.2s ease",
-              }}
-            >
-              {oauthLoading ? (
-                <>
-                  <RefreshCw
-                    className="spinning"
-                    size={16}
-                    style={{ color: "#ff4f87" }}
-                  />
+            {oauthLoading ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "10px",
+                  padding: "14px",
+                  background: "rgba(255, 79, 135, 0.08)",
+                  borderRadius: "12px",
+                  border: "1px solid rgba(255, 79, 135, 0.3)",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                    color: "#ff4f87",
+                    fontWeight: 700,
+                    fontSize: "14px",
+                  }}
+                >
+                  <RefreshCw className="spinning" size={16} />
                   <span>正在等待浏览器完成授权...</span>
-                </>
-              ) : (
-                <>
-                  <span style={{ color: "#ff4f87" }}>◆</span>
-                  <span>使用 TannerLab 账号统一登录 (Google 级静默秒登)</span>
-                </>
-              )}
-            </button>
+                </div>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "12px",
+                    color: "#aaa",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  已拉起默认浏览器打开授权页。若页面关闭或丢失，请使用下方按钮操作：
+                </p>
+                <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                  {oauthUrl && (
+                    <button
+                      type="button"
+                      style={{
+                        flex: 1,
+                        padding: "8px 10px",
+                        background: "rgba(255, 255, 255, 0.12)",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        borderRadius: "8px",
+                        color: "#fff",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                        fontWeight: 600,
+                      }}
+                      onClick={() => void openUrl(oauthUrl)}
+                    >
+                      🔗 重新打开网页
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    style={{
+                      flex: 1,
+                      padding: "8px 10px",
+                      background: "rgba(255, 255, 255, 0.05)",
+                      border: "1px solid rgba(255, 255, 255, 0.15)",
+                      borderRadius: "8px",
+                      color: "#aaa",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => {
+                      setOauthLoading(false);
+                      setOauthUrl(undefined);
+                    }}
+                  >
+                    ❌ 取消并重新登录
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={startBrowserOAuth}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "10px",
+                  padding: "12px",
+                  borderRadius: "10px",
+                  background: "rgba(255, 255, 255, 0.08)",
+                  border: "1px solid rgba(255, 255, 255, 0.15)",
+                  color: "#f5f2ec",
+                  fontWeight: 700,
+                  fontSize: "14px",
+                  cursor: busy ? "not-allowed" : "pointer",
+                  transition: "all 0.2s ease",
+                }}
+              >
+                <span style={{ color: "#ff4f87" }}>◆</span>
+                <span>使用 TannerLab 账号统一登录 (Google 级静默秒登)</span>
+              </button>
+            )}
             <div
               style={{
                 display: "flex",
@@ -600,6 +687,7 @@ function Dashboard({
     "active",
   );
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
+  const [launchModalOpen, setLaunchModalOpen] = useState(false);
   const [visibleLimit, setVisibleLimit] = useState(100);
   const refreshInFlight = useRef(false);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
@@ -862,6 +950,26 @@ function Dashboard({
                 </strong>
                 <small>{snapshot.account.user.email}</small>
               </div>
+            </button>
+            <button
+              className="primary-button"
+              onClick={() => setLaunchModalOpen(true)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "8px 14px",
+                background: "linear-gradient(135deg, #ff4f87 0%, #a855f7 100%)",
+                border: "none",
+                borderRadius: "10px",
+                color: "#fff",
+                fontWeight: 700,
+                cursor: "pointer",
+                boxShadow: "0 4px 12px rgba(255, 79, 135, 0.25)",
+              }}
+            >
+              <Plus size={16} />
+              <span>发起新会话</span>
             </button>
             <button
               className="outline-button"
@@ -1140,6 +1248,13 @@ function Dashboard({
             }}
           />
         )}
+        <LaunchSessionModal
+          open={launchModalOpen}
+          onClose={() => setLaunchModalOpen(false)}
+          onLaunched={async () => {
+            await refresh();
+          }}
+        />
         {error !== undefined && (
           <div className="toast-error" role="alert">
             <AlertTriangle />
@@ -1213,7 +1328,7 @@ function SessionRow({
     session.payload.state.presence,
   );
   const runtime = session.payload.runtime;
-  const title = runtime?.title || "未命名会话";
+  const title = sessionDisplayTitle(session);
   return (
     <button
       className={selected ? "session-row selected" : "session-row"}
@@ -1250,6 +1365,250 @@ function SessionRow({
   );
 }
 
+function LaunchSessionModal({
+  open,
+  onClose,
+  onLaunched,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onLaunched: (agentSessionId: string, agentType: Session["agent_type"]) => void;
+}) {
+  const [agentType, setAgentType] =
+    useState<Session["agent_type"]>("claude_code");
+  const [cwd, setCwd] = useState("d:/ClaudeSpace");
+  const [prompt, setPrompt] = useState("");
+  const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState<string>();
+
+  if (!open) return null;
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (launching || prompt.trim() === "") return;
+    setLaunching(true);
+    setError(undefined);
+    try {
+      const onEvent = new Channel<SessionTurnEvent>();
+      const result = await invoke<{
+        agent_session_id: string;
+        agent_type: string;
+      }>("launch_new_session", {
+        input: {
+          agent_type: agentType,
+          cwd: cwd.trim() ? cwd.trim() : null,
+          prompt: prompt.trim(),
+        },
+        onEvent,
+      });
+      onLaunched(result.agent_session_id, agentType);
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+      setLaunching(false);
+    }
+  };
+
+  return (
+    <div className="panel-scrim" onMouseDown={onClose}>
+      <div
+        className="launch-modal-card"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          width: "90%",
+          maxWidth: "540px",
+          background: "#18181b",
+          border: "1px solid rgba(255, 255, 255, 0.15)",
+          borderRadius: "16px",
+          padding: "24px",
+          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.6)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "18px",
+          color: "#f4f4f5",
+        }}
+      >
+        <header
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <Sparkles size={20} style={{ color: "#ff4f87" }} />
+            <h3 style={{ margin: 0, fontSize: "17px", fontWeight: 700 }}>
+              发起全新 Agent 会话
+            </h3>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            style={{ padding: "6px" }}
+          >
+            <X size={18} />
+          </button>
+        </header>
+        <form
+          onSubmit={submit}
+          style={{ display: "flex", flexDirection: "column", gap: "16px" }}
+        >
+          <label style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "13px", fontWeight: 600, color: "#a1a1aa" }}>
+              选择目标 Agent
+            </span>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "10px",
+              }}
+            >
+              {(
+                [
+                  {
+                    type: "claude_code",
+                    label: "Claude Code",
+                    desc: "Anthropic 原生 CLI",
+                  },
+                  {
+                    type: "codex",
+                    label: "OpenAI Codex",
+                    desc: "OpenAI 代码助手",
+                  },
+                  {
+                    type: "antigravity",
+                    label: "Google Antigravity",
+                    desc: "DeepMind Coding Agent",
+                  },
+                  {
+                    type: "grok_build",
+                    label: "Grok Build",
+                    desc: "xAI 全栈开发",
+                  },
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item.type}
+                  type="button"
+                  onClick={() => setAgentType(item.type)}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    padding: "12px",
+                    borderRadius: "10px",
+                    background:
+                      agentType === item.type
+                        ? "rgba(255, 79, 135, 0.15)"
+                        : "rgba(255, 255, 255, 0.04)",
+                    border:
+                      agentType === item.type
+                        ? "1px solid #ff4f87"
+                        : "1px solid rgba(255, 255, 255, 0.1)",
+                    color: "#f4f4f5",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <strong style={{ fontSize: "14px" }}>{item.label}</strong>
+                  <small style={{ fontSize: "11px", color: "#a1a1aa" }}>
+                    {item.desc}
+                  </small>
+                </button>
+              ))}
+            </div>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <span style={{ fontSize: "13px", fontWeight: 600, color: "#a1a1aa" }}>
+              工作目录 (Cwd)
+            </span>
+            <input
+              type="text"
+              placeholder="例如 d:/ClaudeSpace 或 d:/ClaudeSpace/Project/..."
+              value={cwd}
+              onChange={(e) => setCwd(e.target.value)}
+              required
+              style={{
+                padding: "10px 12px",
+                borderRadius: "8px",
+                background: "rgba(0, 0, 0, 0.3)",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                color: "#f4f4f5",
+                fontSize: "13px",
+              }}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <span style={{ fontSize: "13px", fontWeight: 600, color: "#a1a1aa" }}>
+              初始任务指令 (Prompt)
+            </span>
+            <textarea
+              rows={3}
+              placeholder="输入你想让 Agent 执行的第一条指令..."
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              required
+              autoFocus
+              style={{
+                padding: "10px 12px",
+                borderRadius: "8px",
+                background: "rgba(0, 0, 0, 0.3)",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                color: "#f4f4f5",
+                fontSize: "13px",
+                resize: "vertical",
+              }}
+            />
+          </label>
+          {error && <p className="form-error" style={{ margin: 0 }}>{error}</p>}
+          <footer
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "10px",
+              marginTop: "8px",
+            }}
+          >
+            <button
+              type="button"
+              className="outline-button"
+              onClick={onClose}
+              disabled={launching}
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={launching || !prompt.trim()}
+              style={{
+                background: "linear-gradient(135deg, #ff4f87 0%, #a855f7 100%)",
+                border: "none",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+            >
+              {launching ? (
+                <>
+                  <RefreshCw className="spin" size={16} /> 正在拉起 Agent...
+                </>
+              ) : (
+                <>
+                  <Play size={16} /> 启动并进入会话
+                </>
+              )}
+            </button>
+          </footer>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function SessionControlPanel({
   session,
   previousSession,
@@ -1272,9 +1631,10 @@ function SessionControlPanel({
   const [agentActivity, setAgentActivity] = useState<string>();
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [fullscreen, setFullscreen] = useState(false);
   const [panelView, setPanelView] = useState<
     "context" | "conversation" | "timeline"
-  >("context");
+  >("conversation");
   const [timeline, setTimeline] = useState<SessionTimelineEvent[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState<string>();
@@ -1287,7 +1647,7 @@ function SessionControlPanel({
     session.payload.state.presence,
   );
   const runtime = session.payload.runtime;
-  const title = runtime?.title || "未命名会话";
+  const title = sessionDisplayTitle(session);
   const permission =
     session.agent_type === "codex"
       ? (runtime?.permission_mode ?? runtime?.approval_policy)
@@ -1493,16 +1853,28 @@ function SessionControlPanel({
       }}
     >
       <aside
-        className="session-control-panel"
+        className={
+          fullscreen
+            ? "session-control-panel fullscreen"
+            : "session-control-panel"
+        }
         aria-label="会话控制"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
           <div>
-            <span className="card-kicker">SESSION CONTROL</span>
+            <span className="card-kicker">SESSION WORKSPACE</span>
             <h2 title={title}>{title}</h2>
           </div>
           <div className="session-header-actions">
+            <button
+              className="icon-button"
+              aria-label={fullscreen ? "还原窗口" : "全屏沉浸模式"}
+              title={fullscreen ? "还原窗口" : "全屏沉浸模式"}
+              onClick={() => setFullscreen((v) => !v)}
+            >
+              {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
             <button
               className="icon-button"
               aria-label="上一条会话"
@@ -1565,16 +1937,16 @@ function SessionControlPanel({
 
         <nav className="session-panel-tabs" aria-label="会话面板视图">
           <button
+            aria-pressed={panelView === "conversation"}
+            onClick={() => setPanelView("conversation")}
+          >
+            会话交互
+          </button>
+          <button
             aria-pressed={panelView === "context"}
             onClick={() => setPanelView("context")}
           >
             运行上下文
-          </button>
-          <button
-            aria-pressed={panelView === "conversation"}
-            onClick={() => setPanelView("conversation")}
-          >
-            会话对话
           </button>
           <button
             aria-pressed={panelView === "timeline"}
@@ -1677,28 +2049,53 @@ function SessionControlPanel({
 
         {error !== undefined && <p className="panel-error">{error}</p>}
         {panelView === "conversation" && (
-          <form className="session-composer" onSubmit={sendMessage}>
-            <textarea
-              aria-label="发送给 Agent"
-              maxLength={16_000}
-              placeholder={
-                session.archived ? "恢复会话后再发送" : "继续这个会话…"
-              }
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              disabled={busy || session.archived === true}
-            />
-            <button
-              className="composer-send"
-              type="submit"
-              aria-label="发送"
-              disabled={
-                busy || session.archived === true || prompt.trim() === ""
-              }
-            >
-              <Send />
-            </button>
-          </form>
+          <div className="composer-container">
+            <div className="slash-commands-bar">
+              <span className="slash-title">快捷指令:</span>
+              {["/help", "/clear", "/compact", "/cost", "/review", "/test"].map(
+                (cmd) => (
+                  <button
+                    key={cmd}
+                    type="button"
+                    className="slash-chip"
+                    onClick={() => setPrompt((p) => (p ? `${p} ${cmd}` : cmd))}
+                  >
+                    {cmd}
+                  </button>
+                ),
+              )}
+            </div>
+            <form className="session-composer" onSubmit={sendMessage}>
+              <textarea
+                aria-label="发送给 Agent"
+                maxLength={16_000}
+                placeholder={
+                  session.archived
+                    ? "恢复会话后再发送"
+                    : "继续这个会话… (Enter 发送，Shift+Enter 换行)"
+                }
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendMessage(e);
+                  }
+                }}
+                disabled={busy || session.archived === true}
+              />
+              <button
+                className="composer-send"
+                type="submit"
+                aria-label="发送"
+                disabled={
+                  busy || session.archived === true || prompt.trim() === ""
+                }
+              >
+                <Send />
+              </button>
+            </form>
+          </div>
         )}
         <footer>
           <span>
