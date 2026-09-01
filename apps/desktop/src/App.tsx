@@ -12,8 +12,6 @@ import {
   CircleUserRound,
   Cloud,
   Code2,
-  Copy,
-  CornerDownLeft,
   Cpu,
   Database,
   Eye,
@@ -21,10 +19,8 @@ import {
   Folder,
   FolderTree,
   HardDrive,
-  Layers,
   LogOut,
   Maximize2,
-  Menu,
   MessageSquare,
   Minimize2,
   Monitor,
@@ -700,7 +696,6 @@ function Dashboard({
     "active",
   );
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
-  const [activeMode, setActiveMode] = useState<"cowork" | "code">("code");
   const [alertDismissed, setAlertDismissed] = useState(false);
   const [showBannerDetails, setShowBannerDetails] = useState(false);
   const [collapsedProviders, setCollapsedProviders] = useState<
@@ -718,9 +713,7 @@ function Dashboard({
   const [quickProvider, setQuickProvider] =
     useState<Session["agent_type"]>("claude_code");
   const [quickCwd, setQuickCwd] = useState("d:/ClaudeSpace");
-  const [quickBypass, setQuickBypass] = useState(true);
   const [quickLaunching, setQuickLaunching] = useState(false);
-  const [quickModel, setQuickModel] = useState("claude-fable-5 1M");
 
   const refreshInFlight = useRef(false);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
@@ -929,29 +922,36 @@ function Dashboard({
     snapshot.account.user.email.split("@")[0] ||
     "Administrator";
 
+  const sourceIssue = snapshot.local.sources.find(
+    (source) => source.status === "backoff" || !source.detected,
+  );
+  const showSystemNotice =
+    !snapshot.realtime_connected || sourceIssue !== undefined;
+  const sessionSectionTitle =
+    attentionSessions.length > 0 ? "需要你处理" : "最近会话";
+
   return (
     <main className="claude-app-shell">
       {/* Left Claude Desktop Sidebar */}
       <aside className="claude-sidebar" aria-label="侧边栏导航">
-        {/* Top Control Bar */}
         <div className="sidebar-top-bar">
-          <div className="top-nav-left">
-            <button
-              type="button"
-              className="top-icon-btn"
-              title="主菜单"
-              aria-label="主菜单"
-            >
-              <Menu size={16} />
-            </button>
-            <button
-              type="button"
-              className="top-icon-btn"
-              title="切换工作区视图"
-              aria-label="切换工作区视图"
-            >
-              <Layers size={15} />
-            </button>
+          <button
+            type="button"
+            className="sidebar-brand"
+            onClick={() => setSelectedSessionKey(undefined)}
+            aria-label="返回 AgentHub 首页"
+          >
+            <span className="hub-orbit-mark" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span>
+              <strong>AgentHub</strong>
+              <small>本机智能体中枢</small>
+            </span>
+          </button>
+          <div className="top-nav-right">
             <button
               type="button"
               className={`top-icon-btn ${searchOpen ? "active" : ""}`}
@@ -961,11 +961,19 @@ function Dashboard({
             >
               <Search size={15} />
             </button>
-          </div>
-          <div className="top-nav-right">
             <button
               type="button"
               className="top-icon-btn"
+              disabled={refreshing}
+              onClick={() => void refresh()}
+              title="刷新本机索引"
+              aria-label="刷新本机索引"
+            >
+              <RefreshCw className={refreshing ? "spin" : ""} size={15} />
+            </button>
+            <button
+              type="button"
+              className="top-icon-btn history-button"
               disabled={previousSession === undefined}
               onClick={() =>
                 previousSession &&
@@ -977,7 +985,7 @@ function Dashboard({
             </button>
             <button
               type="button"
-              className="top-icon-btn"
+              className="top-icon-btn history-button"
               disabled={nextSession === undefined}
               onClick={() =>
                 nextSession && setSelectedSessionKey(sessionKey(nextSession))
@@ -989,40 +997,42 @@ function Dashboard({
           </div>
         </div>
 
-        {/* Mode Switcher Pill */}
-        <div className="sidebar-mode-pill" role="tablist">
+        <div className="sidebar-mode-pill" role="tablist" aria-label="会话范围">
           <button
             type="button"
-            className={activeMode === "cowork" ? "active" : ""}
+            className={archiveFilter === "active" ? "active" : ""}
             onClick={() => {
-              setActiveMode("cowork");
+              setArchiveFilter("active");
               setSelectedSessionKey(undefined);
             }}
           >
-            <Sparkles size={14} />
-            <span>Cowork</span>
+            <Activity size={14} />
+            <span>进行中</span>
           </button>
           <button
             type="button"
-            className={activeMode === "code" ? "active" : ""}
-            onClick={() => setActiveMode("code")}
+            className={archiveFilter === "archived" ? "active" : ""}
+            onClick={() => {
+              setArchiveFilter("archived");
+              setSelectedSessionKey(undefined);
+            }}
           >
-            <Code2 size={14} />
-            <span>Code</span>
+            <Archive size={14} />
+            <span>已归档</span>
           </button>
         </div>
 
-        {/* Action Buttons */}
         <div className="sidebar-action-buttons">
           <button
             type="button"
             className="sidebar-new-btn"
             onClick={() => {
               setSelectedSessionKey(undefined);
+              setLaunchModalOpen(true);
             }}
           >
             <Plus size={16} />
-            <span>New</span>
+            <span>新建会话</span>
           </button>
           <button
             type="button"
@@ -1030,7 +1040,7 @@ function Dashboard({
             onClick={() => setSettingsOpen(true)}
           >
             <Folder size={14} />
-            <span>Customize</span>
+            <span>本机设置</span>
           </button>
         </div>
 
@@ -1060,7 +1070,9 @@ function Dashboard({
         <div className="sidebar-providers-tree">
           {providerGroups.length === 0 ? (
             <div className="sidebar-empty">
-              <span>{query ? "没有匹配的会话" : "正在扫描本机 Agent 会话..."}</span>
+              <span>
+                {query ? "没有匹配的会话" : "正在扫描本机 Agent 会话..."}
+              </span>
             </div>
           ) : (
             providerGroups.map((group) => {
@@ -1070,13 +1082,25 @@ function Dashboard({
               const remaining = group.sessions.length - visibleSessions.length;
 
               return (
-                <div className="provider-group" key={group.provider}>
-                  {/* Provider Header */}
+                <div
+                  className="provider-group"
+                  data-provider={group.provider}
+                  key={group.provider}
+                >
                   <div
                     className="provider-group-header"
                     onClick={() => toggleProviderCollapse(group.provider)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        toggleProviderCollapse(group.provider);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
                   >
                     <div className="provider-header-left">
+                      <i className="provider-signal" aria-hidden="true" />
                       <span className="provider-chevron">
                         {isCollapsed ? (
                           <ChevronRight size={13} />
@@ -1085,6 +1109,9 @@ function Dashboard({
                         )}
                       </span>
                       <strong className="provider-title">{group.label}</strong>
+                      <span className="provider-count">
+                        {group.sessions.length}
+                      </span>
                     </div>
                     <div
                       className="provider-header-actions"
@@ -1109,7 +1136,6 @@ function Dashboard({
                     </div>
                   </div>
 
-                  {/* Provider Session Items */}
                   {!isCollapsed && (
                     <div className="provider-sessions-list">
                       {visibleSessions.map((session) => {
@@ -1125,6 +1151,7 @@ function Dashboard({
                             type="button"
                             key={sessionKey(session)}
                             className={`sidebar-session-item ${isSelected ? "selected" : ""}`}
+                            data-provider={session.agent_type}
                             onClick={() =>
                               setSelectedSessionKey(sessionKey(session))
                             }
@@ -1149,7 +1176,6 @@ function Dashboard({
                         );
                       })}
 
-                      {/* Show More Button */}
                       {remaining > 0 && (
                         <button
                           type="button"
@@ -1161,7 +1187,7 @@ function Dashboard({
                             )
                           }
                         >
-                          Show {remaining} more
+                          再显示 {remaining} 个
                         </button>
                       )}
                     </div>
@@ -1172,35 +1198,37 @@ function Dashboard({
           )}
         </div>
 
-        {/* Sidebar Footer - User Profile */}
         <div className="sidebar-footer">
-          <button
-            type="button"
-            className="sidebar-profile-card"
-            onClick={() => setAccountOpen(true)}
-          >
-            <div className="profile-brand-icon">
-              <ClaudeSparkIcon size={18} />
-            </div>
-            <div className="profile-meta">
-              <strong>{displayName}</strong>
-              <small>
-                Gateway <i className="live-status-dot" />
-              </small>
-            </div>
-            <ChevronDown size={14} className="profile-chevron" />
+          <div className="sidebar-profile-card">
+            <button
+              type="button"
+              className="profile-account-btn"
+              onClick={() => setAccountOpen(true)}
+            >
+              <span className="profile-brand-icon" aria-hidden="true">
+                {initials(displayName)}
+              </span>
+              <span className="profile-meta">
+                <strong>{displayName}</strong>
+                <small>
+                  {snapshot.realtime_connected ? "实时连接" : "轮询连接"}
+                  <i
+                    className={`live-status-dot ${snapshot.realtime_connected ? "" : "fallback"}`}
+                  />
+                </small>
+              </span>
+              <ChevronDown size={14} className="profile-chevron" />
+            </button>
             <button
               type="button"
               className="profile-opt-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setSettingsOpen(true);
-              }}
-              title="设置"
+              onClick={() => setSettingsOpen(true)}
+              title="打开设置"
+              aria-label="打开设置"
             >
-              <Sparkles size={14} />
+              <Settings size={15} />
             </button>
-          </button>
+          </div>
         </div>
       </aside>
 
@@ -1229,26 +1257,100 @@ function Dashboard({
             }}
           />
         ) : (
-          /* Claude Desktop Home / Welcome & Quick Launcher Stage */
           <div className="claude-home-stage">
-            {/* Header */}
-            <header className="claude-welcome-header">
-              <ClaudeSparkIcon size={26} />
-              <h1>Welcome back, {displayName}</h1>
+            <header className="workspace-masthead">
+              <div className="workspace-title-block">
+                <span className="workspace-eyebrow">LOCAL AGENT DESK</span>
+                <h1>继续推进，{displayName}</h1>
+                <p>从一处查看、唤起和接管本机上的每个 Agent 会话。</p>
+              </div>
+              <div className="hub-health" aria-label="中枢状态">
+                <span className="hub-health-orbit" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span>
+                  <strong>{snapshot.local.session_count}</strong>
+                  <small>个本机会话</small>
+                </span>
+              </div>
             </header>
 
-            {/* Alert Banner */}
-            {!alertDismissed && (
+            <section
+              className="agent-constellation"
+              aria-labelledby="agent-constellation-title"
+            >
+              <div className="section-heading-row">
+                <div>
+                  <span className="section-kicker">实时编队</span>
+                  <h2 id="agent-constellation-title">Agent 星轨</h2>
+                </div>
+                <span
+                  className={`connection-chip ${snapshot.realtime_connected ? "connected" : "fallback"}`}
+                >
+                  <i />
+                  {snapshot.realtime_connected ? "实时同步" : "轮询同步"}
+                </span>
+              </div>
+              <div className="constellation-track">
+                {PROVIDER_LIST.map((provider) => {
+                  const providerSessions = sessions.filter(
+                    (session) => session.agent_type === provider.type,
+                  );
+                  const workingCount = providerSessions.filter(
+                    (session) =>
+                      session.payload.state.activity_status === "WORKING",
+                  ).length;
+                  const source = snapshot.local.sources.find(
+                    (item) => item.agent_type === provider.type,
+                  );
+                  return (
+                    <button
+                      type="button"
+                      className="constellation-node"
+                      data-provider={provider.type}
+                      key={provider.type}
+                      onClick={() => openLaunchModalFor(provider.type)}
+                      title={`使用 ${provider.label} 发起新会话`}
+                    >
+                      <span className="constellation-signal" aria-hidden="true">
+                        <i />
+                      </span>
+                      <span className="constellation-copy">
+                        <strong>{provider.shortLabel}</strong>
+                        <small>
+                          {providerSessions.length} 个会话
+                          {workingCount > 0 ? ` · ${workingCount} 运行中` : ""}
+                        </small>
+                      </span>
+                      <span
+                        className={`source-state ${source?.detected ? "detected" : "missing"}`}
+                      >
+                        {source?.detected ? "已接入" : "未发现"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            {!alertDismissed && showSystemNotice && (
               <div className="claude-alert-box">
                 <div className="alert-content">
                   <div className="alert-title-row">
                     <AlertTriangle size={16} className="alert-icon" />
-                    <strong>Configured model not available</strong>
+                    <strong>
+                      {!snapshot.realtime_connected
+                        ? "实时通道暂不可用，已切换为安全轮询"
+                        : `${agentShortLabel(sourceIssue!.agent_type)} 尚未完成本机接入`}
+                    </strong>
                   </div>
                   {showBannerDetails && (
                     <p className="alert-details-text">
-                      当前网关直连正常，本地发现 {snapshot.local.session_count}{" "}
-                      个会话。如需调整默认 Agent CLI 路径或刷新周期，请打开设置。
+                      已发现 {snapshot.local.session_count}{" "}
+                      个本机会话，现有数据不会丢失。 可在本机设置中检查 CLI
+                      路径与索引周期。
                     </p>
                   )}
                   <div className="alert-actions-row">
@@ -1257,14 +1359,14 @@ function Dashboard({
                       className="alert-link"
                       onClick={() => setShowBannerDetails((v) => !v)}
                     >
-                      {showBannerDetails ? "Hide details" : "Details"}
+                      {showBannerDetails ? "收起详情" : "查看详情"}
                     </button>
                     <button
                       type="button"
                       className="alert-btn"
                       onClick={() => setSettingsOpen(true)}
                     >
-                      Open Setup
+                      打开设置
                     </button>
                     <button
                       type="button"
@@ -1272,7 +1374,7 @@ function Dashboard({
                       disabled={refreshing}
                       onClick={() => void refresh()}
                     >
-                      {refreshing ? "Checking..." : "Check again"}
+                      {refreshing ? "正在检查…" : "重新检查"}
                     </button>
                   </div>
                 </div>
@@ -1287,13 +1389,24 @@ function Dashboard({
               </div>
             )}
 
-            {/* Sessions List Section */}
-            <div className="claude-sessions-section">
-              <h2>Sessions</h2>
+            <section
+              className="claude-sessions-section"
+              aria-labelledby="session-section-title"
+            >
+              <div className="section-heading-row compact">
+                <div>
+                  <span className="section-kicker">会话队列</span>
+                  <h2 id="session-section-title">{sessionSectionTitle}</h2>
+                </div>
+                <span className="section-count">
+                  {displayWelcomeSessions.length}
+                </span>
+              </div>
               <div className="claude-sessions-list">
                 {displayWelcomeSessions.length === 0 ? (
                   <div className="sessions-empty-note">
-                    <span>暂无需要关注的会话，请在下方直接输入发起新任务</span>
+                    <CheckCircle2 size={18} />
+                    <span>当前没有待处理会话，可以从下方发起一项新任务。</span>
                   </div>
                 ) : (
                   displayWelcomeSessions.map((session) => {
@@ -1306,9 +1419,11 @@ function Dashboard({
                     const timeAgo = relativeTime(activityTime(session));
 
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={sessionKey(session)}
                         className="claude-session-card"
+                        data-provider={session.agent_type}
                         onClick={() =>
                           setSelectedSessionKey(sessionKey(session))
                         }
@@ -1319,65 +1434,43 @@ function Dashboard({
                           >
                             <i className="status-dot" />
                             {attention
-                              ? "Needs input"
+                              ? "等待处理"
                               : isWorking
-                                ? "Running"
-                                : "Idle"}
+                                ? "运行中"
+                                : "空闲"}
                           </span>
-                          <strong className="card-title" title={title}>
-                            {title}
-                          </strong>
+                          <span className="card-session-copy">
+                            <strong className="card-title" title={title}>
+                              {title}
+                            </strong>
+                            <small>{agentShortLabel(session.agent_type)}</small>
+                          </span>
                         </div>
                         <div className="card-right">
                           <span className="card-meta">
-                            {project} {timeAgo}
+                            {project} · {timeAgo}
                           </span>
                           <ChevronRight size={16} className="card-chevron" />
                         </div>
-                      </div>
+                      </button>
                     );
                   })
                 )}
               </div>
-            </div>
+            </section>
 
-            {/* Bottom Quick Task Launcher Prompt Dock */}
-            <div className="claude-prompt-dock">
-              {/* Top Tags inside prompt dock */}
-              <div className="prompt-dock-tags">
-                <div className="dock-tags-left">
-                  <span className="dock-pill">
-                    <Monitor size={12} />
-                    <span>{snapshot.device.name || "Local"}</span>
-                  </span>
-                  <span className="dock-pill active" title={quickCwd}>
-                    <Folder size={12} />
-                    <span>
-                      {quickCwd.length > 25
-                        ? "..." + quickCwd.slice(-20)
-                        : quickCwd}
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    className="dock-pill-btn"
-                    title="注入任务上下文"
-                  >
-                    <Copy size={12} />
-                  </button>
-                </div>
-                <div className="dock-tags-right">
-                  <span className="dock-mascot" title="AgentHub Companion">
-                    <MascotIcon size={22} />
-                  </span>
-                </div>
+            <form onSubmit={handleQuickLaunch} className="claude-prompt-dock">
+              <div className="prompt-dock-heading">
+                <span className="prompt-spark">
+                  <Sparkles size={15} />
+                </span>
+                <strong>交给一个 Agent</strong>
+                <span>Enter 发送 · Shift + Enter 换行</span>
               </div>
-
-              {/* Main Prompt Input */}
-              <form onSubmit={handleQuickLaunch} className="prompt-dock-form">
+              <div className="prompt-dock-form">
                 <textarea
-                  rows={2}
-                  placeholder="Describe a task or ask a question"
+                  rows={3}
+                  placeholder="描述要完成的事，AgentHub 会在本机启动对应的 Agent…"
                   value={quickPrompt}
                   onChange={(e) => setQuickPrompt(e.target.value)}
                   onKeyDown={(e) => {
@@ -1394,24 +1487,25 @@ function Dashboard({
                   disabled={quickLaunching || !quickPrompt.trim()}
                   title="发送任务指令"
                 >
-                  <CornerDownLeft size={16} />
+                  {quickLaunching ? (
+                    <RefreshCw className="spin" size={16} />
+                  ) : (
+                    <Send size={16} />
+                  )}
                 </button>
-              </form>
+              </div>
 
-              {/* Bottom Options Row */}
               <div className="prompt-dock-bottom">
-                <div className="dock-bottom-left">
-                  <button
-                    type="button"
-                    className={`dock-bypass-btn ${quickBypass ? "active" : ""}`}
-                    onClick={() => setQuickBypass((v) => !v)}
-                  >
-                    <span>Bypass permissions</span>
-                    <span className="bypass-symbol">
-                      {quickBypass ? "✓" : "+"}
-                    </span>
-                  </button>
-                </div>
+                <label className="dock-path-field">
+                  <Folder size={13} />
+                  <span className="sr-only">工作目录</span>
+                  <input
+                    value={quickCwd}
+                    onChange={(event) => setQuickCwd(event.target.value)}
+                    aria-label="工作目录"
+                    spellCheck={false}
+                  />
+                </label>
                 <div className="dock-bottom-right">
                   <select
                     className="dock-model-select"
@@ -1426,10 +1520,12 @@ function Dashboard({
                       </option>
                     ))}
                   </select>
-                  <span className="model-max-pill">Max ⭕</span>
+                  <span className="dock-safety-note">
+                    <ShieldCheck size={12} /> 遵循本机权限
+                  </span>
                 </div>
               </div>
-            </div>
+            </form>
           </div>
         )}
 
@@ -1581,7 +1677,10 @@ function LaunchSessionModal({
   open: boolean;
   initialAgentType?: Session["agent_type"];
   onClose: () => void;
-  onLaunched: (agentSessionId: string, agentType: Session["agent_type"]) => void;
+  onLaunched: (
+    agentSessionId: string,
+    agentType: Session["agent_type"],
+  ) => void;
 }) {
   const [agentType, setAgentType] =
     useState<Session["agent_type"]>(initialAgentType);
@@ -1620,142 +1719,66 @@ function LaunchSessionModal({
     }
   };
 
+  if (!open) return null;
+
   return (
-    <div className="panel-scrim" onMouseDown={onClose}>
+    <div className="panel-scrim launch-session-scrim" onMouseDown={onClose}>
       <div
         className="launch-modal-card"
         onMouseDown={(e) => e.stopPropagation()}
-        style={{
-          width: "90%",
-          maxWidth: "540px",
-          background: "#18181b",
-          border: "1px solid rgba(255, 255, 255, 0.15)",
-          borderRadius: "16px",
-          padding: "24px",
-          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.6)",
-          display: "flex",
-          flexDirection: "column",
-          gap: "18px",
-          color: "#f4f4f5",
-        }}
       >
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <Sparkles size={20} style={{ color: "#ff4f87" }} />
-            <h3 style={{ margin: 0, fontSize: "17px", fontWeight: 700 }}>
-              发起全新 Agent 会话
-            </h3>
+        <header className="launch-modal-header">
+          <div>
+            <span className="launch-modal-mark">
+              <Sparkles size={18} />
+            </span>
+            <span>
+              <small>NEW LOCAL SESSION</small>
+              <h3>发起 Agent 会话</h3>
+            </span>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={onClose}
-            style={{ padding: "6px" }}
+            aria-label="关闭新建会话"
           >
             <X size={18} />
           </button>
         </header>
-        <form
-          onSubmit={submit}
-          style={{ display: "flex", flexDirection: "column", gap: "16px" }}
-        >
-          <label style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <span style={{ fontSize: "13px", fontWeight: 600, color: "#a1a1aa" }}>
-              选择目标 Agent
-            </span>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "10px",
-              }}
-            >
-              {(
-                [
-                  {
-                    type: "claude_code",
-                    label: "Claude Code",
-                    desc: "Anthropic 原生 CLI",
-                  },
-                  {
-                    type: "codex",
-                    label: "OpenAI Codex",
-                    desc: "OpenAI 代码助手",
-                  },
-                  {
-                    type: "antigravity",
-                    label: "Google Antigravity",
-                    desc: "DeepMind Coding Agent",
-                  },
-                  {
-                    type: "grok_build",
-                    label: "Grok Build",
-                    desc: "xAI 全栈开发",
-                  },
-                ] as const
-              ).map((item) => (
+        <form onSubmit={submit} className="launch-modal-form">
+          <fieldset className="launch-provider-fieldset">
+            <legend>选择目标 Agent</legend>
+            <div className="launch-provider-grid">
+              {PROVIDER_LIST.map((item) => (
                 <button
                   key={item.type}
                   type="button"
+                  className={agentType === item.type ? "selected" : ""}
+                  data-provider={item.type}
                   onClick={() => setAgentType(item.type)}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    padding: "12px",
-                    borderRadius: "10px",
-                    background:
-                      agentType === item.type
-                        ? "rgba(255, 79, 135, 0.15)"
-                        : "rgba(255, 255, 255, 0.04)",
-                    border:
-                      agentType === item.type
-                        ? "1px solid #ff4f87"
-                        : "1px solid rgba(255, 255, 255, 0.1)",
-                    color: "#f4f4f5",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "all 0.15s ease",
-                  }}
                 >
-                  <strong style={{ fontSize: "14px" }}>{item.label}</strong>
-                  <small style={{ fontSize: "11px", color: "#a1a1aa" }}>
-                    {item.desc}
-                  </small>
+                  <i aria-hidden="true" />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.desc}</small>
+                  </span>
                 </button>
               ))}
             </div>
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span style={{ fontSize: "13px", fontWeight: 600, color: "#a1a1aa" }}>
-              工作目录 (Cwd)
-            </span>
+          </fieldset>
+          <label className="launch-form-field">
+            <span>工作目录</span>
             <input
               type="text"
               placeholder="例如 d:/ClaudeSpace 或 d:/ClaudeSpace/Project/..."
               value={cwd}
               onChange={(e) => setCwd(e.target.value)}
               required
-              style={{
-                padding: "10px 12px",
-                borderRadius: "8px",
-                background: "rgba(0, 0, 0, 0.3)",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
-                color: "#f4f4f5",
-                fontSize: "13px",
-              }}
             />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <span style={{ fontSize: "13px", fontWeight: 600, color: "#a1a1aa" }}>
-              初始任务指令 (Prompt)
-            </span>
+          <label className="launch-form-field">
+            <span>初始任务指令</span>
             <textarea
               rows={3}
               placeholder="输入你想让 Agent 执行的第一条指令..."
@@ -1763,26 +1786,10 @@ function LaunchSessionModal({
               onChange={(e) => setPrompt(e.target.value)}
               required
               autoFocus
-              style={{
-                padding: "10px 12px",
-                borderRadius: "8px",
-                background: "rgba(0, 0, 0, 0.3)",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
-                color: "#f4f4f5",
-                fontSize: "13px",
-                resize: "vertical",
-              }}
             />
           </label>
-          {error && <p className="form-error" style={{ margin: 0 }}>{error}</p>}
-          <footer
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: "10px",
-              marginTop: "8px",
-            }}
-          >
+          {error && <p className="form-error">{error}</p>}
+          <footer className="launch-modal-actions">
             <button
               type="button"
               className="outline-button"
@@ -1795,13 +1802,6 @@ function LaunchSessionModal({
               type="submit"
               className="primary-button"
               disabled={launching || !prompt.trim()}
-              style={{
-                background: "linear-gradient(135deg, #ff4f87 0%, #a855f7 100%)",
-                border: "none",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
             >
               {launching ? (
                 <>
@@ -2521,65 +2521,6 @@ function AccountPanel({
         <LogOut /> 退出登录
       </button>
     </aside>
-  );
-}
-
-function MascotIcon({ size = 20 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      aria-hidden="true"
-      style={{
-        color: "#e27858",
-        display: "inline-block",
-        verticalAlign: "middle",
-      }}
-    >
-      <rect x="2" y="2" width="2" height="2" />
-      <rect x="12" y="2" width="2" height="2" />
-      <rect x="4" y="4" width="8" height="2" />
-      <rect x="2" y="6" width="12" height="4" />
-      <rect x="4" y="8" width="2" height="2" fill="#18181b" />
-      <rect x="10" y="8" width="2" height="2" fill="#18181b" />
-      <rect x="2" y="10" width="2" height="4" />
-      <rect x="12" y="10" width="2" height="4" />
-      <rect x="6" y="10" width="4" height="2" />
-    </svg>
-  );
-}
-
-function ClaudeSparkIcon({
-  size = 22,
-  color = "#d97757",
-}: {
-  size?: number;
-  color?: string;
-}) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      style={{
-        display: "inline-block",
-        verticalAlign: "middle",
-        filter: "drop-shadow(0 0 4px rgba(217, 119, 87, 0.4))",
-      }}
-    >
-      <line x1="12" y1="2" x2="12" y2="22" />
-      <line x1="2" y1="12" x2="22" y2="12" />
-      <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-      <line x1="19.07" y1="4.93" x2="4.93" y2="19.07" />
-    </svg>
   );
 }
 

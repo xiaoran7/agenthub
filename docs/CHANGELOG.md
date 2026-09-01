@@ -3,6 +3,22 @@
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 
+## [Unreleased]
+
+### Changed
+
+- **桌面端工作台 UI 全面重构**：
+  - 保留 Claude Desktop 的双栏、低噪音和内容优先体验，改用 AgentHub 专属的暖纸色主舞台、深色本机导航与 Provider 信号色系统；
+  - 新增“Agent 星轨”，用真实的本机会话数、运行中数量、采集接入状态和实时/轮询连接状态呈现多 Agent 编队；
+  - 侧栏改为真实可用的“进行中 / 已归档”范围切换，“新建会话”现在直接打开启动器，移除无实际行为的模式切换与权限开关；
+  - 重构首页会话队列、快速任务输入、会话详情编辑区与新建会话面板，统一中文操作语义、焦点态、响应式布局和减少动态效果支持；
+  - 将登录后工作台样式独立到 `workspace.css`，隔离认证/基础组件样式与工作台设计系统。
+
+### Fixed
+
+- 修复 `LaunchSessionModal` 忽略 `open` 属性、启动器在工作台加载后始终常驻的问题。
+- 修复侧栏账户区嵌套按钮产生无效交互结构的问题，并补充桌面端 favicon 消除开发环境 404。
+
 ## [2.0.5] - 2026-09-01
 
 ### Added
@@ -83,9 +99,7 @@
     - 新增 `SlashCommandMenu`：智能 Slash 指令补全下拉面板；
     - 扩展 `apps/web/src/lib/api.ts` v2 交互控制 API 客户端方法。
 
-
 ### Added
-
 
 - **Antigravity 智能体适配与观测支持**：Runner 新增对 Antigravity（Google AGY / Gemini CLI）的会话采集、Transcript JSONL 解析与实时状态映射，支持 `USER_INPUT`、`PLANNER_RESPONSE`、工具调用与规划状态标准化识别；集成本地工作区路径脱敏与快照合并，完全遵循不读取/不上传对话正文或代码的安全边界。
 - **TannerLab / Tg-oauth 统一身份认证深度接入与持久化支持**：
