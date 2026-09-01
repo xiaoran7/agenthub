@@ -3,7 +3,7 @@
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 
-## [2.0.4] - 2026-09-01
+## [2.0.5] - 2026-09-01
 
 ### Added
 
@@ -16,6 +16,8 @@
   - 会话面板全屏沉浸模式与分屏抽屉自由切换，无缝嵌入主舞台交互；
   - 集成快捷 Slash 指令栏（`/help`, `/clear`, `/compact`, `/cost`, `/review`, `/test`）与 Enter 快捷键发送；
   - 优化 Thinking 思考折叠块、工具调用卡片与富文本消息气泡呈现。
+
+## [2.0.4] - 2026-09-01
 
 ### Fixed
 
