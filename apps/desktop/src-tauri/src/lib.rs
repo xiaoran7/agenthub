@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -18,11 +18,11 @@ use agent_pulse_runner::{
         grok,
     },
     collectors::{
-        AgentTurnUpdate, CodexAppServer, CollectorError, LocalSessionContext,
+        AgentTurnUpdate, CodexAppServer, CollectorError, LocalSessionContext, TurnOptions,
         collect_antigravity_session_contexts, collect_claude_session_contexts,
         collect_claude_transcripts, collect_codex_local_threads, collect_codex_session_contexts,
         collect_grok_session_contexts, collect_grok_sessions, find_antigravity_session_cwd,
-        find_grok_session_cwd, run_agent_session_turn_streaming,
+        find_grok_session_cwd, run_agent_session_start_streaming, run_agent_session_turn_streaming,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -54,7 +54,7 @@ const MAX_PROMPT_CHARS: usize = 16_000;
 const MAX_SESSION_ID_CHARS: usize = 160;
 const MAX_SSE_LINE_BYTES: usize = 64 * 1024;
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(45);
-const STREAM_MAX_BACKOFF: Duration = Duration::from_secs(15);
+const STREAM_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const SESSION_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
@@ -91,6 +91,8 @@ enum DesktopError {
     AgentBusy,
     #[error("本机会话已停止")]
     AgentCancelled,
+    #[error("{0}")]
+    Attachment(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,14 +141,29 @@ struct SessionMessageInput {
     agent_type: AgentType,
     agent_session_id: String,
     prompt: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<String>,
+    #[serde(default)]
+    attachments: Vec<SessionAttachmentInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionAttachmentInput {
+    name: String,
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct LaunchSessionInput {
     agent_type: AgentType,
-    #[allow(dead_code)]
     cwd: Option<String>,
     prompt: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,6 +339,178 @@ async fn load_session_conversation(input: SessionConversationInput) -> Result<Ve
 }
 
 #[tauri::command]
+async fn list_agent_models(state: State<'_, DesktopState>) -> Result<Vec<Value>, String> {
+    list_agent_models_inner(&state).map_err(|error| error.to_string())
+}
+
+fn builtin_model_catalog(
+    agent: AgentType,
+) -> &'static [(&'static str, &'static str, &'static str)] {
+    match agent {
+        AgentType::ClaudeCode => &[
+            ("claude-opus-4-1", "Claude Opus 4.1", "深度复杂工程与规划"),
+            ("claude-sonnet-4-5", "Claude Sonnet 4.5", "日常开发主力"),
+            ("claude-haiku-4-5", "Claude Haiku 4.5", "快速轻量响应"),
+        ],
+        AgentType::Codex => &[
+            ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", "最强代码推理"),
+            ("gpt-5.1-codex", "GPT-5.1 Codex", "全栈自主开发"),
+            ("gpt-5-codex", "GPT-5 Codex", "稳定代码代理"),
+        ],
+        AgentType::Antigravity => &[
+            ("gemini-3-pro", "Gemini 3 Pro", "DeepMind 最新推理"),
+            ("gemini-2.5-pro", "Gemini 2.5 Pro", "超长上下文架构"),
+        ],
+        AgentType::GrokBuild => &[
+            ("grok-4", "Grok 4", "xAI 旗舰全栈开发"),
+            ("grok-code-fast-1", "Grok Code Fast", "低延迟快速任务"),
+        ],
+    }
+}
+
+fn model_family(value: &str) -> String {
+    let lower = value.trim().to_ascii_lowercase();
+    lower
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_end_matches('-')
+        .to_owned()
+}
+
+fn model_label(value: &str) -> String {
+    for (id, label, _) in [
+        builtin_model_catalog(AgentType::ClaudeCode),
+        builtin_model_catalog(AgentType::Codex),
+        builtin_model_catalog(AgentType::Antigravity),
+        builtin_model_catalog(AgentType::GrokBuild),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if *id == value {
+            return (*label).to_owned();
+        }
+    }
+    let mut parts: Vec<String> = value
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_owned())
+        .collect();
+    for part in &mut parts {
+        if part.len() == 1 {
+            part.make_ascii_uppercase();
+        } else if part
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+        {
+            let mut chars = part.chars();
+            let first = chars.next().unwrap_or_default().to_ascii_uppercase();
+            *part = format!("{first}{}", chars.as_str());
+        }
+    }
+    parts.join(" ")
+}
+
+fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopError> {
+    let contexts = local_session_contexts(state);
+    let mut result = Vec::new();
+    for agent in [
+        AgentType::ClaudeCode,
+        AgentType::Codex,
+        AgentType::Antigravity,
+        AgentType::GrokBuild,
+    ] {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for context in contexts.values() {
+            if context.agent_type != agent {
+                continue;
+            }
+            if let Some(model) = context
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                *counts.entry(model.to_owned()).or_default() += 1;
+            }
+        }
+        let mut dynamic: Vec<(String, usize)> = counts.into_iter().collect();
+        dynamic.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        dynamic.truncate(6);
+
+        let mut models: Vec<Value> = Vec::new();
+        let mut seen_families: HashSet<String> = HashSet::new();
+        for (value, count) in &dynamic {
+            seen_families.insert(model_family(value));
+            models.push(json!({
+                "value": value,
+                "label": model_label(value),
+                "desc": format!("本机 Agent 实测（{count} 个会话）"),
+                "source": "agent"
+            }));
+        }
+        for (value, label, desc) in builtin_model_catalog(agent) {
+            if seen_families.contains(&model_family(value)) {
+                continue;
+            }
+            models.push(json!({
+                "value": value,
+                "label": label,
+                "desc": desc,
+                "source": "builtin"
+            }));
+        }
+        result.push(json!({ "agent_type": agent_type_name(agent), "models": models }));
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+async fn pick_folder(start_dir: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new();
+        if let Some(dir) = start_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+        {
+            dialog = dialog.set_directory(dir);
+        }
+        Ok(dialog
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|_| DesktopError::AgentFailed.to_string())?
+}
+
+#[tauri::command]
+async fn pick_files(start_dir: Option<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new();
+        if let Some(dir) = start_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+        {
+            dialog = dialog.set_directory(dir);
+        }
+        Ok(dialog
+            .pick_files()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect())
+    })
+    .await
+    .map_err(|_| DesktopError::AgentFailed.to_string())?
+}
+
+#[tauri::command]
 async fn send_session_message(
     input: SessionMessageInput,
     on_event: Channel<SessionTurnEvent>,
@@ -367,41 +556,79 @@ async fn launch_new_session(
     if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(DesktopError::InvalidAction.to_string());
     }
-    let session_id = format!("session-{}", chrono::Utc::now().timestamp_millis());
-    let key = session_turn_key(input.agent_type, &session_id);
     let cancelled = Arc::new(AtomicBool::new(false));
-    {
-        let mut active_turns = state
-            .active_turns
-            .lock()
-            .map_err(|_| DesktopError::AgentFailed.to_string())?;
-        active_turns.insert(key.clone(), cancelled.clone());
-    }
-    let _ = on_event.send(SessionTurnEvent::Started);
     let data_dir = state.data_dir.clone();
-    let agent_type = input.agent_type;
-    let agent_session_id = session_id.clone();
-    let input_msg = SessionMessageInput {
-        agent_type,
-        agent_session_id: agent_session_id.clone(),
-        prompt: prompt.to_owned(),
-    };
     let result = tauri::async_runtime::spawn_blocking(move || {
-        send_session_message_inner(input_msg, &data_dir, &cancelled, on_event)
+        launch_new_session_inner(input, &data_dir, &cancelled, on_event)
     })
-    .await;
-    if let Ok(mut active_turns) = state.active_turns.lock() {
-        active_turns.remove(&key);
-    }
-    let val = result
-        .map_err(|_| DesktopError::AgentFailed.to_string())?
-        .map_err(|error| error.to_string())?;
+    .await
+    .map_err(|_| DesktopError::AgentFailed.to_string())?
+    .map_err(|error| error.to_string())?;
+    Ok(result)
+}
 
+fn launch_new_session_inner(
+    input: LaunchSessionInput,
+    data_dir: &Path,
+    cancelled: &AtomicBool,
+    on_event: Channel<SessionTurnEvent>,
+) -> Result<Value, DesktopError> {
+    let prompt = input.prompt.trim();
+    let config = read_config(data_dir)?;
+    let binary = match input.agent_type {
+        AgentType::ClaudeCode => &config.claude_binary,
+        AgentType::Codex => &config.codex_binary,
+        AgentType::Antigravity => &config.claude_binary,
+        AgentType::GrokBuild => &config.grok_binary,
+    };
+    let cwd = input
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .ok_or(DesktopError::InvalidAction)?;
+    let _ = on_event.send(SessionTurnEvent::Started);
+    let outcome = run_agent_session_start_streaming(
+        input.agent_type,
+        binary,
+        &cwd,
+        prompt,
+        TurnOptions {
+            model: input.model.as_deref(),
+            permission_mode: input.permission_mode.as_deref(),
+        },
+        AGENT_TURN_TIMEOUT,
+        cancelled,
+        move |update| {
+            let event = match update {
+                AgentTurnUpdate::AssistantDelta(text) => SessionTurnEvent::AssistantDelta { text },
+                AgentTurnUpdate::AssistantMessage(text) => {
+                    SessionTurnEvent::AssistantMessage { text }
+                }
+                AgentTurnUpdate::Activity(label) => SessionTurnEvent::Activity { label },
+            };
+            let _ = on_event.send(event);
+        },
+    )
+    .map_err(|error| match error {
+        CollectorError::Cancelled { .. } => DesktopError::AgentCancelled,
+        _ => DesktopError::AgentFailed,
+    })?;
+    if outcome.response.trim().is_empty() {
+        return Err(DesktopError::AgentFailed);
+    }
+    let session_id = outcome
+        .session_id
+        .filter(|id| validate_session_id(id).is_ok())
+        .ok_or(DesktopError::AgentFailed)?;
     Ok(json!({
         "agent_session_id": session_id,
-        "agent_type": agent_type_name(agent_type),
-        "response": val["response"],
-        "completed_at": val["completed_at"]
+        "agent_type": agent_type_name(input.agent_type),
+        "cwd": cwd.to_string_lossy(),
+        "response": outcome.response.trim(),
+        "completed_at": chrono::Utc::now(),
     }))
 }
 
@@ -1030,8 +1257,8 @@ fn send_session_message_inner(
     on_event: Channel<SessionTurnEvent>,
 ) -> Result<Value, DesktopError> {
     validate_session_id(&input.agent_session_id)?;
-    let prompt = input.prompt.trim();
-    if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
+    let prompt = compose_turn_prompt(&input.prompt, &input.attachments)?;
+    if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS * 4 {
         return Err(DesktopError::InvalidAction);
     }
     let config = read_config(data_dir)?;
@@ -1055,12 +1282,16 @@ fn send_session_message_inner(
                 .ok_or(DesktopError::SessionUnavailable)?,
         ),
     };
-    let response = run_agent_session_turn_streaming(
+    let outcome = run_agent_session_turn_streaming(
         input.agent_type,
         binary,
         project_path.as_deref(),
         &input.agent_session_id,
-        prompt,
+        &prompt,
+        TurnOptions {
+            model: input.model.as_deref(),
+            permission_mode: input.permission_mode.as_deref(),
+        },
         AGENT_TURN_TIMEOUT,
         cancelled,
         move |update| {
@@ -1078,13 +1309,86 @@ fn send_session_message_inner(
         CollectorError::Cancelled { .. } => DesktopError::AgentCancelled,
         _ => DesktopError::AgentFailed,
     })?;
-    if response.trim().is_empty() {
+    if outcome.response.trim().is_empty() {
         return Err(DesktopError::AgentFailed);
     };
     Ok(json!({
-        "response": response.trim(),
+        "response": outcome.response.trim(),
         "completed_at": chrono::Utc::now(),
     }))
+}
+
+const MAX_ATTACHMENTS: usize = 8;
+const MAX_ATTACHMENT_CHARS: usize = 128_000;
+const MAX_ATTACHMENT_TOTAL_CHARS: usize = 400_000;
+
+fn compose_turn_prompt(
+    prompt: &str,
+    attachments: &[SessionAttachmentInput],
+) -> Result<String, DesktopError> {
+    if attachments.is_empty() {
+        return Ok(prompt.trim().to_owned());
+    }
+    if attachments.len() > MAX_ATTACHMENTS {
+        return Err(DesktopError::Attachment(
+            "一次最多附带 8 个文件".to_owned(),
+        ));
+    }
+    let mut sections = vec![prompt.trim().to_owned()];
+    let mut total = 0_usize;
+    for attachment in attachments {
+        let (name, content) = read_attachment_text(&attachment.path, &attachment.name)?;
+        total += content.chars().count();
+        if total > MAX_ATTACHMENT_TOTAL_CHARS {
+            return Err(DesktopError::Attachment(
+                "附件总内容超过 400K 字符上限".to_owned(),
+            ));
+        }
+        sections.push(format!("--- 附件：{name} ---\n```text\n{content}\n```"));
+    }
+    sections.push("以上附件由用户在 AgentHub 中选择，请优先读取并使用它们。".to_owned());
+    Ok(sections.join("\n\n"))
+}
+
+fn read_attachment_text(path: &str, name: &str) -> Result<(String, String), DesktopError> {
+    let trimmed = name.trim();
+    let display_name = if trimmed.is_empty() {
+        Path::new(path)
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "attachment".to_owned())
+    } else {
+        trimmed.to_owned()
+    };
+    let file_path = PathBuf::from(path.trim());
+    let metadata = fs::metadata(&file_path)
+        .map_err(|_| DesktopError::Attachment(format!("{display_name}：文件不存在或不可读")))?;
+    if !metadata.is_file() {
+        return Err(DesktopError::Attachment(format!(
+            "{display_name}：不是文件"
+        )));
+    }
+    if metadata.len() > 8 * 1024 * 1024 {
+        return Err(DesktopError::Attachment(format!(
+            "{display_name}：文件超过 8MB 上限"
+        )));
+    }
+    let bytes = fs::read(&file_path)
+        .map_err(|_| DesktopError::Attachment(format!("{display_name}：读取失败")))?;
+    if bytes.iter().take(8 * 1024).any(|byte| *byte == 0) {
+        return Err(DesktopError::Attachment(format!(
+            "{display_name}：暂不支持二进制文件，请粘贴文本或 Markdown"
+        )));
+    }
+    let mut text = decode_local_text(&bytes);
+    if text.chars().count() > MAX_ATTACHMENT_CHARS {
+        text = format!(
+            "{}\n\n[已截断：原文超过 {} 字符]",
+            text.chars().take(MAX_ATTACHMENT_CHARS).collect::<String>(),
+            MAX_ATTACHMENT_CHARS
+        );
+    }
+    Ok((display_name, text))
 }
 
 fn set_session_archived_inner(
@@ -1394,6 +1698,7 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
 
     if let Some(blocks) = content.and_then(Value::as_array) {
         let mut text_parts = Vec::new();
+        let mut pending_tools: HashMap<String, usize> = HashMap::new();
         for block in blocks {
             let block_type = block
                 .get("type")
@@ -1419,23 +1724,28 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
                     }
                 }
                 "tool_use" | "tool_call" | "function_call" | "custom_tool_call" => {
-                    let label = block
+                    let name = block
                         .get("name")
                         .or_else(|| block.get("tool_name"))
                         .and_then(Value::as_str)
                         .unwrap_or("工具调用");
-                    let details = block
-                        .get("input")
-                        .or_else(|| block.get("arguments"))
-                        .map(compact_json)
-                        .unwrap_or_default();
+                    let input = block.get("input").or_else(|| block.get("arguments"));
+                    let label = tool_call_label(name, input);
+                    let details =
+                        input.map(compact_json).unwrap_or_default();
+                    // Transcripts are historical records: a persisted tool call is
+                    // done unless its result below reports an error.
+                    let index = items.len();
                     items.push(conversation_item(
                         "assistant",
                         "tool",
-                        label,
+                        &label,
                         &details,
-                        "running",
+                        "completed",
                     ));
+                    if let Some(id) = block.get("id").and_then(Value::as_str) {
+                        pending_tools.insert(id.to_owned(), index);
+                    }
                 }
                 "tool_result" | "function_call_output" | "custom_tool_call_output" => {
                     let details = block
@@ -1447,13 +1757,31 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
                         .get("is_error")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    items.push(conversation_item(
-                        "system",
-                        "tool",
-                        "工具结果",
-                        &details,
-                        if failed { "failed" } else { "completed" },
-                    ));
+                    let matched = block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| pending_tools.get(id).copied());
+                    if let Some(index) = matched {
+                        if !details.trim().is_empty() {
+                            let merged = format!(
+                                "{}\n\n〔结果〕\n{}",
+                                items[index]["content"].as_str().unwrap_or_default(),
+                                details.trim()
+                            );
+                            items[index]["content"] = Value::String(merged);
+                        }
+                        if failed {
+                            items[index]["status"] = Value::String("failed".to_owned());
+                        }
+                    } else if !details.trim().is_empty() {
+                        items.push(conversation_item(
+                            "system",
+                            "tool",
+                            "工具结果",
+                            &details,
+                            if failed { "failed" } else { "completed" },
+                        ));
+                    }
                 }
                 _ => {}
             }
@@ -1479,15 +1807,15 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
             | "file_change"
     );
     if tool_type {
-        let label = payload
+        let named = payload
             .get("name")
             .or_else(|| payload.get("command"))
-            .and_then(Value::as_str)
-            .unwrap_or(if payload_type.contains("file") {
-                "文件变更"
-            } else {
-                "工具调用"
-            });
+            .and_then(Value::as_str);
+        let label = match named {
+            Some(name) => tool_call_label(name, payload.get("arguments")),
+            None if payload_type.contains("file") => "文件变更".to_owned(),
+            None => "工具调用".to_owned(),
+        };
         let details = payload
             .get("arguments")
             .or_else(|| payload.get("aggregatedOutput"))
@@ -1495,15 +1823,21 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
             .or_else(|| payload.get("changes"))
             .map(compact_json)
             .unwrap_or_default();
-        let status = payload
+        // Persisted rollout records are historical: an unfinished marker in an
+        // old rollout means the record was cut, not that work is still running.
+        let status = match payload
             .get("status")
             .and_then(Value::as_str)
             .map(status_label)
-            .unwrap_or("unknown");
+            .unwrap_or("unknown")
+        {
+            "running" | "unknown" => "completed",
+            other => other,
+        };
         items.push(conversation_item(
             "assistant",
             "tool",
-            label,
+            &label,
             &details,
             status,
         ));
@@ -1594,6 +1928,42 @@ fn normalized_role(value: &Value) -> Option<&'static str> {
 fn conversation_item(role: &str, kind: &str, label: &str, content: &str, status: &str) -> Value {
     json!({ "role": role, "kind": kind, "label": label, "status": status,
         "content": content.trim().chars().take(16_000).collect::<String>() })
+}
+
+/// Summarizes a tool call as `Name: key argument` so collapsed rows stay
+/// scannable without expanding the payload.
+fn tool_call_label(name: &str, input: Option<&Value>) -> String {
+    const KEY_FIELDS: [&str; 10] = [
+        "command",
+        "file_path",
+        "path",
+        "notebook_path",
+        "url",
+        "pattern",
+        "query",
+        "prompt",
+        "description",
+        "skill",
+    ];
+    let detail = input.and_then(|input| {
+        KEY_FIELDS.iter().find_map(|field| {
+            input
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+    });
+    match detail {
+        Some(detail) if detail.chars().count() > 96 => {
+            format!(
+                "{name}: {}…",
+                detail.chars().take(96).collect::<String>()
+            )
+        }
+        Some(detail) => format!("{name}: {detail}"),
+        None => name.to_owned(),
+    }
 }
 
 fn compact_json(value: &Value) -> String {
@@ -2334,21 +2704,36 @@ fn dashboard_realtime_loop(
 ) {
     let mut attempt = 0_u32;
     while !stop.load(Ordering::Relaxed) {
+        let started = Instant::now();
         let result = read_dashboard_stream(app, server_url, cookie, stop, connected);
         if stop.load(Ordering::Relaxed) {
             break;
         }
         publish_realtime_state(app, connected, false, false);
-        attempt = if result.is_ok() {
-            1
-        } else {
-            attempt.saturating_add(1)
+        // Retry policy: a stream that stayed healthy for a while means the
+        // server simply closed it, so reconnect almost immediately. A 429
+        // means every stream slot is busy (e.g. half-open sockets after a
+        // network switch) and reconnecting faster only makes it worse.
+        let delay = match &result {
+            Ok(_) if started.elapsed() >= Duration::from_secs(30) => Duration::from_secs(1),
+            Ok(_) => Duration::from_secs(2),
+            Err(DesktopError::LoginRateLimited) => Duration::from_secs(60),
+            Err(_) => {
+                attempt = attempt.saturating_add(1);
+                Duration::from_secs(2_u64.saturating_pow(attempt.min(4))).min(STREAM_MAX_BACKOFF)
+            }
         };
-        let delay =
-            Duration::from_secs(2_u64.saturating_pow(attempt.min(4))).min(STREAM_MAX_BACKOFF);
-        sleep_until_cancelled(stop, delay);
+        sleep_until_cancelled(stop, jittered(delay));
     }
     connected.store(false, Ordering::Relaxed);
+}
+
+fn jittered(duration: Duration) -> Duration {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.subsec_nanos())
+        .unwrap_or(0);
+    duration + Duration::from_millis((nanos % 400) as u64)
 }
 
 fn read_dashboard_stream(
@@ -2523,7 +2908,7 @@ fn http_agent() -> ureq::Agent {
 fn dashboard_stream_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(REQUEST_TIMEOUT))
-        .timeout_recv_response(Some(REQUEST_TIMEOUT))
+        .timeout_recv_response(Some(Duration::from_secs(30)))
         .timeout_recv_body(Some(STREAM_READ_TIMEOUT))
         .user_agent(concat!(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/",
@@ -2680,6 +3065,9 @@ pub fn run() {
             set_sync_paused,
             load_session_timeline,
             load_session_conversation,
+            list_agent_models,
+            pick_folder,
+            pick_files,
             logout
         ])
         .build(tauri::generate_context!())

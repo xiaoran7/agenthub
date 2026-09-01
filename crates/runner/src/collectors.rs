@@ -117,6 +117,21 @@ pub enum AgentTurnUpdate {
     Activity(&'static str),
 }
 
+/// Per-turn overrides the desktop panel can attach to a resume or launch.
+#[derive(Debug, Clone, Default)]
+pub struct TurnOptions<'a> {
+    pub model: Option<&'a str>,
+    pub permission_mode: Option<&'a str>,
+}
+
+/// Outcome of a streamed agent process: final message plus the session id the
+/// CLI reported for freshly started conversations.
+#[derive(Debug, Clone)]
+pub struct AgentStreamOutcome {
+    pub response: String,
+    pub session_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LocalSessionContext {
     pub agent_type: crate::domain::AgentType,
@@ -911,6 +926,18 @@ fn apply_codex_context_line(line: &str, context: &mut LocalSessionContext) {
                 .pointer("/payload/model_context_window")
                 .and_then(Value::as_u64)
                 .or(context.context_window_tokens);
+        }
+        Some("event_msg")
+            if context.title.is_none()
+                && value.pointer("/payload/type").and_then(Value::as_str) == Some("user_message") =>
+        {
+            let prompt_text = value
+                .pointer("/payload/message")
+                .or_else(|| value.pointer("/payload/text"))
+                .and_then(Value::as_str);
+            if let Some(text) = prompt_text {
+                context.title = local_prompt_title(text);
+            }
         }
         _ => {}
     }
@@ -1947,26 +1974,30 @@ pub fn run_agent_session_turn(
         project_path,
         session_id,
         prompt,
+        TurnOptions::default(),
         timeout,
         &AtomicBool::new(false),
         |_| {},
     )
+    .map(|outcome| outcome.response)
 }
 
 /// Resume an Agent session while forwarding safe, user-visible progress.
 /// Conversation text is never logged or persisted by this function. The
 /// caller owns the callback destination and cancellation flag.
 #[allow(clippy::too_many_arguments)]
+/// Resumes an existing agent conversation and streams the turn's updates.
 pub fn run_agent_session_turn_streaming(
     agent: crate::domain::AgentType,
     binary: impl AsRef<Path>,
     project_path: Option<&Path>,
     session_id: &str,
     prompt: &str,
+    options: TurnOptions<'_>,
     timeout: Duration,
     cancelled: &AtomicBool,
     on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
-) -> Result<String, CollectorError> {
+) -> Result<AgentStreamOutcome, CollectorError> {
     let binary = binary.as_ref();
     let program = binary.display().to_string();
     let mut command = Command::new(binary);
@@ -2030,9 +2061,139 @@ pub fn run_agent_session_turn_streaming(
             Some(prompt_file)
         }
     };
+    apply_turn_options(&mut command, agent, &options);
     if let Some(project_path) = project_path {
         command.current_dir(project_path);
     }
+    run_agent_stream_process(
+        agent,
+        command,
+        program,
+        prompt,
+        prompt_file,
+        timeout,
+        cancelled,
+        on_update,
+    )
+}
+
+/// Starts a brand-new agent conversation in `cwd` and streams the first turn.
+/// The session id is recovered from the CLI's stream output so the panel can
+/// switch to the real conversation immediately.
+pub fn run_agent_session_start_streaming(
+    agent: crate::domain::AgentType,
+    binary: impl AsRef<Path>,
+    cwd: &Path,
+    prompt: &str,
+    options: TurnOptions<'_>,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+    on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
+) -> Result<AgentStreamOutcome, CollectorError> {
+    let binary = binary.as_ref();
+    let program = binary.display().to_string();
+    let mut command = Command::new(binary);
+    let prompt_file = match agent {
+        crate::domain::AgentType::ClaudeCode | crate::domain::AgentType::Antigravity => {
+            command.args([
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+            ]);
+            None
+        }
+        crate::domain::AgentType::Codex => {
+            command.args([
+                "exec",
+                "--json",
+                "--color",
+                "never",
+                "--skip-git-repo-check",
+                "-",
+            ]);
+            None
+        }
+        crate::domain::AgentType::GrokBuild => {
+            let prompt_file = write_prompt_file(prompt)?;
+            let prompt_path = prompt_file
+                .path()
+                .to_str()
+                .ok_or_else(|| CollectorError::Io {
+                    program: program.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "prompt file path is not valid UTF-8",
+                    ),
+                })?;
+            command.args([
+                "--prompt-file",
+                prompt_path,
+                "--output-format",
+                "streaming-json",
+            ]);
+            Some(prompt_file)
+        }
+    };
+    apply_turn_options(&mut command, agent, &options);
+    command.current_dir(cwd);
+    run_agent_stream_process(
+        agent,
+        command,
+        program,
+        prompt,
+        prompt_file,
+        timeout,
+        cancelled,
+        on_update,
+    )
+}
+
+fn apply_turn_options(command: &mut Command, agent: crate::domain::AgentType, options: &TurnOptions<'_>) {
+    let Some(model) = options.model.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    match agent {
+        crate::domain::AgentType::ClaudeCode => {
+            command.args(["--model", model]);
+            if let Some(mode) = options
+                .permission_mode
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                command.args(["--permission-mode", mode]);
+            }
+        }
+        crate::domain::AgentType::Codex => {
+            command.args(["-m", model]);
+            if let Some(mode) = options
+                .permission_mode
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let sandbox = match mode {
+                    "read-only" | "plan" => "read-only",
+                    "bypassPermissions" | "danger-full-access" => "danger-full-access",
+                    _ => "workspace-write",
+                };
+                command.args(["--sandbox", sandbox]);
+            }
+        }
+        crate::domain::AgentType::Antigravity | crate::domain::AgentType::GrokBuild => {}
+    }
+}
+
+fn run_agent_stream_process(
+    agent: crate::domain::AgentType,
+    mut command: Command,
+    program: String,
+    prompt: &str,
+    prompt_file: Option<tempfile::NamedTempFile>,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+    on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
+) -> Result<AgentStreamOutcome, CollectorError> {
     command
         .stdin(if prompt_file.is_some() {
             Stdio::null()
@@ -2109,10 +2270,45 @@ pub fn run_agent_session_turn_streaming(
         program: program.clone(),
         source,
     })?;
-    final_agent_message(agent, &output).ok_or_else(|| CollectorError::Protocol {
+    let response = final_agent_message(agent, &output).ok_or_else(|| CollectorError::Protocol {
         program,
         code: "missing_final_message".to_owned(),
         message: "missing final agent message".to_owned(),
+    })?;
+    let session_id = extract_session_id_from_output(agent, &output);
+    Ok(AgentStreamOutcome {
+        response,
+        session_id,
+    })
+}
+
+fn extract_session_id_from_output(agent: crate::domain::AgentType, output: &str) -> Option<String> {
+    output.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        let raw = match agent {
+            crate::domain::AgentType::ClaudeCode => ["session_id"]
+                .into_iter()
+                .find_map(|field| value.get(field).and_then(Value::as_str))
+                .filter(|_| {
+                    value.get("type").and_then(Value::as_str)
+                        == Some("system")
+                        && value.get("subtype").and_then(Value::as_str) == Some("init")
+                        || value.get("type").and_then(Value::as_str) == Some("result")
+                }),
+            crate::domain::AgentType::Codex => value
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .filter(|_| value.get("type").and_then(Value::as_str) == Some("thread.started")),
+            crate::domain::AgentType::Antigravity | crate::domain::AgentType::GrokBuild => [
+                "session_id",
+                "sessionId",
+                "conversation_id",
+                "conversationId",
+            ]
+            .into_iter()
+            .find_map(|field| value.get(field).and_then(Value::as_str)),
+        }?;
+        metadata_label(raw, MAX_CONFIG_VALUE_CHARS)
     })
 }
 
@@ -3174,6 +3370,7 @@ mod tests {
             None,
             "019abc-session",
             "private prompt",
+            TurnOptions::default(),
             Duration::from_secs(10),
             &cancelled,
             |_| {},

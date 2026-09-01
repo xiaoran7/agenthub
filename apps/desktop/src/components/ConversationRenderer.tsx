@@ -1,17 +1,13 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Brain,
-  ChevronDown,
   ChevronRight,
-  Code2,
   Copy,
   Check,
   Terminal,
   Activity,
-  Sparkles,
-  FileCode,
   Wrench,
   AlertCircle,
   CheckCircle2,
@@ -23,8 +19,14 @@ interface ConversationRendererProps {
   index: number;
 }
 
-export function ConversationItem({ message, index }: ConversationRendererProps) {
-  if (message.content === "" && message.kind !== "tool" && message.kind !== "thinking") {
+const RESULT_SEPARATOR = "〔结果〕";
+
+export function ConversationItem({ message }: ConversationRendererProps) {
+  if (
+    message.content === "" &&
+    message.kind !== "tool" &&
+    message.kind !== "thinking"
+  ) {
     return null;
   }
 
@@ -33,7 +35,7 @@ export function ConversationItem({ message, index }: ConversationRendererProps) 
     return <ThinkingBlock content={message.content} defaultOpen={false} />;
   }
 
-  // 2. Dedicated tool call / command / status item
+  // 2. Dedicated tool call / command / status item (collapsed one-liner)
   if (
     message.kind === "tool" ||
     message.kind === "command" ||
@@ -42,7 +44,7 @@ export function ConversationItem({ message, index }: ConversationRendererProps) 
     return <ToolCallBlock message={message} />;
   }
 
-  // 3. User Message -> Rounded Dark Bubble (Like Image 3, No Loud Colors)
+  // 3. User Message -> Rounded Dark Bubble
   if (message.role === "user") {
     return (
       <div className="message-row user-row">
@@ -57,7 +59,7 @@ export function ConversationItem({ message, index }: ConversationRendererProps) 
     );
   }
 
-  // 4. Assistant / System Message -> Natural Fluid Markdown (No Restricting Cards, Parses Embedded Thinking)
+  // 4. Assistant / System Message -> Natural Fluid Markdown
   return (
     <div className="message-row assistant-row">
       <div className="assistant-flow-content">
@@ -69,7 +71,8 @@ export function ConversationItem({ message, index }: ConversationRendererProps) 
 
 function ParsedAssistantContent({ text }: { text: string }) {
   // Check for embedded <think>...</think> or <thinking>...</thinking> or <thought>...</thought> tags
-  const thinkRegex = /<(?:think|thinking|thought)>([\s\S]*?)<\/(?:think|thinking|thought)>/gi;
+  const thinkRegex =
+    /<(?:think|thinking|thought)>([\s\S]*?)<\/(?:think|thinking|thought)>/gi;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -77,9 +80,7 @@ function ParsedAssistantContent({ text }: { text: string }) {
   while ((match = thinkRegex.exec(text)) !== null) {
     const preText = text.slice(lastIndex, match.index);
     if (preText.trim()) {
-      parts.push(
-        <MarkdownSection key={`md-${lastIndex}`} content={preText} />
-      );
+      parts.push(<MarkdownSection key={`md-${lastIndex}`} content={preText} />);
     }
     const thinkContent = match[1];
     if (thinkContent.trim()) {
@@ -88,7 +89,7 @@ function ParsedAssistantContent({ text }: { text: string }) {
           key={`think-${match.index}`}
           content={thinkContent.trim()}
           defaultOpen={false}
-        />
+        />,
       );
     }
     lastIndex = match.index + match[0].length;
@@ -96,9 +97,7 @@ function ParsedAssistantContent({ text }: { text: string }) {
 
   const remaining = text.slice(lastIndex);
   if (remaining.trim() || parts.length === 0) {
-    parts.push(
-      <MarkdownSection key={`md-${lastIndex}`} content={remaining} />
-    );
+    parts.push(<MarkdownSection key={`md-${lastIndex}`} content={remaining} />);
   }
 
   return <>{parts}</>;
@@ -126,26 +125,39 @@ function ThinkingBlock({
         </span>
         <strong className="thinking-title">思考过程</strong>
         <span className="thinking-stats">
-          {charCount > 1000 ? `${(charCount / 1000).toFixed(1)}k 字符` : `${charCount} 字符`}
+          {charCount > 1000
+            ? `${(charCount / 1000).toFixed(1)}k 字符`
+            : `${charCount} 字符`}
         </span>
         <ChevronRight size={13} className="thinking-chevron" />
       </summary>
       <div className="thinking-body">
         <div className="thinking-inner-text">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {content}
-          </ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         </div>
       </div>
     </details>
   );
 }
 
+/** Splits `args 〔结果〕 output` payloads produced by the desktop normalizer. */
+function splitToolContent(content: string): { args: string; result: string } {
+  const at = content.indexOf(RESULT_SEPARATOR);
+  if (at === -1) return { args: content, result: "" };
+  return {
+    args: content.slice(0, at).trim(),
+    result: content.slice(at + RESULT_SEPARATOR.length).trim(),
+  };
+}
+
 function ToolCallBlock({ message }: { message: ConversationMessage }) {
   const [open, setOpen] = useState(false);
   const failed = message.status === "failed";
+  const running = message.status === "running";
   const isCommand = message.kind === "command";
   const isStatus = message.kind === "status";
+  const { args, result } = splitToolContent(message.content);
+  const effectiveStatus = running ? "running" : failed ? "failed" : "completed";
 
   return (
     <details
@@ -156,38 +168,43 @@ function ToolCallBlock({ message }: { message: ConversationMessage }) {
       <summary className="tool-call-summary">
         <span className="tool-icon-badge">
           {isCommand ? (
-            <Terminal size={13} />
+            <Terminal size={12} />
           ) : isStatus ? (
-            <Activity size={13} />
+            <Activity size={12} />
           ) : (
-            <Wrench size={13} />
+            <Wrench size={12} />
           )}
         </span>
         <strong className="tool-name">
-          {message.label || (isCommand ? "命令执行" : isStatus ? "状态更新" : "工具调用")}
+          {message.label ||
+            (isCommand ? "命令执行" : isStatus ? "状态更新" : "工具调用")}
         </strong>
-        <span className={`tool-status-pill ${message.status || "completed"}`}>
+        <span className={`tool-status-pill ${effectiveStatus}`}>
           {failed ? (
             <>
-              <AlertCircle size={11} /> 失败
+              <AlertCircle size={10} /> 失败
             </>
-          ) : message.status === "running" ? (
+          ) : running ? (
             <>
-              <Activity size={11} className="spin" /> 运行中
+              <Activity size={10} className="spin" /> 运行中
             </>
           ) : (
             <>
-              <CheckCircle2 size={11} /> 完成
+              <CheckCircle2 size={10} /> 完成
             </>
           )}
         </span>
-        <ChevronRight size={13} className="tool-chevron" />
+        <ChevronRight size={12} className="tool-chevron" />
       </summary>
-      {message.content && (
-        <div className="tool-call-body">
-          <pre className="tool-content-pre">{message.content}</pre>
-        </div>
-      )}
+      <div className="tool-call-body">
+        {args.trim() && <pre className="tool-content-pre">{args}</pre>}
+        {result.trim() && (
+          <div className="tool-result-markdown">
+            <span className="tool-result-caption">执行结果</span>
+            <MarkdownSection content={result} />
+          </div>
+        )}
+      </div>
     </details>
   );
 }
@@ -198,10 +215,10 @@ function MarkdownSection({ content }: { content: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          code({ node, inline, className, children, ...props }: any) {
+          code({ className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || "");
             const codeString = String(children).replace(/\n$/, "");
-            if (!inline && (match || codeString.includes("\n"))) {
+            if (!props.inline && (match || codeString.includes("\n"))) {
               return (
                 <CodeBlock
                   language={match ? match[1] : "text"}

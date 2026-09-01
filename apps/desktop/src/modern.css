@@ -1,0 +1,1036 @@
+/* ==========================================================================
+ * AgentHub v2.2 modern layer — final overrides.
+ * Loaded last: this file is the single source of truth for the Codex-style
+ * home stage, the modern composer, the session panel scroll contract,
+ * compact tool rows, and markdown typography. Older layers stay for
+ * settings/auth screens that were not reworked here.
+ * ========================================================================== */
+
+html,
+body,
+#root {
+  overscroll-behavior: none;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a37 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3a3a37;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #4a4a46;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --------------------------------------------------------------------------
+ * Home stage: a centered, non-scrolling column; the prompt dock participates
+ * in normal flow so nothing can be "pulled past" and no banner can reflow it.
+ * ------------------------------------------------------------------------ */
+
+.claude-home-stage {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 32px 64px 44px;
+}
+
+.claude-home-stage .workspace-masthead {
+  width: min(100%, 770px);
+  margin: 0;
+}
+
+.floating-notice {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(100%, 640px);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  color: #e9e8e4;
+  background: rgba(33, 27, 22, 0.92);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 12px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+  animation: notice-in 0.18s ease-out;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.floating-notice .alert-content {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.floating-notice .alert-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fbbf24;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.floating-notice .alert-title-row .alert-icon {
+  flex: 0 0 auto;
+}
+
+.floating-notice .alert-link {
+  margin-left: auto;
+  color: #93c5fd;
+  font-size: 11px;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+.floating-notice .alert-details-text {
+  margin: 0;
+  color: #c9c7c1;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.floating-notice .alert-actions-row {
+  display: flex;
+  gap: 8px;
+}
+
+.floating-notice .alert-btn {
+  padding: 4px 10px;
+  color: #efeee9;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.floating-notice .alert-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.floating-notice .alert-close-btn {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  color: #8a8880;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.floating-notice .alert-close-btn:hover {
+  color: #efeee9;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* --------------------------------------------------------------------------
+ * Modern composer: borderless textarea inside a soft card with an inline
+ * toolbar. Shared by the home dock and the session panel.
+ * ------------------------------------------------------------------------ */
+
+.modern-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.modern-composer textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #ecebe8;
+  font-size: 13px;
+  line-height: 1.55;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.claude-prompt-dock {
+  position: relative;
+  inset: auto;
+  width: min(100%, 770px);
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.prompt-dock-form {
+  padding: 4px;
+  background: #1f1f1e;
+  border: 1px solid #34342f;
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.prompt-dock-form:focus-within {
+  border-color: #55554e;
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.4),
+    0 0 0 3px rgba(217, 119, 87, 0.08);
+}
+
+.prompt-dock-form textarea {
+  min-height: 48px;
+  padding: 10px 50px 6px 12px;
+}
+
+.prompt-dock-form textarea::placeholder {
+  color: #77756f;
+}
+
+.inline-send {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: #151514;
+  background: #e8e6e1;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.inline-send:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+.inline-send:disabled {
+  color: #7c7a74;
+  background: #35342f;
+  cursor: not-allowed;
+}
+
+.prompt-dock-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 2px 0;
+}
+
+.dock-path-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 55%;
+  min-height: 28px;
+  padding: 0 10px;
+  color: #a8a69f;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.dock-path-field:hover {
+  color: #e3e1db;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.dock-path-field svg {
+  flex: 0 0 auto;
+}
+
+.dock-path-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.dock-bottom-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dock-bottom-right .custom-select-dropdown {
+  width: auto;
+  max-width: 200px;
+}
+
+.dock-safety-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #6f6d66;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+ * Session panel: header / tabs / pane / composer are strict flex rows and the
+ * pane is the only scroll container.
+ * ------------------------------------------------------------------------ */
+
+/* The scrim never had geometry of its own, so every height:100% below it
+ * collapsed to content height — that is why session transcripts could not
+ * scroll. Pin it to the stage and the flex contract finally holds. */
+.claude-stage > .session-control-panel-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: block;
+  overflow: hidden;
+  background: #151514;
+}
+
+.claude-stage .session-control-panel,
+.claude-stage .session-control-panel.fullscreen {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  color: #e9e8e4;
+  background: #151514;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+
+.claude-stage .session-control-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 14px;
+  background: #151514;
+  border-bottom: 1px solid #262625;
+}
+
+.claude-stage .session-control-panel .panel-nav {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.claude-stage .session-control-panel .icon-button {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #96948d;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+}
+
+.claude-stage .session-control-panel .icon-button:hover:not(:disabled) {
+  color: #efeee9;
+  background: #30302e;
+}
+
+.claude-stage .session-breadcrumb {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.3;
+}
+
+.claude-stage .session-breadcrumb strong {
+  overflow: hidden;
+  color: #efeee9;
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-stage .session-breadcrumb small {
+  overflow: hidden;
+  color: #77756f;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-stage .panel-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.claude-stage .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.claude-stage .status-pill i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.claude-stage .status-pill.working {
+  color: #7ed5a0;
+  background: rgba(126, 213, 160, 0.1);
+}
+
+.claude-stage .status-pill.waiting {
+  color: #e7b35d;
+  background: rgba(231, 179, 93, 0.12);
+}
+
+.claude-stage .status-pill.idle {
+  color: #96948d;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.claude-stage .status-pill.failed {
+  color: #ff8f8a;
+  background: rgba(255, 122, 116, 0.12);
+}
+
+.claude-stage .status-pill.history {
+  color: #96948d;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.claude-stage .session-control-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.claude-stage .session-control-panel > header,
+.claude-stage .panel-view-switcher {
+  flex: 0 0 auto;
+}
+
+.claude-stage .panel-view-switcher {
+  display: flex;
+  gap: 4px;
+  padding: 8px 20px 10px;
+  border-bottom: 1px solid #262625;
+}
+
+.claude-stage .panel-view-switcher button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 11px;
+  color: #96948d;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
+}
+
+.claude-stage .panel-view-switcher button:hover {
+  color: #ecebe8;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.claude-stage .panel-view-switcher button.active {
+  color: #efeee9;
+  background: #30302e;
+}
+
+.claude-stage .conversation-pane,
+.claude-stage .runtime-context-view,
+.claude-stage .session-runtime-context,
+.claude-stage .timeline-view {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.claude-stage .session-runtime-context {
+  padding: 24px 28px;
+}
+
+.claude-stage .composer-container {
+  flex: 0 0 auto;
+  width: min(calc(100% - 40px), 820px);
+  margin: 0 auto;
+  padding: 6px 0 14px;
+  background: #151514;
+}
+
+.claude-stage .session-composer {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: #1f1f1e;
+  border: 1px solid #34342f;
+  border-radius: 14px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.claude-stage .session-composer:focus-within {
+  border-color: #55554e;
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.08);
+}
+
+.claude-stage .session-composer textarea {
+  min-height: 44px;
+  max-height: 220px;
+  padding: 10px 12px 2px;
+  color: #ecebe8;
+  background: transparent;
+  border: 0;
+  outline: none;
+  resize: none;
+  font-size: 13px;
+}
+
+.claude-stage .session-composer textarea::placeholder {
+  color: #77756f;
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 6px;
+}
+
+.composer-spacer {
+  flex: 1;
+}
+
+.composer-context {
+  color: #6f6d66;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.tool-ghost-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #96948d;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tool-ghost-btn:hover:not(:disabled) {
+  color: #efeee9;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tool-ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer-toolbar .custom-select-dropdown.ghost {
+  width: auto;
+  max-width: 190px;
+  flex: 0 1 auto;
+}
+
+.custom-select-dropdown.ghost .select-trigger {
+  min-height: 28px;
+  padding: 3px 8px;
+  background: transparent;
+  border-color: transparent;
+  color: #a8a69f;
+  font-size: 11.5px;
+}
+
+.custom-select-dropdown.ghost .select-trigger:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #ecebe8;
+}
+
+.composer-toolbar .composer-send {
+  position: static;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #151514;
+  background: #e8e6e1;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+/* The pre-v22 layer absolutely positioned the send button inside the old
+ * textarea-only composer; the toolbar layout needs it back in flow. */
+.claude-stage .session-composer .composer-toolbar .composer-send {
+  position: static;
+  right: auto;
+  bottom: auto;
+}
+
+.composer-toolbar .composer-send:disabled {
+  color: #7c7a74;
+  background: #35342f;
+  cursor: not-allowed;
+}
+
+.composer-toolbar .composer-send.turn-cancel-btn {
+  color: #ff8f8a;
+  background: rgba(255, 122, 116, 0.12);
+}
+
+.composer-toolbar .composer-send.turn-cancel-btn:hover:not(:disabled) {
+  background: rgba(255, 122, 116, 0.22);
+}
+
+/* Attachment chips */
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 2px 8px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 4px 8px;
+  color: #c9c7c1;
+  background: #262624;
+  border: 1px solid #35342f;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.attachment-chip svg {
+  flex: 0 0 auto;
+  color: #8a8880;
+}
+
+.attachment-chip .attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip button {
+  display: grid;
+  place-items: center;
+  padding: 1px;
+  color: #8a8880;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.attachment-chip button:hover {
+  color: #ff8f8a;
+}
+
+/* --------------------------------------------------------------------------
+ * Conversation content: compact collapsible tool rows + markdown typography.
+ * ------------------------------------------------------------------------ */
+
+.claude-stage .conversation-pane {
+  width: min(100%, 820px);
+  margin: 0 auto;
+  padding: 26px 24px 42px;
+}
+
+.message-row {
+  margin-bottom: 18px;
+}
+
+.tool-call-accordion {
+  margin: 5px 0;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.tool-call-accordion.failed {
+  border-color: rgba(255, 122, 116, 0.28);
+}
+
+.tool-call-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  color: #8f8d86;
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.tool-call-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-call-summary:hover {
+  color: #d6d4ce;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tool-icon-badge {
+  display: inline-flex;
+  color: #7a786f;
+}
+
+.tool-name {
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+  color: inherit;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-size: 9.5px;
+  flex: 0 0 auto;
+}
+
+.tool-status-pill.completed {
+  color: #7a786f;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tool-status-pill.failed {
+  color: #ff8f8a;
+  background: rgba(255, 122, 116, 0.12);
+}
+
+.tool-status-pill.running {
+  color: #7ed5a0;
+  background: rgba(126, 213, 160, 0.1);
+}
+
+.tool-chevron {
+  flex: 0 0 auto;
+  color: #6f6d66;
+  transition: transform 0.15s ease;
+}
+
+.tool-call-accordion[open] .tool-chevron {
+  transform: rotate(90deg);
+}
+
+.tool-call-body {
+  padding: 6px 10px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tool-content-pre {
+  margin: 0;
+  padding: 8px 10px;
+  color: #a5a39c;
+  background: #131312;
+  border-radius: 7px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-result-markdown {
+  margin-top: 8px;
+}
+
+.tool-result-caption {
+  display: block;
+  margin-bottom: 4px;
+  color: #6f6d66;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.markdown-body {
+  color: #deded9;
+  font-size: 13px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 18px 0 8px;
+  color: #f0efe9;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.markdown-body h1 {
+  font-size: 19px;
+}
+.markdown-body h2 {
+  font-size: 16.5px;
+}
+.markdown-body h3 {
+  font-size: 14.5px;
+}
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 13px;
+}
+
+.markdown-body p {
+  margin: 8px 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.markdown-body li {
+  margin: 3px 0;
+}
+
+.markdown-body li > input[type="checkbox"] {
+  margin-right: 6px;
+}
+
+.markdown-body blockquote {
+  margin: 10px 0;
+  padding: 2px 14px;
+  color: #a5a39c;
+  border-left: 3px solid #3c3b36;
+}
+
+.markdown-body hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid #2c2b28;
+}
+
+.markdown-body a {
+  color: #8ab4ff;
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body :not(pre) > code {
+  padding: 1.5px 5px;
+  color: #e3c1a6;
+  background: rgba(217, 119, 87, 0.1);
+  border-radius: 5px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.86em;
+}
+
+.markdown-body table {
+  margin: 10px 0;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 6px 10px;
+  border: 1px solid #2e2d2a;
+  text-align: left;
+}
+
+.markdown-body th {
+  color: #c9c7c1;
+  background: #202020;
+  font-weight: 600;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.thinking-accordion {
+  margin: 6px 0 12px;
+}
+
+/* --------------------------------------------------------------------------
+ * Sidebar & launch modal upgrades.
+ * ------------------------------------------------------------------------ */
+
+.top-icon-btn.new-task-btn {
+  color: #efeee9;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.top-icon-btn.new-task-btn:hover {
+  color: #ffffff;
+  background: #d97757;
+}
+
+.cwd-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cwd-picker-btn {
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  color: #d7d5cf;
+  background: #111110;
+  border: 1px solid #3a3a37;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.cwd-picker-btn:hover {
+  border-color: #55554e;
+}
+
+.cwd-picker-btn svg {
+  flex: 0 0 auto;
+  color: #96948d;
+}
+
+.cwd-picker-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.cwd-recent-select {
+  width: auto;
+  min-width: 92px;
+  max-width: 150px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 980px) {
+  .claude-home-stage {
+    padding: 28px 36px 36px;
+  }
+}
+
+@media (max-width: 720px) {
+  .claude-home-stage {
+    padding: 24px 20px 32px;
+  }
+}

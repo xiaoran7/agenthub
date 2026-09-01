@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Archive,
   ArrowLeft,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -23,6 +24,7 @@ import {
   MessageSquare,
   Monitor,
   Pause,
+  Paperclip,
   Pin,
   Play,
   Plus,
@@ -49,18 +51,29 @@ import {
 } from "react";
 
 import {
+  fetchAgentModels,
+  defaultModelFor,
+  useAgentModels,
+  type AgentModelOption,
+} from "./agentModels";
+import {
+  cachedConversation,
+  loadConversation,
+  prefetchConversations,
+  seedConversation,
+} from "./conversationCache";
+import {
   PROVIDER_LIST,
-  PROVIDER_MODELS,
   activityTime,
   adjacentItem,
   agentLabel,
   agentShortLabel,
   getDefaultModel,
-  getProviderModels,
   groupSessionsByWorkspace,
   isAttentionSession,
   permissionFieldLabel,
   relativeTime,
+  rememberTitleOverride,
   sessionDisplayTitle,
   statusView,
 } from "./presentation";
@@ -169,9 +182,7 @@ function AuthScreen({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [serverUrl, setServerUrl] = useState(
-    "https://platform.tannerlab.xyz",
-  );
+  const [serverUrl, setServerUrl] = useState("https://platform.tannerlab.xyz");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(initialError);
@@ -184,12 +195,9 @@ function AuthScreen({
     setBusy(true);
     setError(undefined);
     try {
-      const resp = await invoke<TgDeviceCodeResponse>(
-        "start_tg_device_auth",
-        {
-          serverUrl: serverUrl.trim() || undefined,
-        },
-      );
+      const resp = await invoke<TgDeviceCodeResponse>("start_tg_device_auth", {
+        serverUrl: serverUrl.trim() || undefined,
+      });
       setDeviceFlow(resp);
       setPolling(true);
     } catch (err) {
@@ -207,13 +215,10 @@ function AuthScreen({
 
     const poll = async () => {
       try {
-        const resp = await invoke<TgDevicePollResponse>(
-          "poll_tg_device_auth",
-          {
-            deviceCode: deviceFlow.device_code,
-            serverUrl: serverUrl.trim() || undefined,
-          },
-        );
+        const resp = await invoke<TgDevicePollResponse>("poll_tg_device_auth", {
+          deviceCode: deviceFlow.device_code,
+          serverUrl: serverUrl.trim() || undefined,
+        });
         if (disposed) return;
         if (resp.status === "success" && resp.snapshot) {
           onAuthenticated(resp.snapshot);
@@ -487,7 +492,7 @@ function Dashboard({
   const [quickProvider, setQuickProvider] =
     useState<Session["agent_type"]>("claude_code");
   const [quickCwd, setQuickCwd] = useState(
-    snapshot.preferences.default_cwd || "d:/ClaudeSpace",
+    snapshot.preferences.default_cwd || "",
   );
   const [quickLaunching, setQuickLaunching] = useState(false);
 
@@ -607,11 +612,34 @@ function Dashboard({
     if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    // A single dropped SSE frame shouldn't flash "轮询连接" and shove the
+    // banner in; only degrade after the channel stays down for a while.
+    let degradeTimer: number | undefined;
+    const markDisconnected = () => {
+      if (degradeTimer !== undefined) return;
+      degradeTimer = window.setTimeout(() => {
+        degradeTimer = undefined;
+        if (!disposed) {
+          setSnapshot((current) => ({
+            ...current,
+            realtime_connected: false,
+          }));
+        }
+      }, 20_000);
+    };
+    const markConnected = () => {
+      if (degradeTimer !== undefined) {
+        window.clearTimeout(degradeTimer);
+        degradeTimer = undefined;
+      }
+      setSnapshot((current) => ({ ...current, realtime_connected: true }));
+    };
     void listen<DashboardRealtimeEvent>("dashboard-realtime", (event) => {
-      setSnapshot((current) => ({
-        ...current,
-        realtime_connected: event.payload.connected,
-      }));
+      if (event.payload.connected) {
+        markConnected();
+      } else {
+        markDisconnected();
+      }
       if (event.payload.changed) void refresh();
     })
       .then((nextUnlisten) => {
@@ -622,18 +650,90 @@ function Dashboard({
         }
       })
       .catch(() => {
-        if (!disposed) {
-          setSnapshot((current) => ({
-            ...current,
-            realtime_connected: false,
-          }));
-        }
+        if (!disposed) markDisconnected();
       });
     return () => {
       disposed = true;
+      if (degradeTimer !== undefined) window.clearTimeout(degradeTimer);
       unlisten?.();
     };
   }, [refresh]);
+
+  // Warm the conversation cache for pinned + recent sessions so clicking a
+  // session renders instantly, then re-verifies against the agent transcript.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const priority = [
+        ...sessions.filter((session) =>
+          pinnedSessions.includes(sessionKey(session)),
+        ),
+        ...sessions,
+      ]
+        .slice(0, 10)
+        .map((session) => ({
+          key: sessionKey(session),
+          agentType: session.agent_type,
+          agentSessionId: session.agent_session_id,
+        }));
+      prefetchConversations(priority);
+    }, 1_500);
+    return () => window.clearTimeout(timer);
+  }, [pinnedSessions, sessions]);
+
+  // Demo mode ships a rich sample transcript so the conversation view,
+  // collapsed tools, and markdown rendering can be reviewed without a CLI.
+  useEffect(() => {
+    const demoMode =
+      import.meta.env.DEV &&
+      new URLSearchParams(window.location.search).has("demo");
+    if (!demoMode || sessions.length === 0) return;
+    const sample = [
+      {
+        role: "user",
+        kind: "message",
+        content: "帮我检查支付服务的重试逻辑，然后把超时改成 5 秒",
+      },
+      {
+        role: "assistant",
+        kind: "thinking",
+        content:
+          "先定位 retry 配置，一般在 PaymentClient。超时 3s → 5s，注意单位是毫秒。",
+      },
+      {
+        role: "assistant",
+        kind: "tool",
+        label: "Grep: retry_timeout",
+        status: "completed",
+        content:
+          '{\n  "pattern": "retry_timeout",\n  "path": "services/payment"\n}\n\n〔结果〕\nservices/payment/client.ts:12:  retry_timeout_ms: 3_000,',
+      },
+      {
+        role: "assistant",
+        kind: "tool",
+        label: "Edit: services/payment/client.ts",
+        status: "completed",
+        content:
+          '{\n  "old": "retry_timeout_ms: 3_000",\n  "new": "retry_timeout_ms: 5_000"\n}\n\n〔结果〕\n已应用 1 处修改。',
+      },
+      {
+        role: "assistant",
+        kind: "tool",
+        label: "Bash: cargo test -p payment",
+        status: "failed",
+        content:
+          '{\n  "command": "cargo test -p payment"\n}\n\n〔结果〕\nerror[E0433]: failed to resolve: use of undeclared crate `payment`',
+      },
+      {
+        role: "assistant",
+        kind: "message",
+        content:
+          "已完成两处修改，但测试命令的包名不对：\n\n1. `retry_timeout_ms` 已从 3s 调整为 **5s**\n2. 重试逻辑本身无需改动\n\n| 项目 | 修改前 | 修改后 |\n| --- | --- | --- |\n| 超时 | 3000ms | 5000ms |\n\n```bash\ncargo test -p payment-service\n```\n\n> 注意：包名是 `payment-service`，上一条命令已失败，请用上面的命令重跑。",
+      },
+    ] as ConversationMessage[];
+    for (const session of sessions) {
+      seedConversation(sessionKey(session), sample);
+    }
+  }, [sessions]);
 
   useEffect(() => {
     if (agentFilter !== "all") {
@@ -659,9 +759,28 @@ function Dashboard({
     }
   };
 
+  const chooseQuickCwd = async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      showToast("演示模式不支持文件夹选择");
+      return;
+    }
+    try {
+      const picked = await invoke<string | null>("pick_folder", {
+        startDir: quickCwd || null,
+      });
+      if (picked) setQuickCwd(picked);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const handleQuickLaunch = async (event?: FormEvent) => {
     if (event) event.preventDefault();
     if (quickLaunching || quickPrompt.trim() === "") return;
+    if (!quickCwd.trim()) {
+      setError("请先选择工作目录，Agent 将在该目录中启动");
+      return;
+    }
     setQuickLaunching(true);
     setError(undefined);
     try {
@@ -672,15 +791,20 @@ function Dashboard({
       }>("launch_new_session", {
         input: {
           agent_type: quickProvider,
-          cwd: quickCwd.trim() ? quickCwd.trim() : null,
+          cwd: quickCwd.trim(),
           prompt: quickPrompt.trim(),
+          model: currentDockModel || undefined,
         },
         onEvent,
       });
       setQuickPrompt("");
       await refresh();
       setSelectedSessionKey(
-        snapshot.device.device_id + ":" + result.agent_type + ":" + result.agent_session_id,
+        snapshot.device.device_id +
+          ":" +
+          result.agent_type +
+          ":" +
+          result.agent_session_id,
       );
     } catch (err) {
       setError(errorMessage(err));
@@ -735,9 +859,15 @@ function Dashboard({
     PROVIDER_LIST.find((provider) => provider.type === agentFilter) ??
     PROVIDER_LIST[0];
 
-  const currentProviderModel =
-    selectedModelsByAgent[selectedProvider.type] ||
-    getDefaultModel(selectedProvider.type);
+  // Model catalog comes from the installed agent CLIs (local transcripts),
+  // with the builtin catalog only as a fresh-install fallback.
+  const dockModels = useAgentModels(selectedProvider.type);
+  const storedDockModel = selectedModelsByAgent[selectedProvider.type];
+  const currentDockModel =
+    storedDockModel &&
+    dockModels.some((model) => model.value === storedDockModel)
+      ? storedDockModel
+      : (dockModels[0]?.value ?? "");
 
   return (
     <main className="claude-app-shell">
@@ -755,6 +885,19 @@ function Dashboard({
             </span>
           </button>
           <div className="top-nav-right">
+            <button
+              type="button"
+              className="top-icon-btn new-task-btn"
+              onClick={() => {
+                setSelectedSessionKey(undefined);
+                if (agentFilter !== "all") setLaunchModalProvider(agentFilter);
+                setLaunchModalOpen(true);
+              }}
+              title="新建任务"
+              aria-label="新建任务"
+            >
+              <Plus size={16} />
+            </button>
             <button
               type="button"
               className={"top-icon-btn " + (searchOpen ? "active" : "")}
@@ -817,21 +960,6 @@ function Dashboard({
             size="sm"
             ariaLabel="选择当前 Agent"
           />
-        </div>
-
-        <div className="sidebar-action-buttons">
-          <button
-            type="button"
-            className="sidebar-new-btn"
-            onClick={() => {
-              setSelectedSessionKey(undefined);
-              if (agentFilter !== "all") setLaunchModalProvider(agentFilter);
-              setLaunchModalOpen(true);
-            }}
-          >
-            <Plus size={16} />
-            <span>新建任务</span>
-          </button>
         </div>
 
         {/* Search Box if opened */}
@@ -932,7 +1060,10 @@ function Dashboard({
                         return (
                           <div
                             key={sessionKey(session)}
-                            className={"sidebar-session-item " + (isSelected ? "selected" : "")}
+                            className={
+                              "sidebar-session-item " +
+                              (isSelected ? "selected" : "")
+                            }
                             data-provider={session.agent_type}
                             title={title}
                             onContextMenu={(e) => {
@@ -969,7 +1100,12 @@ function Dashboard({
                             </button>
                             <button
                               type="button"
-                              className={"sidebar-pin " + (pinnedSessions.includes(sessionKey(session)) ? "active" : "")}
+                              className={
+                                "sidebar-pin " +
+                                (pinnedSessions.includes(sessionKey(session))
+                                  ? "active"
+                                  : "")
+                              }
                               onClick={() =>
                                 togglePinnedSession(sessionKey(session))
                               }
@@ -1042,7 +1178,10 @@ function Dashboard({
                 <small>
                   {snapshot.realtime_connected ? "实时连接" : "轮询连接"}
                   <i
-                    className={"live-status-dot " + (snapshot.realtime_connected ? "" : "fallback")}
+                    className={
+                      "live-status-dot " +
+                      (snapshot.realtime_connected ? "" : "fallback")
+                    }
                   />
                 </small>
               </span>
@@ -1066,31 +1205,34 @@ function Dashboard({
           />
         ) : (
           <div className="claude-home-stage">
-            {/* Top Notice Banner - Point 2 (At Top, No Overlap) */}
+            {/* Floating system notice: overlays without reflowing the stage. */}
             {!alertDismissed && showSystemNotice && (
-              <div className="claude-alert-box top-banner">
+              <div className="floating-notice" role="status">
                 <div className="alert-content">
                   <div className="alert-title-row">
-                    <AlertTriangle size={16} className="alert-icon" />
+                    <AlertTriangle size={15} className="alert-icon" />
                     <strong>
                       {!snapshot.realtime_connected
                         ? "实时通道暂不可用，已切换为安全轮询"
-                        : agentShortLabel(sourceIssue!.agent_type) + " 尚未完成本机接入"}
+                        : agentShortLabel(sourceIssue!.agent_type) +
+                          " 尚未完成本机接入"}
                     </strong>
-                  </div>
-                  {showBannerDetails && (
-                    <p className="alert-details-text">
-                      已发现 {snapshot.local.session_count} 个本机会话，现有数据不会丢失。可在本机设置中检查 CLI 路径与索引周期。
-                    </p>
-                  )}
-                  <div className="alert-actions-row">
                     <button
                       type="button"
                       className="alert-link"
                       onClick={() => setShowBannerDetails((v) => !v)}
                     >
-                      {showBannerDetails ? "收起详情" : "查看详情"}
+                      {showBannerDetails ? "收起" : "详情"}
                     </button>
+                  </div>
+                  {showBannerDetails && (
+                    <p className="alert-details-text">
+                      已发现 {snapshot.local.session_count}{" "}
+                      个本机会话，现有数据不会丢失。可在本机设置中检查 CLI
+                      路径与索引周期。
+                    </p>
+                  )}
+                  <div className="alert-actions-row">
                     <button
                       type="button"
                       className="alert-btn"
@@ -1114,7 +1256,7 @@ function Dashboard({
                   onClick={() => setAlertDismissed(true)}
                   aria-label="关闭通知"
                 >
-                  <X size={15} />
+                  <X size={14} />
                 </button>
               </div>
             )}
@@ -1129,17 +1271,10 @@ function Dashboard({
             </header>
 
             <form onSubmit={handleQuickLaunch} className="claude-prompt-dock">
-              <div className="prompt-dock-heading">
-                <span className="prompt-spark">
-                  <Sparkles size={15} />
-                </span>
-                <strong>交给 {selectedProvider.shortLabel}</strong>
-                <span>Enter 发送 · Shift + Enter 换行</span>
-              </div>
-              <div className="prompt-dock-form">
+              <div className="modern-composer prompt-dock-form">
                 <textarea
-                  rows={3}
-                  placeholder="描述一项任务或提出问题"
+                  rows={1}
+                  placeholder="描述一项任务或提出问题…"
                   value={quickPrompt}
                   onChange={(e) => setQuickPrompt(e.target.value)}
                   onKeyDown={(e) => {
@@ -1152,40 +1287,40 @@ function Dashboard({
                 />
                 <button
                   type="submit"
-                  className="dock-submit-btn"
-                  disabled={quickLaunching || !quickPrompt.trim()}
-                  title="发送任务指令"
+                  className="composer-send inline-send"
+                  disabled={
+                    quickLaunching || !quickPrompt.trim() || !quickCwd.trim()
+                  }
+                  title={quickCwd ? "发送任务指令" : "先选择工作目录"}
                 >
                   {quickLaunching ? (
-                    <RefreshCw className="spin" size={16} />
+                    <RefreshCw className="spin" size={15} />
                   ) : (
-                    <Send size={16} />
+                    <ArrowUp size={15} />
                   )}
                 </button>
               </div>
 
               <div className="prompt-dock-bottom">
-                <label className="dock-path-field">
+                <button
+                  type="button"
+                  className="dock-path-field"
+                  onClick={() => void chooseQuickCwd()}
+                  title="选择工作目录"
+                >
                   <Folder size={13} />
-                  <span className="sr-only">工作目录</span>
-                  <input
-                    value={quickCwd}
-                    onChange={(event) => setQuickCwd(event.target.value)}
-                    aria-label="工作目录"
-                    spellCheck={false}
-                  />
-                </label>
+                  <span className="dock-path-text">
+                    {quickCwd || "选择工作目录"}
+                  </span>
+                </button>
                 <div className="dock-bottom-right">
-                  {/* Dynamic Model Dropdown (Point 1) */}
                   <SelectDropdown
-                    value={currentProviderModel}
-                    options={getProviderModels(selectedProvider.type).map(
-                      (m) => ({
-                        value: m.value,
-                        label: m.label,
-                        desc: m.desc,
-                      }),
-                    )}
+                    value={currentDockModel}
+                    options={dockModels.map((model) => ({
+                      value: model.value,
+                      label: model.label,
+                      desc: model.desc,
+                    }))}
                     onChange={(val) => {
                       setSelectedModelsByAgent((prev) => {
                         const next = {
@@ -1243,7 +1378,11 @@ function Dashboard({
           onLaunched={async (agentSessionId, agentType) => {
             await refresh();
             setSelectedSessionKey(
-              snapshot.device.device_id + ":" + agentType + ":" + agentSessionId,
+              snapshot.device.device_id +
+                ":" +
+                agentType +
+                ":" +
+                agentSessionId,
             );
           }}
         />
@@ -1253,9 +1392,7 @@ function Dashboard({
           <SessionContextMenu
             position={contextMenu}
             onClose={() => setContextMenu(null)}
-            isPinned={pinnedSessions.includes(
-              sessionKey(contextMenu.session),
-            )}
+            isPinned={pinnedSessions.includes(sessionKey(contextMenu.session))}
             onTogglePin={togglePinnedSession}
             onNewSessionForAgent={(agentType) => {
               openLaunchModalFor(agentType);
@@ -1276,10 +1413,7 @@ function Dashboard({
           <div className="toast-error" role="alert">
             <AlertTriangle />
             {error}
-            <button
-              aria-label="关闭错误"
-              onClick={() => setError(undefined)}
-            >
+            <button aria-label="关闭错误" onClick={() => setError(undefined)}>
               <X />
             </button>
           </div>
@@ -1287,6 +1421,58 @@ function Dashboard({
       </section>
     </main>
   );
+}
+
+const PERMISSION_OPTIONS: Record<
+  Session["agent_type"],
+  Array<{ value: string; label: string }>
+> = {
+  claude_code: [
+    { value: "", label: "默认权限" },
+    { value: "acceptEdits", label: "接受编辑" },
+    { value: "plan", label: "计划模式" },
+    { value: "bypassPermissions", label: "完全访问" },
+  ],
+  codex: [
+    { value: "", label: "默认沙箱" },
+    { value: "read-only", label: "只读" },
+    { value: "workspace-write", label: "工作区写入" },
+    { value: "danger-full-access", label: "完全访问" },
+  ],
+  antigravity: [{ value: "", label: "默认权限" }],
+  grok_build: [{ value: "", label: "默认权限" }],
+};
+
+function loadRecentCwds(): string[] {
+  try {
+    const stored = window.localStorage.getItem("agenthub:recent-cwds");
+    const parsed = stored ? (JSON.parse(stored) as string[]) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberRecentCwd(cwd: string) {
+  const next = [cwd, ...loadRecentCwds().filter((item) => item !== cwd)].slice(
+    0,
+    5,
+  );
+  try {
+    window.localStorage.setItem("agenthub:recent-cwds", JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+}
+
+async function pickFolderDialog(start?: string): Promise<string | undefined> {
+  if (!("__TAURI_INTERNALS__" in window)) return undefined;
+  const picked = await invoke<string | null>("pick_folder", {
+    startDir: start || null,
+  });
+  return picked ?? undefined;
 }
 
 function LaunchSessionModal({
@@ -1305,24 +1491,47 @@ function LaunchSessionModal({
 }) {
   const [agentType, setAgentType] =
     useState<Session["agent_type"]>(initialAgentType);
-  const [model, setModel] = useState<string>(() =>
-    getDefaultModel(initialAgentType),
-  );
-  const [cwd, setCwd] = useState("d:/ClaudeSpace");
+  const models = useAgentModels(agentType);
+  const [model, setModel] = useState<string>("");
+  const [permission, setPermission] = useState("");
+  const [cwd, setCwd] = useState(() => loadRecentCwds()[0] || "");
   const [prompt, setPrompt] = useState("");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string>();
+  const recentCwds = useMemo(() => loadRecentCwds(), [open]);
 
   useEffect(() => {
     if (open) {
       setAgentType(initialAgentType);
-      setModel(getDefaultModel(initialAgentType));
+      setPermission("");
+      setPrompt("");
+      setError(undefined);
+      setCwd((current) => current || loadRecentCwds()[0] || "");
     }
   }, [initialAgentType, open]);
+
+  useEffect(() => {
+    if (!models.some((option) => option.value === model)) {
+      setModel(models[0]?.value ?? "");
+    }
+  }, [model, models]);
+
+  const chooseCwd = async () => {
+    try {
+      const picked = await pickFolderDialog(cwd);
+      if (picked) setCwd(picked);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (launching || prompt.trim() === "") return;
+    if (!cwd.trim()) {
+      setError("请选择工作目录，Agent 将在该目录中启动");
+      return;
+    }
     setLaunching(true);
     setError(undefined);
     try {
@@ -1333,11 +1542,14 @@ function LaunchSessionModal({
       }>("launch_new_session", {
         input: {
           agent_type: agentType,
-          cwd: cwd.trim() ? cwd.trim() : null,
+          cwd: cwd.trim(),
           prompt: prompt.trim(),
+          model: model || undefined,
+          permission_mode: permission || undefined,
         },
         onEvent,
       });
+      rememberRecentCwd(cwd.trim());
       onLaunched(result.agent_session_id, agentType);
       onClose();
     } catch (err) {
@@ -1385,7 +1597,7 @@ function LaunchSessionModal({
                   data-provider={item.type}
                   onClick={() => {
                     setAgentType(item.type);
-                    setModel(getDefaultModel(item.type));
+                    setPermission("");
                   }}
                 >
                   <i aria-hidden="true" />
@@ -1399,13 +1611,13 @@ function LaunchSessionModal({
           </fieldset>
 
           <label className="launch-form-field">
-            <span>运行模型</span>
+            <span>运行模型（来自本机 Agent）</span>
             <SelectDropdown
               value={model}
-              options={getProviderModels(agentType).map((m) => ({
-                value: m.value,
-                label: m.label,
-                desc: m.desc,
+              options={models.map((option) => ({
+                value: option.value,
+                label: option.label,
+                desc: option.desc,
               }))}
               onChange={(val) => setModel(val)}
               size="md"
@@ -1413,15 +1625,45 @@ function LaunchSessionModal({
           </label>
 
           <label className="launch-form-field">
-            <span>工作目录</span>
-            <input
-              type="text"
-              placeholder="例如 d:/ClaudeSpace 或 d:/ClaudeSpace/Project/..."
-              value={cwd}
-              onChange={(e) => setCwd(e.target.value)}
-              required
+            <span>权限</span>
+            <SelectDropdown
+              value={permission}
+              options={PERMISSION_OPTIONS[agentType]}
+              onChange={(val) => setPermission(val)}
+              size="md"
             />
           </label>
+
+          <div className="launch-form-field">
+            <span>工作目录</span>
+            <div className="cwd-picker-row">
+              <button
+                type="button"
+                className="cwd-picker-btn"
+                onClick={() => void chooseCwd()}
+                title="选择工作目录"
+              >
+                <Folder size={14} />
+                <span className="cwd-picker-text">
+                  {cwd || "点击选择文件夹…"}
+                </span>
+              </button>
+              {recentCwds.length > 1 && (
+                <SelectDropdown
+                  value=""
+                  placeholder="最近"
+                  options={recentCwds.map((item) => ({
+                    value: item,
+                    label: item.length > 34 ? "…" + item.slice(-32) : item,
+                  }))}
+                  onChange={(val) => setCwd(val)}
+                  size="sm"
+                  className="cwd-recent-select"
+                  ariaLabel="最近使用的工作目录"
+                />
+              )}
+            </div>
+          </div>
           <label className="launch-form-field">
             <span>初始任务指令</span>
             <textarea
@@ -1446,7 +1688,7 @@ function LaunchSessionModal({
             <button
               type="submit"
               className="primary-button"
-              disabled={launching || !prompt.trim()}
+              disabled={launching || !prompt.trim() || !cwd.trim()}
             >
               {launching ? (
                 <>
@@ -1465,6 +1707,27 @@ function LaunchSessionModal({
   );
 }
 
+interface TurnOptionsState {
+  model?: string;
+  permission?: string;
+}
+
+function sameConversation(
+  a: ConversationMessage[],
+  b: ConversationMessage[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (message, index) =>
+        message.role === b[index].role &&
+        message.kind === b[index].kind &&
+        message.status === b[index].status &&
+        message.content === b[index].content,
+    )
+  );
+}
+
 function SessionControlPanel({
   session,
   previousSession,
@@ -1479,7 +1742,12 @@ function SessionControlPanel({
   onClose: () => void;
 }) {
   const [prompt, setPrompt] = useState("");
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const cacheKey = sessionKey(session);
+  // Render from the preloaded cache immediately, then verify against the
+  // agent transcript and refresh only when the content actually differs.
+  const [messages, setMessages] = useState<ConversationMessage[]>(
+    () => cachedConversation(cacheKey) ?? [],
+  );
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [agentActivity, setAgentActivity] = useState<string>();
@@ -1491,9 +1759,26 @@ function SessionControlPanel({
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState<string>();
   const [timelineReload, setTimelineReload] = useState(0);
+  const [attachments, setAttachments] = useState<
+    Array<{ name: string; path: string }>
+  >([]);
+  const [turnOptions, setTurnOptions] = useState<
+    Record<string, TurnOptionsState>
+  >(() => {
+    try {
+      const stored = window.localStorage.getItem("agenthub:turn-options");
+      return stored
+        ? (JSON.parse(stored) as Record<string, TurnOptionsState>)
+        : {};
+    } catch {
+      return {};
+    }
+  });
+  const models = useAgentModels(session.agent_type);
+  const permissionOptions = PERMISSION_OPTIONS[session.agent_type];
   const pendingDelta = useRef("");
   const deltaFrame = useRef<number | undefined>(undefined);
-  const conversationEnd = useRef<HTMLDivElement>(null);
+  const paneRef = useRef<HTMLElement | null>(null);
   const status = statusView(
     session.payload.state.activity_status,
     session.payload.state.presence,
@@ -1504,6 +1789,45 @@ function SessionControlPanel({
     session.agent_type === "codex"
       ? (runtime?.permission_mode ?? runtime?.approval_policy)
       : runtime?.permission_mode;
+  const sessionOptions = turnOptions[cacheKey] ?? {};
+  const currentModel =
+    sessionOptions.model &&
+    models.some((option) => option.value === sessionOptions.model)
+      ? sessionOptions.model
+      : (models[0]?.value ?? "");
+  const currentPermission =
+    sessionOptions.permission &&
+    permissionOptions.some(
+      (option) => option.value === sessionOptions.permission,
+    )
+      ? sessionOptions.permission
+      : "";
+  const contextSummary = useMemo(() => {
+    const used = runtime?.context_used_tokens;
+    const windowSize = runtime?.context_window_tokens;
+    if (used !== undefined && windowSize !== undefined && windowSize > 0) {
+      return Math.min(100, Math.round((used / windowSize) * 100)) + "% 上下文";
+    }
+    return undefined;
+  }, [runtime]);
+
+  const updateTurnOptions = (patch: TurnOptionsState) => {
+    setTurnOptions((current) => {
+      const next = {
+        ...current,
+        [cacheKey]: { ...current[cacheKey], ...patch },
+      };
+      try {
+        window.localStorage.setItem(
+          "agenthub:turn-options",
+          JSON.stringify(next),
+        );
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (panelView !== "timeline") return;
@@ -1539,15 +1863,26 @@ function SessionControlPanel({
   ]);
 
   useEffect(() => {
+    // Demo mode (no Tauri bridge) keeps the seeded sample transcript.
+    if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false;
-    invoke<ConversationMessage[]>("load_session_conversation", {
-      input: {
-        agent_type: session.agent_type,
-        agent_session_id: session.agent_session_id,
-      },
-    })
+    loadConversation(session.agent_type, session.agent_session_id)
       .then((next) => {
-        if (!disposed) setMessages(next);
+        if (disposed) return;
+        setMessages((current) =>
+          current.length > 0 && sameConversation(current, next)
+            ? current
+            : next,
+        );
+        const firstUser = next.find(
+          (message) =>
+            message.role === "user" &&
+            message.kind === undefined &&
+            message.content.trim().length >= 4,
+        );
+        if (firstUser && !session.payload.runtime?.title) {
+          rememberTitleOverride(cacheKey, firstUser.content);
+        }
       })
       .catch((err) => {
         if (!disposed) setError(errorMessage(err));
@@ -1555,13 +1890,21 @@ function SessionControlPanel({
     return () => {
       disposed = true;
     };
-  }, [session.agent_session_id, session.agent_type]);
+  }, [
+    cacheKey,
+    session.agent_session_id,
+    session.agent_type,
+    session.payload.runtime?.title,
+  ]);
 
+  // Pin the view to the newest message by scrolling the pane itself; calling
+  // scrollIntoView here would also scroll every ancestor (window included).
   useEffect(() => {
-    if (panelView === "conversation") {
-      conversationEnd.current?.scrollIntoView({ behavior: "smooth" });
+    const pane = paneRef.current;
+    if (pane && panelView === "conversation") {
+      pane.scrollTop = pane.scrollHeight;
     }
-  }, [messages, panelView]);
+  }, [messages, panelView, busy, agentActivity]);
 
   const flushDelta = useCallback(() => {
     deltaFrame.current = undefined;
@@ -1581,6 +1924,30 @@ function SessionControlPanel({
     [flushDelta],
   );
 
+  const attachFiles = async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setError("演示模式不支持附件");
+      return;
+    }
+    try {
+      const picked = await invoke<string[]>("pick_files", {
+        startDir: null,
+      });
+      setAttachments((current) => {
+        const merged = [...current];
+        for (const path of picked) {
+          if (merged.some((item) => item.path === path)) continue;
+          if (merged.length >= 8) break;
+          const name = path.split(/[\\/]/).pop() || path;
+          merged.push({ name, path });
+        }
+        return merged;
+      });
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
     if (busy || prompt.trim() === "") return;
@@ -1589,6 +1956,8 @@ function SessionControlPanel({
     setBusy(true);
     setError(undefined);
     setAgentActivity(undefined);
+    const sentAttachments = attachments;
+    setAttachments([]);
     setMessages((current) => [
       ...current,
       { role: "user", content: nextPrompt },
@@ -1612,17 +1981,17 @@ function SessionControlPanel({
           setAgentActivity(event.label);
         }
       };
-      const result = await invoke<SessionTurnResult>(
-        "send_session_turn",
-        {
-          input: {
-            agent_type: session.agent_type,
-            agent_session_id: session.agent_session_id,
-            prompt: nextPrompt,
-          },
-          onEvent,
+      const result = await invoke<SessionTurnResult>("send_session_turn", {
+        input: {
+          agent_type: session.agent_type,
+          agent_session_id: session.agent_session_id,
+          prompt: nextPrompt,
+          model: currentModel || undefined,
+          permission_mode: currentPermission || undefined,
+          attachments: sentAttachments,
         },
-      );
+        onEvent,
+      });
       if (deltaFrame.current !== undefined) {
         window.cancelAnimationFrame(deltaFrame.current);
         deltaFrame.current = undefined;
@@ -1639,10 +2008,19 @@ function SessionControlPanel({
       pendingDelta.current = "";
       setMessages((current) => dropTrailingEmptyAssistant(current));
       setError(errorMessage(nextError));
+      // Give the user a chance to retry with the same attachments.
+      setAttachments((current) =>
+        current.length === 0 && sentAttachments.length > 0
+          ? sentAttachments
+          : current,
+      );
     } finally {
       setBusy(false);
       setCancelling(false);
       setAgentActivity(undefined);
+      void loadConversation(session.agent_type, session.agent_session_id).catch(
+        () => undefined,
+      );
     }
   };
 
@@ -1720,10 +2098,7 @@ function SessionControlPanel({
           </div>
         </header>
 
-        <nav
-          className="panel-view-switcher"
-          aria-label="会话详情视图"
-        >
+        <nav className="panel-view-switcher" aria-label="会话详情视图">
           <button
             type="button"
             className={panelView === "conversation" ? "active" : ""}
@@ -1791,7 +2166,11 @@ function SessionControlPanel({
             onReload={() => setTimelineReload((value) => value + 1)}
           />
         ) : (
-          <section className="conversation-pane" aria-live="polite">
+          <section
+            className="conversation-pane"
+            ref={paneRef}
+            aria-live="polite"
+          >
             {messages.length === 0 ? (
               <div className="conversation-empty">
                 <MessageSquare />
@@ -1805,7 +2184,13 @@ function SessionControlPanel({
                 <ConversationItem
                   message={message}
                   index={index}
-                  key={message.role + "-" + (message.kind ?? "message") + "-" + index}
+                  key={
+                    message.role +
+                    "-" +
+                    (message.kind ?? "message") +
+                    "-" +
+                    index
+                  }
                 />
               ))
             )}
@@ -1814,7 +2199,6 @@ function SessionControlPanel({
                 <RefreshCw className="spin" /> {agentActivity}
               </div>
             )}
-            <div ref={conversationEnd} />
           </section>
         )}
 
@@ -1822,22 +2206,35 @@ function SessionControlPanel({
 
         {panelView === "conversation" && (
           <div className="composer-container">
-            <div className="slash-commands-bar">
-              <span className="slash-title">快捷指令:</span>
-              {["/help", "/clear", "/compact", "/cost", "/review", "/test"].map(
-                (cmd) => (
-                  <button
-                    key={cmd}
-                    type="button"
-                    className="slash-chip"
-                    onClick={() => setPrompt((p) => (p ? p + " " + cmd : cmd))}
+            {attachments.length > 0 && (
+              <div className="attachment-row">
+                {attachments.map((file) => (
+                  <span
+                    className="attachment-chip"
+                    key={file.path}
+                    title={file.path}
                   >
-                    {cmd}
-                  </button>
-                ),
-              )}
-            </div>
-            <form className="session-composer" onSubmit={sendMessage}>
+                    <Paperclip size={11} />
+                    <span className="attachment-name">{file.name}</span>
+                    <button
+                      type="button"
+                      aria-label={"移除附件 " + file.name}
+                      onClick={() =>
+                        setAttachments((current) =>
+                          current.filter((item) => item.path !== file.path),
+                        )
+                      }
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <form
+              className="session-composer modern-composer"
+              onSubmit={sendMessage}
+            >
               <textarea
                 aria-label="发送给 Agent"
                 maxLength={16_000}
@@ -1852,27 +2249,67 @@ function SessionControlPanel({
                 }}
                 disabled={busy}
               />
-              {busy ? (
+              <div className="composer-toolbar">
                 <button
-                  className="composer-send turn-cancel-btn"
                   type="button"
-                  disabled={cancelling}
-                  onClick={() => void cancelTurn()}
-                  title="停止当前生成"
-                  aria-label="停止"
+                  className="tool-ghost-btn"
+                  onClick={() => void attachFiles()}
+                  title="附加文件或文档"
+                  aria-label="附加文件"
+                  disabled={busy}
                 >
-                  <Square size={16} />
+                  <Plus size={15} />
                 </button>
-              ) : (
-                <button
-                  className="composer-send"
-                  type="submit"
-                  aria-label="发送"
-                  disabled={busy || prompt.trim() === ""}
-                >
-                  <Send size={16} />
-                </button>
-              )}
+                <SelectDropdown
+                  className="ghost"
+                  value={currentModel}
+                  options={models.map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                    desc: option.desc,
+                  }))}
+                  onChange={(val) => updateTurnOptions({ model: val })}
+                  size="sm"
+                  ariaLabel="会话模型"
+                />
+                {permissionOptions.length > 1 && (
+                  <SelectDropdown
+                    className="ghost"
+                    value={currentPermission}
+                    options={permissionOptions}
+                    onChange={(val) => updateTurnOptions({ permission: val })}
+                    size="sm"
+                    ariaLabel="权限模式"
+                  />
+                )}
+                <span className="composer-spacer" />
+                {contextSummary && (
+                  <span className="composer-context" title="上下文窗口使用">
+                    {contextSummary}
+                  </span>
+                )}
+                {busy ? (
+                  <button
+                    className="composer-send turn-cancel-btn"
+                    type="button"
+                    disabled={cancelling}
+                    onClick={() => void cancelTurn()}
+                    title="停止当前生成"
+                    aria-label="停止"
+                  >
+                    <Square size={14} />
+                  </button>
+                ) : (
+                  <button
+                    className="composer-send"
+                    type="submit"
+                    aria-label="发送"
+                    disabled={busy || prompt.trim() === ""}
+                  >
+                    <ArrowUp size={15} />
+                  </button>
+                )}
+              </div>
             </form>
           </div>
         )}
@@ -2024,7 +2461,13 @@ function errorMessage(error: unknown): string {
 }
 
 function sessionKey(session: Session): string {
-  return session.device_id + ":" + session.agent_type + ":" + session.agent_session_id;
+  return (
+    session.device_id +
+    ":" +
+    session.agent_type +
+    ":" +
+    session.agent_session_id
+  );
 }
 
 function SessionTimelineView({
@@ -2146,7 +2589,14 @@ function formatContextUsage(runtime: Session["payload"]["runtime"]): string {
   const window = runtime?.context_window_tokens;
   if (used !== undefined && window !== undefined && window > 0) {
     const percentage = Math.min(100, Math.round((used / window) * 100));
-    return formatTokenCount(used) + " / " + formatTokenCount(window) + " · " + percentage + "%";
+    return (
+      formatTokenCount(used) +
+      " / " +
+      formatTokenCount(window) +
+      " · " +
+      percentage +
+      "%"
+    );
   }
   if (window !== undefined) return formatTokenCount(window) + " 上限";
   if (used !== undefined) return formatTokenCount(used) + " 已用 · 上限未提供";
