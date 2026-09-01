@@ -171,7 +171,7 @@ impl GatewayClient {
         let base_url = validate_base_url(base_url)?;
         let mut config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
-            .user_agent(concat!("agent-pulse-runner/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub-Runner/", env!("CARGO_PKG_VERSION")))
             // Following a redirect could resend the request to an address the
             // HTTPS/loopback policy never validated.
             .max_redirects(0);

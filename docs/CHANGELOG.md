@@ -3,6 +3,19 @@
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 
+## [2.0.1] - 2026-09-01
+
+### Fixed
+
+- **Google / VS Code 级原生 Loopback PKCE 静默秒登支持**：
+  - 彻底取消繁琐的设备配对码流（Device Code Flow），桌面端 Rust 原生绑定本地临时回环端口（`http://127.0.0.1:<port>/callback`，RFC 8252 §7.3）；
+  - 修复服务端 `TgOAuthClient` 构造时环境变量空字符串导致 `client_id=""` 的穿透缺陷，增加 `.trim() ||` 严格防空回退保障；
+  - 统一认证中心（`auth.tannerlab.cn`）更新 `agent-pulse` 客户端的 Loopback 重定向白名单；
+  - 客户端网络引擎与 Runner 统一更新标准浏览器 User-Agent，杜绝云端 WAF 拦截；
+  - 桌面端拉起系统默认浏览器后，用户完成授权即刻自动回环秒进工作台，网页端自动提示成功并关闭。
+- **全链路测试与质量基线验证**：
+  - 210 项单元测试、集成测试与真实交互 E2E 全量通过（Rust 98 项 + API 60 项 + Desktop 8 项 + Web 42 项 + Contracts 2 项）。
+
 ## [2.0.0] - 2026-09-01
 
 ### Changed (2.0.0-spec 架构重定界)
