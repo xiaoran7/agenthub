@@ -490,6 +490,27 @@ fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, D
 }
 
 #[tauri::command]
+async fn open_external_url(url: String) -> Result<(), String> {
+    let target = url.trim().to_owned();
+    if !target.starts_with("https://") && !target.starts_with("http://") {
+        return Err("invalid_url_scheme".to_owned());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &target])
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&target)
+            .spawn();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn start_tg_device_auth(server_url: Option<String>) -> Result<Value, String> {
     let configured_server = server_url.or_else(|| std::env::var("AGENT_PULSE_SERVER_URL").ok());
     let server_url =
@@ -1776,6 +1797,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             authenticate,
+            open_external_url,
             start_tg_device_auth,
             poll_tg_device_auth,
             restore_session,

@@ -154,6 +154,17 @@ function AuthScreen({
   >();
   const [polling, setPolling] = useState(false);
 
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  const openUrl = async (url: string) => {
+    try {
+      await invoke("open_external_url", { url });
+    } catch {
+      window.open(url, "_blank");
+    }
+  };
+
   const startDeviceAuth = async () => {
     if (busy) return;
     setBusy(true);
@@ -167,7 +178,7 @@ function AuthScreen({
       setPolling(true);
       const targetUrl =
         codeRes.verification_uri_complete || codeRes.verification_uri;
-      window.open(targetUrl, "_blank");
+      void openUrl(targetUrl);
     } catch (nextError) {
       setError(errorMessage(nextError));
       setBusy(false);
@@ -248,62 +259,147 @@ function AuthScreen({
         {deviceFlow ? (
           <div
             className="auth-form"
-            style={{ textAlign: "center", gap: "20px" }}
+            style={{ textAlign: "center", gap: "16px" }}
           >
             <header>
               <span className="card-kicker">TannerLab SSO</span>
-              <h2>正在等待授权确认</h2>
-              <p>请在浏览器中完成授权登录，或核对以下验证码：</p>
+              <h2>正在等待浏览器授权</h2>
+              <p>请在已打开的浏览器中完成登录并确认授权：</p>
             </header>
             <div
               style={{
-                fontSize: "28px",
-                fontWeight: 800,
-                letterSpacing: "4px",
-                padding: "20px",
-                background: "rgba(255, 255, 255, 0.05)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "8px",
+                padding: "16px",
+                background: "rgba(255, 255, 255, 0.04)",
                 borderRadius: "12px",
                 border: "1px dashed rgba(255, 255, 255, 0.2)",
-                color: "#7ed5a0",
-                fontFamily: "monospace",
               }}
             >
-              {deviceFlow.user_code}
+              <span
+                style={{
+                  fontSize: "12px",
+                  color: "#888",
+                  textTransform: "uppercase",
+                  letterSpacing: "1px",
+                }}
+              >
+                设备验证码 (Device Code)
+              </span>
+              <div
+                style={{
+                  fontSize: "26px",
+                  fontWeight: 800,
+                  letterSpacing: "4px",
+                  color: "#7ed5a0",
+                  fontFamily: "monospace",
+                }}
+              >
+                {deviceFlow.user_code}
+              </div>
+              <button
+                type="button"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: copiedCode ? "#7ed5a0" : "#888",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "4px 8px",
+                }}
+                onClick={() => {
+                  void navigator.clipboard.writeText(deviceFlow.user_code);
+                  setCopiedCode(true);
+                  setTimeout(() => setCopiedCode(false), 2000);
+                }}
+              >
+                {copiedCode ? "✓ 已复制验证码" : "点击复制验证码"}
+              </button>
             </div>
             <div
-              style={{ display: "flex", gap: "12px", justifyContent: "center" }}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+                alignItems: "center",
+              }}
             >
               <button
                 type="button"
                 className="primary-button"
+                style={{ width: "100%", padding: "12px" }}
                 onClick={() =>
-                  window.open(
+                  void openUrl(
                     deviceFlow.verification_uri_complete ||
                       deviceFlow.verification_uri,
-                    "_blank",
                   )
                 }
               >
-                打开授权网页
+                在默认浏览器中重新打开授权页
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDeviceFlow(undefined);
-                  setPolling(false);
-                  setBusy(false);
-                }}
-                style={{
-                  background: "transparent",
-                  border: "1px solid rgba(255, 255, 255, 0.15)",
-                  color: "#aaa",
-                  padding: "10px 18px",
-                  borderRadius: "10px",
-                  cursor: "pointer",
-                }}
-              >
-                取消
-              </button>
+              <div style={{ display: "flex", gap: "10px", width: "100%" }}>
+                <button
+                  type="button"
+                  style={{
+                    flex: 1,
+                    background: "rgba(255, 255, 255, 0.06)",
+                    border: "1px solid rgba(255, 255, 255, 0.15)",
+                    color: copiedLink ? "#7ed5a0" : "#ccc",
+                    padding: "10px",
+                    borderRadius: "10px",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                  }}
+                  onClick={() => {
+                    const url =
+                      deviceFlow.verification_uri_complete ||
+                      deviceFlow.verification_uri;
+                    void navigator.clipboard.writeText(url);
+                    setCopiedLink(true);
+                    setTimeout(() => setCopiedLink(false), 2000);
+                  }}
+                >
+                  {copiedLink ? "✓ 已复制授权链接" : "复制授权链接"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeviceFlow(undefined);
+                    setPolling(false);
+                    setBusy(false);
+                  }}
+                  style={{
+                    flex: 1,
+                    background: "transparent",
+                    border: "1px solid rgba(255, 255, 255, 0.15)",
+                    color: "#aaa",
+                    padding: "10px",
+                    borderRadius: "10px",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                  }}
+                >
+                  返回账号登录
+                </button>
+              </div>
+            </div>
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#888",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+              }}
+            >
+              <RefreshCw className="spinning" size={14} />{" "}
+              正在等待网页端授权确认...
             </div>
           </div>
         ) : (

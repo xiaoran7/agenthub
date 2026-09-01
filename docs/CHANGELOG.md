@@ -35,8 +35,9 @@
 - **TannerLab / Tg-oauth 统一身份认证深度接入与持久化支持**：
   - Gateway API 基于 PKCE S256 规范深度集成 TannerLab 统一身份认证（`tg-oauth`），提供授权地址生成、回调验证、用户信息解析与多会话绑定；
   - 数据库新增 `0015_oauth_accounts.sql` 迁移，用户表扩展 `oauth_provider` 与 `oauth_sub` 列及联合唯一索引，`PostgresGatewayStore` 完整实现 OAuth 账号查询与原子 upsert 绑定；
-  - Web 控制台 `SettingsPanel` 账户安全面板实时识别并展示 TannerLab SSO 关联状态；
-  - 桌面端无缝支持 Device Flow（RFC 8628）设备码流并完成本地与云端自动同步。
+  - 注册生产 IdP 客户端 `agent-pulse` 并支持全链路 Device Code Flow（RFC 8628）；
+  - 桌面端集成 `open_external_url` 原生指令，自动拉起系统默认浏览器并提供设备码/链接一键复制与无感轮询授权；
+  - Web 控制台 `SettingsPanel` 账户安全面板实时识别并展示 TannerLab SSO 关联状态。
 - **项目全平台正式更名为 AgentHub**：
   - 项目名称由 AgentPulse 全面升级更名为 **AgentHub（智能体集成中心）**；
   - 同步更新 Web 元数据、Tauri 桌面端应用名称/窗口标题/权限配置、Android 原生端配置、Runner CLI 帮助名、部署脚本及所有用户端文案与文档。
