@@ -20,9 +20,7 @@ import {
   FolderTree,
   HardDrive,
   LogOut,
-  Maximize2,
   MessageSquare,
-  Minimize2,
   Monitor,
   Pause,
   Pin,
@@ -39,6 +37,8 @@ import {
   Terminal,
   X,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   useCallback,
   useDeferredValue,
@@ -965,17 +965,6 @@ function Dashboard({
   const selectedProvider =
     PROVIDER_LIST.find((provider) => provider.type === agentFilter) ??
     PROVIDER_LIST[0];
-  const selectedAgentSessions = sessions.filter(
-    (session) => session.agent_type === selectedProvider.type,
-  );
-  const totalTokens = selectedAgentSessions.reduce(
-    (total, session) =>
-      total + (session.payload.runtime?.session_total_tokens ?? 0),
-    0,
-  );
-  const activeDays = new Set(
-    selectedAgentSessions.map((session) => activityTime(session).slice(0, 10)),
-  ).size;
 
   return (
     <main className="claude-app-shell">
@@ -1092,15 +1081,7 @@ function Dashboard({
             }}
           >
             <Plus size={16} />
-            <span>新建会话</span>
-          </button>
-          <button
-            type="button"
-            className="sidebar-customize-btn"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Folder size={14} />
-            <span>本机设置</span>
+            <span>新建任务</span>
           </button>
         </div>
 
@@ -1293,7 +1274,8 @@ function Dashboard({
             <button
               type="button"
               className="profile-account-btn"
-              onClick={() => setAccountOpen(true)}
+              onClick={() => setAccountOpen((open) => !open)}
+              aria-expanded={accountOpen}
             >
               <span className="profile-brand-icon" aria-hidden="true">
                 {initials(displayName)}
@@ -1308,15 +1290,6 @@ function Dashboard({
                 </small>
               </span>
               <ChevronDown size={14} className="profile-chevron" />
-            </button>
-            <button
-              type="button"
-              className="profile-opt-btn"
-              onClick={() => setSettingsOpen(true)}
-              title="打开设置"
-              aria-label="打开设置"
-            >
-              <Settings size={15} />
             </button>
           </div>
         </div>
@@ -1356,65 +1329,6 @@ function Dashboard({
                 <h1>接下来做什么，{displayName}？</h1>
               </div>
             </header>
-
-            <section
-              className="home-overview-card"
-              aria-label={`${selectedProvider.label} 使用概览`}
-            >
-              <div className="overview-tabs">
-                <strong>概览</strong>
-                <span>{selectedProvider.label}</span>
-                <span
-                  className={`connection-chip ${snapshot.realtime_connected ? "connected" : "fallback"}`}
-                >
-                  <i /> {snapshot.realtime_connected ? "实时" : "轮询"}
-                </span>
-              </div>
-              <div className="overview-metrics">
-                <span>
-                  <small>Sessions</small>
-                  <strong>{selectedAgentSessions.length}</strong>
-                </span>
-                <span>
-                  <small>Working</small>
-                  <strong>
-                    {
-                      selectedAgentSessions.filter(
-                        (session) =>
-                          session.payload.state.activity_status === "WORKING",
-                      ).length
-                    }
-                  </strong>
-                </span>
-                <span>
-                  <small>Total tokens</small>
-                  <strong>{formatTokenCount(totalTokens)}</strong>
-                </span>
-                <span>
-                  <small>Active days</small>
-                  <strong>{activeDays}</strong>
-                </span>
-              </div>
-              <div className="activity-grid" aria-label="最近活动分布">
-                {Array.from({ length: 77 }, (_, index) => (
-                  <i
-                    key={index}
-                    className={
-                      index >=
-                        77 - Math.min(24, selectedAgentSessions.length * 2) &&
-                      (index + selectedAgentSessions.length) % 3 !== 0
-                        ? `level-${1 + ((index + selectedAgentSessions.length) % 3)}`
-                        : ""
-                    }
-                  />
-                ))}
-              </div>
-              <p>
-                {selectedAgentSessions.length > 0
-                  ? `已从本机导入 ${selectedAgentSessions.length} 个 ${selectedProvider.shortLabel} 会话。`
-                  : `尚未发现 ${selectedProvider.shortLabel} 会话，新建任务后会自动归入工作目录。`}
-              </p>
-            </section>
 
             {!alertDismissed && showSystemNotice && (
               <div className="claude-alert-box">
@@ -1532,10 +1446,14 @@ function Dashboard({
 
         {/* Global Account, Settings, and Launch Modals */}
         {accountOpen && (
-          <AccountPanel
+          <AccountMenu
             snapshot={snapshot}
             busy={actionBusy}
             onClose={() => setAccountOpen(false)}
+            onOpenSettings={() => {
+              setAccountOpen(false);
+              setSettingsOpen(true);
+            }}
             onLogout={() => void signOut()}
           />
         )}
@@ -1843,7 +1761,6 @@ function SessionControlPanel({
   const [agentActivity, setAgentActivity] = useState<string>();
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [fullscreen, setFullscreen] = useState(false);
   const [panelView, setPanelView] = useState<
     "context" | "conversation" | "timeline"
   >("conversation");
@@ -2084,11 +2001,7 @@ function SessionControlPanel({
       }}
     >
       <aside
-        className={
-          fullscreen
-            ? "session-control-panel fullscreen"
-            : "session-control-panel"
-        }
+        className="session-control-panel"
         aria-label="会话控制"
         onMouseDown={(event) => event.stopPropagation()}
       >
@@ -2124,44 +2037,6 @@ function SessionControlPanel({
               onClick={() => setPanelView("timeline")}
             >
               <Activity size={15} />
-            </button>
-            <button
-              className="icon-button"
-              aria-label={fullscreen ? "还原窗口" : "全屏沉浸模式"}
-              title={fullscreen ? "还原窗口" : "全屏沉浸模式"}
-              onClick={() => setFullscreen((v) => !v)}
-            >
-              {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            </button>
-            <button
-              className="icon-button"
-              aria-label="上一条会话"
-              title={
-                previousSession === undefined
-                  ? "已经是筛选结果中的第一条"
-                  : "上一条会话"
-              }
-              disabled={previousSession === undefined || busy}
-              onClick={() =>
-                previousSession !== undefined && onNavigate(previousSession)
-              }
-            >
-              <ChevronLeft />
-            </button>
-            <button
-              className="icon-button"
-              aria-label="下一条会话"
-              title={
-                nextSession === undefined
-                  ? "已经是筛选结果中的最后一条"
-                  : "下一条会话"
-              }
-              disabled={nextSession === undefined || busy}
-              onClick={() =>
-                nextSession !== undefined && onNavigate(nextSession)
-              }
-            >
-              <ChevronRight />
             </button>
             <button
               className="icon-button"
@@ -2244,17 +2119,12 @@ function SessionControlPanel({
                 </p>
               </div>
             ) : (
-              messages.map((message, index) =>
-                message.content === "" ? null : (
-                  <div
-                    className={`turn-message ${message.role}`}
-                    key={`${message.role}-${index}`}
-                  >
-                    <span>{message.role === "user" ? "你" : "Agent"}</span>
-                    <p>{message.content}</p>
-                  </div>
-                ),
-              )
+              messages.map((message, index) => (
+                <ConversationItem
+                  message={message}
+                  key={`${message.role}-${message.kind ?? "message"}-${index}`}
+                />
+              ))
             )}
             {busy && agentActivity !== undefined && (
               <div className="agent-thinking">
@@ -2341,6 +2211,57 @@ function SessionControlPanel({
         </footer>
       </aside>
     </div>
+  );
+}
+
+function ConversationItem({ message }: { message: ConversationMessage }) {
+  if (message.content === "" && message.kind !== "tool") return null;
+  if (
+    message.kind === "tool" ||
+    message.kind === "command" ||
+    message.kind === "status"
+  ) {
+    const failed = message.status === "failed";
+    return (
+      <details className={`activity-item ${failed ? "failed" : ""}`}>
+        <summary>
+          <span className="activity-item-icon">
+            {message.kind === "command" ? (
+              <Terminal size={14} />
+            ) : message.kind === "status" ? (
+              <Activity size={14} />
+            ) : (
+              <Code2 size={14} />
+            )}
+          </span>
+          <strong>
+            {message.label ||
+              (message.kind === "command" ? "命令" : "工具调用")}
+          </strong>
+          <span className="activity-item-state">
+            {failed
+              ? "失败"
+              : message.status === "running"
+                ? "运行中"
+                : message.status === "completed"
+                  ? "完成"
+                  : "状态"}
+          </span>
+          <ChevronRight size={13} className="activity-chevron" />
+        </summary>
+        {message.content !== "" && <pre>{message.content}</pre>}
+      </details>
+    );
+  }
+  return (
+    <article className={`turn-message ${message.role}`}>
+      {message.role === "user" && <span>你</span>}
+      <div className="markdown-body">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {message.content}
+        </ReactMarkdown>
+      </div>
+    </article>
   );
 }
 
@@ -2542,65 +2463,46 @@ function DesktopSettingsPanel({
   );
 }
 
-function AccountPanel({
+function AccountMenu({
   snapshot,
   busy,
   onClose,
+  onOpenSettings,
   onLogout,
 }: {
   snapshot: Snapshot;
   busy: boolean;
   onClose: () => void;
+  onOpenSettings: () => void;
   onLogout: () => void;
 }) {
   return (
-    <aside className="account-panel" aria-label="账号信息">
-      <header>
-        <div>
-          <span className="card-kicker">AgentHub 账号</span>
-          <h2>{snapshot.account.user.display_name || "未设置名称"}</h2>
+    <aside className="account-menu" aria-label="账号菜单">
+      <button
+        className="account-menu-backdrop"
+        aria-label="关闭账号菜单"
+        onClick={onClose}
+      />
+      <div className="account-menu-card">
+        <div className="account-menu-identity">
+          <strong>{snapshot.account.user.display_name || "未设置名称"}</strong>
+          <span>{snapshot.account.user.email}</span>
+          <small>
+            {planLabel(snapshot.account.subscription.plan)} ·{" "}
+            {snapshot.realtime_connected ? "实时连接" : "轮询连接"}
+          </small>
         </div>
-        <button
-          className="icon-button"
-          aria-label="关闭账号信息"
-          onClick={onClose}
-        >
-          <X />
+        <button type="button" onClick={onOpenSettings}>
+          <Settings size={15} />
+          <span>设置</span>
+          <small>Ctrl+,</small>
         </button>
-      </header>
-      <dl>
-        <div>
-          <dt>邮箱</dt>
-          <dd>{snapshot.account.user.email}</dd>
-        </div>
-        <div>
-          <dt>套餐</dt>
-          <dd>{planLabel(snapshot.account.subscription.plan)}</dd>
-        </div>
-        <div>
-          <dt>账号状态</dt>
-          <dd>
-            {snapshot.account.subscription.status === "active"
-              ? "正常"
-              : snapshot.account.subscription.status}
-          </dd>
-        </div>
-        <div>
-          <dt>历史保留</dt>
-          <dd>{snapshot.account.entitlements?.history_days ?? "—"} 天</dd>
-        </div>
-        <div>
-          <dt>当前设备</dt>
-          <dd>{snapshot.device.name}</dd>
-        </div>
-        <div>
-          <dt>服务</dt>
-          <dd>{new URL(snapshot.server_url).host}</dd>
-        </div>
-      </dl>
-      <button className="logout-button" disabled={busy} onClick={onLogout}>
-        <LogOut /> 退出登录
-      </button>
+        <div className="account-menu-separator" />
+        <button type="button" disabled={busy} onClick={onLogout}>
+          <LogOut size={15} />
+          <span>退出登录</span>
+        </button>
+      </div>
     </aside>
   );
 }

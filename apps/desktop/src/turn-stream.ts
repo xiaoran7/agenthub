@@ -1,5 +1,8 @@
 export interface ConversationMessage {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
+  kind?: "message" | "tool" | "command" | "status";
+  label?: string;
+  status?: "running" | "completed" | "failed" | "unknown";
   content: string;
 }
 
@@ -12,6 +15,7 @@ export function appendAssistantDelta(
   for (let index = next.length - 1; index >= 0; index -= 1) {
     if (next[index].role === "assistant") {
       next[index] = {
+        ...next[index],
         role: "assistant",
         content: `${next[index].content}${delta}`,
       };
@@ -28,7 +32,7 @@ export function replaceAssistantMessage(
   const next = [...current];
   for (let index = next.length - 1; index >= 0; index -= 1) {
     if (next[index].role === "assistant") {
-      next[index] = { role: "assistant", content };
+      next[index] = { ...next[index], role: "assistant", content };
       return next;
     }
   }

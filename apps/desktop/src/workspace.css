@@ -2068,6 +2068,438 @@
   }
 }
 
+/* Keep the final desktop proportions authoritative over legacy theme passes above. */
+@media (min-width: 981px) {
+  .claude-app-shell {
+    grid-template-columns: 272px minmax(0, 1fr);
+  }
+
+  .claude-home-stage {
+    padding: 84px 64px 124px;
+  }
+
+  .claude-prompt-dock {
+    right: 64px;
+    left: 64px;
+    max-width: 770px;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 980px) {
+  .claude-app-shell {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+}
+
+/* Codex-style information hierarchy: directory rail, document transcript, anchored account menu. */
+.claude-app-shell {
+  grid-template-columns: 272px minmax(0, 1fr);
+}
+
+.claude-sidebar {
+  background: #151515;
+  border-right: 1px solid #292929;
+}
+
+.sidebar-top-bar {
+  min-height: 54px;
+  padding: 12px 14px 7px 16px;
+}
+
+.sidebar-brand strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.sidebar-action-buttons {
+  display: block;
+  margin: 0 10px 8px;
+}
+
+.sidebar-new-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 0 12px;
+  background: #292929;
+}
+
+.sidebar-agent-picker {
+  margin-inline: 10px;
+}
+
+.sidebar-providers-tree {
+  padding-inline: 10px;
+}
+
+.provider-title {
+  max-width: 190px;
+  color: #a9a9a5;
+  font-size: 11px;
+}
+
+.sidebar-session-title {
+  font-size: 12px;
+}
+
+.sidebar-session-open {
+  min-height: 32px;
+}
+
+.sidebar-session-item {
+  min-height: 32px;
+}
+
+.profile-account-btn {
+  width: 100%;
+}
+
+.account-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  pointer-events: none;
+}
+
+.account-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.account-menu-card {
+  position: absolute;
+  bottom: 54px;
+  left: 8px;
+  width: 256px;
+  padding: 7px;
+  color: #d8d8d4;
+  background: #202020;
+  border: 1px solid #3a3a3a;
+  border-radius: 10px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.52);
+  pointer-events: auto;
+}
+
+.account-menu-identity {
+  padding: 9px 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.account-menu-identity strong {
+  color: #f1f1ed;
+  font-size: 12px;
+}
+
+.account-menu-identity span,
+.account-menu-identity small {
+  overflow: hidden;
+  color: #8d8d88;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu-card > button:not(.account-menu-backdrop) {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 7px;
+  color: #d8d8d4;
+  text-align: left;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.account-menu-card > button:hover {
+  background: #333333;
+}
+
+.account-menu-card > button small {
+  color: #7c7c77;
+  font-size: 9px;
+}
+
+.account-menu-separator {
+  height: 1px;
+  margin: 5px 3px;
+  background: #393939;
+}
+
+.claude-home-stage {
+  padding: 84px 64px 124px;
+  align-items: stretch;
+  background: #171717;
+}
+
+.workspace-masthead {
+  width: min(100%, 770px);
+  margin: 0 auto;
+}
+
+.workspace-title-block h1 {
+  font-size: 24px;
+  font-weight: 580;
+}
+
+.home-agent-note {
+  margin: 9px 0 0 28px;
+  color: #81817c;
+  font-size: 11px;
+}
+
+.claude-alert-box {
+  width: min(100%, 770px);
+  margin-top: 24px;
+}
+
+.claude-prompt-dock {
+  right: 64px;
+  bottom: 22px;
+  left: 64px;
+  max-width: 770px;
+}
+
+.prompt-dock-form {
+  min-height: 70px;
+  background: #202020;
+  border-color: #3a3a3a;
+  border-radius: 12px;
+}
+
+.prompt-dock-form textarea {
+  min-height: 66px;
+  font-size: 13px;
+}
+
+.claude-stage .session-control-panel > header {
+  min-height: 52px;
+  padding: 9px 18px;
+  background: #171717;
+  border-bottom-color: #2b2b2b;
+}
+
+.claude-stage .conversation-pane {
+  width: min(100%, 820px);
+  padding: 22px 28px 50px;
+}
+
+.turn-message {
+  margin: 0 0 22px;
+}
+
+.turn-message > span {
+  display: block;
+  margin: 0 0 5px;
+  color: #777772 !important;
+  font-size: 10px;
+}
+
+.turn-message.user {
+  margin-left: auto;
+  max-width: 78%;
+}
+
+.turn-message.user .markdown-body {
+  padding: 10px 13px;
+  background: #242424;
+  border: 1px solid #333333;
+  border-radius: 11px;
+}
+
+.turn-message.assistant,
+.turn-message.system {
+  max-width: 100%;
+}
+
+.markdown-body {
+  color: #deded9;
+  font-size: 13px;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.markdown-body p {
+  margin: 0 0 10px;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: 18px 0 8px;
+  color: #f1f1ed;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0 12px;
+  padding-left: 22px;
+}
+.markdown-body li {
+  margin: 4px 0;
+}
+.markdown-body code {
+  padding: 2px 5px;
+  color: #e8c1b4;
+  background: #2b2726;
+  border-radius: 4px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.9em;
+}
+.markdown-body pre {
+  margin: 10px 0;
+  padding: 12px 14px;
+  overflow: auto;
+  background: #101010;
+  border: 1px solid #303030;
+  border-radius: 8px;
+}
+.markdown-body pre code {
+  padding: 0;
+  color: #d8d8d3;
+  background: transparent;
+}
+.markdown-body blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  color: #a5a5a0;
+  border-left: 2px solid #d97757;
+}
+.markdown-body a {
+  color: #dd9279;
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 6px 8px;
+  border: 1px solid #353535;
+  text-align: left;
+}
+
+.activity-item {
+  margin: 0 0 7px;
+  color: #aaa9a4;
+  font-size: 11px;
+}
+
+.activity-item summary {
+  min-height: 29px;
+  padding: 4px 5px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, auto) 1fr 14px;
+  align-items: center;
+  gap: 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.activity-item summary:hover {
+  background: #202020;
+}
+.activity-item summary::-webkit-details-marker {
+  display: none;
+}
+.activity-item-icon {
+  color: #777772 !important;
+}
+.activity-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #bdbdb8 !important;
+  font-weight: 520;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-item-state {
+  justify-self: start;
+  color: #6f6f6b !important;
+}
+.activity-item.failed strong,
+.activity-item.failed .activity-item-state {
+  color: #d78368 !important;
+}
+.activity-chevron {
+  justify-self: end;
+  transition: transform 120ms ease;
+}
+.activity-item[open] .activity-chevron {
+  transform: rotate(90deg);
+}
+.activity-item pre {
+  max-height: 240px;
+  margin: 2px 0 10px 28px;
+  padding: 10px 12px;
+  overflow: auto;
+  color: #aaa9a4;
+  background: #111111;
+  border: 1px solid #2d2d2d;
+  border-radius: 7px;
+  font:
+    10px/1.55 "Cascadia Mono",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+}
+
+.claude-stage .composer-container {
+  width: min(calc(100% - 56px), 820px);
+  padding-bottom: 10px;
+  background: #171717;
+}
+
+.claude-stage .slash-commands-bar {
+  display: none;
+}
+
+@media (max-width: 980px) {
+  .claude-app-shell {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  .claude-home-stage {
+    padding-inline: 36px;
+  }
+  .claude-prompt-dock {
+    right: 36px;
+    left: 36px;
+  }
+}
+
+@media (max-width: 720px) {
+  .claude-app-shell {
+    grid-template-columns: 68px minmax(0, 1fr);
+  }
+  .account-menu-card {
+    width: 240px;
+  }
+  .claude-home-stage {
+    padding: 56px 20px 118px;
+  }
+  .claude-prompt-dock {
+    right: 20px;
+    left: 20px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .claude-app-shell *,
   .claude-app-shell *::before,
@@ -2867,5 +3299,34 @@
   }
   .settings-layout form {
     padding: 24px 20px 16px;
+  }
+}
+
+/* Final desktop sizing contract. */
+.claude-stage {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (min-width: 981px) {
+  .claude-app-shell {
+    grid-template-columns: 272px minmax(0, 1fr);
+  }
+
+  .claude-home-stage {
+    padding: 84px 64px 124px;
+  }
+
+  .claude-prompt-dock {
+    right: 64px;
+    left: 64px;
+    max-width: 770px;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 980px) {
+  .claude-app-shell {
+    grid-template-columns: 240px minmax(0, 1fr);
   }
 }

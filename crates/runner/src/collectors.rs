@@ -255,9 +255,9 @@ pub fn collect_claude_transcripts_from(
 }
 
 /// Reads only explicit, bounded session metadata for the desktop detail view.
-/// Titles come only from provider-owned title events, are never inferred from
-/// user messages, and are intentionally kept separate from SessionObservation
-/// so they cannot enter the sync outbox.
+/// Titles prefer provider-owned title events and fall back to a bounded local
+/// summary of the first meaningful user request. They remain separate from
+/// SessionObservation so neither the title nor prompt enters the sync outbox.
 pub fn collect_claude_session_contexts(
     limit: usize,
 ) -> Result<Vec<LocalSessionContext>, CollectorError> {
@@ -460,15 +460,7 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 })
                 .or_else(|| value.get("prompt").and_then(Value::as_str));
             if let Some(text) = prompt_text {
-                let first_line = text
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("")
-                    .trim();
-                let clean = first_line.trim_start_matches(['#', ' ', '>']).trim();
-                if !clean.is_empty() {
-                    context.title = metadata_label(clean, MAX_SESSION_TITLE_CHARS);
-                }
+                context.title = local_prompt_title(text);
             }
         }
         _ => {}
@@ -1345,6 +1337,41 @@ fn read_grok_session_context(
     context.title = summary
         .generated_title
         .and_then(|value| metadata_label(&value, MAX_SESSION_TITLE_CHARS));
+    if context.title.is_none() {
+        let history = summary_path
+            .parent()
+            .map(|dir| dir.join("chat_history.jsonl"));
+        if let Some(history) = history.filter(|path| path.is_file())
+            && let Ok(file) = fs::File::open(history)
+        {
+            let mut reader = BufReader::new(file);
+            for _ in 0..64 {
+                let BoundedLine::Line(line) = read_bounded_line(&mut reader) else {
+                    break;
+                };
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                let role = value
+                    .get("role")
+                    .or_else(|| value.pointer("/message/role"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !matches!(role, "user" | "human") {
+                    continue;
+                }
+                let text = value
+                    .get("content")
+                    .or_else(|| value.pointer("/message/content"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                context.title = local_prompt_title(text);
+                if context.title.is_some() {
+                    break;
+                }
+            }
+        }
+    }
     context.model = summary
         .current_model_id
         .and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
@@ -1752,33 +1779,8 @@ pub fn collect_antigravity_session_contexts_from(
                 };
                 if val.get("type").and_then(Value::as_str) == Some("USER_INPUT") {
                     let content = val.get("content").and_then(Value::as_str).unwrap_or("");
-                    if let Some(start) = content.find("<USER_REQUEST>") {
-                        let req_content = &content[start + "<USER_REQUEST>".len()..];
-                        let end = req_content
-                            .find("</USER_REQUEST>")
-                            .unwrap_or(req_content.len());
-                        let req_text = req_content[..end].trim();
-                        let first_line = req_text
-                            .lines()
-                            .find(|l| !l.trim().is_empty())
-                            .unwrap_or("")
-                            .trim();
-                        if !first_line.is_empty() {
-                            context.title = metadata_label(first_line, MAX_SESSION_TITLE_CHARS);
-                            break;
-                        }
-                    }
-                    let first_line = content
-                        .lines()
-                        .find(|l| !l.trim().is_empty())
-                        .unwrap_or("")
-                        .trim();
-                    let clean = first_line
-                        .trim_start_matches("<USER_REQUEST>")
-                        .trim_end_matches("</USER_REQUEST>")
-                        .trim();
-                    if !clean.is_empty() && !clean.starts_with('<') {
-                        context.title = metadata_label(clean, MAX_SESSION_TITLE_CHARS);
+                    context.title = local_prompt_title(content);
+                    if context.title.is_some() {
                         break;
                     }
                 }
@@ -1788,6 +1790,31 @@ pub fn collect_antigravity_session_contexts_from(
         contexts.push(context);
     }
     Ok(contexts)
+}
+
+fn local_prompt_title(text: &str) -> Option<String> {
+    let text = if let Some(start) = text.find("<USER_REQUEST>") {
+        let request = &text[start + "<USER_REQUEST>".len()..];
+        &request[..request.find("</USER_REQUEST>").unwrap_or(request.len())]
+    } else {
+        text
+    };
+    if [
+        "<local-command-caveat>",
+        "<command-name>",
+        "<task-notification>",
+    ]
+    .iter()
+    .any(|tag| text.contains(tag))
+    {
+        return None;
+    }
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let clean = line.trim_start_matches(['#', ' ', '>', '-', '*']).trim();
+    if clean.is_empty() || clean.starts_with('<') {
+        return None;
+    }
+    metadata_label(clean, MAX_SESSION_TITLE_CHARS)
 }
 
 pub fn find_antigravity_session_cwd(session_id: &str) -> Result<Option<PathBuf>, CollectorError> {
@@ -3393,6 +3420,18 @@ mod tests {
             &mut context,
         );
         assert_eq!(context.title.as_deref(), Some("User title"));
+    }
+
+    #[test]
+    fn local_prompt_titles_ignore_provider_control_messages() {
+        assert_eq!(
+            local_prompt_title("<USER_REQUEST>优化侧边栏与会话页</USER_REQUEST>").as_deref(),
+            Some("优化侧边栏与会话页")
+        );
+        assert!(
+            local_prompt_title("<local-command-caveat>internal</local-command-caveat>").is_none()
+        );
+        assert!(local_prompt_title("<command-name>/compact</command-name>").is_none());
     }
 
     #[test]

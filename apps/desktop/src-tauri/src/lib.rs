@@ -1174,20 +1174,13 @@ fn load_session_conversation_inner(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some((role, text)) = local_conversation_message(&value) else {
-            continue;
-        };
-        let text = text
-            .replace("<USER_REQUEST>", "")
-            .replace("</USER_REQUEST>", "");
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
+        for item in normalize_local_conversation_items(&value) {
+            messages.push(item);
+            if messages.len() >= 300 {
+                break;
+            }
         }
-        messages.push(
-            json!({ "role": role, "content": text.chars().take(16_000).collect::<String>() }),
-        );
-        if messages.len() >= 200 {
+        if messages.len() >= 300 {
             break;
         }
     }
@@ -1264,6 +1257,26 @@ fn decode_local_text(bytes: &[u8]) -> String {
             .collect::<Vec<_>>();
         return String::from_utf16_lossy(&units);
     }
+    if bytes.len() >= 8 && bytes.len().is_multiple_of(2) {
+        let pairs = bytes.chunks_exact(2).collect::<Vec<_>>();
+        let even_nuls = pairs.iter().filter(|pair| pair[0] == 0).count();
+        let odd_nuls = pairs.iter().filter(|pair| pair[1] == 0).count();
+        let threshold = pairs.len() / 3;
+        if odd_nuls > threshold {
+            let units = pairs
+                .iter()
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>();
+            return String::from_utf16_lossy(&units);
+        }
+        if even_nuls > threshold {
+            let units = pairs
+                .iter()
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>();
+            return String::from_utf16_lossy(&units);
+        }
+    }
     String::from_utf8_lossy(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes)).into_owned()
 }
 
@@ -1303,6 +1316,287 @@ fn local_conversation_message(value: &Value) -> Option<(&'static str, String)> {
         .or_else(|| value.get("text"))?;
     let text = extract_local_text(content);
     (!text.trim().is_empty()).then_some((role, text))
+}
+
+fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload = value.get("payload").unwrap_or(value);
+    let payload_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if matches!(
+        event_type,
+        "summary" | "file-history-snapshot" | "queue-operation"
+    ) || matches!(payload_type, "turn_context" | "token_count" | "reasoning")
+    {
+        return Vec::new();
+    }
+
+    let content = value
+        .pointer("/message/content")
+        .or_else(|| payload.get("content"))
+        .or_else(|| payload.get("message"))
+        .or_else(|| value.get("content"))
+        .or_else(|| value.get("text"));
+
+    if let Some(text) = content.and_then(Value::as_str) {
+        if text.contains("<local-command-caveat>") {
+            return Vec::new();
+        }
+        if let Some(command) = xml_tag(text, "command-name") {
+            return vec![conversation_item(
+                "system",
+                "command",
+                "本地命令",
+                &command,
+                "completed",
+            )];
+        }
+        if text.contains("<task-notification>") {
+            let summary =
+                xml_tag(text, "summary").unwrap_or_else(|| "后台任务状态已更新".to_owned());
+            let status = xml_tag(text, "status").unwrap_or_default();
+            return vec![conversation_item(
+                "system",
+                "status",
+                "后台任务",
+                &summary,
+                status_label(&status),
+            )];
+        }
+    }
+
+    let role = normalized_role(value);
+    let mut items = Vec::new();
+    if let Some(blocks) = content.and_then(Value::as_array) {
+        let mut text_parts = Vec::new();
+        for block in blocks {
+            let block_type = block
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match block_type {
+                "text" | "input_text" | "output_text" => {
+                    let text = extract_local_text(block);
+                    if !text.trim().is_empty() {
+                        text_parts.push(text);
+                    }
+                }
+                "tool_use" | "tool_call" | "function_call" | "custom_tool_call" => {
+                    let label = block
+                        .get("name")
+                        .or_else(|| block.get("tool_name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("工具调用");
+                    let details = block
+                        .get("input")
+                        .or_else(|| block.get("arguments"))
+                        .map(compact_json)
+                        .unwrap_or_default();
+                    items.push(conversation_item(
+                        "assistant",
+                        "tool",
+                        label,
+                        &details,
+                        "running",
+                    ));
+                }
+                "tool_result" | "function_call_output" | "custom_tool_call_output" => {
+                    let details = block
+                        .get("content")
+                        .or_else(|| block.get("output"))
+                        .map(extract_local_text)
+                        .unwrap_or_default();
+                    let failed = block
+                        .get("is_error")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    items.push(conversation_item(
+                        "system",
+                        "tool",
+                        "工具结果",
+                        &details,
+                        if failed { "failed" } else { "completed" },
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if let Some(role) = role {
+            let text = clean_message_text(&text_parts.join("\n"));
+            if !text.is_empty() {
+                items.insert(
+                    0,
+                    conversation_item(role, "message", "", &text, "completed"),
+                );
+            }
+        }
+    }
+
+    let tool_type = matches!(
+        payload_type,
+        "function_call"
+            | "custom_tool_call"
+            | "commandExecution"
+            | "command_execution"
+            | "fileChange"
+            | "file_change"
+    );
+    if tool_type {
+        let label = payload
+            .get("name")
+            .or_else(|| payload.get("command"))
+            .and_then(Value::as_str)
+            .unwrap_or(if payload_type.contains("file") {
+                "文件变更"
+            } else {
+                "工具调用"
+            });
+        let details = payload
+            .get("arguments")
+            .or_else(|| payload.get("aggregatedOutput"))
+            .or_else(|| payload.get("aggregated_output"))
+            .or_else(|| payload.get("changes"))
+            .map(compact_json)
+            .unwrap_or_default();
+        let status = payload
+            .get("status")
+            .and_then(Value::as_str)
+            .map(status_label)
+            .unwrap_or("unknown");
+        items.push(conversation_item(
+            "assistant",
+            "tool",
+            label,
+            &details,
+            status,
+        ));
+    }
+    if matches!(
+        payload_type,
+        "function_call_output" | "custom_tool_call_output"
+    ) {
+        let details = payload
+            .get("output")
+            .or_else(|| payload.get("content"))
+            .map(extract_local_text)
+            .unwrap_or_default();
+        items.push(conversation_item(
+            "system",
+            "tool",
+            "工具结果",
+            &details,
+            "completed",
+        ));
+    }
+
+    if let Some(calls) = value
+        .get("tool_calls")
+        .or_else(|| payload.get("tool_calls"))
+        .and_then(Value::as_array)
+    {
+        for call in calls {
+            let function = call.get("function").unwrap_or(call);
+            let label = function
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("工具调用");
+            let details = function
+                .get("arguments")
+                .or_else(|| call.get("input"))
+                .map(compact_json)
+                .unwrap_or_default();
+            items.push(conversation_item(
+                "assistant",
+                "tool",
+                label,
+                &details,
+                "completed",
+            ));
+        }
+    }
+
+    if items.is_empty()
+        && let Some((role, text)) = local_conversation_message(value)
+    {
+        let text = clean_message_text(&text);
+        if !text.is_empty() {
+            items.push(conversation_item(role, "message", "", &text, "completed"));
+        }
+    }
+    items
+}
+
+fn normalized_role(value: &Value) -> Option<&'static str> {
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload_type = value
+        .pointer("/payload/type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let role = value
+        .get("role")
+        .or_else(|| value.pointer("/message/role"))
+        .or_else(|| value.pointer("/payload/role"))
+        .and_then(Value::as_str)
+        .unwrap_or(match (event_type, payload_type) {
+            ("user", _) | ("USER_INPUT", _) | (_, "user_message") | (_, "userMessage") => "user",
+            ("assistant", _) | ("ASSISTANT", _) | (_, "agent_message") | (_, "agentMessage") => {
+                "assistant"
+            }
+            _ => "",
+        });
+    match role.to_ascii_lowercase().as_str() {
+        "user" | "human" => Some("user"),
+        "assistant" | "agent" | "model" => Some("assistant"),
+        _ => None,
+    }
+}
+
+fn conversation_item(role: &str, kind: &str, label: &str, content: &str, status: &str) -> Value {
+    json!({ "role": role, "kind": kind, "label": label, "status": status,
+        "content": content.trim().chars().take(16_000).collect::<String>() })
+}
+
+fn compact_json(value: &Value) -> String {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap_or_default())
+}
+
+fn status_label(status: &str) -> &'static str {
+    match status.to_ascii_lowercase().as_str() {
+        "completed" | "complete" | "success" | "succeeded" => "completed",
+        "failed" | "error" | "declined" => "failed",
+        "running" | "inprogress" | "in_progress" | "pending" => "running",
+        _ => "unknown",
+    }
+}
+
+fn xml_tag(text: &str, tag: &str) -> Option<String> {
+    let start_tag = format!("<{tag}>");
+    let end_tag = format!("</{tag}>");
+    let start = text.find(&start_tag)? + start_tag.len();
+    let end = text[start..].find(&end_tag)? + start;
+    Some(text[start..end].trim().to_owned())
+}
+
+fn clean_message_text(text: &str) -> String {
+    let text = text
+        .replace("<USER_REQUEST>", "")
+        .replace("</USER_REQUEST>", "");
+    if text.contains("<local-command-caveat>") {
+        return String::new();
+    }
+    text.trim().to_owned()
 }
 
 fn extract_local_text(value: &Value) -> String {
@@ -2415,6 +2709,30 @@ mod tests {
     }
 
     #[test]
+    fn local_conversation_normalizer_filters_control_markup_and_keeps_tools() {
+        let caveat = json!({"type":"user","message":{"content":"<local-command-caveat>internal only</local-command-caveat>"}});
+        let command = json!({"type":"user","message":{"content":"<command-name>/compact</command-name><command-message>compact</command-message>"}});
+        let claude = json!({"type":"assistant","message":{"content":[
+            {"type":"text","text":"- 完成一项\n- 完成二项"},
+            {"type":"tool_use","name":"Read","input":{"file_path":"README.md"}}
+        ]}});
+        let codex = json!({"type":"response_item","payload":{"type":"command_execution","command":"cargo test","status":"completed","aggregated_output":"ok"}});
+
+        assert!(normalize_local_conversation_items(&caveat).is_empty());
+        assert_eq!(
+            normalize_local_conversation_items(&command)[0]["kind"],
+            "command"
+        );
+        let claude_items = normalize_local_conversation_items(&claude);
+        assert_eq!(claude_items[0]["kind"], "message");
+        assert_eq!(claude_items[1]["kind"], "tool");
+        assert_eq!(
+            normalize_local_conversation_items(&codex)[0]["label"],
+            "cargo test"
+        );
+    }
+
+    #[test]
     fn local_text_decoder_handles_utf8_and_utf16_without_mojibake() {
         assert_eq!(decode_local_text("会话内容".as_bytes()), "会话内容");
         let mut utf16 = vec![0xff, 0xfe];
@@ -2422,6 +2740,11 @@ mod tests {
             utf16.extend_from_slice(&unit.to_le_bytes());
         }
         assert_eq!(decode_local_text(&utf16), "会话内容");
+        let utf16_without_bom = "session 内容"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(decode_local_text(&utf16_without_bom), "session 内容");
     }
 
     #[test]

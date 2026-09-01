@@ -57,15 +57,13 @@ Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP
 - Claude 历史发现只读取 `CLAUDE_CONFIG_DIR` 或 `~/.claude/projects` 中的白名单元数据。
 - Codex 优先使用 app-server；不可执行时只读 `CODEX_HOME` 最新状态库的 Thread 元数据。
 - 桌面启动时先执行一次本地元数据扫描（每种来源最多 1000 条），随后进入后台自适应轮询。
-- 用户打开会话时，桌面端会从各 Provider 原生目录按 Session ID 读取本地 JSONL 正文；支持 Claude Code、Codex、Antigravity 和 Grok Build，并兼容 UTF-8 BOM 与 UTF-16 LE/BE。正文只进入当前 WebView，不进入 Outbox、Gateway、配置或日志。
+- 用户打开会话时，桌面端会从各 Provider 原生目录按 Session ID 读取本地 JSONL 正文；支持 Claude Code、Codex、Antigravity 和 Grok Build，并兼容 UTF-8 BOM 与 UTF-16 LE/BE（含无 BOM 启发式识别）。读取结果会规范化为消息、工具调用、命令和状态；普通消息使用安全的 CommonMark/GFM 渲染，Provider 控制标签不会作为正文显示。正文只进入当前 WebView，不进入 Outbox、Gateway、配置或日志。
 - Claude/Codex memory 只读取文件或索引数量与字节大小，不读取记忆正文。
 - 日常发现与同步不读取 Claude/Codex OAuth Token、API Key、消息正文、Prompt、工具参数或
   命令输出。桌面运行上下文是独立的本机增强层：Claude 只扫描有界 JSONL 头尾的供应商标题事件、
   权限模式、模型和用量字段；Codex 只读状态库白名单列和受 `CODEX_HOME` 路径约束的 rollout
   最多 2 MiB 尾部，并只接受 `turn_context`/`token_count`。结果缓存 15 秒，不进入同步协议。
-- 会话标题只接受 Claude `/rename`/`custom-title`、Claude 自带 `ai-title` 或 Codex 本地状态库
-  保存的标题；自定义标题优先，且不会自行读取首条 Prompt 推断标题。远端设备未同步这些本机字段时
-  明确显示“未提供”。
+- 会话标题优先使用 Claude `/rename`/`custom-title`、Claude 自带 `ai-title`、Codex 本地状态库或其他 Provider 保存的标题；没有显式标题时，会在本机从首条有效用户请求生成有界摘要，并过滤命令提示、后台通知等控制内容。标题不进入同步协议，远端设备未提供本机上下文时使用项目名回退。
 - 用户在会话控制台显式发送时，Prompt 仅通过 Tauri IPC 和 stdin 交给本机 CLI；回复只保留
   在当前前端内存中，不进入桌面配置、SQLite Outbox、Gateway 或日志。单次输入最多 16000
   字符，输出最多 2 MiB，执行最长 15 分钟；stderr 只被排空，不回传到界面。

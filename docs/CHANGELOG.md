@@ -11,10 +11,13 @@
 
 ### Changed
 
+- 桌面端本机会话正文改为 Provider 结构化规范化：Claude Code 控制标签不再作为正文裸露，Codex、Antigravity 与 Grok Build 的消息、Markdown、命令、工具调用和状态按语义渲染；正文继续只在当前 WebView 本地展示。
+- 会话区改为 Codex 式紧凑文档流，支持 CommonMark/GFM 列表、表格、引用和代码块；工具活动折叠为单行，首页移除统计看板，侧栏采用 272px 工作目录导航和真实会话标题。
+- 删除侧栏裸露的“本机设置”按钮和右侧大型账号卡；设置入口收纳到左下角账号栏弹出菜单。
 - 桌面端侧边栏收窄并统一为 Claude Desktop 风格的深色单色轨道，新增全局 Agent 选择器；会话按当前 Agent 过滤，补齐“收起”操作。
 - 设置面板改为居中遮罩窗口，避免被主内容遮盖；会话打开时在本机按会话 ID 读取 Claude transcript 的 user/assistant 正文，正文不进入同步与云端事件。
 - 桌面端进一步改为所选 Agent 下按工作目录分组，增加会话置顶，并将首页、会话顶部与三分类设置页统一为紧凑深色工作台。
-- 本机首次扫描、后台持续扫描与健康汇总补齐 Antigravity；历史正文读取扩展到 Claude Code、Codex、Antigravity 与 Grok Build，并兼容 UTF-8 BOM、UTF-16 LE/BE，避免中文乱码。
+- 本机首次扫描、后台持续扫描与健康汇总补齐 Antigravity；历史正文读取扩展到 Claude Code、Codex、Antigravity 与 Grok Build，并兼容 UTF-8 BOM、UTF-16 LE/BE（含无 BOM 启发式识别），避免中文乱码。
 - 实时 SSE 心跳缩短到 10 秒，桌面读超时放宽到 45 秒，降低代理空闲超时或网络抖动造成的误断线，保留轮询降级。
 
 ## [2.0.7] - 2026-09-01

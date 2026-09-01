@@ -287,7 +287,9 @@ flowchart TD
     AttachWrapper --> Done["纳入 AgentHub 统一多路复用管理"]
 ```
 
-桌面端在用户打开会话时，按 Provider 原生目录读取 Claude Code、Codex、Antigravity 或 Grok Build 的本地正文，并仅在当前 WebView 内解码展示。正文不进入 Gateway、Outbox、日志或默认云端 API；自动同步范围仍是状态与脱敏元数据。
+桌面端在用户打开会话时，按 Provider 原生目录读取 Claude Code、Codex、Antigravity 或 Grok Build 的本地正文，并仅在当前 WebView 内解码展示。读取层把原生记录规范化为 `message`、`tool`、`command`、`status` 四类展示项：Claude 控制标签会被过滤或转成状态项，Codex `ThreadItem`、Antigravity/Grok 工具调用保留语义边界，普通消息交给安全 Markdown 渲染器。正文、工具参数与输出不进入 Gateway、Outbox、日志或默认云端 API；自动同步范围仍是状态与脱敏元数据。
+
+侧栏标题优先使用 Provider 显式标题；缺少显式标题时，只在本机从首条有效用户请求生成有界摘要，并排除本地命令提示、后台任务通知及其他控制消息。该摘要属于 WebView/桌面本地上下文，不进入同步协议。
 
 ---
 
