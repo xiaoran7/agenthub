@@ -25,6 +25,7 @@ import {
   Minimize2,
   Monitor,
   Pause,
+  Pin,
   Play,
   Plus,
   RefreshCw,
@@ -33,7 +34,6 @@ import {
   Send,
   Settings,
   ShieldCheck,
-  Sliders,
   Sparkles,
   Square,
   Terminal,
@@ -55,13 +55,12 @@ import {
   adjacentItem,
   agentLabel,
   agentShortLabel,
-  groupSessionsByProvider,
+  groupSessionsByWorkspace,
   isAttentionSession,
   permissionFieldLabel,
   relativeTime,
   sessionDisplayTitle,
   statusView,
-  type ProviderGroup,
 } from "./presentation";
 import {
   appendAssistantDelta,
@@ -707,6 +706,14 @@ function Dashboard({
   const [launchModalOpen, setLaunchModalOpen] = useState(false);
   const [launchModalProvider, setLaunchModalProvider] =
     useState<Session["agent_type"]>("claude_code");
+  const [pinnedSessions, setPinnedSessions] = useState<string[]>(() => {
+    try {
+      const stored = window.localStorage.getItem("agenthub:pinned-sessions");
+      return stored ? (JSON.parse(stored) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // Quick Task Launcher state
   const [quickPrompt, setQuickPrompt] = useState("");
@@ -750,9 +757,17 @@ function Dashboard({
     [agentFilter, archiveFilter, deferredQuery, deviceFilter, sessions],
   );
 
-  const providerGroups = useMemo(
-    () => groupSessionsByProvider(filteredSessions),
-    [filteredSessions],
+  const workspaceGroups = useMemo(
+    () =>
+      groupSessionsByWorkspace(filteredSessions).map((group) => ({
+        ...group,
+        sessions: [...group.sessions].sort(
+          (a, b) =>
+            Number(pinnedSessions.includes(sessionKey(b))) -
+            Number(pinnedSessions.includes(sessionKey(a))),
+        ),
+      })),
+    [filteredSessions, pinnedSessions],
   );
 
   const attentionSessions = useMemo(
@@ -851,6 +866,13 @@ function Dashboard({
     };
   }, [refresh]);
 
+  useEffect(() => {
+    if (agentFilter !== "all") {
+      setQuickProvider(agentFilter);
+      setLaunchModalProvider(agentFilter);
+    }
+  }, [agentFilter]);
+
   const signOut = async () => {
     if (actionBusy) return;
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -917,6 +939,19 @@ function Dashboard({
     }));
   };
 
+  const togglePinnedSession = (key: string) => {
+    setPinnedSessions((current) => {
+      const next = current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [key, ...current];
+      window.localStorage.setItem(
+        "agenthub:pinned-sessions",
+        JSON.stringify(next),
+      );
+      return next;
+    });
+  };
+
   const displayName =
     snapshot.account.user.display_name ||
     snapshot.account.user.email.split("@")[0] ||
@@ -927,8 +962,20 @@ function Dashboard({
   );
   const showSystemNotice =
     !snapshot.realtime_connected || sourceIssue !== undefined;
-  const sessionSectionTitle =
-    attentionSessions.length > 0 ? "需要你处理" : "最近会话";
+  const selectedProvider =
+    PROVIDER_LIST.find((provider) => provider.type === agentFilter) ??
+    PROVIDER_LIST[0];
+  const selectedAgentSessions = sessions.filter(
+    (session) => session.agent_type === selectedProvider.type,
+  );
+  const totalTokens = selectedAgentSessions.reduce(
+    (total, session) =>
+      total + (session.payload.runtime?.session_total_tokens ?? 0),
+    0,
+  );
+  const activeDays = new Set(
+    selectedAgentSessions.map((session) => activityTime(session).slice(0, 10)),
+  ).size;
 
   return (
     <main className="claude-app-shell">
@@ -941,14 +988,8 @@ function Dashboard({
             onClick={() => setSelectedSessionKey(undefined)}
             aria-label="返回 AgentHub 首页"
           >
-            <span className="hub-orbit-mark" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
             <span>
               <strong>AgentHub</strong>
-              <small>本机智能体中枢</small>
             </span>
           </button>
           <div className="top-nav-right">
@@ -1032,7 +1073,6 @@ function Dashboard({
             }}
             aria-label="选择当前 Agent"
           >
-            <option value="all">全部 Agent</option>
             {PROVIDER_LIST.map((provider) => (
               <option key={provider.type} value={provider.type}>
                 {provider.label}
@@ -1047,6 +1087,7 @@ function Dashboard({
             className="sidebar-new-btn"
             onClick={() => {
               setSelectedSessionKey(undefined);
+              if (agentFilter !== "all") setLaunchModalProvider(agentFilter);
               setLaunchModalOpen(true);
             }}
           >
@@ -1085,41 +1126,39 @@ function Dashboard({
           </div>
         )}
 
-        {/* Grouped by Provider Sessions Tree */}
+        {/* The selected Agent is grouped only by local workspace. */}
         <div className="sidebar-providers-tree">
-          {providerGroups.length === 0 ? (
+          {workspaceGroups.length === 0 ? (
             <div className="sidebar-empty">
               <span>
                 {query ? "没有匹配的会话" : "正在扫描本机 Agent 会话..."}
               </span>
             </div>
           ) : (
-            providerGroups.map((group) => {
-              const isCollapsed = !!collapsedProviders[group.provider];
-              const visibleLimit = expandedLimits[group.provider] ?? 6;
+            workspaceGroups.map((group) => {
+              const isCollapsed = !!collapsedProviders[group.name];
+              const visibleLimit = expandedLimits[group.name] ?? 12;
               const visibleSessions = group.sessions.slice(0, visibleLimit);
               const remaining = group.sessions.length - visibleSessions.length;
 
               return (
                 <div
-                  className="provider-group"
-                  data-provider={group.provider}
-                  key={group.provider}
+                  className="provider-group workspace-group"
+                  key={group.name}
                 >
                   <div
                     className="provider-group-header"
-                    onClick={() => toggleProviderCollapse(group.provider)}
+                    onClick={() => toggleProviderCollapse(group.name)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        toggleProviderCollapse(group.provider);
+                        toggleProviderCollapse(group.name);
                       }
                     }}
                     role="button"
                     tabIndex={0}
                   >
                     <div className="provider-header-left">
-                      <i className="provider-signal" aria-hidden="true" />
                       <span className="provider-chevron">
                         {isCollapsed ? (
                           <ChevronRight size={13} />
@@ -1127,9 +1166,7 @@ function Dashboard({
                           <ChevronDown size={13} />
                         )}
                       </span>
-                      <strong className="provider-title">
-                        {agentFilter === "all" ? group.label : "Sessions"}
-                      </strong>
+                      <strong className="provider-title">{group.name}</strong>
                       <span className="provider-count">
                         {group.sessions.length}
                       </span>
@@ -1141,18 +1178,13 @@ function Dashboard({
                       <button
                         type="button"
                         className="provider-action-icon"
-                        title={`发起新的 ${group.label} 会话`}
-                        onClick={() => openLaunchModalFor(group.provider)}
+                        title={`在 ${group.name} 新建会话`}
+                        onClick={() =>
+                          agentFilter !== "all" &&
+                          openLaunchModalFor(agentFilter)
+                        }
                       >
                         <Plus size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="provider-action-icon"
-                        title="设置"
-                        onClick={() => setSettingsOpen(true)}
-                      >
-                        <Sliders size={13} />
                       </button>
                     </div>
                   </div>
@@ -1168,32 +1200,55 @@ function Dashboard({
                         const title = sessionDisplayTitle(session);
 
                         return (
-                          <button
-                            type="button"
+                          <div
                             key={sessionKey(session)}
                             className={`sidebar-session-item ${isSelected ? "selected" : ""}`}
                             data-provider={session.agent_type}
-                            onClick={() =>
-                              setSelectedSessionKey(sessionKey(session))
-                            }
                             title={title}
                           >
-                            <span className="session-status-indicator">
-                              {attention ? (
-                                <AlertTriangle
-                                  size={13}
-                                  className="status-warn-icon"
-                                />
-                              ) : isWorking ? (
-                                <i className="status-dot working" />
-                              ) : (
-                                <i className="status-dot normal" />
-                              )}
-                            </span>
-                            <span className="sidebar-session-title">
-                              {title}
-                            </span>
-                          </button>
+                            <button
+                              type="button"
+                              className="sidebar-session-open"
+                              onClick={() =>
+                                setSelectedSessionKey(sessionKey(session))
+                              }
+                            >
+                              <span className="session-status-indicator">
+                                {attention ? (
+                                  <AlertTriangle
+                                    size={13}
+                                    className="status-warn-icon"
+                                  />
+                                ) : isWorking ? (
+                                  <i className="status-dot working" />
+                                ) : (
+                                  <i className="status-dot normal" />
+                                )}
+                              </span>
+                              <span className="sidebar-session-title">
+                                {title}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`sidebar-pin ${pinnedSessions.includes(sessionKey(session)) ? "active" : ""}`}
+                              onClick={() =>
+                                togglePinnedSession(sessionKey(session))
+                              }
+                              aria-label={
+                                pinnedSessions.includes(sessionKey(session))
+                                  ? "取消置顶"
+                                  : "置顶会话"
+                              }
+                              title={
+                                pinnedSessions.includes(sessionKey(session))
+                                  ? "取消置顶"
+                                  : "置顶会话"
+                              }
+                            >
+                              <Pin size={11} />
+                            </button>
+                          </div>
                         );
                       })}
 
@@ -1203,7 +1258,7 @@ function Dashboard({
                           className="sidebar-show-more"
                           onClick={() =>
                             expandProviderLimit(
-                              group.provider,
+                              group.name,
                               group.sessions.length,
                             )
                           }
@@ -1211,11 +1266,16 @@ function Dashboard({
                           再显示 {remaining} 个
                         </button>
                       )}
-                      {remaining === 0 && group.sessions.length > 6 && (
+                      {remaining === 0 && group.sessions.length > 12 && (
                         <button
                           type="button"
                           className="sidebar-show-more collapse"
-                          onClick={() => setExpandedLimits((current) => ({ ...current, [group.provider]: 6 }))}
+                          onClick={() =>
+                            setExpandedLimits((current) => ({
+                              ...current,
+                              [group.name]: 12,
+                            }))
+                          }
                         >
                           收起
                         </button>
@@ -1290,79 +1350,70 @@ function Dashboard({
           <div className="claude-home-stage">
             <header className="workspace-masthead">
               <div className="workspace-title-block">
-                <span className="workspace-eyebrow">LOCAL AGENT DESK</span>
-                <h1>继续推进，{displayName}</h1>
-                <p>从一处查看、唤起和接管本机上的每个 Agent 会话。</p>
-              </div>
-              <div className="hub-health" aria-label="中枢状态">
-                <span className="hub-health-orbit" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
+                <span className="prompt-spark">
+                  <Sparkles size={18} />
                 </span>
-                <span>
-                  <strong>{snapshot.local.session_count}</strong>
-                  <small>个本机会话</small>
-                </span>
+                <h1>接下来做什么，{displayName}？</h1>
               </div>
             </header>
 
             <section
-              className="agent-constellation"
-              aria-labelledby="agent-constellation-title"
+              className="home-overview-card"
+              aria-label={`${selectedProvider.label} 使用概览`}
             >
-              <div className="section-heading-row">
-                <div>
-                  <span className="section-kicker">实时编队</span>
-                  <h2 id="agent-constellation-title">Agent 星轨</h2>
-                </div>
+              <div className="overview-tabs">
+                <strong>概览</strong>
+                <span>{selectedProvider.label}</span>
                 <span
                   className={`connection-chip ${snapshot.realtime_connected ? "connected" : "fallback"}`}
                 >
-                  <i />
-                  {snapshot.realtime_connected ? "实时同步" : "轮询同步"}
+                  <i /> {snapshot.realtime_connected ? "实时" : "轮询"}
                 </span>
               </div>
-              <div className="constellation-track">
-                {PROVIDER_LIST.map((provider) => {
-                  const providerSessions = sessions.filter(
-                    (session) => session.agent_type === provider.type,
-                  );
-                  const workingCount = providerSessions.filter(
-                    (session) =>
-                      session.payload.state.activity_status === "WORKING",
-                  ).length;
-                  const source = snapshot.local.sources.find(
-                    (item) => item.agent_type === provider.type,
-                  );
-                  return (
-                    <button
-                      type="button"
-                      className="constellation-node"
-                      data-provider={provider.type}
-                      key={provider.type}
-                      onClick={() => openLaunchModalFor(provider.type)}
-                      title={`使用 ${provider.label} 发起新会话`}
-                    >
-                      <span className="constellation-signal" aria-hidden="true">
-                        <i />
-                      </span>
-                      <span className="constellation-copy">
-                        <strong>{provider.shortLabel}</strong>
-                        <small>
-                          {providerSessions.length} 个会话
-                          {workingCount > 0 ? ` · ${workingCount} 运行中` : ""}
-                        </small>
-                      </span>
-                      <span
-                        className={`source-state ${source?.detected ? "detected" : "missing"}`}
-                      >
-                        {source?.detected ? "已接入" : "未发现"}
-                      </span>
-                    </button>
-                  );
-                })}
+              <div className="overview-metrics">
+                <span>
+                  <small>Sessions</small>
+                  <strong>{selectedAgentSessions.length}</strong>
+                </span>
+                <span>
+                  <small>Working</small>
+                  <strong>
+                    {
+                      selectedAgentSessions.filter(
+                        (session) =>
+                          session.payload.state.activity_status === "WORKING",
+                      ).length
+                    }
+                  </strong>
+                </span>
+                <span>
+                  <small>Total tokens</small>
+                  <strong>{formatTokenCount(totalTokens)}</strong>
+                </span>
+                <span>
+                  <small>Active days</small>
+                  <strong>{activeDays}</strong>
+                </span>
               </div>
+              <div className="activity-grid" aria-label="最近活动分布">
+                {Array.from({ length: 77 }, (_, index) => (
+                  <i
+                    key={index}
+                    className={
+                      index >=
+                        77 - Math.min(24, selectedAgentSessions.length * 2) &&
+                      (index + selectedAgentSessions.length) % 3 !== 0
+                        ? `level-${1 + ((index + selectedAgentSessions.length) % 3)}`
+                        : ""
+                    }
+                  />
+                ))}
+              </div>
+              <p>
+                {selectedAgentSessions.length > 0
+                  ? `已从本机导入 ${selectedAgentSessions.length} 个 ${selectedProvider.shortLabel} 会话。`
+                  : `尚未发现 ${selectedProvider.shortLabel} 会话，新建任务后会自动归入工作目录。`}
+              </p>
             </section>
 
             {!alertDismissed && showSystemNotice && (
@@ -1419,88 +1470,18 @@ function Dashboard({
               </div>
             )}
 
-            <section
-              className="claude-sessions-section"
-              aria-labelledby="session-section-title"
-            >
-              <div className="section-heading-row compact">
-                <div>
-                  <span className="section-kicker">会话队列</span>
-                  <h2 id="session-section-title">{sessionSectionTitle}</h2>
-                </div>
-                <span className="section-count">
-                  {displayWelcomeSessions.length}
-                </span>
-              </div>
-              <div className="claude-sessions-list">
-                {displayWelcomeSessions.length === 0 ? (
-                  <div className="sessions-empty-note">
-                    <CheckCircle2 size={18} />
-                    <span>当前没有待处理会话，可以从下方发起一项新任务。</span>
-                  </div>
-                ) : (
-                  displayWelcomeSessions.map((session) => {
-                    const attention = isAttentionSession(session);
-                    const isWorking =
-                      session.payload.state.activity_status === "WORKING";
-                    const title = sessionDisplayTitle(session);
-                    const project =
-                      session.payload.project.display_name || "ClaudeSpace";
-                    const timeAgo = relativeTime(activityTime(session));
-
-                    return (
-                      <button
-                        type="button"
-                        key={sessionKey(session)}
-                        className="claude-session-card"
-                        data-provider={session.agent_type}
-                        onClick={() =>
-                          setSelectedSessionKey(sessionKey(session))
-                        }
-                      >
-                        <div className="card-left">
-                          <span
-                            className={`card-status-badge ${attention ? "needs-input" : isWorking ? "running" : "idle"}`}
-                          >
-                            <i className="status-dot" />
-                            {attention
-                              ? "等待处理"
-                              : isWorking
-                                ? "运行中"
-                                : "空闲"}
-                          </span>
-                          <span className="card-session-copy">
-                            <strong className="card-title" title={title}>
-                              {title}
-                            </strong>
-                            <small>{agentShortLabel(session.agent_type)}</small>
-                          </span>
-                        </div>
-                        <div className="card-right">
-                          <span className="card-meta">
-                            {project} · {timeAgo}
-                          </span>
-                          <ChevronRight size={16} className="card-chevron" />
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </section>
-
             <form onSubmit={handleQuickLaunch} className="claude-prompt-dock">
               <div className="prompt-dock-heading">
                 <span className="prompt-spark">
                   <Sparkles size={15} />
                 </span>
-                <strong>交给一个 Agent</strong>
+                <strong>交给 {selectedProvider.shortLabel}</strong>
                 <span>Enter 发送 · Shift + Enter 换行</span>
               </div>
               <div className="prompt-dock-form">
                 <textarea
                   rows={3}
-                  placeholder="描述要完成的事，AgentHub 会在本机启动对应的 Agent…"
+                  placeholder="描述一项任务或提出问题"
                   value={quickPrompt}
                   onChange={(e) => setQuickPrompt(e.target.value)}
                   onKeyDown={(e) => {
@@ -1537,19 +1518,9 @@ function Dashboard({
                   />
                 </label>
                 <div className="dock-bottom-right">
-                  <select
-                    className="dock-model-select"
-                    value={quickProvider}
-                    onChange={(e) =>
-                      setQuickProvider(e.target.value as Session["agent_type"])
-                    }
-                  >
-                    {PROVIDER_LIST.map((p) => (
-                      <option key={p.type} value={p.type}>
-                        {p.label} · {p.defaultModel}
-                      </option>
-                    ))}
-                  </select>
+                  <span className="dock-model-label">
+                    {selectedProvider.defaultModel}
+                  </span>
                   <span className="dock-safety-note">
                     <ShieldCheck size={12} /> 遵循本机权限
                   </span>
@@ -2122,11 +2093,38 @@ function SessionControlPanel({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
-          <div>
-            <span className="card-kicker">SESSION WORKSPACE</span>
+          <div className="session-title-line">
             <h2 title={title}>{title}</h2>
+            <span>{session.payload.project.display_name || "未分类项目"}</span>
           </div>
           <div className="session-header-actions">
+            <button
+              className="icon-button"
+              aria-label="会话内容"
+              title="会话内容"
+              aria-pressed={panelView === "conversation"}
+              onClick={() => setPanelView("conversation")}
+            >
+              <MessageSquare size={15} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="运行上下文"
+              title="运行上下文"
+              aria-pressed={panelView === "context"}
+              onClick={() => setPanelView("context")}
+            >
+              <Terminal size={15} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="时间线"
+              title="时间线"
+              aria-pressed={panelView === "timeline"}
+              onClick={() => setPanelView("timeline")}
+            >
+              <Activity size={15} />
+            </button>
             <button
               className="icon-button"
               aria-label={fullscreen ? "还原窗口" : "全屏沉浸模式"}
@@ -2175,46 +2173,6 @@ function SessionControlPanel({
             </button>
           </div>
         </header>
-
-        <div className="session-control-summary">
-          <span className="agent-symbol">
-            {session.agent_type === "claude_code" ? (
-              <Code2 />
-            ) : session.agent_type === "codex" ? (
-              "◆"
-            ) : (
-              "✦"
-            )}
-          </span>
-          <div>
-            <strong>{agentLabel(session.agent_type)}</strong>
-            <span>{session.payload.project.display_name || "未分类项目"}</span>
-            <em className={`status-chip ${status.className}`}>
-              <i /> {session.archived ? "已归档" : status.label}
-            </em>
-          </div>
-        </div>
-
-        <nav className="session-panel-tabs" aria-label="会话面板视图">
-          <button
-            aria-pressed={panelView === "conversation"}
-            onClick={() => setPanelView("conversation")}
-          >
-            会话交互
-          </button>
-          <button
-            aria-pressed={panelView === "context"}
-            onClick={() => setPanelView("context")}
-          >
-            运行上下文
-          </button>
-          <button
-            aria-pressed={panelView === "timeline"}
-            onClick={() => setPanelView("timeline")}
-          >
-            时间线
-          </button>
-        </nav>
 
         {panelView === "context" ? (
           <section className="runtime-context-view">
@@ -2403,6 +2361,9 @@ function DesktopSettingsPanel({
   const [grokBinary, setGrokBinary] = useState(preferences.grok_binary);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [section, setSection] = useState<"general" | "agents" | "privacy">(
+    "general",
+  );
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -2437,10 +2398,7 @@ function DesktopSettingsPanel({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
-          <div>
-            <span className="card-kicker">DESKTOP RUNTIME</span>
-            <h2>连接与控制</h2>
-          </div>
+          <h2>设置</h2>
           <button
             className="icon-button"
             aria-label="关闭设置"
@@ -2449,62 +2407,136 @@ function DesktopSettingsPanel({
             <X />
           </button>
         </header>
-        <div className="settings-intro">
-          <Cpu />
-          <p>扫描和发送都在这台电脑上完成。CLI 路径只保存在本机。</p>
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="设置分类">
+            <button
+              className={section === "general" ? "active" : ""}
+              onClick={() => setSection("general")}
+            >
+              <Settings size={16} />
+              通用
+            </button>
+            <button
+              className={section === "agents" ? "active" : ""}
+              onClick={() => setSection("agents")}
+            >
+              <Cpu size={16} />
+              Agent 与同步
+            </button>
+            <button
+              className={section === "privacy" ? "active" : ""}
+              onClick={() => setSection("privacy")}
+            >
+              <ShieldCheck size={16} />
+              隐私
+            </button>
+          </nav>
+          <form onSubmit={save}>
+            {section === "general" && (
+              <section className="settings-section">
+                <div>
+                  <h3>通用</h3>
+                  <p>控制 AgentHub 桌面端的刷新与显示行为。</p>
+                </div>
+                <label className="settings-row">
+                  <span>
+                    <strong>刷新周期</strong>
+                    <small>实时通道断开时用于兜底轮询。</small>
+                  </span>
+                  <div className="range-field">
+                    <input
+                      type="range"
+                      min="2"
+                      max="60"
+                      value={refreshSeconds}
+                      onChange={(event) =>
+                        setRefreshSeconds(Number(event.target.value))
+                      }
+                    />
+                    <strong>{refreshSeconds} 秒</strong>
+                  </div>
+                </label>
+              </section>
+            )}
+            {section === "agents" && (
+              <section className="settings-section">
+                <div>
+                  <h3>Agent 与同步</h3>
+                  <p>自动发现本机会话，并从各 Agent 的本地存储导入历史内容。</p>
+                </div>
+                <label>
+                  <span>Claude Code CLI</span>
+                  <input
+                    value={claudeBinary}
+                    maxLength={260}
+                    onChange={(event) => setClaudeBinary(event.target.value)}
+                    placeholder="claude"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Codex CLI</span>
+                  <input
+                    value={codexBinary}
+                    maxLength={260}
+                    onChange={(event) => setCodexBinary(event.target.value)}
+                    placeholder="codex"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Grok Build CLI</span>
+                  <input
+                    value={grokBinary}
+                    maxLength={260}
+                    onChange={(event) => setGrokBinary(event.target.value)}
+                    placeholder="grok"
+                    required
+                  />
+                </label>
+                <div className="settings-info">
+                  <RefreshCw size={16} />
+                  <span>
+                    <strong>自动导入已开启</strong>
+                    <small>
+                      Claude Code、Codex、Antigravity 与 Grok Build
+                      会话会按工作目录整理。
+                    </small>
+                  </span>
+                </div>
+              </section>
+            )}
+            {section === "privacy" && (
+              <section className="settings-section">
+                <div>
+                  <h3>隐私</h3>
+                  <p>会话正文仅在当前设备解码并展示。</p>
+                </div>
+                <div className="settings-info">
+                  <HardDrive size={17} />
+                  <span>
+                    <strong>本地正文</strong>
+                    <small>不会写入 AgentHub 云端、日志或同步队列。</small>
+                  </span>
+                </div>
+                <div className="settings-info">
+                  <ShieldCheck size={17} />
+                  <span>
+                    <strong>凭据隔离</strong>
+                    <small>Token、Cookie 与私钥不会随会话一起导入。</small>
+                  </span>
+                </div>
+              </section>
+            )}
+            {error !== undefined && <p className="panel-error">{error}</p>}
+            <footer className="settings-actions">
+              <button className="primary-button" disabled={busy} type="submit">
+                {busy ? <RefreshCw className="spin" /> : <CheckCircle2 />}
+                保存设置
+              </button>
+            </footer>
+          </form>
         </div>
-        <form onSubmit={save}>
-          <label>
-            <span>刷新周期</span>
-            <div className="range-field">
-              <input
-                type="range"
-                min="2"
-                max="60"
-                value={refreshSeconds}
-                onChange={(event) =>
-                  setRefreshSeconds(Number(event.target.value))
-                }
-              />
-              <strong>{refreshSeconds} 秒</strong>
-            </div>
-          </label>
-          <label>
-            <span>Claude CLI</span>
-            <input
-              value={claudeBinary}
-              maxLength={260}
-              onChange={(event) => setClaudeBinary(event.target.value)}
-              placeholder="claude"
-              required
-            />
-          </label>
-          <label>
-            <span>Codex CLI</span>
-            <input
-              value={codexBinary}
-              maxLength={260}
-              onChange={(event) => setCodexBinary(event.target.value)}
-              placeholder="codex"
-              required
-            />
-          </label>
-          <label>
-            <span>Grok Build CLI</span>
-            <input
-              value={grokBinary}
-              maxLength={260}
-              onChange={(event) => setGrokBinary(event.target.value)}
-              placeholder="grok"
-              required
-            />
-          </label>
-          {error !== undefined && <p className="panel-error">{error}</p>}
-          <button className="primary-button" disabled={busy} type="submit">
-            {busy ? <RefreshCw className="spin" /> : <CheckCircle2 />}
-            保存设置
-          </button>
-        </form>
       </aside>
     </div>
   );
@@ -2881,6 +2913,12 @@ const demoSnapshot: Snapshot = {
         status: "healthy",
       },
       {
+        agent_type: "antigravity",
+        session_count: 7,
+        detected: true,
+        status: "healthy",
+      },
+      {
         agent_type: "grok_build",
         session_count: 4,
         detected: true,
@@ -2909,6 +2947,7 @@ const demoSnapshot: Snapshot = {
     demoSession("claude_code", "用户增长分析", "IDLE", 25),
     demoSession("codex", "API 网关开发", "WORKING", 1),
     demoSession("codex", "数据导出工具", "UNKNOWN", 180, "PERSISTED"),
+    demoSession("antigravity", "搜索体验实验", "IDLE", 44),
     demoSession("grok_build", "AgentHub 采集", "WORKING", 3),
   ],
 };

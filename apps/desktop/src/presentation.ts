@@ -95,6 +95,28 @@ export interface ProviderGroup {
   sessions: Session[];
 }
 
+export interface WorkspaceGroup {
+  name: string;
+  sessions: Session[];
+}
+
+export function groupSessionsByWorkspace(
+  sessions: Session[],
+): WorkspaceGroup[] {
+  const groups = new Map<string, Session[]>();
+  for (const session of sessions) {
+    const workspace =
+      session.payload.project.display_name?.trim() || "未分类项目";
+    const list = groups.get(workspace);
+    if (list) list.push(session);
+    else groups.set(workspace, [session]);
+  }
+  return [...groups.entries()].map(([name, workspaceSessions]) => ({
+    name,
+    sessions: workspaceSessions,
+  }));
+}
+
 export function groupSessionsByProvider(sessions: Session[]): ProviderGroup[] {
   const groups = new Map<Session["agent_type"], Session[]>();
   for (const p of PROVIDER_LIST) {

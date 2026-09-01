@@ -12,9 +12,9 @@ Windows Tauri 桌面客户端。用户通过现有 AgentHub 邮箱账号注册�
 AgentHub 账号与套餐。记忆区只统计 Claude memory 文件、Codex memory 索引和 Grok
 `summary.json` 的数量与字节，不读取或展示正文。
 
-会话列表现在也是本机控制台：按脱敏项目目录分组并显示供应商的显式会话名；点击会话可查看
+会话列表现在也是本机控制台：先用全局选择器确定 Agent，再按脱敏工作目录分组并显示显式会话名；会话支持置顶、目录折叠和长列表展开/收起。点击会话可查看
 模型、推理强度、权限/审批策略、沙箱、上下文窗口与 Token 用量，并直接继续 Claude Code、
-Codex 或 Grok Build 会话、按设备筛选账号下的 Session、查看当前账号范围内的状态时间线、在当前筛选结果中用上一条/下一条按钮或左右方向键巡检会话、清空本次打开期间的显示内容，以及归档/恢复会话。状态时间线
+Codex、Antigravity 或 Grok Build 会话、按设备筛选账号下的 Session、查看当前账号范围内的状态时间线、在当前筛选结果中用上一条/下一条按钮或左右方向键巡检会话、清空本次打开期间的显示内容，以及归档/恢复会话。状态时间线
 只显示序列、观察时间、接收时间、项目名和状态，不读取对话正文；尚未同步到云端的本机会话会明确显示暂无记录。设置面板
 可配置 2–60 秒刷新周期（默认 4 秒）和三个 CLI 的可执行文件路径。桌面 Host 会使用登录
 Cookie 建立 Gateway SSE 出站连接，云端变化到达即刷新；周期轮询保留为断流兜底。连接状态
@@ -57,6 +57,7 @@ Windows 版本会读取当前用户的系统代理配置；显式设置的 `HTTP
 - Claude 历史发现只读取 `CLAUDE_CONFIG_DIR` 或 `~/.claude/projects` 中的白名单元数据。
 - Codex 优先使用 app-server；不可执行时只读 `CODEX_HOME` 最新状态库的 Thread 元数据。
 - 桌面启动时先执行一次本地元数据扫描（每种来源最多 1000 条），随后进入后台自适应轮询。
+- 用户打开会话时，桌面端会从各 Provider 原生目录按 Session ID 读取本地 JSONL 正文；支持 Claude Code、Codex、Antigravity 和 Grok Build，并兼容 UTF-8 BOM 与 UTF-16 LE/BE。正文只进入当前 WebView，不进入 Outbox、Gateway、配置或日志。
 - Claude/Codex memory 只读取文件或索引数量与字节大小，不读取记忆正文。
 - 日常发现与同步不读取 Claude/Codex OAuth Token、API Key、消息正文、Prompt、工具参数或
   命令输出。桌面运行上下文是独立的本机增强层：Claude 只扫描有界 JSONL 头尾的供应商标题事件、

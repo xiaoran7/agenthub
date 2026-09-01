@@ -26,7 +26,6 @@
 - [踩坑集](docs/PITFALLS.md)
 - [设计取舍备忘](docs/MISC.md)
 
-
 ## 开发
 
 - [桌面 App 开发说明](apps/desktop/README.md)
@@ -75,6 +74,9 @@ Windows 桌面 App（`apps/desktop`）已复用同一邮箱注册/登录接口�
 本机 Ed25519 身份、完成账号设备登记，并在应用进程内启动 Runner 与同步 Worker，无需
 CMD 或手工配对码。桌面会话详情可经本机 CLI 继续 Claude Code/Codex、查看同步元数据并
 归档/恢复，并以 Tauri Channel 增量显示安全的助手文本/活动状态、支持停止本机回合。桌面
+端使用单一 Agent 选择器，随后按工作目录分组并支持会话置顶、折叠与展开/收起；打开会话
+时会从 Claude Code、Codex、Antigravity 或 Grok Build 的本地原生存储导入历史正文，正文
+只在当前设备解码展示，不进入云端同步。
 Host 复用 Gateway SSE 实时变化流，2–60 秒可配置周期刷新作为断流兜底。显式发送的 Prompt
 与回复只在本机进程和当前界面内流转，不进入 Outbox 或 Gateway；AgentHub 登录 Cookie
 保存在 OS Keyring，Claude/Codex 登录凭据、历史对话正文和工具载荷不会上传。

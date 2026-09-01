@@ -6,6 +6,7 @@ import {
   agentLabel,
   agentShortLabel,
   groupSessionsByProvider,
+  groupSessionsByWorkspace,
   isAttentionSession,
   permissionFieldLabel,
   relativeTime,
@@ -79,6 +80,19 @@ describe("desktop presentation", () => {
     expect(groups[0].sessions).toHaveLength(2);
     expect(groups[1].provider).toBe("codex");
     expect(groups[1].sessions).toHaveLength(1);
+  });
+
+  it("groups the selected agent sessions by workspace preserving recency order", () => {
+    const sessions = [
+      { payload: { project: { display_name: "ClaudeSpace" } } },
+      { payload: { project: { display_name: "Solum" } } },
+      { payload: { project: { display_name: "ClaudeSpace" } } },
+    ] as Session[];
+
+    expect(groupSessionsByWorkspace(sessions)).toEqual([
+      { name: "ClaudeSpace", sessions: [sessions[0], sessions[2]] },
+      { name: "Solum", sessions: [sessions[1]] },
+    ]);
   });
 
   it("identifies sessions requiring attention", () => {

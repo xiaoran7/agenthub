@@ -79,7 +79,8 @@ const MAX_SESSION_EVENT_LIMIT = 500;
 /** Reconnect delay advertised to EventSource clients. */
 const STREAM_RETRY_MS = 5_000;
 /** Keeps intermediaries from closing an idle stream, and detects dead peers. */
-const STREAM_HEARTBEAT_MS = 20_000;
+// Keep idle streams alive below common reverse-proxy idle/read timeouts.
+const STREAM_HEARTBEAT_MS = 10_000;
 /** One panel opens one stream; the cap bounds a misbehaving or hostile client. */
 const MAX_STREAMS_PER_OWNER = 8;
 const MAX_PUSH_ENDPOINT_LENGTH = 2_048;

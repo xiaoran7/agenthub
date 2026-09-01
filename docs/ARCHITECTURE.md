@@ -36,7 +36,7 @@ flowchart TB
         EventStore["双层事件存储器 (Dual-Layer Store)"]
         SessionMgr["Session Wrapper & Router"]
         PG[(PostgreSQL 数据库)]
-        
+
         WSHub <--> ReconcileEngine
         WSHub <--> SessionMgr
         SessionMgr --> EventStore
@@ -49,13 +49,13 @@ flowchart TB
         LocalRegistry[("最小本地注册表 (Minimal Local Registry)")]
         CmdRouter["Command & Slash 路由分发器"]
         NativeScanner["本地原生 Session 扫描器"]
-        
+
         subgraph Adapters["Agent 进程适配层 (Process Adapters)"]
             ClaudeAdapter["Claude Code Adapter (stdio / JSONL)"]
             CodexAdapter["Codex App-Server Adapter (JSON-RPC)"]
             CustomAdapter["其他 Agent Adapter"]
         end
-        
+
         WSClient <--> Outbox
         WSClient <--> CmdRouter
         CmdRouter <--> LocalRegistry
@@ -112,6 +112,7 @@ classDiagram
 ```
 
 ### 3.1 状态边界与转换规则
+
 1. **Runner 离线不等于 Session 销毁**：当 Runner 网络中断时，Runner 状态变为 `offline`，但其承载的所有 Session 状态变为 `disconnected_runner`（暂停远程控制，但保留完整历史与上下文）。当 Runner 重连并 Reconcile 通过后，Session 恢复对应执行状态。
 2. **Presence 不影响 Agent 执行**：即使所有客户端全部断开（Presence 为 0），后台 Agent 依然正常执行耗时任务并写入 Local Registry 和 Outbox。Presence 主要用于控制流式推流的服务端 QoS 降级策略。
 
@@ -130,8 +131,8 @@ Runner 与 Server 之间的单条 WebSocket 连接中传输的所有数据均封
   "type": "event | cmd | cmd_ack | ack | heartbeat | reconcile | presence",
   "seq": 1024,
   "ack_seq": 980,
-  "hub_session_id": "hub_sess_01J8...", 
-  "cmd_id": "cmd_01J9...", 
+  "hub_session_id": "hub_sess_01J8...",
+  "cmd_id": "cmd_01J9...",
   "timestamp": 1725148800000,
   "payload": { ... }
 }
@@ -223,8 +224,18 @@ flowchart LR
      {
        "runner_id": "run_01J6XYZ...",
        "active_sessions": [
-         { "hub_session_id": "s1", "state": "running", "turn_id": 4, "state_hash": "a1b2c3..." },
-         { "hub_session_id": "s2", "state": "idle", "turn_id": 12, "state_hash": "d4e5f6..." }
+         {
+           "hub_session_id": "s1",
+           "state": "running",
+           "turn_id": 4,
+           "state_hash": "a1b2c3..."
+         },
+         {
+           "hub_session_id": "s2",
+           "state": "idle",
+           "turn_id": 12,
+           "state_hash": "d4e5f6..."
+         }
        ]
      }
      ```
@@ -260,17 +271,23 @@ CREATE TABLE local_sessions (
 ```mermaid
 flowchart TD
     Scanner["原生 Session 扫描器 (Native Scanner)"]
-    
+
     Scanner -->|"扫描 ~/.claude/projects/"| ClaudeScan["发现 Claude 本地 JSONL 会话"]
     Scanner -->|"扫描 ~/.codex/ / SQLite"| CodexScan["发现 Codex 原生 Threads"]
-    
+    Scanner -->|"扫描 Antigravity brain/"| AntigravityScan["发现 Antigravity transcripts"]
+    Scanner -->|"扫描 ~/.grok/sessions/"| GrokScan["发现 Grok Build sessions"]
+
     ClaudeScan --> CandidateList["生成可导入会话候选列表 (Import Candidates)"]
     CodexScan --> CandidateList
-    
-    CandidateList -->|"UI 展示候选并点击导入"| ImportCmd["执行 import_native_session 指令"]
-    ImportCmd -->|"分配全局 hub_session_id"| AttachWrapper["建立 Hub Wrapper 映射并同步历史"]
+    AntigravityScan --> CandidateList
+    GrokScan --> CandidateList
+
+    CandidateList -->|"桌面启动与后台轮询自动导入元数据"| ImportCmd["写入本地注册表与 Outbox"]
+    ImportCmd -->|"分配全局 hub_session_id"| AttachWrapper["建立 Hub Wrapper 映射并同步状态"]
     AttachWrapper --> Done["纳入 AgentHub 统一多路复用管理"]
 ```
+
+桌面端在用户打开会话时，按 Provider 原生目录读取 Claude Code、Codex、Antigravity 或 Grok Build 的本地正文，并仅在当前 WebView 内解码展示。正文不进入 Gateway、Outbox、日志或默认云端 API；自动同步范围仍是状态与脱敏元数据。
 
 ---
 

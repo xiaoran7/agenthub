@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -30,8 +30,8 @@ use agent_pulse_runner::{
     outbox::Outbox,
     privacy::ProjectRedactor,
     runtime::{
-        ClaudeSessionSource, CodexSessionSource, GrokSessionSource, PollPolicy, RunnerRuntime,
-        SessionSource,
+        AntigravitySessionSource, ClaudeSessionSource, CodexSessionSource, GrokSessionSource,
+        PollPolicy, RunnerRuntime, SessionSource,
     },
     sync::MAX_SYNC_BATCH_EVENTS,
     sync_worker::{SyncPolicy, SyncWorker},
@@ -53,7 +53,7 @@ const AGENT_TURN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_PROMPT_CHARS: usize = 16_000;
 const MAX_SESSION_ID_CHARS: usize = 160;
 const MAX_SSE_LINE_BYTES: usize = 64 * 1024;
-const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(25);
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(45);
 const STREAM_MAX_BACKOFF: Duration = Duration::from_secs(15);
 const SESSION_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(15);
 
@@ -314,9 +314,7 @@ async fn load_session_timeline(
 }
 
 #[tauri::command]
-async fn load_session_conversation(
-    input: SessionConversationInput,
-) -> Result<Vec<Value>, String> {
+async fn load_session_conversation(input: SessionConversationInput) -> Result<Vec<Value>, String> {
     tauri::async_runtime::spawn_blocking(move || load_session_conversation_inner(input))
         .await
         .map_err(|_| DesktopError::Unreachable.to_string())?
@@ -969,6 +967,9 @@ fn dashboard_snapshot(
     let codex_health = outbox
         .adapter_health(AgentType::Codex)
         .map_err(|_| DesktopError::Sync)?;
+    let antigravity_health = outbox
+        .adapter_health(AgentType::Antigravity)
+        .map_err(|_| DesktopError::Sync)?;
     let grok_health = outbox
         .adapter_health(AgentType::GrokBuild)
         .map_err(|_| DesktopError::Sync)?;
@@ -1009,6 +1010,7 @@ fn dashboard_snapshot(
             "sources": [
                 local_source_summary(AgentType::ClaudeCode, &local_sessions, claude_health),
                 local_source_summary(AgentType::Codex, &local_sessions, codex_health),
+                local_source_summary(AgentType::Antigravity, &local_sessions, antigravity_health),
                 local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health)
             ],
             "memory": local_memory_summary(),
@@ -1153,52 +1155,184 @@ fn load_session_conversation_inner(
     input: SessionConversationInput,
 ) -> Result<Vec<Value>, DesktopError> {
     validate_session_id(&input.agent_session_id)?;
-    if input.agent_type != AgentType::ClaudeCode {
-        return Ok(Vec::new());
-    }
     let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
         return Ok(Vec::new());
     };
-    let projects = PathBuf::from(home).join(".claude").join("projects");
-    let Some(path) = find_transcript_file(&projects, &input.agent_session_id, 0) else {
+    let home = PathBuf::from(home);
+    let Some(path) = find_agent_transcript(&home, input.agent_type, &input.agent_session_id) else {
         return Ok(Vec::new());
     };
-    let file = fs::File::open(path).map_err(|_| DesktopError::InvalidResponse)?;
-    let reader = BufReader::new(file);
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .map_err(|_| DesktopError::InvalidResponse)?
+        .take(32 * 1024 * 1024)
+        .read_to_end(&mut bytes)
+        .map_err(|_| DesktopError::InvalidResponse)?;
+    let content = decode_local_text(&bytes);
     let mut messages = Vec::new();
-    for line in reader.lines().take(500) {
-        let Ok(line) = line else { continue };
-        let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
-        let role = match value.get("type").and_then(Value::as_str) {
-            Some("user") => "user",
-            Some("assistant") => "assistant",
-            _ => continue,
+    for line in content.lines().take(2_000) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
         };
-        let Some(content) = value.pointer("/message/content") else { continue };
-        let text = if let Some(text) = content.as_str() {
-            text.to_owned()
-        } else {
-            content
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| item.get("text").and_then(Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default()
+        let Some((role, text)) = local_conversation_message(&value) else {
+            continue;
         };
+        let text = text
+            .replace("<USER_REQUEST>", "")
+            .replace("</USER_REQUEST>", "");
         let text = text.trim();
-        if text.is_empty() { continue; }
-        messages.push(json!({ "role": role, "content": text.chars().take(16_000).collect::<String>() }));
-        if messages.len() >= 100 { break; }
+        if text.is_empty() {
+            continue;
+        }
+        messages.push(
+            json!({ "role": role, "content": text.chars().take(16_000).collect::<String>() }),
+        );
+        if messages.len() >= 200 {
+            break;
+        }
     }
     Ok(messages)
 }
 
+fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -> Option<PathBuf> {
+    match agent_type {
+        AgentType::ClaudeCode => {
+            find_transcript_file(&home.join(".claude").join("projects"), session_id, 0)
+        }
+        AgentType::Codex => find_provider_transcript(&home.join(".codex"), session_id, 0),
+        AgentType::Antigravity => {
+            let roots = [
+                home.join(".gemini").join("antigravity"),
+                home.join(".antigravity"),
+            ];
+            roots.into_iter().find_map(|root| {
+                let direct = root
+                    .join("brain")
+                    .join(session_id)
+                    .join(".system_generated")
+                    .join("logs")
+                    .join("transcript.jsonl");
+                direct.is_file().then_some(direct)
+            })
+        }
+        AgentType::GrokBuild => {
+            find_provider_transcript(&home.join(".grok").join("sessions"), session_id, 0)
+        }
+    }
+}
+
+fn find_provider_transcript(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
+    if depth > 7 {
+        return None;
+    }
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            let parent_matches = path
+                .ancestors()
+                .any(|part| part.file_name().and_then(|value| value.to_str()) == Some(session_id));
+            if name.contains(session_id) || parent_matches {
+                return Some(path);
+            }
+        }
+        if path.is_dir()
+            && let Some(found) = find_provider_transcript(&path, session_id, depth + 1)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn decode_local_text(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16_lossy(&units);
+    }
+    if bytes.starts_with(&[0xfe, 0xff]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16_lossy(&units);
+    }
+    String::from_utf8_lossy(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes)).into_owned()
+}
+
+fn local_conversation_message(value: &Value) -> Option<(&'static str, String)> {
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload_type = value
+        .pointer("/payload/type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let raw_role = value
+        .get("role")
+        .or_else(|| value.pointer("/message/role"))
+        .or_else(|| value.pointer("/payload/role"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| match (event_type, payload_type) {
+            ("user", _) | ("USER_INPUT", _) | (_, "user_message") => "user",
+            ("assistant", _) | ("ASSISTANT", _) | (_, "agent_message") => "assistant",
+            (_, "message") => value
+                .pointer("/payload/role")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            _ => "",
+        });
+    let role = match raw_role.to_ascii_lowercase().as_str() {
+        "user" | "human" => "user",
+        "assistant" | "agent" | "model" => "assistant",
+        _ => return None,
+    };
+    let content = value
+        .pointer("/message/content")
+        .or_else(|| value.pointer("/payload/content"))
+        .or_else(|| value.pointer("/payload/message"))
+        .or_else(|| value.get("content"))
+        .or_else(|| value.get("text"))?;
+    let text = extract_local_text(content);
+    (!text.trim().is_empty()).then_some((role, text))
+}
+
+fn extract_local_text(value: &Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_owned();
+    }
+    if let Some(items) = value.as_array() {
+        return items
+            .iter()
+            .filter(|item| {
+                !matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some("thinking" | "reasoning" | "tool_call" | "tool_result")
+                )
+            })
+            .map(extract_local_text)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    ["text", "content", "output_text", "input_text", "message"]
+        .into_iter()
+        .find_map(|field| value.get(field).map(extract_local_text))
+        .unwrap_or_default()
+}
+
 fn find_transcript_file(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
-    if depth > 3 { return None; }
+    if depth > 3 {
+        return None;
+    }
     let entries = fs::read_dir(root).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1208,10 +1342,10 @@ fn find_transcript_file(root: &Path, session_id: &str, depth: usize) -> Option<P
         {
             return Some(path);
         }
-        if path.is_dir() {
-            if let Some(found) = find_transcript_file(&path, session_id, depth + 1) {
-                return Some(found);
-            }
+        if path.is_dir()
+            && let Some(found) = find_transcript_file(&path, session_id, depth + 1)
+        {
+            return Some(found);
         }
     }
     None
@@ -1334,6 +1468,7 @@ fn build_engine(
             LOCAL_SESSION_LIMIT,
             DESKTOP_COLLECTOR_TIMEOUT,
         )),
+        Box::new(AntigravitySessionSource::new(true)),
         Box::new(GrokSessionSource::new(true)),
     ];
     let redactor =
@@ -1454,6 +1589,39 @@ fn bootstrap_local_sessions(
                     1,
                     next_attempt,
                     Some(&code),
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+    }
+
+    let mut antigravity_source = AntigravitySessionSource::new(true);
+    match antigravity_source.collect(&meta, redactor) {
+        Ok(observations) => {
+            for observation in observations {
+                outbox
+                    .enqueue_if_changed(&observation)
+                    .map_err(|_| DesktopError::Sync)?;
+            }
+            outbox
+                .record_adapter_health(
+                    AgentType::Antigravity,
+                    meta.observed_at,
+                    true,
+                    0,
+                    next_attempt,
+                    None,
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+        Err(error) => {
+            outbox
+                .record_adapter_health(
+                    AgentType::Antigravity,
+                    meta.observed_at,
+                    false,
+                    1,
+                    next_attempt,
+                    Some(error.code()),
                 )
                 .map_err(|_| DesktopError::Sync)?;
         }
@@ -2223,6 +2391,37 @@ mod tests {
             Some(format!("__Host-agent_pulse_session={token}"))
         );
         assert!(extract_session_cookie("other=secret; Path=/").is_none());
+    }
+
+    #[test]
+    fn local_conversation_parser_supports_provider_native_message_shapes() {
+        let claude = json!({"type":"user","message":{"content":[{"type":"text","text":"你好"}]}});
+        let codex = json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已完成"}]}});
+        let antigravity =
+            json!({"type":"USER_INPUT","content":"<USER_REQUEST>修复乱码</USER_REQUEST>"});
+
+        assert_eq!(
+            local_conversation_message(&claude),
+            Some(("user", "你好".into()))
+        );
+        assert_eq!(
+            local_conversation_message(&codex),
+            Some(("assistant", "已完成".into()))
+        );
+        assert_eq!(
+            local_conversation_message(&antigravity),
+            Some(("user", "<USER_REQUEST>修复乱码</USER_REQUEST>".into()))
+        );
+    }
+
+    #[test]
+    fn local_text_decoder_handles_utf8_and_utf16_without_mojibake() {
+        assert_eq!(decode_local_text("会话内容".as_bytes()), "会话内容");
+        let mut utf16 = vec![0xff, 0xfe];
+        for unit in "会话内容".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_local_text(&utf16), "会话内容");
     }
 
     #[test]
