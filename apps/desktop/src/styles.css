@@ -1899,3 +1899,894 @@ input:focus-visible {
   font-weight: 600;
   margin: 8px 0;
 }
+
+/* =========================================================================
+   Claude Desktop Shell & Provider Tree UI
+   ========================================================================= */
+
+.claude-app-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  width: 100%;
+  height: 100%;
+  background: #141413;
+  color: #f5f2ec;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+}
+
+/* Sidebar */
+.claude-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #191816;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  user-select: none;
+}
+
+.sidebar-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.top-nav-left,
+.top-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.top-icon-btn {
+  background: transparent;
+  border: none;
+  color: #a8a29e;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.top-icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f2ec;
+}
+
+.top-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.top-icon-btn.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #d97757;
+}
+
+/* Mode Switcher Pill */
+.sidebar-mode-pill {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 10px 14px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.sidebar-mode-pill button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: #a8a29e;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-mode-pill button.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f5f2ec;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* Action Buttons */
+.sidebar-action-buttons {
+  display: flex;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.sidebar-new-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f5f2ec;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-new-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.sidebar-customize-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: #a8a29e;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-customize-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f5f2ec;
+}
+
+/* Search Box */
+.sidebar-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 14px 10px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #f5f2ec;
+}
+
+.sidebar-search-box input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: #f5f2ec;
+  font-size: 12px;
+  outline: none;
+}
+
+.sidebar-search-box input::placeholder {
+  color: #78716c;
+}
+
+.clear-query {
+  background: transparent;
+  border: none;
+  color: #78716c;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0;
+}
+
+/* Provider Sessions Tree */
+.sidebar-providers-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sidebar-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: #78716c;
+  font-size: 12px;
+}
+
+.provider-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.provider-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #a8a29e;
+  transition: background 0.12s ease;
+}
+
+.provider-group-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.provider-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.provider-chevron {
+  display: inline-flex;
+  align-items: center;
+  color: #78716c;
+}
+
+.provider-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d6d3d1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0.7;
+}
+
+.provider-group-header:hover .provider-header-actions {
+  opacity: 1;
+}
+
+.provider-action-icon {
+  background: transparent;
+  border: none;
+  color: #a8a29e;
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.provider-action-icon:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f5f2ec;
+}
+
+.provider-sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 14px;
+  margin-top: 2px;
+}
+
+.sidebar-session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #d6d3d1;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.12s ease;
+}
+
+.sidebar-session-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+}
+
+.sidebar-session-item.selected {
+  background: rgba(255, 255, 255, 0.11);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.session-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.status-warn-icon {
+  color: #f59e0b;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.working {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+}
+
+.status-dot.normal {
+  background: #78716c;
+}
+
+.sidebar-session-title {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-show-more {
+  padding: 5px 8px;
+  font-size: 11px;
+  color: #78716c;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.12s ease;
+}
+
+.sidebar-show-more:hover {
+  color: #d97757;
+}
+
+/* Sidebar Footer */
+.sidebar-footer {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-profile-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #f5f2ec;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.sidebar-profile-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.profile-brand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.profile-meta strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.profile-meta small {
+  font-size: 11px;
+  color: #78716c;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.live-status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #10b981;
+  display: inline-block;
+}
+
+.profile-chevron {
+  color: #78716c;
+}
+
+.profile-opt-btn {
+  background: transparent;
+  border: none;
+  color: #78716c;
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-opt-btn:hover {
+  color: #f5f2ec;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* =========================================================================
+   Main Stage (Home & Interactive Session Views)
+   ========================================================================= */
+
+.claude-stage {
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: #141413;
+  position: relative;
+}
+
+.claude-home-stage {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 36px 48px 28px;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  justify-content: space-between;
+}
+
+/* Welcome Header */
+.claude-welcome-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.claude-welcome-header h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: #f5f2ec;
+  letter-spacing: -0.02em;
+}
+
+/* Alert Banner */
+.claude-alert-box {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 12px;
+  padding: 14px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.alert-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.alert-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #f59e0b;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.alert-icon {
+  color: #f59e0b;
+}
+
+.alert-details-text {
+  margin: 6px 0 10px;
+  font-size: 12px;
+  color: #d6d3d1;
+  line-height: 1.5;
+}
+
+.alert-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.alert-link {
+  color: #d97757;
+  text-decoration: underline;
+  background: none;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.alert-btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f5f2ec;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.alert-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.alert-close-btn {
+  background: none;
+  border: none;
+  color: #78716c;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.alert-close-btn:hover {
+  color: #f5f2ec;
+}
+
+/* Sessions Section */
+.claude-sessions-section {
+  margin-bottom: auto;
+}
+
+.claude-sessions-section h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #a8a29e;
+  margin: 0 0 12px;
+}
+
+.claude-sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sessions-empty-note {
+  padding: 20px;
+  text-align: center;
+  color: #78716c;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+}
+
+.claude-session-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.claude-session-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.card-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.card-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.card-status-badge.needs-input {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.card-status-badge.running {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.card-status-badge.idle {
+  background: rgba(255, 255, 255, 0.06);
+  color: #a8a29e;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f5f2ec;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.card-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.card-meta {
+  font-size: 12px;
+  color: #78716c;
+}
+
+.card-chevron {
+  color: #78716c;
+}
+
+/* Prompt Dock (Bottom Task Quick Launcher) */
+.claude-prompt-dock {
+  background: #1c1b18;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-top: 24px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prompt-dock-tags {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dock-tags-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dock-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #a8a29e;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.dock-pill.active {
+  color: #f5f2ec;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dock-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: none;
+  color: #a8a29e;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.dock-pill-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f5f2ec;
+}
+
+.dock-mascot {
+  display: flex;
+  align-items: center;
+}
+
+.prompt-dock-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  position: relative;
+}
+
+.prompt-dock-form textarea {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: #f5f2ec;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  min-height: 46px;
+}
+
+.prompt-dock-form textarea::placeholder {
+  color: #78716c;
+}
+
+.dock-submit-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f5f2ec;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.dock-submit-btn:hover:not(:disabled) {
+  background: #d97757;
+  color: #ffffff;
+}
+
+.dock-submit-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.prompt-dock-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 8px;
+}
+
+.dock-bypass-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #a8a29e;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.dock-bypass-btn:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #f5f2ec;
+}
+
+.dock-bypass-btn.active {
+  color: #d97757;
+  border-color: rgba(217, 119, 87, 0.3);
+}
+
+.bypass-symbol {
+  font-weight: 700;
+}
+
+.dock-bottom-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dock-model-select {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #d6d3d1;
+  font-size: 11px;
+  padding: 3px 8px;
+  outline: none;
+  cursor: pointer;
+}
+
+.dock-model-select option {
+  background: #1c1b18;
+  color: #f5f2ec;
+}
+
+.model-max-pill {
+  font-size: 11px;
+  color: #78716c;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Embedded Session Control inside Claude Stage */
+.claude-stage .panel-scrim {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  backdrop-filter: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.claude-stage .session-control-panel {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border: none;
+  background: #141413;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.claude-stage .session-control-panel.fullscreen {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 100;
+  box-shadow: 0 0 100px rgba(0, 0, 0, 0.9);
+}
+
+

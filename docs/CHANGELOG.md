@@ -7,9 +7,13 @@
 
 ### Added
 
-- **Claude Desktop 级全功能 Agent 交互工作台壳**：
-  - 支持会话面板全屏沉浸模式与分屏抽屉自由切换；
-  - 增加「➕ 发起新会话」原生弹窗与快捷指令，支持一键在任意本地目录拉起 Claude Code / OpenAI Codex / Google Antigravity / Grok Build；
+- **Claude Desktop 级全功能 Agent 交互工作台壳与 Provider 会话重组**：
+  - 侧边栏全面仿照 Claude Desktop 极简炭黑视觉语言（`Cowork` / `Code` 模式切换、`+ New`、`Customize`、快捷搜索与前后导航）；
+  - **核心重构**：废弃原项目目录分组，严格按照 Provider 供应商（`Claude Code`、`OpenAI Codex`、`Google Antigravity`、`Grok Build`）对 Session 进行分组与折叠展示，提供独立 `+` 快速发起按钮与待关注 `⚠️` / 运行中 `•` 状态指示；
+  - 底部个人信息条更新为 `Administrator · Gateway` 状态卡片；
+  - 主舞台（Welcome 态）重构为包含欢迎问候、警示横幅（Alert Banner）、`Sessions` 待关注/最近会话卡片列表；
+  - 底部嵌入 Claude Desktop 悬浮 Prompt 快速启动卡片（集成 `💻 Local`、`📁 ClaudeSpace`、`📋` 注入、8-bit 复古像素怪兽吉祥物、`Bypass permissions` 切换、模型选择器与快捷发起）；
+  - 会话面板全屏沉浸模式与分屏抽屉自由切换，无缝嵌入主舞台交互；
   - 集成快捷 Slash 指令栏（`/help`, `/clear`, `/compact`, `/cost`, `/review`, `/test`）与 Enter 快捷键发送；
   - 优化 Thinking 思考折叠块、工具调用卡片与富文本消息气泡呈现。
 

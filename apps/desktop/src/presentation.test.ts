@@ -5,6 +5,8 @@ import {
   adjacentItem,
   agentLabel,
   agentShortLabel,
+  groupSessionsByProvider,
+  isAttentionSession,
   permissionFieldLabel,
   relativeTime,
   statusView,
@@ -55,5 +57,45 @@ describe("desktop presentation", () => {
     expect(adjacentItem(items, 0, -1)).toBeUndefined();
     expect(adjacentItem(items, 2, 1)).toBeUndefined();
     expect(adjacentItem(items, -1, 1)).toBeUndefined();
+  });
+
+  it("groups sessions by provider preserving order", () => {
+    const s1 = {
+      agent_type: "claude_code",
+      payload: { state: { activity_status: "WORKING" } },
+    } as Session;
+    const s2 = {
+      agent_type: "codex",
+      payload: { state: { activity_status: "WAITING_PERMISSION" } },
+    } as Session;
+    const s3 = {
+      agent_type: "claude_code",
+      payload: { state: { activity_status: "IDLE" } },
+    } as Session;
+
+    const groups = groupSessionsByProvider([s1, s2, s3]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].provider).toBe("claude_code");
+    expect(groups[0].sessions).toHaveLength(2);
+    expect(groups[1].provider).toBe("codex");
+    expect(groups[1].sessions).toHaveLength(1);
+  });
+
+  it("identifies sessions requiring attention", () => {
+    expect(
+      isAttentionSession({
+        payload: { state: { activity_status: "WAITING_PERMISSION" } },
+      } as Session),
+    ).toBe(true);
+    expect(
+      isAttentionSession({
+        payload: { state: { activity_status: "WAITING_INPUT" } },
+      } as Session),
+    ).toBe(true);
+    expect(
+      isAttentionSession({
+        payload: { state: { activity_status: "WORKING" } },
+      } as Session),
+    ).toBe(false);
   });
 });

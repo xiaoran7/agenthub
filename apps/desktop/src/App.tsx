@@ -4,20 +4,27 @@ import {
   Activity,
   AlertTriangle,
   Archive,
+  ArrowLeft,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleUserRound,
   Cloud,
   Code2,
+  Copy,
+  CornerDownLeft,
   Cpu,
   Database,
   Eye,
   EyeOff,
+  Folder,
   FolderTree,
   HardDrive,
+  Layers,
   LogOut,
   Maximize2,
+  Menu,
   MessageSquare,
   Minimize2,
   Monitor,
@@ -30,6 +37,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Sliders,
   Sparkles,
   Square,
   Terminal,
@@ -46,14 +54,18 @@ import {
 } from "react";
 
 import {
+  PROVIDER_LIST,
   activityTime,
   adjacentItem,
   agentLabel,
   agentShortLabel,
+  groupSessionsByProvider,
+  isAttentionSession,
   permissionFieldLabel,
   relativeTime,
   sessionDisplayTitle,
   statusView,
+  type ProviderGroup,
 } from "./presentation";
 import {
   appendAssistantDelta,
@@ -681,14 +693,35 @@ function Dashboard({
   const [accountOpen, setAccountOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
   const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
   const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">(
     "active",
   );
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
+  const [activeMode, setActiveMode] = useState<"cowork" | "code">("code");
+  const [alertDismissed, setAlertDismissed] = useState(false);
+  const [showBannerDetails, setShowBannerDetails] = useState(false);
+  const [collapsedProviders, setCollapsedProviders] = useState<
+    Record<string, boolean>
+  >({});
+  const [expandedLimits, setExpandedLimits] = useState<Record<string, number>>(
+    {},
+  );
   const [launchModalOpen, setLaunchModalOpen] = useState(false);
-  const [visibleLimit, setVisibleLimit] = useState(100);
+  const [launchModalProvider, setLaunchModalProvider] =
+    useState<Session["agent_type"]>("claude_code");
+
+  // Quick Task Launcher state
+  const [quickPrompt, setQuickPrompt] = useState("");
+  const [quickProvider, setQuickProvider] =
+    useState<Session["agent_type"]>("claude_code");
+  const [quickCwd, setQuickCwd] = useState("d:/ClaudeSpace");
+  const [quickBypass, setQuickBypass] = useState(true);
+  const [quickLaunching, setQuickLaunching] = useState(false);
+  const [quickModel, setQuickModel] = useState("claude-fable-5 1M");
+
   const refreshInFlight = useRef(false);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
 
@@ -699,6 +732,7 @@ function Dashboard({
       ),
     [snapshot.sessions],
   );
+
   const filteredSessions = useMemo(
     () =>
       sessions.filter((session) => {
@@ -722,11 +756,31 @@ function Dashboard({
       }),
     [agentFilter, archiveFilter, deferredQuery, deviceFilter, sessions],
   );
+
+  const providerGroups = useMemo(
+    () => groupSessionsByProvider(filteredSessions),
+    [filteredSessions],
+  );
+
+  const attentionSessions = useMemo(
+    () => filteredSessions.filter(isAttentionSession),
+    [filteredSessions],
+  );
+
+  const recentSessions = useMemo(
+    () => filteredSessions.slice(0, 8),
+    [filteredSessions],
+  );
+
+  const displayWelcomeSessions =
+    attentionSessions.length > 0 ? attentionSessions : recentSessions;
+
   const selectedSession = useMemo(
     () =>
       sessions.find((session) => sessionKey(session) === selectedSessionKey),
     [selectedSessionKey, sessions],
   );
+
   const selectedFilteredIndex = selectedSessionKey
     ? filteredSessions.findIndex(
         (session) => sessionKey(session) === selectedSessionKey,
@@ -738,26 +792,6 @@ function Dashboard({
     -1,
   );
   const nextSession = adjacentItem(filteredSessions, selectedFilteredIndex, 1);
-  const groupedSessions = useMemo(() => {
-    const groups = new Map<string, Session[]>();
-    for (const session of filteredSessions.slice(0, visibleLimit)) {
-      const group = session.payload.project.display_name || "未分类项目";
-      const entries = groups.get(group);
-      if (entries === undefined) groups.set(group, [session]);
-      else entries.push(session);
-    }
-    return [...groups.entries()];
-  }, [filteredSessions, visibleLimit]);
-  const counts = useMemo(() => {
-    const next: Record<Session["agent_type"], number> = {
-      claude_code: 0,
-      codex: 0,
-      antigravity: 0,
-      grok_build: 0,
-    };
-    for (const session of sessions) next[session.agent_type] += 1;
-    return next;
-  }, [sessions]);
 
   const refresh = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -824,35 +858,6 @@ function Dashboard({
     };
   }, [refresh]);
 
-  useEffect(
-    () => setVisibleLimit(100),
-    [agentFilter, archiveFilter, deferredQuery, deviceFilter],
-  );
-
-  const toggleSync = async () => {
-    if (actionBusy) return;
-    if (!("__TAURI_INTERNALS__" in window)) {
-      setSnapshot((current) => ({
-        ...current,
-        sync_running: !current.sync_running,
-      }));
-      return;
-    }
-    setActionBusy(true);
-    try {
-      await invoke("set_sync_paused", { paused: snapshot.sync_running });
-      setSnapshot((current) => ({
-        ...current,
-        sync_running: !current.sync_running,
-      }));
-      setError(undefined);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
   const signOut = async () => {
     if (actionBusy) return;
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -870,363 +875,339 @@ function Dashboard({
     }
   };
 
+  const handleQuickLaunch = async (event?: FormEvent) => {
+    if (event) event.preventDefault();
+    if (quickLaunching || quickPrompt.trim() === "") return;
+    setQuickLaunching(true);
+    setError(undefined);
+    try {
+      const onEvent = new Channel<SessionTurnEvent>();
+      const result = await invoke<{
+        agent_session_id: string;
+        agent_type: string;
+      }>("launch_new_session", {
+        input: {
+          agent_type: quickProvider,
+          cwd: quickCwd.trim() ? quickCwd.trim() : null,
+          prompt: quickPrompt.trim(),
+        },
+        onEvent,
+      });
+      setQuickPrompt("");
+      await refresh();
+      setSelectedSessionKey(
+        `${snapshot.device.device_id}:${result.agent_type}:${result.agent_session_id}`,
+      );
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setQuickLaunching(false);
+    }
+  };
+
+  const openLaunchModalFor = (provider: Session["agent_type"]) => {
+    setLaunchModalProvider(provider);
+    setLaunchModalOpen(true);
+  };
+
+  const toggleProviderCollapse = (provider: string) => {
+    setCollapsedProviders((curr) => ({
+      ...curr,
+      [provider]: !curr[provider],
+    }));
+  };
+
+  const expandProviderLimit = (provider: string, total: number) => {
+    setExpandedLimits((curr) => ({
+      ...curr,
+      [provider]: total,
+    }));
+  };
+
+  const displayName =
+    snapshot.account.user.display_name ||
+    snapshot.account.user.email.split("@")[0] ||
+    "Administrator";
+
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <PulseMark />
-        <nav aria-label="主导航">
-          <button aria-current="page">
-            <Activity />
-            <span>会话</span>
+    <main className="claude-app-shell">
+      {/* Left Claude Desktop Sidebar */}
+      <aside className="claude-sidebar" aria-label="侧边栏导航">
+        {/* Top Control Bar */}
+        <div className="sidebar-top-bar">
+          <div className="top-nav-left">
+            <button
+              type="button"
+              className="top-icon-btn"
+              title="主菜单"
+              aria-label="主菜单"
+            >
+              <Menu size={16} />
+            </button>
+            <button
+              type="button"
+              className="top-icon-btn"
+              title="切换工作区视图"
+              aria-label="切换工作区视图"
+            >
+              <Layers size={15} />
+            </button>
+            <button
+              type="button"
+              className={`top-icon-btn ${searchOpen ? "active" : ""}`}
+              onClick={() => setSearchOpen((v) => !v)}
+              title="搜索会话"
+              aria-label="搜索会话"
+            >
+              <Search size={15} />
+            </button>
+          </div>
+          <div className="top-nav-right">
+            <button
+              type="button"
+              className="top-icon-btn"
+              disabled={previousSession === undefined}
+              onClick={() =>
+                previousSession &&
+                setSelectedSessionKey(sessionKey(previousSession))
+              }
+              title="上一个会话"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button
+              type="button"
+              className="top-icon-btn"
+              disabled={nextSession === undefined}
+              onClick={() =>
+                nextSession && setSelectedSessionKey(sessionKey(nextSession))
+              }
+              title="下一个会话"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* Mode Switcher Pill */}
+        <div className="sidebar-mode-pill" role="tablist">
+          <button
+            type="button"
+            className={activeMode === "cowork" ? "active" : ""}
+            onClick={() => {
+              setActiveMode("cowork");
+              setSelectedSessionKey(undefined);
+            }}
+          >
+            <Sparkles size={14} />
+            <span>Cowork</span>
           </button>
           <button
-            aria-label="桌面设置"
-            aria-expanded={settingsOpen}
+            type="button"
+            className={activeMode === "code" ? "active" : ""}
+            onClick={() => setActiveMode("code")}
+          >
+            <Code2 size={14} />
+            <span>Code</span>
+          </button>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="sidebar-action-buttons">
+          <button
+            type="button"
+            className="sidebar-new-btn"
+            onClick={() => {
+              setSelectedSessionKey(undefined);
+            }}
+          >
+            <Plus size={16} />
+            <span>New</span>
+          </button>
+          <button
+            type="button"
+            className="sidebar-customize-btn"
             onClick={() => setSettingsOpen(true)}
           >
-            <Settings />
-            <span>设置</span>
+            <Folder size={14} />
+            <span>Customize</span>
           </button>
-        </nav>
-        <button
-          className="sidebar-account"
-          aria-label="查看账号信息"
-          aria-expanded={accountOpen}
-          title={snapshot.account.user.email}
-          onClick={() => setAccountOpen((value) => !value)}
-        >
-          <CircleUserRound />
-        </button>
-      </aside>
+        </div>
 
-      <section className="workspace">
-        <header className="workspace-header">
-          <div>
-            <span className="section-label">
-              <Monitor /> LOCAL DEVICE
-            </span>
-            <h1>{snapshot.device.name}</h1>
-            <p
-              className={
-                snapshot.local.pending_events > 0
-                  ? "sync-copy pending"
-                  : "sync-copy"
-              }
-            >
-              <i />{" "}
-              {snapshot.sync_running
-                ? snapshot.local.pending_events > 0
-                  ? `${snapshot.local.pending_events} 条等待上传`
-                  : "本地与云端已同步"
-                : "云同步已暂停，本地扫描继续"}
-            </p>
-            <span
-              className={
-                snapshot.realtime_connected
-                  ? "live-refresh connected"
-                  : "live-refresh"
-              }
-            >
-              <i />
-              {snapshot.realtime_connected
-                ? "SSE 实时连接"
-                : `每 ${snapshot.preferences.refresh_interval_seconds} 秒兜底刷新`}
-            </span>
-          </div>
-          <div className="header-actions">
-            <button
-              className="account-summary"
-              onClick={() => setAccountOpen(true)}
-            >
-              <span>
-                {initials(
-                  snapshot.account.user.display_name ||
-                    snapshot.account.user.email,
-                )}
-              </span>
-              <div>
-                <strong>
-                  {snapshot.account.user.display_name || "AgentHub 用户"}
-                </strong>
-                <small>{snapshot.account.user.email}</small>
-              </div>
-            </button>
-            <button
-              className="primary-button"
-              onClick={() => setLaunchModalOpen(true)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "8px 14px",
-                background: "linear-gradient(135deg, #ff4f87 0%, #a855f7 100%)",
-                border: "none",
-                borderRadius: "10px",
-                color: "#fff",
-                fontWeight: 700,
-                cursor: "pointer",
-                boxShadow: "0 4px 12px rgba(255, 79, 135, 0.25)",
-              }}
-            >
-              <Plus size={16} />
-              <span>发起新会话</span>
-            </button>
-            <button
-              className="outline-button"
-              disabled={actionBusy}
-              onClick={() => void toggleSync()}
-            >
-              {snapshot.sync_running ? <Pause /> : <Play />}
-              {snapshot.sync_running ? "暂停云同步" : "继续云同步"}
-            </button>
-            <button
-              className="icon-button"
-              aria-label="刷新"
-              disabled={refreshing}
-              onClick={() => void refresh()}
-            >
-              <RefreshCw className={refreshing ? "spin" : undefined} />
-            </button>
-          </div>
-        </header>
-
-        <section className="discovery-grid" aria-label="本地发现概览">
-          <div className="source-list">
-            <SourceRow
-              icon={<Code2 />}
-              name="Claude Code"
-              fallbackCount={counts.claude_code}
-              source={snapshot.local.sources.find(
-                (item) => item.agent_type === "claude_code",
-              )}
+        {/* Search Box if opened */}
+        {searchOpen && (
+          <div className="sidebar-search-box">
+            <Search size={14} />
+            <input
+              autoFocus
+              placeholder="按名称、模型或项目搜索..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
             />
-            <SourceRow
-              icon={<span className="codex-cube">◆</span>}
-              name="Codex"
-              fallbackCount={counts.codex}
-              source={snapshot.local.sources.find(
-                (item) => item.agent_type === "codex",
-              )}
-            />
-            <SourceRow
-              icon={<span className="antigravity-mark">▲</span>}
-              name="Antigravity"
-              fallbackCount={counts.antigravity}
-              source={snapshot.local.sources.find(
-                (item) => item.agent_type === "antigravity",
-              )}
-            />
-            <SourceRow
-              icon={<span className="grok-mark">✦</span>}
-              name="Grok Build"
-              fallbackCount={counts.grok_build}
-              source={snapshot.local.sources.find(
-                (item) => item.agent_type === "grok_build",
-              )}
-            />
-          </div>
-          <div className="memory-card">
-            <span className="memory-icon">
-              <Database />
-            </span>
-            <div>
-              <span className="card-kicker">本地记忆索引</span>
-              <strong>
-                {snapshot.local.memory.claude_files} 个 Claude 文件 ·{" "}
-                {snapshot.local.memory.codex_indexes} 个 Codex 索引 ·{" "}
-                {snapshot.local.memory.grok_sessions} 个 Grok 会话
-              </strong>
-              <p>
-                {formatBytes(
-                  snapshot.local.memory.claude_bytes +
-                    snapshot.local.memory.codex_bytes +
-                    snapshot.local.memory.grok_bytes,
-                )}
-                ，只读取数量和大小
-              </p>
-            </div>
-            <ShieldCheck />
-          </div>
-        </section>
-
-        <section className="session-section">
-          <div className="session-heading">
-            <div>
-              <span className="card-kicker">DISCOVERY LEDGER</span>
-              <h2>会话索引</h2>
-              <p>
-                本机发现 {snapshot.local.session_count} 个 · 当前显示{" "}
-                {filteredSessions.length} 个
-              </p>
-            </div>
-            <div className="session-tools">
-              <div className="archive-filter" aria-label="归档筛选">
-                <button
-                  aria-pressed={archiveFilter === "active"}
-                  onClick={() => setArchiveFilter("active")}
-                >
-                  活跃
-                </button>
-                <button
-                  aria-pressed={archiveFilter === "archived"}
-                  onClick={() => setArchiveFilter("archived")}
-                >
-                  已归档
-                </button>
-              </div>
-              <label className="session-search">
-                <Search />
-                <input
-                  aria-label="搜索会话、目录或模型"
-                  placeholder="搜索会话、目录或模型"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </label>
-              {snapshot.devices.length > 1 && (
-                <label className="device-filter">
-                  <Monitor />
-                  <select
-                    aria-label="设备筛选"
-                    value={deviceFilter}
-                    onChange={(event) => setDeviceFilter(event.target.value)}
-                  >
-                    <option value="all">全部设备</option>
-                    {snapshot.devices.map((device) => (
-                      <option key={device.device_id} value={device.device_id}>
-                        {device.device_id === snapshot.device.device_id
-                          ? `当前设备 · ${snapshot.device.name}`
-                          : `设备 · ${shortDeviceId(device.device_id)}`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <div className="agent-filter" aria-label="Agent 筛选">
-                {(
-                  [
-                    "all",
-                    "claude_code",
-                    "codex",
-                    "antigravity",
-                    "grok_build",
-                  ] as const
-                ).map((value) => (
-                  <button
-                    key={value}
-                    aria-pressed={agentFilter === value}
-                    onClick={() => setAgentFilter(value)}
-                  >
-                    {value === "all" ? "全部" : agentShortLabel(value)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="session-table" role="table" aria-label="会话列表">
-            <div className="session-table-head" role="row">
-              <span>会话</span>
-              <span>运行环境</span>
-              <span>状态</span>
-              <span>最近活动</span>
-              <span>同步</span>
-            </div>
-            {filteredSessions.length === 0 ? (
-              <div className="empty-state">
-                {archiveFilter === "active" &&
-                query === "" &&
-                agentFilter === "all" ? (
-                  <Activity />
-                ) : (
-                  <Search />
-                )}
-                <h3>
-                  {archiveFilter === "archived" &&
-                  query === "" &&
-                  agentFilter === "all" &&
-                  deviceFilter === "all"
-                    ? "暂无归档会话"
-                    : deviceFilter !== "all" &&
-                        query === "" &&
-                        agentFilter === "all"
-                      ? "该设备暂无会话"
-                      : query === "" && agentFilter === "all"
-                        ? "正在扫描本机会话"
-                        : "没有匹配的会话"}
-                </h3>
-                <p>
-                  {archiveFilter === "archived" &&
-                  query === "" &&
-                  agentFilter === "all" &&
-                  deviceFilter === "all"
-                    ? "在会话控制面板中归档后，会话会移动到这里。"
-                    : deviceFilter !== "all" &&
-                        query === "" &&
-                        agentFilter === "all"
-                      ? "切换设备筛选，查看其他设备上的 Session。"
-                      : query === "" && agentFilter === "all"
-                        ? "扫描失败时会在上方来源卡片显示原因。"
-                        : "换一个会话名、目录、模型或清除 Agent 筛选。"}
-                </p>
-              </div>
-            ) : (
-              groupedSessions.map(([group, groupSessions]) => (
-                <div className="session-group" role="rowgroup" key={group}>
-                  <div className="session-group-label" role="row">
-                    <FolderTree />
-                    <strong>{group}</strong>
-                    <span>{groupSessions.length} 个会话</span>
-                  </div>
-                  {groupSessions.map((session) => (
-                    <SessionRow
-                      key={`${session.device_id}:${session.agent_type}:${session.agent_session_id}`}
-                      session={session}
-                      selected={selectedSessionKey === sessionKey(session)}
-                      onSelect={() =>
-                        setSelectedSessionKey(sessionKey(session))
-                      }
-                    />
-                  ))}
-                </div>
-              ))
+            {query && (
+              <button
+                type="button"
+                className="clear-query"
+                onClick={() => setQuery("")}
+              >
+                <X size={12} />
+              </button>
             )}
           </div>
-          {filteredSessions.length > visibleLimit && (
-            <button
-              className="load-more"
-              onClick={() => setVisibleLimit((value) => value + 100)}
-            >
-              再显示 {Math.min(100, filteredSessions.length - visibleLimit)}{" "}
-              个会话
-            </button>
-          )}
-        </section>
+        )}
 
-        <div className="discovery-note" role="status">
-          <HardDrive />
-          <span>
-            本地扫描于 {relativeTime(snapshot.local.refreshed_at)}{" "}
-            更新；对话、Prompt 和记忆正文不会上传。
-          </span>
+        {/* Grouped by Provider Sessions Tree */}
+        <div className="sidebar-providers-tree">
+          {providerGroups.length === 0 ? (
+            <div className="sidebar-empty">
+              <span>{query ? "没有匹配的会话" : "正在扫描本机 Agent 会话..."}</span>
+            </div>
+          ) : (
+            providerGroups.map((group) => {
+              const isCollapsed = !!collapsedProviders[group.provider];
+              const visibleLimit = expandedLimits[group.provider] ?? 6;
+              const visibleSessions = group.sessions.slice(0, visibleLimit);
+              const remaining = group.sessions.length - visibleSessions.length;
+
+              return (
+                <div className="provider-group" key={group.provider}>
+                  {/* Provider Header */}
+                  <div
+                    className="provider-group-header"
+                    onClick={() => toggleProviderCollapse(group.provider)}
+                  >
+                    <div className="provider-header-left">
+                      <span className="provider-chevron">
+                        {isCollapsed ? (
+                          <ChevronRight size={13} />
+                        ) : (
+                          <ChevronDown size={13} />
+                        )}
+                      </span>
+                      <strong className="provider-title">{group.label}</strong>
+                    </div>
+                    <div
+                      className="provider-header-actions"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="provider-action-icon"
+                        title={`发起新的 ${group.label} 会话`}
+                        onClick={() => openLaunchModalFor(group.provider)}
+                      >
+                        <Plus size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="provider-action-icon"
+                        title="设置"
+                        onClick={() => setSettingsOpen(true)}
+                      >
+                        <Sliders size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Provider Session Items */}
+                  {!isCollapsed && (
+                    <div className="provider-sessions-list">
+                      {visibleSessions.map((session) => {
+                        const isSelected =
+                          selectedSessionKey === sessionKey(session);
+                        const attention = isAttentionSession(session);
+                        const isWorking =
+                          session.payload.state.activity_status === "WORKING";
+                        const title = sessionDisplayTitle(session);
+
+                        return (
+                          <button
+                            type="button"
+                            key={sessionKey(session)}
+                            className={`sidebar-session-item ${isSelected ? "selected" : ""}`}
+                            onClick={() =>
+                              setSelectedSessionKey(sessionKey(session))
+                            }
+                            title={title}
+                          >
+                            <span className="session-status-indicator">
+                              {attention ? (
+                                <AlertTriangle
+                                  size={13}
+                                  className="status-warn-icon"
+                                />
+                              ) : isWorking ? (
+                                <i className="status-dot working" />
+                              ) : (
+                                <i className="status-dot normal" />
+                              )}
+                            </span>
+                            <span className="sidebar-session-title">
+                              {title}
+                            </span>
+                          </button>
+                        );
+                      })}
+
+                      {/* Show More Button */}
+                      {remaining > 0 && (
+                        <button
+                          type="button"
+                          className="sidebar-show-more"
+                          onClick={() =>
+                            expandProviderLimit(
+                              group.provider,
+                              group.sessions.length,
+                            )
+                          }
+                        >
+                          Show {remaining} more
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
-        {accountOpen && (
-          <AccountPanel
-            snapshot={snapshot}
-            busy={actionBusy}
-            onClose={() => setAccountOpen(false)}
-            onLogout={() => void signOut()}
-          />
-        )}
-        {settingsOpen && (
-          <DesktopSettingsPanel
-            preferences={snapshot.preferences}
-            onClose={() => setSettingsOpen(false)}
-            onSaved={(preferences) =>
-              setSnapshot((current) => ({ ...current, preferences }))
-            }
-          />
-        )}
-        {selectedSession !== undefined && (
+
+        {/* Sidebar Footer - User Profile */}
+        <div className="sidebar-footer">
+          <button
+            type="button"
+            className="sidebar-profile-card"
+            onClick={() => setAccountOpen(true)}
+          >
+            <div className="profile-brand-icon">
+              <ClaudeSparkIcon size={18} />
+            </div>
+            <div className="profile-meta">
+              <strong>{displayName}</strong>
+              <small>
+                Gateway <i className="live-status-dot" />
+              </small>
+            </div>
+            <ChevronDown size={14} className="profile-chevron" />
+            <button
+              type="button"
+              className="profile-opt-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSettingsOpen(true);
+              }}
+              title="设置"
+            >
+              <Sparkles size={14} />
+            </button>
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content Stage */}
+      <section className="claude-stage">
+        {selectedSession !== undefined ? (
+          /* Active Session View Embedded in Stage */
           <SessionControlPanel
             key={sessionKey(selectedSession)}
             session={selectedSession}
@@ -1247,12 +1228,238 @@ function Dashboard({
               await refresh();
             }}
           />
+        ) : (
+          /* Claude Desktop Home / Welcome & Quick Launcher Stage */
+          <div className="claude-home-stage">
+            {/* Header */}
+            <header className="claude-welcome-header">
+              <ClaudeSparkIcon size={26} />
+              <h1>Welcome back, {displayName}</h1>
+            </header>
+
+            {/* Alert Banner */}
+            {!alertDismissed && (
+              <div className="claude-alert-box">
+                <div className="alert-content">
+                  <div className="alert-title-row">
+                    <AlertTriangle size={16} className="alert-icon" />
+                    <strong>Configured model not available</strong>
+                  </div>
+                  {showBannerDetails && (
+                    <p className="alert-details-text">
+                      当前网关直连正常，本地发现 {snapshot.local.session_count}{" "}
+                      个会话。如需调整默认 Agent CLI 路径或刷新周期，请打开设置。
+                    </p>
+                  )}
+                  <div className="alert-actions-row">
+                    <button
+                      type="button"
+                      className="alert-link"
+                      onClick={() => setShowBannerDetails((v) => !v)}
+                    >
+                      {showBannerDetails ? "Hide details" : "Details"}
+                    </button>
+                    <button
+                      type="button"
+                      className="alert-btn"
+                      onClick={() => setSettingsOpen(true)}
+                    >
+                      Open Setup
+                    </button>
+                    <button
+                      type="button"
+                      className="alert-btn"
+                      disabled={refreshing}
+                      onClick={() => void refresh()}
+                    >
+                      {refreshing ? "Checking..." : "Check again"}
+                    </button>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="alert-close-btn"
+                  onClick={() => setAlertDismissed(true)}
+                  aria-label="关闭通知"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+
+            {/* Sessions List Section */}
+            <div className="claude-sessions-section">
+              <h2>Sessions</h2>
+              <div className="claude-sessions-list">
+                {displayWelcomeSessions.length === 0 ? (
+                  <div className="sessions-empty-note">
+                    <span>暂无需要关注的会话，请在下方直接输入发起新任务</span>
+                  </div>
+                ) : (
+                  displayWelcomeSessions.map((session) => {
+                    const attention = isAttentionSession(session);
+                    const isWorking =
+                      session.payload.state.activity_status === "WORKING";
+                    const title = sessionDisplayTitle(session);
+                    const project =
+                      session.payload.project.display_name || "ClaudeSpace";
+                    const timeAgo = relativeTime(activityTime(session));
+
+                    return (
+                      <div
+                        key={sessionKey(session)}
+                        className="claude-session-card"
+                        onClick={() =>
+                          setSelectedSessionKey(sessionKey(session))
+                        }
+                      >
+                        <div className="card-left">
+                          <span
+                            className={`card-status-badge ${attention ? "needs-input" : isWorking ? "running" : "idle"}`}
+                          >
+                            <i className="status-dot" />
+                            {attention
+                              ? "Needs input"
+                              : isWorking
+                                ? "Running"
+                                : "Idle"}
+                          </span>
+                          <strong className="card-title" title={title}>
+                            {title}
+                          </strong>
+                        </div>
+                        <div className="card-right">
+                          <span className="card-meta">
+                            {project} {timeAgo}
+                          </span>
+                          <ChevronRight size={16} className="card-chevron" />
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Bottom Quick Task Launcher Prompt Dock */}
+            <div className="claude-prompt-dock">
+              {/* Top Tags inside prompt dock */}
+              <div className="prompt-dock-tags">
+                <div className="dock-tags-left">
+                  <span className="dock-pill">
+                    <Monitor size={12} />
+                    <span>{snapshot.device.name || "Local"}</span>
+                  </span>
+                  <span className="dock-pill active" title={quickCwd}>
+                    <Folder size={12} />
+                    <span>
+                      {quickCwd.length > 25
+                        ? "..." + quickCwd.slice(-20)
+                        : quickCwd}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="dock-pill-btn"
+                    title="注入任务上下文"
+                  >
+                    <Copy size={12} />
+                  </button>
+                </div>
+                <div className="dock-tags-right">
+                  <span className="dock-mascot" title="AgentHub Companion">
+                    <MascotIcon size={22} />
+                  </span>
+                </div>
+              </div>
+
+              {/* Main Prompt Input */}
+              <form onSubmit={handleQuickLaunch} className="prompt-dock-form">
+                <textarea
+                  rows={2}
+                  placeholder="Describe a task or ask a question"
+                  value={quickPrompt}
+                  onChange={(e) => setQuickPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void handleQuickLaunch();
+                    }
+                  }}
+                  disabled={quickLaunching}
+                />
+                <button
+                  type="submit"
+                  className="dock-submit-btn"
+                  disabled={quickLaunching || !quickPrompt.trim()}
+                  title="发送任务指令"
+                >
+                  <CornerDownLeft size={16} />
+                </button>
+              </form>
+
+              {/* Bottom Options Row */}
+              <div className="prompt-dock-bottom">
+                <div className="dock-bottom-left">
+                  <button
+                    type="button"
+                    className={`dock-bypass-btn ${quickBypass ? "active" : ""}`}
+                    onClick={() => setQuickBypass((v) => !v)}
+                  >
+                    <span>Bypass permissions</span>
+                    <span className="bypass-symbol">
+                      {quickBypass ? "✓" : "+"}
+                    </span>
+                  </button>
+                </div>
+                <div className="dock-bottom-right">
+                  <select
+                    className="dock-model-select"
+                    value={quickProvider}
+                    onChange={(e) =>
+                      setQuickProvider(e.target.value as Session["agent_type"])
+                    }
+                  >
+                    {PROVIDER_LIST.map((p) => (
+                      <option key={p.type} value={p.type}>
+                        {p.label} · {p.defaultModel}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="model-max-pill">Max ⭕</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Global Account, Settings, and Launch Modals */}
+        {accountOpen && (
+          <AccountPanel
+            snapshot={snapshot}
+            busy={actionBusy}
+            onClose={() => setAccountOpen(false)}
+            onLogout={() => void signOut()}
+          />
+        )}
+        {settingsOpen && (
+          <DesktopSettingsPanel
+            preferences={snapshot.preferences}
+            onClose={() => setSettingsOpen(false)}
+            onSaved={(preferences) =>
+              setSnapshot((current) => ({ ...current, preferences }))
+            }
+          />
         )}
         <LaunchSessionModal
           open={launchModalOpen}
+          initialAgentType={launchModalProvider}
           onClose={() => setLaunchModalOpen(false)}
-          onLaunched={async () => {
+          onLaunched={async (agentSessionId, agentType) => {
             await refresh();
+            setSelectedSessionKey(
+              `${snapshot.device.device_id}:${agentType}:${agentSessionId}`,
+            );
           }}
         />
         {error !== undefined && (
@@ -1367,21 +1574,25 @@ function SessionRow({
 
 function LaunchSessionModal({
   open,
+  initialAgentType = "claude_code",
   onClose,
   onLaunched,
 }: {
   open: boolean;
+  initialAgentType?: Session["agent_type"];
   onClose: () => void;
   onLaunched: (agentSessionId: string, agentType: Session["agent_type"]) => void;
 }) {
   const [agentType, setAgentType] =
-    useState<Session["agent_type"]>("claude_code");
+    useState<Session["agent_type"]>(initialAgentType);
   const [cwd, setCwd] = useState("d:/ClaudeSpace");
   const [prompt, setPrompt] = useState("");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string>();
 
-  if (!open) return null;
+  useEffect(() => {
+    if (open) setAgentType(initialAgentType);
+  }, [initialAgentType, open]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -2310,6 +2521,65 @@ function AccountPanel({
         <LogOut /> 退出登录
       </button>
     </aside>
+  );
+}
+
+function MascotIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden="true"
+      style={{
+        color: "#e27858",
+        display: "inline-block",
+        verticalAlign: "middle",
+      }}
+    >
+      <rect x="2" y="2" width="2" height="2" />
+      <rect x="12" y="2" width="2" height="2" />
+      <rect x="4" y="4" width="8" height="2" />
+      <rect x="2" y="6" width="12" height="4" />
+      <rect x="4" y="8" width="2" height="2" fill="#18181b" />
+      <rect x="10" y="8" width="2" height="2" fill="#18181b" />
+      <rect x="2" y="10" width="2" height="4" />
+      <rect x="12" y="10" width="2" height="4" />
+      <rect x="6" y="10" width="4" height="2" />
+    </svg>
+  );
+}
+
+function ClaudeSparkIcon({
+  size = 22,
+  color = "#d97757",
+}: {
+  size?: number;
+  color?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{
+        display: "inline-block",
+        verticalAlign: "middle",
+        filter: "drop-shadow(0 0 4px rgba(217, 119, 87, 0.4))",
+      }}
+    >
+      <line x1="12" y1="2" x2="12" y2="22" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+      <line x1="19.07" y1="4.93" x2="4.93" y2="19.07" />
+    </svg>
   );
 }
 

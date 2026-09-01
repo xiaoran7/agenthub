@@ -51,6 +51,102 @@ export function permissionFieldLabel(type: Session["agent_type"]): string {
   return "审批策略";
 }
 
+export const PROVIDER_LIST: ReadonlyArray<{
+  type: Session["agent_type"];
+  label: string;
+  shortLabel: string;
+  defaultModel: string;
+  desc: string;
+}> = [
+  {
+    type: "claude_code",
+    label: "Claude Code",
+    shortLabel: "Claude",
+    defaultModel: "claude-3-7-sonnet",
+    desc: "Anthropic 原生 CLI",
+  },
+  {
+    type: "codex",
+    label: "OpenAI Codex",
+    shortLabel: "Codex",
+    defaultModel: "gpt-5-codex",
+    desc: "OpenAI 代码助手",
+  },
+  {
+    type: "antigravity",
+    label: "Google Antigravity",
+    shortLabel: "Antigravity",
+    defaultModel: "gemini-2.5-pro",
+    desc: "DeepMind Coding Agent",
+  },
+  {
+    type: "grok_build",
+    label: "Grok Build",
+    shortLabel: "Grok",
+    defaultModel: "grok-4.6",
+    desc: "xAI 全栈开发",
+  },
+];
+
+export interface ProviderGroup {
+  provider: Session["agent_type"];
+  label: string;
+  shortLabel: string;
+  sessions: Session[];
+}
+
+export function groupSessionsByProvider(sessions: Session[]): ProviderGroup[] {
+  const groups = new Map<Session["agent_type"], Session[]>();
+  for (const p of PROVIDER_LIST) {
+    groups.set(p.type, []);
+  }
+
+  for (const session of sessions) {
+    const list = groups.get(session.agent_type);
+    if (list) {
+      list.push(session);
+    } else {
+      groups.set(session.agent_type, [session]);
+    }
+  }
+
+  const result: ProviderGroup[] = [];
+  for (const p of PROVIDER_LIST) {
+    const list = groups.get(p.type) ?? [];
+    if (list.length > 0) {
+      result.push({
+        provider: p.type,
+        label: p.label,
+        shortLabel: p.shortLabel,
+        sessions: list,
+      });
+    }
+  }
+
+  // Include any extra providers if dynamic
+  for (const [provider, list] of groups.entries()) {
+    if (!PROVIDER_LIST.some((p) => p.type === provider) && list.length > 0) {
+      result.push({
+        provider,
+        label: agentLabel(provider),
+        shortLabel: agentShortLabel(provider),
+        sessions: list,
+      });
+    }
+  }
+
+  return result;
+}
+
+export function isAttentionSession(session: Session): boolean {
+  const status = session.payload.state.activity_status;
+  return (
+    status === "WAITING_PERMISSION" ||
+    status === "WAITING_INPUT" ||
+    status === "FAILED"
+  );
+}
+
 export function adjacentItem<T>(
   items: readonly T[],
   index: number,
