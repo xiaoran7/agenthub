@@ -5,9 +5,11 @@
 
 ## [Unreleased]
 
+## [2.0.9] - 2026-09-01
+
 ### Release
 
-- 打包 Windows 桌面端 `AgentHub v2.0.8`，包含 Agent/工作目录导航、本机多 Provider 会话正文导入、统一深色界面与实时连接稳定性修复。
+- 打包 Windows 桌面端 `AgentHub v2.0.9`，包含多 Provider 会话语义解码、Markdown/工具调用渲染、真实会话标题、Codex 风格工作台与左下角设置菜单。
 
 ### Changed
 
@@ -19,6 +21,12 @@
 - 桌面端进一步改为所选 Agent 下按工作目录分组，增加会话置顶，并将首页、会话顶部与三分类设置页统一为紧凑深色工作台。
 - 本机首次扫描、后台持续扫描与健康汇总补齐 Antigravity；历史正文读取扩展到 Claude Code、Codex、Antigravity 与 Grok Build，并兼容 UTF-8 BOM、UTF-16 LE/BE（含无 BOM 启发式识别），避免中文乱码。
 - 实时 SSE 心跳缩短到 10 秒，桌面读超时放宽到 45 秒，降低代理空闲超时或网络抖动造成的误断线，保留轮询降级。
+
+## [2.0.8] - 2026-09-01
+
+### Changed
+
+- 发布 AgentHub 2.0.8 Windows x64 安装包，提供 MSI 与 NSIS Setup 两种格式。
 
 ## [2.0.7] - 2026-09-01
 
