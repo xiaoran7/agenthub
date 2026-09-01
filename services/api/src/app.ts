@@ -164,6 +164,7 @@ export function createGatewayApp(
   });
 
   app.setErrorHandler((error, _request, reply) => {
+    app.log.error(error);
     if (error instanceof AccountError) {
       void reply.status(error.statusCode).send({ error: error.code });
       return;
@@ -210,10 +211,12 @@ export function createGatewayApp(
         ? error.statusCode
         : undefined;
     if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
-      void reply.status(statusCode).send({ error: "invalid_request" });
+      void reply.status(statusCode).send({
+        error: "invalid_request",
+        message: error instanceof Error ? error.message : undefined,
+      });
       return;
     }
-    app.log.error(error);
     void reply.status(500).send({ error: "internal_error" });
   });
 

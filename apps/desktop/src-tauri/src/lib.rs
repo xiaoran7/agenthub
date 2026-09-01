@@ -1844,7 +1844,7 @@ fn request_json(
 fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
-        .user_agent(concat!("agent-pulse-desktop/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/", env!("CARGO_PKG_VERSION")))
         .max_redirects(0)
         .build()
         .new_agent()
@@ -1855,7 +1855,7 @@ fn dashboard_stream_agent() -> ureq::Agent {
         .timeout_connect(Some(REQUEST_TIMEOUT))
         .timeout_recv_response(Some(REQUEST_TIMEOUT))
         .timeout_recv_body(Some(STREAM_READ_TIMEOUT))
-        .user_agent(concat!("agent-pulse-desktop/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/", env!("CARGO_PKG_VERSION")))
         .max_redirects(0)
         .build()
         .new_agent()
