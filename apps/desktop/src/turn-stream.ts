@@ -1,6 +1,6 @@
 export interface ConversationMessage {
   role: "user" | "assistant" | "system";
-  kind?: "message" | "tool" | "command" | "status";
+  kind?: "message" | "tool" | "command" | "status" | "thinking";
   label?: string;
   status?: "running" | "completed" | "failed" | "unknown";
   content: string;

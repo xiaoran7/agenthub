@@ -51,6 +51,44 @@ export function permissionFieldLabel(type: Session["agent_type"]): string {
   return "审批策略";
 }
 
+export const PROVIDER_MODELS: Record<
+  Session["agent_type"],
+  Array<{ value: string; label: string; desc: string }>
+> = {
+  claude_code: [
+    { value: "claude-3-7-sonnet", label: "Claude 3.7 Sonnet", desc: "最强混合推理与自主开发" },
+    { value: "claude-3-5-sonnet", label: "Claude 3.5 Sonnet", desc: "行业标杆通用编程" },
+    { value: "claude-3-5-haiku", label: "Claude 3.5 Haiku", desc: "超低延迟快速响应" },
+    { value: "claude-opus-4-7", label: "Claude Opus 4.7", desc: "复杂多文件架构与规划" },
+  ],
+  codex: [
+    { value: "gpt-5.5-codex", label: "GPT-5.5 Codex", desc: "最新代码推理专家" },
+    { value: "gpt-5-codex", label: "GPT-5 Codex", desc: "全栈自主代理" },
+    { value: "gpt-4.1-codex", label: "GPT-4.1 Codex", desc: "高速高上下文工程" },
+    { value: "o3-mini", label: "OpenAI o3-mini", desc: "极速高精度代码推理" },
+  ],
+  antigravity: [
+    { value: "gemini-3.7-flash", label: "Gemini 3.7 Flash", desc: "高阶混合推理与视觉" },
+    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro", desc: "超长上下文复杂逻辑架构" },
+    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash", desc: "极速轻量智能体协作" },
+  ],
+  grok_build: [
+    { value: "grok-4.6", label: "Grok 4.6", desc: "xAI 全栈实时开发" },
+    { value: "grok-4.0", label: "Grok 4.0", desc: "标准工程构建助手" },
+    { value: "grok-code-fast", label: "Grok Code Fast", desc: "低延迟快速单步任务" },
+  ],
+};
+
+export function getProviderModels(type: Session["agent_type"]) {
+  return PROVIDER_MODELS[type] ?? [];
+}
+
+export function getDefaultModel(type: Session["agent_type"], customModel?: string) {
+  if (customModel && customModel.trim()) return customModel.trim();
+  const list = getProviderModels(type);
+  return list[0]?.value ?? "default-model";
+}
+
 export const PROVIDER_LIST: ReadonlyArray<{
   type: Session["agent_type"];
   label: string;
@@ -69,14 +107,14 @@ export const PROVIDER_LIST: ReadonlyArray<{
     type: "codex",
     label: "OpenAI Codex",
     shortLabel: "Codex",
-    defaultModel: "gpt-5-codex",
+    defaultModel: "gpt-5.5-codex",
     desc: "OpenAI 代码助手",
   },
   {
     type: "antigravity",
     label: "Google Antigravity",
     shortLabel: "Antigravity",
-    defaultModel: "gemini-2.5-pro",
+    defaultModel: "gemini-3.7-flash",
     desc: "DeepMind Coding Agent",
   },
   {

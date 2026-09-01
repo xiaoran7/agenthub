@@ -78,6 +78,15 @@ export interface DesktopPreferences {
   claude_binary: string;
   codex_binary: string;
   grok_binary: string;
+  default_cwd?: string;
+  selected_models?: Record<string, string>;
+  editor_target?: string;
+  terminal_shell?: string;
+  app_language?: string;
+  theme?: string;
+  permission_default?: boolean;
+  permission_auto_review?: boolean;
+  permission_full_access?: boolean;
 }
 
 export interface SessionTurnResult {

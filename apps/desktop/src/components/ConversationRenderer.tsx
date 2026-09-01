@@ -1,0 +1,268 @@
+﻿import React, { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  Brain,
+  ChevronDown,
+  ChevronRight,
+  Code2,
+  Copy,
+  Check,
+  Terminal,
+  Activity,
+  Sparkles,
+  FileCode,
+  Wrench,
+  AlertCircle,
+  CheckCircle2,
+} from "lucide-react";
+import type { ConversationMessage } from "../turn-stream";
+
+interface ConversationRendererProps {
+  message: ConversationMessage;
+  index: number;
+}
+
+export function ConversationItem({ message, index }: ConversationRendererProps) {
+  if (message.content === "" && message.kind !== "tool" && message.kind !== "thinking") {
+    return null;
+  }
+
+  // 1. Dedicated thinking process item
+  if (message.kind === "thinking") {
+    return <ThinkingBlock content={message.content} defaultOpen={false} />;
+  }
+
+  // 2. Dedicated tool call / command / status item
+  if (
+    message.kind === "tool" ||
+    message.kind === "command" ||
+    message.kind === "status"
+  ) {
+    return <ToolCallBlock message={message} />;
+  }
+
+  // 3. User Message -> Rounded Dark Bubble (Like Image 3, No Loud Colors)
+  if (message.role === "user") {
+    return (
+      <div className="message-row user-row">
+        <div className="user-bubble-pill">
+          <div className="user-bubble-content">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 4. Assistant / System Message -> Natural Fluid Markdown (No Restricting Cards, Parses Embedded Thinking)
+  return (
+    <div className="message-row assistant-row">
+      <div className="assistant-flow-content">
+        <ParsedAssistantContent text={message.content} />
+      </div>
+    </div>
+  );
+}
+
+function ParsedAssistantContent({ text }: { text: string }) {
+  // Check for embedded <think>...</think> or <thinking>...</thinking> or <thought>...</thought> tags
+  const thinkRegex = /<(?:think|thinking|thought)>([\s\S]*?)<\/(?:think|thinking|thought)>/gi;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = thinkRegex.exec(text)) !== null) {
+    const preText = text.slice(lastIndex, match.index);
+    if (preText.trim()) {
+      parts.push(
+        <MarkdownSection key={`md-${lastIndex}`} content={preText} />
+      );
+    }
+    const thinkContent = match[1];
+    if (thinkContent.trim()) {
+      parts.push(
+        <ThinkingBlock
+          key={`think-${match.index}`}
+          content={thinkContent.trim()}
+          defaultOpen={false}
+        />
+      );
+    }
+    lastIndex = match.index + match[0].length;
+  }
+
+  const remaining = text.slice(lastIndex);
+  if (remaining.trim() || parts.length === 0) {
+    parts.push(
+      <MarkdownSection key={`md-${lastIndex}`} content={remaining} />
+    );
+  }
+
+  return <>{parts}</>;
+}
+
+function ThinkingBlock({
+  content,
+  defaultOpen = false,
+}: {
+  content: string;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const charCount = content.length;
+
+  return (
+    <details
+      className={`thinking-accordion ${open ? "open" : ""}`}
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="thinking-summary">
+        <span className="thinking-icon-badge">
+          <Brain size={14} className="thinking-spark" />
+        </span>
+        <strong className="thinking-title">思考过程</strong>
+        <span className="thinking-stats">
+          {charCount > 1000 ? `${(charCount / 1000).toFixed(1)}k 字符` : `${charCount} 字符`}
+        </span>
+        <ChevronRight size={13} className="thinking-chevron" />
+      </summary>
+      <div className="thinking-body">
+        <div className="thinking-inner-text">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content}
+          </ReactMarkdown>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function ToolCallBlock({ message }: { message: ConversationMessage }) {
+  const [open, setOpen] = useState(false);
+  const failed = message.status === "failed";
+  const isCommand = message.kind === "command";
+  const isStatus = message.kind === "status";
+
+  return (
+    <details
+      className={`tool-call-accordion ${failed ? "failed" : ""} ${open ? "open" : ""}`}
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="tool-call-summary">
+        <span className="tool-icon-badge">
+          {isCommand ? (
+            <Terminal size={13} />
+          ) : isStatus ? (
+            <Activity size={13} />
+          ) : (
+            <Wrench size={13} />
+          )}
+        </span>
+        <strong className="tool-name">
+          {message.label || (isCommand ? "命令执行" : isStatus ? "状态更新" : "工具调用")}
+        </strong>
+        <span className={`tool-status-pill ${message.status || "completed"}`}>
+          {failed ? (
+            <>
+              <AlertCircle size={11} /> 失败
+            </>
+          ) : message.status === "running" ? (
+            <>
+              <Activity size={11} className="spin" /> 运行中
+            </>
+          ) : (
+            <>
+              <CheckCircle2 size={11} /> 完成
+            </>
+          )}
+        </span>
+        <ChevronRight size={13} className="tool-chevron" />
+      </summary>
+      {message.content && (
+        <div className="tool-call-body">
+          <pre className="tool-content-pre">{message.content}</pre>
+        </div>
+      )}
+    </details>
+  );
+}
+
+function MarkdownSection({ content }: { content: string }) {
+  return (
+    <div className="markdown-body custom-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code({ node, inline, className, children, ...props }: any) {
+            const match = /language-(\w+)/.exec(className || "");
+            const codeString = String(children).replace(/\n$/, "");
+            if (!inline && (match || codeString.includes("\n"))) {
+              return (
+                <CodeBlock
+                  language={match ? match[1] : "text"}
+                  value={codeString}
+                />
+              );
+            }
+            return (
+              <code className={className} {...props}>
+                {children}
+              </code>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function CodeBlock({ language, value }: { language: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <div className="code-block-wrapper">
+      <div className="code-block-header">
+        <span className="code-language">{language || "code"}</span>
+        <button
+          type="button"
+          className="code-copy-btn"
+          onClick={handleCopy}
+          aria-label="复制代码"
+          title="复制代码"
+        >
+          {copied ? (
+            <>
+              <Check size={12} className="copy-success" />
+              <span>已复制</span>
+            </>
+          ) : (
+            <>
+              <Copy size={12} />
+              <span>复制</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="code-block-pre">
+        <code>{value}</code>
+      </pre>
+    </div>
+  );
+}

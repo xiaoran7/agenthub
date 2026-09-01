@@ -32,13 +32,12 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Sliders,
   Sparkles,
   Square,
   Terminal,
   X,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   useCallback,
   useDeferredValue,
@@ -51,10 +50,13 @@ import {
 
 import {
   PROVIDER_LIST,
+  PROVIDER_MODELS,
   activityTime,
   adjacentItem,
   agentLabel,
   agentShortLabel,
+  getDefaultModel,
+  getProviderModels,
   groupSessionsByWorkspace,
   isAttentionSession,
   permissionFieldLabel,
@@ -81,6 +83,14 @@ import type {
   TgDeviceCodeResponse,
   TgDevicePollResponse,
 } from "./types";
+
+import { SelectDropdown } from "./components/SelectDropdown";
+import {
+  SessionContextMenu,
+  type ContextMenuPosition,
+} from "./components/SessionContextMenu";
+import { ConversationItem } from "./components/ConversationRenderer";
+import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
 
 type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
@@ -159,118 +169,90 @@ function AuthScreen({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [serverUrl, setServerUrl] = useState(
+    "https://platform.tannerlab.xyz",
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState(false);
-  const [oauthUrl, setOauthUrl] = useState<string>();
-  const [error, setError] = useState(initialError);
-  const [deviceFlow, setDeviceFlow] = useState<
-    TgDeviceCodeResponse | undefined
-  >();
+  const [error, setError] = useState<string | undefined>(initialError);
+
+  // TG device code auth state
+  const [deviceFlow, setDeviceFlow] = useState<TgDeviceCodeResponse>();
   const [polling, setPolling] = useState(false);
 
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<{ url: string }>("oauth_url_ready", (event) => {
-      setOauthUrl(event.payload.url);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
-  }, []);
-
-  const openUrl = async (url: string) => {
-    try {
-      await invoke("open_external_url", { url });
-    } catch {
-      window.open(url, "_blank");
-    }
-  };
-
-  const startBrowserOAuth = async () => {
-    if (busy || oauthLoading) return;
-    setOauthLoading(true);
-    setError(undefined);
-    try {
-      const snapshot = await invoke<Snapshot>("start_tg_browser_oauth", {
-        server_url: null,
-      });
-      onAuthenticated(snapshot);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setOauthLoading(false);
-      setOauthUrl(undefined);
-    }
-  };
-
-  const startDeviceAuth = async () => {
-    if (busy) return;
+  const startTgDeviceAuth = async () => {
     setBusy(true);
     setError(undefined);
     try {
-      const codeRes = await invoke<TgDeviceCodeResponse>(
+      const resp = await invoke<TgDeviceCodeResponse>(
         "start_tg_device_auth",
-        { server_url: null },
+        {
+          serverUrl: serverUrl.trim() || undefined,
+        },
       );
-      setDeviceFlow(codeRes);
+      setDeviceFlow(resp);
       setPolling(true);
-      const targetUrl =
-        codeRes.verification_uri_complete || codeRes.verification_uri;
-      void openUrl(targetUrl);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
       setBusy(false);
     }
   };
 
   useEffect(() => {
     if (!polling || !deviceFlow) return;
-    let cancelled = false;
-    const interval = Math.max(3, deviceFlow.interval || 5) * 1000;
-    const timer = setInterval(async () => {
-      if (cancelled) return;
+    let timer: number | undefined;
+    let disposed = false;
+    const intervalMs = Math.max(2000, deviceFlow.interval * 1000);
+
+    const poll = async () => {
       try {
-        const res = await invoke<TgDevicePollResponse>("poll_tg_device_auth", {
-          server_url: null,
-          device_code: deviceFlow.device_code,
-        });
-        if (res.status === "success" && res.snapshot) {
-          clearInterval(timer);
-          setPolling(false);
-          onAuthenticated(res.snapshot);
+        const resp = await invoke<TgDevicePollResponse>(
+          "poll_tg_device_auth",
+          {
+            deviceCode: deviceFlow.device_code,
+            serverUrl: serverUrl.trim() || undefined,
+          },
+        );
+        if (disposed) return;
+        if (resp.status === "success" && resp.snapshot) {
+          onAuthenticated(resp.snapshot);
+          return;
         }
       } catch (err) {
-        clearInterval(timer);
-        setPolling(false);
-        setBusy(false);
-        setError(errorMessage(err));
+        if (!disposed) {
+          setError(errorMessage(err));
+          setPolling(false);
+        }
+        return;
       }
-    }, interval);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
+      if (!disposed) {
+        timer = window.setTimeout(poll, intervalMs);
+      }
     };
-  }, [polling, deviceFlow, onAuthenticated]);
+
+    timer = window.setTimeout(poll, intervalMs);
+    return () => {
+      disposed = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [polling, deviceFlow, serverUrl, onAuthenticated]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy) return;
     setBusy(true);
     setError(undefined);
     try {
       const next = await invoke<Snapshot>("authenticate", {
         input: {
           mode,
-          email,
+          email: email.trim(),
           password,
-          display_name: mode === "register" ? displayName : null,
+          display_name:
+            mode === "register" && displayName.trim()
+              ? displayName.trim()
+              : undefined,
+          server_url: serverUrl.trim() ? serverUrl.trim() : undefined,
         },
       });
       onAuthenticated(next);
@@ -283,393 +265,155 @@ function AuthScreen({
 
   return (
     <main className="auth-shell">
-      <section className="auth-story">
-        <Brand />
-        <div className="auth-story-copy">
-          <span className="story-kicker">LOCAL SESSION OBSERVATORY</span>
-          <h1>
-            看清每一个
-            <br />
-            本地 Agent 脉搏
-          </h1>
+      <div className="auth-card">
+        <header className="auth-header">
+          <Brand size={36} />
+          <h2>{mode === "login" ? "登录 AgentHub" : "注册新账号"}</h2>
           <p>
-            Claude Code、Codex、Antigravity、Grok
-            Build、历史会话与记忆索引会在登录后自动盘点。只同步状态和脱敏后的项目名。
+            {mode === "login"
+              ? "登录后自动连接本地 Agent 与云端控制台"
+              : "创建账号以同步管理多个开发设备"}
           </p>
-        </div>
-        <LocalCloudDiagram />
-      </section>
-      <section className="auth-panel">
-        {deviceFlow ? (
-          <div
-            className="auth-form"
-            style={{ textAlign: "center", gap: "16px" }}
-          >
-            <header>
-              <span className="card-kicker">TannerLab SSO</span>
-              <h2>正在等待浏览器授权</h2>
-              <p>请在已打开的浏览器中完成登录并确认授权：</p>
-            </header>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: "8px",
-                padding: "16px",
-                background: "rgba(255, 255, 255, 0.04)",
-                borderRadius: "12px",
-                border: "1px dashed rgba(255, 255, 255, 0.2)",
+        </header>
+
+        {deviceFlow && polling ? (
+          <div className="tg-device-card">
+            <p className="tg-device-instructions">
+              请在浏览器打开以下页面并确认授权：
+            </p>
+            <a
+              href={
+                deviceFlow.verification_uri_complete ||
+                deviceFlow.verification_uri
+              }
+              target="_blank"
+              rel="noreferrer"
+              className="tg-verify-link"
+            >
+              {deviceFlow.verification_uri}
+            </a>
+            <div className="tg-user-code-box">
+              <span>验证码</span>
+              <strong>{deviceFlow.user_code}</strong>
+            </div>
+            <div className="loading-line">
+              <i />
+            </div>
+            <p className="tg-waiting-text">正在等待浏览器确认…</p>
+            <button
+              type="button"
+              className="outline-button"
+              onClick={() => {
+                setPolling(false);
+                setDeviceFlow(undefined);
               }}
             >
-              <span
-                style={{
-                  fontSize: "12px",
-                  color: "#888",
-                  textTransform: "uppercase",
-                  letterSpacing: "1px",
-                }}
-              >
-                设备验证码 (Device Code)
-              </span>
-              <div
-                style={{
-                  fontSize: "26px",
-                  fontWeight: 800,
-                  letterSpacing: "4px",
-                  color: "#7ed5a0",
-                  fontFamily: "monospace",
-                }}
-              >
-                {deviceFlow.user_code}
-              </div>
-              <button
-                type="button"
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: copiedCode ? "#7ed5a0" : "#888",
-                  fontSize: "12px",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  padding: "4px 8px",
-                }}
-                onClick={() => {
-                  void navigator.clipboard.writeText(deviceFlow.user_code);
-                  setCopiedCode(true);
-                  setTimeout(() => setCopiedCode(false), 2000);
-                }}
-              >
-                {copiedCode ? "✓ 已复制验证码" : "点击复制验证码"}
-              </button>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "10px",
-                alignItems: "center",
-              }}
-            >
-              <button
-                type="button"
-                className="primary-button"
-                style={{ width: "100%", padding: "12px" }}
-                onClick={() =>
-                  void openUrl(
-                    deviceFlow.verification_uri_complete ||
-                      deviceFlow.verification_uri,
-                  )
-                }
-              >
-                在默认浏览器中重新打开授权页
-              </button>
-              <div style={{ display: "flex", gap: "10px", width: "100%" }}>
-                <button
-                  type="button"
-                  style={{
-                    flex: 1,
-                    background: "rgba(255, 255, 255, 0.06)",
-                    border: "1px solid rgba(255, 255, 255, 0.15)",
-                    color: copiedLink ? "#7ed5a0" : "#ccc",
-                    padding: "10px",
-                    borderRadius: "10px",
-                    cursor: "pointer",
-                    fontSize: "13px",
-                  }}
-                  onClick={() => {
-                    const url =
-                      deviceFlow.verification_uri_complete ||
-                      deviceFlow.verification_uri;
-                    void navigator.clipboard.writeText(url);
-                    setCopiedLink(true);
-                    setTimeout(() => setCopiedLink(false), 2000);
-                  }}
-                >
-                  {copiedLink ? "✓ 已复制授权链接" : "复制授权链接"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeviceFlow(undefined);
-                    setPolling(false);
-                    setBusy(false);
-                  }}
-                  style={{
-                    flex: 1,
-                    background: "transparent",
-                    border: "1px solid rgba(255, 255, 255, 0.15)",
-                    color: "#aaa",
-                    padding: "10px",
-                    borderRadius: "10px",
-                    cursor: "pointer",
-                    fontSize: "13px",
-                  }}
-                >
-                  返回账号登录
-                </button>
-              </div>
-            </div>
-            <div
-              style={{
-                fontSize: "12px",
-                color: "#888",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "6px",
-              }}
-            >
-              <RefreshCw className="spinning" size={14} />{" "}
-              正在等待网页端授权确认...
-            </div>
+              返回账号密码登录
+            </button>
           </div>
         ) : (
           <form onSubmit={submit} className="auth-form">
-            <header>
-              <span className="card-kicker">AgentHub Desktop</span>
-              <h2>{mode === "login" ? "连接这台电脑" : "创建账号"}</h2>
-              <p>
-                {mode === "login"
-                  ? "登录后立即扫描本机，不必打开终端。"
-                  : "一个账号连接你的所有开发设备。"}
-              </p>
-            </header>
-            {oauthLoading ? (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "10px",
-                  padding: "14px",
-                  background: "rgba(255, 79, 135, 0.08)",
-                  borderRadius: "12px",
-                  border: "1px solid rgba(255, 79, 135, 0.3)",
-                  textAlign: "center",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "8px",
-                    color: "#ff4f87",
-                    fontWeight: 700,
-                    fontSize: "14px",
-                  }}
-                >
-                  <RefreshCw className="spinning" size={16} />
-                  <span>正在等待浏览器完成授权...</span>
-                </div>
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: "12px",
-                    color: "#aaa",
-                    lineHeight: 1.4,
-                  }}
-                >
-                  已拉起默认浏览器打开授权页。若页面关闭或丢失，请使用下方按钮操作：
-                </p>
-                <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                  {oauthUrl && (
-                    <button
-                      type="button"
-                      style={{
-                        flex: 1,
-                        padding: "8px 10px",
-                        background: "rgba(255, 255, 255, 0.12)",
-                        border: "1px solid rgba(255, 255, 255, 0.2)",
-                        borderRadius: "8px",
-                        color: "#fff",
-                        fontSize: "12px",
-                        cursor: "pointer",
-                        fontWeight: 600,
-                      }}
-                      onClick={() => void openUrl(oauthUrl)}
-                    >
-                      🔗 重新打开网页
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    style={{
-                      flex: 1,
-                      padding: "8px 10px",
-                      background: "rgba(255, 255, 255, 0.05)",
-                      border: "1px solid rgba(255, 255, 255, 0.15)",
-                      borderRadius: "8px",
-                      color: "#aaa",
-                      fontSize: "12px",
-                      cursor: "pointer",
-                    }}
-                    onClick={() => {
-                      setOauthLoading(false);
-                      setOauthUrl(undefined);
-                    }}
-                  >
-                    ❌ 取消并重新登录
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={startBrowserOAuth}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "10px",
-                  padding: "12px",
-                  borderRadius: "10px",
-                  background: "rgba(255, 255, 255, 0.08)",
-                  border: "1px solid rgba(255, 255, 255, 0.15)",
-                  color: "#f5f2ec",
-                  fontWeight: 700,
-                  fontSize: "14px",
-                  cursor: busy ? "not-allowed" : "pointer",
-                  transition: "all 0.2s ease",
-                }}
-              >
-                <span style={{ color: "#ff4f87" }}>◆</span>
-                <span>使用 TannerLab 账号统一登录 (Google 级静默秒登)</span>
-              </button>
-            )}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                textAlign: "center",
-                color: "#777",
-                fontSize: "12px",
-                margin: "4px 0",
-              }}
-            >
-              <div
-                style={{
-                  flex: 1,
-                  height: "1px",
-                  background: "rgba(255, 255, 255, 0.1)",
-                }}
-              />
-              <span style={{ padding: "0 10px" }}>或使用邮箱密码</span>
-              <div
-                style={{
-                  flex: 1,
-                  height: "1px",
-                  background: "rgba(255, 255, 255, 0.1)",
-                }}
-              />
-            </div>
-            <div className="mode-switch" aria-label="账号操作">
-              <button
-                type="button"
-                aria-current={mode === "login"}
-                onClick={() => setMode("login")}
-              >
-                登录
-              </button>
-              <button
-                type="button"
-                aria-current={mode === "register"}
-                onClick={() => setMode("register")}
-              >
-                注册
-              </button>
-            </div>
-            {mode === "register" && (
-              <label>
-                <span>显示名称</span>
-                <input
-                  autoComplete="name"
-                  value={displayName}
-                  onChange={(event) => setDisplayName(event.target.value)}
-                  required
-                />
-              </label>
-            )}
             <label>
               <span>邮箱</span>
               <input
-                autoFocus
-                autoComplete="email"
                 type="email"
-                placeholder="name@example.com"
+                placeholder="developer@example.com"
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(e) => setEmail(e.target.value)}
                 required
+                autoFocus
               />
             </label>
             <label>
               <span>密码</span>
-              <div className="password-field">
-                <input
-                  autoComplete={
-                    mode === "login" ? "current-password" : "new-password"
-                  }
-                  minLength={10}
-                  type={showPassword ? "text" : "password"}
-                  placeholder="至少 10 个字符"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                />
-                <button
-                  type="button"
-                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                  onClick={() => setShowPassword((value) => !value)}
-                >
-                  {showPassword ? <EyeOff /> : <Eye />}
-                </button>
-              </div>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
             </label>
-            {error !== undefined && (
-              <p className="form-error" role="alert">
-                {error}
-              </p>
+            {mode === "register" && (
+              <label>
+                <span>显示名称（可选）</span>
+                <input
+                  type="text"
+                  placeholder="Tang Tang"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                />
+              </label>
             )}
-            <button className="primary-button" disabled={busy} type="submit">
+
+            <button
+              type="button"
+              className="advanced-toggle"
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              {showAdvanced ? "收起高级设置" : "高级设置（自定义服务器）"}
+            </button>
+
+            {showAdvanced && (
+              <label className="advanced-field">
+                <span>服务器地址</span>
+                <input
+                  type="url"
+                  placeholder="https://platform.tannerlab.xyz"
+                  value={serverUrl}
+                  onChange={(e) => setServerUrl(e.target.value)}
+                />
+              </label>
+            )}
+
+            {error && <p className="form-error">{error}</p>}
+
+            <button
+              type="submit"
+              className="primary-button submit-btn"
+              disabled={busy}
+            >
               {busy ? (
                 <>
-                  <RefreshCw className="spin" /> 正在扫描并连接
+                  <RefreshCw className="spin" size={16} /> 正在连接...
                 </>
               ) : mode === "login" ? (
-                "登录并扫描本机"
+                "登录并连接"
               ) : (
-                "注册并扫描本机"
+                "创建账号"
               )}
             </button>
-            <p className="privacy-note">
-              <ShieldCheck /> 不上传对话、Prompt、命令、Token 或记忆正文
-            </p>
+
+            <button
+              type="button"
+              className="outline-button tg-oauth-btn"
+              onClick={startTgDeviceAuth}
+              disabled={busy}
+            >
+              <Sparkles size={16} />
+              通过 Telegram / 浏览器快捷登录
+            </button>
+
+            <footer className="auth-footer">
+              {mode === "login" ? (
+                <span>
+                  还没有账号？
+                  <button type="button" onClick={() => setMode("register")}>
+                    立即注册
+                  </button>
+                </span>
+              ) : (
+                <span>
+                  已有账号？
+                  <button type="button" onClick={() => setMode("login")}>
+                    直接登录
+                  </button>
+                </span>
+              )}
+            </footer>
           </form>
         )}
-      </section>
+      </div>
     </main>
   );
 }
@@ -691,9 +435,6 @@ function Dashboard({
   const [searchOpen, setSearchOpen] = useState(false);
   const [agentFilter, setAgentFilter] = useState<AgentFilter>("claude_code");
   const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
-  const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">(
-    "active",
-  );
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
   const [alertDismissed, setAlertDismissed] = useState(false);
   const [showBannerDetails, setShowBannerDetails] = useState(false);
@@ -715,11 +456,39 @@ function Dashboard({
     }
   });
 
+  // Selected models per agent provider (Point 1)
+  const [selectedModelsByAgent, setSelectedModelsByAgent] = useState<
+    Record<string, string>
+  >(() => {
+    try {
+      const stored = window.localStorage.getItem("agenthub:selected-models");
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // Context Menu & Toast state (Point 11)
+  const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(
+    null,
+  );
+  const [toastMessage, setToastMessage] = useState<string>();
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(
+      () => setToastMessage((curr) => (curr === msg ? undefined : curr)),
+      2500,
+    );
+  };
+
   // Quick Task Launcher state
   const [quickPrompt, setQuickPrompt] = useState("");
   const [quickProvider, setQuickProvider] =
     useState<Session["agent_type"]>("claude_code");
-  const [quickCwd, setQuickCwd] = useState("d:/ClaudeSpace");
+  const [quickCwd, setQuickCwd] = useState(
+    snapshot.preferences.default_cwd || "d:/ClaudeSpace",
+  );
   const [quickLaunching, setQuickLaunching] = useState(false);
 
   const refreshInFlight = useRef(false);
@@ -733,6 +502,7 @@ function Dashboard({
     [snapshot.sessions],
   );
 
+  // Active Sessions only - Point 3 & 10 (remove archived)
   const filteredSessions = useMemo(
     () =>
       sessions.filter((session) => {
@@ -740,8 +510,7 @@ function Dashboard({
           return false;
         if (deviceFilter !== "all" && session.device_id !== deviceFilter)
           return false;
-        if ((session.archived === true) !== (archiveFilter === "archived"))
-          return false;
+        if (session.archived === true) return false;
         if (deferredQuery === "") return true;
         const haystack = [
           session.payload.runtime?.title,
@@ -754,7 +523,7 @@ function Dashboard({
           .toLocaleLowerCase();
         return haystack.includes(deferredQuery);
       }),
-    [agentFilter, archiveFilter, deferredQuery, deviceFilter, sessions],
+    [agentFilter, deferredQuery, deviceFilter, sessions],
   );
 
   const workspaceGroups = useMemo(
@@ -911,7 +680,7 @@ function Dashboard({
       setQuickPrompt("");
       await refresh();
       setSelectedSessionKey(
-        `${snapshot.device.device_id}:${result.agent_type}:${result.agent_session_id}`,
+        snapshot.device.device_id + ":" + result.agent_type + ":" + result.agent_session_id,
       );
     } catch (err) {
       setError(errorMessage(err));
@@ -966,6 +735,10 @@ function Dashboard({
     PROVIDER_LIST.find((provider) => provider.type === agentFilter) ??
     PROVIDER_LIST[0];
 
+  const currentProviderModel =
+    selectedModelsByAgent[selectedProvider.type] ||
+    getDefaultModel(selectedProvider.type);
+
   return (
     <main className="claude-app-shell">
       {/* Left Claude Desktop Sidebar */}
@@ -984,7 +757,7 @@ function Dashboard({
           <div className="top-nav-right">
             <button
               type="button"
-              className={`top-icon-btn ${searchOpen ? "active" : ""}`}
+              className={"top-icon-btn " + (searchOpen ? "active" : "")}
               onClick={() => setSearchOpen((v) => !v)}
               title="搜索会话"
               aria-label="搜索会话"
@@ -1027,48 +800,24 @@ function Dashboard({
           </div>
         </div>
 
-        <div className="sidebar-mode-pill" role="tablist" aria-label="会话范围">
-          <button
-            type="button"
-            className={archiveFilter === "active" ? "active" : ""}
-            onClick={() => {
-              setArchiveFilter("active");
-              setSelectedSessionKey(undefined);
-            }}
-          >
-            <Activity size={14} />
-            <span>进行中</span>
-          </button>
-          <button
-            type="button"
-            className={archiveFilter === "archived" ? "active" : ""}
-            onClick={() => {
-              setArchiveFilter("archived");
-              setSelectedSessionKey(undefined);
-            }}
-          >
-            <Archive size={14} />
-            <span>已归档</span>
-          </button>
-        </div>
-
-        <label className="sidebar-agent-picker">
-          <span>当前 Agent</span>
-          <select
+        {/* Modern Sleek Agent Selector Dropdown (Point 7) */}
+        <div className="sidebar-agent-picker-v2">
+          <span className="picker-label">当前 Agent</span>
+          <SelectDropdown
             value={agentFilter}
-            onChange={(event) => {
-              setAgentFilter(event.target.value as AgentFilter);
+            options={PROVIDER_LIST.map((provider) => ({
+              value: provider.type,
+              label: provider.label,
+              desc: provider.desc,
+            }))}
+            onChange={(val) => {
+              setAgentFilter(val as AgentFilter);
               setSelectedSessionKey(undefined);
             }}
-            aria-label="选择当前 Agent"
-          >
-            {PROVIDER_LIST.map((provider) => (
-              <option key={provider.type} value={provider.type}>
-                {provider.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            size="sm"
+            ariaLabel="选择当前 Agent"
+          />
+        </div>
 
         <div className="sidebar-action-buttons">
           <button
@@ -1107,7 +856,7 @@ function Dashboard({
           </div>
         )}
 
-        {/* The selected Agent is grouped only by local workspace. */}
+        {/* The selected Agent is grouped by local workspace. */}
         <div className="sidebar-providers-tree">
           {workspaceGroups.length === 0 ? (
             <div className="sidebar-empty">
@@ -1159,7 +908,7 @@ function Dashboard({
                       <button
                         type="button"
                         className="provider-action-icon"
-                        title={`在 ${group.name} 新建会话`}
+                        title={"在 " + group.name + " 新建会话"}
                         onClick={() =>
                           agentFilter !== "all" &&
                           openLaunchModalFor(agentFilter)
@@ -1183,9 +932,17 @@ function Dashboard({
                         return (
                           <div
                             key={sessionKey(session)}
-                            className={`sidebar-session-item ${isSelected ? "selected" : ""}`}
+                            className={"sidebar-session-item " + (isSelected ? "selected" : "")}
                             data-provider={session.agent_type}
                             title={title}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setContextMenu({
+                                x: e.clientX,
+                                y: e.clientY,
+                                session,
+                              });
+                            }}
                           >
                             <button
                               type="button"
@@ -1212,7 +969,7 @@ function Dashboard({
                             </button>
                             <button
                               type="button"
-                              className={`sidebar-pin ${pinnedSessions.includes(sessionKey(session)) ? "active" : ""}`}
+                              className={"sidebar-pin " + (pinnedSessions.includes(sessionKey(session)) ? "active" : "")}
                               onClick={() =>
                                 togglePinnedSession(sessionKey(session))
                               }
@@ -1285,7 +1042,7 @@ function Dashboard({
                 <small>
                   {snapshot.realtime_connected ? "实时连接" : "轮询连接"}
                   <i
-                    className={`live-status-dot ${snapshot.realtime_connected ? "" : "fallback"}`}
+                    className={"live-status-dot " + (snapshot.realtime_connected ? "" : "fallback")}
                   />
                 </small>
               </span>
@@ -1306,46 +1063,24 @@ function Dashboard({
             nextSession={nextSession}
             onNavigate={(next) => setSelectedSessionKey(sessionKey(next))}
             onClose={() => setSelectedSessionKey(undefined)}
-            onChanged={async (archived) => {
-              setSnapshot((current) => ({
-                ...current,
-                sessions: current.sessions.map((session) =>
-                  sessionKey(session) === sessionKey(selectedSession)
-                    ? { ...session, archived }
-                    : session,
-                ),
-              }));
-              setArchiveFilter(archived ? "archived" : "active");
-              await refresh();
-            }}
           />
         ) : (
           <div className="claude-home-stage">
-            <header className="workspace-masthead">
-              <div className="workspace-title-block">
-                <span className="prompt-spark">
-                  <Sparkles size={18} />
-                </span>
-                <h1>接下来做什么，{displayName}？</h1>
-              </div>
-            </header>
-
+            {/* Top Notice Banner - Point 2 (At Top, No Overlap) */}
             {!alertDismissed && showSystemNotice && (
-              <div className="claude-alert-box">
+              <div className="claude-alert-box top-banner">
                 <div className="alert-content">
                   <div className="alert-title-row">
                     <AlertTriangle size={16} className="alert-icon" />
                     <strong>
                       {!snapshot.realtime_connected
                         ? "实时通道暂不可用，已切换为安全轮询"
-                        : `${agentShortLabel(sourceIssue!.agent_type)} 尚未完成本机接入`}
+                        : agentShortLabel(sourceIssue!.agent_type) + " 尚未完成本机接入"}
                     </strong>
                   </div>
                   {showBannerDetails && (
                     <p className="alert-details-text">
-                      已发现 {snapshot.local.session_count}{" "}
-                      个本机会话，现有数据不会丢失。 可在本机设置中检查 CLI
-                      路径与索引周期。
+                      已发现 {snapshot.local.session_count} 个本机会话，现有数据不会丢失。可在本机设置中检查 CLI 路径与索引周期。
                     </p>
                   )}
                   <div className="alert-actions-row">
@@ -1383,6 +1118,15 @@ function Dashboard({
                 </button>
               </div>
             )}
+
+            <header className="workspace-masthead">
+              <div className="workspace-title-block">
+                <span className="prompt-spark">
+                  <Sparkles size={18} />
+                </span>
+                <h1>接下来做什么，{displayName}？</h1>
+              </div>
+            </header>
 
             <form onSubmit={handleQuickLaunch} className="claude-prompt-dock">
               <div className="prompt-dock-heading">
@@ -1432,9 +1176,33 @@ function Dashboard({
                   />
                 </label>
                 <div className="dock-bottom-right">
-                  <span className="dock-model-label">
-                    {selectedProvider.defaultModel}
-                  </span>
+                  {/* Dynamic Model Dropdown (Point 1) */}
+                  <SelectDropdown
+                    value={currentProviderModel}
+                    options={getProviderModels(selectedProvider.type).map(
+                      (m) => ({
+                        value: m.value,
+                        label: m.label,
+                        desc: m.desc,
+                      }),
+                    )}
+                    onChange={(val) => {
+                      setSelectedModelsByAgent((prev) => {
+                        const next = {
+                          ...prev,
+                          [selectedProvider.type]: val,
+                        };
+                        window.localStorage.setItem(
+                          "agenthub:selected-models",
+                          JSON.stringify(next),
+                        );
+                        return next;
+                      });
+                    }}
+                    size="sm"
+                    align="right"
+                    ariaLabel="选择模型"
+                  />
                   <span className="dock-safety-note">
                     <ShieldCheck size={12} /> 遵循本机权限
                   </span>
@@ -1444,7 +1212,7 @@ function Dashboard({
           </div>
         )}
 
-        {/* Global Account, Settings, and Launch Modals */}
+        {/* Global Account, Settings, Launch, ContextMenu Modals */}
         {accountOpen && (
           <AccountMenu
             snapshot={snapshot}
@@ -1458,12 +1226,14 @@ function Dashboard({
           />
         )}
         {settingsOpen && (
-          <DesktopSettingsPanel
+          <DesktopSettingsModal
             preferences={snapshot.preferences}
+            snapshot={snapshot}
             onClose={() => setSettingsOpen(false)}
             onSaved={(preferences) =>
               setSnapshot((current) => ({ ...current, preferences }))
             }
+            onLogout={() => void signOut()}
           />
         )}
         <LaunchSessionModal
@@ -1473,117 +1243,49 @@ function Dashboard({
           onLaunched={async (agentSessionId, agentType) => {
             await refresh();
             setSelectedSessionKey(
-              `${snapshot.device.device_id}:${agentType}:${agentSessionId}`,
+              snapshot.device.device_id + ":" + agentType + ":" + agentSessionId,
             );
           }}
         />
+
+        {/* Right-click Context Menu on Sessions (Point 11) */}
+        {contextMenu && (
+          <SessionContextMenu
+            position={contextMenu}
+            onClose={() => setContextMenu(null)}
+            isPinned={pinnedSessions.includes(
+              sessionKey(contextMenu.session),
+            )}
+            onTogglePin={togglePinnedSession}
+            onNewSessionForAgent={(agentType) => {
+              openLaunchModalFor(agentType);
+            }}
+            onShowToast={showToast}
+          />
+        )}
+
+        {/* Toast Notification Pill */}
+        {toastMessage && (
+          <div className="toast-feedback">
+            <CheckCircle2 size={14} style={{ color: "#38bdf8" }} />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+
         {error !== undefined && (
           <div className="toast-error" role="alert">
             <AlertTriangle />
             {error}
-            <button aria-label="关闭错误" onClick={() => setError(undefined)}>
+            <button
+              aria-label="关闭错误"
+              onClick={() => setError(undefined)}
+            >
               <X />
             </button>
           </div>
         )}
       </section>
     </main>
-  );
-}
-
-function SourceRow({
-  icon,
-  name,
-  fallbackCount,
-  source,
-}: {
-  icon: React.ReactNode;
-  name: string;
-  fallbackCount: number;
-  source?: LocalSource;
-}) {
-  const healthy = source?.status === "healthy";
-  const failed = source?.status === "backoff";
-  return (
-    <div className="source-row">
-      <span className="source-icon">{icon}</span>
-      <div className="source-copy">
-        <strong>{name}</strong>
-        <span className="source-count">
-          已发现 {source?.session_count ?? fallbackCount} 个会话
-        </span>
-      </div>
-      <span
-        className={
-          healthy
-            ? "source-health healthy"
-            : failed
-              ? "source-health failed"
-              : "source-health"
-        }
-        title={source?.error_code}
-      >
-        {healthy ? (
-          <CheckCircle2 />
-        ) : failed ? (
-          <AlertTriangle />
-        ) : (
-          <RefreshCw className="spin" />
-        )}
-        {healthy ? "扫描正常" : failed ? "正在重试" : "正在扫描"}
-      </span>
-    </div>
-  );
-}
-
-function SessionRow({
-  session,
-  selected,
-  onSelect,
-}: {
-  session: Session;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const status = statusView(
-    session.payload.state.activity_status,
-    session.payload.state.presence,
-  );
-  const runtime = session.payload.runtime;
-  const title = sessionDisplayTitle(session);
-  return (
-    <button
-      className={selected ? "session-row selected" : "session-row"}
-      role="row"
-      onClick={onSelect}
-    >
-      <span className="session-identity">
-        <strong title={title}>{title}</strong>
-        <small>{session.payload.project.display_name || "未分类项目"}</small>
-      </span>
-      <span className="session-runtime">
-        <strong>{agentLabel(session.agent_type)}</strong>
-        <small>{runtime?.model ?? "模型未提供"}</small>
-      </span>
-      <span>
-        <em className={`status-chip ${status.className}`}>
-          <i />
-          {status.label}
-        </em>
-      </span>
-      <time>{relativeTime(activityTime(session))}</time>
-      <span className="session-row-tail">
-        <i
-          className={`sync-dot ${session.sync_state ?? "synced"}`}
-          title={
-            session.sync_state === "local"
-              ? "本地已发现，等待云端确认"
-              : "云端已同步"
-          }
-        />
-        <ChevronRight />
-      </span>
-    </button>
   );
 }
 
@@ -1603,13 +1305,19 @@ function LaunchSessionModal({
 }) {
   const [agentType, setAgentType] =
     useState<Session["agent_type"]>(initialAgentType);
+  const [model, setModel] = useState<string>(() =>
+    getDefaultModel(initialAgentType),
+  );
   const [cwd, setCwd] = useState("d:/ClaudeSpace");
   const [prompt, setPrompt] = useState("");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    if (open) setAgentType(initialAgentType);
+    if (open) {
+      setAgentType(initialAgentType);
+      setModel(getDefaultModel(initialAgentType));
+    }
   }, [initialAgentType, open]);
 
   const submit = async (event: FormEvent) => {
@@ -1675,7 +1383,10 @@ function LaunchSessionModal({
                   type="button"
                   className={agentType === item.type ? "selected" : ""}
                   data-provider={item.type}
-                  onClick={() => setAgentType(item.type)}
+                  onClick={() => {
+                    setAgentType(item.type);
+                    setModel(getDefaultModel(item.type));
+                  }}
                 >
                   <i aria-hidden="true" />
                   <span>
@@ -1686,6 +1397,21 @@ function LaunchSessionModal({
               ))}
             </div>
           </fieldset>
+
+          <label className="launch-form-field">
+            <span>运行模型</span>
+            <SelectDropdown
+              value={model}
+              options={getProviderModels(agentType).map((m) => ({
+                value: m.value,
+                label: m.label,
+                desc: m.desc,
+              }))}
+              onChange={(val) => setModel(val)}
+              size="md"
+            />
+          </label>
+
           <label className="launch-form-field">
             <span>工作目录</span>
             <input
@@ -1745,21 +1471,18 @@ function SessionControlPanel({
   nextSession,
   onNavigate,
   onClose,
-  onChanged,
 }: {
   session: Session;
   previousSession?: Session;
   nextSession?: Session;
   onNavigate: (session: Session) => void;
   onClose: () => void;
-  onChanged: (archived: boolean) => Promise<void>;
 }) {
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [agentActivity, setAgentActivity] = useState<string>();
-  const [archiveBusy, setArchiveBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [panelView, setPanelView] = useState<
     "context" | "conversation" | "timeline"
@@ -1823,138 +1546,109 @@ function SessionControlPanel({
         agent_session_id: session.agent_session_id,
       },
     })
-      .then((history) => {
-        if (!disposed && history.length > 0) setMessages(history);
+      .then((next) => {
+        if (!disposed) setMessages(next);
       })
-      .catch(() => {
-        // History is best-effort; the live session remains usable.
+      .catch((err) => {
+        if (!disposed) setError(errorMessage(err));
       });
     return () => {
       disposed = true;
     };
   }, [session.agent_session_id, session.agent_type]);
 
-  const replaceLastAssistant = (content: string) => {
-    setMessages((current) => replaceAssistantMessage(current, content));
-  };
+  useEffect(() => {
+    if (panelView === "conversation") {
+      conversationEnd.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, panelView]);
 
-  const flushPendingDelta = () => {
+  const flushDelta = useCallback(() => {
     deltaFrame.current = undefined;
+    if (pendingDelta.current === "") return;
     const delta = pendingDelta.current;
     pendingDelta.current = "";
-    if (delta === "") return;
     setMessages((current) => appendAssistantDelta(current, delta));
-  };
+  }, []);
 
-  useEffect(() => {
-    conversationEnd.current?.scrollIntoView({ block: "end" });
-  }, [agentActivity, messages]);
-
-  useEffect(
-    () => () => {
-      if (deltaFrame.current !== undefined)
-        window.cancelAnimationFrame(deltaFrame.current);
+  const handleAssistantDelta = useCallback(
+    (delta: string) => {
+      pendingDelta.current += delta;
+      if (deltaFrame.current === undefined) {
+        deltaFrame.current = window.requestAnimationFrame(flushDelta);
+      }
     },
-    [],
+    [flushDelta],
   );
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT")
-      ) {
-        return;
-      }
-      if (event.key === "Escape") {
-        if (!busy) {
-          event.preventDefault();
-          onClose();
-        }
-        return;
-      }
-      if (event.key === "ArrowLeft" && previousSession !== undefined) {
-        event.preventDefault();
-        onNavigate(previousSession);
-      } else if (event.key === "ArrowRight" && nextSession !== undefined) {
-        event.preventDefault();
-        onNavigate(nextSession);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [busy, nextSession, onClose, onNavigate, previousSession]);
 
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
-    const content = prompt.trim();
-    if (busy || content === "") return;
+    if (busy || prompt.trim() === "") return;
+    const nextPrompt = prompt.trim();
     setPrompt("");
     setBusy(true);
-    setCancelling(false);
-    setAgentActivity("正在连接本机 CLI");
     setError(undefined);
+    setAgentActivity(undefined);
     setMessages((current) => [
       ...current,
-      { role: "user", content },
+      { role: "user", content: nextPrompt },
       { role: "assistant", content: "" },
     ]);
     try {
       const onEvent = new Channel<SessionTurnEvent>();
-      onEvent.onmessage = (update) => {
-        if (update.type === "started") {
-          setAgentActivity("Agent 正在本机运行");
-        } else if (update.type === "activity") {
-          setAgentActivity(update.label);
-        } else if (update.type === "assistant_message") {
-          pendingDelta.current = "";
+      onEvent.onmessage = (event) => {
+        if (event.type === "assistant_delta") {
+          handleAssistantDelta(event.text);
+        } else if (event.type === "assistant_message") {
           if (deltaFrame.current !== undefined) {
             window.cancelAnimationFrame(deltaFrame.current);
             deltaFrame.current = undefined;
           }
-          replaceLastAssistant(update.text);
-          setAgentActivity("正在收尾");
-        } else {
-          pendingDelta.current += update.text;
-          setAgentActivity("正在生成回复");
-          if (deltaFrame.current === undefined) {
-            deltaFrame.current =
-              window.requestAnimationFrame(flushPendingDelta);
-          }
+          pendingDelta.current = "";
+          setMessages((current) =>
+            replaceAssistantMessage(current, event.text),
+          );
+        } else if (event.type === "activity") {
+          setAgentActivity(event.label);
         }
       };
-      const result = await invoke<SessionTurnResult>("send_session_message", {
-        input: {
-          agent_type: session.agent_type,
-          agent_session_id: session.agent_session_id,
-          prompt: content,
+      const result = await invoke<SessionTurnResult>(
+        "send_session_turn",
+        {
+          input: {
+            agent_type: session.agent_type,
+            agent_session_id: session.agent_session_id,
+            prompt: nextPrompt,
+          },
+          onEvent,
         },
-        onEvent,
-      });
-      pendingDelta.current = "";
+      );
       if (deltaFrame.current !== undefined) {
         window.cancelAnimationFrame(deltaFrame.current);
         deltaFrame.current = undefined;
       }
-      replaceLastAssistant(result.response);
+      pendingDelta.current = "";
+      setMessages((current) =>
+        replaceAssistantMessage(current, result.response),
+      );
     } catch (nextError) {
+      if (deltaFrame.current !== undefined) {
+        window.cancelAnimationFrame(deltaFrame.current);
+        deltaFrame.current = undefined;
+      }
+      pendingDelta.current = "";
+      setMessages((current) => dropTrailingEmptyAssistant(current));
       setError(errorMessage(nextError));
-      setMessages(dropTrailingEmptyAssistant);
     } finally {
-      setAgentActivity(undefined);
-      setCancelling(false);
       setBusy(false);
+      setCancelling(false);
+      setAgentActivity(undefined);
     }
   };
 
   const cancelTurn = async () => {
     if (!busy || cancelling) return;
     setCancelling(true);
-    setAgentActivity("正在停止本机回合");
     try {
       await invoke("cancel_session_turn", {
         input: {
@@ -1968,138 +1662,126 @@ function SessionControlPanel({
     }
   };
 
-  const toggleArchive = async () => {
-    if (archiveBusy) return;
-    setArchiveBusy(true);
-    setError(undefined);
-    try {
-      const archived = session.archived !== true;
-      await invoke("set_session_archived", {
-        input: {
-          agent_type: session.agent_type,
-          agent_session_id: session.agent_session_id,
-          project_display_name: session.payload.project.display_name,
-          project_fingerprint: session.payload.project.fingerprint,
-          observed_at: session.observed_at,
-          archived,
-        },
-      });
-      await onChanged(archived);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setArchiveBusy(false);
-    }
-  };
-
   return (
     <div
-      className="panel-scrim"
-      onMouseDown={() => {
-        if (busy) setError("请先停止当前回合，再关闭会话控制面板。");
-        else onClose();
-      }}
+      className="session-control-panel-scrim"
+      role="region"
+      aria-label={title}
     >
-      <aside
-        className="session-control-panel"
-        aria-label="会话控制"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+      <aside className="session-control-panel">
         <header>
-          <div className="session-title-line">
-            <h2 title={title}>{title}</h2>
-            <span>{session.payload.project.display_name || "未分类项目"}</span>
-          </div>
-          <div className="session-header-actions">
+          <div className="panel-nav">
             <button
               className="icon-button"
-              aria-label="会话内容"
-              title="会话内容"
-              aria-pressed={panelView === "conversation"}
-              onClick={() => setPanelView("conversation")}
-            >
-              <MessageSquare size={15} />
-            </button>
-            <button
-              className="icon-button"
-              aria-label="运行上下文"
-              title="运行上下文"
-              aria-pressed={panelView === "context"}
-              onClick={() => setPanelView("context")}
-            >
-              <Terminal size={15} />
-            </button>
-            <button
-              className="icon-button"
-              aria-label="时间线"
-              title="时间线"
-              aria-pressed={panelView === "timeline"}
-              onClick={() => setPanelView("timeline")}
-            >
-              <Activity size={15} />
-            </button>
-            <button
-              className="icon-button"
-              aria-label="关闭会话"
-              disabled={busy}
+              aria-label="返回"
               onClick={onClose}
+              title="返回工作区首页"
+            >
+              <ArrowLeft />
+            </button>
+            <span className="session-breadcrumb">
+              <strong>{title}</strong>
+              <small>
+                {session.payload.project.display_name || "未分类项目"}
+              </small>
+            </span>
+          </div>
+          <div className="panel-heading-actions">
+            <span className={"status-pill " + status.className}>
+              <i />
+              {status.label}
+            </span>
+            <button
+              className="icon-button"
+              aria-label="上一个会话"
+              title="上一个会话"
+              disabled={previousSession === undefined}
+              onClick={() => previousSession && onNavigate(previousSession)}
+            >
+              <ChevronLeft />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="下一个会话"
+              title="下一个会话"
+              disabled={nextSession === undefined}
+              onClick={() => nextSession && onNavigate(nextSession)}
+            >
+              <ChevronRight />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="关闭面板"
+              onClick={onClose}
+              title="关闭会话"
             >
               <X />
             </button>
           </div>
         </header>
 
+        <nav
+          className="panel-view-switcher"
+          aria-label="会话详情视图"
+        >
+          <button
+            type="button"
+            className={panelView === "conversation" ? "active" : ""}
+            onClick={() => setPanelView("conversation")}
+          >
+            <MessageSquare size={14} />
+            <span>对话消息</span>
+          </button>
+          <button
+            type="button"
+            className={panelView === "context" ? "active" : ""}
+            onClick={() => setPanelView("context")}
+          >
+            <Sliders size={14} />
+            <span>运行上下文</span>
+          </button>
+          <button
+            type="button"
+            className={panelView === "timeline" ? "active" : ""}
+            onClick={() => setPanelView("timeline")}
+          >
+            <Activity size={14} />
+            <span>状态时间线</span>
+          </button>
+        </nav>
+
         {panelView === "context" ? (
-          <section className="runtime-context-view">
-            <dl className="session-metadata">
+          <section className="session-runtime-context">
+            <dl>
               <div>
-                <dt>分类目录</dt>
-                <dd>{session.payload.project.display_name || "未分类项目"}</dd>
+                <dt>Agent 类型</dt>
+                <dd>{agentLabel(session.agent_type)}</dd>
               </div>
               <div>
-                <dt>会话 ID</dt>
-                <dd title={session.agent_session_id}>
-                  {session.agent_session_id}
-                </dd>
+                <dt>会话模型</dt>
+                <dd>{runtime?.model ?? "模型未提供"}</dd>
               </div>
               <div>
-                <dt>模型</dt>
-                <dd title={runtime?.model}>{runtime?.model ?? "未提供"}</dd>
-              </div>
-              <div>
-                <dt>推理强度</dt>
-                <dd>{runtime?.reasoning_effort ?? "未提供"}</dd>
+                <dt>思考 / 推理深度</dt>
+                <dd>{runtime?.reasoning_effort ?? "未配置"}</dd>
               </div>
               <div>
                 <dt>{permissionFieldLabel(session.agent_type)}</dt>
-                <dd>{permission ?? "未提供"}</dd>
+                <dd>{permission ?? "未指定"}</dd>
               </div>
               <div>
                 <dt>沙箱模式</dt>
-                <dd>{runtime?.sandbox_mode ?? "未提供"}</dd>
+                <dd>{runtime?.sandbox_mode ?? "未配置"}</dd>
               </div>
               <div>
-                <dt>上下文窗口</dt>
+                <dt>上下文使用</dt>
                 <dd>{formatContextUsage(runtime)}</dd>
               </div>
               <div>
-                <dt>会话累计 Token</dt>
+                <dt>会话总消耗</dt>
                 <dd>{formatTokenCount(runtime?.session_total_tokens)}</dd>
               </div>
-              <div>
-                <dt>最近活动</dt>
-                <dd>{relativeTime(activityTime(session))}</dd>
-              </div>
-              <div>
-                <dt>同步状态</dt>
-                <dd>
-                  {session.sync_state === "local" ? "等待云端确认" : "已同步"}
-                </dd>
-              </div>
             </dl>
-            <p className="runtime-privacy-note">
-              <ShieldCheck /> 运行上下文来自本机元数据，不同步会话标题或配置。
-            </p>
           </section>
         ) : panelView === "timeline" ? (
           <SessionTimelineView
@@ -2122,7 +1804,8 @@ function SessionControlPanel({
               messages.map((message, index) => (
                 <ConversationItem
                   message={message}
-                  key={`${message.role}-${message.kind ?? "message"}-${index}`}
+                  index={index}
+                  key={message.role + "-" + (message.kind ?? "message") + "-" + index}
                 />
               ))
             )}
@@ -2136,6 +1819,7 @@ function SessionControlPanel({
         )}
 
         {error !== undefined && <p className="panel-error">{error}</p>}
+
         {panelView === "conversation" && (
           <div className="composer-container">
             <div className="slash-commands-bar">
@@ -2146,7 +1830,7 @@ function SessionControlPanel({
                     key={cmd}
                     type="button"
                     className="slash-chip"
-                    onClick={() => setPrompt((p) => (p ? `${p} ${cmd}` : cmd))}
+                    onClick={() => setPrompt((p) => (p ? p + " " + cmd : cmd))}
                   >
                     {cmd}
                   </button>
@@ -2157,11 +1841,7 @@ function SessionControlPanel({
               <textarea
                 aria-label="发送给 Agent"
                 maxLength={16_000}
-                placeholder={
-                  session.archived
-                    ? "恢复会话后再发送"
-                    : "继续这个会话… (Enter 发送，Shift+Enter 换行)"
-                }
+                placeholder="继续这个会话… (Enter 发送，Shift+Enter 换行)"
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 onKeyDown={(e) => {
@@ -2170,294 +1850,32 @@ function SessionControlPanel({
                     void sendMessage(e);
                   }
                 }}
-                disabled={busy || session.archived === true}
+                disabled={busy}
               />
-              <button
-                className="composer-send"
-                type="submit"
-                aria-label="发送"
-                disabled={
-                  busy || session.archived === true || prompt.trim() === ""
-                }
-              >
-                <Send />
-              </button>
+              {busy ? (
+                <button
+                  className="composer-send turn-cancel-btn"
+                  type="button"
+                  disabled={cancelling}
+                  onClick={() => void cancelTurn()}
+                  title="停止当前生成"
+                  aria-label="停止"
+                >
+                  <Square size={16} />
+                </button>
+              ) : (
+                <button
+                  className="composer-send"
+                  type="submit"
+                  aria-label="发送"
+                  disabled={busy || prompt.trim() === ""}
+                >
+                  <Send size={16} />
+                </button>
+              )}
             </form>
           </div>
         )}
-        <footer>
-          <span>
-            <ShieldCheck /> 本机直连 · Prompt 不上传
-          </span>
-          <div className="session-footer-actions">
-            {busy && (
-              <button
-                className="turn-cancel"
-                disabled={cancelling}
-                onClick={() => void cancelTurn()}
-              >
-                <Square />
-                {cancelling ? "停止中" : "停止回合"}
-              </button>
-            )}
-            <button
-              disabled={archiveBusy || busy}
-              onClick={() => void toggleArchive()}
-            >
-              {session.archived ? <RotateCcw /> : <Archive />}
-              {session.archived ? "恢复会话" : "归档会话"}
-            </button>
-          </div>
-        </footer>
-      </aside>
-    </div>
-  );
-}
-
-function ConversationItem({ message }: { message: ConversationMessage }) {
-  if (message.content === "" && message.kind !== "tool") return null;
-  if (
-    message.kind === "tool" ||
-    message.kind === "command" ||
-    message.kind === "status"
-  ) {
-    const failed = message.status === "failed";
-    return (
-      <details className={`activity-item ${failed ? "failed" : ""}`}>
-        <summary>
-          <span className="activity-item-icon">
-            {message.kind === "command" ? (
-              <Terminal size={14} />
-            ) : message.kind === "status" ? (
-              <Activity size={14} />
-            ) : (
-              <Code2 size={14} />
-            )}
-          </span>
-          <strong>
-            {message.label ||
-              (message.kind === "command" ? "命令" : "工具调用")}
-          </strong>
-          <span className="activity-item-state">
-            {failed
-              ? "失败"
-              : message.status === "running"
-                ? "运行中"
-                : message.status === "completed"
-                  ? "完成"
-                  : "状态"}
-          </span>
-          <ChevronRight size={13} className="activity-chevron" />
-        </summary>
-        {message.content !== "" && <pre>{message.content}</pre>}
-      </details>
-    );
-  }
-  return (
-    <article className={`turn-message ${message.role}`}>
-      {message.role === "user" && <span>你</span>}
-      <div className="markdown-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {message.content}
-        </ReactMarkdown>
-      </div>
-    </article>
-  );
-}
-
-function DesktopSettingsPanel({
-  preferences,
-  onClose,
-  onSaved,
-}: {
-  preferences: DesktopPreferences;
-  onClose: () => void;
-  onSaved: (preferences: DesktopPreferences) => void;
-}) {
-  const [refreshSeconds, setRefreshSeconds] = useState(
-    preferences.refresh_interval_seconds,
-  );
-  const [claudeBinary, setClaudeBinary] = useState(preferences.claude_binary);
-  const [codexBinary, setCodexBinary] = useState(preferences.codex_binary);
-  const [grokBinary, setGrokBinary] = useState(preferences.grok_binary);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [section, setSection] = useState<"general" | "agents" | "privacy">(
-    "general",
-  );
-
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(undefined);
-    try {
-      const next = await invoke<DesktopPreferences>(
-        "save_desktop_preferences",
-        {
-          input: {
-            refresh_interval_seconds: refreshSeconds,
-            claude_binary: claudeBinary,
-            codex_binary: codexBinary,
-            grok_binary: grokBinary,
-          },
-        },
-      );
-      onSaved(next);
-      onClose();
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="panel-scrim" onMouseDown={onClose}>
-      <aside
-        className="settings-panel"
-        aria-label="桌面设置"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header>
-          <h2>设置</h2>
-          <button
-            className="icon-button"
-            aria-label="关闭设置"
-            onClick={onClose}
-          >
-            <X />
-          </button>
-        </header>
-        <div className="settings-layout">
-          <nav className="settings-nav" aria-label="设置分类">
-            <button
-              className={section === "general" ? "active" : ""}
-              onClick={() => setSection("general")}
-            >
-              <Settings size={16} />
-              通用
-            </button>
-            <button
-              className={section === "agents" ? "active" : ""}
-              onClick={() => setSection("agents")}
-            >
-              <Cpu size={16} />
-              Agent 与同步
-            </button>
-            <button
-              className={section === "privacy" ? "active" : ""}
-              onClick={() => setSection("privacy")}
-            >
-              <ShieldCheck size={16} />
-              隐私
-            </button>
-          </nav>
-          <form onSubmit={save}>
-            {section === "general" && (
-              <section className="settings-section">
-                <div>
-                  <h3>通用</h3>
-                  <p>控制 AgentHub 桌面端的刷新与显示行为。</p>
-                </div>
-                <label className="settings-row">
-                  <span>
-                    <strong>刷新周期</strong>
-                    <small>实时通道断开时用于兜底轮询。</small>
-                  </span>
-                  <div className="range-field">
-                    <input
-                      type="range"
-                      min="2"
-                      max="60"
-                      value={refreshSeconds}
-                      onChange={(event) =>
-                        setRefreshSeconds(Number(event.target.value))
-                      }
-                    />
-                    <strong>{refreshSeconds} 秒</strong>
-                  </div>
-                </label>
-              </section>
-            )}
-            {section === "agents" && (
-              <section className="settings-section">
-                <div>
-                  <h3>Agent 与同步</h3>
-                  <p>自动发现本机会话，并从各 Agent 的本地存储导入历史内容。</p>
-                </div>
-                <label>
-                  <span>Claude Code CLI</span>
-                  <input
-                    value={claudeBinary}
-                    maxLength={260}
-                    onChange={(event) => setClaudeBinary(event.target.value)}
-                    placeholder="claude"
-                    required
-                  />
-                </label>
-                <label>
-                  <span>Codex CLI</span>
-                  <input
-                    value={codexBinary}
-                    maxLength={260}
-                    onChange={(event) => setCodexBinary(event.target.value)}
-                    placeholder="codex"
-                    required
-                  />
-                </label>
-                <label>
-                  <span>Grok Build CLI</span>
-                  <input
-                    value={grokBinary}
-                    maxLength={260}
-                    onChange={(event) => setGrokBinary(event.target.value)}
-                    placeholder="grok"
-                    required
-                  />
-                </label>
-                <div className="settings-info">
-                  <RefreshCw size={16} />
-                  <span>
-                    <strong>自动导入已开启</strong>
-                    <small>
-                      Claude Code、Codex、Antigravity 与 Grok Build
-                      会话会按工作目录整理。
-                    </small>
-                  </span>
-                </div>
-              </section>
-            )}
-            {section === "privacy" && (
-              <section className="settings-section">
-                <div>
-                  <h3>隐私</h3>
-                  <p>会话正文仅在当前设备解码并展示。</p>
-                </div>
-                <div className="settings-info">
-                  <HardDrive size={17} />
-                  <span>
-                    <strong>本地正文</strong>
-                    <small>不会写入 AgentHub 云端、日志或同步队列。</small>
-                  </span>
-                </div>
-                <div className="settings-info">
-                  <ShieldCheck size={17} />
-                  <span>
-                    <strong>凭据隔离</strong>
-                    <small>Token、Cookie 与私钥不会随会话一起导入。</small>
-                  </span>
-                </div>
-              </section>
-            )}
-            {error !== undefined && <p className="panel-error">{error}</p>}
-            <footer className="settings-actions">
-              <button className="primary-button" disabled={busy} type="submit">
-                {busy ? <RefreshCw className="spin" /> : <CheckCircle2 />}
-                保存设置
-              </button>
-            </footer>
-          </form>
-        </div>
       </aside>
     </div>
   );
@@ -2599,21 +2017,6 @@ function PulseMark({ size = 24 }: { size?: number }) {
   );
 }
 
-function LocalCloudDiagram() {
-  return (
-    <div className="local-cloud" aria-hidden="true">
-      <Cloud className="cloud" />
-      <span className="signal-line" />
-      <div className="laptop">
-        <Monitor />
-        <span>
-          <Code2 /> <PulseMark size={14} />
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function errorMessage(error: unknown): string {
   if (typeof error === "string" && error.trim() !== "") return error;
   if (error instanceof Error && error.message !== "") return error.message;
@@ -2621,12 +2024,7 @@ function errorMessage(error: unknown): string {
 }
 
 function sessionKey(session: Session): string {
-  return `${session.device_id}:${session.agent_type}:${session.agent_session_id}`;
-}
-
-function shortDeviceId(deviceId: string): string {
-  if (deviceId.length <= 14) return deviceId;
-  return `${deviceId.slice(0, 6)}…${deviceId.slice(-5)}`;
+  return session.device_id + ":" + session.agent_type + ":" + session.agent_session_id;
 }
 
 function SessionTimelineView({
@@ -2695,7 +2093,7 @@ function SessionTimelineView({
           );
           return (
             <li className="timeline-item" key={event.event_id}>
-              <span className={`timeline-marker ${status.className}`}>
+              <span className={"timeline-marker " + status.className}>
                 <i />
               </span>
               <div className="timeline-event">
@@ -2723,12 +2121,6 @@ function SessionTimelineView({
   );
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`;
-  return `${(bytes / 1_048_576).toFixed(1)} MB`;
-}
-
 function formatTimelineTimestamp(value: string): string {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return "时间未知";
@@ -2744,9 +2136,9 @@ function formatTimelineTimestamp(value: string): string {
 
 function formatTokenCount(tokens: number | undefined): string {
   if (tokens === undefined) return "未提供";
-  if (tokens < 1_000) return `${tokens} tokens`;
-  if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(1)}K tokens`;
-  return `${(tokens / 1_000_000).toFixed(2)}M tokens`;
+  if (tokens < 1_000) return tokens + " tokens";
+  if (tokens < 1_000_000) return (tokens / 1_000).toFixed(1) + "K tokens";
+  return (tokens / 1_000_000).toFixed(2) + "M tokens";
 }
 
 function formatContextUsage(runtime: Session["payload"]["runtime"]): string {
@@ -2754,10 +2146,10 @@ function formatContextUsage(runtime: Session["payload"]["runtime"]): string {
   const window = runtime?.context_window_tokens;
   if (used !== undefined && window !== undefined && window > 0) {
     const percentage = Math.min(100, Math.round((used / window) * 100));
-    return `${formatTokenCount(used)} / ${formatTokenCount(window)} · ${percentage}%`;
+    return formatTokenCount(used) + " / " + formatTokenCount(window) + " · " + percentage + "%";
   }
-  if (window !== undefined) return `${formatTokenCount(window)} 上限`;
-  if (used !== undefined) return `${formatTokenCount(used)} 已用 · 上限未提供`;
+  if (window !== undefined) return formatTokenCount(window) + " 上限";
+  if (used !== undefined) return formatTokenCount(used) + " 已用 · 上限未提供";
   return "未提供";
 }
 
@@ -2863,10 +2255,10 @@ function demoSession(
 ): Session {
   const observedAt = new Date(Date.now() - minutesAgo * 60_000).toISOString();
   return {
-    event_id: `${agent}-${project}`,
+    event_id: agent + "-" + project,
     device_id: "dev_demo",
     agent_type: agent,
-    agent_session_id: `${agent}-${project}`,
+    agent_session_id: agent + "-" + project,
     observed_at: observedAt,
     sync_state: minutesAgo < 3 ? "local" : "synced",
     payload: {
@@ -2875,16 +2267,16 @@ function demoSession(
       last_activity_at: observedAt,
       runtime: {
         agent_type: agent,
-        agent_session_id: `${agent}-${project}`,
+        agent_session_id: agent + "-" + project,
         title:
           agent === "claude_code"
-            ? `${project}实施计划`
+            ? project + "实施计划"
             : agent === "grok_build"
-              ? `${project}采集适配`
-              : `${project}接口与测试`,
+              ? project + "采集适配"
+              : project + "接口与测试",
         model:
           agent === "claude_code"
-            ? "claude-opus-4-7"
+            ? "claude-3-7-sonnet"
             : agent === "grok_build"
               ? "grok-4.6"
               : "gpt-5.5-codex",

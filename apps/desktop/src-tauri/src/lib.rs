@@ -1373,6 +1373,25 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
 
     let role = normalized_role(value);
     let mut items = Vec::new();
+
+    if let Some(thinking) = value
+        .get("thinking")
+        .or_else(|| payload.get("thinking"))
+        .or_else(|| payload.get("reasoning"))
+        .and_then(Value::as_str)
+    {
+        let clean = clean_message_text(thinking);
+        if !clean.is_empty() {
+            items.push(conversation_item(
+                "assistant",
+                "thinking",
+                "思考过程",
+                &clean,
+                "completed",
+            ));
+        }
+    }
+
     if let Some(blocks) = content.and_then(Value::as_array) {
         let mut text_parts = Vec::new();
         for block in blocks {
@@ -1381,6 +1400,18 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             match block_type {
+                "thinking" | "thought" | "reasoning" => {
+                    let text = extract_local_text(block);
+                    if !text.trim().is_empty() {
+                        items.push(conversation_item(
+                            "assistant",
+                            "thinking",
+                            "思考过程",
+                            &text,
+                            "completed",
+                        ));
+                    }
+                }
                 "text" | "input_text" | "output_text" => {
                     let text = extract_local_text(block);
                     if !text.trim().is_empty() {
