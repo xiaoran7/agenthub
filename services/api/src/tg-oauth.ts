@@ -81,16 +81,20 @@ export class TgOAuthClient {
 
   constructor(config: TgOAuthConfig = {}) {
     this.#issuerUrl =
-      config.issuerUrl ??
-      process.env.TG_OAUTH_ISSUER ??
+      config.issuerUrl?.trim() ||
+      process.env.TG_OAUTH_ISSUER?.trim() ||
       "https://auth.tannerlab.cn";
     this.#clientId =
-      config.clientId ?? process.env.TG_OAUTH_CLIENT_ID ?? "agent-pulse";
+      config.clientId?.trim() ||
+      process.env.TG_OAUTH_CLIENT_ID?.trim() ||
+      "agent-pulse";
     this.#clientSecret =
-      config.clientSecret ?? process.env.TG_OAUTH_CLIENT_SECRET;
+      config.clientSecret?.trim() ||
+      process.env.TG_OAUTH_CLIENT_SECRET?.trim() ||
+      undefined;
     this.#redirectUri =
-      config.redirectUri ??
-      process.env.TG_OAUTH_REDIRECT_URI ??
+      config.redirectUri?.trim() ||
+      process.env.TG_OAUTH_REDIRECT_URI?.trim() ||
       "http://localhost:3000/auth/callback/tg";
     this.#fetch = config.fetchFn ?? fetch;
   }

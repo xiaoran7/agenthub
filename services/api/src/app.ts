@@ -364,12 +364,17 @@ export function createGatewayApp(
 
   app.post("/v1/auth/oauth/tg/authorize-url", async (request, reply) => {
     const body =
-      request.body && typeof request.body === "object"
+      typeof request.body === "object" && request.body !== null
         ? (request.body as Record<string, unknown>)
         : {};
     const redirectUri =
-      typeof body.redirect_uri === "string" ? body.redirect_uri : undefined;
-    const scope = typeof body.scope === "string" ? body.scope : undefined;
+      typeof body.redirect_uri === "string" && body.redirect_uri.trim() !== ""
+        ? body.redirect_uri.trim()
+        : undefined;
+    const scope =
+      typeof body.scope === "string" && body.scope.trim() !== ""
+        ? body.scope.trim()
+        : undefined;
     const state = randomBytes(24).toString("base64url");
     const pkce = generatePkcePair();
     const authorizeUrl = await tgOAuth.buildAuthorizeUrl({
