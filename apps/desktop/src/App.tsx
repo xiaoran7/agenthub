@@ -148,6 +148,7 @@ function AuthScreen({
   const [displayName, setDisplayName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const [error, setError] = useState(initialError);
   const [deviceFlow, setDeviceFlow] = useState<
     TgDeviceCodeResponse | undefined
@@ -162,6 +163,22 @@ function AuthScreen({
       await invoke("open_external_url", { url });
     } catch {
       window.open(url, "_blank");
+    }
+  };
+
+  const startBrowserOAuth = async () => {
+    if (busy || oauthLoading) return;
+    setOauthLoading(true);
+    setError(undefined);
+    try {
+      const snapshot = await invoke<Snapshot>("start_tg_browser_oauth", {
+        server_url: null,
+      });
+      onAuthenticated(snapshot);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setOauthLoading(false);
     }
   };
 
@@ -415,8 +432,8 @@ function AuthScreen({
             </header>
             <button
               type="button"
-              disabled={busy}
-              onClick={startDeviceAuth}
+              disabled={busy || oauthLoading}
+              onClick={startBrowserOAuth}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -429,11 +446,25 @@ function AuthScreen({
                 color: "#f5f2ec",
                 fontWeight: 700,
                 fontSize: "14px",
-                cursor: "pointer",
+                cursor: busy || oauthLoading ? "not-allowed" : "pointer",
+                transition: "all 0.2s ease",
               }}
             >
-              <span style={{ color: "#ff4f87" }}>◆</span>
-              <span>使用 TannerLab 账号一键登录</span>
+              {oauthLoading ? (
+                <>
+                  <RefreshCw
+                    className="spinning"
+                    size={16}
+                    style={{ color: "#ff4f87" }}
+                  />
+                  <span>正在等待浏览器完成授权...</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ color: "#ff4f87" }}>◆</span>
+                  <span>使用 TannerLab 账号统一登录 (Google 级静默秒登)</span>
+                </>
+              )}
             </button>
             <div
               style={{
