@@ -3,7 +3,7 @@
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 
-## [Unreleased]
+## [2.0.0] - 2026-09-01
 
 ### Changed (2.0.0-spec 架构重定界)
 
