@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 桌面端侧边栏收窄并统一为 Claude Desktop 风格的深色单色轨道，新增全局 Agent 选择器；会话按当前 Agent 过滤，补齐“收起”操作。
+- 设置面板改为居中遮罩窗口，避免被主内容遮盖；会话打开时在本机按会话 ID 读取 Claude transcript 的 user/assistant 正文，正文不进入同步与云端事件。
+
 ## [2.0.6] - 2026-09-01
 
 ### Changed

@@ -690,7 +690,7 @@ function Dashboard({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>("claude_code");
   const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
   const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">(
     "active",
@@ -1022,6 +1022,25 @@ function Dashboard({
           </button>
         </div>
 
+        <label className="sidebar-agent-picker">
+          <span>当前 Agent</span>
+          <select
+            value={agentFilter}
+            onChange={(event) => {
+              setAgentFilter(event.target.value as AgentFilter);
+              setSelectedSessionKey(undefined);
+            }}
+            aria-label="选择当前 Agent"
+          >
+            <option value="all">全部 Agent</option>
+            {PROVIDER_LIST.map((provider) => (
+              <option key={provider.type} value={provider.type}>
+                {provider.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <div className="sidebar-action-buttons">
           <button
             type="button"
@@ -1108,7 +1127,9 @@ function Dashboard({
                           <ChevronDown size={13} />
                         )}
                       </span>
-                      <strong className="provider-title">{group.label}</strong>
+                      <strong className="provider-title">
+                        {agentFilter === "all" ? group.label : "Sessions"}
+                      </strong>
                       <span className="provider-count">
                         {group.sessions.length}
                       </span>
@@ -1188,6 +1209,15 @@ function Dashboard({
                           }
                         >
                           再显示 {remaining} 个
+                        </button>
+                      )}
+                      {remaining === 0 && group.sessions.length > 6 && (
+                        <button
+                          type="button"
+                          className="sidebar-show-more collapse"
+                          onClick={() => setExpandedLimits((current) => ({ ...current, [group.provider]: 6 }))}
+                        >
+                          收起
                         </button>
                       )}
                     </div>
@@ -1896,6 +1926,25 @@ function SessionControlPanel({
     session.device_id,
     timelineReload,
   ]);
+
+  useEffect(() => {
+    let disposed = false;
+    invoke<ConversationMessage[]>("load_session_conversation", {
+      input: {
+        agent_type: session.agent_type,
+        agent_session_id: session.agent_session_id,
+      },
+    })
+      .then((history) => {
+        if (!disposed && history.length > 0) setMessages(history);
+      })
+      .catch(() => {
+        // History is best-effort; the live session remains usable.
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [session.agent_session_id, session.agent_type]);
 
   const replaceLastAssistant = (content: string) => {
     setMessages((current) => replaceAssistantMessage(current, content));

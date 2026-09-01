@@ -162,6 +162,12 @@ struct SessionTimelineInput {
     agent_session_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct SessionConversationInput {
+    agent_type: AgentType,
+    agent_session_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SessionTurnEvent {
@@ -302,6 +308,16 @@ async fn load_session_timeline(
 ) -> Result<Vec<Value>, String> {
     let data_dir = state.data_dir.clone();
     tauri::async_runtime::spawn_blocking(move || load_session_timeline_inner(input, &data_dir))
+        .await
+        .map_err(|_| DesktopError::Unreachable.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn load_session_conversation(
+    input: SessionConversationInput,
+) -> Result<Vec<Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || load_session_conversation_inner(input))
         .await
         .map_err(|_| DesktopError::Unreachable.to_string())?
         .map_err(|error| error.to_string())
@@ -1131,6 +1147,74 @@ fn load_session_timeline_inner(
         .as_array()
         .ok_or(DesktopError::InvalidResponse)?;
     Ok(events.iter().map(sanitize_timeline_event).collect())
+}
+
+fn load_session_conversation_inner(
+    input: SessionConversationInput,
+) -> Result<Vec<Value>, DesktopError> {
+    validate_session_id(&input.agent_session_id)?;
+    if input.agent_type != AgentType::ClaudeCode {
+        return Ok(Vec::new());
+    }
+    let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
+        return Ok(Vec::new());
+    };
+    let projects = PathBuf::from(home).join(".claude").join("projects");
+    let Some(path) = find_transcript_file(&projects, &input.agent_session_id, 0) else {
+        return Ok(Vec::new());
+    };
+    let file = fs::File::open(path).map_err(|_| DesktopError::InvalidResponse)?;
+    let reader = BufReader::new(file);
+    let mut messages = Vec::new();
+    for line in reader.lines().take(500) {
+        let Ok(line) = line else { continue };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+        let role = match value.get("type").and_then(Value::as_str) {
+            Some("user") => "user",
+            Some("assistant") => "assistant",
+            _ => continue,
+        };
+        let Some(content) = value.pointer("/message/content") else { continue };
+        let text = if let Some(text) = content.as_str() {
+            text.to_owned()
+        } else {
+            content
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default()
+        };
+        let text = text.trim();
+        if text.is_empty() { continue; }
+        messages.push(json!({ "role": role, "content": text.chars().take(16_000).collect::<String>() }));
+        if messages.len() >= 100 { break; }
+    }
+    Ok(messages)
+}
+
+fn find_transcript_file(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
+    if depth > 3 { return None; }
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+            && path.file_stem().and_then(|value| value.to_str()) == Some(session_id)
+        {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(found) = find_transcript_file(&path, session_id, depth + 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 fn sanitize_timeline_event(event: &Value) -> Value {
@@ -2102,6 +2186,7 @@ pub fn run() {
             save_desktop_preferences,
             set_sync_paused,
             load_session_timeline,
+            load_session_conversation,
             logout
         ])
         .build(tauri::generate_context!())

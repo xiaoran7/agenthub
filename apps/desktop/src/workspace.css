@@ -1573,6 +1573,155 @@
   backdrop-filter: blur(8px);
 }
 
+/* Claude Desktop alignment pass: compact rail, one accent, centered sheets. */
+.claude-app-shell {
+  grid-template-columns: 248px minmax(0, 1fr);
+  --provider-claude: #d97757;
+  --provider-codex: #d97757;
+  --provider-antigravity: #d97757;
+  --provider-grok: #d97757;
+}
+
+.claude-sidebar {
+  background: #171716;
+}
+
+.sidebar-top-bar {
+  min-height: 62px;
+  padding: 10px 11px 8px 13px;
+}
+
+.sidebar-brand .hub-orbit-mark,
+.hub-health-orbit {
+  display: none;
+}
+
+.sidebar-brand {
+  gap: 0;
+}
+
+.sidebar-agent-picker {
+  display: grid;
+  gap: 5px;
+  margin: 0 12px 10px;
+  color: #8f8c85;
+  font-size: 10px;
+}
+
+.sidebar-agent-picker select {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  color: #f3efe7;
+  background: #252523;
+  font-size: 12px;
+  outline: none;
+}
+
+.sidebar-agent-picker select:focus {
+  border-color: rgba(217, 119, 87, 0.7);
+}
+
+.provider-signal,
+.constellation-signal {
+  background: var(--provider-claude) !important;
+}
+
+.sidebar-show-more.collapse {
+  color: #d97757;
+}
+
+.claude-stage {
+  background: #111110;
+  color: #f3efe7;
+}
+
+.claude-home-stage {
+  background: #111110;
+}
+
+.workspace-masthead,
+.agent-constellation,
+.claude-sessions-section,
+.claude-prompt-dock {
+  color: #f3efe7;
+}
+
+.workspace-masthead h1,
+.section-heading-row h2,
+.workspace-title-block p,
+.section-kicker,
+.card-title,
+.card-meta {
+  color: #f3efe7;
+}
+
+.agent-constellation,
+.claude-sessions-section {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.constellation-node,
+.claude-session-card,
+.claude-prompt-dock {
+  background: #1b1b19;
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #f3efe7;
+}
+
+.claude-prompt-dock textarea,
+.claude-prompt-dock input {
+  color: #f3efe7;
+}
+
+.claude-prompt-dock textarea::placeholder {
+  color: #8f8c85;
+}
+
+.claude-app-shell > .claude-stage > .panel-scrim {
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(8px);
+}
+
+.claude-app-shell > .claude-stage > .panel-scrim .settings-panel {
+  width: min(760px, calc(100vw - 56px));
+  height: min(720px, calc(100vh - 56px));
+  max-height: calc(100vh - 56px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: #1c1c1b;
+  box-shadow: 0 28px 100px rgba(0, 0, 0, 0.58);
+}
+
+.claude-app-shell > .claude-stage > .panel-scrim .settings-panel > header {
+  padding: 20px 24px;
+}
+
+.claude-app-shell > .claude-stage > .panel-scrim .settings-panel form {
+  overflow: auto;
+}
+
+.claude-app-shell > .claude-stage > .panel-scrim .settings-panel form > label > input,
+.claude-app-shell > .claude-stage > .panel-scrim .range-field {
+  color: #f3efe7;
+  background: #111110;
+}
+
+.claude-app-shell > .claude-stage > .account-panel {
+  top: 68px;
+  right: 18px;
+  width: min(320px, calc(100vw - 36px));
+  padding: 20px;
+  border-radius: 14px;
+  background: #1c1c1b;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
 .launch-modal-card {
   width: min(94vw, 590px);
   max-height: min(90vh, 720px);
