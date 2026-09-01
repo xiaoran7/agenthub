@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Release
+
+- 打包 Windows 桌面端 `AgentHub v2.0.8`，包含 Agent/工作目录导航、本机多 Provider 会话正文导入、统一深色界面与实时连接稳定性修复。
+
 ### Changed
 
 - 桌面端侧边栏收窄并统一为 Claude Desktop 风格的深色单色轨道，新增全局 Agent 选择器；会话按当前 Agent 过滤，补齐“收起”操作。
