@@ -452,15 +452,20 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                     if let Some(text) = c.as_str() {
                         Some(text)
                     } else if let Some(arr) = c.as_array() {
-                        arr.iter().find_map(|item| item.get("text").and_then(Value::as_str))
+                        arr.iter()
+                            .find_map(|item| item.get("text").and_then(Value::as_str))
                     } else {
                         None
                     }
                 })
                 .or_else(|| value.get("prompt").and_then(Value::as_str));
             if let Some(text) = prompt_text {
-                let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-                let clean = first_line.trim_start_matches(|c| c == '#' || c == ' ' || c == '>').trim();
+                let first_line = text
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .trim();
+                let clean = first_line.trim_start_matches(['#', ' ', '>']).trim();
                 if !clean.is_empty() {
                     context.title = metadata_label(clean, MAX_SESSION_TITLE_CHARS);
                 }
@@ -1749,15 +1754,25 @@ pub fn collect_antigravity_session_contexts_from(
                     let content = val.get("content").and_then(Value::as_str).unwrap_or("");
                     if let Some(start) = content.find("<USER_REQUEST>") {
                         let req_content = &content[start + "<USER_REQUEST>".len()..];
-                        let end = req_content.find("</USER_REQUEST>").unwrap_or(req_content.len());
+                        let end = req_content
+                            .find("</USER_REQUEST>")
+                            .unwrap_or(req_content.len());
                         let req_text = req_content[..end].trim();
-                        let first_line = req_text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                        let first_line = req_text
+                            .lines()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or("")
+                            .trim();
                         if !first_line.is_empty() {
                             context.title = metadata_label(first_line, MAX_SESSION_TITLE_CHARS);
                             break;
                         }
                     }
-                    let first_line = content.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                    let first_line = content
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("")
+                        .trim();
                     let clean = first_line
                         .trim_start_matches("<USER_REQUEST>")
                         .trim_end_matches("</USER_REQUEST>")

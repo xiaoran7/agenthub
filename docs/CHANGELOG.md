@@ -5,8 +5,11 @@
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-09-01
+
 ### Changed
 
+- 发布 AgentHub 2.0.6 Windows x64 安装包，提供 MSI 与 NSIS Setup 两种格式。
 - **桌面端工作台 UI 全面重构**：
   - 保留 Claude Desktop 的双栏、低噪音和内容优先体验，改用 AgentHub 专属的暖纸色主舞台、深色本机导航与 Provider 信号色系统；
   - 新增“Agent 星轨”，用真实的本机会话数、运行中数量、采集接入状态和实时/轮询连接状态呈现多 Agent 编队；
@@ -18,6 +21,7 @@
 
 - 修复 `LaunchSessionModal` 忽略 `open` 属性、启动器在工作台加载后始终常驻的问题。
 - 修复侧栏账户区嵌套按钮产生无效交互结构的问题，并补充桌面端 favicon 消除开发环境 404。
+- 修复 Rust 1.97 下发布构建被 `manual_pattern_char_comparison` Clippy 门禁阻断的问题。
 
 ## [2.0.5] - 2026-09-01
 
