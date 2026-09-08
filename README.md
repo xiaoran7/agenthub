@@ -1,5 +1,7 @@
 # AgentHub（智能体集成中心）
 
+> 当前为原生 Remote 重构阶段：Codex 持久 Host、鉴权重放、Web/桌面/Android 入口已接入，实际验证范围见 [迁移状态](docs/README.md)。既有 v2 方案介绍不能作为完成证据；Claude、实际客户端安装和生产验收仍待完成。
+
 面向 Claude Code、OpenAI Codex、Antigravity 等本地 Coding Agent 的**统一多 Agent 远程控制平面（Unified Multi-Agent Remote Plane）**。
 
 用户只需在电脑上运行单一轻量级 Runner，即可通过一条多路复用 WebSocket 长连接将本机所有 Coding Agent 会话接入云端控制中心，在网页端和移动端实现全功能远程控制、实时流式会话交互、工具审批与状态感知。
