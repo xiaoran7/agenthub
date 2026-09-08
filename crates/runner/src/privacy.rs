@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::domain::ProjectRef;
@@ -44,8 +44,32 @@ impl ProjectRedactor {
     }
 }
 
+pub fn workspace_id_for_path(raw_cwd: &str) -> String {
+    let normalized = normalize_path_for_fingerprint(raw_cwd);
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"agenthub_workspace_v1:");
+    hasher.update(normalized.as_bytes());
+    let hash = hex::encode(hasher.finalize());
+    let display = project_display_name(raw_cwd);
+    let safe_display: String = display
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(24)
+        .collect();
+    format!("ws-{safe_display}-{}", &hash[..16])
+}
+
 fn normalize_path_for_fingerprint(raw_cwd: &str) -> String {
-    let normalized = raw_cwd.trim().replace('\\', "/");
+    let normalized = raw_cwd
+        .trim()
+        .trim_end_matches(['/', '\\'])
+        .replace('\\', "/");
     #[cfg(windows)]
     {
         normalized.to_lowercase()
@@ -79,6 +103,30 @@ pub fn project_display_name(raw_cwd: &str) -> String {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "unknown-project".into())
+}
+
+/// Recursively traverses a JSON Value and replaces any SessionBinding.workspace_path,
+/// candidate workspace_path, or string field named "workspace_path" with its safe workspace_id.
+pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, val) in map.iter_mut() {
+                if key == "workspace_path" {
+                    if let Some(path_str) = val.as_str() {
+                        *val = serde_json::Value::String(workspace_id_for_path(path_str));
+                    }
+                } else {
+                    sanitize_workspace_paths_in_json(val);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                sanitize_workspace_paths_in_json(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn is_current_user_home(trimmed_cwd: &str) -> bool {
@@ -122,5 +170,15 @@ mod tests {
         assert!(matches_home(r"C:\Users\Alice", r"c:/users/alice"));
         assert!(!matches_home(r"C:\Users\alice\project", r"C:\Users\alice"));
         assert!(!matches_home(r"C:\Users\alice", ""));
+    }
+
+    #[test]
+    fn workspace_id_is_stable_and_does_not_reveal_full_path() {
+        let ws1 = workspace_id_for_path(r"C:\Users\alice\code\my-app");
+        let ws2 = workspace_id_for_path(r"c:\users\alice\code\my-app\");
+        assert_eq!(ws1, ws2);
+        assert!(ws1.starts_with("ws-my-app-"));
+        assert!(!ws1.contains("alice"));
+        assert!(!ws1.contains("code"));
     }
 }

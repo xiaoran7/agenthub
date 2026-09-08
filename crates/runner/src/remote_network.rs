@@ -266,7 +266,7 @@ pub fn run_with_local_control(
         if let Some(candidates) = d.get_mut("candidates").and_then(Value::as_array_mut) {
             for c in candidates {
                 if let Some(path_str) = c.get("workspace_path").and_then(Value::as_str) {
-                    let sanitized = crate::privacy::project_display_name(path_str);
+                    let sanitized = crate::privacy::workspace_id_for_path(path_str);
                     c["workspace_path"] = json!(sanitized);
                 }
             }
@@ -275,7 +275,7 @@ pub fn run_with_local_control(
     });
     let sanitized_workspaces: Vec<String> = workspaces
         .iter()
-        .map(|p| crate::privacy::project_display_name(&p.to_string_lossy()))
+        .map(|p| crate::privacy::workspace_id_for_path(&p.to_string_lossy()))
         .collect();
     let sanitized_sessions: Vec<Value> = durable
         .host
@@ -283,7 +283,7 @@ pub fn run_with_local_control(
         .into_iter()
         .map(|s| {
             let sanitized_ws =
-                crate::privacy::project_display_name(&s.workspace_path.to_string_lossy());
+                crate::privacy::workspace_id_for_path(&s.workspace_path.to_string_lossy());
             json!({
                 "hub_session_id": s.hub_session_id,
                 "provider_session_id": s.provider_session_id,
@@ -578,7 +578,8 @@ fn network_loop(
             while !control.stopped.load(Ordering::Relaxed) {
                 for value in outgoing.try_iter().take(32) {
                     match value {
-                        NetworkSend::Data(e, seq, payload) if e == epoch => {
+                        NetworkSend::Data(e, seq, mut payload) if e == epoch => {
+                            crate::privacy::sanitize_workspace_paths_in_json(&mut payload);
                             send(
                                 &mut socket,
                                 json!({"type":"data","seq":seq,"payload":payload}),

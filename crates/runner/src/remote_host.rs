@@ -359,9 +359,16 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             {
                 return Err(NativeError::rejected("session_already_bound"));
             }
-            let cwd = workspace_path
-                .canonicalize()
-                .map_err(|_| NativeError::rejected("workspace_unavailable"))?;
+            let cwd = if let Ok(canonical) = workspace_path.canonicalize() {
+                canonical
+            } else {
+                let ws_str = workspace_path.to_string_lossy();
+                self.workspaces
+                    .iter()
+                    .find(|w| crate::privacy::workspace_id_for_path(&w.to_string_lossy()) == ws_str)
+                    .cloned()
+                    .ok_or_else(|| NativeError::rejected("workspace_unavailable"))?
+            };
             if !self.workspaces.contains(&cwd) {
                 return Err(NativeError::rejected("workspace_not_authorized"));
             }

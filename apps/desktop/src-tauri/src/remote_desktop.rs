@@ -231,10 +231,11 @@ fn start_host_with_workspaces(
         worker_control.ready.store(false, Ordering::Relaxed);
     });
 
-    // Wait up to 5 seconds for host to report ready, or fail fast if thread exited with error
+    // Wait up to 20 seconds for host to report ready (aligning with 20s interactive handshake)
     let start = Instant::now();
-    while !control.ready.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(5) {
+    while !control.ready.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(20) {
         if worker.is_finished() {
+            let _ = worker.join();
             return Err(DesktopError::AgentFailed);
         }
         thread::sleep(Duration::from_millis(20));
@@ -242,6 +243,7 @@ fn start_host_with_workspaces(
 
     if !control.ready.load(Ordering::Relaxed) {
         control.stopped.store(true, Ordering::Relaxed);
+        let _ = worker.join();
         return Err(DesktopError::AgentFailed);
     }
 
@@ -326,11 +328,29 @@ pub(crate) async fn start_remote_host(
         .remote
         .lock()
         .map_err(|_| "本机连接正在切换".to_owned())?;
+    if let Some(handle) = slot.as_mut()
+        && !handle.thread.is_finished()
+        && !handle.failed.load(Ordering::Relaxed)
+        && handle.control.ready.load(Ordering::Relaxed)
+    {
+        // Host is already running: dynamically authorize any new workspaces without stopping active sessions
+        for ws in &profile.workspace_paths {
+            let _ = handle.client.authorize_workspace(ws.clone());
+            if !handle.profile.workspace_paths.contains(ws) {
+                handle.profile.workspace_paths.push(ws.clone());
+            }
+        }
+        let _ = fs::write(
+            profile_path,
+            serde_json::to_vec(&handle.profile).map_err(|_| "无法保存连接设置".to_owned())?,
+        );
+        return Ok(());
+    }
     if slot
         .as_ref()
         .is_some_and(|handle| !handle.thread.is_finished())
     {
-        return Err("本机连接仍在运行，请先停止后再更改目录".to_owned());
+        return Err("本机连接正在关闭或状态异常，请稍候再试".to_owned());
     }
     fs::write(
         profile_path,

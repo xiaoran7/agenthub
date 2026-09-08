@@ -817,6 +817,15 @@ fn launch_codex_session_with_client(
                             });
                         }
                         "turn/completed" => {
+                            let status = event.raw["params"]["turn"]["status"]
+                                .as_str()
+                                .unwrap_or("unknown");
+                            if status == "interrupted" {
+                                return Err(DesktopError::AgentCancelled);
+                            }
+                            if status != "completed" {
+                                return Err(DesktopError::AgentFailed);
+                            }
                             if full_response.trim().is_empty()
                                 && let Some(text) = event.raw["params"]["turn"]["output"].as_str()
                             {
@@ -969,6 +978,15 @@ fn send_codex_message_with_client(
                             });
                         }
                         "turn/completed" => {
+                            let status = event.raw["params"]["turn"]["status"]
+                                .as_str()
+                                .unwrap_or("unknown");
+                            if status == "interrupted" {
+                                return Err(DesktopError::AgentCancelled);
+                            }
+                            if status != "completed" {
+                                return Err(DesktopError::AgentFailed);
+                            }
                             if full_response.trim().is_empty()
                                 && let Some(text) = event.raw["params"]["turn"]["output"].as_str()
                             {
@@ -3047,14 +3065,7 @@ fn merge_dashboard_sessions(
             agent_pulse_runner::remote_host::ExecutionState::Terminated => "STOPPED",
             _ => "UNKNOWN",
         };
-        let is_active_state = matches!(
-            binding.execution_state,
-            agent_pulse_runner::remote_host::ExecutionState::Running
-                | agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission
-                | agent_pulse_runner::remote_host::ExecutionState::AwaitingInput
-                | agent_pulse_runner::remote_host::ExecutionState::Idle
-        );
-        let presence = if binding.control_connected && is_active_state {
+        let presence = if binding.control_connected {
             "LIVE"
         } else {
             "PERSISTED"
@@ -3997,8 +4008,8 @@ mod tests {
             workspace_path: PathBuf::from("D:/test-ws"),
             host_generation: "gen-1".to_owned(),
             control_connected: true,
-            execution_state: agent_pulse_runner::remote_host::ExecutionState::Running,
-            current_turn_id: Some("turn-1".to_owned()),
+            execution_state: agent_pulse_runner::remote_host::ExecutionState::Completed,
+            current_turn_id: None,
         };
         let merged =
             merge_dashboard_sessions(&json!([]), &[], &[], "device-local", &contexts, &[binding]);
@@ -4006,7 +4017,7 @@ mod tests {
             .iter()
             .find(|s| s["agent_session_id"] == "session-active")
             .unwrap();
-        assert_eq!(found["payload"]["state"]["activity_status"], "WORKING");
+        assert_eq!(found["payload"]["state"]["activity_status"], "COMPLETED");
         assert_eq!(found["payload"]["state"]["presence"], "LIVE");
         assert_eq!(found["payload"]["source"], "native_host");
     }

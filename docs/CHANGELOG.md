@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Codex NativeSessionHost 单一本机会话核心第四轮深度对齐与闭环整改（2026-09-08）
+
+- **解决 turn/completed 严格判定 status 状态**：
+  - `launch_codex_session_with_client` 与 `send_codex_message_with_client` 增加对 `params.turn.status` 的显式校验；
+  - 遇到 `status == "interrupted"` 时映射为 `DesktopError::AgentCancelled`，遇到非 `completed`（如 `failed`、`unknown`）时拒绝返回成功与 `completed_at`，严格返回 `DesktopError::AgentFailed`。
+- **解决不可逆 workspace_id 映射与 Remote 寻址闭环**：
+  - 引入稳定不可逆的 `workspace_id_for_path` 双向安全映射机制（`ws-{safe_display}-{hash16}`）；
+  - `RemoteAction::Connect` 既支持本机物理路径，也支持解析 `workspace_id` 反向安全寻址已授权工作区，使 Remote 客户端从 `ready` 包获取工作区标识后原样发起会话可逆寻址成功，杜绝 `workspace_unavailable` / `workspace_not_authorized`。
+- **解决路径泄漏闭环（Receipt & Host Events）**：
+  - 在 `remote_network.rs` 的 Outbox 数据发送守卫中引入 `sanitize_workspace_paths_in_json` 递归脱敏；
+  - 对进入 Outbox 管道的所有数据包（包括 `ready`、`command receipt`、`Host events`）中的 `workspace_path` 进行全面脱敏过滤，彻底杜绝任何原生物理路径泄漏到 Gateway 与远端持久化账本。
+- **解决 Remote 启动与 Host 动态授权共存**：
+  - 重构 `start_remote_host`：发现健康运行中的 Host 时，直接动态调用 `client.authorize_workspace` 增量授权并追加 profile，不再阻断用户或强制要求“先停止运行中的 Host”，实现本地工作台与 Remote 共存复用同一 NativeSessionHost。
+- **解决 ready 等待超时与线程 Join 资源竞争治理**：
+  - 将启动等待超时由 5 秒提升至 20 秒，严格对齐底层交互式启动协议超时；
+  - 出现超时或退出失败时显式调用 `worker.join()` 回收旧线程，避免 SQLite 锁与通道竞态。
+- **解决 Presence 与执行状态完全解耦**：
+  - 在 `merge_dashboard_sessions` 中，`presence` 严格由 `control_connected` 布尔值决定（`control_connected == true` 时为 `LIVE`，否则为 `PERSISTED`），彻底消除执行状态（如 completed/error）对连接在席状态的混淆干扰。
+- **修复真实 Codex Remote + Gateway 离线回放测试并 100% 验证通过**：
+  - 针对原生 Codex 集成测试 `services/api/test/remote-native.test.ts` 进行端到端诊断排查：排查出本地代理环境变量与默认模型权限冲突（`gpt-5.6-sol`/`gpt-5.3-codex` 未授权 400 报错），配置修正并在代理环境下完成 2 轮真实 Codex Remote 会话交互、Gateway 重启与磁盘回放全流程验证，测试用例 100% 绿色通过。
+- **全套质量门禁全绿**：
+  - `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 零报错；
+  - `cargo test --workspace` 131 passed；
+  - 全套 Node/TS 测试（`@agent-pulse/contracts` 12 passed、`@agent-pulse/api` 52 passed 6 skipped、`@agent-pulse/desktop` 11 passed、`@agent-pulse/web` 43 passed）与 `npm run typecheck`、`npm run format:check` 100% 全绿。
+
 ### Codex NativeSessionHost 单一本机会话核心第三轮深度对齐与状态/路径安全收敛（2026-09-08）
 
 - **解决 P1 回合超时或断流不得伪造成功**：
