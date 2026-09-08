@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### 架构与产品定位纠偏与文档定界（2026-09-08）
+
+- **确立顶层定位与唯一标准**：
+  - **核心定位**：`AgentHub = 多种本地 AI Agent 的统一远程控制入口`。
+  - **核心功能三步走**：① 发现本机正在运行的 Codex / Claude 等官方 Agent；② 接管现有 Session；③ 安全暴露给手机端（Android）和 Web 端继续使用。
+  - **三不原则**：不替代官方 Agent，不自己再造 Agent，不改变用户本地使用习惯。
+  - **唯一裁决标准**：“这个功能是不是在帮助用户‘远程继续使用本机已经运行的 Agent’？不是就不做。”
+- **全套规范与协议文档对齐**：
+  - 更新 `README.md`、`AGENTS.md`、`docs/PRD.md`、`docs/ARCHITECTURE.md`、`docs/SYNC_PROTOCOL.md`、`docs/README.md`，统一顶层拓扑与设计铁律。
+
 ### v2.3.3 恢复默认 UI 与 Remote 协同无缝桥接发版（2026-09-08）
 
 - **恢复原有默认 UI 体验**：桌面端默认恢复为精美 Claude Desktop 风格的 Dashboard（侧边栏、Agent 下拉、工作区树、置顶/展开、模型选择、提示词坞、实时索引轮询与会话详情），消除覆盖默认界面的偏离。
