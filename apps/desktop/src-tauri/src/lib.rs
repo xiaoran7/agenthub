@@ -500,22 +500,14 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
 
         let mut models: Vec<Value> = Vec::new();
         let mut seen_families: HashSet<String> = HashSet::new();
-        for (value, count) in &dynamic {
-            seen_families.insert(model_family(value));
-            models.push(json!({
-                "value": value,
-                "label": model_label(value),
-                "desc": format!("本机 Agent 实测（{count} 个会话）"),
-                "source": "agent"
-            }));
-        }
-        let mut host_models_loaded = false;
+
         if agent == AgentType::Codex
             && let Some(client) = remote_desktop::get_host_client(state)
             && let Ok(val) = client.query_models()
             && let Some(arr) = val.get("data").and_then(Value::as_array)
             && !arr.is_empty()
         {
+            // For Codex, prioritize live models returned directly from the authoritative Host
             for item in arr {
                 let id = item.get("id").and_then(Value::as_str).unwrap_or("");
                 if !id.is_empty() && !seen_families.contains(&model_family(id)) {
@@ -533,21 +525,29 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                     }));
                 }
             }
-            if !models.is_empty() {
-                host_models_loaded = true;
-            }
-        }
-        if !host_models_loaded {
-            for (value, label, desc) in builtin_model_catalog(agent) {
-                if seen_families.contains(&model_family(value)) {
-                    continue;
-                }
+        } else {
+            // For other agents or when Host is not available, populate from local transcripts
+            for (value, count) in &dynamic {
+                seen_families.insert(model_family(value));
                 models.push(json!({
                     "value": value,
-                    "label": label,
-                    "desc": desc,
-                    "source": "builtin"
+                    "label": model_label(value),
+                    "desc": format!("本机 Agent 实测（{count} 个会话）"),
+                    "source": "agent"
                 }));
+            }
+            if models.is_empty() {
+                for (value, label, desc) in builtin_model_catalog(agent) {
+                    if seen_families.contains(&model_family(value)) {
+                        continue;
+                    }
+                    models.push(json!({
+                        "value": value,
+                        "label": label,
+                        "desc": desc,
+                        "source": "builtin"
+                    }));
+                }
             }
         }
         result.push(json!({ "agent_type": agent_type_name(agent), "models": models }));
@@ -781,6 +781,7 @@ fn launch_codex_session_with_client(
     }
 
     let mut full_response = String::new();
+    let mut turn_completed = false;
     let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
     while Instant::now() < deadline {
         if cancelled.load(Ordering::Relaxed) {
@@ -824,6 +825,7 @@ fn launch_codex_session_with_client(
                             let _ = on_event.send(SessionTurnEvent::AssistantMessage {
                                 text: full_response.clone(),
                             });
+                            turn_completed = true;
                             break;
                         }
                         _ => {}
@@ -837,8 +839,8 @@ fn launch_codex_session_with_client(
 
     drop(sub);
 
-    if full_response.trim().is_empty() {
-        full_response = "任务已提交。".to_owned();
+    if !turn_completed || full_response.trim().is_empty() {
+        return Err(DesktopError::AgentFailed);
     }
 
     Ok(json!({
@@ -931,6 +933,7 @@ fn send_codex_message_with_client(
     }
 
     let mut full_response = String::new();
+    let mut turn_completed = false;
     let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
     while Instant::now() < deadline {
         if cancelled.load(Ordering::Relaxed) {
@@ -974,6 +977,7 @@ fn send_codex_message_with_client(
                             let _ = on_event.send(SessionTurnEvent::AssistantMessage {
                                 text: full_response.clone(),
                             });
+                            turn_completed = true;
                             break;
                         }
                         _ => {}
@@ -987,8 +991,8 @@ fn send_codex_message_with_client(
 
     drop(sub);
 
-    if full_response.trim().is_empty() {
-        full_response = "回合已完成。".to_owned();
+    if !turn_completed || full_response.trim().is_empty() {
+        return Err(DesktopError::AgentFailed);
     }
 
     Ok(json!({
@@ -1123,33 +1127,32 @@ fn cancel_session_turn(
     if let Some(cancelled) = cancelled {
         cancelled.store(true, Ordering::Relaxed);
     }
-    if input.agent_type == AgentType::Codex
-        && let Some(client) = remote_desktop::get_host_client(&state)
-    {
+    if input.agent_type == AgentType::Codex {
+        let client = remote_desktop::get_host_client(&state)
+            .ok_or_else(|| "Codex NativeSessionHost 未在运行".to_owned())?;
         let sessions = client
             .query_sessions()
             .map_err(|e| format!("无法查询会话注册表: {e}"))?;
-        if let Some(binding) = sessions
+        let binding = sessions
             .iter()
             .find(|s| s.provider_session_id == input.agent_session_id)
-        {
-            let generation = client
-                .query_generation()
-                .map_err(|e| format!("无法获取 Host 代际: {e}"))?;
-            let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
-                client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
-                hub_session_id: binding.hub_session_id.clone(),
-                host_generation: Some(generation),
-                command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
-            };
-            let receipt = client
-                .execute(interrupt_cmd)
-                .map_err(|e| format!("执行中断指令失败: {e}"))?;
-            if receipt.status != "accepted" {
-                return Err(format!("中断请求被拒绝: {}", receipt.status));
-            }
-            return Ok(json!({ "cancelled": true, "receipt": receipt }));
+            .ok_or_else(|| format!("未找到绑定的 Codex 会话 {}", input.agent_session_id))?;
+        let generation = client
+            .query_generation()
+            .map_err(|e| format!("无法获取 Host 代际: {e}"))?;
+        let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+            client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+            hub_session_id: binding.hub_session_id.clone(),
+            host_generation: Some(generation),
+            command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
+        };
+        let receipt = client
+            .execute(interrupt_cmd)
+            .map_err(|e| format!("执行中断指令失败: {e}"))?;
+        if receipt.status != "accepted" {
+            return Err(format!("中断请求被拒绝: {}", receipt.status));
         }
+        return Ok(json!({ "cancelled": true, "receipt": receipt }));
     }
     Ok(json!({ "cancelled": true }))
 }
@@ -1817,18 +1820,19 @@ fn offline_dashboard_snapshot(
     Ok(json!({
         "account": {
             "user": {
-                "user_id": "local",
-                "email": "local@agenthub.dev",
-                "display_name": "Local User"
+                "user_id": "offline",
+                "email": "离线本地模式",
+                "display_name": "本机离线用户"
             },
             "subscription": {
-                "plan": "free",
-                "status": "active"
+                "plan": "offline",
+                "status": "local_only"
             },
             "entitlements": {
                 "max_devices": 1,
                 "history_days": 365
-            }
+            },
+            "offline": true
         },
         "devices": [
             {
@@ -3043,9 +3047,21 @@ fn merge_dashboard_sessions(
             agent_pulse_runner::remote_host::ExecutionState::Terminated => "STOPPED",
             _ => "UNKNOWN",
         };
+        let is_active_state = matches!(
+            binding.execution_state,
+            agent_pulse_runner::remote_host::ExecutionState::Running
+                | agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission
+                | agent_pulse_runner::remote_host::ExecutionState::AwaitingInput
+                | agent_pulse_runner::remote_host::ExecutionState::Idle
+        );
+        let presence = if binding.control_connected && is_active_state {
+            "LIVE"
+        } else {
+            "PERSISTED"
+        };
         if let Some(existing) = sessions.get_mut(&key) {
             existing["payload"]["state"]["activity_status"] = json!(status);
-            existing["payload"]["state"]["presence"] = json!("ACTIVE");
+            existing["payload"]["state"]["presence"] = json!(presence);
         } else {
             let context = contexts.get(&session_context_key(
                 AgentType::Codex,
@@ -3075,7 +3091,7 @@ fn merge_dashboard_sessions(
                         },
                         "state": {
                             "activity_status": status,
-                            "presence": "ACTIVE",
+                            "presence": presence,
                         },
                         "source": "native_host",
                         "confidence": 1.0,
@@ -3984,20 +4000,14 @@ mod tests {
             execution_state: agent_pulse_runner::remote_host::ExecutionState::Running,
             current_turn_id: Some("turn-1".to_owned()),
         };
-        let merged = merge_dashboard_sessions(
-            &json!([]),
-            &[],
-            &[],
-            "device-local",
-            &contexts,
-            &[binding],
-        );
+        let merged =
+            merge_dashboard_sessions(&json!([]), &[], &[], "device-local", &contexts, &[binding]);
         let found = merged
             .iter()
             .find(|s| s["agent_session_id"] == "session-active")
             .unwrap();
         assert_eq!(found["payload"]["state"]["activity_status"], "WORKING");
-        assert_eq!(found["payload"]["state"]["presence"], "ACTIVE");
+        assert_eq!(found["payload"]["state"]["presence"], "LIVE");
         assert_eq!(found["payload"]["source"], "native_host");
     }
 
@@ -4015,9 +4025,10 @@ mod tests {
         };
 
         let snapshot = offline_dashboard_snapshot(&identity, &state).unwrap();
-        assert_eq!(snapshot["account"]["user"]["user_id"], "local");
-        assert_eq!(snapshot["account"]["user"]["email"], "local@agenthub.dev");
-        assert_eq!(snapshot["account"]["subscription"]["plan"], "free");
+        assert_eq!(snapshot["account"]["user"]["user_id"], "offline");
+        assert_eq!(snapshot["account"]["user"]["email"], "离线本地模式");
+        assert_eq!(snapshot["account"]["subscription"]["plan"], "offline");
+        assert_eq!(snapshot["account"]["offline"], true);
         assert_eq!(snapshot["sync_running"], false);
         assert_eq!(snapshot["realtime_connected"], false);
         assert_eq!(snapshot["device"]["device_id"], identity.device_id());

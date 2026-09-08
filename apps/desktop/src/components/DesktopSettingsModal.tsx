@@ -487,7 +487,11 @@ export function DesktopSettingsModal({
                     <div className="settings-card">
                       <div className="settings-row-item">
                         <div className="row-text">
-                          <strong>当前登录账号</strong>
+                          <strong>
+                            {snapshot.account.offline
+                              ? "当前运行模式"
+                              : "当前登录账号"}
+                          </strong>
                           <p>{snapshot.account.user.email}</p>
                         </div>
                         {onLogout && (
@@ -497,7 +501,11 @@ export function DesktopSettingsModal({
                             onClick={onLogout}
                           >
                             <LogOut size={14} />
-                            <span>退出登录</span>
+                            <span>
+                              {snapshot.account.offline
+                                ? "登录 / 切换模式"
+                                : "退出登录"}
+                            </span>
                           </button>
                         )}
                       </div>

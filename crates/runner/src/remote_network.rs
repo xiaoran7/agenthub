@@ -262,9 +262,41 @@ pub fn run_with_local_control(
         .map_err(|error| anyhow::anyhow!(error.code))?;
     let mut durable = DurableHost::new(host, journal)?;
     let models = durable.host.models().ok();
-    let discovery = durable.host.discover().ok();
+    let discovery = durable.host.discover().ok().map(|mut d| {
+        if let Some(candidates) = d.get_mut("candidates").and_then(Value::as_array_mut) {
+            for c in candidates {
+                if let Some(path_str) = c.get("workspace_path").and_then(Value::as_str) {
+                    let sanitized = crate::privacy::project_display_name(path_str);
+                    c["workspace_path"] = json!(sanitized);
+                }
+            }
+        }
+        d
+    });
+    let sanitized_workspaces: Vec<String> = workspaces
+        .iter()
+        .map(|p| crate::privacy::project_display_name(&p.to_string_lossy()))
+        .collect();
+    let sanitized_sessions: Vec<Value> = durable
+        .host
+        .sessions()
+        .into_iter()
+        .map(|s| {
+            let sanitized_ws =
+                crate::privacy::project_display_name(&s.workspace_path.to_string_lossy());
+            json!({
+                "hub_session_id": s.hub_session_id,
+                "provider_session_id": s.provider_session_id,
+                "workspace_path": sanitized_ws,
+                "host_generation": s.host_generation,
+                "control_connected": s.control_connected,
+                "execution_state": s.execution_state,
+                "current_turn_id": s.current_turn_id,
+            })
+        })
+        .collect();
     durable.journal.append(&json!({"type":"ready","provider":"codex_app_server","host_generation":durable.host.generation(),
-        "workspaces":workspaces,"sessions":durable.host.sessions(),"models":models,"discovery":discovery,"attach_running":false}),&[])?;
+        "workspaces":sanitized_workspaces,"sessions":sanitized_sessions,"models":models,"discovery":discovery,"attach_running":false}),&[])?;
     control.ready.store(true, Ordering::Relaxed);
     let command_seq = Arc::new(AtomicI64::new(durable.journal.received_command_seq()?));
     let (events_tx, events) = mpsc::sync_channel(256);

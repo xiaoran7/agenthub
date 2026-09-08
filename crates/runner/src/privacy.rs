@@ -56,7 +56,7 @@ fn normalize_path_for_fingerprint(raw_cwd: &str) -> String {
     }
 }
 
-fn project_display_name(raw_cwd: &str) -> String {
+pub fn project_display_name(raw_cwd: &str) -> String {
     let trimmed = raw_cwd.trim().trim_end_matches(['/', '\\']);
     if trimmed.is_empty() {
         return "unknown-project".into();

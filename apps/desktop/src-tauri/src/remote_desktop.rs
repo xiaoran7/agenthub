@@ -46,6 +46,7 @@ pub(crate) fn get_host_client(state: &DesktopState) -> Option<LocalHostClient> {
         && !handle.thread.is_finished()
         && !handle.control.stopped.load(Ordering::Relaxed)
         && !handle.failed.load(Ordering::Relaxed)
+        && handle.control.ready.load(Ordering::Relaxed)
     {
         return Some(handle.client.clone());
     }
@@ -65,6 +66,7 @@ pub(crate) fn ensure_host_client(
         if let Some(handle) = slot.as_mut()
             && !handle.thread.is_finished()
             && !handle.failed.load(Ordering::Relaxed)
+            && handle.control.ready.load(Ordering::Relaxed)
         {
             if let Some(workspace) = required_workspace {
                 let canonical = workspace
@@ -119,6 +121,7 @@ pub(crate) fn ensure_host_client(
         if let Some(handle) = slot.as_ref()
             && !handle.thread.is_finished()
             && !handle.failed.load(Ordering::Relaxed)
+            && handle.control.ready.load(Ordering::Relaxed)
         {
             if let Some(workspace) = required_workspace {
                 let canonical = workspace
@@ -228,16 +231,18 @@ fn start_host_with_workspaces(
         worker_control.ready.store(false, Ordering::Relaxed);
     });
 
-    // Wait briefly up to 2 seconds for host to report ready, or fail fast if thread exited with error
+    // Wait up to 5 seconds for host to report ready, or fail fast if thread exited with error
     let start = Instant::now();
-    while !control.ready.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(2) {
+    while !control.ready.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(5) {
         if worker.is_finished() {
-            if failed.load(Ordering::Relaxed) {
-                return Err(DesktopError::AgentFailed);
-            }
-            break;
+            return Err(DesktopError::AgentFailed);
         }
         thread::sleep(Duration::from_millis(20));
+    }
+
+    if !control.ready.load(Ordering::Relaxed) {
+        control.stopped.store(true, Ordering::Relaxed);
+        return Err(DesktopError::AgentFailed);
     }
 
     let mut slot = state.remote.lock().map_err(|_| DesktopError::AgentFailed)?;
@@ -456,5 +461,9 @@ mod tests {
             session_contexts: Mutex::new(SessionContextCache::default()),
         };
         assert!(get_host_client(&state).is_some());
+
+        // When not ready, get_host_client must strictly reject and return None
+        control.ready.store(false, Ordering::Relaxed);
+        assert!(get_host_client(&state).is_none());
     }
 }

@@ -19,6 +19,7 @@ export interface Account {
     max_devices?: number;
     history_days?: number;
   };
+  offline?: boolean;
 }
 
 export interface Device {

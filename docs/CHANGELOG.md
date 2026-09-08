@@ -2,25 +2,29 @@
 
 ## [Unreleased]
 
-### Codex NativeSessionHost 单一本机会话核心收敛与生命周期/契约/格式化全面治理（2026-09-08）
+### Codex NativeSessionHost 单一本机会话核心第三轮深度对齐与状态/路径安全收敛（2026-09-08）
 
-- **解决 P1 健康 Host 始终被判定为不可用**：
-  - 修复 `remote_desktop.rs` 中 `failed` 原子变量初值为 `true` 导致健康运行中 Host 始终被误判为失效的严重生命周期倒置缺陷；
-  - 明确状态机划分：启动即置为 not failed，新增 `control.ready` 同步就绪屏障，等待 Host 进程与通信初始化就绪；只有进程崩溃或执行报错时才更新为 `failed=true`。
-- **解决 P1 离线快照违反前端 Snapshot 契约**：
-  - 修正 `offline_dashboard_snapshot` 中 `account: null` 导致前端读取 `snapshot.account.user.email` 时触发 TypeError 崩溃的契约不兼容；
-  - 填充离线本地账户结构（`user_id: "local"`, `display_name: "Local User"`, `subscription: "free"`），补齐设备 `last_seen_at` 时间戳字段，确保前端离线冷启动 100% 稳健渲染。
-- **解决 P1 Host 失败遗留永久 busy 与活跃回合清理**：
-  - 在 `send_session_message` 中调整 `ensure_host_client` 异常分支，当 Host 获取或建立失败时立即清理 `active_turns` 记录并释放状态，杜绝界面永久陷入 busy 死锁；
-  - 完善 `cancel_session_turn`：通过 `client.execute(RemoteAction::Interrupt)` 发送中断指令并严格校验执行回执 `receipt.status == "accepted"`，真实反映取消结果，杜绝盲目返回 `cancelled: true`。
-- **打通本地权威会话源与模型无脑追加清理**：
-  - `merge_dashboard_sessions` 真实接入 `host_bindings`，将 NativeSessionHost 维护的会话注册表作为权威源，将实时执行状态（`WORKING`, `IDLE`, `WAITING_PERMISSION` 等）与 `ACTIVE` 状态同步至 Dashboard，杜绝多套会话分裂；
-  - 清理 Codex 模型获取时的无条件硬编码目录追加，成功从 Native Host 取得模型目录时优先权威输出，仅在完全获取不到时才走本地兜底。
-- **全仓格式化与门禁通过**：
-  - 使用 Prettier 修复全仓 11 个文件的代码风格问题，`npm run format:check` 100% 通过；
-  - 新增 `running_host_handle_reports_ready_and_provides_client` 运行中 Host 句柄与客户端有效性单测；
-  - 新增 `host_session_registry_overrides_dashboard_state_and_populates_missing_session` 权威会话注册表覆盖与合并单测；
-  - 验证 Rust 单测 15+113 通过，Node/TS 单测 12+52+11+43=118 项全绿，全工作区 `cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --all --check` 零报错通过。
+- **解决 P1 回合超时或断流不得伪造成功**：
+  - 重构 `launch_codex_session_with_client` 与 `send_codex_message_with_client` 事件接收循环：引入明确的 `turn_completed` 终态信号标记；
+  - 严禁在未收到 `turn/completed` 或流断开/超时时落入兜底字符串（如“任务已提交 / 回合已完成”）并写入 `completed_at`，杜绝伪造 Provider 成功状态，一律返回真实 `DesktopError::AgentFailed`。
+- **解决 P1 ready 屏障严格闭环与超时拦截**：
+  - 修正 `remote_desktop.rs`：启动 Host 等待屏障超时（5秒）或进程未就绪时，严格拒绝返回客户端并标记停止与失败，杜绝未 ready 即放行；
+  - `get_host_client` 显式增加 `handle.control.ready.load()` 检查，未就绪或已关闭的 Host 绝对返回 `None`；单测中补充断言未 ready 时返回 `None` 的负向验证。
+- **解决 P1 显式建模离线本地运行态，消除虚构登录账户**：
+  - 离线快照显式输出 `offline: true`，账户信息真实展示为“离线本地模式”与 `local_only`，前端账号菜单与设置对话框识别离线模式展示“本地工作区 · 未连接 Gateway”，按钮适配为“切换连接 / 登录”，不再呈现虚构的已登录账户与退出登录假象。
+- **解决 P1 物理路径安全合规，防止完整本机路径上报远端**：
+  - 在 Runner 发送 `ready` 事件时，对 `workspaces` 授权目录列表、`sessions` 绑定的工作区目录以及 `discovery` 发现候选的 `workspace_path` 全面执行脱敏（使用 `project_display_name` 提取项目名称与安全相对标识），彻底杜绝本地操作系统物理绝对路径写入 Remote Outbox 与 Gateway 持久化账本。
+- **解决 P1 cancel_session_turn 拒绝盲目成功与假取消**：
+  - 当针对 Codex 会话取消时，如果未找到运行中的 Host 或目标 SessionBinding，严格返回错误信息，不再默认声称 `{"cancelled": true}`。
+- **解决 P2 Session Registry 准确区分 Presence 与执行态**：
+  - 彻底清理无条件 `presence: ACTIVE`，对齐官方规范枚举（`LIVE` / `PERSISTED`）：仅当 `control_connected == true` 且处于活跃执行状态（`Running` / `AwaitingPermission` / `AwaitingInput` / `Idle`）时标记为 `LIVE`；已断开控制连接或终止/异常/已完成状态则准确标定为 `PERSISTED`。
+- **解决 P2 Codex 模型目录由 Host 权威主导**：
+  - 重构 `list_agent_models_inner`：Codex 提供商优先直接从运行中的 Native Host 获取官方动态模型列表，不优先混入历史 transcript 的陈旧模型名称，避免覆盖原生模型能力与真实标签。
+- **自动化测试与门禁核验**：
+  - 修复 `cargo fmt` 代码格式问题，`cargo fmt --all --check` 与 `npm run format:check` 严格全绿；
+  - `cargo clippy --workspace --all-targets -- -D warnings` 零告警通过；
+  - `cargo test --workspace` 131 passed，显式运行本机 Codex 的 ignored 集成测试 `desktop_owner_can_stop_native_host_without_a_process_signal` 顺利通过；
+  - 全套 Node/TS 测试（118 项通过，6 skipped）与 `npm run typecheck` 全绿通过。
 
 ### 产品与文档收敛：local-first 工作台 + Remote（2026-09-08）
 
