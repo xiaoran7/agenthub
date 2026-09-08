@@ -17,6 +17,7 @@ import { PostgresGatewayStore } from "./postgres-store.js";
 import { WebPushSender, vapidKeysFromEnv } from "./push.js";
 import { StripeBillingProvider } from "./stripe-billing.js";
 import { InMemoryGatewayStore } from "./store.js";
+import { RemoteContentStore } from "./remote-store.js";
 
 const port = parsePort(process.env.PORT);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -145,6 +146,11 @@ if (vapidKeys !== undefined) {
     publicKey: vapidKeys.publicKey,
     sender: new WebPushSender(vapidKeys),
   };
+}
+if (process.env.AGENTHUB_REMOTE_DATABASE) {
+  options.remoteContent = new RemoteContentStore(
+    process.env.AGENTHUB_REMOTE_DATABASE,
+  );
 }
 const app = createGatewayApp(options);
 

@@ -1440,3 +1440,4 @@ export * from "./v2-capabilities.js";
 export * from "./v2-commands.js";
 export * from "./v2-events.js";
 export * from "./v2-slash.js";
+export * from "./remote.js";

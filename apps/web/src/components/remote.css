@@ -1,0 +1,364 @@
+.remote-console {
+  height: 100dvh;
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  background: #18191c;
+  color: #ecece8;
+  font:
+    15px/1.6 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+.remote-console * {
+  box-sizing: border-box;
+}
+.remote-console button,
+.remote-console select,
+.remote-console textarea {
+  font: inherit;
+  color: inherit;
+}
+.remote-console button {
+  border: 1px solid #414247;
+  border-radius: 8px;
+  background: #292a2f;
+  padding: 8px 13px;
+  cursor: pointer;
+}
+.remote-console button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.remote-console button:focus-visible,
+.remote-console select:focus-visible,
+.remote-console textarea:focus-visible {
+  outline: 2px solid #b7c9c2;
+  outline-offset: 3px;
+}
+.remote-console .remote-primary {
+  background: #cbd8ce;
+  color: #18251e;
+  border-color: transparent;
+  font-weight: 600;
+}
+.remote-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: #121315;
+  border-right: 1px solid #303136;
+  padding: 24px 18px;
+  overflow: auto;
+}
+.remote-brand {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.5px;
+}
+.remote-brand span {
+  font-size: 11px;
+  color: #aebfb3;
+  border: 1px solid #39443c;
+  padding: 3px 7px;
+  border-radius: 5px;
+  margin-left: 8px;
+  letter-spacing: 0.3px;
+}
+.remote-nav-label {
+  font-size: 12px;
+  color: #95969a;
+  margin-top: 12px;
+}
+.remote-sidebar section h2 {
+  font-size: 13px;
+  font-weight: 500;
+  color: #babbbd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0 10px 6px;
+}
+.remote-sidebar .remote-session {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  margin: 3px 0;
+  padding: 10px;
+}
+.remote-session small {
+  color: #989da0;
+  font-size: 11px;
+}
+.remote-sidebar .remote-session.selected {
+  background: #2b2e2c;
+  border-color: #424c45;
+}
+.remote-sidebar-footer {
+  margin-top: auto;
+  color: #a9abaa;
+  font-size: 12px;
+  display: grid;
+  gap: 12px;
+}
+.remote-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.remote-main > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 36px;
+  border-bottom: 1px solid #303136;
+  gap: 20px;
+}
+.remote-main h1 {
+  font-size: 19px;
+  font-weight: 550;
+  letter-spacing: -0.4px;
+  margin: 0;
+}
+.remote-main header p {
+  font-size: 12px;
+  color: #a2a7a3;
+  margin: 4px 0 0;
+}
+.remote-welcome {
+  margin: auto;
+  max-width: 640px;
+  padding: 48px;
+}
+.remote-eyebrow {
+  font-size: 12px;
+  color: #a7b6ad;
+}
+.remote-welcome h2 {
+  font-size: 32px;
+  line-height: 1.35;
+  font-weight: 500;
+  letter-spacing: -1px;
+}
+.remote-welcome p {
+  color: #a6aaa7;
+  font-size: 15px;
+}
+.remote-muted {
+  color: #9da19e;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.remote-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 12px 24px 0;
+  padding: 12px 16px;
+  border: 1px solid #64543b;
+  background: #302b22;
+  color: #e8d5ae;
+  font-size: 13px;
+  border-radius: 8px;
+}
+.remote-timeline {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  overscroll-behavior: contain;
+  padding: 28px max(24px, calc((100% - 800px) / 2));
+}
+.remote-message {
+  margin: 0 0 28px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.remote-message small {
+  display: block;
+  color: #a4b2a8;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.remote-message.user {
+  background: #2b2c30;
+  padding: 16px 20px;
+  border-radius: 14px;
+  margin-left: 12%;
+}
+.remote-tool {
+  border: 1px solid #3c4040;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+.remote-console pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12px/1.6 ui-monospace,
+    Consolas,
+    monospace;
+}
+.remote-approval {
+  border: 1px solid #97794c;
+  background: #302a22;
+  padding: 20px;
+  border-radius: 10px;
+  margin: 20px 0;
+}
+.remote-approval h3 {
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+.remote-approval > div {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.remote-composer {
+  flex-shrink: 0;
+  max-width: 800px;
+  width: calc(100% - 48px);
+  margin: 10px auto 24px;
+  padding: 15px 18px;
+  border: 1px solid #424646;
+  border-radius: 14px;
+  background: #242629;
+}
+.remote-composer label {
+  display: block;
+  font-size: 11px;
+  color: #b9c8bf;
+}
+.remote-composer textarea {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: vertical;
+  min-height: 70px;
+  max-height: 200px;
+  padding: 10px 0;
+  outline: none;
+}
+.remote-composer > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.remote-composer small {
+  font-size: 11px;
+  color: #9da29f;
+}
+.remote-launch {
+  background: #222427;
+  color: #ecece8;
+  border: 1px solid #484c48;
+  border-radius: 14px;
+  padding: 26px;
+  width: min(520px, calc(100% - 32px));
+  max-height: 90dvh;
+}
+.remote-launch::backdrop {
+  background: #0009;
+  backdrop-filter: blur(4px);
+}
+.remote-launch header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.remote-launch h2 {
+  font-size: 21px;
+  font-weight: 550;
+  margin: 0;
+}
+.remote-launch label {
+  display: grid;
+  gap: 5px;
+  font-size: 13px;
+  margin-top: 17px;
+}
+.remote-launch select {
+  padding: 10px;
+  background: #181a1c;
+  border: 1px solid #44494a;
+  border-radius: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.remote-launch p {
+  font-size: 12px;
+  color: #aeb5b0;
+  margin: 20px 0;
+}
+@media (max-width: 700px) {
+  .remote-console {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .remote-sidebar {
+    padding: 12px 16px;
+    gap: 10px;
+    max-height: 190px;
+    border-right: 0;
+    border-bottom: 1px solid #303136;
+  }
+  .remote-sidebar .remote-brand {
+    font-size: 17px;
+  }
+  .remote-nav-label,
+  .remote-sidebar-footer {
+    display: none;
+  }
+  .remote-sidebar > button {
+    position: absolute;
+    right: 16px;
+    top: 12px;
+    padding: 5px 10px;
+  }
+  .remote-sidebar section {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .remote-sidebar section h2 {
+    min-width: 75px;
+    max-width: 100px;
+  }
+  .remote-sidebar .remote-session {
+    width: auto;
+    min-width: 150px;
+    margin: 0;
+    padding: 6px 10px;
+  }
+  .remote-main > header {
+    padding: 15px 20px;
+  }
+  .remote-welcome {
+    padding: 28px;
+  }
+  .remote-welcome h2 {
+    font-size: 26px;
+  }
+  .remote-timeline {
+    padding: 20px;
+  }
+  .remote-composer {
+    width: calc(100% - 28px);
+    margin-bottom: 14px;
+  }
+  .remote-notice {
+    margin: 10px 14px 0;
+  }
+  .remote-message.user {
+    margin-left: 5%;
+  }
+}

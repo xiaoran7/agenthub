@@ -22,6 +22,8 @@ import fastifyRawBody from "fastify-raw-body";
 import fastifyWebsocket from "@fastify/websocket";
 import { V2SessionManager } from "./v2-session-manager.js";
 import { DualLayerEventStore } from "./v2-event-store.js";
+import { registerRemoteRoutes } from "./remote-routes.js";
+import type { RemoteContentStore } from "./remote-store.js";
 
 import {
   AccountError,
@@ -135,6 +137,7 @@ export interface GatewayAppOptions {
   billingProvider?: BillingProvider;
   tgOAuthClient?: TgOAuthClient;
   v2Manager?: V2SessionManager;
+  remoteContent?: RemoteContentStore;
   loginRateLimitSecret?: Buffer;
   trustProxy?: boolean;
   bindingCodeFactory?: () => string;
@@ -221,7 +224,16 @@ export function createGatewayApp(
     void reply.status(500).send({ error: "internal_error" });
   });
 
-  void app.register(fastifyWebsocket);
+  // Native JSONL permits 16 MiB; leave room for the Remote envelope.
+  void app.register(fastifyWebsocket, {
+    options: { maxPayload: 17 * 1024 * 1024 },
+  });
+  if (options.remoteContent) {
+    const content = options.remoteContent;
+    void app.register(async (remoteApp) =>
+      registerRemoteRoutes(remoteApp, store, authenticator, content),
+    );
+  }
 
   if (options.billingProvider !== undefined) {
     const provider = options.billingProvider;
@@ -1739,224 +1751,229 @@ export function createGatewayApp(
     raw.on("error", close);
   });
 
-  const v2Manager = options.v2Manager ?? new V2SessionManager();
+  // Retired in-memory prototype is available only to explicitly injected fixtures.
+  // Production remote traffic must use the authenticated, durable v3 routes.
+  if (options.v2Manager) {
+    const v2Manager = options.v2Manager;
 
-  // v2 WebSocket Multiplexing Bus for Runners
-  void app.register(async (v2WsApp) => {
-    v2WsApp.get("/v2/ws", { websocket: true }, (socket, _request) => {
-      let runnerConn: any;
+    // v2 WebSocket Multiplexing Bus for Runners
+    void app.register(async (v2WsApp) => {
+      v2WsApp.get("/v2/ws", { websocket: true }, (socket, _request) => {
+        let runnerConn: any;
 
-      socket.on("message", (data: any) => {
-        try {
-          const frame = JSON.parse(data.toString("utf8"));
-          if (!runnerConn && frame.type === "handshake") {
-            const runnerId =
-              frame.payload?.runner_id || `runner_${randomUUID()}`;
-            runnerConn = v2Manager.registerRunner(runnerId, socket as any);
+        socket.on("message", (data: any) => {
+          try {
+            const frame = JSON.parse(data.toString("utf8"));
+            if (!runnerConn && frame.type === "handshake") {
+              const runnerId =
+                frame.payload?.runner_id || `runner_${randomUUID()}`;
+              runnerConn = v2Manager.registerRunner(runnerId, socket as any);
+            }
+            if (runnerConn) {
+              v2Manager.handleIncomingFrame(runnerConn, frame);
+            }
+          } catch {
+            // ignore parse error
           }
+        });
+
+        socket.on("close", () => {
           if (runnerConn) {
-            v2Manager.handleIncomingFrame(runnerConn, frame);
+            v2Manager.unregisterRunner(runnerConn.runner_id);
           }
-        } catch {
-          // ignore parse error
-        }
-      });
-
-      socket.on("close", () => {
-        if (runnerConn) {
-          v2Manager.unregisterRunner(runnerConn.runner_id);
-        }
+        });
       });
     });
-  });
 
-  // v2 Dynamic Capabilities
-  app.get("/v2/capabilities", async (request) => {
-    await authenticator.authenticate(request);
-    return { capabilities: v2Manager.listAllCapabilities() };
-  });
-
-  app.get("/v2/runners/:runnerId/capabilities", async (request, reply) => {
-    await authenticator.authenticate(request);
-    const { runnerId } = request.params as { runnerId: string };
-    const caps = v2Manager.getCapabilities(runnerId);
-    if (!caps) {
-      void reply.status(404).send({ error: "runner_not_found" });
-      return;
-    }
-    return { capabilities: caps };
-  });
-
-  app.post("/v2/capabilities", async (request) => {
-    const report = validateCapabilityReport(request.body);
-    v2Manager.saveCapabilities(report);
-    return { status: "recorded" };
-  });
-
-  // v2 Workspace-First Sessions
-  app.get("/v2/sessions", async (request) => {
-    await authenticator.authenticate(request);
-    const query = request.query as {
-      runner_id?: string;
-      workspace_path?: string;
-    };
-    return { sessions: v2Manager.eventStore.listSessions(query) };
-  });
-
-  app.get("/v2/sessions/:sessionId", async (request, reply) => {
-    await authenticator.authenticate(request);
-    const { sessionId } = request.params as { sessionId: string };
-    const session = v2Manager.eventStore.getSession(sessionId);
-    if (!session) {
-      void reply.status(404).send({ error: "session_not_found" });
-      return;
-    }
-    return { session };
-  });
-
-  // v2 Interactive Control Commands
-  app.post("/v2/sessions/launch", async (request, reply) => {
-    await authenticator.authenticate(request);
-    const body = expectObject(request.body);
-    const profile = validateLaunchProfile(body.launch_profile);
-    const cmdId =
-      typeof body.cmd_id === "string"
-        ? body.cmd_id
-        : `cmd_${Date.now().toString(36)}`;
-    const hubSessionId = `hub_${randomUUID()}`;
-
-    try {
-      v2Manager.sendCommand(profile.target_runner_id, hubSessionId, cmdId, {
-        action: "launch_session",
-        launch_profile: profile,
-      });
-      return { hub_session_id: hubSessionId, cmd_id: cmdId };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "launch_failed";
-      void reply.status(400).send({ error: msg });
-    }
-  });
-
-  app.post("/v2/sessions/:sessionId/prompt", async (request, reply) => {
-    await authenticator.authenticate(request);
-    const { sessionId } = request.params as { sessionId: string };
-    const session = v2Manager.eventStore.getSession(sessionId);
-    if (!session) {
-      void reply.status(404).send({ error: "session_not_found" });
-      return;
-    }
-    const body = expectObject(request.body);
-    const text = typeof body.text === "string" ? body.text : "";
-    if (!text.trim()) {
-      void reply.status(400).send({ error: "prompt_text_required" });
-      return;
-    }
-    const cmdId =
-      typeof body.cmd_id === "string"
-        ? body.cmd_id
-        : `cmd_${Date.now().toString(36)}`;
-
-    v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
-      action: "send_prompt",
-      text,
-      client_turn_id:
-        typeof body.client_turn_id === "string"
-          ? body.client_turn_id
-          : undefined,
+    // v2 Dynamic Capabilities
+    app.get("/v2/capabilities", async (request) => {
+      await authenticator.authenticate(request);
+      return { capabilities: v2Manager.listAllCapabilities() };
     });
-    return { status: "queued", cmd_id: cmdId };
-  });
 
-  app.post("/v2/sessions/:sessionId/approve", async (request, reply) => {
-    await authenticator.authenticate(request);
-    const { sessionId } = request.params as { sessionId: string };
-    const session = v2Manager.eventStore.getSession(sessionId);
-    if (!session) {
-      void reply.status(404).send({ error: "session_not_found" });
-      return;
-    }
-    const body = expectObject(request.body);
-    const approvalId =
-      typeof body.approval_id === "string" ? body.approval_id : "";
-    const decision =
-      body.decision === "approved" || body.decision === "rejected"
-        ? body.decision
-        : "rejected";
-    const cmdId =
-      typeof body.cmd_id === "string"
-        ? body.cmd_id
-        : `cmd_${Date.now().toString(36)}`;
-
-    v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
-      action: "resolve_approval",
-      approval_id: approvalId,
-      decision,
-      custom_feedback:
-        typeof body.custom_feedback === "string"
-          ? body.custom_feedback
-          : undefined,
-    });
-    return { status: "sent", cmd_id: cmdId };
-  });
-
-  app.post("/v2/sessions/:sessionId/interrupt", async (request, reply) => {
-    await authenticator.authenticate(request);
-    const { sessionId } = request.params as { sessionId: string };
-    const session = v2Manager.eventStore.getSession(sessionId);
-    if (!session) {
-      void reply.status(404).send({ error: "session_not_found" });
-      return;
-    }
-    const body = expectObject(request.body);
-    const cmdId =
-      typeof body.cmd_id === "string"
-        ? body.cmd_id
-        : `cmd_${Date.now().toString(36)}`;
-
-    v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
-      action: "interrupt_turn",
-      reason: typeof body.reason === "string" ? body.reason : "user_cancelled",
-    });
-    return { status: "sent", cmd_id: cmdId };
-  });
-
-  // v2 Live Stream Delta SSE for Session
-  app.get("/v2/sessions/:sessionId/stream", async (request, reply) => {
-    await authenticator.authenticate(request);
-    const { sessionId } = request.params as { sessionId: string };
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-store",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-    });
-    request.raw.socket.setNoDelay(true);
-    request.raw.socket.setTimeout(0);
-
-    const write = (chunk: string): void => {
-      if (!raw.writableEnded) {
-        raw.write(chunk);
+    app.get("/v2/runners/:runnerId/capabilities", async (request, reply) => {
+      await authenticator.authenticate(request);
+      const { runnerId } = request.params as { runnerId: string };
+      const caps = v2Manager.getCapabilities(runnerId);
+      if (!caps) {
+        void reply.status(404).send({ error: "runner_not_found" });
+        return;
       }
-    };
-    write(`retry: ${STREAM_RETRY_MS}\n\n`);
-    write("event: ready\ndata: {}\n\n");
+      return { capabilities: caps };
+    });
 
-    const unsubscribe = v2Manager.eventStore.subscribeDeltas(
-      sessionId,
-      (delta) => {
-        write(`event: delta\ndata: ${JSON.stringify(delta)}\n\n`);
-      },
-    );
+    app.post("/v2/capabilities", async (request) => {
+      const report = validateCapabilityReport(request.body);
+      v2Manager.saveCapabilities(report);
+      return { status: "recorded" };
+    });
 
-    const close = (): void => {
-      unsubscribe();
-      raw.end();
-    };
-    raw.on("close", close);
-    raw.on("error", close);
-  });
+    // v2 Workspace-First Sessions
+    app.get("/v2/sessions", async (request) => {
+      await authenticator.authenticate(request);
+      const query = request.query as {
+        runner_id?: string;
+        workspace_path?: string;
+      };
+      return { sessions: v2Manager.eventStore.listSessions(query) };
+    });
+
+    app.get("/v2/sessions/:sessionId", async (request, reply) => {
+      await authenticator.authenticate(request);
+      const { sessionId } = request.params as { sessionId: string };
+      const session = v2Manager.eventStore.getSession(sessionId);
+      if (!session) {
+        void reply.status(404).send({ error: "session_not_found" });
+        return;
+      }
+      return { session };
+    });
+
+    // v2 Interactive Control Commands
+    app.post("/v2/sessions/launch", async (request, reply) => {
+      await authenticator.authenticate(request);
+      const body = expectObject(request.body);
+      const profile = validateLaunchProfile(body.launch_profile);
+      const cmdId =
+        typeof body.cmd_id === "string"
+          ? body.cmd_id
+          : `cmd_${Date.now().toString(36)}`;
+      const hubSessionId = `hub_${randomUUID()}`;
+
+      try {
+        v2Manager.sendCommand(profile.target_runner_id, hubSessionId, cmdId, {
+          action: "launch_session",
+          launch_profile: profile,
+        });
+        return { hub_session_id: hubSessionId, cmd_id: cmdId };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "launch_failed";
+        void reply.status(400).send({ error: msg });
+      }
+    });
+
+    app.post("/v2/sessions/:sessionId/prompt", async (request, reply) => {
+      await authenticator.authenticate(request);
+      const { sessionId } = request.params as { sessionId: string };
+      const session = v2Manager.eventStore.getSession(sessionId);
+      if (!session) {
+        void reply.status(404).send({ error: "session_not_found" });
+        return;
+      }
+      const body = expectObject(request.body);
+      const text = typeof body.text === "string" ? body.text : "";
+      if (!text.trim()) {
+        void reply.status(400).send({ error: "prompt_text_required" });
+        return;
+      }
+      const cmdId =
+        typeof body.cmd_id === "string"
+          ? body.cmd_id
+          : `cmd_${Date.now().toString(36)}`;
+
+      v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
+        action: "send_prompt",
+        text,
+        client_turn_id:
+          typeof body.client_turn_id === "string"
+            ? body.client_turn_id
+            : undefined,
+      });
+      return { status: "queued", cmd_id: cmdId };
+    });
+
+    app.post("/v2/sessions/:sessionId/approve", async (request, reply) => {
+      await authenticator.authenticate(request);
+      const { sessionId } = request.params as { sessionId: string };
+      const session = v2Manager.eventStore.getSession(sessionId);
+      if (!session) {
+        void reply.status(404).send({ error: "session_not_found" });
+        return;
+      }
+      const body = expectObject(request.body);
+      const approvalId =
+        typeof body.approval_id === "string" ? body.approval_id : "";
+      const decision =
+        body.decision === "approved" || body.decision === "rejected"
+          ? body.decision
+          : "rejected";
+      const cmdId =
+        typeof body.cmd_id === "string"
+          ? body.cmd_id
+          : `cmd_${Date.now().toString(36)}`;
+
+      v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
+        action: "resolve_approval",
+        approval_id: approvalId,
+        decision,
+        custom_feedback:
+          typeof body.custom_feedback === "string"
+            ? body.custom_feedback
+            : undefined,
+      });
+      return { status: "sent", cmd_id: cmdId };
+    });
+
+    app.post("/v2/sessions/:sessionId/interrupt", async (request, reply) => {
+      await authenticator.authenticate(request);
+      const { sessionId } = request.params as { sessionId: string };
+      const session = v2Manager.eventStore.getSession(sessionId);
+      if (!session) {
+        void reply.status(404).send({ error: "session_not_found" });
+        return;
+      }
+      const body = expectObject(request.body);
+      const cmdId =
+        typeof body.cmd_id === "string"
+          ? body.cmd_id
+          : `cmd_${Date.now().toString(36)}`;
+
+      v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
+        action: "interrupt_turn",
+        reason:
+          typeof body.reason === "string" ? body.reason : "user_cancelled",
+      });
+      return { status: "sent", cmd_id: cmdId };
+    });
+
+    // v2 Live Stream Delta SSE for Session
+    app.get("/v2/sessions/:sessionId/stream", async (request, reply) => {
+      await authenticator.authenticate(request);
+      const { sessionId } = request.params as { sessionId: string };
+      reply.hijack();
+      const raw = reply.raw;
+      raw.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      request.raw.socket.setNoDelay(true);
+      request.raw.socket.setTimeout(0);
+
+      const write = (chunk: string): void => {
+        if (!raw.writableEnded) {
+          raw.write(chunk);
+        }
+      };
+      write(`retry: ${STREAM_RETRY_MS}\n\n`);
+      write("event: ready\ndata: {}\n\n");
+
+      const unsubscribe = v2Manager.eventStore.subscribeDeltas(
+        sessionId,
+        (delta) => {
+          write(`event: delta\ndata: ${JSON.stringify(delta)}\n\n`);
+        },
+      );
+
+      const close = (): void => {
+        unsubscribe();
+        raw.end();
+      };
+      raw.on("close", close);
+      raw.on("error", close);
+    });
+  }
 
   app.addHook("onClose", async () => {
     for (const close of [...openStreams]) {

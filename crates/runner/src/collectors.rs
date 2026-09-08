@@ -929,7 +929,8 @@ fn apply_codex_context_line(line: &str, context: &mut LocalSessionContext) {
         }
         Some("event_msg")
             if context.title.is_none()
-                && value.pointer("/payload/type").and_then(Value::as_str) == Some("user_message") =>
+                && value.pointer("/payload/type").and_then(Value::as_str)
+                    == Some("user_message") =>
         {
             let prompt_text = value
                 .pointer("/payload/message")
@@ -2080,6 +2081,7 @@ pub fn run_agent_session_turn_streaming(
 /// Starts a brand-new agent conversation in `cwd` and streams the first turn.
 /// The session id is recovered from the CLI's stream output so the panel can
 /// switch to the real conversation immediately.
+#[allow(clippy::too_many_arguments)] // Legacy one-shot API; retained until client migration.
 pub fn run_agent_session_start_streaming(
     agent: crate::domain::AgentType,
     binary: impl AsRef<Path>,
@@ -2150,8 +2152,16 @@ pub fn run_agent_session_start_streaming(
     )
 }
 
-fn apply_turn_options(command: &mut Command, agent: crate::domain::AgentType, options: &TurnOptions<'_>) {
-    let Some(model) = options.model.map(str::trim).filter(|value| !value.is_empty()) else {
+fn apply_turn_options(
+    command: &mut Command,
+    agent: crate::domain::AgentType,
+    options: &TurnOptions<'_>,
+) {
+    let Some(model) = options
+        .model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return;
     };
     match agent {
@@ -2184,6 +2194,7 @@ fn apply_turn_options(command: &mut Command, agent: crate::domain::AgentType, op
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Shared by the legacy CLI wrappers.
 fn run_agent_stream_process(
     agent: crate::domain::AgentType,
     mut command: Command,
@@ -2290,8 +2301,7 @@ fn extract_session_id_from_output(agent: crate::domain::AgentType, output: &str)
                 .into_iter()
                 .find_map(|field| value.get(field).and_then(Value::as_str))
                 .filter(|_| {
-                    value.get("type").and_then(Value::as_str)
-                        == Some("system")
+                    value.get("type").and_then(Value::as_str) == Some("system")
                         && value.get("subtype").and_then(Value::as_str) == Some("init")
                         || value.get("type").and_then(Value::as_str) == Some("result")
                 }),
@@ -2651,6 +2661,23 @@ impl CodexAppServer {
         binary: impl AsRef<Path>,
         response_timeout: Duration,
     ) -> Result<Self, CollectorError> {
+        Self::start_mode(binary, response_timeout, false)
+    }
+
+    /// A long-lived control connection must receive content and tool events.
+    /// Metadata collectors retain their original opt-out list.
+    pub fn start_interactive(
+        binary: impl AsRef<Path>,
+        response_timeout: Duration,
+    ) -> Result<Self, CollectorError> {
+        Self::start_mode(binary, response_timeout, true)
+    }
+
+    fn start_mode(
+        binary: impl AsRef<Path>,
+        response_timeout: Duration,
+        interactive: bool,
+    ) -> Result<Self, CollectorError> {
         let binary = binary.as_ref();
         let program = binary.display().to_string();
         let mut command = Command::new(binary);
@@ -2697,11 +2724,11 @@ impl CodexAppServer {
             response_timeout,
             job: Some(job),
         };
-        server.initialize()?;
+        server.initialize(interactive)?;
         Ok(server)
     }
 
-    fn initialize(&mut self) -> Result<(), CollectorError> {
+    fn initialize(&mut self, interactive: bool) -> Result<(), CollectorError> {
         self.request(
             "initialize",
             json!({
@@ -2712,7 +2739,7 @@ impl CodexAppServer {
                 },
                 "capabilities": {
                     "experimentalApi": false,
-                    "optOutNotificationMethods": [
+                    "optOutNotificationMethods": if interactive { json!([]) } else { json!([
                         "thread/started",
                         "thread/name/updated",
                         "thread/tokenUsage/updated",
@@ -2730,7 +2757,7 @@ impl CodexAppServer {
                         "warning",
                         "configWarning",
                         "error"
-                    ]
+                    ]) }
                 }
             }),
         )?;
@@ -2850,6 +2877,11 @@ impl CodexAppServer {
                 program: self.program.clone(),
                 source,
             })
+    }
+
+    /// Answer a server request in its own ID namespace; never allocate a new ID.
+    pub fn respond(&mut self, request_id: Value, result: Value) -> Result<(), CollectorError> {
+        self.send(&json!({"id": request_id, "result": result}))
     }
 
     pub fn drain_messages(&mut self) -> Result<Vec<Value>, CollectorError> {

@@ -2823,6 +2823,15 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     });
   }
 
+  async getRegisteredDevice(
+    deviceId: string,
+  ): Promise<RegisteredDevice | undefined> {
+    const rows = await this.#sql<
+      DeviceRow[]
+    >`SELECT * FROM agent_platform_devices WHERE device_id = ${deviceId}`;
+    return rows[0] === undefined ? undefined : registeredDevice(rows[0]);
+  }
+
   async listDevices(ownerId: string): Promise<DeviceView[]> {
     const rows = await this.#sql<
       Array<{

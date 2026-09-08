@@ -96,15 +96,14 @@ export function SelectDropdown<T extends string = string>({
             {selectedOption ? selectedOption.label : placeholder}
           </span>
         </span>
-        <ChevronDown size={14} className={`select-chevron ${open ? "rotate" : ""}`} />
+        <ChevronDown
+          size={14}
+          className={`select-chevron ${open ? "rotate" : ""}`}
+        />
       </button>
 
       {open && (
-        <div
-          className={`select-menu ${align}`}
-          role="listbox"
-          tabIndex={-1}
-        >
+        <div className={`select-menu ${align}`} role="listbox" tabIndex={-1}>
           {options.map((option) => {
             const isSelected = option.value === value;
             return (

@@ -40,7 +40,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "agenthub-runner")]
-#[command(about = "Local metadata collector for AgentHub sessions")]
+#[command(about = "AgentHub native session host and metadata collector")]
 struct Cli {
     #[arg(long, env = "AGENT_PLATFORM_DEVICE_ID", default_value = "local-dev")]
     device_id: String,
@@ -79,6 +79,29 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Connect a durable native Host to the authenticated v3 Gateway.
+    RemoteRun {
+        #[arg(long)]
+        codex_binary: PathBuf,
+        #[arg(long, required = true)]
+        workspace: Vec<PathBuf>,
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long)]
+        server: String,
+    },
+    /// Local JSONL control channel for a persistent Codex app-server Host.
+    /// This is not yet the authenticated Gateway transport.
+    RemoteHost {
+        #[arg(long)]
+        codex_binary: PathBuf,
+        #[arg(
+            long,
+            required = true,
+            help = "Authorize an exact working directory; repeat for multiple projects"
+        )]
+        workspace: Vec<PathBuf>,
+    },
     Normalize {
         #[arg(value_enum)]
         format: InputFormat,
@@ -439,6 +462,22 @@ fn main() -> Result<()> {
     let auth_cache = cli.auth_cache;
 
     match cli.command {
+        Command::RemoteRun {
+            codex_binary,
+            workspace,
+            db,
+            server,
+        } => {
+            let identity = runtime_identity
+                .ok_or_else(|| anyhow::anyhow!("remote_requires_bound_device_identity"))?;
+            agent_pulse_runner::remote_network::run(codex_binary, workspace, db, identity, server)?;
+        }
+        Command::RemoteHost {
+            codex_binary,
+            workspace,
+        } => {
+            agent_pulse_runner::remote_ipc::run(codex_binary, workspace)?;
+        }
         Command::Normalize { format, input } => {
             let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
             let meta = ObservationMeta::now(&device_id);

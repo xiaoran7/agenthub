@@ -63,6 +63,7 @@ import {
 } from "../src/lib/preview-data";
 import { Icon } from "../src/components/Icon";
 import { AccountGate } from "../src/components/AccountGate";
+import RemotePage from "./remote/page";
 import {
   acceptTeamInvitation,
   accountErrorMessage,
@@ -126,6 +127,16 @@ function SyncAlert({
 }
 
 export default function PanelPage() {
+  const [legacy, setLegacy] = useState<boolean | null>(null);
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    setLegacy(query.has("legacy") || query.has("preview"));
+  }, []);
+  if (legacy === null) return <LoadingView />;
+  return legacy ? <LegacyPanelPage /> : <RemotePage />;
+}
+
+function LegacyPanelPage() {
   const [account, setAccount] = useState<AccountView | null | undefined>();
   const [config, setConfig] = useState<PanelConfig | undefined>();
   const [previewMode, setPreviewMode] = useState<boolean | undefined>();

@@ -72,9 +72,15 @@ export function DesktopSettingsModal({
   const [refreshSeconds, setRefreshSeconds] = useState(
     preferences.refresh_interval_seconds || 4,
   );
-  const [claudeBinary, setClaudeBinary] = useState(preferences.claude_binary || "claude");
-  const [codexBinary, setCodexBinary] = useState(preferences.codex_binary || "codex");
-  const [grokBinary, setGrokBinary] = useState(preferences.grok_binary || "grok");
+  const [claudeBinary, setClaudeBinary] = useState(
+    preferences.claude_binary || "claude",
+  );
+  const [codexBinary, setCodexBinary] = useState(
+    preferences.codex_binary || "codex",
+  );
+  const [grokBinary, setGrokBinary] = useState(
+    preferences.grok_binary || "grok",
+  );
   const [defaultCwd, setDefaultCwd] = useState(
     preferences.default_cwd || "d:/ClaudeSpace",
   );
@@ -159,9 +165,17 @@ export function DesktopSettingsModal({
         { id: "appearance", label: "外观", icon: <SunMoon size={15} /> },
         { id: "voice", label: "语音", icon: <Mic size={15} /> },
         { id: "config", label: "配置", icon: <Sliders size={15} /> },
-        { id: "personalization", label: "个性化", icon: <Sparkles size={15} /> },
+        {
+          id: "personalization",
+          label: "个性化",
+          icon: <Sparkles size={15} />,
+        },
         { id: "shortcuts", label: "键盘快捷键", icon: <Keyboard size={15} /> },
-        { id: "billing", label: "使用情况和计费", icon: <CreditCard size={15} /> },
+        {
+          id: "billing",
+          label: "使用情况和计费",
+          icon: <CreditCard size={15} />,
+        },
         { id: "account", label: "账户", icon: <CircleUserRound size={15} /> },
       ],
     },
@@ -179,7 +193,11 @@ export function DesktopSettingsModal({
         { id: "hooks", label: "钩子", icon: <Anchor size={15} /> },
         { id: "connections", label: "连接", icon: <Radio size={15} /> },
         { id: "git", label: "Git 集成", icon: <GitBranch size={15} /> },
-        { id: "environment", label: "环境与 Shell", icon: <Terminal size={15} /> },
+        {
+          id: "environment",
+          label: "环境与 Shell",
+          icon: <Terminal size={15} />,
+        },
       ],
     },
   ];
@@ -242,9 +260,8 @@ export function DesktopSettingsModal({
         <main className="settings-modal-main">
           <header className="settings-main-header">
             <h2>
-              {navItems
-                .flatMap((g) => g.items)
-                .find((i) => i.id === section)?.label || "设置"}
+              {navItems.flatMap((g) => g.items).find((i) => i.id === section)
+                ?.label || "设置"}
             </h2>
             <div className="settings-header-right">
               {saveSuccess && (
@@ -275,7 +292,8 @@ export function DesktopSettingsModal({
                         <div className="row-text">
                           <strong>默认权限</strong>
                           <p>
-                            默认情况下，Agent 可以读取和编辑其工作空间中的文件。需要时，它可以请求额外访问权限。
+                            默认情况下，Agent
+                            可以读取和编辑其工作空间中的文件。需要时，它可以请求额外访问权限。
                           </p>
                         </div>
                         <label className="ios-toggle">
@@ -294,14 +312,17 @@ export function DesktopSettingsModal({
                         <div className="row-text">
                           <strong>自动审核</strong>
                           <p>
-                            Agent 可以读取和编辑其工作空间中的文件。Agent 会自动审查额外访问权限请求。
+                            Agent 可以读取和编辑其工作空间中的文件。Agent
+                            会自动审查额外访问权限请求。
                           </p>
                         </div>
                         <label className="ios-toggle">
                           <input
                             type="checkbox"
                             checked={permAutoReview}
-                            onChange={(e) => setPermAutoReview(e.target.checked)}
+                            onChange={(e) =>
+                              setPermAutoReview(e.target.checked)
+                            }
                           />
                           <span className="toggle-slider" />
                         </label>
@@ -313,14 +334,17 @@ export function DesktopSettingsModal({
                         <div className="row-text">
                           <strong>完全访问权限</strong>
                           <p>
-                            当 Agent 以完整访问权限运行时，它无需你的批准即可编辑你电脑上的任何文件，并运行可访问网络的命令。
+                            当 Agent
+                            以完整访问权限运行时，它无需你的批准即可编辑你电脑上的任何文件，并运行可访问网络的命令。
                           </p>
                         </div>
                         <label className="ios-toggle">
                           <input
                             type="checkbox"
                             checked={permFullAccess}
-                            onChange={(e) => setPermFullAccess(e.target.checked)}
+                            onChange={(e) =>
+                              setPermFullAccess(e.target.checked)
+                            }
                           />
                           <span className="toggle-slider" />
                         </label>
@@ -474,13 +498,21 @@ export function DesktopSettingsModal({
                         <div className="stat-box">
                           <span className="stat-label">Codex 存储</span>
                           <strong className="stat-value">
-                            {(snapshot.local.memory.codex_bytes / 1024 / 1024).toFixed(1)} MB
+                            {(
+                              snapshot.local.memory.codex_bytes /
+                              1024 /
+                              1024
+                            ).toFixed(1)}{" "}
+                            MB
                           </strong>
                         </div>
                         <div className="stat-box">
                           <span className="stat-label">Claude 存储</span>
                           <strong className="stat-value">
-                            {(snapshot.local.memory.claude_bytes / 1024).toFixed(1)} KB
+                            {(
+                              snapshot.local.memory.claude_bytes / 1024
+                            ).toFixed(1)}{" "}
+                            KB
                           </strong>
                         </div>
                       </div>
@@ -498,7 +530,9 @@ export function DesktopSettingsModal({
                       <div className="settings-row-item">
                         <div className="row-text">
                           <strong>用户名称</strong>
-                          <p>{snapshot.account.user.display_name || "未设置"}</p>
+                          <p>
+                            {snapshot.account.user.display_name || "未设置"}
+                          </p>
                         </div>
                       </div>
                       <div className="settings-divider" />
@@ -512,14 +546,19 @@ export function DesktopSettingsModal({
                       <div className="settings-row-item">
                         <div className="row-text">
                           <strong>订阅计划</strong>
-                          <p>{snapshot.account.subscription.plan.toUpperCase()} · 激活中</p>
+                          <p>
+                            {snapshot.account.subscription.plan.toUpperCase()} ·
+                            激活中
+                          </p>
                         </div>
                       </div>
                       <div className="settings-divider" />
                       <div className="settings-row-item">
                         <div className="row-text">
                           <strong>设备 ID</strong>
-                          <p className="monospace-text">{snapshot.device.device_id}</p>
+                          <p className="monospace-text">
+                            {snapshot.device.device_id}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -629,12 +668,16 @@ export function DesktopSettingsModal({
               {section === "computer" && (
                 <div className="settings-section-block">
                   <div className="settings-card-group">
-                    <h4 className="card-group-title">电脑操控 (Agent Computer Bridge)</h4>
+                    <h4 className="card-group-title">
+                      电脑操控 (Agent Computer Bridge)
+                    </h4>
                     <div className="settings-card">
                       <div className="settings-row-item">
                         <div className="row-text">
                           <strong>本地桌面操控桥</strong>
-                          <p>允许 Agent 驱动屏幕截屏、鼠标键盘交互与窗口聚焦。</p>
+                          <p>
+                            允许 Agent 驱动屏幕截屏、鼠标键盘交互与窗口聚焦。
+                          </p>
                         </div>
                         <span className="status-badge-chip active">运行中</span>
                       </div>
@@ -654,7 +697,9 @@ export function DesktopSettingsModal({
                           <strong>CHANGELOG 自动留痕规范</strong>
                           <p>每次代码变更与发版必须同步递增版本并更新留痕。</p>
                         </div>
-                        <span className="status-badge-chip active">铁律生效</span>
+                        <span className="status-badge-chip active">
+                          铁律生效
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -719,7 +764,9 @@ export function DesktopSettingsModal({
                       <div className="settings-row-item">
                         <div className="row-text">
                           <strong>当前方案</strong>
-                          <p>{snapshot.account.subscription.plan.toUpperCase()}</p>
+                          <p>
+                            {snapshot.account.subscription.plan.toUpperCase()}
+                          </p>
                         </div>
                       </div>
                       <div className="settings-divider" />
@@ -827,7 +874,9 @@ export function DesktopSettingsModal({
                       <div className="settings-row-item">
                         <div className="row-text">
                           <strong>服务器端点</strong>
-                          <p className="monospace-text">{snapshot.server_url}</p>
+                          <p className="monospace-text">
+                            {snapshot.server_url}
+                          </p>
                         </div>
                         <span className="status-badge-chip active">
                           {snapshot.realtime_connected ? "实时连接" : "轮询中"}

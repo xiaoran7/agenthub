@@ -1,0 +1,410 @@
+use agent_pulse_runner::remote_host::*;
+use serde_json::{Value, json};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
+
+#[derive(Default)]
+struct State {
+    expected: VecDeque<(&'static str, Result<Value, NativeError>)>,
+    calls: Vec<(String, Value)>,
+    responses: Vec<(Value, Value)>,
+    messages: Vec<Value>,
+    lost: bool,
+}
+
+#[derive(Clone, Default)]
+struct Fake(Arc<Mutex<State>>);
+impl NativeTransport for Fake {
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, NativeError> {
+        let mut state = self.0.lock().unwrap();
+        state.calls.push((method.into(), params));
+        let (expected, result) = state
+            .expected
+            .pop_front()
+            .expect("unexpected native request");
+        assert_eq!(method, expected);
+        result
+    }
+    fn respond(&mut self, id: Value, result: Value) -> Result<(), NativeError> {
+        self.0.lock().unwrap().responses.push((id, result));
+        Ok(())
+    }
+    fn drain(&mut self) -> Result<Vec<Value>, NativeError> {
+        let mut state = self.0.lock().unwrap();
+        if state.lost {
+            return Err(NativeError {
+                code: "provider_transport_lost".into(),
+                outcome_unknown: true,
+            });
+        }
+        Ok(std::mem::take(&mut state.messages))
+    }
+}
+impl Fake {
+    fn expect(&self, method: &'static str, result: Value) {
+        self.0
+            .lock()
+            .unwrap()
+            .expected
+            .push_back((method, Ok(result)));
+    }
+    fn event(&self, value: Value) {
+        self.0.lock().unwrap().messages.push(value);
+    }
+}
+
+fn setup() -> (tempfile::TempDir, Fake, NativeSessionHost<Fake>) {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let host = NativeSessionHost::new(fake.clone(), vec![dir.path().into()]).unwrap();
+    (dir, fake, host)
+}
+
+#[test]
+fn discovery_only_exports_authorized_metadata_and_never_grants_control() {
+    let (dir, fake, mut host) = setup();
+    let other = tempfile::tempdir().unwrap();
+    fake.expect("thread/list", json!({"data":[
+        {"id":"allowed","cwd":dir.path(),"name":"Example","preview":"private preview","turns":["private body"],"status":{"type":"idle"}},
+        {"id":"other","cwd":other.path(),"name":"Outside","status":{"type":"idle"}}
+    ],"nextCursor":null}));
+    let result = host.discover().unwrap();
+    assert_eq!(result["candidates"].as_array().unwrap().len(), 1);
+    assert_eq!(result["candidates"][0]["control_connected"], false);
+    assert!(!result.to_string().contains("private"));
+    assert!(host.sessions().is_empty());
+}
+fn connect(dir: &tempfile::TempDir, hub: &str) -> RemoteCommand {
+    RemoteCommand {
+        client_cmd_id: format!("create-{hub}"),
+        hub_session_id: hub.into(),
+        host_generation: None,
+        command: RemoteAction::Connect {
+            mode: ConnectMode::Create,
+            workspace_path: dir.path().into(),
+            provider_session_id: None,
+            model: None,
+            sandbox: CodexSandbox::ReadOnly,
+            approval_policy: CodexApprovalPolicy::Untrusted,
+        },
+    }
+}
+fn control(host: &NativeSessionHost<Fake>, id: &str, action: RemoteAction) -> RemoteCommand {
+    RemoteCommand {
+        client_cmd_id: id.into(),
+        hub_session_id: "hub".into(),
+        host_generation: Some(host.generation().into()),
+        command: action,
+    }
+}
+fn bind(dir: &tempfile::TempDir, fake: &Fake, host: &mut NativeSessionHost<Fake>) {
+    fake.expect(
+        "thread/start",
+        json!({"thread": {"id": "native-real", "status": {"type":"idle"}}}),
+    );
+    assert_eq!(host.handle_command(connect(dir, "hub")).status, "accepted");
+}
+fn start_turn(fake: &Fake, host: &mut NativeSessionHost<Fake>, id: &str) {
+    fake.expect(
+        "turn/start",
+        json!({"turn": {"id": id, "status": "inProgress"}}),
+    );
+    let cmd = control(
+        host,
+        id,
+        RemoteAction::SendPrompt {
+            text: "hello".into(),
+        },
+    );
+    assert_eq!(host.handle_command(cmd).status, "accepted");
+}
+
+#[test]
+fn create_uses_native_identity_and_never_reexecutes_duplicate_commands() {
+    let (dir, fake, mut host) = setup();
+    let command = connect(&dir, "hub");
+    fake.expect(
+        "thread/start",
+        json!({"thread": {"id":"native-real", "status":{"type":"idle"}}}),
+    );
+    let first = host.handle_command(command.clone());
+    assert_eq!(first, host.handle_command(command.clone()));
+    assert_eq!(
+        first.result.unwrap()["binding"]["provider_session_id"],
+        "native-real"
+    );
+    let mut conflict = command;
+    conflict.hub_session_id = "another".into();
+    assert_eq!(
+        host.handle_command(conflict).code.as_deref(),
+        Some("command_id_conflict")
+    );
+    let state = fake.0.lock().unwrap();
+    assert_eq!(state.calls.len(), 1);
+    assert_eq!(state.calls[0].1["sandbox"], "read-only");
+    assert_eq!(state.calls[0].1["approvalPolicy"], "untrusted");
+    assert!(state.calls[0].1.get("model").is_none());
+}
+
+#[test]
+fn two_turns_share_native_id_and_only_native_completion_releases_busy_state() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-1");
+    let busy = control(
+        &host,
+        "busy",
+        RemoteAction::SendPrompt {
+            text: "second".into(),
+        },
+    );
+    assert_eq!(
+        host.handle_command(busy).code.as_deref(),
+        Some("session_busy_or_unknown")
+    );
+    fake.event(json!({"method":"turn/completed", "params":{"threadId":"native-real", "turn":{"id":"turn-1", "status":"completed"}}}));
+    host.poll().unwrap();
+    start_turn(&fake, &mut host, "turn-2");
+    fake.event(json!({"method":"turn/completed", "params":{"threadId":"native-real", "turn":{"id":"turn-1", "status":"completed"}}}));
+    host.poll().unwrap();
+    assert_eq!(
+        host.sessions()[0].current_turn_id.as_deref(),
+        Some("turn-2")
+    );
+    let state = fake.0.lock().unwrap();
+    let turns: Vec<_> = state
+        .calls
+        .iter()
+        .filter(|(method, _)| method == "turn/start")
+        .collect();
+    assert_eq!(turns.len(), 2);
+    assert!(
+        turns
+            .iter()
+            .all(|(_, params)| params["threadId"] == "native-real")
+    );
+}
+
+#[test]
+fn approval_preserves_request_id_fences_generation_and_rejects_replays() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-1");
+    let raw = json!({"id":7,"method":"item/commandExecution/requestApproval", "params":{"threadId":"native-real","turnId":"turn-1","command":"test","availableDecisions":["accept","decline"]}});
+    fake.event(raw.clone());
+    let events = host.poll().unwrap();
+    assert_eq!(events[0].raw, raw);
+    let approval_id = events[0].approval_id.clone().unwrap();
+    let action = RemoteAction::ResolveApproval {
+        approval_id: approval_id.clone(),
+        approved: true,
+    };
+    let mut stale = control(&host, "stale", action.clone());
+    stale.host_generation = Some("old".into());
+    assert_eq!(
+        host.handle_command(stale).code.as_deref(),
+        Some("host_generation_mismatch")
+    );
+    let good = control(&host, "approve", action.clone());
+    let receipt = host.handle_command(good.clone());
+    assert_eq!(receipt.status, "accepted");
+    assert_eq!(receipt, host.handle_command(good));
+    assert_eq!(
+        host.sessions()[0].execution_state,
+        ExecutionState::AwaitingPermission
+    );
+    fake.event(raw);
+    assert!(host.poll().unwrap()[0].approval_id.is_none());
+    let repeat = control(&host, "repeat", action);
+    assert_eq!(
+        host.handle_command(repeat).code.as_deref(),
+        Some("approval_not_pending")
+    );
+    assert_eq!(
+        fake.0.lock().unwrap().responses,
+        vec![(json!(7), json!({"decision":"accept"}))]
+    );
+}
+
+#[test]
+fn interrupt_keeps_running_until_provider_confirmation() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-1");
+    fake.expect("turn/interrupt", json!({}));
+    let command = control(&host, "stop", RemoteAction::Interrupt);
+    assert_eq!(host.handle_command(command).status, "accepted");
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::Running);
+    fake.event(json!({"method":"turn/completed","params":{"threadId":"native-real","turn":{"id":"turn-1","status":"interrupted"}}}));
+    host.poll().unwrap();
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::Idle);
+    assert!(host.sessions()[0].current_turn_id.is_none());
+}
+
+#[test]
+fn transport_loss_is_unknown_and_never_automatically_reexecutes_a_prompt() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    fake.0.lock().unwrap().expected.push_back((
+        "turn/start",
+        Err(NativeError {
+            code: "timeout".into(),
+            outcome_unknown: true,
+        }),
+    ));
+    let command = control(
+        &host,
+        "uncertain",
+        RemoteAction::SendPrompt {
+            text: "change something".into(),
+        },
+    );
+    let receipt = host.handle_command(command.clone());
+    assert_eq!(receipt.status, "indeterminate");
+    assert_eq!(receipt, host.handle_command(command));
+    assert!(!host.sessions()[0].control_connected);
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::Unknown);
+    assert!(!host.is_alive());
+}
+
+#[test]
+fn resume_reads_before_loading_and_preserves_provider_identity() {
+    let (dir, fake, mut host) = setup();
+    let mut command = connect(&dir, "hub");
+    if let RemoteAction::Connect {
+        mode,
+        provider_session_id,
+        ..
+    } = &mut command.command
+    {
+        *mode = ConnectMode::Resume;
+        *provider_session_id = Some("existing".into());
+    }
+    fake.expect(
+        "thread/read",
+        json!({"thread":{"id":"existing","cwd":dir.path(),"status":{"type":"notLoaded"}}}),
+    );
+    fake.expect(
+        "thread/resume",
+        json!({"thread":{"id":"existing","status":{"type":"idle"}}}),
+    );
+    assert_eq!(host.handle_command(command).status, "accepted");
+    assert_eq!(host.sessions()[0].provider_session_id, "existing");
+    assert_eq!(fake.0.lock().unwrap().calls[1].1["threadId"], "existing");
+}
+
+#[test]
+fn known_active_external_session_is_never_resumed_or_attached() {
+    let (dir, fake, mut host) = setup();
+    let mut command = connect(&dir, "hub");
+    if let RemoteAction::Connect {
+        mode,
+        provider_session_id,
+        ..
+    } = &mut command.command
+    {
+        *mode = ConnectMode::Resume;
+        *provider_session_id = Some("active".into());
+    }
+    fake.expect("thread/read",json!({"thread":{"id":"active","cwd":dir.path(),"status":{"type":"active","activeFlags":[]}}}));
+    assert_eq!(
+        host.handle_command(command.clone()).code.as_deref(),
+        Some("external_session_not_resumable")
+    );
+    command.client_cmd_id = "attach".into();
+    if let RemoteAction::Connect { mode, .. } = &mut command.command {
+        *mode = ConnectMode::Attach;
+    }
+    assert_eq!(
+        host.handle_command(command).code.as_deref(),
+        Some("attach_not_supported")
+    );
+    assert_eq!(fake.0.lock().unwrap().calls.len(), 1);
+}
+
+#[test]
+fn missing_native_id_fails_instead_of_fabricating_a_session() {
+    let (dir, fake, mut host) = setup();
+    fake.expect("thread/start", json!({"thread":{}}));
+    let receipt = host.handle_command(connect(&dir, "hub"));
+    assert_eq!(receipt.status, "indeterminate");
+    assert!(host.sessions().is_empty());
+}
+
+#[test]
+fn unauthorized_workspace_is_rejected_before_any_provider_call() {
+    let (_, fake, mut host) = setup();
+    let other = tempfile::tempdir().unwrap();
+    assert_eq!(
+        host.handle_command(connect(&other, "hub")).code.as_deref(),
+        Some("workspace_not_authorized")
+    );
+    assert!(fake.0.lock().unwrap().calls.is_empty());
+}
+
+#[test]
+fn unknown_notifications_are_retained_without_inventing_execution_state() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    let raw =
+        json!({"method":"future/event","params":{"threadId":"native-real","new_field":"payload"}});
+    fake.event(raw.clone());
+    let events = host.poll().unwrap();
+    assert_eq!(events[0].raw, raw);
+    assert_eq!(
+        events[0].binding.as_ref().unwrap().execution_state,
+        ExecutionState::Idle
+    );
+}
+
+#[test]
+fn stale_approval_after_turn_completion_cannot_be_answered() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-1");
+    fake.event(json!({"id":"request-1","method":"item/fileChange/requestApproval","params":{"threadId":"native-real","turnId":"turn-1"}}));
+    let approval_id = host.poll().unwrap()[0].approval_id.clone().unwrap();
+    fake.event(json!({"method":"turn/completed","params":{"threadId":"native-real","turn":{"id":"turn-1","status":"completed"}}}));
+    host.poll().unwrap();
+    let command = control(
+        &host,
+        "approve-late",
+        RemoteAction::ResolveApproval {
+            approval_id,
+            approved: true,
+        },
+    );
+    assert_eq!(
+        host.handle_command(command).code.as_deref(),
+        Some("approval_not_pending")
+    );
+    assert!(fake.0.lock().unwrap().responses.is_empty());
+}
+
+#[test]
+fn model_catalog_is_returned_from_native_protocol_without_fallback() {
+    let (_, fake, mut host) = setup();
+    let result = json!({"data":[{"id":"native-dynamic-model"}],"nextCursor":null});
+    fake.expect("model/list", result.clone());
+    assert_eq!(host.models().unwrap(), result);
+}
+
+#[test]
+fn unknown_slash_does_not_fall_through_to_prompt() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    let command = control(
+        &host,
+        "slash",
+        RemoteAction::SendPrompt {
+            text: "/compact".into(),
+        },
+    );
+    assert_eq!(
+        host.handle_command(command).code.as_deref(),
+        Some("slash_not_supported")
+    );
+    assert_eq!(fake.0.lock().unwrap().calls.len(), 1);
+}

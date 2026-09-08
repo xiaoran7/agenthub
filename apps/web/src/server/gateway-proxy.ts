@@ -78,11 +78,12 @@ export async function proxyGatewayRequest(
     origin?: string;
     accessToken?: string | undefined;
     fetch?: typeof fetch;
+    version?: "v1" | "v3";
   } = {},
 ): Promise<Response> {
   const requestUrl = new URL(request.url);
   const encodedPath = path.map(encodeURIComponent).join("/");
-  const upstreamUrl = `${gatewayOrigin(options.origin)}/v1/${encodedPath}${requestUrl.search}`;
+  const upstreamUrl = `${gatewayOrigin(options.origin)}/${options.version ?? "v1"}/${encodedPath}${requestUrl.search}`;
   const method = request.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
   const accessToken =

@@ -93,6 +93,7 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 
 private enum class AppSection(val label: String, val mark: String) {
+    REMOTE("远程", "↗"),
     SESSIONS("全部", "□"),
     WAITING("待处理", "✓"),
     DEVICES("设备", "▣"),
@@ -103,7 +104,7 @@ private enum class AppSection(val label: String, val mark: String) {
 fun AgentPlatformApp(controller: AppController) {
     val state = controller.state
     var section by rememberSaveable {
-        mutableStateOf(if (state.config == null) AppSection.SETTINGS else AppSection.SESSIONS)
+        mutableStateOf(if (state.config == null) AppSection.SETTINGS else AppSection.REMOTE)
     }
     var selectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -185,6 +186,9 @@ fun AgentPlatformApp(controller: AppController) {
             label = "app-section",
         ) { targetSection ->
             when (targetSection) {
+                AppSection.REMOTE -> state.config?.let { config ->
+                    RemoteScreen(config, Modifier.padding(innerPadding))
+                }
                 AppSection.SESSIONS,
                 AppSection.WAITING ->
                     SessionsScreen(
@@ -216,7 +220,7 @@ fun AgentPlatformApp(controller: AppController) {
                         config = state.config,
                         onSave = { config ->
                             controller.saveConfig(config).also { error ->
-                                if (error == null) section = AppSection.SESSIONS
+                                if (error == null) section = AppSection.REMOTE
                             }
                         },
                         onClear = controller::clearConfig,

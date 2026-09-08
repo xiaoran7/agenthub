@@ -39,11 +39,17 @@ class AgentGateway(
         )
     }
 
-    private fun getJson(path: String): JSONObject {
+    fun remoteRequest(path: String, body: JSONObject? = null): JSONObject {
+        require(path.startsWith("/") && !path.contains("..") && !path.contains('#'))
+        return getJson("/v3/remote$path", body)
+    }
+
+    private fun getJson(path: String, body: JSONObject? = null): JSONObject {
         val base = config.normalized().gatewayBase
         val connection = URI("$base$path").toURL().openConnection() as HttpURLConnection
         return try {
-            connection.requestMethod = "GET"
+            connection.requestMethod = if (body == null) "GET" else "POST"
+            connection.instanceFollowRedirects = false
             connection.connectTimeout = 8_000
             connection.readTimeout = 12_000
             connection.setRequestProperty("Accept", "application/json")
@@ -58,6 +64,11 @@ class AgentGateway(
                 connection.setRequestProperty("x-user-id", config.developmentUserId)
             }
 
+            if (body != null) {
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
+            }
             val status = connection.responseCode
             if (status !in 200..299) {
                 val code =

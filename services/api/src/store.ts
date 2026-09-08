@@ -132,6 +132,7 @@ export interface HeartbeatResult {
 }
 
 export interface GatewayStore {
+  getRegisteredDevice(deviceId: string): Promise<RegisteredDevice | undefined>;
   setAuditRecorder?(recorder: Pick<AccountStore, "recordAuditEvent">): void;
   createBindingCode(
     ownerId: string,
@@ -669,6 +670,13 @@ export class InMemoryGatewayStore implements GatewayStore {
       owner_id: device.owner_id,
       snapshots: accepted,
     };
+  }
+
+  async getRegisteredDevice(
+    deviceId: string,
+  ): Promise<RegisteredDevice | undefined> {
+    const device = this.#devices.get(deviceId);
+    return device === undefined ? undefined : { ...device };
   }
 
   async listDevices(ownerId: string): Promise<DeviceView[]> {

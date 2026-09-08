@@ -310,6 +310,37 @@ async fn restore_session(
 }
 
 #[tauri::command]
+async fn remote_gateway_request(
+    path: String,
+    body: Option<Value>,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    // Only the fixed remote namespace can use the locally stored account cookie.
+    if !path.starts_with('/') || path.contains("..") || path.contains(['#', '\\', '%']) {
+        return Err("invalid_remote_path".into());
+    }
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = read_config(&data_dir).map_err(|_| "remote_unavailable")?;
+        let cookie = load_cookie(&config.server_url).map_err(|_| "authentication_required")?;
+        request_json(
+            if body.is_some() { "POST" } else { "GET" },
+            &config.server_url,
+            &format!("/v3/remote{path}"),
+            Some(&cookie),
+            body.as_ref(),
+        )
+        .map_err(|error| match error {
+            DesktopError::InvalidCredentials => "authentication_required",
+            _ => "remote_unavailable",
+        })
+    })
+    .await
+    .map_err(|_| "remote_unavailable".to_owned())?
+    .map_err(str::to_owned)
+}
+
+#[tauri::command]
 async fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, String> {
     let config = read_config(&state.data_dir).map_err(|error| error.to_string())?;
     let cookie = load_cookie(&config.server_url).map_err(|error| error.to_string())?;
@@ -1330,9 +1361,7 @@ fn compose_turn_prompt(
         return Ok(prompt.trim().to_owned());
     }
     if attachments.len() > MAX_ATTACHMENTS {
-        return Err(DesktopError::Attachment(
-            "一次最多附带 8 个文件".to_owned(),
-        ));
+        return Err(DesktopError::Attachment("一次最多附带 8 个文件".to_owned()));
     }
     let mut sections = vec![prompt.trim().to_owned()];
     let mut total = 0_usize;
@@ -1731,8 +1760,7 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
                         .unwrap_or("工具调用");
                     let input = block.get("input").or_else(|| block.get("arguments"));
                     let label = tool_call_label(name, input);
-                    let details =
-                        input.map(compact_json).unwrap_or_default();
+                    let details = input.map(compact_json).unwrap_or_default();
                     // Transcripts are historical records: a persisted tool call is
                     // done unless its result below reports an error.
                     let index = items.len();
@@ -1956,10 +1984,7 @@ fn tool_call_label(name: &str, input: Option<&Value>) -> String {
     });
     match detail {
         Some(detail) if detail.chars().count() > 96 => {
-            format!(
-                "{name}: {}…",
-                detail.chars().take(96).collect::<String>()
-            )
+            format!("{name}: {}…", detail.chars().take(96).collect::<String>())
         }
         Some(detail) => format!("{name}: {detail}"),
         None => name.to_owned(),
@@ -3057,6 +3082,7 @@ pub fn run() {
             poll_tg_device_auth,
             restore_session,
             refresh_dashboard,
+            remote_gateway_request,
             send_session_message,
             launch_new_session,
             cancel_session_turn,
