@@ -2,160 +2,54 @@
 
 > 当前为原生 Remote 重构阶段：Codex 持久 Host、鉴权重放、Web/桌面/Android 入口已接入，实际验证范围见 [迁移状态](docs/README.md)。既有 v2 方案介绍不能作为完成证据；Claude、实际客户端安装和生产验收仍待完成。
 
-面向 Claude Code、OpenAI Codex、Antigravity 等本地 Coding Agent 的**统一多 Agent 远程控制平面（Unified Multi-Agent Remote Plane）**。
-
-用户只需在电脑上运行单一轻量级 Runner，即可通过一条多路复用 WebSocket 长连接将本机所有 Coding Agent 会话接入云端控制中心，在网页端和移动端实现全功能远程控制、实时流式会话交互、工具审批与状态感知。
-
-## 核心架构原则 (v2.0)
-
-- **工作区优先（Workspace-First）**：以工作目录为一级组织维度，支持同目录多会话并发与冲突感知。
-- **合并多 Agent Remote**：单 Runner 维持一条长连接，多路复用所有 Claude/Codex/Antigravity 会话。
-- **可靠传输（ACK + Replay）**：滑动窗口双向确认与断线重放机制，杜绝丢包。
-- **双层事件存储**：服务端持久化全量会话正文（规范化统一事件 + Provider 原始事件），同时对高频 Token 流进行存储聚合优化。
-- **动态能力发现与 Launch Profile**：启动自动探测本机 Agent 特性，强类型 Profile 发起会话，权限控制按会话精细化隔离。
-- **原生 Slash 路由与会话导入**：智能拦截分发 `/` 指令，支持扫描导入本地已有历史原生会话。
-- **零凭据窃取**：AgentHub 绝不主动采集 Provider Credential Store，责任边界清晰。
-
-## 文档体系
-
-- [产品需求文档 (PRD v2.0)](docs/PRD.md)
-- [系统架构设计规范 (Architecture v2.0)](docs/ARCHITECTURE.md)
-- [多路复用事件总线与同步协议 (Sync Protocol v2.0)](docs/SYNC_PROTOCOL.md)
-- [Launch Profile、能力发现与权限模型规范](docs/CAPABILITY_AND_LAUNCH_SPEC.md)
-- [技术可行性报告](docs/TECHNICAL_FEASIBILITY.md)
-- [跨端设计系统](docs/DESIGN_SYSTEM.md)
-- [变更日志](docs/CHANGELOG.md)
-- [踩坑集](docs/PITFALLS.md)
-- [设计取舍备忘](docs/MISC.md)
+多 Coding Agent 的原生远程会话入口：在电脑开始工作，在网页、桌面或手机继续同一个会话。执行留在本机 Runner，客户端共享原生上下文、实时输出、审批与中断。当前正在从监控与本地交互迁移，阶段状态见 [文档索引](docs/README.md)。
 
 ## 开发
 
-- [桌面 App 开发说明](apps/desktop/README.md)
-- [Runner 开发说明](crates/runner/README.md)
-- [Gateway API 开发说明](services/api/README.md)
-- [共享同步契约](packages/contracts/README.md)
-
-当前 Runner 已支持 Claude 本地 Session JSONL、Codex app-server/本地状态库，以及
-Grok Build `summary.json`/`active_sessions.json` 的一次性和持续采集、状态标准化、隐私脱敏、
-SQLite Outbox、Adapter 退避与健康诊断，以及本地设备身份和签名同步批次。
-常驻 `run` 配置 Gateway 后会在独立线程自动排空 Outbox；新事件立即唤醒同步，
-网络失败按独立退避恢复，不阻塞 Agent 采集。
-凭据管理默认关闭；用户显式开启 `--allow-credential-access` 后，Runner 可通过官方
-Claude CLI/Codex App Server 和受支持的本地 auth 文件、Keychain/Keyring、环境变量
-读取认证状态、刷新与配额，并把原始凭据仅保存于本机加密缓存。Gateway 和 Web 只接收
-脱敏认证快照，不接收 access/refresh token；重新登录、退出和 token reveal 都是本地显式
-命令。
-云端已具备受认证的一次性设备绑定、软撤销、签名批次验收、内存幂等写入与只读
-Session 查询；绑定码和设备生命周期在 PostgreSQL 部署中持久化。
-Runner 已可通过 HTTPS（本地开发允许回环 HTTP）完成设备绑定、批次上传和确认清理，
-并支持为私有 Gateway 显式配置 CA 根证书而不关闭证书验证。
-Gateway 已提供 PostgreSQL 迁移和事务 Store；未配置数据库时仍使用开发期内存存储。
-Web 面板（`apps/web`）已提供设备列表、会话分类视图与状态时间线的只读展示，
-并经 `GET /v1/stream`（SSE）实时刷新，轮询保留为兜底。会话进入等待输入或等待
-权限时可通过 Web Push 推送通知（需在 Gateway 配置 VAPID 密钥）。
-独立原生 Android 客户端（`apps/android`）已提供同一五类 Session 视图、待处理
-入口、设备页、详情时间线和相邻会话巡检；它直接访问 Gateway 只读接口，每 5 秒
-刷新，并用 Android Keystore 加密保存部署凭据。Web、桌面宽屏和 Android 共享
-[跨端设计系统](docs/DESIGN_SYSTEM.md) 的颜色、圆角、排版与状态表达。
-平台已支持邮箱注册、密码登录、HttpOnly Web 会话与 Free/Pro/Team 权益映射；设备、
-Session、SSE 和 Push 均按登录用户隔离。旧个人部署 Bearer 令牌保留为显式兼容模式。
-设置面板可验证邮箱、查看/撤销网页登录会话，并按当前订阅设备额度签发一次性绑定码和
-软撤销设备。账户已支持忘记密码、一次性邮件重置和登录后改密；重置会撤销全部 Web
-会话，改密会保留当前会话并撤销其他会话。每个账户都有个人工作区；Team 方案所有者可
-邀请已注册用户为管理员或成员，成员可在个人与已加入工作区之间切换，设备、Session 和
-任务始终按当前工作区隔离。邀请链接只显示一次并通过 URL fragment 传递，待接受邀请也
-计入 10 人席位上限。设置面板可按账户或当前工作区查看安全、订阅、设备和远程任务审计轨迹，
-审计只保存动作与公开白名单元数据。服务端已提供厂商无关的签名账单事件入口，并在
-PostgreSQL 部署中通过 `LISTEN/NOTIFY` 跨 API 实例广播变化；服务端现在可选接入 Stripe
-Checkout、Customer Portal 和原始 webhook 验签，未配置密钥时支付入口明确关闭；实际邮件
-供应商可选使用通用 HTTP 适配器或 Resend，联合登录尚未接入。Runner 默认每 15 秒通过
-`POST /v1/devices/heartbeat` 发送 Ed25519 签名设备心跳；Gateway 校验登记、公钥、撤销
-状态和 5 分钟时钟窗口，并按设备拒绝旧时间戳重放。心跳不携带 Session、Prompt、代码或
-凭据内容。Service Worker 只服务推送，不做离线缓存。
-Windows 桌面 App（`apps/desktop`）已复用同一邮箱注册/登录接口：登录后自动创建或加载
-本机 Ed25519 身份、完成账号设备登记，并在应用进程内启动 Runner 与同步 Worker，无需
-CMD 或手工配对码。桌面会话详情可经本机 CLI 继续 Claude Code/Codex、查看同步元数据并
-归档/恢复，并以 Tauri Channel 增量显示安全的助手文本/活动状态、支持停止本机回合。桌面
-端使用单一 Agent 选择器，随后按工作目录分组并支持会话置顶、折叠与展开/收起；打开会话
-时会从 Claude Code、Codex、Antigravity 或 Grok Build 的本地原生存储导入历史正文，正文
-只在当前设备解码展示，不进入云端同步。
-Host 复用 Gateway SSE 实时变化流，2–60 秒可配置周期刷新作为断流兜底。显式发送的 Prompt
-与回复只在本机进程和当前界面内流转，不进入 Outbox 或 Gateway；AgentHub 登录 Cookie
-保存在 OS Keyring，Claude/Codex 登录凭据、历史对话正文和工具载荷不会上传。
-会话索引按脱敏项目目录分组，并在本机显示显式会话名、模型、推理强度、权限/审批与沙箱策略、
-上下文窗口和 Token 用量；这层运行上下文不进入同步协议，也不会从首条 Prompt 猜测标题。
-M4 安全与稳定性阶段已完成自动化基线；PostgreSQL 18.4 的 12 设备/3000 Session
-并发工作负载、外部不可达后的 Outbox 保留/恢复，以及 Codex CLI 0.144.2 当前版本
-只读采集也已现场通过；本机真实 TLS 握手和私有 CA 恢复已进入回归套件。真实 Agent
-升级矩阵、部署网络证书故障/长时间离线和系统级 Web Push 呈现仍待环境验收，详见
-[M4 验收记录](docs/M4_VALIDATION.md)。
-
-### Windows 桌面 App
+在仓库根目录安装 Node 依赖；Rust、Gateway 与各客户端环境按下方组件说明准备。
 
 ```powershell
+npm.cmd ci
+# Windows 桌面
 npm.cmd run tauri --workspace @agent-pulse/desktop -- dev
-```
-
-生产构建：
-
-```powershell
-npm.cmd run tauri --workspace @agent-pulse/desktop -- build
-```
-
-默认连接 `https://platform.tannerlab.xyz`；开发环境可在 Tauri 启动前设置
-`AGENT_PULSE_SERVER_URL` 为回环地址。桌面端配置和安全边界见
-[桌面 App 开发说明](apps/desktop/README.md)。
-
-### Web 面板
-
-先启动 Gateway（见 [Gateway 说明](services/api/README.md)），再启动面板：
-
-```powershell
+# Web：先按 services/api/README.md 启动 Gateway
 npm.cmd run dev --workspace @agent-pulse/web
 ```
 
-开发服务器监听 `http://localhost:3000`，并把 `/v1` 请求代理到
-`http://127.0.0.1:3001`（可用 `GATEWAY_ORIGIN` 环境变量覆盖）。个人部署还应在
-Web 服务端设置与 Gateway 相同的 `GATEWAY_ACCESS_TOKEN`；同源代理会注入令牌，
-浏览器无法读取或覆盖。面板右上角「设置」中的用户标识仅用于 Gateway 显式开启
-开发认证时的本地调试。直连要求 HTTPS 或回环 HTTP，且不会获得服务端访问令牌，
-令牌部署请保持网关地址为空并使用同源代理。
+Web 开发入口为 `http://localhost:3000`，默认代理 Gateway `http://127.0.0.1:3001`，可用 `GATEWAY_ORIGIN` 覆盖。桌面开发可用 `AGENT_PULSE_SERVER_URL` 指向回环服务。
 
-「设置」里的「推送通知」开关需要 Gateway 配置了 VAPID 密钥（见 Gateway 说明），
-且页面运行在 https 或 localhost 上；开启后会话进入等待输入/等待权限时推送通知，
-点击通知会聚焦已打开的面板并定位到该会话。
+Android 使用 JDK 17+、SDK 36 和 `apps/android/gradlew.bat`；设备连接本机 Gateway 可用 `adb reverse tcp:3001 tcp:3001`。安装与打包前按 [AGENTS.md](AGENTS.md) 同步版本。
 
-### 原生 Android App
-
-Android 客户端是独立 Kotlin + Jetpack Compose 应用，不是 WebView 或 PWA 封装。
-本机需要 JDK 17+ 与 Android SDK 36；仓库已包含 Gradle Wrapper：
-
-```powershell
-cd apps/android
-.\gradlew.bat testDebugUnitTest assembleDebug
-```
-
-调试 APK 输出到 `apps/android/app/build/outputs/apk/debug/app-debug.apk`。连接本机
-Gateway 时先执行：
-
-```powershell
-adb reverse tcp:3001 tcp:3001
-```
-
-然后在 App 设置中使用 `http://127.0.0.1:3001` 和本机开发用户。生产部署必须填写
-HTTPS Gateway 和访问令牌；令牌经 Android Keystore 加密后写入不可备份的私有配置，
-不会进入日志、URL 或仓库。当前原生版本只读并使用周期刷新；原生推送、发布签名与
-实体设备矩阵仍属于后续交付边界，详见
-[Android 验收记录](docs/ANDROID_VALIDATION.md)。
-
-Rust 与 TypeScript 全量检查：
+## 验证
 
 ```powershell
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
 npm.cmd test
 npm.cmd run typecheck
 npm.cmd run format:check
-cd apps/android
-.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
 ```
+
+Android 单独运行 `apps/android` 下的 `testDebugUnitTest` 与 `lintDebug`；打包命令与产物位置见客户端说明。仅文档调整不运行构建。
+
+## 边界与文档
+
+目标和实现阶段分开维护：发现历史、恢复上下文、连接运行中会话是三种能力。新 Remote 只在原生协议确认后报告可控制；现有只读采集、元数据同步与桌面本地执行在迁移期间保留，不能作为新 Remote 已完成的证据。
+
+- 新 Remote 链路沿用原生 Agent 登录，不读取、缓存或刷新 Provider 凭据。已接入远程控制的内容同步到授权 Gateway；历史扫描不自动上传全文。
+- Runner 主动出站；设备绑定、签名批次、Outbox 与断线恢复的实际合同见同步协议。
+- 生产使用 HTTPS；私有 CA 配置不能关闭证书验证。个人兼容令牌通过 Web 同源服务端代理注入，不暴露给浏览器。
+- 邮件、支付、Web Push、真机和实际 Agent CLI 的可用性需要对应环境验收，不能从自动化基线推定。
+
+| 内容 | 权威入口 |
+|---|---|
+| 工程约束 | [AGENTS.md](AGENTS.md) |
+| 产品与架构 | [PRD](docs/PRD.md)、[ARCHITECTURE](docs/ARCHITECTURE.md) |
+| 同步与能力发现 | [SYNC_PROTOCOL](docs/SYNC_PROTOCOL.md)、[Launch Profile](docs/CAPABILITY_AND_LAUNCH_SPEC.md) |
+| 组件开发 | [Runner](crates/runner/README.md)、[Gateway](services/api/README.md)、[桌面](apps/desktop/README.md)、[Android](apps/android/README.md)、[契约](packages/contracts/README.md) |
+| 部署与设计 | [DEPLOYMENT](docs/DEPLOYMENT.md)、[DESIGN_SYSTEM](docs/DESIGN_SYSTEM.md) |
+| 验收证据 | [M4](docs/M4_VALIDATION.md)、[Android](docs/ANDROID_VALIDATION.md) |
+| 经验与历史 | [PITFALLS](docs/PITFALLS.md)、[MISC](docs/MISC.md)、[CHANGELOG](docs/CHANGELOG.md) |
+
+其他专题从 [文档索引](docs/README.md) 按需阅读。

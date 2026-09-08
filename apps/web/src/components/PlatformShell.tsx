@@ -177,6 +177,17 @@ function NavigationRail({
               <span>{item.label}</span>
             </button>
           ))}
+          <button
+            className="rail-item"
+            onClick={() => {
+              window.location.href = "/?remote=1";
+            }}
+            type="button"
+            title="打开远程接管控制台"
+          >
+            <Icon name="activity" size={18} />
+            <span>远程接管</span>
+          </button>
         </nav>
       </div>
       <div className="rail-bottom">

@@ -322,11 +322,11 @@ export function RemoteConsole({
             onClick={
               onManage ??
               (() => {
-                window.location.href = "/?legacy=1";
+                window.location.href = "/";
               })
             }
           >
-            设备与账户
+            返回控制台
           </button>
         </div>
       </aside>

@@ -31,6 +31,7 @@ import {
   Pin,
   Play,
   Plus,
+  Radio,
   RefreshCw,
   RotateCcw,
   Search,
@@ -135,7 +136,7 @@ export function App() {
   );
   const [restoring, setRestoring] = useState(!demo);
   const [error, setError] = useState<string>();
-  const [management, setManagement] = useState(false);
+  const [viewMode, setViewMode] = useState<"dashboard" | "remote">("dashboard");
   const [localHost, setLocalHost] = useState(false);
 
   const restore = useCallback(async () => {
@@ -169,13 +170,13 @@ export function App() {
       />
     );
   }
-  if (!demo && !management)
+  if (!demo && viewMode === "remote")
     return (
       <>
         <RemoteConsole
           request={desktopRemoteRequest}
           onAuthenticationRequired={() => setSnapshot(undefined)}
-          onManage={() => setManagement(true)}
+          onManage={() => setViewMode("dashboard")}
           onLocalHost={() => setLocalHost(true)}
         />
         {localHost && <NativeHostDialog onClose={() => setLocalHost(false)} />}
@@ -183,13 +184,13 @@ export function App() {
     );
   return (
     <>
-      {!demo && (
-        <button onClick={() => setManagement(false)}>返回远程会话</button>
-      )}
       <Dashboard
         initialSnapshot={snapshot}
         onLogout={() => setSnapshot(undefined)}
+        onOpenRemote={!demo ? () => setViewMode("remote") : undefined}
+        onOpenLocalHost={!demo ? () => setLocalHost(true) : undefined}
       />
+      {localHost && <NativeHostDialog onClose={() => setLocalHost(false)} />}
     </>
   );
 }
@@ -462,9 +463,13 @@ function AuthScreen({
 function Dashboard({
   initialSnapshot,
   onLogout,
+  onOpenRemote,
+  onOpenLocalHost,
 }: {
   initialSnapshot: Snapshot;
   onLogout: () => void;
+  onOpenRemote?: () => void;
+  onOpenLocalHost?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [actionBusy, setActionBusy] = useState(false);
@@ -921,6 +926,17 @@ function Dashboard({
             </span>
           </button>
           <div className="top-nav-right">
+            {onOpenRemote && (
+              <button
+                type="button"
+                className="top-icon-btn"
+                onClick={onOpenRemote}
+                title="打开远程接管控制台 (Remote)"
+                aria-label="打开远程接管控制台"
+              >
+                <Radio size={15} />
+              </button>
+            )}
             <button
               type="button"
               className="top-icon-btn new-task-btn"
@@ -1405,6 +1421,7 @@ function Dashboard({
               setSnapshot((current) => ({ ...current, preferences }))
             }
             onLogout={() => void signOut()}
+            onOpenLocalHost={onOpenLocalHost}
           />
         )}
         <LaunchSessionModal

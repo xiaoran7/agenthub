@@ -39,6 +39,7 @@ interface DesktopSettingsModalProps {
   onClose: () => void;
   onSaved: (preferences: DesktopPreferences) => void;
   onLogout?: () => void;
+  onOpenLocalHost?: () => void;
 }
 
 type SettingsSection =
@@ -66,6 +67,7 @@ export function DesktopSettingsModal({
   onClose,
   onSaved,
   onLogout,
+  onOpenLocalHost,
 }: DesktopSettingsModalProps) {
   const [section, setSection] = useState<SettingsSection>("general");
   const [searchQuery, setSearchQuery] = useState("");
@@ -882,6 +884,30 @@ export function DesktopSettingsModal({
                           {snapshot.realtime_connected ? "实时连接" : "轮询中"}
                         </span>
                       </div>
+                      {onOpenLocalHost && (
+                        <>
+                          <div className="settings-divider" />
+                          <div className="settings-row-item">
+                            <div className="row-text">
+                              <strong>本机 Remote Host 守护</strong>
+                              <p>
+                                启动本机 Codex 远程接管
+                                Host，支持工作目录配置与多端接续。
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="outline-button"
+                              onClick={() => {
+                                onClose();
+                                onOpenLocalHost();
+                              }}
+                            >
+                              管理本机连接
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

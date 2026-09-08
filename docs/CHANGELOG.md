@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### v2.3.3 恢复默认 UI 与 Remote 协同无缝桥接发版（2026-09-08）
+
+- **恢复原有默认 UI 体验**：桌面端默认恢复为精美 Claude Desktop 风格的 Dashboard（侧边栏、Agent 下拉、工作区树、置顶/展开、模型选择、提示词坞、实时索引轮询与会话详情），消除覆盖默认界面的偏离。
+- **桥接 Remote 控制链路**：
+  - 桌面端顶栏新增 `Remote` 快捷入口（Radio 图标），支持一键在 Dashboard 与 Remote 控制台之间平滑切换；
+  - 桌面端系统设置模态框「远程连接」分区内集成「本机 Remote Host 守护」管理入口，无缝唤起 NativeHostDialog；
+  - Web 面板默认恢复多端管控总览，左侧导航轨保留显式「远程接管」直达入口；
+  - 统一更新返回入口链接，保障控制台与各视图间流畅流转。
+- **版本递增与产物打包**：全端统一递增至 `v2.3.3`（Android versionCode=6），完成 Tauri NSIS 安装包打包与 Deliverables 归档，遵照铁律自动清理旧版 `v2.3.2` 安装包。
+
+## 2026-09-07 — 文档精简
+
+- 通用工程与整洁约束统一引用工作区 AGENT.md；项目入口只保留特有边界，合并重复工具说明和逐会话记录。
+- 仅文档变更；检查引用、编码和 diff，未打包、未执行设备或生产验证。
+
+
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
 

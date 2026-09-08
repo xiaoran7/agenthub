@@ -127,13 +127,13 @@ function SyncAlert({
 }
 
 export default function PanelPage() {
-  const [legacy, setLegacy] = useState<boolean | null>(null);
+  const [showRemote, setShowRemote] = useState<boolean | null>(null);
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
-    setLegacy(query.has("legacy") || query.has("preview"));
+    setShowRemote(query.has("remote"));
   }, []);
-  if (legacy === null) return <LoadingView />;
-  return legacy ? <LegacyPanelPage /> : <RemotePage />;
+  if (showRemote === null) return <LoadingView />;
+  return showRemote ? <RemotePage /> : <LegacyPanelPage />;
 }
 
 function LegacyPanelPage() {
