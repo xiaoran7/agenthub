@@ -312,7 +312,7 @@ function AuthScreen({
           <h2>{mode === "login" ? "登录 AgentHub" : "注册新账号"}</h2>
           <p>
             {mode === "login"
-              ? "登录后自动连接本地 Agent 与云端控制台"
+              ? "登录后选择工作目录，连接并接续你的原生 Agent 会话"
               : "创建账号以同步管理多个开发设备"}
           </p>
         </header>

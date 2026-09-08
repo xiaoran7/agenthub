@@ -10,7 +10,7 @@
 - [能力与接入](CAPABILITY_AND_LAUNCH_SPEC.md)：真实能力证据、会话配置与 UI 动作。
 - [可行性](TECHNICAL_FEASIBILITY.md)：官方来源、适配选择和待验证事项。
 - [设计系统](DESIGN_SYSTEM.md)、[部署](DEPLOYMENT.md)、[坑点](PITFALLS.md)、[历史变更](CHANGELOG.md)。
-- [M4 验收](M4_VALIDATION.md)、[Android 验收](ANDROID_VALIDATION.md) 仅作为各自旧阶段的证据，不证明新 Remote 已验收。
+- [M4 验收](M4_VALIDATION.md)、[Android 验收](ANDROID_VALIDATION.md) 按日期区分旧阶段与新 Remote 证据，不把模拟器/回环网络扩大为真机或生产验收。
 
 ## 迁移阶段
 
@@ -19,7 +19,7 @@
 | R0 文档定界 | 原生 Remote 目标、接入语义、协议与旧边界替换 | 已替换并同步组件入口 |
 | R1 原生 Host | Codex 长时 app-server、真实 ID、恢复、审批、中断、命令去重 | 已实现；原生两轮交互、协议 fixture 验证通过 |
 | R2 可靠远程链路 | 设备鉴权、持久 Registry/账本、双向日志、内容存储、重连对齐 | 单实例 SQLite 链路已实现；真实 Gateway 重启重放验证通过；多实例/压力验收待做 |
-| R3 多端统一 | Web/桌面/Android 消费同一会话，Workspace-first | Web 创建/两轮续聊/刷新/Host 重启恢复/离线禁控及 390px、1440px 布局验证通过；桌面共享 UI、目录选择、内嵌 Host 启停已接入，Tauri fixture UI 与真实 Codex 嵌入式停止验证通过；Android 单元测试与 lint 通过，桌面/手机实际安装运行待验收 |
+| R3 多端统一 | Web/桌面/Android 消费同一会话，Workspace-first | Web 创建/两轮续聊/刷新/Host 重启恢复/离线禁控及 390px、1440px 布局验证通过；桌面共享 UI、目录选择、内嵌 Host 启停已接入，Tauri fixture UI 与真实 Codex 嵌入式停止验证通过；v2.3.2 桌面实际安装及登录页检查通过（登录后操作待手动认证）；Android 实际 APK 在模拟器完成创建/两轮续聊/审批/中断/重启恢复，详见验收文档 |
 | R4 Provider 扩展与验收 | Claude 长时控制，其余按证据开放，真机/生产 | 待实施 |
 
 ## 可复用现状

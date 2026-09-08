@@ -3,6 +3,16 @@
 > 本文记录 M4 的可重复验收项、当前证据和仍需真实环境完成的边界。测试通过只代表
 > 对应层级已验证，不把 Fixture、内存 Store 或回环网络模拟写成生产环境通过。
 
+## 2026-09-08 v2.3.2 安装与原生 Remote 验收
+
+- 产物位于工作区 Deliverables/AgentHub：AgentHub-v2.3.2-windows-x64-setup.exe、AgentHub-v2.3.2-android-debug.apk；Android 为测试签名，不是正式商店包。
+- Windows NSIS 实际安装与覆盖安装后启动成功；初包登录页缺少当前 DOM 对应样式，修复居中布局、窄窗口规则及按钮对比度，最终安装版截图已确认。桌面认证尚未由用户完成，内嵌 Host 的完整安装版启停/跨端续聊未标记通过。
+- release Runner 2.3.1 + 原生 Codex 0.153.4 执行 remote-native.test.ts：真实签名连接、两轮同原生 ID、重复命令不重复执行、Gateway 停止 6 秒后 SQLite 回放全部通过（约 33 秒）。最终 2.3.2 只进一步修正登录页窄窗口样式及版本，无 Host 逻辑变化。
+- 最终源码通过 npm test/typecheck/format:check、Android 单元/lint/打包。remote_embedded 原生停止验证通过（首次调用漏设测试环境变量，补齐后 1.30 秒通过）；不把配置错误隐去或当原生协议故障。
+- Android 最终实际 APK 的续聊、审批、中断、覆盖安装与 Host 重启恢复见 ANDROID_VALIDATION.md。Gateway 测试账户/设备为内存 Store，内容与 Host 日志使用 SQLite；不代表 PostgreSQL/生产 HTTPS 或多实例验收。
+- 自动审批拒绝启用 WebView 调试端口的组合命令，仅返回 blocked by policy；随后采用普通启动与 Windows UI 检查。电脑操作技能禁止自动认证界面，桌面登录需手动完成。
+- 已知边界：此前原生重放测试的一次 90 秒超时尚未定位；本次通过不消除长时稳定性待验收项。Claude Remote、实体手机、桌面认证后的完整流程与生产部署未完成。
+
 ## 当前状态
 
 M4 已于 2026-07-28 进入执行阶段，五类验收均已建立自动化基线；磁盘 Outbox

@@ -883,7 +883,7 @@ private fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text("GATEWAY CONNECTION", style = MaterialTheme.typography.labelSmall)
-                Text("连接同一份只读数据", style = MaterialTheme.typography.headlineMedium)
+                Text("接续你的原生会话", style = MaterialTheme.typography.headlineMedium)
                 Text(
                     "生产部署必须使用 HTTPS。访问令牌使用 Android Keystore 加密，不写日志、不参与备份。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

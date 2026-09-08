@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+### v2.3.2 打包与安装实测（2026-09-08）
+
+- 同步 Node/Tauri/Cargo 版本为 2.3.2，Android versionCode=5；交付 Windows x64 NSIS 与 Android Debug APK。初包暴露登录页布局与旧只读文案，修复后递增版本重新打包。
+- Windows 实际安装/覆盖安装与登录页渲染通过；桌面登录后的完整 Host 操作仍待手动认证，不能记为端到端通过。
+- Android 模拟器通过实际 APK 创建 Codex 会话、两轮续聊、覆盖安装保留连接、原生审批、中断及 Host 重启后恢复同一原生 ID；真实 release Runner 的 Gateway 重启重放/命令去重测试通过。
+- npm 测试、typecheck、format:check 与 Android 单元/lint/assembleDebug 通过；原生嵌入式停止测试通过。详细边界见 M4_VALIDATION.md、ANDROID_VALIDATION.md；未部署生产。
+
+
 ### 桌面本机 Remote 入口（2026-09-08）
 
 - 桌面增加目录选择、原生 Codex 路径、启动/停止与事实连接状态；内嵌 Host 复用 Runner 协议，通过独立取消信号管理生命周期，退出登录停止本机连接。

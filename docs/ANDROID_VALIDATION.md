@@ -1,5 +1,15 @@
 # 原生 Android 验收记录
 
+## 2026-09-08 v2.3.2 原生 Remote APK
+
+- 环境：Windows 本机 Gateway（账户/设备内存 Store，内容 SQLite），ADB reverse 回环连接；Medium_Phone 模拟器 1080×2400，未连接实体手机。Host 使用 release Runner 2.3.1 与原生 Codex 0.153.4；最终 APK 为 2.3.2 / versionCode 5，Debug 签名。
+- 安装：2.3.0 初包安装启动，修复设置页只读文案后覆盖安装最终 2.3.2；系统 dumpsys 核实版本。重启后 Keystore 连接配置可用，原生会话与历史仍可访问。
+- 实际界面创建只读工作目录会话并发送两轮文本；第二轮仅要求重复，Codex 返回上一轮相同测试标记。两轮对应同一个 provider_session_id。
+- 最终 APK 展示真实 shell 审批（30 秒等待并打印测试标记，不读写文件）；点击允许后状态从 awaiting_permission 变为 running，再点击停止任务，原生 turn/completed 为 interrupted。此证据确认原生回合中断，不声称所有子进程立即终止。
+- 停止 Host 后，历史仍可查看且输入禁用；同数据库重启 Host 后必须点击恢复原生会话。恢复后 host_generation 改变、provider_session_id 不变，再发送上下文核对请求仍返回相同标记。
+- 自动化：testDebugUnitTest、lintDebug、assembleDebug 均通过。ADB 输入需等待软键盘动画并检查实际文本，避免坐标点击落在尚未收起的键盘上。
+- 未覆盖：实体手机、正式签名/商店发布、公网 HTTPS、长时稳定性、桌面与手机同时控制的完整安装版流程。
+
 ## 2026-07-29 Compose 动效轮次
 
 ### 自动化
