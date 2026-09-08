@@ -6,6 +6,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -568,9 +569,23 @@ async fn send_session_message(
         active_turns.insert(key.clone(), cancelled.clone());
     }
     let _ = on_event.send(SessionTurnEvent::Started);
+
+    let client = if input.agent_type == AgentType::Codex {
+        Some(
+            remote_desktop::ensure_host_client(&state, None)
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+
     let data_dir = state.data_dir.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        send_session_message_inner(input, &data_dir, &cancelled, on_event)
+        if let Some(client) = client {
+            send_codex_message_with_client(input, client, &data_dir, &cancelled, on_event)
+        } else {
+            send_session_message_inner(input, &data_dir, &cancelled, on_event)
+        }
     })
     .await;
     if let Ok(mut active_turns) = state.active_turns.lock() {
@@ -592,14 +607,385 @@ async fn launch_new_session(
         return Err(DesktopError::InvalidAction.to_string());
     }
     let cancelled = Arc::new(AtomicBool::new(false));
+
+    let client = if input.agent_type == AgentType::Codex {
+        let cwd_path = input
+            .cwd
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+            .ok_or_else(|| DesktopError::InvalidAction.to_string())?;
+        Some(
+            remote_desktop::ensure_host_client(&state, Some(&cwd_path))
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+
     let data_dir = state.data_dir.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        launch_new_session_inner(input, &data_dir, &cancelled, on_event)
+        if let Some(client) = client {
+            launch_codex_session_with_client(input, client, &cancelled, on_event)
+        } else {
+            launch_new_session_inner(input, &data_dir, &cancelled, on_event)
+        }
     })
     .await
     .map_err(|_| DesktopError::AgentFailed.to_string())?
     .map_err(|error| error.to_string())?;
     Ok(result)
+}
+
+fn launch_codex_session_with_client(
+    input: LaunchSessionInput,
+    client: agent_pulse_runner::remote_network::LocalHostClient,
+    cancelled: &AtomicBool,
+    on_event: Channel<SessionTurnEvent>,
+) -> Result<Value, DesktopError> {
+    let prompt = input.prompt.trim();
+    let cwd = input
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .ok_or(DesktopError::InvalidAction)?;
+    let cwd = cwd.canonicalize().map_err(|_| DesktopError::InvalidAction)?;
+
+    let (sub, rx) = client.subscribe(256);
+
+    let hub_session_id = format!("hub-{}", uuid::Uuid::new_v4());
+    let connect_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+        client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+        hub_session_id: hub_session_id.clone(),
+        host_generation: None,
+        command: agent_pulse_runner::remote_host::RemoteAction::Connect {
+            mode: agent_pulse_runner::remote_host::ConnectMode::Create,
+            workspace_path: cwd.clone(),
+            provider_session_id: None,
+            model: input.model.filter(|m| !m.trim().is_empty()),
+            sandbox: match input.permission_mode.as_deref() {
+                Some("danger-full-access" | "danger" | "bypass") => {
+                    agent_pulse_runner::remote_host::CodexSandbox::DangerFullAccess
+                }
+                Some("read-only") => agent_pulse_runner::remote_host::CodexSandbox::ReadOnly,
+                _ => agent_pulse_runner::remote_host::CodexSandbox::WorkspaceWrite,
+            },
+            approval_policy: match input.permission_mode.as_deref() {
+                Some("never") => agent_pulse_runner::remote_host::CodexApprovalPolicy::Never,
+                Some("untrusted") => {
+                    agent_pulse_runner::remote_host::CodexApprovalPolicy::Untrusted
+                }
+                _ => agent_pulse_runner::remote_host::CodexApprovalPolicy::OnRequest,
+            },
+        },
+    };
+
+    let receipt = client
+        .execute(connect_cmd)
+        .map_err(|_| DesktopError::AgentFailed)?;
+    if receipt.status != "accepted" {
+        return Err(DesktopError::AgentFailed);
+    }
+    let binding_val = receipt.result.ok_or(DesktopError::AgentFailed)?;
+    let provider_session_id = binding_val["binding"]["provider_session_id"]
+        .as_str()
+        .ok_or(DesktopError::AgentFailed)?
+        .to_owned();
+    let host_generation = client
+        .query_generation()
+        .map_err(|_| DesktopError::AgentFailed)?;
+
+    let _ = on_event.send(SessionTurnEvent::Started);
+
+    let prompt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+        client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+        hub_session_id: hub_session_id.clone(),
+        host_generation: Some(host_generation.clone()),
+        command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
+            text: prompt.to_owned(),
+        },
+    };
+
+    let send_receipt = client
+        .execute(prompt_cmd)
+        .map_err(|_| DesktopError::AgentFailed)?;
+    if send_receipt.status != "accepted" {
+        return Err(DesktopError::AgentFailed);
+    }
+
+    let mut full_response = String::new();
+    let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
+    while Instant::now() < deadline {
+        if cancelled.load(Ordering::Relaxed) {
+            let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+                client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+                hub_session_id: hub_session_id.clone(),
+                host_generation: Some(host_generation),
+                command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
+            };
+            let _ = client.execute(interrupt_cmd);
+            return Err(DesktopError::AgentCancelled);
+        }
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(event) => {
+                if event.hub_session_id.as_deref() == Some(&hub_session_id) {
+                    match event.kind.as_str() {
+                        "item/agentMessage/delta" => {
+                            if let Some(delta) = event.raw["params"]["delta"].as_str() {
+                                full_response.push_str(delta);
+                                let _ = on_event.send(SessionTurnEvent::AssistantDelta {
+                                    text: delta.to_owned(),
+                                });
+                            }
+                        }
+                        "turn/started" => {
+                            let _ = on_event.send(SessionTurnEvent::Activity {
+                                label: "正在思考与执行...",
+                            });
+                        }
+                        "approval_requested" => {
+                            let _ = on_event.send(SessionTurnEvent::Activity {
+                                label: "等待审批确认...",
+                            });
+                        }
+                        "turn/completed" => {
+                            if full_response.trim().is_empty() {
+                                if let Some(text) =
+                                    event.raw["params"]["turn"]["output"].as_str()
+                                {
+                                    full_response = text.to_owned();
+                                }
+                            }
+                            let _ = on_event.send(SessionTurnEvent::AssistantMessage {
+                                text: full_response.clone(),
+                            });
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    drop(sub);
+
+    if full_response.trim().is_empty() {
+        full_response = "任务已提交。".to_owned();
+    }
+
+    Ok(json!({
+        "agent_session_id": provider_session_id,
+        "agent_type": "codex",
+        "cwd": cwd.to_string_lossy(),
+        "response": full_response.trim(),
+        "completed_at": chrono::Utc::now(),
+    }))
+}
+
+fn send_codex_message_with_client(
+    input: SessionMessageInput,
+    client: agent_pulse_runner::remote_network::LocalHostClient,
+    _data_dir: &Path,
+    cancelled: &AtomicBool,
+    on_event: Channel<SessionTurnEvent>,
+) -> Result<Value, DesktopError> {
+    validate_session_id(&input.agent_session_id)?;
+    let prompt = compose_turn_prompt(&input.prompt, &input.attachments)?;
+    if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS * 4 {
+        return Err(DesktopError::InvalidAction);
+    }
+
+    let sessions = client.query_sessions().unwrap_or_default();
+    let existing_binding = sessions
+        .iter()
+        .find(|s| s.provider_session_id == input.agent_session_id)
+        .cloned();
+
+    let hub_session_id = if let Some(binding) = existing_binding {
+        binding.hub_session_id
+    } else {
+        let cwd = find_codex_session_cwd(&input.agent_session_id)
+            .or_else(|| std::env::current_dir().ok())
+            .ok_or(DesktopError::SessionUnavailable)?;
+        let hub_id = format!("hub-{}", uuid::Uuid::new_v4());
+        let resume_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+            client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+            hub_session_id: hub_id.clone(),
+            host_generation: None,
+            command: agent_pulse_runner::remote_host::RemoteAction::Connect {
+                mode: agent_pulse_runner::remote_host::ConnectMode::Resume,
+                workspace_path: cwd,
+                provider_session_id: Some(input.agent_session_id.clone()),
+                model: input.model.filter(|m| !m.trim().is_empty()),
+                sandbox: match input.permission_mode.as_deref() {
+                    Some("danger-full-access" | "danger" | "bypass") => {
+                        agent_pulse_runner::remote_host::CodexSandbox::DangerFullAccess
+                    }
+                    Some("read-only") => agent_pulse_runner::remote_host::CodexSandbox::ReadOnly,
+                    _ => agent_pulse_runner::remote_host::CodexSandbox::WorkspaceWrite,
+                },
+                approval_policy: match input.permission_mode.as_deref() {
+                    Some("never") => agent_pulse_runner::remote_host::CodexApprovalPolicy::Never,
+                    Some("untrusted") => {
+                        agent_pulse_runner::remote_host::CodexApprovalPolicy::Untrusted
+                    }
+                    _ => agent_pulse_runner::remote_host::CodexApprovalPolicy::OnRequest,
+                },
+            },
+        };
+        let receipt = client
+            .execute(resume_cmd)
+            .map_err(|_| DesktopError::SessionUnavailable)?;
+        if receipt.status != "accepted" {
+            return Err(DesktopError::SessionUnavailable);
+        }
+        hub_id
+    };
+
+    let host_generation = client
+        .query_generation()
+        .map_err(|_| DesktopError::AgentFailed)?;
+
+    let (sub, rx) = client.subscribe(256);
+
+    let prompt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+        client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+        hub_session_id: hub_session_id.clone(),
+        host_generation: Some(host_generation.clone()),
+        command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
+            text: prompt,
+        },
+    };
+
+    let send_receipt = client
+        .execute(prompt_cmd)
+        .map_err(|_| DesktopError::AgentFailed)?;
+    if send_receipt.status != "accepted" {
+        return Err(DesktopError::AgentFailed);
+    }
+
+    let mut full_response = String::new();
+    let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
+    while Instant::now() < deadline {
+        if cancelled.load(Ordering::Relaxed) {
+            let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+                client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+                hub_session_id: hub_session_id.clone(),
+                host_generation: Some(host_generation),
+                command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
+            };
+            let _ = client.execute(interrupt_cmd);
+            return Err(DesktopError::AgentCancelled);
+        }
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(event) => {
+                if event.hub_session_id.as_deref() == Some(&hub_session_id) {
+                    match event.kind.as_str() {
+                        "item/agentMessage/delta" => {
+                            if let Some(delta) = event.raw["params"]["delta"].as_str() {
+                                full_response.push_str(delta);
+                                let _ = on_event.send(SessionTurnEvent::AssistantDelta {
+                                    text: delta.to_owned(),
+                                });
+                            }
+                        }
+                        "turn/started" => {
+                            let _ = on_event.send(SessionTurnEvent::Activity {
+                                label: "正在思考与执行...",
+                            });
+                        }
+                        "approval_requested" => {
+                            let _ = on_event.send(SessionTurnEvent::Activity {
+                                label: "等待审批确认...",
+                            });
+                        }
+                        "turn/completed" => {
+                            if full_response.trim().is_empty() {
+                                if let Some(text) =
+                                    event.raw["params"]["turn"]["output"].as_str()
+                                {
+                                    full_response = text.to_owned();
+                                }
+                            }
+                            let _ = on_event.send(SessionTurnEvent::AssistantMessage {
+                                text: full_response.clone(),
+                            });
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    drop(sub);
+
+    if full_response.trim().is_empty() {
+        full_response = "回合已完成。".to_owned();
+    }
+
+    Ok(json!({
+        "response": full_response.trim(),
+        "completed_at": chrono::Utc::now(),
+    }))
+}
+
+fn find_codex_session_cwd(session_id: &str) -> Option<PathBuf> {
+    let Some(home) = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+    else {
+        return None;
+    };
+    let codex_dir = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+
+    if let Ok(entries) = fs::read_dir(&codex_dir) {
+        let mut sqlite_files = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("state_") && name.ends_with(".sqlite") {
+                    sqlite_files.push(path);
+                }
+            }
+        }
+        sqlite_files.sort();
+        sqlite_files.reverse();
+
+        for db_path in sqlite_files {
+            if let Ok(conn) = rusqlite::Connection::open_with_flags(
+                &db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                let res: rusqlite::Result<String> = conn.query_row(
+                    "SELECT cwd FROM threads WHERE id = ?1",
+                    [session_id],
+                    |row| row.get(0),
+                );
+                if let Ok(cwd_str) = res {
+                    let p = PathBuf::from(cwd_str);
+                    if p.is_dir() {
+                        return p.canonicalize().ok().or(Some(p));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn launch_new_session_inner(
@@ -682,9 +1068,28 @@ fn cancel_session_turn(
         .cloned();
     if let Some(cancelled) = cancelled {
         cancelled.store(true, Ordering::Relaxed);
-        return Ok(json!({ "cancelled": true }));
     }
-    Ok(json!({ "cancelled": false }))
+    if input.agent_type == AgentType::Codex {
+        if let Some(client) = remote_desktop::get_host_client(&state) {
+            if let Ok(sessions) = client.query_sessions() {
+                if let Some(binding) = sessions
+                    .iter()
+                    .find(|s| s.provider_session_id == input.agent_session_id)
+                {
+                    if let Ok(generation) = client.query_generation() {
+                        let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+                            client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+                            hub_session_id: binding.hub_session_id.clone(),
+                            host_generation: Some(generation),
+                            command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
+                        };
+                        let _ = client.execute(interrupt_cmd);
+                    }
+                }
+            }
+        }
+    }
+    Ok(json!({ "cancelled": true }))
 }
 
 #[tauri::command]

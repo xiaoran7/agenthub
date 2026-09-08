@@ -2,23 +2,148 @@
 use crate::{
     collectors::CodexAppServer,
     device::DeviceIdentity,
-    remote_host::{NativeSessionHost, RemoteCommand},
+    remote_host::{CommandReceipt, HostEvent, NativeSessionHost, RemoteCommand, SessionBinding},
     remote_journal::{DurableHost, RemoteJournal},
 };
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     net::TcpStream,
     path::PathBuf,
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
     time::{Duration, Instant},
 };
 use tungstenite::{Message, WebSocket, stream::MaybeTlsStream};
+
+pub enum LocalHostCommand {
+    Execute {
+        command: RemoteCommand,
+        respond_to: SyncSender<Result<CommandReceipt, String>>,
+    },
+    QuerySessions {
+        respond_to: SyncSender<Vec<SessionBinding>>,
+    },
+    QueryGeneration {
+        respond_to: SyncSender<String>,
+    },
+    QueryModels {
+        respond_to: SyncSender<Result<Value, String>>,
+    },
+    Discover {
+        respond_to: SyncSender<Result<Value, String>>,
+    },
+}
+
+pub struct LocalHostChannel {
+    pub receiver: Receiver<LocalHostCommand>,
+    pub listeners: Arc<Mutex<HashMap<u64, SyncSender<HostEvent>>>>,
+}
+
+#[derive(Clone)]
+pub struct LocalHostClient {
+    sender: SyncSender<LocalHostCommand>,
+    listeners: Arc<Mutex<HashMap<u64, SyncSender<HostEvent>>>>,
+    next_listener_id: Arc<AtomicU64>,
+}
+
+pub struct LocalEventSubscription {
+    listeners: Arc<Mutex<HashMap<u64, SyncSender<HostEvent>>>>,
+    id: u64,
+}
+
+impl Drop for LocalEventSubscription {
+    fn drop(&mut self) {
+        if let Ok(mut listeners) = self.listeners.lock() {
+            listeners.remove(&self.id);
+        }
+    }
+}
+
+impl LocalHostClient {
+    pub fn execute(&self, command: RemoteCommand) -> Result<CommandReceipt, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::Execute {
+                command,
+                respond_to: tx,
+            })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "command_timeout".to_string())?
+    }
+
+    pub fn query_sessions(&self) -> Result<Vec<SessionBinding>, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::QuerySessions { respond_to: tx })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "query_timeout".to_string())
+    }
+
+    pub fn query_generation(&self) -> Result<String, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::QueryGeneration { respond_to: tx })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "query_timeout".to_string())
+    }
+
+    pub fn query_models(&self) -> Result<Value, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::QueryModels { respond_to: tx })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(15))
+            .map_err(|_| "query_timeout".to_string())?
+    }
+
+    pub fn discover(&self) -> Result<Value, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::Discover { respond_to: tx })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(15))
+            .map_err(|_| "query_timeout".to_string())?
+    }
+
+    pub fn subscribe(&self, capacity: usize) -> (LocalEventSubscription, Receiver<HostEvent>) {
+        let (tx, rx) = mpsc::sync_channel(capacity);
+        let id = self.next_listener_id.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut listeners) = self.listeners.lock() {
+            listeners.insert(id, tx);
+        }
+        (
+            LocalEventSubscription {
+                listeners: self.listeners.clone(),
+                id,
+            },
+            rx,
+        )
+    }
+}
+
+pub fn create_local_host_channel() -> (LocalHostClient, LocalHostChannel) {
+    let (tx, rx) = mpsc::sync_channel(128);
+    let listeners = Arc::new(Mutex::new(HashMap::new()));
+    let client = LocalHostClient {
+        sender: tx,
+        listeners: listeners.clone(),
+        next_listener_id: Arc::new(AtomicU64::new(1)),
+    };
+    let channel = LocalHostChannel {
+        receiver: rx,
+        listeners,
+    };
+    (client, channel)
+}
 
 enum NetworkEvent {
     Connected(u64, i64),
@@ -68,13 +193,39 @@ pub fn run_with_control(
     server: String,
     control: Arc<RemoteControl>,
 ) -> Result<()> {
+    run_with_local_control(
+        binary,
+        workspaces,
+        database,
+        identity,
+        Some(server),
+        control,
+        None,
+    )
+}
+
+pub fn run_with_local_control(
+    binary: PathBuf,
+    workspaces: Vec<PathBuf>,
+    database: PathBuf,
+    identity: DeviceIdentity,
+    server: Option<String>,
+    control: Arc<RemoteControl>,
+    local_channel: Option<LocalHostChannel>,
+) -> Result<()> {
     let _cleanup = StopOnExit(control.clone());
     if control.stopped.load(Ordering::Relaxed) {
         return Ok(());
     }
-    let url = validate_server(&server)?;
+    let (url, bound_server) = match server {
+        Some(ref s) if !s.trim().is_empty() && s != "local://agenthub" => {
+            let validated = validate_server(s)?;
+            (Some(validated.clone()), validated)
+        }
+        _ => (None, "local://agenthub".to_owned()),
+    };
     let mut journal = RemoteJournal::open(database)?;
-    journal.bind_identity(identity.device_id(), url.as_str())?;
+    journal.bind_identity(identity.device_id(), &bound_server)?;
     let native = CodexAppServer::start_interactive(binary, Duration::from_secs(20))
         .map_err(|_| anyhow::anyhow!("native_host_start_failed"))?;
     let host = NativeSessionHost::new(native, workspaces.clone())
@@ -90,24 +241,80 @@ pub fn run_with_control(
     let generation = durable.host.generation().to_owned();
     let worker_stop = control.clone();
     let worker_seq = command_seq.clone();
-    thread::spawn(move || {
-        network_loop(
-            url,
-            identity,
-            generation,
-            worker_seq,
-            worker_stop,
-            events_tx,
-            send_rx,
-        )
-    });
+    if let Some(target_url) = url {
+        thread::spawn(move || {
+            network_loop(
+                target_url,
+                identity,
+                generation,
+                worker_seq,
+                worker_stop,
+                events_tx,
+                send_rx,
+            )
+        });
+    }
     let mut active = None;
     let mut offered = 0;
     while !control.stopped.load(Ordering::Relaxed) {
-        durable.poll()?;
+        let polled_events = match durable.poll() {
+            Ok(events) => events,
+            Err(error) => {
+                if !durable.host.is_alive() {
+                    control.stopped.store(true, Ordering::Relaxed);
+                    bail!("native_host_lost");
+                }
+                bail!(error);
+            }
+        };
         if !durable.host.is_alive() {
             control.stopped.store(true, Ordering::Relaxed);
             bail!("native_host_lost");
+        }
+        // Broadcast events to local listeners if registered
+        if !polled_events.is_empty() {
+            if let Some(ref local) = local_channel {
+                if let Ok(mut listeners) = local.listeners.lock() {
+                    listeners.retain(|_, listener| {
+                        let mut alive = true;
+                        for event in &polled_events {
+                            if listener.try_send(event.clone()).is_err() {
+                                alive = false;
+                                break;
+                            }
+                        }
+                        alive
+                    });
+                }
+            }
+        }
+        // Drain local commands
+        if let Some(ref local) = local_channel {
+            for _ in 0..32 {
+                match local.receiver.try_recv() {
+                    Ok(LocalHostCommand::Execute { command, respond_to }) => {
+                        let result = durable
+                            .handle_command(command)
+                            .map(|(receipt, _)| receipt)
+                            .map_err(|err| err.to_string());
+                        let _ = respond_to.send(result);
+                    }
+                    Ok(LocalHostCommand::QuerySessions { respond_to }) => {
+                        let _ = respond_to.send(durable.host.sessions());
+                    }
+                    Ok(LocalHostCommand::QueryGeneration { respond_to }) => {
+                        let _ = respond_to.send(durable.host.generation().to_string());
+                    }
+                    Ok(LocalHostCommand::QueryModels { respond_to }) => {
+                        let _ = respond_to.send(durable.host.models().map_err(|e| e.code));
+                    }
+                    Ok(LocalHostCommand::Discover { respond_to }) => {
+                        let _ = respond_to.send(durable.host.discover().map_err(|e| e.code));
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
         }
         // Bound network work each tick so native stdout is drained during replay.
         for event in events.try_iter().take(128) {

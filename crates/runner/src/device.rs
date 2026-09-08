@@ -42,6 +42,7 @@ struct PersistedDeviceIdentity {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Clone)]
 pub struct DeviceIdentity {
     device_id: String,
     signing_key: SigningKey,

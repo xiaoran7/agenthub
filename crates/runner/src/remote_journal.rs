@@ -21,6 +21,8 @@ pub enum JournalError {
     InvalidAck,
     #[error("remote_journal_identity_mismatch")]
     IdentityMismatch,
+    #[error("{0}")]
+    HostLost(String),
 }
 
 pub enum BeginCommand {
@@ -290,22 +292,23 @@ impl<T: NativeTransport> DurableHost<T> {
         }
     }
 
-    pub fn poll(&mut self) -> Result<()> {
+    pub fn poll(&mut self) -> Result<Vec<crate::remote_host::HostEvent>> {
         match self.host.poll() {
             Ok(events) => {
-                for event in events {
+                for event in &events {
                     let bindings = event.binding.iter().cloned().collect::<Vec<_>>();
                     self.journal
                         .append(&json!({"type":"event","event":event}), &bindings)?;
                 }
+                Ok(events)
             }
             Err(error) => {
                 self.journal.append(
                     &json!({"type":"host_lost","code":error.code}),
                     &self.host.sessions(),
                 )?;
+                Err(JournalError::HostLost(error.code))
             }
         }
-        Ok(())
     }
 }

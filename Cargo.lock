@@ -51,6 +51,7 @@ dependencies = [
  "chrono",
  "keyring",
  "rfd",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -59,6 +60,7 @@ dependencies = [
  "thiserror 2.0.19",
  "ureq",
  "url",
+ "uuid",
 ]
 
 [[package]]

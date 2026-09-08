@@ -1,5 +1,7 @@
 use super::*;
-use agent_pulse_runner::remote_network::{RemoteControl, run_with_control};
+use agent_pulse_runner::remote_network::{
+    LocalHostClient, RemoteControl, create_local_host_channel, run_with_local_control,
+};
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct RemoteProfile {
@@ -8,10 +10,11 @@ pub(crate) struct RemoteProfile {
 }
 
 pub(crate) struct RemoteHandle {
-    control: Arc<RemoteControl>,
-    thread: JoinHandle<()>,
-    failed: Arc<AtomicBool>,
-    profile: RemoteProfile,
+    pub(crate) control: Arc<RemoteControl>,
+    pub(crate) thread: JoinHandle<()>,
+    pub(crate) failed: Arc<AtomicBool>,
+    pub(crate) profile: RemoteProfile,
+    pub(crate) client: LocalHostClient,
 }
 
 pub(crate) fn stop(state: &DesktopState) {
@@ -31,6 +34,170 @@ fn scoped_paths(data_dir: &Path, server: &str, device: &str) -> (PathBuf, PathBu
         data_dir.join(format!("remote-{}.sqlite", &scope[..16])),
         data_dir.join(format!("remote-{}.json", &scope[..16])),
     )
+}
+
+fn local_scoped_paths(data_dir: &Path, device: &str) -> (PathBuf, PathBuf) {
+    scoped_paths(data_dir, "local://agenthub", device)
+}
+
+pub(crate) fn get_host_client(state: &DesktopState) -> Option<LocalHostClient> {
+    if let Ok(slot) = state.remote.lock()
+        && let Some(handle) = slot.as_ref()
+        && !handle.thread.is_finished()
+        && !handle.failed.load(Ordering::Relaxed)
+    {
+        return Some(handle.client.clone());
+    }
+    None
+}
+
+pub(crate) fn ensure_host_client(
+    state: &DesktopState,
+    required_workspace: Option<&Path>,
+) -> Result<LocalHostClient, DesktopError> {
+    let slot = state
+        .remote
+        .lock()
+        .map_err(|_| DesktopError::AgentFailed)?;
+
+    if let Some(handle) = slot.as_ref() {
+        if !handle.thread.is_finished() && !handle.failed.load(Ordering::Relaxed) {
+            if let Some(workspace) = required_workspace {
+                let canonical = workspace
+                    .canonicalize()
+                    .unwrap_or_else(|_| workspace.to_path_buf());
+                if handle
+                    .profile
+                    .workspace_paths
+                    .iter()
+                    .any(|w| w == &canonical)
+                {
+                    return Ok(handle.client.clone());
+                }
+                let mut new_workspaces = handle.profile.workspace_paths.clone();
+                if new_workspaces.len() < 32 && !new_workspaces.contains(&canonical) {
+                    new_workspaces.push(canonical);
+                }
+                handle.control.stopped.store(true, Ordering::Relaxed);
+                drop(slot);
+                return start_host_with_workspaces(state, new_workspaces);
+            } else {
+                return Ok(handle.client.clone());
+            }
+        }
+    }
+    drop(slot);
+
+    let mut workspaces = Vec::new();
+    if let Some(workspace) = required_workspace {
+        if let Ok(canonical) = workspace.canonicalize() {
+            if canonical.is_dir() {
+                workspaces.push(canonical);
+            }
+        }
+    }
+    start_host_with_workspaces(state, workspaces)
+}
+
+fn start_host_with_workspaces(
+    state: &DesktopState,
+    mut workspace_paths: Vec<PathBuf>,
+) -> Result<LocalHostClient, DesktopError> {
+    let data_dir = &state.data_dir;
+    let config = read_config(data_dir).ok();
+    let codex_binary = config
+        .as_ref()
+        .map(|c| c.codex_binary.clone())
+        .unwrap_or_else(default_codex_binary);
+
+    let identity = load_or_create_identity(data_dir).map_err(|_| DesktopError::Identity)?;
+
+    let server_url = config.as_ref().map(|c| c.server_url.as_str());
+    let (database, profile_path) = match server_url {
+        Some(url) => scoped_paths(data_dir, url, identity.device_id()),
+        None => local_scoped_paths(data_dir, identity.device_id()),
+    };
+
+    if let Ok(bytes) = fs::read(&profile_path) {
+        if let Ok(saved_profile) = serde_json::from_slice::<RemoteProfile>(&bytes) {
+            for path in saved_profile.workspace_paths {
+                if workspace_paths.len() < 32 && !workspace_paths.contains(&path) && path.is_dir() {
+                    workspace_paths.push(path);
+                }
+            }
+        }
+    }
+
+    if workspace_paths.is_empty() {
+        if let Ok(cwd) = std::env::current_dir().and_then(|p| p.canonicalize()) {
+            if cwd.is_dir() {
+                workspace_paths.push(cwd);
+            }
+        }
+    }
+
+    let profile = RemoteProfile {
+        workspace_paths: workspace_paths.clone(),
+        codex_binary: codex_binary.clone(),
+    };
+    let _ = fs::write(
+        &profile_path,
+        serde_json::to_vec(&profile).unwrap_or_default(),
+    );
+
+    let server_for_run = match server_url {
+        Some(url) => {
+            let mut u = Url::parse(url).ok();
+            if let Some(ref mut u) = u {
+                let scheme = if u.scheme() == "https" {
+                    "wss"
+                } else {
+                    "ws"
+                };
+                let _ = u.set_scheme(scheme);
+                u.set_path("/v3/remote/ws");
+            }
+            u.map(|u| u.to_string())
+        }
+        None => None,
+    };
+
+    let control = Arc::new(RemoteControl::default());
+    let worker_control = control.clone();
+    let failed = Arc::new(AtomicBool::new(true));
+    let worker_failed = failed.clone();
+    let worker_profile = profile.clone();
+    let worker_identity = identity.clone();
+
+    let (client, channel) = create_local_host_channel();
+    let client_for_state = client.clone();
+
+    let worker = thread::spawn(move || {
+        let result = run_with_local_control(
+            PathBuf::from(worker_profile.codex_binary),
+            worker_profile.workspace_paths,
+            database,
+            worker_identity,
+            server_for_run,
+            worker_control,
+            Some(channel),
+        );
+        worker_failed.store(result.is_err(), Ordering::Relaxed);
+    });
+
+    let mut slot = state
+        .remote
+        .lock()
+        .map_err(|_| DesktopError::AgentFailed)?;
+    *slot = Some(RemoteHandle {
+        control,
+        thread: worker,
+        failed,
+        profile,
+        client: client_for_state,
+    });
+
+    Ok(client)
 }
 
 #[tauri::command]
@@ -119,14 +286,17 @@ pub(crate) async fn start_remote_host(
     let failed = Arc::new(AtomicBool::new(true));
     let worker_failed = failed.clone();
     let worker_profile = profile.clone();
+    let (client, channel) = create_local_host_channel();
+    let client_for_state = client.clone();
     let worker = thread::spawn(move || {
-        let result = run_with_control(
+        let result = run_with_local_control(
             PathBuf::from(worker_profile.codex_binary),
             worker_profile.workspace_paths,
             database,
             identity,
-            server,
+            Some(server),
             worker_control,
+            Some(channel),
         );
         worker_failed.store(result.is_err(), Ordering::Relaxed);
     });
@@ -135,6 +305,7 @@ pub(crate) async fn start_remote_host(
         thread: worker,
         failed,
         profile,
+        client: client_for_state,
     });
     Ok(())
 }
