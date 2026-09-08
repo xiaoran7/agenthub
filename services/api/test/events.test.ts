@@ -10,7 +10,7 @@ import {
 const message: ChangeMessage = {
   device_id: `dev_${"a".repeat(32)}`,
   accepted: 1,
-  remote_tasks: true,
+  auth_snapshots: true,
 };
 
 test("change broker keeps notifications owner scoped", () => {

@@ -5,23 +5,15 @@ import {
   activityStatuses,
   agentTypes,
   parseAuthSyncBatch,
-  parseCreateRemoteTask,
   parseDeviceRegistration,
   parseDeviceHeartbeat,
-  parseDeviceTaskClaim,
-  parseDeviceTaskUpdate,
   parseSyncBatch,
   presences,
-  remoteTaskStatuses,
   verifySyncBatch,
-  validateCapabilityReport,
-  validateLaunchProfile,
 } from "@agent-pulse/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyRawBody from "fastify-raw-body";
 import fastifyWebsocket from "@fastify/websocket";
-import { V2SessionManager } from "./v2-session-manager.js";
-import { DualLayerEventStore } from "./v2-event-store.js";
 import { registerRemoteRoutes } from "./remote-routes.js";
 import type { RemoteContentStore } from "./remote-store.js";
 
@@ -71,7 +63,6 @@ import {
   bindingCodeDigest,
   type AuthFilters,
   type GatewayStore,
-  type RemoteTaskFilters,
   type SessionFilters,
   type SessionStatusChange,
 } from "./store.js";
@@ -90,8 +81,6 @@ const DEFAULT_BINDING_TTL_SECONDS = 600;
 const MIN_BINDING_TTL_SECONDS = 60;
 const MAX_BINDING_TTL_SECONDS = 3_600;
 const DEVICE_ID_PATTERN = /^dev_[0-9a-f]{32}$/;
-const TASK_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_DEVICE_CLOCK_SKEW_MS = 5 * 60_000;
 const EMAIL_VERIFICATION_BYTES = 32;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60_000;
@@ -136,7 +125,6 @@ export interface GatewayAppOptions {
   billingVerifier?: BillingEventVerifier;
   billingProvider?: BillingProvider;
   tgOAuthClient?: TgOAuthClient;
-  v2Manager?: V2SessionManager;
   remoteContent?: RemoteContentStore;
   loginRateLimitSecret?: Buffer;
   trustProxy?: boolean;
@@ -192,18 +180,15 @@ export function createGatewayApp(
       return;
     }
     if (error instanceof GatewayStoreError) {
-      const status = ["task_not_found"].includes(error.code)
-        ? 404
-        : [
-              "device_not_registered",
-              "device_key_mismatch",
-              "device_revoked",
-              "invalid_binding_code",
-              "device_not_owned",
-              "task_limit_reached",
-            ].includes(error.code)
-          ? 403
-          : 409;
+      const status = [
+        "device_not_registered",
+        "device_key_mismatch",
+        "device_revoked",
+        "invalid_binding_code",
+        "device_not_owned",
+      ].includes(error.code)
+        ? 403
+        : 409;
       void reply.status(status).send({ error: error.code });
       return;
     }
@@ -1350,148 +1335,6 @@ export function createGatewayApp(
     return reply.send({ snapshots: await store.listAuth(ownerId, filters) });
   });
 
-  app.post("/v1/tasks", async (request, reply) => {
-    const identity = await mutationIdentity(
-      options.accounts,
-      authenticator,
-      request,
-      now(),
-    );
-    const ownerId = identity.workspace_owner_id;
-    const accounts = requireAccounts(options.accounts);
-    const account = await accounts.accountView(ownerId);
-    if (account === undefined) throw new AuthenticationError();
-    requireVerifiedEmail(account, options.emailVerification !== undefined);
-    if (!account.entitlements.remote_tasks) {
-      throw new AccountError(
-        "remote_tasks_unavailable",
-        "remote tasks require a paid subscription",
-        403,
-      );
-    }
-    const input = parseCreateRemoteTask(request.body);
-    if (input.execution_policy !== "local_confirmation") {
-      throw new AccountError(
-        "execution_policy_unavailable",
-        "execution policy is not enabled",
-        403,
-      );
-    }
-    const createdAt = now();
-    const result = await store.createRemoteTask(
-      ownerId,
-      {
-        ...input,
-        task_id: randomUUID(),
-        created_at: createdAt.toISOString(),
-        expires_at: new Date(
-          createdAt.getTime() + input.expires_in_seconds * 1_000,
-        ).toISOString(),
-        max_concurrent_tasks: account.entitlements.max_concurrent_tasks,
-      },
-      identity.actor_user_id,
-    );
-    if (result.created) {
-      broker.publish(ownerId, {
-        device_id: result.task.target_device_id,
-        accepted: 0,
-        remote_tasks: true,
-      });
-    }
-    return reply.status(result.created ? 201 : 200).send(result.task);
-  });
-
-  app.get("/v1/tasks", async (request, reply) => {
-    const ownerId = await authenticator.authenticate(request);
-    const query = request.query as Record<string, unknown>;
-    const unknownQuery = Object.keys(query).find(
-      (key) => !["target_device_id", "status"].includes(key),
-    );
-    if (unknownQuery !== undefined) {
-      throw new ContractError("invalid_query", "query field is invalid");
-    }
-    const filters: RemoteTaskFilters = {};
-    if (query.target_device_id !== undefined) {
-      if (
-        typeof query.target_device_id !== "string" ||
-        !DEVICE_ID_PATTERN.test(query.target_device_id)
-      ) {
-        throw new ContractError("invalid_query", "target_device_id is invalid");
-      }
-      filters.target_device_id = query.target_device_id;
-    }
-    if (query.status !== undefined) {
-      if (
-        typeof query.status !== "string" ||
-        !isOneOf(remoteTaskStatuses, query.status)
-      ) {
-        throw new ContractError("invalid_query", "status is invalid");
-      }
-      filters.status = query.status;
-    }
-    return reply.send({ tasks: await store.listRemoteTasks(ownerId, filters) });
-  });
-
-  app.post("/v1/tasks/:taskId/cancel", async (request, reply) => {
-    const identity = await mutationIdentity(
-      options.accounts,
-      authenticator,
-      request,
-      now(),
-    );
-    const ownerId = identity.workspace_owner_id;
-    const { taskId } = request.params as { taskId?: unknown };
-    if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
-      throw new ContractError("invalid_task_id", "task ID is invalid");
-    }
-    const task = await store.cancelRemoteTask(
-      ownerId,
-      taskId,
-      identity.actor_user_id,
-    );
-    broker.publish(ownerId, {
-      device_id: task.target_device_id,
-      accepted: 0,
-      remote_tasks: true,
-    });
-    return reply.send(task);
-  });
-
-  app.post("/v1/device-tasks/claim", async (request, reply) => {
-    const claim = parseDeviceTaskClaim(request.body);
-    assertFreshDeviceTimestamp(claim.requested_at, now());
-    const task = await store.claimRemoteTask(claim);
-    if (task === undefined) return reply.status(204).send();
-    broker.publish(task.owner_id, {
-      device_id: task.task.target_device_id,
-      accepted: 0,
-      remote_tasks: true,
-    });
-    return reply.send(task.task);
-  });
-
-  app.post("/v1/device-tasks/:taskId/status", async (request, reply) => {
-    const { taskId } = request.params as { taskId?: unknown };
-    if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
-      throw new ContractError("invalid_task_id", "task ID is invalid");
-    }
-    const update = parseDeviceTaskUpdate(request.body);
-    if (update.task_id !== taskId) {
-      throw new ContractError(
-        "task_id_mismatch",
-        "task ID does not match route",
-      );
-    }
-    assertFreshDeviceTimestamp(update.updated_at, now());
-    const result = await store.updateRemoteTask(update);
-    broker.publish(result.owner_id, {
-      device_id: result.task.target_device_id,
-      accepted: 0,
-      remote_tasks: true,
-    });
-    return reply.send(result.task);
-  });
-
   app.delete("/v1/devices/:deviceId", async (request, reply) => {
     const identity = await mutationIdentity(
       options.accounts,
@@ -1750,230 +1593,6 @@ export function createGatewayApp(
     raw.on("close", close);
     raw.on("error", close);
   });
-
-  // Retired in-memory prototype is available only to explicitly injected fixtures.
-  // Production remote traffic must use the authenticated, durable v3 routes.
-  if (options.v2Manager) {
-    const v2Manager = options.v2Manager;
-
-    // v2 WebSocket Multiplexing Bus for Runners
-    void app.register(async (v2WsApp) => {
-      v2WsApp.get("/v2/ws", { websocket: true }, (socket, _request) => {
-        let runnerConn: any;
-
-        socket.on("message", (data: any) => {
-          try {
-            const frame = JSON.parse(data.toString("utf8"));
-            if (!runnerConn && frame.type === "handshake") {
-              const runnerId =
-                frame.payload?.runner_id || `runner_${randomUUID()}`;
-              runnerConn = v2Manager.registerRunner(runnerId, socket as any);
-            }
-            if (runnerConn) {
-              v2Manager.handleIncomingFrame(runnerConn, frame);
-            }
-          } catch {
-            // ignore parse error
-          }
-        });
-
-        socket.on("close", () => {
-          if (runnerConn) {
-            v2Manager.unregisterRunner(runnerConn.runner_id);
-          }
-        });
-      });
-    });
-
-    // v2 Dynamic Capabilities
-    app.get("/v2/capabilities", async (request) => {
-      await authenticator.authenticate(request);
-      return { capabilities: v2Manager.listAllCapabilities() };
-    });
-
-    app.get("/v2/runners/:runnerId/capabilities", async (request, reply) => {
-      await authenticator.authenticate(request);
-      const { runnerId } = request.params as { runnerId: string };
-      const caps = v2Manager.getCapabilities(runnerId);
-      if (!caps) {
-        void reply.status(404).send({ error: "runner_not_found" });
-        return;
-      }
-      return { capabilities: caps };
-    });
-
-    app.post("/v2/capabilities", async (request) => {
-      const report = validateCapabilityReport(request.body);
-      v2Manager.saveCapabilities(report);
-      return { status: "recorded" };
-    });
-
-    // v2 Workspace-First Sessions
-    app.get("/v2/sessions", async (request) => {
-      await authenticator.authenticate(request);
-      const query = request.query as {
-        runner_id?: string;
-        workspace_path?: string;
-      };
-      return { sessions: v2Manager.eventStore.listSessions(query) };
-    });
-
-    app.get("/v2/sessions/:sessionId", async (request, reply) => {
-      await authenticator.authenticate(request);
-      const { sessionId } = request.params as { sessionId: string };
-      const session = v2Manager.eventStore.getSession(sessionId);
-      if (!session) {
-        void reply.status(404).send({ error: "session_not_found" });
-        return;
-      }
-      return { session };
-    });
-
-    // v2 Interactive Control Commands
-    app.post("/v2/sessions/launch", async (request, reply) => {
-      await authenticator.authenticate(request);
-      const body = expectObject(request.body);
-      const profile = validateLaunchProfile(body.launch_profile);
-      const cmdId =
-        typeof body.cmd_id === "string"
-          ? body.cmd_id
-          : `cmd_${Date.now().toString(36)}`;
-      const hubSessionId = `hub_${randomUUID()}`;
-
-      try {
-        v2Manager.sendCommand(profile.target_runner_id, hubSessionId, cmdId, {
-          action: "launch_session",
-          launch_profile: profile,
-        });
-        return { hub_session_id: hubSessionId, cmd_id: cmdId };
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : "launch_failed";
-        void reply.status(400).send({ error: msg });
-      }
-    });
-
-    app.post("/v2/sessions/:sessionId/prompt", async (request, reply) => {
-      await authenticator.authenticate(request);
-      const { sessionId } = request.params as { sessionId: string };
-      const session = v2Manager.eventStore.getSession(sessionId);
-      if (!session) {
-        void reply.status(404).send({ error: "session_not_found" });
-        return;
-      }
-      const body = expectObject(request.body);
-      const text = typeof body.text === "string" ? body.text : "";
-      if (!text.trim()) {
-        void reply.status(400).send({ error: "prompt_text_required" });
-        return;
-      }
-      const cmdId =
-        typeof body.cmd_id === "string"
-          ? body.cmd_id
-          : `cmd_${Date.now().toString(36)}`;
-
-      v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
-        action: "send_prompt",
-        text,
-        client_turn_id:
-          typeof body.client_turn_id === "string"
-            ? body.client_turn_id
-            : undefined,
-      });
-      return { status: "queued", cmd_id: cmdId };
-    });
-
-    app.post("/v2/sessions/:sessionId/approve", async (request, reply) => {
-      await authenticator.authenticate(request);
-      const { sessionId } = request.params as { sessionId: string };
-      const session = v2Manager.eventStore.getSession(sessionId);
-      if (!session) {
-        void reply.status(404).send({ error: "session_not_found" });
-        return;
-      }
-      const body = expectObject(request.body);
-      const approvalId =
-        typeof body.approval_id === "string" ? body.approval_id : "";
-      const decision =
-        body.decision === "approved" || body.decision === "rejected"
-          ? body.decision
-          : "rejected";
-      const cmdId =
-        typeof body.cmd_id === "string"
-          ? body.cmd_id
-          : `cmd_${Date.now().toString(36)}`;
-
-      v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
-        action: "resolve_approval",
-        approval_id: approvalId,
-        decision,
-        custom_feedback:
-          typeof body.custom_feedback === "string"
-            ? body.custom_feedback
-            : undefined,
-      });
-      return { status: "sent", cmd_id: cmdId };
-    });
-
-    app.post("/v2/sessions/:sessionId/interrupt", async (request, reply) => {
-      await authenticator.authenticate(request);
-      const { sessionId } = request.params as { sessionId: string };
-      const session = v2Manager.eventStore.getSession(sessionId);
-      if (!session) {
-        void reply.status(404).send({ error: "session_not_found" });
-        return;
-      }
-      const body = expectObject(request.body);
-      const cmdId =
-        typeof body.cmd_id === "string"
-          ? body.cmd_id
-          : `cmd_${Date.now().toString(36)}`;
-
-      v2Manager.sendCommand(session.runner_id, sessionId, cmdId, {
-        action: "interrupt_turn",
-        reason:
-          typeof body.reason === "string" ? body.reason : "user_cancelled",
-      });
-      return { status: "sent", cmd_id: cmdId };
-    });
-
-    // v2 Live Stream Delta SSE for Session
-    app.get("/v2/sessions/:sessionId/stream", async (request, reply) => {
-      await authenticator.authenticate(request);
-      const { sessionId } = request.params as { sessionId: string };
-      reply.hijack();
-      const raw = reply.raw;
-      raw.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-store",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-      request.raw.socket.setNoDelay(true);
-      request.raw.socket.setTimeout(0);
-
-      const write = (chunk: string): void => {
-        if (!raw.writableEnded) {
-          raw.write(chunk);
-        }
-      };
-      write(`retry: ${STREAM_RETRY_MS}\n\n`);
-      write("event: ready\ndata: {}\n\n");
-
-      const unsubscribe = v2Manager.eventStore.subscribeDeltas(
-        sessionId,
-        (delta) => {
-          write(`event: delta\ndata: ${JSON.stringify(delta)}\n\n`);
-        },
-      );
-
-      const close = (): void => {
-        unsubscribe();
-        raw.end();
-      };
-      raw.on("close", close);
-      raw.on("error", close);
-    });
-  }
 
   app.addHook("onClose", async () => {
     for (const close of [...openStreams]) {

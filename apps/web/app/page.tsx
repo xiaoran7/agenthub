@@ -11,7 +11,6 @@ import {
 
 import { SettingsPanel } from "../src/components/SettingsPanel";
 import { DeviceConnectDialog } from "../src/components/DeviceConnectDialog";
-import { LaunchSessionDialog } from "../src/components/LaunchSessionDialog";
 import { SessionInspector } from "../src/components/SessionInspector";
 import {
   ActivityView,
@@ -21,7 +20,6 @@ import {
   OverviewView,
   SessionsView,
 } from "../src/components/PlatformViews";
-import { TasksView } from "../src/components/TasksView";
 import { PlatformShell } from "../src/components/PlatformShell";
 import {
   describeApiError,
@@ -29,7 +27,6 @@ import {
   fetchDevices,
   fetchSessionEvents,
   fetchSessions,
-  fetchTasks,
 } from "../src/lib/api";
 import type { PanelConfig } from "../src/lib/config";
 import { loadConfig, saveConfig } from "../src/lib/config";
@@ -53,7 +50,6 @@ import type {
   DeviceRecord,
   SessionRecord,
   SessionRef,
-  RemoteTask,
 } from "../src/lib/types";
 import { parseSessionRef, sessionKey, sessionRef } from "../src/lib/types";
 import {
@@ -143,7 +139,6 @@ function LegacyPanelPage() {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [authSnapshots, setAuthSnapshots] = useState<AuthRecord[]>([]);
-  const [tasks, setTasks] = useState<RemoteTask[]>([]);
   const [syncError, setSyncError] = useState<string | undefined>();
   const [lastSyncMs, setLastSyncMs] = useState<number | undefined>();
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -158,7 +153,6 @@ function LegacyPanelPage() {
   const [timelineError, setTimelineError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deviceConnectOpen, setDeviceConnectOpen] = useState(false);
-  const [launchSessionOpen, setLaunchSessionOpen] = useState(false);
   const [fullSession, setFullSession] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
   const [browserOnline, setBrowserOnline] = useState(true);
@@ -211,24 +205,21 @@ function LegacyPanelPage() {
       setDevices(PREVIEW_DEVICES);
       setSessions(PREVIEW_SESSIONS);
       setAuthSnapshots([]);
-      setTasks([]);
       setSyncError(undefined);
       setLastSyncMs(Date.now());
       return;
     }
     if (account === undefined || account === null) return;
     try {
-      const [nextDevices, nextSessions, nextAuthSnapshots, nextTasks] =
+      const [nextDevices, nextSessions, nextAuthSnapshots] =
         await Promise.all([
           fetchDevices(config),
           fetchSessions(config),
           fetchDeviceAuth(config),
-          fetchTasks(config),
         ]);
       setDevices(nextDevices);
       setSessions(nextSessions);
       setAuthSnapshots(nextAuthSnapshots);
-      setTasks(nextTasks);
       setSyncError(undefined);
       setLastSyncMs(Date.now());
     } catch (error) {
@@ -464,7 +455,6 @@ function LegacyPanelPage() {
     setDevices([]);
     setSessions([]);
     setAuthSnapshots([]);
-    setTasks([]);
     setSelected(undefined);
     setFullSession(false);
     setSyncError(undefined);
@@ -515,7 +505,6 @@ function LegacyPanelPage() {
         nowMs={nowMs}
         onFilterChange={setSessionFilter}
         onSelect={handleSelectSession}
-        onLaunchSession={() => setLaunchSessionOpen(true)}
         selectedKey={selectedKey}
         sessions={baseSessions}
       />
@@ -529,22 +518,6 @@ function LegacyPanelPage() {
         onSelect={handleSelectSession}
         sessions={baseSessions}
         authSnapshots={authSnapshots}
-      />
-    );
-  } else if (
-    section === "tasks" &&
-    account !== null &&
-    account !== undefined &&
-    config !== undefined
-  ) {
-    view = (
-      <TasksView
-        account={account}
-        config={config}
-        devices={devices}
-        onRefresh={refresh}
-        sessions={sessions}
-        tasks={tasks}
       />
     );
   } else if (section === "activity") {
@@ -639,7 +612,6 @@ function LegacyPanelPage() {
             setDevices([]);
             setSessions([]);
             setAuthSnapshots([]);
-            setTasks([]);
           });
         }}
       >
@@ -664,7 +636,6 @@ function LegacyPanelPage() {
             setDevices([]);
             setSessions([]);
             setAuthSnapshots([]);
-            setTasks([]);
             setSelected(undefined);
             setTimeline(undefined);
             void refreshRef.current();
@@ -676,7 +647,6 @@ function LegacyPanelPage() {
             setDevices([]);
             setSessions([]);
             setAuthSnapshots([]);
-            setTasks([]);
           }}
           onSave={handleSaveConfig}
         />
@@ -685,16 +655,6 @@ function LegacyPanelPage() {
         <DeviceConnectDialog
           config={config}
           onClose={() => setDeviceConnectOpen(false)}
-        />
-      )}
-      {launchSessionOpen && config !== undefined && (
-        <LaunchSessionDialog
-          config={config}
-          onClose={() => setLaunchSessionOpen(false)}
-          onLaunched={(_sessionId) => {
-            setLaunchSessionOpen(false);
-            void refresh();
-          }}
         />
       )}
     </>

@@ -4,7 +4,6 @@ import type {
   DeviceRecord,
   SessionRecord,
   SessionRef,
-  RemoteTask,
 } from "./types";
 
 export const DEFAULT_TIMELINE_LIMIT = 100;
@@ -52,14 +51,6 @@ export function deviceAuthUrl(base: string): string {
 
 export function streamUrl(base: string): string {
   return `${base}/v1/stream`;
-}
-
-export function tasksUrl(base: string): string {
-  return `${base}/v1/tasks`;
-}
-
-export function cancelTaskUrl(base: string, taskId: string): string {
-  return `${base}/v1/tasks/${encodeURIComponent(taskId)}/cancel`;
 }
 
 export function pushKeyUrl(base: string): string {
@@ -284,132 +275,6 @@ export async function fetchSessionEvents(
     config.userId,
   );
   return body.events;
-}
-
-export async function fetchTasks(config: PanelConfig): Promise<RemoteTask[]> {
-  const body = await fetchJson<{ tasks: RemoteTask[] }>(
-    tasksUrl(config.gatewayBase),
-    config.userId,
-  );
-  return body.tasks;
-}
-
-export async function createTask(
-  config: PanelConfig,
-  input: {
-    target_device_id: string;
-    agent_type: "claude_code" | "codex";
-    prompt: string;
-    project_fingerprint: string;
-    idempotency_key: string;
-    execution_policy: "local_confirmation";
-    expires_in_seconds: number;
-  },
-): Promise<RemoteTask> {
-  return sendJsonResponse<RemoteTask>(
-    tasksUrl(config.gatewayBase),
-    config.userId,
-    "POST",
-    input,
-  );
-}
-
-export async function cancelTask(
-  config: PanelConfig,
-  taskId: string,
-): Promise<RemoteTask> {
-  return sendJsonResponse<RemoteTask>(
-    cancelTaskUrl(config.gatewayBase, taskId),
-    config.userId,
-    "POST",
-    {},
-  );
-}
-
-// --- AgentHub v2 API Endpoints ---
-
-export async function fetchV2Capabilities(config: PanelConfig): Promise<any[]> {
-  return fetchJson<any[]>(
-    `${config.gatewayBase}/v2/capabilities`,
-    config.userId,
-  );
-}
-
-export async function fetchV2Sessions(
-  config: PanelConfig,
-  filter?: { runner_id?: string; workspace_path?: string },
-): Promise<any[]> {
-  const query = filter
-    ? `?${new URLSearchParams(filter as Record<string, string>).toString()}`
-    : "";
-  return fetchJson<any[]>(
-    `${config.gatewayBase}/v2/sessions${query}`,
-    config.userId,
-  );
-}
-
-export async function fetchV2Session(
-  config: PanelConfig,
-  sessionId: string,
-): Promise<any> {
-  return fetchJson<any>(
-    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}`,
-    config.userId,
-  );
-}
-
-export async function launchV2Session(
-  config: PanelConfig,
-  launch_profile: any,
-): Promise<{ hub_session_id: string; cmd_id: string }> {
-  return sendJsonResponse<{ hub_session_id: string; cmd_id: string }>(
-    `${config.gatewayBase}/v2/sessions/launch`,
-    config.userId,
-    "POST",
-    { launch_profile },
-  );
-}
-
-export async function sendV2Prompt(
-  config: PanelConfig,
-  sessionId: string,
-  text: string,
-  client_turn_id?: string,
-): Promise<{ status: string; cmd_id: string }> {
-  return sendJsonResponse<{ status: string; cmd_id: string }>(
-    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}/prompt`,
-    config.userId,
-    "POST",
-    { text, client_turn_id },
-  );
-}
-
-export async function resolveV2Approval(
-  config: PanelConfig,
-  sessionId: string,
-  approval_id: string,
-  decision: "approved" | "rejected",
-  custom_feedback?: string,
-): Promise<{ status: string; cmd_id: string }> {
-  return sendJsonResponse<{ status: string; cmd_id: string }>(
-    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}/approve`,
-    config.userId,
-    "POST",
-    { approval_id, decision, custom_feedback },
-  );
-}
-
-export async function interruptV2Turn(
-  config: PanelConfig,
-  sessionId: string,
-  reason?: string,
-): Promise<{ status: string; cmd_id: string }> {
-  return sendJsonResponse<{ status: string; cmd_id: string }>(
-    `${config.gatewayBase}/v2/sessions/${encodeURIComponent(sessionId)}/interrupt`,
-    config.userId,
-    "POST",
-    { reason },
-  );
 }
 
 async function sendJsonResponse<T>(

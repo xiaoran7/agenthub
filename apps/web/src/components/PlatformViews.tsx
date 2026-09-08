@@ -462,7 +462,6 @@ export function SessionsView({
   onFilterChange,
   selectedKey,
   onSelect,
-  onLaunchSession,
 }: {
   sessions: SessionRecord[];
   devices: DeviceRecord[];
@@ -471,7 +470,6 @@ export function SessionsView({
   onFilterChange: (filter: SessionFilter) => void;
   selectedKey?: string | undefined;
   onSelect: (session: SessionRecord) => void;
-  onLaunchSession?: (() => void) | undefined;
 }) {
   const visible = sortPlatformSessions(
     sessions.filter((session) => matchesSessionFilter(session, filter)),
@@ -481,31 +479,6 @@ export function SessionsView({
       <ViewHeader
         title="会话"
         description="监控并远程控制所有已连接设备上的 Agent 会话。"
-        action={
-          onLaunchSession ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={onLaunchSession}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "8px 14px",
-                fontSize: "13px",
-                borderRadius: "6px",
-                background: "var(--blue, #0284c7)",
-                color: "#fff",
-                border: "none",
-                cursor: "pointer",
-                fontWeight: 600,
-              }}
-            >
-              <Icon name="activity" size={14} />
-              <span>发起新会话</span>
-            </button>
-          ) : undefined
-        }
       />
       <section className="session-view-panel section-panel">
         <div className="session-view-toolbar">

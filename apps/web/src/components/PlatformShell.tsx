@@ -298,70 +298,59 @@ function ContextBar({
         <span>
           {section === "sessions"
             ? "当前活动"
-            : section === "tasks"
-              ? "远程执行"
-              : section === "activity"
-                ? "实时动态"
-                : section === "diagnostics"
-                  ? "系统"
-                  : "设备总览"}
+            : section === "activity"
+              ? "实时动态"
+              : section === "diagnostics"
+                ? "系统"
+                : "设备总览"}
         </span>
       </div>
       <div className="context-controls">
-        {section !== "tasks" && (
-          <SelectControl
-            label="设备筛选"
-            onChange={deviceChange}
-            value={deviceFilter ?? "all"}
-          >
-            <option value="all">全部设备</option>
-            {devices
-              .filter((device) => !device.revoked)
-              .map((device) => (
-                <option key={device.device_id} value={device.device_id}>
-                  {device.display_name ?? device.device_id.slice(0, 14)}
-                </option>
-              ))}
-          </SelectControl>
-        )}
-        {section !== "tasks" && (
-          <div
-            className="provider-segments"
-            aria-label="Agent 来源"
-            role="group"
-          >
-            {(["all", "claude_code", "codex"] as const).map((provider) => (
-              <button
-                aria-pressed={providerFilter === provider}
-                key={provider}
-                onClick={() => onProviderFilterChange(provider)}
-                type="button"
-              >
-                {provider === "all" ? "全部" : AGENT_LABELS[provider]}
-              </button>
+        <SelectControl
+          label="设备筛选"
+          onChange={deviceChange}
+          value={deviceFilter ?? "all"}
+        >
+          <option value="all">全部设备</option>
+          {devices
+            .filter((device) => !device.revoked)
+            .map((device) => (
+              <option key={device.device_id} value={device.device_id}>
+                {device.display_name ?? device.device_id.slice(0, 14)}
+              </option>
             ))}
-          </div>
-        )}
-        {section !== "tasks" && (
-          <SelectControl
-            label="时间范围"
-            onChange={rangeChange}
-            value={rangeFilter}
-          >
-            <option value="24h">过去 24 小时</option>
-            <option value="7d">过去 7 天</option>
-            <option value="all">全部时间</option>
-          </SelectControl>
-        )}
+        </SelectControl>
+        <div
+          className="provider-segments"
+          aria-label="Agent 来源"
+          role="group"
+        >
+          {(["all", "claude_code", "codex"] as const).map((provider) => (
+            <button
+              aria-pressed={providerFilter === provider}
+              key={provider}
+              onClick={() => onProviderFilterChange(provider)}
+              type="button"
+            >
+              {provider === "all" ? "全部" : AGENT_LABELS[provider]}
+            </button>
+          ))}
+        </div>
+        <SelectControl
+          label="时间范围"
+          onChange={rangeChange}
+          value={rangeFilter}
+        >
+          <option value="24h">过去 24 小时</option>
+          <option value="7d">过去 7 天</option>
+          <option value="all">全部时间</option>
+        </SelectControl>
         <label className="search-control">
           <Icon name="search" size={16} />
           <input
             aria-label="搜索会话"
             onChange={(event) => onSearchChange(event.target.value)}
-            placeholder={
-              section === "tasks" ? "搜索功能即将接入" : "搜索会话或按 ⌘K"
-            }
-            disabled={section === "tasks"}
+            placeholder="搜索会话或按 ⌘K"
             value={search}
           />
         </label>

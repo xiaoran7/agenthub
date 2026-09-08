@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### 核心定位架构重构与冗余功能清理（2026-09-08）
+
+- **坚守核心定位与三不原则**：严格围绕“多种本地 AI Agent 的统一远程控制入口”，仅保留“发现、接管、暴露”核心链路，清理偏离定位的自造任务系统、死代码与伪功能。
+- **清理自建任务代执行系统**：
+  - Rust Runner 端彻底移除 `tasks.rs`（476行）、命令行 `Command::Tasks`、`run_agent_task` 及 Gateway 的 `claim_task` / `update_task` 接口；
+  - Gateway API 端移除 `/v1/tasks`、`/v1/device-tasks/*` 调度路由、数据库表与 `remote-tasks.test.ts`；
+  - Web 端移除 `TasksView.tsx` 及任务导航和过滤项。
+- **清除已废弃的 v2 内存原型与协议死代码**：
+  - 移除 Gateway 中仅供 mock 注入的 `/v2/*` 路由与 `v2-session-manager.ts`、`v2-event-store.ts`；
+  - 移除 `packages/contracts` 下已废弃的 `v2-*.ts` 合同及对应测试；
+  - 移除 Runner 端孤立死代码 `v2_protocol.rs`。
+- **清理自造 Agent 启动逻辑与陈列假设置**：
+  - Web 端移除 `LaunchSessionDialog.tsx`、未引用组件 `ToolApprovalModal.tsx`、`SlashCommandMenu.tsx` 及失效 v2 API 方法；
+  - 桌面端设置弹窗精简为核心四项（常规刷新、Agent 路径、远程连接与 Host 守护、账户管理），清理无后端的陈列假开关（电脑操控桥、浏览器探针、个性化记忆等）。
+
 ### 架构与产品定位纠偏与文档定界（2026-09-08）
 
 - **确立顶层定位与唯一标准**：

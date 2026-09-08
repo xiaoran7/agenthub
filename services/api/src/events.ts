@@ -13,7 +13,6 @@ export interface ChangeMessage {
   device_id: string;
   accepted: number;
   auth_snapshots?: boolean;
-  remote_tasks?: boolean;
 }
 
 export type ChangeListener = (message: ChangeMessage) => void;
@@ -167,9 +166,7 @@ function isChangeMessage(value: unknown): value is ChangeMessage {
     return false;
   }
   return (
-    (message.auth_snapshots === undefined ||
-      typeof message.auth_snapshots === "boolean") &&
-    (message.remote_tasks === undefined ||
-      typeof message.remote_tasks === "boolean")
+    message.auth_snapshots === undefined ||
+    typeof message.auth_snapshots === "boolean"
   );
 }

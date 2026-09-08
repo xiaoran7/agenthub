@@ -4,7 +4,6 @@ import type { DeviceRecord, SessionRecord } from "./types";
 export type SectionKey =
   | "overview"
   | "sessions"
-  | "tasks"
   | "devices"
   | "activity"
   | "diagnostics"
@@ -22,7 +21,6 @@ export const NAV_ITEMS: ReadonlyArray<{
   icon:
     | "overview"
     | "sessions"
-    | "tasks"
     | "devices"
     | "activity"
     | "diagnostics"
@@ -30,7 +28,6 @@ export const NAV_ITEMS: ReadonlyArray<{
 }> = [
   { key: "overview", label: "总览", icon: "overview" },
   { key: "sessions", label: "会话", icon: "sessions" },
-  { key: "tasks", label: "任务", icon: "tasks" },
   { key: "devices", label: "设备", icon: "devices" },
   { key: "activity", label: "动态", icon: "activity" },
   { key: "diagnostics", label: "诊断", icon: "diagnostics" },
@@ -44,7 +41,6 @@ export const MOBILE_NAV_ITEMS = [
 export const SECTION_LABELS: Record<SectionKey, string> = {
   overview: "总览",
   sessions: "会话",
-  tasks: "任务",
   devices: "设备",
   activity: "动态",
   diagnostics: "诊断",
