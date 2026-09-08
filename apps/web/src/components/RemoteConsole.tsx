@@ -37,10 +37,12 @@ export function RemoteConsole({
   request = remoteRequest,
   onAuthenticationRequired,
   onManage,
+  onLocalHost,
 }: {
   request?: RemoteRequest;
   onAuthenticationRequired?: () => void;
   onManage?: () => void;
+  onLocalHost?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState(empty);
   const [selected, setSelected] = useState("");
@@ -284,6 +286,7 @@ export function RemoteConsole({
           ＋ 新建会话
         </button>
         <div className="remote-nav-label">工作区</div>
+        {onLocalHost && <button onClick={onLocalHost}>连接本机</button>}
         {[...groups].map(([group, sessions]) => (
           <section key={group}>
             <h2 title={sessions[0]!.binding.workspace_path}>

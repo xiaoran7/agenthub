@@ -2,7 +2,7 @@
 
 Windows Tauri 桌面客户端。用户通过现有 AgentHub 邮箱账号注册或登录后，应用会自动：
 
-默认入口已改为 Remote，会话 UI 与 Web 共用；通过 Tauri IPC 使用安全存储中的登录 Cookie 请求 Gateway，不把 Cookie 交给前端。新入口支持同一原生会话的输入、审批、中断与恢复。需要先启用 Gateway v3 并启动独立 `remote-run`，桌面内嵌的旧采集引擎尚不自动托管 Remote Host。设备与账户按钮保留下面描述的旧管理界面。
+默认入口已改为 Remote，会话 UI 与 Web 共用；通过 Tauri IPC 使用安全存储中的登录 Cookie 请求 Gateway，不把 Cookie 交给前端。新入口支持同一原生会话的输入、审批、中断与恢复。启用 Gateway v3 后，点击“连接本机”，选择 Codex 原生可执行文件与授权目录即可启动内嵌 Remote Host；也可使用独立 `remote-run`。同一设备不能同时启动两份 Host。配置与内容库按设备/Gateway 隔离；关闭会话页面不停止 Host，退出登录或退出桌面应用会停止。设备与账户按钮保留下面描述的旧管理界面。
 
 1. 创建或加载本机 Ed25519 设备身份。
 2. 使用当前登录会话完成设备登记，不展示一次性配对码。

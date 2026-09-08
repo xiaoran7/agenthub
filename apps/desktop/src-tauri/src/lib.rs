@@ -11,6 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod remote_desktop;
+use remote_desktop::{RemoteHandle, remote_host_status, start_remote_host, stop_remote_host};
+
 use agent_pulse_runner::{
     adapters::{
         claude,
@@ -265,6 +268,7 @@ impl RealtimeHandle {
 }
 
 struct DesktopState {
+    remote: Mutex<Option<RemoteHandle>>,
     data_dir: PathBuf,
     engine: Mutex<Option<EngineHandle>>,
     realtime: Mutex<Option<RealtimeHandle>>,
@@ -740,6 +744,7 @@ async fn set_sync_paused(paused: bool, state: State<'_, DesktopState>) -> Result
 
 #[tauri::command]
 async fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
+    remote_desktop::stop(&state);
     let config = read_config(&state.data_dir).ok();
     if let Ok(mut engine) = state.engine.lock()
         && let Some(handle) = engine.take()
@@ -3070,6 +3075,7 @@ pub fn run() {
                 engine: Mutex::new(None),
                 realtime: Mutex::new(None),
                 active_turns: Mutex::new(HashMap::new()),
+                remote: Mutex::new(None),
                 session_contexts: Mutex::new(SessionContextCache::default()),
             });
             Ok(())
@@ -3083,6 +3089,9 @@ pub fn run() {
             restore_session,
             refresh_dashboard,
             remote_gateway_request,
+            remote_host_status,
+            start_remote_host,
+            stop_remote_host,
             send_session_message,
             launch_new_session,
             cancel_session_turn,
@@ -3103,6 +3112,7 @@ pub fn run() {
                 && let Some(state) = app_handle.try_state::<DesktopState>()
             {
                 stop_dashboard_realtime(&state);
+                remote_desktop::stop(&state);
                 if let Ok(active_turns) = state.active_turns.lock() {
                     for cancelled in active_turns.values() {
                         cancelled.store(true, Ordering::Relaxed);

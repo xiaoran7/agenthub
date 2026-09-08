@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { NativeHostDialog } from "./components/NativeHostDialog";
 import { RemoteConsole } from "../../web/src/components/RemoteConsole";
 import type { RemoteRequest } from "../../web/src/lib/remote";
 import { listen } from "@tauri-apps/api/event";
@@ -135,6 +136,7 @@ export function App() {
   const [restoring, setRestoring] = useState(!demo);
   const [error, setError] = useState<string>();
   const [management, setManagement] = useState(false);
+  const [localHost, setLocalHost] = useState(false);
 
   const restore = useCallback(async () => {
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -169,11 +171,15 @@ export function App() {
   }
   if (!demo && !management)
     return (
-      <RemoteConsole
-        request={desktopRemoteRequest}
-        onAuthenticationRequired={() => setSnapshot(undefined)}
-        onManage={() => setManagement(true)}
-      />
+      <>
+        <RemoteConsole
+          request={desktopRemoteRequest}
+          onAuthenticationRequired={() => setSnapshot(undefined)}
+          onManage={() => setManagement(true)}
+          onLocalHost={() => setLocalHost(true)}
+        />
+        {localHost && <NativeHostDialog onClose={() => setLocalHost(false)} />}
+      </>
     );
   return (
     <>

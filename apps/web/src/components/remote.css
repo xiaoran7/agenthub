@@ -19,7 +19,8 @@
   font: inherit;
   color: inherit;
 }
-.remote-console button {
+.remote-console button,
+.remote-launch button {
   border: 1px solid #414247;
   border-radius: 8px;
   background: #292a2f;
@@ -285,13 +286,16 @@
   font-size: 13px;
   margin-top: 17px;
 }
-.remote-launch select {
+.remote-launch select,
+.remote-launch input {
   padding: 10px;
   background: #181a1c;
   border: 1px solid #44494a;
   border-radius: 6px;
   width: 100%;
   min-width: 0;
+  color: inherit;
+  font: inherit;
 }
 .remote-launch p {
   font-size: 12px;

@@ -31,6 +31,20 @@ enum NetworkSend {
     Ack(u64, i64),
 }
 
+#[derive(Default)]
+pub struct RemoteControl {
+    pub stopped: AtomicBool,
+    pub connected: AtomicBool,
+}
+
+struct StopOnExit(Arc<RemoteControl>);
+impl Drop for StopOnExit {
+    fn drop(&mut self) {
+        self.0.stopped.store(true, Ordering::Relaxed);
+        self.0.connected.store(false, Ordering::Relaxed);
+    }
+}
+
 pub fn run(
     binary: PathBuf,
     workspaces: Vec<PathBuf>,
@@ -38,6 +52,26 @@ pub fn run(
     identity: DeviceIdentity,
     server: String,
 ) -> Result<()> {
+    let control = Arc::new(RemoteControl::default());
+    let signal = control.clone();
+    ctrlc::set_handler(move || signal.stopped.store(true, Ordering::Relaxed))?;
+    run_with_control(binary, workspaces, database, identity, server, control)
+}
+
+/// Embeddable Host; the owning application controls shutdown without installing
+/// a second process-wide signal handler. Network connectivity is factual only.
+pub fn run_with_control(
+    binary: PathBuf,
+    workspaces: Vec<PathBuf>,
+    database: PathBuf,
+    identity: DeviceIdentity,
+    server: String,
+    control: Arc<RemoteControl>,
+) -> Result<()> {
+    let _cleanup = StopOnExit(control.clone());
+    if control.stopped.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let url = validate_server(&server)?;
     let mut journal = RemoteJournal::open(database)?;
     journal.bind_identity(identity.device_id(), url.as_str())?;
@@ -50,14 +84,11 @@ pub fn run(
     let discovery = durable.host.discover().ok();
     durable.journal.append(&json!({"type":"ready","provider":"codex_app_server","host_generation":durable.host.generation(),
         "workspaces":workspaces,"sessions":durable.host.sessions(),"models":models,"discovery":discovery,"attach_running":false}),&[])?;
-    let stopped = Arc::new(AtomicBool::new(false));
-    let signal = stopped.clone();
-    ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))?;
     let command_seq = Arc::new(AtomicI64::new(durable.journal.received_command_seq()?));
     let (events_tx, events) = mpsc::sync_channel(256);
     let (send_tx, send_rx) = mpsc::sync_channel(64);
     let generation = durable.host.generation().to_owned();
-    let worker_stop = stopped.clone();
+    let worker_stop = control.clone();
     let worker_seq = command_seq.clone();
     thread::spawn(move || {
         network_loop(
@@ -72,10 +103,10 @@ pub fn run(
     });
     let mut active = None;
     let mut offered = 0;
-    while !stopped.load(Ordering::Relaxed) {
+    while !control.stopped.load(Ordering::Relaxed) {
         durable.poll()?;
         if !durable.host.is_alive() {
-            stopped.store(true, Ordering::Relaxed);
+            control.stopped.store(true, Ordering::Relaxed);
             bail!("native_host_lost");
         }
         // Bound network work each tick so native stdout is drained during replay.
@@ -84,12 +115,13 @@ pub fn run(
                 NetworkEvent::Connected(epoch, server_seq) => {
                     let (sent, acked) = durable.journal.watermarks()?;
                     if server_seq < acked || server_seq > sent {
-                        stopped.store(true, Ordering::Relaxed);
+                        control.stopped.store(true, Ordering::Relaxed);
                         bail!("remote_journal_mismatch");
                     }
                     durable.journal.acknowledge(server_seq)?;
                     offered = server_seq;
                     active = Some(epoch);
+                    control.connected.store(true, Ordering::Relaxed);
                     eprintln!("{{\"code\":\"remote_connected\"}}");
                 }
                 NetworkEvent::Sent(epoch, seq) if active == Some(epoch) => {
@@ -97,6 +129,7 @@ pub fn run(
                 }
                 NetworkEvent::Offline(epoch) if active == Some(epoch) => {
                     active = None;
+                    control.connected.store(false, Ordering::Relaxed);
                     eprintln!("{{\"code\":\"remote_reconnecting\"}}");
                 }
                 NetworkEvent::Frame(epoch, frame) if active == Some(epoch) => {
@@ -131,6 +164,7 @@ pub fn run(
                         }
                         Some("error") => {
                             active = None;
+                            control.connected.store(false, Ordering::Relaxed);
                         }
                         _ => {}
                     }
@@ -211,12 +245,12 @@ fn network_loop(
     identity: DeviceIdentity,
     generation: String,
     command_seq: Arc<AtomicI64>,
-    stopped: Arc<AtomicBool>,
+    control: Arc<RemoteControl>,
     events: SyncSender<NetworkEvent>,
     outgoing: Receiver<NetworkSend>,
 ) {
     let mut epoch = 0;
-    while !stopped.load(Ordering::Relaxed) {
+    while !control.stopped.load(Ordering::Relaxed) {
         epoch += 1;
         // Drop stale queued frames before announcing a new transport epoch.
         for _ in outgoing.try_iter() {}
@@ -256,7 +290,7 @@ fn network_loop(
             ))?;
             set_timeouts(&mut socket, Duration::from_millis(50))?;
             let mut heartbeat = Instant::now();
-            while !stopped.load(Ordering::Relaxed) {
+            while !control.stopped.load(Ordering::Relaxed) {
                 for value in outgoing.try_iter().take(32) {
                     match value {
                         NetworkSend::Data(e, seq, payload) if e == epoch => {
@@ -300,6 +334,7 @@ fn network_loop(
             let _ = socket.close(None);
             Ok(())
         })();
+        control.connected.store(false, Ordering::Relaxed);
         if events.send(NetworkEvent::Offline(epoch)).is_err() {
             break;
         }
@@ -307,7 +342,7 @@ fn network_loop(
             eprintln!("{{\"code\":\"remote_transport_retry\"}}");
         }
         for _ in 0..50 {
-            if stopped.load(Ordering::Relaxed) {
+            if control.stopped.load(Ordering::Relaxed) {
                 return;
             }
             thread::sleep(Duration::from_millis(100));
@@ -318,6 +353,41 @@ fn network_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_shutdown_prevents_startup_and_clears_connectivity_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("remote.db");
+        let stopped = Arc::new(RemoteControl::default());
+        stopped.stopped.store(true, Ordering::Relaxed);
+        stopped.connected.store(true, Ordering::Relaxed);
+        assert!(
+            run_with_control(
+                PathBuf::from("missing-native"),
+                vec![],
+                database.clone(),
+                DeviceIdentity::generate(),
+                "invalid".into(),
+                stopped.clone()
+            )
+            .is_ok()
+        );
+        assert!(!database.exists());
+        assert!(!stopped.connected.load(Ordering::Relaxed));
+        let failed = Arc::new(RemoteControl::default());
+        assert!(
+            run_with_control(
+                PathBuf::from("missing-native"),
+                vec![],
+                database,
+                DeviceIdentity::generate(),
+                "invalid".into(),
+                failed.clone()
+            )
+            .is_err()
+        );
+        assert!(failed.stopped.load(Ordering::Relaxed));
+        assert!(!failed.connected.load(Ordering::Relaxed));
+    }
     #[test]
     fn transport_requires_tls_except_loopback_and_rejects_url_credentials() {
         assert!(validate_server("ws://127.0.0.1:3001/v3/remote/ws").is_ok());
