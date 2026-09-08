@@ -1,6 +1,17 @@
 # AgentHub Gateway API
 
-Device Gateway、任务中转与查询 API 的开发期实现。
+Device Gateway、原生 Remote 会话中转与查询 API。
+
+## 原生 Remote v3
+
+使用 Node.js 24+，设置 `AGENTHUB_REMOTE_DATABASE` 为独立 SQLite 内容数据库路径后启用。账户、设备继续使用既有存储；Remote 的命令、正文和游标持久化在该文件中。当前为单实例实现，目录须持久挂载并限制访问，不能在多个 Gateway 实例共享此文件。
+
+- `/v3/remote/ws`：已绑定设备使用 Ed25519 挑战签名连接，带 Host generation 和重放水位。
+- `GET /v3/remote/sessions`、`/sessions/:runner/:hub`：账户隔离的状态、原生绑定和命令回执。
+- `POST /v3/remote/runners/:runner/commands`：持久接受请求；HTTP 202 只表示排队，实际结果看 Runner 回执。
+- `GET /v3/remote/events`、`/stream`：持久事件分页与 SSE，支持游标重放。
+
+默认不再注册旧 v2 内存原型接口。现有 v1 账户/设备/只读采集保持独立；未设置内容数据库时 v3 不启用。原生集成测试 `test/remote-native.test.ts` 需设置 `AGENTHUB_TEST_RUNNER_BINARY` 和 `AGENTHUB_TEST_CODEX_BINARY`，会在临时工作目录运行两轮真实请求并重启 Gateway。
 
 ## 当前接口
 

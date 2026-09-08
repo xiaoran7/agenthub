@@ -1,6 +1,26 @@
 # AgentHub Runner
 
-本地只读 Session 元数据采集器。目前实现：
+本机执行与发现进程。新 Remote 通过长驻 Codex app-server 维护原生会话；旧只读采集独立保留。
+
+## 原生 Remote
+
+先完成原有设备绑定，在 Gateway 启用 `AGENTHUB_REMOTE_DATABASE`。使用已绑定的设备身份启动：
+
+```powershell
+cargo run -p agent-pulse-runner -- --identity <已绑定设备身份文件> remote-run `
+  --codex-binary <codex原生可执行文件> `
+  --workspace D:\Projects\Example `
+  --db <专用Remote数据库路径> `
+  --server wss://<Gateway域名>/v3/remote/ws
+```
+
+`--workspace` 可重复，仅允许明确授权目录。数据库保存正文、命令与原生 ID，绑定设备和 Gateway，不可跨设备/服务复用。WSS 为默认要求；本机测试可使用 `ws://127.0.0.1:3001/v3/remote/ws`。关闭网页不终止 Host；停止 Runner 会失去实时控制，下次必须显式恢复。
+
+`remote-host` 是同一原生 Host 的本地 JSONL 调试入口，不提供远程持久恢复。`remote-run` 提供持久命令去重、签名握手、断线重放与审批隔离。当前支持 Codex 创建、恢复、输入、审批和中断；不支持任意外部正在运行的 CLI attach。实测 CLI 版本和边界见 [可行性](../../docs/TECHNICAL_FEASIBILITY.md)。
+
+## 旧只读采集
+
+目前实现：
 
 - Claude 本地 Session JSONL 元数据发现
 - Claude 生命周期 Hook 标准化

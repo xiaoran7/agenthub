@@ -1,7 +1,6 @@
 # AgentHub Android
 
-独立 Kotlin + Jetpack Compose 只读客户端。它不是 WebView，也不包含 Runner 或任何
-Claude/OpenAI 登录凭据。
+独立 Kotlin + Jetpack Compose 客户端。默认远程入口消费 v3 原生会话，支持创建、续聊、审批、中断与恢复；旧只读监控保留。它不是 WebView，也不包含 Runner 或任何 Claude/OpenAI 登录凭据。
 
 ## 构建
 
@@ -34,8 +33,8 @@ App 中填写：
 
 ## 安全边界
 
-- 只调用设备、Session、时间线三个 GET 接口。
+- 旧监控调用设备、Session、时间线 GET；Remote 调用账户授权的 v3 查询和命令接口。
 - 远程 Gateway 只允许 HTTPS，明文 HTTP 仅允许回环主机。
 - Bearer 令牌用 Android Keystore AES-256-GCM 加密，配置禁止系统备份。
-- 不读取或保存 Agent Token、transcript、Prompt、代码、Diff、命令和完整路径。
-- 首版前台每 5 秒刷新；原生推送、后台任务、发布签名尚未接入。
+- 不读取 Provider Token 或本机 transcript。已接入 Remote 的正文、工具事件与授权目录从 Gateway 读取，仅在界面内存中聚合，不写本地正文数据库。
+- 旧监控前台每 5 秒刷新；Remote 状态每 1.5 秒、所选会话每 0.5 秒串行刷新。原生推送、后台任务、发布签名尚未接入。

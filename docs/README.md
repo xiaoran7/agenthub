@@ -1,13 +1,29 @@
-# Documentation Index
+# AgentHub 文档与迁移状态
 
-更新日期：2026-09-01 (v2.0.0-spec 重新定界)
+更新：2026-09-07。用户确认目标是多 Provider 的原生 Remote 接续体验，并授权先替换文档、再全面重构。规范描述目标，下面记录实际阶段，两者不可混用。
 
-- **入门与运行**：根 [`README.md`](../README.md)、桌面/Android/Runner 各自 README。
-- **系统架构与核心协议**：
-  - [`ARCHITECTURE.md`](ARCHITECTURE.md)：AgentHub 2.0 系统架构、多路复用 Event Bus、双层事件存储与状态分层模型。
-  - [`SYNC_PROTOCOL.md`](SYNC_PROTOCOL.md)：WebSocket 帧封装、ACK + Replay 滑动窗口重放与 Reconcile 协议。
-  - [`CAPABILITY_AND_LAUNCH_SPEC.md`](CAPABILITY_AND_LAUNCH_SPEC.md)：动态能力发现、Launch Profile 与会话级权限模型规范。
-- **产品与设计**：[`PRD.md`](PRD.md)、[`DESIGN_SYSTEM.md`](DESIGN_SYSTEM.md)、[`TECHNICAL_FEASIBILITY.md`](TECHNICAL_FEASIBILITY.md)。
-- **部署与设备验收**：[`DEPLOYMENT.md`](DEPLOYMENT.md)、[`ANDROID_VALIDATION.md`](ANDROID_VALIDATION.md)。
-- **持续记录**：[`CHANGELOG.md`](CHANGELOG.md)、[`PITFALLS.md`](PITFALLS.md)、[`MISC.md`](MISC.md)。
-- `M4_VALIDATION.md` 是历史里程碑证据，不是当前生产状态页。
+## 权威入口
+
+- [PRD](PRD.md)：产品体验、发现/恢复/连接语义、验收标准。
+- [架构](ARCHITECTURE.md)：Runner、Host、Gateway、客户端和迁移边界。
+- [同步协议](SYNC_PROTOCOL.md)：身份、命令账本、ACK、回放与多端。
+- [能力与接入](CAPABILITY_AND_LAUNCH_SPEC.md)：真实能力证据、会话配置与 UI 动作。
+- [可行性](TECHNICAL_FEASIBILITY.md)：官方来源、适配选择和待验证事项。
+- [设计系统](DESIGN_SYSTEM.md)、[部署](DEPLOYMENT.md)、[坑点](PITFALLS.md)、[历史变更](CHANGELOG.md)。
+- [M4 验收](M4_VALIDATION.md)、[Android 验收](ANDROID_VALIDATION.md) 仅作为各自旧阶段的证据，不证明新 Remote 已验收。
+
+## 迁移阶段
+
+| 阶段 | 范围 | 状态 |
+| --- | --- | --- |
+| R0 文档定界 | 原生 Remote 目标、接入语义、协议与旧边界替换 | 已替换并同步组件入口 |
+| R1 原生 Host | Codex 长时 app-server、真实 ID、恢复、审批、中断、命令去重 | 已实现；原生两轮交互、协议 fixture 验证通过 |
+| R2 可靠远程链路 | 设备鉴权、持久 Registry/账本、双向日志、内容存储、重连对齐 | 单实例 SQLite 链路已实现；真实 Gateway 重启重放验证通过；多实例/压力验收待做 |
+| R3 多端统一 | Web/桌面/Android 消费同一会话，Workspace-first | Web 创建/两轮续聊/刷新/Host 重启恢复/离线禁控及 390px、1440px 布局验证通过；桌面共享 UI 与 IPC 已接入；Android 单元测试与 lint 通过，桌面/手机实际安装运行待验收 |
+| R4 Provider 扩展与验收 | Claude 长时控制，其余按证据开放，真机/生产 | 待实施 |
+
+## 可复用现状
+
+已有账户、设备绑定与签名、v1 元数据 Outbox/数据库、发现适配器、桌面本地正文渲染与真实 CLI 启动。旧模拟 Router 与硬编码能力表已移除，v2 内存原型仅允许测试显式注入，生产默认入口不注册。当前原生 Remote 使用独立 v3 链路。
+
+本轮开工前 README、AGENTS 和 CHANGELOG 有其他会话未提交的文档精简；本轮保留这些改动，提交只纳入本轮所属内容。部署/发版状态留在各自证据中。

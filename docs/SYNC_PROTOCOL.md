@@ -1,333 +1,43 @@
-# AgentHub 多路复用事件总线与同步协议规范 (Sync Protocol v2.0)
+# AgentHub 远程会话协议
 
-> **版本**：2.0.0-spec  
-> **更新日期**：2026-09-01  
-> **协议地位**：AgentHub Runner 与 Server 之间单长连接多路复用通信的权威二进制/JSON 格式契约。
+更新：2026-09-07。本文定义目标控制协议；当前 v1 元数据同步独立兼容。旧 v2 示例不能证明本规范已实现。
 
----
+## 传输与身份
 
-## 1. 协议核心设计与连接模型
+Runner 主动建立单条 WSS 多路复用连接。升级前/握手时校验已绑定设备身份、签名、时效与撤销状态；owner 由 Gateway 解析，不接受客户端自报归属。Web/桌面/Android 经账户鉴权使用同一命令与订阅接口。
 
-1. **单物理连接多路复用**：Runner 节点与云端 Server 之间维持且仅维持**一条 WebSocket 物理长连接**。
-2. **统一 Frame Envelope**：所有控制命令（Commands）、业务事件（Events）、流式 Token（Stream Deltas）、状态确认（ACKs）及心跳巡检均封装在标准帧中。
-3. **强制 ACK + Replay**：引入基于有序序列号（`seq`）与滑动窗口的双向确认和断线自动重放协议，确保零丢失。
-4. **版本协商（Version Negotiation）**：连接握手阶段显式协商协议版本与能力集，向后兼容。
+握手协商 protocol version、feature flags、connection epoch、双方最后连续持久接收水位及重放范围。无共同版本则拒绝；新连接不能以未经校验的 runner_id 覆盖别人的连接。替换连接使用 generation fencing，旧连接 close 回调不能注销新连接。
 
----
+## Envelope 与序列
 
-## 2. 帧封装结构（Frame Envelope）
+保留 ver/frame_id/type/hub_session_id/cmd_id/timestamp/payload 概念。数据帧 event/cmd/cmd_ack 使用按设备与方向持久递增的 seq；ACK/握手/心跳为控制帧，不占可重放数据序列，避免 ACK 风暴和虚假缺口。下一代协议变更必须使用显式版本或协商 feature，不能默默改变旧 v2 seq 语义。
 
-所有帧均为 UTF-8 编码的 JSON 对象（二进制传输模式预留），通用结构如下：
+ack_seq=N 表示 <=N 的数据已连续持久接收，而非“见过的最大序号”。重复 seq 不重复执行/聚合；收到 gap 暂停推进水位并请求补齐。ACK 不得超过已发送水位。seq 相同但 payload 不同视为协议冲突。
 
-```typescript
-export interface FrameEnvelope<T = any> {
-  /** 协议大版本号，当前为 2 */
-  ver: 2;
-  /** 帧唯一 ID (UUID v4 或 ULID) */
-  frame_id: string;
-  /** 帧类型 */
-  type: 
-    | "handshake"
-    | "handshake_ack"
-    | "heartbeat"
-    | "heartbeat_ack"
-    | "event"
-    | "cmd"
-    | "cmd_ack"
-    | "ack"
-    | "reconcile_check"
-    | "reconcile_sync"
-    | "presence";
-  /** 发送方递增的全局序列号 (1, 2, 3...) */
-  seq: number;
-  /** 发送方当前已确认接收到的对方最大连续序列号 */
-  ack_seq: number;
-  /** 多路复用会话包装 ID (Runner 级帧此字段为 null) */
-  hub_session_id?: string | null;
-  /** 客户端发起的幂等命令追踪 ID (仅在 cmd / cmd_ack / 关联 event 中出现) */
-  cmd_id?: string | null;
-  /** 发送时间戳 (Unix 毫秒) */
-  timestamp: number;
-  /** 具体业务负载 */
-  payload: T;
-}
-```
+出站记录在发送前落盘，事务提交接收记录后才 ACK。窗口满采用背压/磁盘排队，不丢弃未确认数据。超出保留范围明确返回 snapshot_required；快照恢复状态，持久日志提供历史，不伪称恢复了已丢正文。
 
----
+## 命令与结果
 
-## 3. 连接握手与版本协商机制 (Handshake)
+每个控制请求携带 client_cmd_id（线上 Envelope 的 cmd_id）。其作用域是 owner + runner，同 ID、同目标和同负载返回同一收据；同 ID 不同负载返回 conflict。持久账本不得因进程重启丢失去重信息。
 
-### 3.1 握手请求 (`handshake`)
+动作：launch_session、resume_session、attach_session、send_prompt、resolve_approval、interrupt_turn。discover/import_history 是只读发现/历史同步动作，绝不暗中启动进程。现有 import_native_session 在迁移期只能表达历史关联，不能代表 attach。
 
-Runner 连接建立后必须发送的第一帧：
+命令状态：queued → accepted → completed 或 rejected/failed/indeterminate。accepted 表示原生协议接受，并不代表任务完成。HTTP 202 或 WS 已发送也不代表 accepted。超时之后禁止自动重复产生副作用；先通过原生状态与账本对齐。
 
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8A001",
-  "type": "handshake",
-  "seq": 1,
-  "ack_seq": 0,
-  "timestamp": 1725148800000,
-  "payload": {
-    "runner_id": "run_01J6XYZ...",
-    "client_version": "2.0.0",
-    "min_supported_protocol": 1,
-    "max_supported_protocol": 2,
-    "last_seen_server_seq": 450,
-    "capabilities": {
-      "providers": ["claude_code", "codex_app_server"],
-      "supports_stream_compression": true,
-      "max_replay_window": 2000
-    }
-  }
-}
-```
+审批必须关联 hub_session_id、Host generation、turn_id 和原始 request_id。过期、跨会话、重复冲突决策拒绝；成功写入回复后仍等待原生后续事件更新执行态。interrupt 同理，不能立即把本地状态改成 idle。
 
-### 3.2 握手确认 (`handshake_ack`)
+## 事件与内容
 
-Server 验证后应答：
+统一事件包含 session_bound、session_control_changed、execution_state_changed、turn_started、message_delta、message_completed、tool_started、tool_completed、approval_requested、approval_resolved、turn_completed、provider_error。每条有稳定 event_id、原生关联 ID 与 Provider 消息来源。
 
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8A002",
-  "type": "handshake_ack",
-  "seq": 1,
-  "ack_seq": 1,
-  "timestamp": 1725148800050,
-  "payload": {
-    "status": "accepted",
-    "negotiated_protocol": 2,
-    "server_version": "2.0.0",
-    "last_seen_runner_seq": 1024,
-    "replay_from_seq": 451,
-    "active_hub_sessions": ["hub_sess_01", "hub_sess_02"]
-  }
-}
-```
+Provider raw payload 与统一事件并存，未知事件保存且不猜测状态。Stream delta 使用 turn/item/block 身份定位，不能只按数组尾部追加。重复帧不重复追加文字；原生最终 item 用于收敛结果。工具输入和输出进入授权内容存储，不进入日志。
 
-若 `replay_from_seq` 小于 Server 当前最新序列号，Server 立即启动滑动窗口重放逻辑。
+## Reconcile 与多端
 
----
+重连和定期巡检交换原生 ID、Host generation、控制状态、当前 turn、待审批集合与最后事件水位。以 Agent/Host 可验证证据收敛；找不到进程标记 lost/unknown，不能根据服务器历史重造 running。
 
-## 4. 可靠传输与滑动窗口重放协议 (ACK + Replay)
+多端先读取 snapshot + cursor，再订阅 cursor 之后的事件。重复投递可接受，业务结果必须幂等。零订阅者不停止 Runner；慢客户端采用有界缓冲并要求重取快照，不能拖住 Agent 读循环。
 
-```mermaid
-stateDiagram-v2
-    [*] --> Connected
-    Connected --> OutboxBuffering : Send Frame (seq: N)
-    OutboxBuffering --> OutboxEvicted : Receive ACK (ack_seq >= N)
-    Connected --> Disconnected : Network Drop
-    Disconnected --> Reconnecting : Auto-Retry (Backoff + Jitter)
-    Reconnecting --> HandshakeWithGap : Connected, Send Handshake(last_seen_seq)
-    HandshakeWithGap --> Replaying : Server/Runner Detects Gap
-    Replaying --> NormalEventLoop : Gap Replayed & ACKed
-    NormalEventLoop --> Connected
-```
+## 验证
 
-### 4.1 确认与重放规则
-1. **累计确认（Cumulative ACK）**：`ack_seq = N` 表示接收方已完整无误接收到序列号 `<= N` 的所有帧。
-2. **滑动窗口缓冲（Outbox Buffer）**：双方均在内存及本地磁盘（SQLite/WAL）中保留最近 2000 个未被对方 ACK 的帧。
-3. **断线重放（Replay Trigger）**：
-   - 握手阶段比对双方 `last_seen_seq`。
-   - 若发送方最新序列号大于对方 `last_seen_seq`，按顺序重放差额帧（Frame 中的 `is_replay: true` 标记可选置位）。
-   - 接收方根据 `seq` 严格去重，确保数据流绝无重复与遗漏。
-
----
-
-## 5. 控制命令集 (Commands) 与幂等处理
-
-所有控制命令均通过 `type: "cmd"` 发送，且强制携带 `cmd_id`。
-
-### 5.1 启动会话 (`launch_session`)
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8B001",
-  "type": "cmd",
-  "seq": 1025,
-  "ack_seq": 451,
-  "hub_session_id": "hub_sess_999",
-  "cmd_id": "cmd_create_001",
-  "timestamp": 1725148805000,
-  "payload": {
-    "action": "launch_session",
-    "launch_profile": {
-      "workspace_path": "d:/ClaudeSpace/Project/solum",
-      "provider": "claude_code",
-      "model": {
-        "model_id": "claude-3-7-sonnet-20250219",
-        "reasoning": { "effort_level": "high", "budget_tokens": 16000 }
-      },
-      "permissions": { "approval_mode": "ask_all_edits" }
-    }
-  }
-}
-```
-
-### 5.2 提交用户 Prompt (`send_prompt`)
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8B002",
-  "type": "cmd",
-  "seq": 1026,
-  "ack_seq": 451,
-  "hub_session_id": "hub_sess_999",
-  "cmd_id": "cmd_prompt_002",
-  "timestamp": 1725148810000,
-  "payload": {
-    "action": "send_prompt",
-    "text": "优化 WebSocket 帧的序列化开销",
-    "client_turn_id": "turn_1"
-  }
-}
-```
-
-### 5.3 审批工具执行 (`resolve_approval`)
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8B003",
-  "type": "cmd",
-  "seq": 1027,
-  "ack_seq": 451,
-  "hub_session_id": "hub_sess_999",
-  "cmd_id": "cmd_appr_003",
-  "timestamp": 1725148815000,
-  "payload": {
-    "action": "resolve_approval",
-    "approval_id": "appr_01J8...",
-    "decision": "approved", // "approved" | "rejected"
-    "custom_feedback": ""
-  }
-}
-```
-
-### 5.4 中断执行 (`interrupt_turn`)
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8B004",
-  "type": "cmd",
-  "seq": 1028,
-  "ack_seq": 451,
-  "hub_session_id": "hub_sess_999",
-  "cmd_id": "cmd_stop_004",
-  "timestamp": 1725148820000,
-  "payload": {
-    "action": "interrupt_turn",
-    "reason": "user_cancelled"
-  }
-}
-```
-
-### 5.5 导入本地原生会话 (`import_native_session`)
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8B005",
-  "type": "cmd",
-  "seq": 1029,
-  "ack_seq": 451,
-  "hub_session_id": "hub_sess_import_001",
-  "cmd_id": "cmd_import_005",
-  "timestamp": 1725148825000,
-  "payload": {
-    "action": "import_native_session",
-    "provider": "claude_code",
-    "native_session_id": "d0f8a8b1-...",
-    "workspace_path": "d:/ClaudeSpace/Project/solum"
-  }
-}
-```
-
----
-
-## 6. 事件集 (Events) 与流式输出优化
-
-所有 Agent 状态变化与内容输出均通过 `type: "event"` 由 Runner 上报。
-
-### 6.1 高频流式分块 (`stream_delta`)
-
-为了平衡 60fps 实时流畅度与网络 I/O 开销，Runner 将 50ms 窗口内的 Token 聚合为一个 Delta 帧：
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8E001",
-  "type": "event",
-  "seq": 2048,
-  "ack_seq": 1029,
-  "hub_session_id": "hub_sess_999",
-  "timestamp": 1725148830000,
-  "payload": {
-    "event_type": "stream_delta",
-    "turn_id": "turn_1",
-    "block_index": 0,
-    "delta_type": "text | thinking | tool_input",
-    "delta_content": "正在对网络帧做性能分析..."
-  }
-}
-```
-
-### 6.2 状态流转事件 (`session_state_changed`)
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8E002",
-  "type": "event",
-  "seq": 2049,
-  "ack_seq": 1029,
-  "hub_session_id": "hub_sess_999",
-  "timestamp": 1725148831000,
-  "payload": {
-    "event_type": "session_state_changed",
-    "previous_state": "running",
-    "current_state": "awaiting_permission",
-    "reason": {
-      "waiting_for": "tool_approval",
-      "approval_id": "appr_01J8...",
-      "tool_name": "Bash",
-      "tool_params": { "command": "git commit -m 'feat: sync'" }
-    }
-  }
-}
-```
-
----
-
-## 7. 状态校验巡检协议 (Reconcile Protocol)
-
-Runner 默认每 30 秒向 Server 发送 `reconcile_check` 帧，比对活跃会话状态摘要：
-
-```json
-{
-  "ver": 2,
-  "frame_id": "frm_01J8R001",
-  "type": "reconcile_check",
-  "seq": 2100,
-  "ack_seq": 1035,
-  "timestamp": 1725148860000,
-  "payload": {
-    "runner_id": "run_01J6XYZ...",
-    "sessions_digest": [
-      {
-        "hub_session_id": "hub_sess_999",
-        "execution_state": "idle",
-        "current_turn": 3,
-        "state_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      }
-    ]
-  }
-}
-```
-
-若 Server 检测到状态指纹不匹配，返回 `reconcile_sync` 帧要求全量校准对应会话的最新快照。
+必须测试乱序、重复、非法 ACK、重连、窗口满、进程重启、同 ID 异负载、审批跨代际、双客户端竞态与跨账户拒绝。真实 WebSocket 加模拟事件只算传输测试，不是原生 Agent Remote 验收。

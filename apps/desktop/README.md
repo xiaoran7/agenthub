@@ -2,6 +2,8 @@
 
 Windows Tauri 桌面客户端。用户通过现有 AgentHub 邮箱账号注册或登录后，应用会自动：
 
+默认入口已改为 Remote，会话 UI 与 Web 共用；通过 Tauri IPC 使用安全存储中的登录 Cookie 请求 Gateway，不把 Cookie 交给前端。新入口支持同一原生会话的输入、审批、中断与恢复。需要先启用 Gateway v3 并启动独立 `remote-run`，桌面内嵌的旧采集引擎尚不自动托管 Remote Host。设备与账户按钮保留下面描述的旧管理界面。
+
 1. 创建或加载本机 Ed25519 设备身份。
 2. 使用当前登录会话完成设备登记，不展示一次性配对码。
 3. 启动内嵌 Runner，发现 Claude Code、Codex、Antigravity 与 Grok Build Session 元数据。
