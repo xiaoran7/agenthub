@@ -157,7 +157,7 @@ pub struct LocalSessionContext {
 }
 
 impl LocalSessionContext {
-    fn new(agent_type: crate::domain::AgentType, agent_session_id: String) -> Self {
+    pub fn new(agent_type: crate::domain::AgentType, agent_session_id: String) -> Self {
         Self {
             agent_type,
             agent_session_id,

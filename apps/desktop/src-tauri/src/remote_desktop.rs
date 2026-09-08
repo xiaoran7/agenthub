@@ -51,17 +51,20 @@ pub(crate) fn get_host_client(state: &DesktopState) -> Option<LocalHostClient> {
     None
 }
 
+static LAUNCH_LOCK: Mutex<()> = Mutex::new(());
+
 pub(crate) fn ensure_host_client(
     state: &DesktopState,
     required_workspace: Option<&Path>,
 ) -> Result<LocalHostClient, DesktopError> {
-    let slot = state
-        .remote
-        .lock()
-        .map_err(|_| DesktopError::AgentFailed)?;
+    // 1. Fast-path: Host is running, check or dynamically authorize workspace without restart
+    {
+        let mut slot = state.remote.lock().map_err(|_| DesktopError::AgentFailed)?;
 
-    if let Some(handle) = slot.as_ref() {
-        if !handle.thread.is_finished() && !handle.failed.load(Ordering::Relaxed) {
+        if let Some(handle) = slot.as_mut()
+            && !handle.thread.is_finished()
+            && !handle.failed.load(Ordering::Relaxed)
+        {
             if let Some(workspace) = required_workspace {
                 let canonical = workspace
                     .canonicalize()
@@ -74,27 +77,70 @@ pub(crate) fn ensure_host_client(
                 {
                     return Ok(handle.client.clone());
                 }
-                let mut new_workspaces = handle.profile.workspace_paths.clone();
-                if new_workspaces.len() < 32 && !new_workspaces.contains(&canonical) {
-                    new_workspaces.push(canonical);
+                // Dynamically authorize new workspace in running host - NEVER stop or kill active sessions!
+                match handle.client.authorize_workspace(canonical.clone()) {
+                    Ok(authorized) => {
+                        if !handle.profile.workspace_paths.contains(&authorized) {
+                            handle.profile.workspace_paths.push(authorized);
+                            let config = read_config(&state.data_dir).ok();
+                            let identity = load_or_create_identity(&state.data_dir)
+                                .map_err(|_| DesktopError::Identity)?;
+                            let (_, profile_path) = match config
+                                .as_ref()
+                                .map(|c| c.server_url.as_str())
+                            {
+                                Some(url) => {
+                                    scoped_paths(&state.data_dir, url, identity.device_id())
+                                }
+                                None => local_scoped_paths(&state.data_dir, identity.device_id()),
+                            };
+                            let _ = fs::write(
+                                &profile_path,
+                                serde_json::to_vec(&handle.profile).unwrap_or_default(),
+                            );
+                        }
+                        return Ok(handle.client.clone());
+                    }
+                    Err(_) => return Err(DesktopError::AgentFailed),
                 }
-                handle.control.stopped.store(true, Ordering::Relaxed);
-                drop(slot);
-                return start_host_with_workspaces(state, new_workspaces);
             } else {
                 return Ok(handle.client.clone());
             }
         }
     }
-    drop(slot);
 
-    let mut workspaces = Vec::new();
-    if let Some(workspace) = required_workspace {
-        if let Ok(canonical) = workspace.canonicalize() {
-            if canonical.is_dir() {
-                workspaces.push(canonical);
+    // 2. Slow-path: serialize host launches with LAUNCH_LOCK to prevent double-spawn races
+    let _launch_guard = LAUNCH_LOCK.lock().map_err(|_| DesktopError::AgentFailed)?;
+
+    // Re-check after acquiring launch lock
+    {
+        let slot = state.remote.lock().map_err(|_| DesktopError::AgentFailed)?;
+        if let Some(handle) = slot.as_ref()
+            && !handle.thread.is_finished()
+            && !handle.failed.load(Ordering::Relaxed)
+        {
+            if let Some(workspace) = required_workspace {
+                let canonical = workspace
+                    .canonicalize()
+                    .unwrap_or_else(|_| workspace.to_path_buf());
+                if handle.profile.workspace_paths.contains(&canonical) {
+                    return Ok(handle.client.clone());
+                }
+                if handle.client.authorize_workspace(canonical).is_ok() {
+                    return Ok(handle.client.clone());
+                }
+            } else {
+                return Ok(handle.client.clone());
             }
         }
+    }
+
+    let mut workspaces = Vec::new();
+    if let Some(workspace) = required_workspace
+        && let Ok(canonical) = workspace.canonicalize()
+        && canonical.is_dir()
+    {
+        workspaces.push(canonical);
     }
     start_host_with_workspaces(state, workspaces)
 }
@@ -118,22 +164,21 @@ fn start_host_with_workspaces(
         None => local_scoped_paths(data_dir, identity.device_id()),
     };
 
-    if let Ok(bytes) = fs::read(&profile_path) {
-        if let Ok(saved_profile) = serde_json::from_slice::<RemoteProfile>(&bytes) {
-            for path in saved_profile.workspace_paths {
-                if workspace_paths.len() < 32 && !workspace_paths.contains(&path) && path.is_dir() {
-                    workspace_paths.push(path);
-                }
+    if let Ok(bytes) = fs::read(&profile_path)
+        && let Ok(saved_profile) = serde_json::from_slice::<RemoteProfile>(&bytes)
+    {
+        for path in saved_profile.workspace_paths {
+            if workspace_paths.len() < 32 && !workspace_paths.contains(&path) && path.is_dir() {
+                workspace_paths.push(path);
             }
         }
     }
 
-    if workspace_paths.is_empty() {
-        if let Ok(cwd) = std::env::current_dir().and_then(|p| p.canonicalize()) {
-            if cwd.is_dir() {
-                workspace_paths.push(cwd);
-            }
-        }
+    if workspace_paths.is_empty()
+        && let Ok(cwd) = std::env::current_dir().and_then(|p| p.canonicalize())
+        && cwd.is_dir()
+    {
+        workspace_paths.push(cwd);
     }
 
     let profile = RemoteProfile {
@@ -149,11 +194,7 @@ fn start_host_with_workspaces(
         Some(url) => {
             let mut u = Url::parse(url).ok();
             if let Some(ref mut u) = u {
-                let scheme = if u.scheme() == "https" {
-                    "wss"
-                } else {
-                    "ws"
-                };
+                let scheme = if u.scheme() == "https" { "wss" } else { "ws" };
                 let _ = u.set_scheme(scheme);
                 u.set_path("/v3/remote/ws");
             }
@@ -185,10 +226,7 @@ fn start_host_with_workspaces(
         worker_failed.store(result.is_err(), Ordering::Relaxed);
     });
 
-    let mut slot = state
-        .remote
-        .lock()
-        .map_err(|_| DesktopError::AgentFailed)?;
+    let mut slot = state.remote.lock().map_err(|_| DesktopError::AgentFailed)?;
     *slot = Some(RemoteHandle {
         control,
         thread: worker,
@@ -363,5 +401,16 @@ mod tests {
         assert_ne!(a, scoped_paths(dir, "https://one.test", "b"));
         assert_ne!(a, scoped_paths(dir, "https://two.test", "a"));
         assert!(a.0.starts_with(dir));
+    }
+
+    #[test]
+    fn offline_scoped_paths_are_deterministic_and_distinct_per_device() {
+        let dir = Path::new("test-dir");
+        let p1 = local_scoped_paths(dir, "dev-1");
+        let p2 = local_scoped_paths(dir, "dev-1");
+        let p3 = local_scoped_paths(dir, "dev-2");
+        assert_eq!(p1, p2);
+        assert_ne!(p1, p3);
+        assert!(p1.0.starts_with(dir));
     }
 }

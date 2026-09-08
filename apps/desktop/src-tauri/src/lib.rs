@@ -293,24 +293,36 @@ async fn restore_session(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<Option<Value>, String> {
+    let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
     let config = match read_config(&state.data_dir) {
         Ok(config) => config,
-        Err(DesktopError::NotAuthenticated) => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(_) => {
+            return Ok(Some(
+                offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string())?,
+            ));
+        }
     };
     let cookie = match load_cookie(&config.server_url) {
         Ok(cookie) => cookie,
-        Err(DesktopError::NotAuthenticated) => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(_) => {
+            return Ok(Some(
+                offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string())?,
+            ));
+        }
     };
-    let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
-    ensure_device_bound(&config.server_url, &cookie, &identity)
-        .map_err(|error| error.to_string())?;
-    start_engine(&state, &config.server_url, &identity).map_err(|error| error.to_string())?;
-    let mut snapshot = dashboard_snapshot(&config.server_url, &cookie, &identity, &state)
-        .map_err(|error| error.to_string())?;
-    snapshot["sync_running"] = Value::Bool(true);
-    start_dashboard_realtime(&state, &app).map_err(|error| error.to_string())?;
+
+    let online = ensure_device_bound(&config.server_url, &cookie, &identity).is_ok();
+    if online {
+        let _ = start_engine(&state, &config.server_url, &identity);
+        let _ = start_dashboard_realtime(&state, &app);
+    }
+
+    let mut snapshot = match dashboard_snapshot(&config.server_url, &cookie, &identity, &state) {
+        Ok(s) => s,
+        Err(_) => offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string())?,
+    };
+    snapshot["sync_running"] = Value::Bool(online);
+    snapshot["realtime_connected"] = Value::Bool(online);
     Ok(Some(snapshot))
 }
 
@@ -347,11 +359,23 @@ async fn remote_gateway_request(
 
 #[tauri::command]
 async fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, String> {
-    let config = read_config(&state.data_dir).map_err(|error| error.to_string())?;
-    let cookie = load_cookie(&config.server_url).map_err(|error| error.to_string())?;
     let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
-    dashboard_snapshot(&config.server_url, &cookie, &identity, &state)
-        .map_err(|error| error.to_string())
+    let config = match read_config(&state.data_dir) {
+        Ok(c) => c,
+        Err(_) => {
+            return offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string());
+        }
+    };
+    let cookie = match load_cookie(&config.server_url) {
+        Ok(c) => c,
+        Err(_) => {
+            return offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string());
+        }
+    };
+    match dashboard_snapshot(&config.server_url, &cookie, &identity, &state) {
+        Ok(s) => Ok(s),
+        Err(_) => offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -485,6 +509,29 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                 "source": "agent"
             }));
         }
+        if agent == AgentType::Codex
+            && let Some(client) = remote_desktop::get_host_client(state)
+            && let Ok(val) = client.query_models()
+            && let Some(arr) = val.get("data").and_then(Value::as_array)
+        {
+            for item in arr {
+                let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                if !id.is_empty() && !seen_families.contains(&model_family(id)) {
+                    seen_families.insert(model_family(id));
+                    let label = item
+                        .get("displayName")
+                        .or_else(|| item.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(id);
+                    models.push(json!({
+                        "value": id,
+                        "label": label,
+                        "desc": "Codex 官方实时模型",
+                        "source": "native_host"
+                    }));
+                }
+            }
+        }
         for (value, label, desc) in builtin_model_catalog(agent) {
             if seen_families.contains(&model_family(value)) {
                 continue;
@@ -571,10 +618,7 @@ async fn send_session_message(
     let _ = on_event.send(SessionTurnEvent::Started);
 
     let client = if input.agent_type == AgentType::Codex {
-        Some(
-            remote_desktop::ensure_host_client(&state, None)
-                .map_err(|e| e.to_string())?,
-        )
+        Some(remote_desktop::ensure_host_client(&state, None).map_err(|e| e.to_string())?)
     } else {
         None
     };
@@ -654,7 +698,9 @@ fn launch_codex_session_with_client(
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
         .ok_or(DesktopError::InvalidAction)?;
-    let cwd = cwd.canonicalize().map_err(|_| DesktopError::InvalidAction)?;
+    let cwd = cwd
+        .canonicalize()
+        .map_err(|_| DesktopError::InvalidAction)?;
 
     let (sub, rx) = client.subscribe(256);
 
@@ -754,12 +800,10 @@ fn launch_codex_session_with_client(
                             });
                         }
                         "turn/completed" => {
-                            if full_response.trim().is_empty() {
-                                if let Some(text) =
-                                    event.raw["params"]["turn"]["output"].as_str()
-                                {
-                                    full_response = text.to_owned();
-                                }
+                            if full_response.trim().is_empty()
+                                && let Some(text) = event.raw["params"]["turn"]["output"].as_str()
+                            {
+                                full_response = text.to_owned();
                             }
                             let _ = on_event.send(SessionTurnEvent::AssistantMessage {
                                 text: full_response.clone(),
@@ -860,9 +904,7 @@ fn send_codex_message_with_client(
         client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
         hub_session_id: hub_session_id.clone(),
         host_generation: Some(host_generation.clone()),
-        command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
-            text: prompt,
-        },
+        command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt { text: prompt },
     };
 
     let send_receipt = client
@@ -908,12 +950,10 @@ fn send_codex_message_with_client(
                             });
                         }
                         "turn/completed" => {
-                            if full_response.trim().is_empty() {
-                                if let Some(text) =
-                                    event.raw["params"]["turn"]["output"].as_str()
-                                {
-                                    full_response = text.to_owned();
-                                }
+                            if full_response.trim().is_empty()
+                                && let Some(text) = event.raw["params"]["turn"]["output"].as_str()
+                            {
+                                full_response = text.to_owned();
                             }
                             let _ = on_event.send(SessionTurnEvent::AssistantMessage {
                                 text: full_response.clone(),
@@ -942,12 +982,9 @@ fn send_codex_message_with_client(
 }
 
 fn find_codex_session_cwd(session_id: &str) -> Option<PathBuf> {
-    let Some(home) = std::env::var_os("USERPROFILE")
+    let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-    else {
-        return None;
-    };
+        .map(PathBuf::from)?;
     let codex_dir = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".codex"));
@@ -956,10 +993,11 @@ fn find_codex_session_cwd(session_id: &str) -> Option<PathBuf> {
         let mut sqlite_files = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("state_") && name.ends_with(".sqlite") {
-                    sqlite_files.push(path);
-                }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && name.starts_with("state_")
+                && name.ends_with(".sqlite")
+            {
+                sqlite_files.push(path);
             }
         }
         sqlite_files.sort();
@@ -1069,25 +1107,21 @@ fn cancel_session_turn(
     if let Some(cancelled) = cancelled {
         cancelled.store(true, Ordering::Relaxed);
     }
-    if input.agent_type == AgentType::Codex {
-        if let Some(client) = remote_desktop::get_host_client(&state) {
-            if let Ok(sessions) = client.query_sessions() {
-                if let Some(binding) = sessions
-                    .iter()
-                    .find(|s| s.provider_session_id == input.agent_session_id)
-                {
-                    if let Ok(generation) = client.query_generation() {
-                        let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
-                            client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
-                            hub_session_id: binding.hub_session_id.clone(),
-                            host_generation: Some(generation),
-                            command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
-                        };
-                        let _ = client.execute(interrupt_cmd);
-                    }
-                }
-            }
-        }
+    if input.agent_type == AgentType::Codex
+        && let Some(client) = remote_desktop::get_host_client(&state)
+        && let Ok(sessions) = client.query_sessions()
+        && let Some(binding) = sessions
+            .iter()
+            .find(|s| s.provider_session_id == input.agent_session_id)
+        && let Ok(generation) = client.query_generation()
+    {
+        let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+            client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+            hub_session_id: binding.hub_session_id.clone(),
+            host_generation: Some(generation),
+            command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
+        };
+        let _ = client.execute(interrupt_cmd);
     }
     Ok(json!({ "cancelled": true }))
 }
@@ -1687,6 +1721,92 @@ fn dashboard_snapshot(
         "sync_running": running,
         "realtime_connected": realtime_connected,
         "server_url": server_url,
+        "preferences": preferences_json(&desktop_config)
+    }))
+}
+
+fn offline_dashboard_snapshot(
+    identity: &DeviceIdentity,
+    state: &DesktopState,
+) -> Result<Value, DesktopError> {
+    let desktop_config = read_config(&state.data_dir).unwrap_or(DesktopConfig {
+        server_url: DEFAULT_SERVER_URL.to_owned(),
+        refresh_interval_seconds: default_refresh_interval_seconds(),
+        claude_binary: default_claude_binary(),
+        codex_binary: default_codex_binary(),
+        grok_binary: default_grok_binary(),
+        archived_sessions: Vec::new(),
+    });
+    let outbox_path = state.data_dir.join("outbox.sqlite");
+    let (stats, local_sessions, claude_health, codex_health, antigravity_health, grok_health) =
+        if let Ok(outbox) = Outbox::open(&outbox_path) {
+            (
+                outbox
+                    .stats()
+                    .unwrap_or(agent_pulse_runner::outbox::OutboxStats {
+                        pending_events: 0,
+                        session_snapshots: 0,
+                    }),
+                outbox.snapshots().unwrap_or_default(),
+                outbox.adapter_health(AgentType::ClaudeCode).ok().flatten(),
+                outbox.adapter_health(AgentType::Codex).ok().flatten(),
+                outbox.adapter_health(AgentType::Antigravity).ok().flatten(),
+                outbox.adapter_health(AgentType::GrokBuild).ok().flatten(),
+            )
+        } else {
+            (
+                agent_pulse_runner::outbox::OutboxStats {
+                    pending_events: 0,
+                    session_snapshots: 0,
+                },
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+
+    let local_contexts = local_session_contexts(state);
+    let empty_remote = json!([]);
+    let sessions = merge_dashboard_sessions(
+        &empty_remote,
+        &local_sessions,
+        &desktop_config.archived_sessions,
+        identity.device_id(),
+        &local_contexts,
+    );
+
+    Ok(json!({
+        "account": Value::Null,
+        "devices": [
+            {
+                "device_id": identity.device_id(),
+                "name": machine_name(),
+                "online": true,
+                "revoked": false
+            }
+        ],
+        "sessions": sessions,
+        "device": {
+            "device_id": identity.device_id(),
+            "name": machine_name()
+        },
+        "local": {
+            "pending_events": stats.pending_events,
+            "session_count": local_sessions.len(),
+            "sources": [
+                local_source_summary(AgentType::ClaudeCode, &local_sessions, claude_health),
+                local_source_summary(AgentType::Codex, &local_sessions, codex_health),
+                local_source_summary(AgentType::Antigravity, &local_sessions, antigravity_health),
+                local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health)
+            ],
+            "memory": local_memory_summary(),
+            "refreshed_at": chrono::Utc::now()
+        },
+        "sync_running": false,
+        "realtime_connected": false,
+        "server_url": desktop_config.server_url,
         "preferences": preferences_json(&desktop_config)
     }))
 }
@@ -2926,6 +3046,26 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
                 .map(|(key, context)| (key.clone(), context.clone())),
         ),
     }
+    if let Some(client) = remote_desktop::get_host_client(state)
+        && let Ok(discovery) = client.discover()
+        && let Some(candidates) = discovery.get("candidates").and_then(Value::as_array)
+    {
+        for item in candidates {
+            if let Some(id) = item.get("provider_session_id").and_then(Value::as_str) {
+                let key = session_context_key(AgentType::Codex, id);
+                let title = item
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                let entry = next
+                    .entry(key)
+                    .or_insert_with(|| LocalSessionContext::new(AgentType::Codex, id.to_owned()));
+                if title.is_some() {
+                    entry.title = title;
+                }
+            }
+        }
+    }
     match antigravity {
         Ok(contexts) => insert_session_contexts(&mut next, contexts),
         Err(_) => next.extend(
@@ -3716,5 +3856,27 @@ mod tests {
 
         assert_eq!(local["payload"]["runtime"]["title"], "Explicit local title");
         assert!(remote["payload"].get("runtime").is_none());
+    }
+
+    #[test]
+    fn offline_cold_start_snapshot_generates_valid_local_dashboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = DeviceIdentity::generate();
+        let state = DesktopState {
+            remote: Mutex::new(None),
+            data_dir: dir.path().to_path_buf(),
+            engine: Mutex::new(None),
+            realtime: Mutex::new(None),
+            active_turns: Mutex::new(HashMap::new()),
+            session_contexts: Mutex::new(SessionContextCache::default()),
+        };
+
+        let snapshot = offline_dashboard_snapshot(&identity, &state).unwrap();
+        assert_eq!(snapshot["account"], Value::Null);
+        assert_eq!(snapshot["sync_running"], false);
+        assert_eq!(snapshot["realtime_connected"], false);
+        assert_eq!(snapshot["device"]["device_id"], identity.device_id());
+        assert!(!snapshot["devices"].as_array().unwrap().is_empty());
+        assert!(snapshot["sessions"].is_array());
     }
 }

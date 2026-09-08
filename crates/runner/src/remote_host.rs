@@ -225,6 +225,23 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     pub fn sessions(&self) -> Vec<SessionBinding> {
         self.sessions.values().cloned().collect()
     }
+    pub fn workspaces(&self) -> &[PathBuf] {
+        &self.workspaces
+    }
+    pub fn authorize_workspace(&mut self, path: PathBuf) -> Result<PathBuf, NativeError> {
+        let canonical = path
+            .canonicalize()
+            .ok()
+            .filter(|p| p.is_dir())
+            .ok_or_else(|| NativeError::rejected("workspace_unavailable"))?;
+        if !self.workspaces.contains(&canonical) {
+            if self.workspaces.len() >= 32 {
+                return Err(NativeError::rejected("workspace_limit_exceeded"));
+            }
+            self.workspaces.push(canonical.clone());
+        }
+        Ok(canonical)
+    }
 
     pub(crate) fn restore_detached(&mut self, bindings: Vec<SessionBinding>) {
         for mut binding in bindings {

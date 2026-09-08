@@ -29,6 +29,13 @@ pub enum LocalHostCommand {
     QuerySessions {
         respond_to: SyncSender<Vec<SessionBinding>>,
     },
+    QueryWorkspaces {
+        respond_to: SyncSender<Vec<PathBuf>>,
+    },
+    AuthorizeWorkspace {
+        workspace: PathBuf,
+        respond_to: SyncSender<Result<PathBuf, String>>,
+    },
     QueryGeneration {
         respond_to: SyncSender<String>,
     },
@@ -85,6 +92,27 @@ impl LocalHostClient {
             .map_err(|_| "host_not_running".to_string())?;
         rx.recv_timeout(Duration::from_secs(10))
             .map_err(|_| "query_timeout".to_string())
+    }
+
+    pub fn query_workspaces(&self) -> Result<Vec<PathBuf>, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::QueryWorkspaces { respond_to: tx })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "query_timeout".to_string())
+    }
+
+    pub fn authorize_workspace(&self, workspace: PathBuf) -> Result<PathBuf, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::AuthorizeWorkspace {
+                workspace,
+                respond_to: tx,
+            })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "authorize_timeout".to_string())?
     }
 
     pub fn query_generation(&self) -> Result<String, String> {
@@ -272,27 +300,29 @@ pub fn run_with_local_control(
             bail!("native_host_lost");
         }
         // Broadcast events to local listeners if registered
-        if !polled_events.is_empty() {
-            if let Some(ref local) = local_channel {
-                if let Ok(mut listeners) = local.listeners.lock() {
-                    listeners.retain(|_, listener| {
-                        let mut alive = true;
-                        for event in &polled_events {
-                            if listener.try_send(event.clone()).is_err() {
-                                alive = false;
-                                break;
-                            }
-                        }
-                        alive
-                    });
+        if !polled_events.is_empty()
+            && let Some(ref local) = local_channel
+            && let Ok(mut listeners) = local.listeners.lock()
+        {
+            listeners.retain(|_, listener| {
+                let mut alive = true;
+                for event in &polled_events {
+                    if listener.try_send(event.clone()).is_err() {
+                        alive = false;
+                        break;
+                    }
                 }
-            }
+                alive
+            });
         }
         // Drain local commands
         if let Some(ref local) = local_channel {
             for _ in 0..32 {
                 match local.receiver.try_recv() {
-                    Ok(LocalHostCommand::Execute { command, respond_to }) => {
+                    Ok(LocalHostCommand::Execute {
+                        command,
+                        respond_to,
+                    }) => {
                         let result = durable
                             .handle_command(command)
                             .map(|(receipt, _)| receipt)
@@ -301,6 +331,19 @@ pub fn run_with_local_control(
                     }
                     Ok(LocalHostCommand::QuerySessions { respond_to }) => {
                         let _ = respond_to.send(durable.host.sessions());
+                    }
+                    Ok(LocalHostCommand::QueryWorkspaces { respond_to }) => {
+                        let _ = respond_to.send(durable.host.workspaces().to_vec());
+                    }
+                    Ok(LocalHostCommand::AuthorizeWorkspace {
+                        workspace,
+                        respond_to,
+                    }) => {
+                        let result = durable
+                            .host
+                            .authorize_workspace(workspace)
+                            .map_err(|e| e.code);
+                        let _ = respond_to.send(result);
                     }
                     Ok(LocalHostCommand::QueryGeneration { respond_to }) => {
                         let _ = respond_to.send(durable.host.generation().to_string());
@@ -606,5 +649,52 @@ mod tests {
         ] {
             assert!(validate_server(url).is_err());
         }
+    }
+
+    #[test]
+    fn local_channel_roundtrips_events_and_cleans_up_dropped_subscriptions() {
+        let (client, channel) = create_local_host_channel();
+        assert_eq!(channel.listeners.lock().unwrap().len(), 0);
+        let (sub1, rx1) = client.subscribe(16);
+        let (sub2, rx2) = client.subscribe(16);
+        assert_eq!(channel.listeners.lock().unwrap().len(), 2);
+
+        let event = HostEvent {
+            event_id: "evt-test".into(),
+            host_generation: "gen-test".into(),
+            binding: None,
+            hub_session_id: Some("hub-1".into()),
+            provider_session_id: Some("thread-1".into()),
+            kind: "item/agentMessage/delta".into(),
+            raw: json!({"params": {"delta": "hello"}}),
+            approval_id: None,
+        };
+
+        {
+            let listeners = channel.listeners.lock().unwrap();
+            for listener in listeners.values() {
+                listener.try_send(event.clone()).unwrap();
+            }
+        }
+
+        assert_eq!(rx1.recv().unwrap().event_id, "evt-test");
+        assert_eq!(rx2.recv().unwrap().event_id, "evt-test");
+
+        drop(sub1);
+        assert_eq!(channel.listeners.lock().unwrap().len(), 1);
+        drop(sub2);
+        assert_eq!(channel.listeners.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn local_client_handles_dropped_channel_without_panic() {
+        let (client, channel) = create_local_host_channel();
+        drop(channel);
+        assert!(client.query_sessions().is_err());
+        assert!(client.query_generation().is_err());
+        assert!(client.query_models().is_err());
+        assert!(client.discover().is_err());
+        assert!(client.query_workspaces().is_err());
+        assert!(client.authorize_workspace(PathBuf::from(".")).is_err());
     }
 }

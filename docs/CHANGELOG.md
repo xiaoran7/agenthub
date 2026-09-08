@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Codex NativeSessionHost 单一本机会话核心收敛与脱机/并发/动态授权治理（2026-09-08）
+
+- **解决 P1 离线冷启动被 Gateway 阻断**：
+  - 重构 `restore_session` 与 `refresh_dashboard`，在未登录 Gateway 或处于离线断网环境时，安全回退至 `offline_dashboard_snapshot`；
+  - 直接从本地 SQLite Outbox、WAL 账本以及本地 transcript 读取活跃会话状态，脱机状态下仍然完整可用。
+- **解决 P1 Host 单例并发竞态与会话破坏**：
+  - 在 `remote_desktop.rs` 引入全局原子互斥锁 `LAUNCH_LOCK`，彻底消除并发多操作触发 double-spawn 争抢 SQLite journal 排他锁的死锁与 panic 竞态；
+  - 弃用“检测到未授权工作区即暴力终止并重启 Host”的破坏性逻辑，实现 `authorize_workspace` 动态工作区热授权，在不中断当前运行 turn 的前提下动态扩展受信任目录集。
+- **打通本地 IPC 真实链路与全协议接入**：
+  - 为 `LocalHostClient` 补充 `AuthorizeWorkspace` 与 `QueryWorkspaces` 指令；
+  - 将 `client.query_models()` 真实接入 `list_agent_models_inner`，消灭前端模型硬编码回退；
+  - 将 `client.discover()` 真实接入 `local_session_contexts`，通过 NativeSessionHost 权威发现本机会话上下文；
+  - 重构 `cancel_session_turn`，接入 `RemoteAction::Interrupt`，实现通过 stdio RPC 原生优雅中断回合。
+- **全面补齐自动化测试与代码质量门禁**：
+  - 新增本地通道双向事件订阅与断开清理单测 `local_channel_roundtrips_events_and_cleans_up_dropped_subscriptions`；
+  - 新增客户端面对异常丢弃通道容错测试 `local_client_handles_dropped_channel_without_panic`；
+  - 新增离线多设备路径隔离确定性单测 `offline_scoped_paths_are_deterministic_and_distinct_per_device`；
+  - 新增离线冷启动 Dashboard 快照生成与结构完整性单测 `offline_cold_start_snapshot_generates_valid_local_dashboard`；
+  - 修复所有 `collapsible_if` 与 `len_zero` Clippy 警告，全工作区 `cargo clippy --all-targets -- -D warnings` 零告警，`cargo fmt --all --check` 严格对齐。
+
 ### 产品与文档收敛：local-first 工作台 + Remote（2026-09-08）
 
 - 明确 AgentHub 是 local-first 多 Agent 工作台，并原生提供 Remote；允许从三端在已授权工作区创建官方 Session，不再把产品限制为“发现、接管、暴露已有会话”。
