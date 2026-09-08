@@ -175,7 +175,6 @@ interface SessionStatusRow {
   event_data: unknown;
 }
 
-
 interface AuditEventRow {
   event_id: string;
   scope: AuditEvent["scope"];

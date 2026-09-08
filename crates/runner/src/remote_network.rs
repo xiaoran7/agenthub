@@ -188,6 +188,7 @@ enum NetworkSend {
 pub struct RemoteControl {
     pub stopped: AtomicBool,
     pub connected: AtomicBool,
+    pub ready: AtomicBool,
 }
 
 struct StopOnExit(Arc<RemoteControl>);
@@ -195,6 +196,7 @@ impl Drop for StopOnExit {
     fn drop(&mut self) {
         self.0.stopped.store(true, Ordering::Relaxed);
         self.0.connected.store(false, Ordering::Relaxed);
+        self.0.ready.store(false, Ordering::Relaxed);
     }
 }
 
@@ -263,6 +265,7 @@ pub fn run_with_local_control(
     let discovery = durable.host.discover().ok();
     durable.journal.append(&json!({"type":"ready","provider":"codex_app_server","host_generation":durable.host.generation(),
         "workspaces":workspaces,"sessions":durable.host.sessions(),"models":models,"discovery":discovery,"attach_running":false}),&[])?;
+    control.ready.store(true, Ordering::Relaxed);
     let command_seq = Arc::new(AtomicI64::new(durable.journal.received_command_seq()?));
     let (events_tx, events) = mpsc::sync_channel(256);
     let (send_tx, send_rx) = mpsc::sync_channel(64);

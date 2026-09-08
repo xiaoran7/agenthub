@@ -44,6 +44,7 @@ pub(crate) fn get_host_client(state: &DesktopState) -> Option<LocalHostClient> {
     if let Ok(slot) = state.remote.lock()
         && let Some(handle) = slot.as_ref()
         && !handle.thread.is_finished()
+        && !handle.control.stopped.load(Ordering::Relaxed)
         && !handle.failed.load(Ordering::Relaxed)
     {
         return Some(handle.client.clone());
@@ -205,7 +206,7 @@ fn start_host_with_workspaces(
 
     let control = Arc::new(RemoteControl::default());
     let worker_control = control.clone();
-    let failed = Arc::new(AtomicBool::new(true));
+    let failed = Arc::new(AtomicBool::new(false));
     let worker_failed = failed.clone();
     let worker_profile = profile.clone();
     let worker_identity = identity.clone();
@@ -220,11 +221,24 @@ fn start_host_with_workspaces(
             database,
             worker_identity,
             server_for_run,
-            worker_control,
+            worker_control.clone(),
             Some(channel),
         );
         worker_failed.store(result.is_err(), Ordering::Relaxed);
+        worker_control.ready.store(false, Ordering::Relaxed);
     });
+
+    // Wait briefly up to 2 seconds for host to report ready, or fail fast if thread exited with error
+    let start = Instant::now();
+    while !control.ready.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(2) {
+        if worker.is_finished() {
+            if failed.load(Ordering::Relaxed) {
+                return Err(DesktopError::AgentFailed);
+            }
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 
     let mut slot = state.remote.lock().map_err(|_| DesktopError::AgentFailed)?;
     *slot = Some(RemoteHandle {
@@ -320,8 +334,7 @@ pub(crate) async fn start_remote_host(
     .map_err(|_| "无法保存连接设置".to_owned())?;
     let control = Arc::new(RemoteControl::default());
     let worker_control = control.clone();
-    // A panic must not look like an intentional stop when the thread finishes.
-    let failed = Arc::new(AtomicBool::new(true));
+    let failed = Arc::new(AtomicBool::new(false));
     let worker_failed = failed.clone();
     let worker_profile = profile.clone();
     let (client, channel) = create_local_host_channel();
@@ -333,10 +346,11 @@ pub(crate) async fn start_remote_host(
             database,
             identity,
             Some(server),
-            worker_control,
+            worker_control.clone(),
             Some(channel),
         );
         worker_failed.store(result.is_err(), Ordering::Relaxed);
+        worker_control.ready.store(false, Ordering::Relaxed);
     });
     *slot = Some(RemoteHandle {
         control,
@@ -412,5 +426,35 @@ mod tests {
         assert_eq!(p1, p2);
         assert_ne!(p1, p3);
         assert!(p1.0.starts_with(dir));
+    }
+
+    #[test]
+    fn running_host_handle_reports_ready_and_provides_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, _channel) = create_local_host_channel();
+        let control = Arc::new(RemoteControl::default());
+        control.ready.store(true, Ordering::Relaxed);
+        let worker = thread::spawn(|| {
+            thread::sleep(Duration::from_millis(50));
+        });
+        let handle = RemoteHandle {
+            control: control.clone(),
+            thread: worker,
+            failed: Arc::new(AtomicBool::new(false)),
+            profile: RemoteProfile {
+                workspace_paths: Vec::new(),
+                codex_binary: "codex".to_owned(),
+            },
+            client,
+        };
+        let state = DesktopState {
+            remote: Mutex::new(Some(handle)),
+            data_dir: dir.path().to_path_buf(),
+            engine: Mutex::new(None),
+            realtime: Mutex::new(None),
+            active_turns: Mutex::new(HashMap::new()),
+            session_contexts: Mutex::new(SessionContextCache::default()),
+        };
+        assert!(get_host_client(&state).is_some());
     }
 }

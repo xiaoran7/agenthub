@@ -509,10 +509,12 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                 "source": "agent"
             }));
         }
+        let mut host_models_loaded = false;
         if agent == AgentType::Codex
             && let Some(client) = remote_desktop::get_host_client(state)
             && let Ok(val) = client.query_models()
             && let Some(arr) = val.get("data").and_then(Value::as_array)
+            && !arr.is_empty()
         {
             for item in arr {
                 let id = item.get("id").and_then(Value::as_str).unwrap_or("");
@@ -531,17 +533,22 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                     }));
                 }
             }
-        }
-        for (value, label, desc) in builtin_model_catalog(agent) {
-            if seen_families.contains(&model_family(value)) {
-                continue;
+            if !models.is_empty() {
+                host_models_loaded = true;
             }
-            models.push(json!({
-                "value": value,
-                "label": label,
-                "desc": desc,
-                "source": "builtin"
-            }));
+        }
+        if !host_models_loaded {
+            for (value, label, desc) in builtin_model_catalog(agent) {
+                if seen_families.contains(&model_family(value)) {
+                    continue;
+                }
+                models.push(json!({
+                    "value": value,
+                    "label": label,
+                    "desc": desc,
+                    "source": "builtin"
+                }));
+            }
         }
         result.push(json!({ "agent_type": agent_type_name(agent), "models": models }));
     }
@@ -618,7 +625,16 @@ async fn send_session_message(
     let _ = on_event.send(SessionTurnEvent::Started);
 
     let client = if input.agent_type == AgentType::Codex {
-        Some(remote_desktop::ensure_host_client(&state, None).map_err(|e| e.to_string())?)
+        let ensure_res = remote_desktop::ensure_host_client(&state, None);
+        match ensure_res {
+            Ok(c) => Some(c),
+            Err(e) => {
+                if let Ok(mut active_turns) = state.active_turns.lock() {
+                    active_turns.remove(&key);
+                }
+                return Err(e.to_string());
+            }
+        }
     } else {
         None
     };
@@ -1109,19 +1125,31 @@ fn cancel_session_turn(
     }
     if input.agent_type == AgentType::Codex
         && let Some(client) = remote_desktop::get_host_client(&state)
-        && let Ok(sessions) = client.query_sessions()
-        && let Some(binding) = sessions
+    {
+        let sessions = client
+            .query_sessions()
+            .map_err(|e| format!("无法查询会话注册表: {e}"))?;
+        if let Some(binding) = sessions
             .iter()
             .find(|s| s.provider_session_id == input.agent_session_id)
-        && let Ok(generation) = client.query_generation()
-    {
-        let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
-            client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
-            hub_session_id: binding.hub_session_id.clone(),
-            host_generation: Some(generation),
-            command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
-        };
-        let _ = client.execute(interrupt_cmd);
+        {
+            let generation = client
+                .query_generation()
+                .map_err(|e| format!("无法获取 Host 代际: {e}"))?;
+            let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+                client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+                hub_session_id: binding.hub_session_id.clone(),
+                host_generation: Some(generation),
+                command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
+            };
+            let receipt = client
+                .execute(interrupt_cmd)
+                .map_err(|e| format!("执行中断指令失败: {e}"))?;
+            if receipt.status != "accepted" {
+                return Err(format!("中断请求被拒绝: {}", receipt.status));
+            }
+            return Ok(json!({ "cancelled": true, "receipt": receipt }));
+        }
     }
     Ok(json!({ "cancelled": true }))
 }
@@ -1676,12 +1704,16 @@ fn dashboard_snapshot(
         .adapter_health(AgentType::GrokBuild)
         .map_err(|_| DesktopError::Sync)?;
     let local_contexts = local_session_contexts(state);
+    let host_bindings = remote_desktop::get_host_client(state)
+        .and_then(|c| c.query_sessions().ok())
+        .unwrap_or_default();
     let sessions = merge_dashboard_sessions(
         &remote_sessions["sessions"],
         &local_sessions,
         &desktop_config.archived_sessions,
         identity.device_id(),
         &local_contexts,
+        &host_bindings,
     );
     let running = state
         .engine
@@ -1768,6 +1800,9 @@ fn offline_dashboard_snapshot(
         };
 
     let local_contexts = local_session_contexts(state);
+    let host_bindings = remote_desktop::get_host_client(state)
+        .and_then(|c| c.query_sessions().ok())
+        .unwrap_or_default();
     let empty_remote = json!([]);
     let sessions = merge_dashboard_sessions(
         &empty_remote,
@@ -1775,16 +1810,33 @@ fn offline_dashboard_snapshot(
         &desktop_config.archived_sessions,
         identity.device_id(),
         &local_contexts,
+        &host_bindings,
     );
 
+    let now_str = chrono::Utc::now().to_rfc3339();
     Ok(json!({
-        "account": Value::Null,
+        "account": {
+            "user": {
+                "user_id": "local",
+                "email": "local@agenthub.dev",
+                "display_name": "Local User"
+            },
+            "subscription": {
+                "plan": "free",
+                "status": "active"
+            },
+            "entitlements": {
+                "max_devices": 1,
+                "history_days": 365
+            }
+        },
         "devices": [
             {
                 "device_id": identity.device_id(),
                 "name": machine_name(),
                 "online": true,
-                "revoked": false
+                "revoked": false,
+                "last_seen_at": now_str
             }
         ],
         "sessions": sessions,
@@ -2922,6 +2974,7 @@ fn merge_dashboard_sessions(
     archived: &[ArchivedSession],
     device_id: &str,
     contexts: &HashMap<String, LocalSessionContext>,
+    host_bindings: &[agent_pulse_runner::remote_host::SessionBinding],
 ) -> Vec<Value> {
     let mut sessions = std::collections::BTreeMap::new();
     if let Some(remote) = remote.as_array() {
@@ -2974,6 +3027,67 @@ fn merge_dashboard_sessions(
                 })
             }),
         );
+    }
+    // Overwrite or populate authoritative Codex sessions from running NativeSessionHost registry
+    for binding in host_bindings {
+        let key = format!("codex:{}:{}", device_id, binding.provider_session_id);
+        let status = match binding.execution_state {
+            agent_pulse_runner::remote_host::ExecutionState::Running => "WORKING",
+            agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission => {
+                "WAITING_PERMISSION"
+            }
+            agent_pulse_runner::remote_host::ExecutionState::AwaitingInput => "WAITING_INPUT",
+            agent_pulse_runner::remote_host::ExecutionState::Idle => "IDLE",
+            agent_pulse_runner::remote_host::ExecutionState::Error => "FAILED",
+            agent_pulse_runner::remote_host::ExecutionState::Completed => "COMPLETED",
+            agent_pulse_runner::remote_host::ExecutionState::Terminated => "STOPPED",
+            _ => "UNKNOWN",
+        };
+        if let Some(existing) = sessions.get_mut(&key) {
+            existing["payload"]["state"]["activity_status"] = json!(status);
+            existing["payload"]["state"]["presence"] = json!("ACTIVE");
+        } else {
+            let context = contexts.get(&session_context_key(
+                AgentType::Codex,
+                &binding.provider_session_id,
+            ));
+            let project_name = binding
+                .workspace_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("workspace");
+            let fp = format!(
+                "{:x}",
+                Sha256::digest(binding.workspace_path.to_string_lossy().as_bytes())
+            );
+            sessions.insert(
+                key,
+                json!({
+                    "event_id": format!("host:{}", binding.hub_session_id),
+                    "device_id": device_id,
+                    "agent_type": "codex",
+                    "agent_session_id": binding.provider_session_id,
+                    "observed_at": chrono::Utc::now().to_rfc3339(),
+                    "payload": {
+                        "project": {
+                            "display_name": project_name,
+                            "fingerprint": &fp[..16],
+                        },
+                        "state": {
+                            "activity_status": status,
+                            "presence": "ACTIVE",
+                        },
+                        "source": "native_host",
+                        "confidence": 1.0,
+                        "started_at": chrono::Utc::now().to_rfc3339(),
+                        "last_activity_at": chrono::Utc::now().to_rfc3339(),
+                        "runtime": context,
+                    },
+                    "sync_state": "local",
+                    "archived": false,
+                }),
+            );
+        }
     }
     for item in archived {
         let key = format!(
@@ -3844,7 +3958,7 @@ mod tests {
         }]);
 
         let merged =
-            merge_dashboard_sessions(&remote, &observations, &[], "device-local", &contexts);
+            merge_dashboard_sessions(&remote, &observations, &[], "device-local", &contexts, &[]);
         let local = merged
             .iter()
             .find(|session| session["device_id"] == "device-local")
@@ -3856,6 +3970,35 @@ mod tests {
 
         assert_eq!(local["payload"]["runtime"]["title"], "Explicit local title");
         assert!(remote["payload"].get("runtime").is_none());
+    }
+
+    #[test]
+    fn host_session_registry_overrides_dashboard_state_and_populates_missing_session() {
+        let contexts = HashMap::new();
+        let binding = agent_pulse_runner::remote_host::SessionBinding {
+            hub_session_id: "hub-1".to_owned(),
+            provider_session_id: "session-active".to_owned(),
+            workspace_path: PathBuf::from("D:/test-ws"),
+            host_generation: "gen-1".to_owned(),
+            control_connected: true,
+            execution_state: agent_pulse_runner::remote_host::ExecutionState::Running,
+            current_turn_id: Some("turn-1".to_owned()),
+        };
+        let merged = merge_dashboard_sessions(
+            &json!([]),
+            &[],
+            &[],
+            "device-local",
+            &contexts,
+            &[binding],
+        );
+        let found = merged
+            .iter()
+            .find(|s| s["agent_session_id"] == "session-active")
+            .unwrap();
+        assert_eq!(found["payload"]["state"]["activity_status"], "WORKING");
+        assert_eq!(found["payload"]["state"]["presence"], "ACTIVE");
+        assert_eq!(found["payload"]["source"], "native_host");
     }
 
     #[test]
@@ -3872,11 +4015,14 @@ mod tests {
         };
 
         let snapshot = offline_dashboard_snapshot(&identity, &state).unwrap();
-        assert_eq!(snapshot["account"], Value::Null);
+        assert_eq!(snapshot["account"]["user"]["user_id"], "local");
+        assert_eq!(snapshot["account"]["user"]["email"], "local@agenthub.dev");
+        assert_eq!(snapshot["account"]["subscription"]["plan"], "free");
         assert_eq!(snapshot["sync_running"], false);
         assert_eq!(snapshot["realtime_connected"], false);
         assert_eq!(snapshot["device"]["device_id"], identity.device_id());
         assert!(!snapshot["devices"].as_array().unwrap().is_empty());
+        assert!(snapshot["devices"][0].get("last_seen_at").is_some());
         assert!(snapshot["sessions"].is_array());
     }
 }

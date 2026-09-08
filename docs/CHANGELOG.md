@@ -2,25 +2,25 @@
 
 ## [Unreleased]
 
-### Codex NativeSessionHost 单一本机会话核心收敛与脱机/并发/动态授权治理（2026-09-08）
+### Codex NativeSessionHost 单一本机会话核心收敛与生命周期/契约/格式化全面治理（2026-09-08）
 
-- **解决 P1 离线冷启动被 Gateway 阻断**：
-  - 重构 `restore_session` 与 `refresh_dashboard`，在未登录 Gateway 或处于离线断网环境时，安全回退至 `offline_dashboard_snapshot`；
-  - 直接从本地 SQLite Outbox、WAL 账本以及本地 transcript 读取活跃会话状态，脱机状态下仍然完整可用。
-- **解决 P1 Host 单例并发竞态与会话破坏**：
-  - 在 `remote_desktop.rs` 引入全局原子互斥锁 `LAUNCH_LOCK`，彻底消除并发多操作触发 double-spawn 争抢 SQLite journal 排他锁的死锁与 panic 竞态；
-  - 弃用“检测到未授权工作区即暴力终止并重启 Host”的破坏性逻辑，实现 `authorize_workspace` 动态工作区热授权，在不中断当前运行 turn 的前提下动态扩展受信任目录集。
-- **打通本地 IPC 真实链路与全协议接入**：
-  - 为 `LocalHostClient` 补充 `AuthorizeWorkspace` 与 `QueryWorkspaces` 指令；
-  - 将 `client.query_models()` 真实接入 `list_agent_models_inner`，消灭前端模型硬编码回退；
-  - 将 `client.discover()` 真实接入 `local_session_contexts`，通过 NativeSessionHost 权威发现本机会话上下文；
-  - 重构 `cancel_session_turn`，接入 `RemoteAction::Interrupt`，实现通过 stdio RPC 原生优雅中断回合。
-- **全面补齐自动化测试与代码质量门禁**：
-  - 新增本地通道双向事件订阅与断开清理单测 `local_channel_roundtrips_events_and_cleans_up_dropped_subscriptions`；
-  - 新增客户端面对异常丢弃通道容错测试 `local_client_handles_dropped_channel_without_panic`；
-  - 新增离线多设备路径隔离确定性单测 `offline_scoped_paths_are_deterministic_and_distinct_per_device`；
-  - 新增离线冷启动 Dashboard 快照生成与结构完整性单测 `offline_cold_start_snapshot_generates_valid_local_dashboard`；
-  - 修复所有 `collapsible_if` 与 `len_zero` Clippy 警告，全工作区 `cargo clippy --all-targets -- -D warnings` 零告警，`cargo fmt --all --check` 严格对齐。
+- **解决 P1 健康 Host 始终被判定为不可用**：
+  - 修复 `remote_desktop.rs` 中 `failed` 原子变量初值为 `true` 导致健康运行中 Host 始终被误判为失效的严重生命周期倒置缺陷；
+  - 明确状态机划分：启动即置为 not failed，新增 `control.ready` 同步就绪屏障，等待 Host 进程与通信初始化就绪；只有进程崩溃或执行报错时才更新为 `failed=true`。
+- **解决 P1 离线快照违反前端 Snapshot 契约**：
+  - 修正 `offline_dashboard_snapshot` 中 `account: null` 导致前端读取 `snapshot.account.user.email` 时触发 TypeError 崩溃的契约不兼容；
+  - 填充离线本地账户结构（`user_id: "local"`, `display_name: "Local User"`, `subscription: "free"`），补齐设备 `last_seen_at` 时间戳字段，确保前端离线冷启动 100% 稳健渲染。
+- **解决 P1 Host 失败遗留永久 busy 与活跃回合清理**：
+  - 在 `send_session_message` 中调整 `ensure_host_client` 异常分支，当 Host 获取或建立失败时立即清理 `active_turns` 记录并释放状态，杜绝界面永久陷入 busy 死锁；
+  - 完善 `cancel_session_turn`：通过 `client.execute(RemoteAction::Interrupt)` 发送中断指令并严格校验执行回执 `receipt.status == "accepted"`，真实反映取消结果，杜绝盲目返回 `cancelled: true`。
+- **打通本地权威会话源与模型无脑追加清理**：
+  - `merge_dashboard_sessions` 真实接入 `host_bindings`，将 NativeSessionHost 维护的会话注册表作为权威源，将实时执行状态（`WORKING`, `IDLE`, `WAITING_PERMISSION` 等）与 `ACTIVE` 状态同步至 Dashboard，杜绝多套会话分裂；
+  - 清理 Codex 模型获取时的无条件硬编码目录追加，成功从 Native Host 取得模型目录时优先权威输出，仅在完全获取不到时才走本地兜底。
+- **全仓格式化与门禁通过**：
+  - 使用 Prettier 修复全仓 11 个文件的代码风格问题，`npm run format:check` 100% 通过；
+  - 新增 `running_host_handle_reports_ready_and_provides_client` 运行中 Host 句柄与客户端有效性单测；
+  - 新增 `host_session_registry_overrides_dashboard_state_and_populates_missing_session` 权威会话注册表覆盖与合并单测；
+  - 验证 Rust 单测 15+113 通过，Node/TS 单测 12+52+11+43=118 项全绿，全工作区 `cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --all --check` 零报错通过。
 
 ### 产品与文档收敛：local-first 工作台 + Remote（2026-09-08）
 

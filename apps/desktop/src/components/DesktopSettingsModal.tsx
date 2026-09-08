@@ -42,11 +42,7 @@ interface DesktopSettingsModalProps {
   onOpenLocalHost?: () => void;
 }
 
-type SettingsSection =
-  | "general"
-  | "import"
-  | "connections"
-  | "account";
+type SettingsSection = "general" | "import" | "connections" | "account";
 
 export function DesktopSettingsModal({
   preferences,
@@ -150,8 +146,16 @@ export function DesktopSettingsModal({
       items: [
         { id: "general", label: "常规与刷新", icon: <Settings size={15} /> },
         { id: "import", label: "Agent 路径", icon: <Download size={15} /> },
-        { id: "connections", label: "远程连接与 Host", icon: <Radio size={15} /> },
-        { id: "account", label: "账户与退出", icon: <CircleUserRound size={15} /> },
+        {
+          id: "connections",
+          label: "远程连接与 Host",
+          icon: <Radio size={15} />,
+        },
+        {
+          id: "account",
+          label: "账户与退出",
+          icon: <CircleUserRound size={15} />,
+        },
       ],
     },
   ];

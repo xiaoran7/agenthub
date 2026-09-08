@@ -211,12 +211,11 @@ function LegacyPanelPage() {
     }
     if (account === undefined || account === null) return;
     try {
-      const [nextDevices, nextSessions, nextAuthSnapshots] =
-        await Promise.all([
-          fetchDevices(config),
-          fetchSessions(config),
-          fetchDeviceAuth(config),
-        ]);
+      const [nextDevices, nextSessions, nextAuthSnapshots] = await Promise.all([
+        fetchDevices(config),
+        fetchSessions(config),
+        fetchDeviceAuth(config),
+      ]);
       setDevices(nextDevices);
       setSessions(nextSessions);
       setAuthSnapshots(nextAuthSnapshots);

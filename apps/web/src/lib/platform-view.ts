@@ -2,12 +2,7 @@ import type { ActivityStatus, AgentType, AuthRecord, AuthState } from "./types";
 import type { DeviceRecord, SessionRecord } from "./types";
 
 export type SectionKey =
-  | "overview"
-  | "sessions"
-  | "devices"
-  | "activity"
-  | "diagnostics"
-  | "help";
+  "overview" | "sessions" | "devices" | "activity" | "diagnostics" | "help";
 
 export type SessionFilter =
   "all" | "running" | "waiting" | "completed" | "failed";
@@ -19,12 +14,7 @@ export const NAV_ITEMS: ReadonlyArray<{
   key: SectionKey;
   label: string;
   icon:
-    | "overview"
-    | "sessions"
-    | "devices"
-    | "activity"
-    | "diagnostics"
-    | "help";
+    "overview" | "sessions" | "devices" | "activity" | "diagnostics" | "help";
 }> = [
   { key: "overview", label: "总览", icon: "overview" },
   { key: "sessions", label: "会话", icon: "sessions" },
