@@ -1,37 +1,36 @@
-# AgentHub 文档与迁移状态
+# AgentHub 文档索引
 
 更新：2026-09-08。
 
-> **核心宗旨与唯一标准**：
-> **AgentHub = 多种本地 AI Agent 的统一远程控制入口。**
-> 核心只做三件事：**发现**本机运行的 Codex/Claude 等官方 Agent、**接管**现有 Session、**暴露**给手机和 Web 离开电脑后继续使用。
-> **三不原则**：不替代官方 Agent，不自己再造 Agent，不改变用户本地使用习惯。
-> **唯一开发判断标准**：“这个功能是不是在帮助用户‘远程继续使用本机已经运行的 Agent’？不是就不做。”
+## 权威文档
 
-规范描述目标，下面记录实际阶段，两者不可混用。
+| 文档                              | 解决的问题                                          |
+| --------------------------------- | --------------------------------------------------- |
+| [PRD](PRD.md)                     | AgentHub 是什么、三端职责、范围和验收标准           |
+| [ARCHITECTURE](ARCHITECTURE.md)   | `agenthubd`、官方 Runtime、Gateway 与客户端如何协作 |
+| [SYNC_PROTOCOL](SYNC_PROTOCOL.md) | Remote 身份、幂等、事件、ACK、重连与多端一致性      |
+| [DESIGN_SYSTEM](DESIGN_SYSTEM.md) | 跨端视觉与交互规则                                  |
+| [DEPLOYMENT](DEPLOYMENT.md)       | Gateway 单机部署与生产边界                          |
+| [PITFALLS](PITFALLS.md)           | 实现与验收前必须检查的已知问题                      |
+| [CHANGELOG](CHANGELOG.md)         | 历史变更，不作为当前能力说明                        |
 
-## 权威入口
+[M4 验收](M4_VALIDATION.md) 与 [Android 验收](ANDROID_VALIDATION.md) 是按日期保存的证据。它们只证明记录中明确执行过的环境，不自动代表真机、生产或其他 Provider 已通过。
 
-- [PRD](PRD.md)：产品体验、发现/恢复/连接语义、验收标准。
-- [架构](ARCHITECTURE.md)：Runner、Host、Gateway、客户端和迁移边界。
-- [同步协议](SYNC_PROTOCOL.md)：身份、命令账本、ACK、回放与多端。
-- [能力与接入](CAPABILITY_AND_LAUNCH_SPEC.md)：真实能力证据、会话配置与 UI 动作。
-- [可行性](TECHNICAL_FEASIBILITY.md)：官方来源、适配选择和待验证事项。
-- [设计系统](DESIGN_SYSTEM.md)、[部署](DEPLOYMENT.md)、[坑点](PITFALLS.md)、[历史变更](CHANGELOG.md)。
-- [M4 验收](M4_VALIDATION.md)、[Android 验收](ANDROID_VALIDATION.md) 按日期区分旧阶段与新 Remote 证据，不把模拟器/回环网络扩大为真机或生产验收。
+## 当前实现与目标差距
 
-## 迁移阶段
+| 范围          | 当前事实                                                 | 下一步                                      |
+| ------------- | -------------------------------------------------------- | ------------------------------------------- |
+| Codex Host    | 常驻 app-server；创建、恢复、多轮、审批、中断可用        | 强化状态对齐和版本兼容                      |
+| Desktop       | 本地 Dashboard 与内嵌 Remote Host 均存在，但仍是两条入口 | 统一通过本地 IPC 调用一个 `agenthubd`       |
+| Gateway       | v3 单实例 SQLite 内容库、设备签名、命令账本、回放        | 统一连接管理；需要横向扩展时迁移 PostgreSQL |
+| Web / Android | 可消费 v3 Remote 会话                                    | 共用能力模型、通知与离线状态                |
+| Claude Code   | 历史发现和 CLI 接续                                      | 验证官方长时协议与认证后实现 Host           |
+| 外部运行会话  | 可发现；默认不声称可写 attach                            | 仅在 Provider 提供可靠所有权/订阅机制后开放 |
 
-| 阶段 | 范围 | 状态 |
-| --- | --- | --- |
-| R0 文档定界 | 原生 Remote 目标、接入语义、协议与旧边界替换 | 已替换并同步组件入口 |
-| R1 原生 Host | Codex 长时 app-server、真实 ID、恢复、审批、中断、命令去重 | 已实现；原生两轮交互、协议 fixture 验证通过 |
-| R2 可靠远程链路 | 设备鉴权、持久 Registry/账本、双向日志、内容存储、重连对齐 | 单实例 SQLite 链路已实现；真实 Gateway 重启重放验证通过；多实例/压力验收待做 |
-| R3 多端统一 | Web/桌面/Android 消费同一会话，Workspace-first | Web 创建/两轮续聊/刷新/Host 重启恢复/离线禁控及 390px、1440px 布局验证通过；桌面共享 UI、目录选择、内嵌 Host 启停已接入，Tauri fixture UI 与真实 Codex 嵌入式停止验证通过；v2.3.2 桌面实际安装及登录页检查通过（登录后操作待手动认证）；Android 实际 APK 在模拟器完成创建/两轮续聊/审批/中断/重启恢复，详见验收文档 |
-| R4 Provider 扩展与验收 | Claude 长时控制，其余按证据开放，真机/生产 | 待实施 |
+`agent-pulse-runner` 是当前可执行文件名，`agenthubd` 是目标架构角色。旧 v1 元数据同步可在迁移期保留，但不得承载新的会话正文或被当成 Remote 完成证据。
 
-## 可复用现状
+## 文档规则
 
-已有账户、设备绑定与签名、v1 元数据 Outbox/数据库、发现适配器、桌面本地正文渲染与真实 CLI 启动。旧模拟 Router 与硬编码能力表已移除，v2 内存原型仅允许测试显式注入，生产默认入口不注册。当前原生 Remote 使用独立 v3 链路。
-
-本轮开工前 README、AGENTS 和 CHANGELOG 有其他会话未提交的文档精简；本轮保留这些改动，提交只纳入本轮所属内容。部署/发版状态留在各自证据中。
+- PRD 只写稳定产品决定；架构写目标结构并明确当前差距；组件 README 写真实命令和接口；验收记录写证据。
+- 不再维护重复的能力清单、可行性摘要和逐轮设计日记。Provider 能力证据统一放在架构文档，变化历史留在 Git 与 CHANGELOG。
+- 新入口只有在真实官方 Runtime 返回原生 ID/事件后，才能标记为可用。

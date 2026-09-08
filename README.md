@@ -1,48 +1,46 @@
-# AgentHub（多种本地 AI Agent 的统一远程控制入口）
+# AgentHub
 
-> **AgentHub 的核心方向与唯一判断标准：**
-> **AgentHub = 多种本地 AI Agent 的统一远程控制入口。**
-> 
-> 具体只做三件事：
-> 1. **发现**：发现本机正在运行的 Codex / Claude 等官方 Agent；
-> 2. **接管**：接管它们现有的 Session；
-> 3. **暴露**：把这些 Session 安全暴露给手机端和 Web 端继续使用。
-> 
-> **核心边界铁律：**
-> - **不替代官方 Agent，不自己再造 Agent，不改变用户本地使用习惯。**
-> - 本地电脑依然正常使用官方 Codex CLI、Claude Code 等工具；用户离开电脑后，统一从 AgentHub 手机端或 Web 端继续查看进度、继续对话、处理工具审批、停止任务和查看运行结果。
-> - **功能判断红线**：以后所有功能都围绕一个唯一标准——**“这个功能是不是在帮助用户‘远程继续使用本机已经运行的 Agent’？”**，如果不是，坚决不做！
+AgentHub 是一个 **local-first 的多 Agent 工作台，并原生提供 Remote 能力**。
 
----
+它不实现自己的 Agent 推理循环，而是调用 Codex、Claude Code 等官方 Runtime。用户可以在 AgentHub Desktop 中创建、恢复和继续官方 Session；离开电脑后，再从 Web 或 Android 访问同一个 Session。
 
-## 核心工作拓扑
+## 产品结构
 
-```
-【本地环境】                            【云端中转】                 【远端接入】
-用户原生使用的 Codex / Claude 会话
-        │ (发现与接管)
-AgentHub 本机 Runner / 守护 Host ───(出站安全通道)───► AgentHub Gateway ◄───► AgentHub 手机端 (Android)
-        │                                                                ◄───► AgentHub Web 端
-本地桌面继续正常工作                                                      (离开电脑后随时随地继续看、聊、审批、停止)
+```text
+Desktop ──本地 IPC──► agenthubd ──官方协议──► Codex / Claude Code Runtime
+                         │
+                         └──主动出站──► Gateway ◄── Web / Android
 ```
 
-## 开发入口
+- **Desktop**：主要工作台。本地管理工作区、创建或恢复 Session、查看工具过程、处理审批；断网时仍可工作。
+- **agenthubd**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等和远程连接；目标形态由 Desktop 自动启动并后台常驻。
+- **Web**：无需安装的远程完整客户端，用于跨设备查看、续聊、审批和中断。
+- **Android**：移动控制端，强调进度、通知、审批和紧急干预。
+- **Gateway**：只做身份、路由、持久化和回放，不运行 Agent，也不是 Session 真相源。
 
-在仓库根目录安装 Node 依赖；Rust、Gateway 与各客户端环境按下方组件说明准备。
+Desktop、Web、Android 是同一产品的三种客户端，不是三套会话系统。创建 Session 是正式能力；“发现历史”“恢复 Session”“连接已运行 Session”则是三种不同语义，不能互相冒充。
+
+## 当前状态
+
+- Codex 已有常驻 app-server Host，支持创建、恢复、多轮输入、审批和中断，并可经 Gateway 提供 Remote。
+- Gateway v3 已有设备签名、命令账本、内容持久化和断线回放；当前内容库为单实例 SQLite。
+- Web 与 Android 已消费 v3 Remote 会话。
+- Desktop 已能启动内嵌 Host，但默认工作台仍保留逐回合 CLI 子进程路径和独立 Remote 入口；下一阶段是统一到 `agenthubd`。
+- Claude Code 目前以历史发现和 CLI 接续为主，常驻双向 Host 尚未完成；外部正在运行的官方会话默认只读，直到 Provider 提供可验证的 attach 与所有权机制。
+
+完成状态以 [文档索引](docs/README.md) 和验收记录为准，不从 UI 入口或模拟测试推定。
+
+## 开发
 
 ```powershell
 npm.cmd ci
-# Windows 桌面
 npm.cmd run tauri --workspace @agent-pulse/desktop -- dev
-# Web：先按 services/api/README.md 启动 Gateway
 npm.cmd run dev --workspace @agent-pulse/web
 ```
 
-Web 开发入口为 `http://localhost:3000`，默认代理 Gateway `http://127.0.0.1:3001`，可用 `GATEWAY_ORIGIN` 覆盖。桌面开发可用 `AGENT_PULSE_SERVER_URL` 指向回环服务。
+Web 默认访问 `http://127.0.0.1:3001` 的 Gateway；桌面可用 `AGENT_PULSE_SERVER_URL` 覆盖。Android 需要 JDK 17+、SDK 36，可用 `adb reverse tcp:3001 tcp:3001` 连接本机 Gateway。
 
-Android 使用 JDK 17+、SDK 36 和 `apps/android/gradlew.bat`；设备连接本机 Gateway 可用 `adb reverse tcp:3001 tcp:3001`。安装与打包前按 [AGENTS.md](AGENTS.md) 同步版本。
-
-## 验证
+完整验证命令：
 
 ```powershell
 cargo test --workspace
@@ -53,25 +51,16 @@ npm.cmd run typecheck
 npm.cmd run format:check
 ```
 
-Android 单独运行 `apps/android` 下的 `testDebugUnitTest` 与 `lintDebug`；打包命令与产物位置见客户端说明。仅文档调整不运行构建。
+仅文档变更不运行语言构建。
 
-## 边界与文档
+## 文档
 
-目标和实现阶段分开维护：发现历史、恢复上下文、连接运行中会话是三种能力。新 Remote 只在原生协议确认后报告可控制；现有只读采集、元数据同步与桌面本地执行在迁移期间保留，不能作为新 Remote 已完成的证据。
-
-- 新 Remote 链路沿用原生 Agent 登录，不读取、缓存或刷新 Provider 凭据。已接入远程控制的内容同步到授权 Gateway；历史扫描不自动上传全文。
-- Runner 主动出站；设备绑定、签名批次、Outbox 与断线恢复的实际合同见同步协议。
-- 生产使用 HTTPS；私有 CA 配置不能关闭证书验证。个人兼容令牌通过 Web 同源服务端代理注入，不暴露给浏览器。
-- 邮件、支付、Web Push、真机和实际 Agent CLI 的可用性需要对应环境验收，不能从自动化基线推定。
-
-| 内容 | 权威入口 |
-|---|---|
-| 工程约束 | [AGENTS.md](AGENTS.md) |
-| 产品与架构 | [PRD](docs/PRD.md)、[ARCHITECTURE](docs/ARCHITECTURE.md) |
-| 同步与能力发现 | [SYNC_PROTOCOL](docs/SYNC_PROTOCOL.md)、[Launch Profile](docs/CAPABILITY_AND_LAUNCH_SPEC.md) |
-| 组件开发 | [Runner](crates/runner/README.md)、[Gateway](services/api/README.md)、[桌面](apps/desktop/README.md)、[Android](apps/android/README.md)、[契约](packages/contracts/README.md) |
-| 部署与设计 | [DEPLOYMENT](docs/DEPLOYMENT.md)、[DESIGN_SYSTEM](docs/DESIGN_SYSTEM.md) |
-| 验收证据 | [M4](docs/M4_VALIDATION.md)、[Android](docs/ANDROID_VALIDATION.md) |
-| 经验与历史 | [PITFALLS](docs/PITFALLS.md)、[MISC](docs/MISC.md)、[CHANGELOG](docs/CHANGELOG.md) |
-
-其他专题从 [文档索引](docs/README.md) 按需阅读。
+| 内容                     | 入口                                                                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 工程约束                 | [AGENTS.md](AGENTS.md)                                                                                                                     |
+| 产品方向                 | [PRD](docs/PRD.md)                                                                                                                         |
+| 目标架构与 Provider 接入 | [ARCHITECTURE](docs/ARCHITECTURE.md)                                                                                                       |
+| Remote 可靠性合同        | [SYNC_PROTOCOL](docs/SYNC_PROTOCOL.md)                                                                                                     |
+| 组件开发                 | [Runner](crates/runner/README.md)、[Gateway](services/api/README.md)、[Desktop](apps/desktop/README.md)、[Android](apps/android/README.md) |
+| 运行维护                 | [DEPLOYMENT](docs/DEPLOYMENT.md)、[PITFALLS](docs/PITFALLS.md)                                                                             |
+| 验收与历史               | [M4](docs/M4_VALIDATION.md)、[Android](docs/ANDROID_VALIDATION.md)、[CHANGELOG](docs/CHANGELOG.md)                                         |

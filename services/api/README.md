@@ -52,11 +52,6 @@ Device Gateway、原生 Remote 会话中转与查询 API。
 | `GET`    | `/v1/devices`                          | 查询当前开发用户的设备                         |
 | `GET`    | `/v1/sessions`                         | 按设备、Presence、Activity Status 查询 Session |
 | `GET`    | `/v1/device-auth`                      | 查询当前用户的认证/配额安全快照                |
-| `POST`   | `/v1/tasks`                            | 按订阅权益向自己的设备创建远程任务             |
-| `GET`    | `/v1/tasks`                            | 查询当前用户的任务与执行状态                   |
-| `POST`   | `/v1/tasks/:taskId/cancel`             | 取消当前用户的未终态任务                       |
-| `POST`   | `/v1/device-tasks/claim`               | 设备签名领取一个待处理任务                     |
-| `POST`   | `/v1/device-tasks/:taskId/status`      | 设备签名回报版本化任务状态                     |
 | `GET`    | `/v1/sessions/events`                  | 查询单个 Session 的状态事件时间线              |
 | `GET`    | `/v1/stream`                           | 订阅本 owner 的会话变化信号（SSE）             |
 | `GET`    | `/v1/push/key`                         | 取 VAPID 应用服务器公钥                        |
@@ -105,14 +100,13 @@ $env:AGENT_PLATFORM_VAPID_SUBJECT = 'mailto:you@example.com'
 同时启用 Secure 并使用 `__Host-` 前缀。密码通过带随机盐的 scrypt 保存，随机会话 Token
 只在浏览器 Cookie 中出现，数据库只保存 SHA-256 摘要。设置面板可列出带公开 UUID 的
 会话并逐个或批量撤销；不返回 Cookie Token 或摘要。会话分别记录登录人和当前工作区：
-账户、密码与会话管理使用登录人，设备、Session、任务、SSE 与 Push 使用工作区 owner，
+账户、密码与会话管理使用登录人，设备、Session、SSE 与 Push 使用工作区 owner，
 不接受前端传入 owner。Free 设备上限在绑定码签发前由服务端强制检查。
 
 `GET /v1/audit` 的 `scope` 可为 `account`（默认）或 `workspace`，`limit` 为 1–100，
 `before` 使用上一页最后一条事件的公开 UUID。账户范围只返回登录人的事件；工作区范围使用
-当前 Web 会话选择的工作区，并在查询时验证成员关系。设备绑定/登记/撤销和远程任务创建、
-领取、取消、状态回报也写入工作区时间线；设备动作不携带网页登录操作者，任务状态只保留
-Agent 类型、前一状态、当前状态和公开 ID。事件只包含动作、公开 UUID、角色、套餐、状态
+当前 Web 会话选择的工作区，并在查询时验证成员关系。设备绑定、登记与撤销写入工作区
+时间线；设备动作不携带网页登录操作者。事件只包含动作、公开 UUID、角色、套餐、状态
 和数量等白名单元数据，不返回邮箱、IP、请求体、Token、Prompt 或 CLI 内容。
 
 生产必须设置 `AGENT_PULSE_LOGIN_RATE_LIMIT_SECRET`（32 字节以上随机值的 base64url
@@ -128,7 +122,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'
 `AGENT_PULSE_EMAIL_TOKEN` 成组配置；Resend 要求 `AGENT_PULSE_PUBLIC_BASE_URL`、
 `AGENT_PULSE_RESEND_API_KEY`、`AGENT_PULSE_RESEND_FROM` 成组配置，且两种适配器不能同时启用。
 启用后未验证
-账户不能签发设备绑定码或创建远程任务。验证 Token 只在邮件链接 fragment 中出现，
+账户不能签发设备绑定码。验证 Token 只在邮件链接 fragment 中出现，
 不会发送给 Web/Nginx，页面读取后立即清理地址栏，数据库只保存摘要。密码重置请求
 统一返回接受，避免泄露邮箱是否注册；重置成功撤销所有会话，登录后改密只保留当前
 会话。Team 邀请要求对方已注册，Token 只保存摘要、72 小时过期，未过期邀请与已加入
@@ -157,11 +151,6 @@ Stripe 配置示例：`AGENT_PULSE_PUBLIC_BASE_URL`、
 `AGENT_PULSE_STRIPE_SECRET_KEY`、`AGENT_PULSE_STRIPE_WEBHOOK_SECRET`、
 `AGENT_PULSE_STRIPE_PRICE_PRO`、`AGENT_PULSE_STRIPE_PRICE_TEAM` 必须成组设置，
 并使用正式 HTTPS 公网地址。Stripe 密钥只在 API 进程初始化时读取，随后从进程环境删除。
-
-远程任务只对 Pro/Team 开放，并由服务端强制执行设备归属和 3/10 个并发任务上限。
-当前只接受 `local_confirmation`，任务不包含服务器路径或 shell 命令。设备领取与状态
-回报使用现有 Ed25519 身份签名，合法迁移与版本号在 Store 中统一检查；Web 通过同一
-owner SSE 收到变化后回读任务列表。
 
 旧个人部署仍可显式使用 Bearer 访问令牌兼容模式。在
 Gateway 配置 `AGENT_PLATFORM_ACCESS_TOKEN`，在 Web 服务端配置相同的
@@ -210,7 +199,7 @@ npm.cmd start --workspace @agent-pulse/api
 
 `migrate` 可用于部署阶段单独执行迁移；服务启动仍会幂等检查迁移版本和 SHA-256，
 历史迁移内容与数据库记录不一致时拒绝启动。当前持久化账户、邮箱验证/密码重置摘要、Web 会话、
-工作区成员与邀请、登录限流 scope、订阅事件审计、`devices`、绑定码摘要、远程任务及审计
+工作区成员与邀请、登录限流 scope、订阅事件审计、`devices`、绑定码摘要、设备审计
 事件、不可变事件流和 Session 快照；批次写入会锁定设备行，在一个事务内完成事件幂等
 检查、连续序列验证、快照合并和设备水位更新。
 
@@ -258,4 +247,4 @@ npm.cmd test --workspace @agent-pulse/api
 - 联合身份提供商和实际邮件供应商适配
 - 设备密钥轮换、恢复绑定和完整绑定审计日志
 - 全局/设备 API 分布式速率限制
-- 支付供应商收银台/webhook 适配、订阅自助变更、任务执行收据与可信执行策略
+- 支付供应商收银台/webhook 适配与订阅自助变更

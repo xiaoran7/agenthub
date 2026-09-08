@@ -1,21 +1,30 @@
 # 项目约束
 
-> **AgentHub 核心定位与唯一标准（2026-09-08）：**
-> **AgentHub = 多种本地 AI Agent 的统一远程控制入口。**
-> 具体只做三件事：**发现本机正在运行的 Codex / Claude 等官方 Agent、接管它们现有 Session、把这些 Session 安全暴露给手机和 Web 继续使用**。
-> **三不原则**：不替代官方 Agent，不自己再造 Agent，不改变用户本地使用习惯。
-> **唯一开发判断标准**：**“这个功能是不是在帮助用户‘远程继续使用本机已经运行的 Agent’？” 不是的话就不做。**
-> 本地照常用官方 Codex、Claude；离开电脑后，统一从 AgentHub 手机端或 Web 端继续看、继续聊、审批、停止任务、看结果。
+AgentHub 是 **local-first 的多 Agent 工作台 + 原生 Remote**。Desktop、Web、Android 必须消费同一套 Session 模型；`agenthubd` 是本机会话控制面，Gateway 只中继和回放。
 
-通用约束继承 [AGENT.md](../../../AGENT.md)。
+通用约束继承 [AGENT.md](../../../AGENT.md)。修改前按任务阅读 [PRD](docs/PRD.md)、[架构](docs/ARCHITECTURE.md)、[远程协议](docs/SYNC_PROTOCOL.md) 与 [坑点](docs/PITFALLS.md)。
 
-- 先读任务相关的 [架构](docs/ARCHITECTURE.md)、[同步协议](docs/SYNC_PROTOCOL.md) 与 [坑点](docs/PITFALLS.md)。需求与现行边界冲突时先明确取舍，不能把规划功能当已实现。
-- 既有只读采集默认只同步元数据白名单，不包含 Prompt、正文、代码、diff、shell、工具载荷、完整目录、环境变量或 transcript；目录只保存显示名与设备 HMAC 指纹。
-- `Presence` 与 `ActivityStatus` 独立；历史会话是 `PERSISTED`，不确定状态标 `UNKNOWN` 并保留来源、置信度。
-- Runner 主动出站，Hook 不直连云端；真实 CLI 验证在 Fixture/单元/协议验证之后。
-- 新 Remote 链路不读取、缓存或刷新 Provider 凭据；登录由原生 Agent 管理。旧凭据模块仅属迁移兼容，不接入新 Host，不递归扫描用户目录或浏览器 Cookie。
-- 产品目标以 2026-09-07 PRD 为准：跨端接续同一原生会话；discover/resume/attach 严格区分。历史发现不代表可控制，只有原生协议确认才报告启动、审批或中断结果。
-- 已接入 Remote 的会话允许向授权 Gateway 同步正文与工具事件；旧只读扫描不自动扩大范围，历史全文须显式导入。Provider raw 与 Hub Envelope 分开，内容不进入诊断日志。
-- Rust 变更通过 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`；TS 变更通过 `npm.cmd test`、`npm.cmd run typecheck`、`npm.cmd run format:check`。
-- `docs/CHANGELOG.md` 记录变更，PITFALLS/MISC 仅写新增可复用结论。文档批次独立提交，不要求运行无关语言测试。
-- 打包同步 Android、Node/Tauri、Cargo 与 UI 版本。
+## 产品边界
+
+- 不自建 Agent 决策循环，不模拟 Provider 成功状态，不读取或代管 Provider 凭据；登录与推理由官方 Runtime 负责。
+- 允许从 AgentHub 主动创建官方 Session，也允许恢复官方历史。`discover`、`resume`、`attach` 严格区分；发现 PID 或 transcript 不代表取得控制权。
+- Desktop 本地操作不得依赖 Gateway。网络中断不销毁 Host，Web/Android 只在本机 Host 可达且控制权明确时允许写操作。
+- 同一原生 Session 默认单写者。不能为了“无缝接管”抢占官方客户端正在持有的 writer；无法验证 attach 时保持只读或显式 resume。
+- Provider 差异保留在适配层和原始事件中；客户端只展示经过能力探测确认的模型、权限、命令与审批动作。
+- 远程命令必须幂等且可审计。排队、Provider 接受和执行完成是不同状态；结果未知时先对齐，不能自动重放可能产生副作用的命令。
+
+## 数据与安全
+
+- 历史发现默认只同步元数据白名单，不上传 Prompt、正文、代码、diff、shell、工具载荷、完整路径、环境变量或 transcript。
+- 进入 managed Remote 的 Session 可将正文、工具事件和审批同步到用户授权的 Gateway；原始 Provider 事件与统一 Envelope 分层保存，内容不进入诊断日志。
+- Runner/agenthubd 主动出站，远端不要求用户开放本机端口。生产使用 TLS；浏览器和移动端不持有设备私钥或 Provider 凭据。
+- `Presence`、`ActivityStatus`、`ControlState` 分开建模。不确定状态标 `UNKNOWN`，并保留来源和时间。
+
+## 实施与验证
+
+- 当前二进制仍名为 `agent-pulse-runner`；目标职责名为 `agenthubd`。重命名不能先于 Desktop 与 Remote 共用同一 Host。
+- 新链路优先完成 Codex 常驻 Host → Desktop 本地 IPC → Gateway Remote；再按官方能力接入 Claude Code，其他 Provider 先保持发现/只读。
+- Rust 变更运行 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`；TS 变更运行 `npm.cmd test`、`npm.cmd run typecheck`、`npm.cmd run format:check`。
+- 真实 CLI、桌面安装、Android 模拟器/真机、Gateway 重启和生产部署分别记录证据，不能互相替代。
+- 行为、接口与架构决策写入 `docs/CHANGELOG.md`。文档批次可独立提交，不要求运行无关构建。
+- 打包时同步 Android、Node/Tauri、Cargo 与 UI 版本。

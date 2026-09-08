@@ -1,6 +1,8 @@
-# AgentHub Runner
+# AgentHub Runner（目标角色：agenthubd）
 
-本机执行与发现进程。新 Remote 通过长驻 Codex app-server 维护原生会话；旧只读采集独立保留。
+本机 Session Host、设备连接与只读发现进程。当前可执行文件名仍为
+`agent-pulse-runner`；后续将作为 Desktop 自动管理的 `agenthubd`，同时服务本地 IPC
+与 Remote，不要求用户手动维护两套 Host。
 
 ## 原生 Remote
 
@@ -16,7 +18,7 @@ cargo run -p agent-pulse-runner -- --identity <已绑定设备身份文件> remo
 
 `--workspace` 可重复，仅允许明确授权目录。数据库保存正文、命令与原生 ID，绑定设备和 Gateway，不可跨设备/服务复用。WSS 为默认要求；本机测试可使用 `ws://127.0.0.1:3001/v3/remote/ws`。关闭网页不终止 Host；停止 Runner 会失去实时控制，下次必须显式恢复。
 
-`remote-host` 是同一原生 Host 的本地 JSONL 调试入口，不提供远程持久恢复。`remote-run` 提供持久命令去重、签名握手、断线重放与审批隔离。当前支持 Codex 创建、恢复、输入、审批和中断；不支持任意外部正在运行的 CLI attach。实测 CLI 版本和边界见 [可行性](../../docs/TECHNICAL_FEASIBILITY.md)。
+`remote-host` 是同一原生 Host 的本地 JSONL 调试入口，不提供远程持久恢复。`remote-run` 提供持久命令去重、签名握手、断线重放与审批隔离。当前支持 Codex 创建、恢复、输入、审批和中断；不支持任意外部正在运行的 CLI attach。产品与 Provider 边界见 [系统架构](../../docs/ARCHITECTURE.md)。
 
 ## 旧只读采集
 
@@ -40,24 +42,6 @@ cargo run -p agent-pulse-runner -- --identity <已绑定设备身份文件> remo
 - Ed25519 本地设备身份、签名同步批次和有界确认
 - 独立后台同步、启动排空、新事件唤醒与网络失败指数退避
 - Fixture 驱动的隐私回归测试
-- Pro/Team 远程任务主动领取、本机项目指纹 allow-list、本地确认与 Claude/Codex/Grok CLI 执行
-
-## 远程任务
-
-任务 Worker 只建立出站连接。每个项目必须在本机显式配置指纹到路径的映射；Gateway
-只看到指纹，不接收路径。当前只支持本地确认策略，提示词会在终端完整显示，并通过
-stdin 交给 Agent CLI，不进入命令行参数：
-
-```powershell
-cargo run -p agent-pulse-runner -- tasks work `
-  --identity runner-identity.json `
-  --server http://127.0.0.1:3001 `
-  --project <64位项目指纹>=D:\Projects\Example
-```
-
-Runner 在 `delivered`、`accepted` 或 `waiting_user` 阶段重启可安全恢复同一任务；若在
-`running` 后中断，下次领取会回报 `execution_interrupted`，不会自动重复执行可能已产生
-修改的提示词。`--once` 只轮询一次，供诊断与自动化验证。
 
 ## 开发命令
 
@@ -257,7 +241,10 @@ Windows 用户可以使用 [`deploy/windows`](../../deploy/windows) 中的一键
 双击 `.cmd` 后输入 Web 页面生成的一次性连接码。脚本会自动初始化设备身份、绑定 Gateway、
 创建本地 SQLite Outbox 并启动持续同步。
 
-## 本地认证状态与配额
+## 旧本地认证状态与配额
+
+以下是迁移期保留的显式 opt-in 兼容能力，不接入新的 Session Host。目标架构由官方
+Runtime 自己管理登录，AgentHub 不缓存、刷新或向 Gateway 上传 Provider 凭据。
 
 凭据读取是显式 opt-in 能力，默认关闭。启用后 Runner 只读取当前用户允许的 Claude Code
 与 Codex 本地凭据来源，并将原始 token 保存在设备本地的 AES-GCM 加密缓存中；上传到 Gateway
@@ -303,7 +290,9 @@ Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化
 
 - Codex 跨客户端实时通知覆盖验证与缺失事件补偿
 - Hook 插件安装器
-- 联合账号登录、设备恢复绑定、密钥轮换与 WebSocket 传输
+- Desktop 本地 IPC 与自动后台常驻
+- Claude Code 长时 Session Host
+- 设备恢复绑定与密钥轮换
 - Windows 身份文件 ACL 主动加固
 - OS 原生服务安装
 

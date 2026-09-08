@@ -2,12 +2,21 @@
 
 ## [Unreleased]
 
+### 产品与文档收敛：local-first 工作台 + Remote（2026-09-08）
+
+- 明确 AgentHub 是 local-first 多 Agent 工作台，并原生提供 Remote；允许从三端在已授权工作区创建官方 Session，不再把产品限制为“发现、接管、暴露已有会话”。
+- 明确 Desktop、Web、Android 共用本机 `agenthubd` 的同一 Session 核心：Desktop 走本地 IPC，Web/Android 经 Gateway；Gateway 不运行 Agent，也不成为 Session 真相源。
+- 记录当前实现差距与顺序：先统一 Codex Host 和 Desktop 本地 IPC，再收敛 Remote 入口、接入 Claude 长时 Host，最后处理多实例与生产容量。
+- 借鉴 ZCode Remote 的“移动端只做控制面、执行环境留在桌面所属机器、授权可撤销”原则；不复制其自研 Agent 和单手机页面限制。
+- 删除重复的 `CAPABILITY_AND_LAUNCH_SPEC.md`、`TECHNICAL_FEASIBILITY.md`、`MISC.md`，将有效结论并入 PRD、架构、协议与精简后的 PITFALLS。
+- 清理 Runner、Gateway 与共享契约 README 中已删除的远程任务接口和能力声明。
+
 ### 核心定位架构重构与冗余功能清理（2026-09-08）
 
 - **坚守核心定位与三不原则**：严格围绕“多种本地 AI Agent 的统一远程控制入口”，仅保留“发现、接管、暴露”核心链路，清理偏离定位的自造任务系统、死代码与伪功能。
 - **清理自建任务代执行系统**：
   - Rust Runner 端彻底移除 `tasks.rs`（476行）、命令行 `Command::Tasks`、`run_agent_task` 及 Gateway 的 `claim_task` / `update_task` 接口；
-  - Gateway API 端移除 `/v1/tasks`、`/v1/device-tasks/*` 调度路由、数据库表与 `remote-tasks.test.ts`；
+  - Gateway API 端移除 `/v1/tasks`、`/v1/device-tasks/*` 调度路由、活动 Store 与 `remote-tasks.test.ts`；已发布迁移保持不可变，残留权益/审计字段后续单独清理；
   - Web 端移除 `TasksView.tsx` 及任务导航和过滤项。
 - **清除已废弃的 v2 内存原型与协议死代码**：
   - 移除 Gateway 中仅供 mock 注入的 `/v2/*` 路由与 `v2-session-manager.ts`、`v2-event-store.ts`；
@@ -42,11 +51,8 @@
 - 通用工程与整洁约束统一引用工作区 AGENT.md；项目入口只保留特有边界，合并重复工具说明和逐会话记录。
 - 仅文档变更；检查引用、编码和 diff，未打包、未执行设备或生产验证。
 
-
 > 所有功能变化都记录在 `Unreleased` 下，格式遵循
 > [Keep a Changelog](https://keepachangelog.com/)。
-
-## [Unreleased]
 
 ### v2.3.2 打包与安装实测（2026-09-08）
 
@@ -54,7 +60,6 @@
 - Windows 实际安装/覆盖安装与登录页渲染通过；桌面登录后的完整 Host 操作仍待手动认证，不能记为端到端通过。
 - Android 模拟器通过实际 APK 创建 Codex 会话、两轮续聊、覆盖安装保留连接、原生审批、中断及 Host 重启后恢复同一原生 ID；真实 release Runner 的 Gateway 重启重放/命令去重测试通过。
 - npm 测试、typecheck、format:check 与 Android 单元/lint/assembleDebug 通过；原生嵌入式停止测试通过。详细边界见 M4_VALIDATION.md、ANDROID_VALIDATION.md；未部署生产。
-
 
 ### 桌面本机 Remote 入口（2026-09-08）
 

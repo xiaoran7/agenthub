@@ -1,51 +1,102 @@
-# AgentHub 远程会话协议
+# AgentHub Remote 协议
 
 更新：2026-09-08。
 
-## 协议宗旨与控制边界
+本文只定义 `agenthubd ↔ Gateway ↔ Web/Android` 的远程可靠性合同。Desktop 到 daemon 使用本地 IPC，但复用同一命令、事件和 Session 状态语义。旧 v1 元数据同步独立兼容。
 
-**本协议只服务于 AgentHub 作为「多种本地 AI Agent 的统一远程控制入口」的核心使命：**
-- **定位**：发现本机正在运行的 Codex / Claude 等官方 Agent，接管它们现有的 Session，并安全暴露给手机和 Web 离开电脑后继续使用。
-- **三不原则**：不替代官方 Agent，不自己再造 Agent，不改变用户本地使用习惯。
-- **唯一裁决标准**：“此协议命令或事件是否在帮助用户‘远程继续使用本机已经运行的 Agent’？”
-- 本文定义目标控制协议；当前 v1 元数据同步独立兼容。旧 v2 示例不能证明本规范已实现。
+## 1. 身份与连接
 
-## 传输与身份
+daemon 使用已绑定设备的 Ed25519 身份主动建立 TLS 长连接。Gateway 从认证上下文解析 owner，不接受 payload 自报归属。握手协商：
 
-Runner 主动建立单条 WSS 多路复用连接。升级前/握手时校验已绑定设备身份、签名、时效与撤销状态；owner 由 Gateway 解析，不接受客户端自报归属。Web/桌面/Android 经账户鉴权使用同一命令与订阅接口。
+- protocol version 与 feature flags；
+- connection epoch / Host generation；
+- 双方最后连续持久接收水位；
+- 可回放范围和是否需要快照。
 
-握手协商 protocol version、feature flags、connection epoch、双方最后连续持久接收水位及重放范围。无共同版本则拒绝；新连接不能以未经校验的 runner_id 覆盖别人的连接。替换连接使用 generation fencing，旧连接 close 回调不能注销新连接。
+新连接通过 generation fencing 替换旧连接；旧 socket 的关闭回调不能注销新连接。设备撤销或 Remote 停止后，Gateway 立即拒绝旧身份。
 
-## Envelope 与序列
+## 2. Envelope 与水位
 
-保留 ver/frame_id/type/hub_session_id/cmd_id/timestamp/payload 概念。数据帧 event/cmd/cmd_ack 使用按设备与方向持久递增的 seq；ACK/握手/心跳为控制帧，不占可重放数据序列，避免 ACK 风暴和虚假缺口。下一代协议变更必须使用显式版本或协商 feature，不能默默改变旧 v2 seq 语义。
+数据帧保留 `version`、`frame_id`、`type`、`hub_session_id`、`cmd_id`、`seq`、`timestamp` 和 `payload`。事件、命令和命令收据使用按设备与方向持久递增的 `seq`；ACK、握手和心跳不占数据序列。
 
-ack_seq=N 表示 <=N 的数据已连续持久接收，而非“见过的最大序号”。重复 seq 不重复执行/聚合；收到 gap 暂停推进水位并请求补齐。ACK 不得超过已发送水位。seq 相同但 payload 不同视为协议冲突。
+`ack_seq=N` 表示 `<=N` 的帧已连续、持久接收：
 
-出站记录在发送前落盘，事务提交接收记录后才 ACK。窗口满采用背压/磁盘排队，不丢弃未确认数据。超出保留范围明确返回 snapshot_required；快照恢复状态，持久日志提供历史，不伪称恢复了已丢正文。
+- 收到 gap 时暂停推进水位并请求补齐；
+- 重复 `seq` 不重复执行或聚合；
+- 相同 `seq` 不同 payload 是协议冲突；
+- ACK 不能超过已发送水位；
+- 发送前落盘，接收事务提交后才 ACK；
+- 窗口满时背压或磁盘排队，不丢未确认帧。
 
-## 命令与结果
+超出保留范围返回 `snapshot_required`。快照恢复当前状态，事件库提供历史；两者都不能伪造已丢内容。
 
-每个控制请求携带 client_cmd_id（线上 Envelope 的 cmd_id）。其作用域是 owner + runner，同 ID、同目标和同负载返回同一收据；同 ID 不同负载返回 conflict。持久账本不得因进程重启丢失去重信息。
+## 3. 命令
 
-动作：launch_session、resume_session、attach_session、send_prompt、resolve_approval、interrupt_turn。discover/import_history 是只读发现/历史同步动作，绝不暗中启动进程。现有 import_native_session 在迁移期只能表达历史关联，不能代表 attach。
+统一动作：
 
-命令状态：queued → accepted → completed 或 rejected/failed/indeterminate。accepted 表示原生协议接受，并不代表任务完成。HTTP 202 或 WS 已发送也不代表 accepted。超时之后禁止自动重复产生副作用；先通过原生状态与账本对齐。
+- `create_session`
+- `resume_session`
+- `attach_session`（仅 Provider 能力确认后开放）
+- `send_prompt`
+- `resolve_approval`
+- `interrupt_turn`
+- `set_remote_enabled`
 
-审批必须关联 hub_session_id、Host generation、turn_id 和原始 request_id。过期、跨会话、重复冲突决策拒绝；成功写入回复后仍等待原生后续事件更新执行态。interrupt 同理，不能立即把本地状态改成 idle。
+`discover` 与 `import_history` 是只读操作，不能暗中启动 Runtime。
 
-## 事件与内容
+每个写请求携带稳定 `client_cmd_id`，幂等作用域为 owner + daemon。同 ID、同目标、同负载返回原收据；同 ID 不同负载返回 conflict。账本跨 daemon 与 Gateway 重启保存。
 
-统一事件包含 session_bound、session_control_changed、execution_state_changed、turn_started、message_delta、message_completed、tool_started、tool_completed、approval_requested、approval_resolved、turn_completed、provider_error。每条有稳定 event_id、原生关联 ID 与 Provider 消息来源。
+命令状态：
 
-Provider raw payload 与统一事件并存，未知事件保存且不猜测状态。Stream delta 使用 turn/item/block 身份定位，不能只按数组尾部追加。重复帧不重复追加文字；原生最终 item 用于收敛结果。工具输入和输出进入授权内容存储，不进入日志。
+```text
+queued -> dispatched -> accepted -> completed
+                  \-> rejected / failed / indeterminate
+```
 
-## Reconcile 与多端
+HTTP 202 或已写入 socket 只表示 queued/dispatched。Provider 协议确认后才是 accepted；任务完成由原生事件确认。超时后不自动重发可能有副作用的动作，先用 Runtime 状态和账本 reconcile。
 
-重连和定期巡检交换原生 ID、Host generation、控制状态、当前 turn、待审批集合与最后事件水位。以 Agent/Host 可验证证据收敛；找不到进程标记 lost/unknown，不能根据服务器历史重造 running。
+审批必须绑定 Session、Host generation、turn ID 和原始 request ID。跨代际、过期或冲突决定被拒绝。中断同理，发出成功不等于执行态已变为 idle。
 
-多端先读取 snapshot + cursor，再订阅 cursor 之后的事件。重复投递可接受，业务结果必须幂等。零订阅者不停止 Runner；慢客户端采用有界缓冲并要求重取快照，不能拖住 Agent 读循环。
+## 4. 事件
 
-## 验证
+统一事件至少包括：
 
-必须测试乱序、重复、非法 ACK、重连、窗口满、进程重启、同 ID 异负载、审批跨代际、双客户端竞态与跨账户拒绝。真实 WebSocket 加模拟事件只算传输测试，不是原生 Agent Remote 验收。
+- `session_bound`、`session_control_changed`
+- `execution_state_changed`
+- `turn_started`、`turn_completed`
+- `message_delta`、`message_completed`
+- `tool_started`、`tool_completed`
+- `approval_requested`、`approval_resolved`
+- `provider_error`
+
+每条事件有稳定 ID、Provider 关联 ID、Host generation 和来源。Provider raw payload 与统一事件并存；未知事件保留但不猜状态。delta 按 turn/item/block 定位，最终 item 用于收敛，重复帧不得重复拼接正文。
+
+正文、工具输入/输出和原始事件只进入授权内容存储，不进入诊断日志。旧发现链路的元数据授权不自动扩大为全文授权。
+
+## 5. 快照、订阅与多端
+
+客户端先获取 `snapshot + cursor`，再订阅 cursor 之后的事件，避免读取与订阅之间丢帧。重复投递允许，业务结果必须幂等。
+
+多个客户端共享同一 Session：
+
+- 客户端数量不改变执行态和 Host 所有权；
+- 零订阅者不停止 Runtime；
+- 慢客户端使用有界缓冲，落后时重取快照，不能阻塞 daemon 的 Provider 读循环；
+- daemon 离线时历史可读，写操作必须显示不可用或真实排队状态；
+- Desktop 本地 IPC 与远程命令经过同一 Session Registry 和命令账本。
+
+## 6. Reconcile
+
+连接恢复和定期巡检交换：
+
+- Provider Session ID 与 Hub Session ID；
+- Host generation 与 ControlState；
+- 当前 turn、待审批集合；
+- 最后连续事件/命令水位；
+- Runtime 进程与能力探测结果。
+
+以 Runtime/Host 可验证证据收敛。找不到进程时标记 `lost/unknown`，不能依据 Gateway 的旧历史重造 `running`。如果命令可能已执行但收据缺失，标记 `indeterminate` 并要求用户或 Adapter 对齐。
+
+## 7. 验证
+
+必须覆盖乱序、重复、非法 ACK、连接替换、窗口满、daemon/Gateway 重启、同 ID 异负载、审批跨代际、双客户端竞态、设备撤销和跨账户拒绝。真实 WebSocket 加模拟事件只证明传输，不证明官方 Agent Remote。

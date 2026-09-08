@@ -9,7 +9,6 @@ Runner 与 Device Gateway 共享的同步协议版本 1 TypeScript 实现。
 - Rust 字段顺序兼容的签名字节生成
 - Ed25519 批次验签
 - Agent、状态、来源、等待原因和载荷类型
-- 远程任务创建、状态机、设备领取/回报与签名字节契约
 - Node 生成、Rust 验证的跨语言测试向量
 
 ```powershell
