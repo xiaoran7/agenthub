@@ -60,7 +60,37 @@ test(
         "--server",
         address.replace("http:", "ws:") + "/v3/remote/ws",
       ],
-      { stdio: ["ignore", "ignore", "pipe"], windowsHide: true },
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+        env: {
+          ...process.env,
+          HTTP_PROXY:
+            process.env.HTTP_PROXY ||
+            process.env.http_proxy ||
+            "http://127.0.0.1:7897",
+          HTTPS_PROXY:
+            process.env.HTTPS_PROXY ||
+            process.env.https_proxy ||
+            "http://127.0.0.1:7897",
+          ALL_PROXY:
+            process.env.ALL_PROXY ||
+            process.env.all_proxy ||
+            "http://127.0.0.1:7897",
+          http_proxy:
+            process.env.http_proxy ||
+            process.env.HTTP_PROXY ||
+            "http://127.0.0.1:7897",
+          https_proxy:
+            process.env.https_proxy ||
+            process.env.HTTPS_PROXY ||
+            "http://127.0.0.1:7897",
+          all_proxy:
+            process.env.all_proxy ||
+            process.env.ALL_PROXY ||
+            "http://127.0.0.1:7897",
+        },
+      },
     );
     let diagnostics = "";
     child.stderr.on("data", (chunk) => {
@@ -109,15 +139,29 @@ test(
     try {
       await wait(sessions, (value) =>
         value.runners.some(
-          (runner: { online: boolean; hello: unknown }) =>
-            runner.online && runner.hello,
+          (runner: { online: boolean; hello: any }) =>
+            runner.online && runner.hello?.workspaces?.length > 0,
         ),
       );
+      const runnersList = (await sessions()).runners;
+      const runner = runnersList.find(
+        (r: { online: boolean; hello: any }) => r.online && r.hello,
+      );
+      const workspaceId = runner.hello.workspaces[0];
+      assert.ok(
+        typeof workspaceId === "string" && workspaceId.startsWith("ws-"),
+        "workspace ID must be emitted in ready hello",
+      );
+
       await submit({
         client_cmd_id: "native-create",
         hub_session_id: "native-hub",
         host_generation: null,
-        command: { action: "connect", mode: "create", workspace_path: dir },
+        command: {
+          action: "connect",
+          mode: "create",
+          workspace_path: workspaceId,
+        },
       });
       const state = await wait(
         sessions,

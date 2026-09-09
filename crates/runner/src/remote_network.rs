@@ -45,6 +45,11 @@ pub enum LocalHostCommand {
     Discover {
         respond_to: SyncSender<Result<Value, String>>,
     },
+    EnableRemote {
+        server_url: String,
+        identity: DeviceIdentity,
+        respond_to: SyncSender<Result<(), String>>,
+    },
 }
 
 pub struct LocalHostChannel {
@@ -140,6 +145,23 @@ impl LocalHostClient {
             .map_err(|_| "host_not_running".to_string())?;
         rx.recv_timeout(Duration::from_secs(15))
             .map_err(|_| "query_timeout".to_string())?
+    }
+
+    pub fn enable_remote(
+        &self,
+        server_url: String,
+        identity: DeviceIdentity,
+    ) -> Result<(), String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(LocalHostCommand::EnableRemote {
+                server_url,
+                identity,
+                respond_to: tx,
+            })
+            .map_err(|_| "host_not_running".to_string())?;
+        rx.recv_timeout(Duration::from_secs(15))
+            .map_err(|_| "enable_remote_timeout".to_string())?
     }
 
     pub fn subscribe(&self, capacity: usize) -> (LocalEventSubscription, Receiver<HostEvent>) {
@@ -295,16 +317,20 @@ pub fn run_with_local_control(
             })
         })
         .collect();
-    durable.journal.append(&json!({"type":"ready","provider":"codex_app_server","host_generation":durable.host.generation(),
-        "workspaces":sanitized_workspaces,"sessions":sanitized_sessions,"models":models,"discovery":discovery,"attach_running":false}),&[])?;
+    let mut ready_payload = json!({"type":"ready","provider":"codex_app_server","host_generation":durable.host.generation(),
+        "workspaces":sanitized_workspaces,"sessions":sanitized_sessions,"models":models,"discovery":discovery,"attach_running":false});
+    crate::privacy::sanitize_workspace_paths_in_json(&mut ready_payload);
+    durable.journal.append(&ready_payload, &[])?;
     control.ready.store(true, Ordering::Relaxed);
     let command_seq = Arc::new(AtomicI64::new(durable.journal.received_command_seq()?));
     let (events_tx, events) = mpsc::sync_channel(256);
-    let (send_tx, send_rx) = mpsc::sync_channel(64);
+    let (mut send_tx, send_rx) = mpsc::sync_channel(64);
     let generation = durable.host.generation().to_owned();
     let worker_stop = control.clone();
     let worker_seq = command_seq.clone();
+    let mut current_server = url.clone();
     if let Some(target_url) = url {
+        let events_tx_clone = events_tx.clone();
         thread::spawn(move || {
             network_loop(
                 target_url,
@@ -312,7 +338,7 @@ pub fn run_with_local_control(
                 generation,
                 worker_seq,
                 worker_stop,
-                events_tx,
+                events_tx_clone,
                 send_rx,
             )
         });
@@ -388,6 +414,39 @@ pub fn run_with_local_control(
                     }
                     Ok(LocalHostCommand::Discover { respond_to }) => {
                         let _ = respond_to.send(durable.host.discover().map_err(|e| e.code));
+                    }
+                    Ok(LocalHostCommand::EnableRemote {
+                        server_url,
+                        identity: remote_identity,
+                        respond_to,
+                    }) => {
+                        let res = (|| -> Result<()> {
+                            let validated = validate_server(&server_url)?;
+                            if current_server.as_ref() == Some(&validated) {
+                                return Ok(());
+                            }
+                            durable.journal.rebind_server_if_local(&validated)?;
+                            current_server = Some(validated.clone());
+                            let (new_send_tx, new_send_rx) = mpsc::sync_channel(64);
+                            send_tx = new_send_tx;
+                            let events_tx_clone = events_tx.clone();
+                            let worker_stop = control.clone();
+                            let worker_seq = command_seq.clone();
+                            let host_gen = durable.host.generation().to_owned();
+                            thread::spawn(move || {
+                                network_loop(
+                                    validated,
+                                    remote_identity,
+                                    host_gen,
+                                    worker_seq,
+                                    worker_stop,
+                                    events_tx_clone,
+                                    new_send_rx,
+                                )
+                            });
+                            Ok(())
+                        })();
+                        let _ = respond_to.send(res.map_err(|e| e.to_string()));
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => break,

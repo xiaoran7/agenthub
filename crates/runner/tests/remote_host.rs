@@ -77,13 +77,14 @@ fn discovery_only_exports_authorized_metadata_and_never_grants_control() {
     assert!(host.sessions().is_empty());
 }
 fn connect(dir: &tempfile::TempDir, hub: &str) -> RemoteCommand {
+    let ws_id = agent_pulse_runner::privacy::workspace_id_for_path(&dir.path().to_string_lossy());
     RemoteCommand {
         client_cmd_id: format!("create-{hub}"),
         hub_session_id: hub.into(),
         host_generation: None,
         command: RemoteAction::Connect {
             mode: ConnectMode::Create,
-            workspace_path: dir.path().into(),
+            workspace_path: ws_id.into(),
             provider_session_id: None,
             model: None,
             sandbox: CodexSandbox::ReadOnly,
@@ -339,6 +340,21 @@ fn unauthorized_workspace_is_rejected_before_any_provider_call() {
     let other = tempfile::tempdir().unwrap();
     assert_eq!(
         host.handle_command(connect(&other, "hub")).code.as_deref(),
+        Some("workspace_not_authorized")
+    );
+    assert!(fake.0.lock().unwrap().calls.is_empty());
+}
+
+#[test]
+fn raw_filesystem_path_is_rejected_as_unauthorized_workspace() {
+    let (dir, fake, mut host) = setup();
+    let mut command = connect(&dir, "hub");
+    // Submitting raw filesystem path instead of workspace_id must be strictly rejected
+    if let RemoteAction::Connect { workspace_path, .. } = &mut command.command {
+        *workspace_path = dir.path().to_path_buf();
+    }
+    assert_eq!(
+        host.handle_command(command).code.as_deref(),
         Some("workspace_not_authorized")
     );
     assert!(fake.0.lock().unwrap().calls.is_empty());

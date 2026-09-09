@@ -335,15 +335,29 @@ pub(crate) async fn start_remote_host(
     {
         // Host is already running: dynamically authorize any new workspaces without stopping active sessions
         for ws in &profile.workspace_paths {
-            let _ = handle.client.authorize_workspace(ws.clone());
             if !handle.profile.workspace_paths.contains(ws) {
-                handle.profile.workspace_paths.push(ws.clone());
+                if handle.profile.workspace_paths.len() >= 32 {
+                    return Err("授权工作区数量不能超过 32 个".to_owned());
+                }
+                let authorized = handle
+                    .client
+                    .authorize_workspace(ws.clone())
+                    .map_err(|e| format!("工作区授权失败: {e}"))?;
+                handle.profile.workspace_paths.push(authorized);
             }
         }
-        let _ = fs::write(
-            profile_path,
+        fs::write(
+            &profile_path,
             serde_json::to_vec(&handle.profile).map_err(|_| "无法保存连接设置".to_owned())?,
-        );
+        )
+        .map_err(|_| "无法保存连接设置".to_owned())?;
+
+        // Truly enable Remote on the running Host: launch Gateway network_loop
+        handle
+            .client
+            .enable_remote(server.to_string(), identity)
+            .map_err(|e| format!("启用远程连接失败: {e}"))?;
+
         return Ok(());
     }
     if slot

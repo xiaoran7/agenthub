@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Codex NativeSessionHost 单一本机会话核心第五轮深度收敛与链路闭环（2026-09-09）
+
+- **解决 P1 已有 Host 开启 Remote 真正启用 Gateway network_loop**：
+  - 在 `LocalHostCommand` 与 `LocalHostClient` 中新增 `EnableRemote` 控制命令；
+  - 当 Desktop 工作台已离线启动本地 Host 后，用户点击开启 Remote 时，`start_remote_host` 直接向运行中的 Host 发送 `enable_remote`，将底层 SQLite WAL Journal 绑定至 Gateway，并动态 spawn 启动 Gateway `network_loop`，彻底解决 connected 始终为 false 的假复用问题。
+- **解决 P1 动态授权错误与配置持久化失败严格拦截**：
+  - 重构 `start_remote_host`：严格限制工作区数量上限为 32 个，若新增工作区超过 32 个或 `client.authorize_workspace` 抛出错误立即阻断并返回拒绝；
+  - `fs::write(&profile_path, ...)` 结果严格向上传播错误，杜绝静默吞掉异常。
+- **解决 P1 递归路径脱敏全字段覆盖（覆盖 cwd、workdir、raw 等）**：
+  - 扩展 `privacy.rs` 中的 `sanitize_workspace_paths_in_json`：除了 `workspace_path`，全面覆盖 `cwd`、`workdir`、`working_dir`、`working_directory`、`project_path`、`root_path` 等字段；
+  - 无论是原生 `provider_response.thread.cwd` 还是事件流中 `raw.params.cwd`，均被递归脱敏替换为安全的 `workspace_id`，物理路径绝不出本机；补充覆盖完整对象结构与嵌套数组的针对性单测。
+- **解决 P1 Remote 协议禁止直接提交绝对物理路径与 E2E 真实验证**：
+  - 重构 `remote_host.rs` 中 `Connect` 命令处理逻辑：彻底移除直接对物理路径执行 `canonicalize()` 的后门，严格仅接受已授权的 `workspace_id`（`ws-...`）并通过反查映射获取真实物理路径；直接提交物理绝对路径一律返回 `workspace_not_authorized`；
+  - 增加单测 `raw_filesystem_path_is_rejected_as_unauthorized_workspace` 显式验证物理绝对路径被严格拦截；
+  - 在 `services/api/test/remote-native.test.ts` 中，真实通过 `ready` 包提取 `workspace_id`（`ws-...`）提交 `connect` 命令，完成端到端隐私链路验证。
+- **解决 P1 Desktop 回合事件流增加 turn ID 校验**：
+  - 在 `launch_codex_session_with_client` 与 `send_codex_message_with_client` 中记录命令返回的 `expected_turn_id`；
+  - 严格比对 `turn/completed` 与 `item/agentMessage/delta` 事件中的 `turn_id`，若不匹配当前回合则安全丢弃延迟到达的旧回合残余事件，杜绝错误截断或结束当前新回合。
+- **解决 P1 取消收据 accepted 语义对齐与消除双重中断竞争**：
+  - 修正 `cancel_session_turn`：中断指令被 Host 接受时返回 `json!({ "accepted": true, "receipt": receipt })`，不再虚假声称 `cancelled: true`；
+  - 移除工作线程内部重复构造并再次发送 `RemoteAction::Interrupt` 的冗余调用，避免同一会话发生双重中断竞争；工作线程仅监听 Provider 回传的真实 `status == "interrupted"` 终态信号后返回 `DesktopError::AgentCancelled`。
+- **全套质量门禁 100% 通过**：
+  - `cargo fmt --all --check` 严格格式化通过；
+  - `cargo clippy --workspace --all-targets -- -D warnings` 零告警通过；
+  - `cargo test --workspace` 实际为 134 passed，1 ignored；
+  - 真实 Codex 启停单测 `desktop_owner_can_stop_native_host_without_a_process_signal` 100% passed；
+  - 全套 Node/TS 测试（118 passed，6 skipped）与 `npm run typecheck`、`npm run format:check` 100% 全绿；
+  - 真实两轮 Codex Remote + Gateway 重启与磁盘回放 E2E 测试 `remote-native.test.ts` 约 14.8 秒顺利通过。
+
 ### Codex NativeSessionHost 单一本机会话核心第四轮深度对齐与闭环整改（2026-09-08）
 
 - **解决 turn/completed 严格判定 status 状态**：

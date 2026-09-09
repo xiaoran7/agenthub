@@ -66,10 +66,13 @@ pub fn workspace_id_for_path(raw_cwd: &str) -> String {
 }
 
 fn normalize_path_for_fingerprint(raw_cwd: &str) -> String {
-    let normalized = raw_cwd
+    let mut normalized = raw_cwd
         .trim()
         .trim_end_matches(['/', '\\'])
         .replace('\\', "/");
+    if normalized.starts_with("//?/") {
+        normalized = normalized[4..].to_string();
+    }
     #[cfg(windows)]
     {
         normalized.to_lowercase()
@@ -106,18 +109,25 @@ pub fn project_display_name(raw_cwd: &str) -> String {
 }
 
 /// Recursively traverses a JSON Value and replaces any SessionBinding.workspace_path,
-/// candidate workspace_path, or string field named "workspace_path" with its safe workspace_id.
+/// candidate workspace_path, cwd, workdir, or physical path fields with safe workspace_id.
 pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, val) in map.iter_mut() {
-                if key == "workspace_path" {
-                    if let Some(path_str) = val.as_str() {
-                        *val = serde_json::Value::String(workspace_id_for_path(path_str));
-                    }
-                } else {
-                    sanitize_workspace_paths_in_json(val);
+                let is_path_key = key == "workspace_path"
+                    || key == "cwd"
+                    || key == "workdir"
+                    || key == "working_dir"
+                    || key == "working_directory"
+                    || key == "project_path"
+                    || key == "root_path";
+                if is_path_key
+                    && let Some(path_str) = val.as_str()
+                    && !path_str.starts_with("ws-")
+                {
+                    *val = serde_json::Value::String(workspace_id_for_path(path_str));
                 }
+                sanitize_workspace_paths_in_json(val);
             }
         }
         serde_json::Value::Array(arr) => {
@@ -180,5 +190,58 @@ mod tests {
         assert!(ws1.starts_with("ws-my-app-"));
         assert!(!ws1.contains("alice"));
         assert!(!ws1.contains("code"));
+    }
+
+    #[test]
+    fn sanitize_workspace_paths_in_json_replaces_cwd_and_nested_paths() {
+        let mut sample = serde_json::json!({
+            "type": "data",
+            "provider_response": {
+                "thread": {
+                    "id": "thread-1",
+                    "cwd": "C:\\Users\\alice\\projects\\super-app"
+                }
+            },
+            "events": [
+                {
+                    "raw": {
+                        "params": {
+                            "cwd": "/home/bob/secret-repo",
+                            "turn": {
+                                "id": "turn-1"
+                            }
+                        }
+                    },
+                    "binding": {
+                        "workspace_path": "D:\\Workspaces\\team-portal"
+                    }
+                }
+            ]
+        });
+        sanitize_workspace_paths_in_json(&mut sample);
+        let serialized = sample.to_string();
+        assert!(!serialized.contains("alice"));
+        assert!(!serialized.contains("bob"));
+        assert!(!serialized.contains("Users"));
+        assert!(!serialized.contains("home"));
+        assert!(!serialized.contains("D:\\\\Workspaces"));
+        assert_eq!(
+            sample["provider_response"]["thread"]["cwd"]
+                .as_str()
+                .unwrap(),
+            workspace_id_for_path("C:\\Users\\alice\\projects\\super-app")
+        );
+        assert_eq!(
+            sample["events"][0]["raw"]["params"]["cwd"]
+                .as_str()
+                .unwrap(),
+            workspace_id_for_path("/home/bob/secret-repo")
+        );
+        assert_eq!(
+            sample["events"][0]["binding"]["workspace_path"]
+                .as_str()
+                .unwrap(),
+            workspace_id_for_path("D:\\Workspaces\\team-portal")
+        );
     }
 }

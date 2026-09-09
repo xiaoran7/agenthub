@@ -77,6 +77,29 @@ impl RemoteJournal {
         Ok(())
     }
 
+    pub fn rebind_server_if_local(&mut self, new_server: &str) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        let stored: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT device_id,server FROM remote_identity WHERE singleton=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((_device_id, server)) = stored {
+            if server == "local://agenthub" || server.trim().is_empty() {
+                transaction.execute(
+                    "UPDATE remote_identity SET server=?1 WHERE singleton=1",
+                    params![new_server],
+                )?;
+            } else if server != new_server {
+                return Err(JournalError::IdentityMismatch);
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn begin_command(&mut self, command: &RemoteCommand) -> Result<BeginCommand> {
         let transaction = self.connection.transaction()?;
         let previous: Option<(String, Option<String>)> = transaction

@@ -702,7 +702,7 @@ async fn launch_new_session(
 fn launch_codex_session_with_client(
     input: LaunchSessionInput,
     client: agent_pulse_runner::remote_network::LocalHostClient,
-    cancelled: &AtomicBool,
+    _cancelled: &AtomicBool,
     on_event: Channel<SessionTurnEvent>,
 ) -> Result<Value, DesktopError> {
     let prompt = input.prompt.trim();
@@ -727,7 +727,9 @@ fn launch_codex_session_with_client(
         host_generation: None,
         command: agent_pulse_runner::remote_host::RemoteAction::Connect {
             mode: agent_pulse_runner::remote_host::ConnectMode::Create,
-            workspace_path: cwd.clone(),
+            workspace_path: PathBuf::from(agent_pulse_runner::privacy::workspace_id_for_path(
+                &cwd.to_string_lossy(),
+            )),
             provider_session_id: None,
             model: input.model.filter(|m| !m.trim().is_empty()),
             sandbox: match input.permission_mode.as_deref() {
@@ -779,26 +781,30 @@ fn launch_codex_session_with_client(
     if send_receipt.status != "accepted" {
         return Err(DesktopError::AgentFailed);
     }
+    let expected_turn_id = send_receipt
+        .result
+        .as_ref()
+        .and_then(|r| r["turn"]["id"].as_str())
+        .map(str::to_owned);
 
     let mut full_response = String::new();
     let mut turn_completed = false;
     let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
     while Instant::now() < deadline {
-        if cancelled.load(Ordering::Relaxed) {
-            let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
-                client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
-                hub_session_id: hub_session_id.clone(),
-                host_generation: Some(host_generation),
-                command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
-            };
-            let _ = client.execute(interrupt_cmd);
-            return Err(DesktopError::AgentCancelled);
-        }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(event) => {
                 if event.hub_session_id.as_deref() == Some(&hub_session_id) {
                     match event.kind.as_str() {
                         "item/agentMessage/delta" => {
+                            let event_turn_id = event.raw["params"]["turnId"]
+                                .as_str()
+                                .or_else(|| event.raw["params"]["turn"]["id"].as_str());
+                            if let Some(expected) = expected_turn_id.as_deref()
+                                && let Some(actual) = event_turn_id
+                                && actual != expected
+                            {
+                                continue;
+                            }
                             if let Some(delta) = event.raw["params"]["delta"].as_str() {
                                 full_response.push_str(delta);
                                 let _ = on_event.send(SessionTurnEvent::AssistantDelta {
@@ -817,6 +823,15 @@ fn launch_codex_session_with_client(
                             });
                         }
                         "turn/completed" => {
+                            let event_turn_id = event.raw["params"]["turn"]["id"]
+                                .as_str()
+                                .or_else(|| event.raw["params"]["turnId"].as_str());
+                            if let Some(expected) = expected_turn_id.as_deref()
+                                && let Some(actual) = event_turn_id
+                                && actual != expected
+                            {
+                                continue;
+                            }
                             let status = event.raw["params"]["turn"]["status"]
                                 .as_str()
                                 .unwrap_or("unknown");
@@ -865,7 +880,7 @@ fn send_codex_message_with_client(
     input: SessionMessageInput,
     client: agent_pulse_runner::remote_network::LocalHostClient,
     _data_dir: &Path,
-    cancelled: &AtomicBool,
+    _cancelled: &AtomicBool,
     on_event: Channel<SessionTurnEvent>,
 ) -> Result<Value, DesktopError> {
     validate_session_id(&input.agent_session_id)?;
@@ -893,7 +908,9 @@ fn send_codex_message_with_client(
             host_generation: None,
             command: agent_pulse_runner::remote_host::RemoteAction::Connect {
                 mode: agent_pulse_runner::remote_host::ConnectMode::Resume,
-                workspace_path: cwd,
+                workspace_path: PathBuf::from(agent_pulse_runner::privacy::workspace_id_for_path(
+                    &cwd.to_string_lossy(),
+                )),
                 provider_session_id: Some(input.agent_session_id.clone()),
                 model: input.model.filter(|m| !m.trim().is_empty()),
                 sandbox: match input.permission_mode.as_deref() {
@@ -940,26 +957,30 @@ fn send_codex_message_with_client(
     if send_receipt.status != "accepted" {
         return Err(DesktopError::AgentFailed);
     }
+    let expected_turn_id = send_receipt
+        .result
+        .as_ref()
+        .and_then(|r| r["turn"]["id"].as_str())
+        .map(str::to_owned);
 
     let mut full_response = String::new();
     let mut turn_completed = false;
     let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
     while Instant::now() < deadline {
-        if cancelled.load(Ordering::Relaxed) {
-            let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
-                client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
-                hub_session_id: hub_session_id.clone(),
-                host_generation: Some(host_generation),
-                command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
-            };
-            let _ = client.execute(interrupt_cmd);
-            return Err(DesktopError::AgentCancelled);
-        }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(event) => {
                 if event.hub_session_id.as_deref() == Some(&hub_session_id) {
                     match event.kind.as_str() {
                         "item/agentMessage/delta" => {
+                            let event_turn_id = event.raw["params"]["turnId"]
+                                .as_str()
+                                .or_else(|| event.raw["params"]["turn"]["id"].as_str());
+                            if let Some(expected) = expected_turn_id.as_deref()
+                                && let Some(actual) = event_turn_id
+                                && actual != expected
+                            {
+                                continue;
+                            }
                             if let Some(delta) = event.raw["params"]["delta"].as_str() {
                                 full_response.push_str(delta);
                                 let _ = on_event.send(SessionTurnEvent::AssistantDelta {
@@ -978,6 +999,15 @@ fn send_codex_message_with_client(
                             });
                         }
                         "turn/completed" => {
+                            let event_turn_id = event.raw["params"]["turn"]["id"]
+                                .as_str()
+                                .or_else(|| event.raw["params"]["turnId"].as_str());
+                            if let Some(expected) = expected_turn_id.as_deref()
+                                && let Some(actual) = event_turn_id
+                                && actual != expected
+                            {
+                                continue;
+                            }
                             let status = event.raw["params"]["turn"]["status"]
                                 .as_str()
                                 .unwrap_or("unknown");
@@ -1170,9 +1200,9 @@ fn cancel_session_turn(
         if receipt.status != "accepted" {
             return Err(format!("中断请求被拒绝: {}", receipt.status));
         }
-        return Ok(json!({ "cancelled": true, "receipt": receipt }));
+        return Ok(json!({ "accepted": true, "receipt": receipt }));
     }
-    Ok(json!({ "cancelled": true }))
+    Ok(json!({ "accepted": true }))
 }
 
 #[tauri::command]
