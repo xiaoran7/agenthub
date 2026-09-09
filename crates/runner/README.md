@@ -1,299 +1,61 @@
-# AgentHub Runner（目标角色：agenthubd）
+# AgentHub Runner
 
-本机 Session Host、设备连接与只读发现进程。当前可执行文件名仍为
-`agent-pulse-runner`；后续将作为 Desktop 自动管理的 `agenthubd`，同时服务本地 IPC
-与 Remote，不要求用户手动维护两套 Host。
+`agent-pulse-runner` 是当前可执行文件名，承载本机会话 Host、设备身份、Remote 连接和只读 Provider 发现。`agenthubd` 是目标架构角色；Desktop 与独立后台进程尚未完全统一前，不得宣称已实现系统级常驻 daemon。
 
-## 原生 Remote
+## 运行模式
 
-先完成原有设备绑定，在 Gateway 启用 `AGENTHUB_REMOTE_DATABASE`。使用已绑定的设备身份启动：
+- `remote-run`：持久 Remote 入口。使用设备身份、授权工作区和本地 SQLite journal，经 WSS 连接 Gateway；支持命令去重、断线回放、审批隔离和 Codex 原生会话控制。
+- `remote-host`：同一 Host 的本地 JSONL 调试入口，不提供远程持久恢复。
+- `run` / `collect-once`：迁移期只读发现与元数据同步，覆盖 Claude、Codex、Grok 和 Antigravity 适配器。
+- `device` / `sync` / `outbox`：设备绑定、签名批次和本地事件队列诊断。
+- `auth`：显式 opt-in 的本地兼容能力；默认不读取 Provider 凭据。
+
+精确子命令和参数以 `cargo run -p agent-pulse-runner -- --help` 及各子命令 `--help` 为准，不在 README 复制完整 CLI 手册。
+
+## 最短验证
+
+从仓库根运行：
 
 ```powershell
-cargo run -p agent-pulse-runner -- --identity <已绑定设备身份文件> remote-run `
-  --codex-binary <codex原生可执行文件> `
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+初始化开发设备身份并查看命令：
+
+```powershell
+cargo run -p agent-pulse-runner -- device init --identity runner-identity.json
+cargo run -p agent-pulse-runner -- --identity runner-identity.json device --help
+```
+
+身份文件包含设备私钥，只能保存在当前用户可读目录，不得提交、上传或跨设备复用。
+
+## Remote 示例
+
+完成设备绑定后，可为明确授权的工作区启动 Remote：
+
+```powershell
+cargo run -p agent-pulse-runner -- --identity runner-identity.json remote-run `
+  --codex-binary <codex可执行文件> `
   --workspace D:\Projects\Example `
-  --db <专用Remote数据库路径> `
+  --db runner.db `
   --server wss://<Gateway域名>/v3/remote/ws
 ```
 
-`--workspace` 可重复，仅允许明确授权目录。数据库保存正文、命令与原生 ID，绑定设备和 Gateway，不可跨设备/服务复用。WSS 为默认要求；本机测试可使用 `ws://127.0.0.1:3001/v3/remote/ws`。关闭网页不终止 Host；停止 Runner 会失去实时控制，下次必须显式恢复。
+非回环地址必须使用 WSS。journal 绑定设备和 Gateway，不得跨身份或服务复用。停止 Runner 会失去实时控制；下次必须显式恢复。当前不支持任意 attach 到由其他官方客户端持有的可写会话。
 
-`remote-host` 是同一原生 Host 的本地 JSONL 调试入口，不提供远程持久恢复。`remote-run` 提供持久命令去重、签名握手、断线重放与审批隔离。当前支持 Codex 创建、恢复、输入、审批和中断；不支持任意外部正在运行的 CLI attach。产品与 Provider 边界见 [系统架构](../../docs/ARCHITECTURE.md)。
+## 隐私与执行边界
 
-## 旧只读采集
+- 只读发现只同步白名单元数据，不保留 Prompt、消息、命令、工具载荷、完整路径、transcript、rollout、Token 或 Cookie。
+- managed Remote 可以在用户授权后同步正文、工具事件和审批；原始 Provider 事件与统一 Envelope 分层保存。
+- 原始凭据不得进入 Gateway、Outbox 或诊断日志。`auth token --reveal` 只允许显式本地操作。
+- `discover`、`resume`、`attach` 和新建 Session 是不同语义；发现 PID、JSONL 或状态库不代表取得控制权。
+- 远程命令必须幂等；排队、Provider 接受和执行完成是不同状态，未知结果先对齐再处理。
 
-目前实现：
+## 文档
 
-- Claude 本地 Session JSONL 元数据发现
-- Claude 生命周期 Hook 标准化
-- Codex app-server Thread 与实时事件标准化
-- Codex 生命周期 Hook 标准化
-- Grok Build `summary.json` / `active_sessions.json` 元数据发现
-- Grok Build 生命周期 Hook 标准化
-- Claude 配置目录一次性 Session 采集（无需 Claude CLI）
-- Codex app-server stdio 握手与一次性 Thread 采集；不可执行时只读本地状态库兜底
-- Grok Build 一次性 Session 采集（无需 `grok` 在 PATH 中）
-- Codex app-server 被动状态通知采集与轮询状态合并
-- Claude/Codex 持续采集、活动/空闲自适应间隔与失败指数退避
-- 采集命令和协议响应强制超时；Windows 下终止完整子进程树
-- 适配器健康状态持久化和安全诊断错误码
-- 工作目录显示名与 HMAC 指纹脱敏
-- SQLite Outbox、事件顺序、幂等和 Session 快照
-- Ed25519 本地设备身份、签名同步批次和有界确认
-- 独立后台同步、启动排空、新事件唤醒与网络失败指数退避
-- Fixture 驱动的隐私回归测试
-
-## 开发命令
-
-```powershell
-$env:AGENT_PLATFORM_FINGERPRINT_KEY = 'local-development-only'
-
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-初始化设备身份：
-
-```powershell
-cargo run -p agent-pulse-runner -- `
-  device init `
-  --identity runner-identity.json
-```
-
-身份文件包含设备私钥，必须保存在仅当前用户可读的目录中，不得提交到 Git、上传或
-与其他设备共用。重复初始化不会覆盖已有文件。后续命令传入全局
-`--identity runner-identity.json` 后，会自动使用该设备 ID，并由设备私钥派生项目
-指纹密钥；也可以设置 `AGENT_PLATFORM_IDENTITY`。
-
-标准化 Claude Agent 列表 Fixture：
-
-```powershell
-cargo run -p agent-pulse-runner -- `
-  --identity runner-identity.json `
-  normalize claude-agents `
-  --input crates/runner/fixtures/claude-agents.json
-```
-
-接收 Claude Hook 并写入本地 Outbox：
-
-```powershell
-Get-Content -Raw crates/runner/fixtures/claude-hook-permission.json |
-  cargo run -p agent-pulse-runner -- `
-    --device-id local-dev `
-    ingest-hook claude `
-    --db runner.db
-```
-
-从本机 Claude、Codex 或 Grok Build 采集一次，并写入本地 Outbox：
-
-```powershell
-cargo run -p agent-pulse-runner -- `
-  --identity runner-identity.json `
-  collect-once claude `
-  --db runner.db
-
-cargo run -p agent-pulse-runner -- `
-  --device-id local-dev `
-  collect-once codex `
-  --db runner.db `
-  --limit 100
-
-cargo run -p agent-pulse-runner -- `
-  --identity runner-identity.json `
-  collect-once grok `
-  --db runner.db
-```
-
-Claude 默认扫描 `CLAUDE_CONFIG_DIR`，未设置时扫描 `~/.claude/projects`，不要求
-`claude` 在 `PATH` 中；`--include-completed` 会把最大历史读取量从 100 提高到 1000。
-扫描只反序列化顶层 Session ID、工作目录与时间，不保留消息或工具载荷。Codex 优先
-使用 app-server；其可执行文件不在 `PATH` 时可通过 `--binary` 指定，启动失败则自动
-只读查询 `CODEX_HOME`（默认 `~/.codex`）最新状态库的 Thread 元数据。该兜底不读取
-rollout 正文或 `auth.json`。Grok Build 扫描 `GROK_HOME`（默认 `~/.grok`）下的
-`summary.json` 与 `active_sessions.json`，不读取对话正文、`auth.json` 或
-`last_turn_summary`。一次性采集默认在 15 秒后超时，可通过
-`--timeout-seconds` 调整。
-
-持续运行两个 Adapter：
-
-```powershell
-$env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
-
-cargo run -p agent-pulse-runner -- `
-  --identity runner-identity.json `
-  run all `
-  --db runner.db
-```
-
-默认有活动 Session 时每 2 秒采集，无活动时每 10 秒采集；失败后按
-2、4、8……秒退避，最长 60 秒。可以通过 `--active-interval-seconds`、
-`--idle-interval-seconds`、`--failure-initial-seconds` 和
-`--failure-max-seconds` 调整。每次采集默认最多等待 15 秒，可通过
-`--collector-timeout-seconds` 调整。`Ctrl-C` 会请求 Runner 安全退出。
-
-设置 `AGENT_PLATFORM_GATEWAY_URL`（或 `run --sync-server`）后，`run` 会启动独立
-同步线程：启动时先尝试排空上次进程留下的事件，采集到新事件时立即唤醒；成功后
-默认每 5 秒检查一次，失败按 2、4、8……秒退避到 60 秒。同步线程使用独立 SQLite
-连接，不会让 15 秒网络超时阻塞 Claude/Codex 采集。每轮仍受单批事件数和最大批次
-数约束，只有合法 ACK 才清理 Outbox；可通过 `--sync-interval-seconds`、
-`--sync-failure-initial-seconds`、`--sync-failure-max-seconds`、`--sync-limit`、
-`--sync-max-batches` 和 `--sync-timeout-seconds` 调整。启用后台同步必须同时传入
-`--identity` 或设置 `AGENT_PLATFORM_IDENTITY`，确保采集与签名使用同一个设备 ID。
-若数据库只有其他设备 ID 的旧事件，后台日志会报告
-`sync_pending_device_mismatch` 并退避，不会把“有积压但无可发送批次”写成成功。
-传输失败期间的每条后台同步报告都会包含当前磁盘 `pending_events`，便于确认长期
-离线时积压仍在增长而非丢失。
-
-远程 Gateway 使用私有 CA 时，把根证书 PEM 文件传给
-`AGENT_PLATFORM_GATEWAY_CA_CERT`（或 `--gateway-ca-cert`）。该选项适用于 `run`、
-`device bind` 和 `sync push`，仍会严格验证证书链、主机名和有效期，不提供跳过
-证书校验的开关：
-
-```powershell
-$env:AGENT_PLATFORM_GATEWAY_URL = 'https://agent.example.internal'
-$env:AGENT_PLATFORM_GATEWAY_CA_CERT = 'C:\ProgramData\AgentPlatform\gateway-ca.pem'
-```
-
-Codex Runner 会处理当前 app-server 连接收到的状态、Turn、审批和用户输入通知，
-并与 `thread/list` / `thread/loaded/list` 的轮询结果合并。为保持只读，它不会调用
-`thread/resume` 或 `thread/start`；因此其他客户端已启动的 Thread 是否会向这条连接
-发送完整实时通知，仍需在可执行的真实 Codex CLI 环境中验证，轮询始终作为兜底。
-Runner 在初始化时退出消息、推理、计划、Diff、命令输出等内容型通知，避免读取不属于
-Session 元数据的载荷。
-
-Claude Runner 不再调用并不存在于当前官方 CLI 的 `claude agents --json`。磁盘发现的
-Session 只标记为持久化历史；工作中、等待输入、等待审批等实时状态必须来自 Hook 或
-后续受支持的官方事件接口。
-
-只运行一个 Adapter：
-
-```powershell
-cargo run -p agent-pulse-runner -- `
-  --device-id local-dev `
-  run codex `
-  --db runner.db `
-  --codex-binary C:\Tools\codex.exe
-```
-
-诊断或测试时可使用 `--max-attempts N` 自动停止。这个数字表示 Adapter 尝试次数；
-`run all --max-attempts 2` 通常会让 Claude 和 Codex 各尝试一次。
-
-查看 Outbox：
-
-```powershell
-cargo run -p agent-pulse-runner -- outbox stats --db runner.db
-cargo run -p agent-pulse-runner -- `
-  outbox pending --db runner.db --device-id local-dev
-cargo run -p agent-pulse-runner -- outbox health --db runner.db
-```
-
-健康状态只保存 `executable_not_found`、`permission_denied`、
-`protocol_invalid_json` 等固定错误码，不保存可执行文件路径或原始系统错误文本。
-状态未变化的轮询不会重复写入 Outbox。
-
-准备并验证签名同步批次：
-
-```powershell
-cargo run -p agent-pulse-runner -- `
-  sync prepare `
-  --identity runner-identity.json `
-  --db runner.db `
-  --limit 100
-
-cargo run -p agent-pulse-runner -- `
-  sync verify `
-  --batch batch.json
-```
-
-`sync prepare` 只输出白名单 Session 元数据，不输出设备私钥。服务端确认写入文件后，
-可用 `sync ack --db runner.db --batch batch.json --acknowledgement ack.json`
-清理已确认事件。确认的设备、批次和序列必须落在实际发送范围内；重复确认是幂等的。
-协议字段和签名规则见 [SYNC_PROTOCOL.md](../../docs/SYNC_PROTOCOL.md)。
-
-连接开发期 Gateway：
-
-```powershell
-  $env:AGENT_PLATFORM_GATEWAY_URL = 'http://127.0.0.1:3001'
-  $env:AGENT_PLATFORM_BINDING_CODE = '<从 Web 设置面板取得的一次性绑定码>'
-
-cargo run -p agent-pulse-runner -- `
-  device bind `
-  --identity runner-identity.json
-
-cargo run -p agent-pulse-runner -- `
-  sync push `
-  --identity runner-identity.json `
-  --db runner.db `
-  --limit 100 `
-  --max-batches 10
-```
-
-绑定码由 Gateway 的 Web 设置面板或受认证的 `POST /v1/device-bindings` 签发，
-默认 10 分钟有效且只显示一次。建议通过环境变量提供，避免进入 Shell 历史。
-私有 CA 部署还需设置 `AGENT_PLATFORM_GATEWAY_CA_CERT`；公共 CA 部署不设置即可。
-`sync push` 保留为诊断和一次性
-排空命令，每次只处理有界数量的批次；Gateway 返回的确认通过本地校验后才会删除
-Outbox 事件。网络失败、超时或无效响应不会清理未确认事件。远程 Gateway 地址必须
-使用 HTTPS，明文 HTTP 只允许 `localhost`、IPv4 或 IPv6 回环地址用于本地开发。
-
-Windows 用户可以使用 [`deploy/windows`](../../deploy/windows) 中的一键接入脚本：将
-`agent-pulse-runner.exe`、`Connect-AgentPulse.cmd` 和 `Connect-AgentPulse.ps1` 放在同一目录，
-双击 `.cmd` 后输入 Web 页面生成的一次性连接码。脚本会自动初始化设备身份、绑定 Gateway、
-创建本地 SQLite Outbox 并启动持续同步。
-
-## 旧本地认证状态与配额
-
-以下是迁移期保留的显式 opt-in 兼容能力，不接入新的 Session Host。目标架构由官方
-Runtime 自己管理登录，AgentHub 不缓存、刷新或向 Gateway 上传 Provider 凭据。
-
-凭据读取是显式 opt-in 能力，默认关闭。启用后 Runner 只读取当前用户允许的 Claude Code
-与 Codex 本地凭据来源，并将原始 token 保存在设备本地的 AES-GCM 加密缓存中；上传到 Gateway
-的认证同步批次只包含状态、来源、脱敏账号、过期时间和可用配额窗口，不包含 token、cookie、
-环境变量值或凭据文件正文。
-
-```powershell
-cargo run -p agent-pulse-runner -- `
-  --allow-credential-access `
-  --identity runner-identity.json `
-  auth status claude
-
-cargo run -p agent-pulse-runner -- `
-  --allow-credential-access `
-  --identity runner-identity.json `
-  auth quota codex
-```
-
-如果 CLI 不在 `PATH`，在 `auth` 子命令上显式传入 `--claude-binary` 或
-`--codex-binary`；这与 `run` 的 provider binary 覆盖选项相互独立。
-
-`auth refresh` 会调用官方 CLI/app-server 的刷新路径；`auth login` 和 `auth logout` 是显式的
-交互式本地操作。遇到 `reauth_required` 时，重新执行对应 provider 的 `auth login`。原始 token
-只有在同时传入 `--allow-credential-access --reveal` 的 `auth token` 命令中输出到当前终端，
-且不会进入日志、Outbox、同步批次或 Web 面板。`run` 启用凭据访问后会按
-`--auth-interval-seconds`（默认 60 秒）后台刷新安全快照；后台循环不会自动启动交互式登录。
-
-## 安全约束
-
-标准化输出禁止包含：
-
-- Prompt 与 Assistant 消息
-- 未经明确授权的 Agent 名称、Thread 标题和任务摘要
-- Shell 命令正文
-- 工具输入与输出
-- 完整工作目录
-- transcript 或 rollout 内容
-- Token、Cookie 和环境变量（除非用户显式执行本地 `auth token --reveal`）
-
-Fixture 中带有敏感标记，测试会确认这些标记不会进入标准化事件或 Outbox。
-
-## 尚未接入
-
-- Codex 跨客户端实时通知覆盖验证与缺失事件补偿
-- Hook 插件安装器
-- Desktop 本地 IPC 与自动后台常驻
-- Claude Code 长时 Session Host
-- 设备恢复绑定与密钥轮换
-- Windows 身份文件 ACL 主动加固
-- OS 原生服务安装
-
-这些功能将在核心协议与隐私测试稳定后逐步接入。
+- [系统架构](../../docs/ARCHITECTURE.md)：Host、Provider、Gateway 与客户端边界。
+- [Remote 协议](../../docs/SYNC_PROTOCOL.md)：身份、序列、ACK、重连和命令状态。
+- [部署](../../docs/DEPLOYMENT.md)与[已知问题](../../docs/PITFALLS.md)。
+- [仓库入口](../../README.md)与[文档索引](../../docs/README.md)。

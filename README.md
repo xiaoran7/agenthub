@@ -20,15 +20,9 @@ Desktop ──本地 IPC──► agenthubd ──官方协议──► Codex / 
 
 Desktop、Web、Android 是同一产品的三种客户端，不是三套会话系统。创建 Session 是正式能力；“发现历史”“恢复 Session”“连接已运行 Session”则是三种不同语义，不能互相冒充。
 
-## 当前状态
+## 当前能力
 
-- Codex 已有常驻 app-server Host，支持创建、恢复、多轮输入、审批和中断，并可经 Gateway 提供 Remote。
-- Gateway v3 已有设备签名、命令账本、内容持久化和断线回放；当前内容库为单实例 SQLite。
-- Web 与 Android 已消费 v3 Remote 会话。
-- Desktop 已能启动内嵌 Host，但默认工作台仍保留逐回合 CLI 子进程路径和独立 Remote 入口；下一阶段是统一到 `agenthubd`。
-- Claude Code 目前以历史发现和 CLI 接续为主，常驻双向 Host 尚未完成；外部正在运行的官方会话默认只读，直到 Provider 提供可验证的 attach 与所有权机制。
-
-完成状态以 [文档索引](docs/README.md) 和验收记录为准，不从 UI 入口或模拟测试推定。
+当前实现、目标架构和未完成差距只在 [文档索引](docs/README.md#当前实现与目标差距) 维护；本入口不复制阶段状态。验收记录只能证明其明确列出的环境，不能由 UI、模拟测试或旧版本数字推定。
 
 ## 开发
 
