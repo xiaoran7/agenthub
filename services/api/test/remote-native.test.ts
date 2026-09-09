@@ -65,30 +65,16 @@ test(
         windowsHide: true,
         env: {
           ...process.env,
-          HTTP_PROXY:
-            process.env.HTTP_PROXY ||
-            process.env.http_proxy ||
-            "http://127.0.0.1:7897",
-          HTTPS_PROXY:
-            process.env.HTTPS_PROXY ||
-            process.env.https_proxy ||
-            "http://127.0.0.1:7897",
-          ALL_PROXY:
-            process.env.ALL_PROXY ||
-            process.env.all_proxy ||
-            "http://127.0.0.1:7897",
-          http_proxy:
-            process.env.http_proxy ||
-            process.env.HTTP_PROXY ||
-            "http://127.0.0.1:7897",
-          https_proxy:
-            process.env.https_proxy ||
-            process.env.HTTPS_PROXY ||
-            "http://127.0.0.1:7897",
-          all_proxy:
-            process.env.all_proxy ||
-            process.env.ALL_PROXY ||
-            "http://127.0.0.1:7897",
+          ...(process.env.AGENTHUB_TEST_PROXY
+            ? {
+                HTTP_PROXY: process.env.AGENTHUB_TEST_PROXY,
+                HTTPS_PROXY: process.env.AGENTHUB_TEST_PROXY,
+                ALL_PROXY: process.env.AGENTHUB_TEST_PROXY,
+                http_proxy: process.env.AGENTHUB_TEST_PROXY,
+                https_proxy: process.env.AGENTHUB_TEST_PROXY,
+                all_proxy: process.env.AGENTHUB_TEST_PROXY,
+              }
+            : {}),
         },
       },
     );

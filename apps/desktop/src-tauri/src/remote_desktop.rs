@@ -25,19 +25,15 @@ pub(crate) fn stop(state: &DesktopState) {
     }
 }
 
-fn scoped_paths(data_dir: &Path, server: &str, device: &str) -> (PathBuf, PathBuf) {
+pub(crate) fn host_database_path(data_dir: &Path, device: &str) -> (PathBuf, PathBuf) {
     let scope = format!(
         "{:x}",
-        Sha256::digest(format!("{server}\n{device}").as_bytes())
+        Sha256::digest(format!("agenthub_native_host_v1\n{device}").as_bytes())
     );
     (
         data_dir.join(format!("remote-{}.sqlite", &scope[..16])),
         data_dir.join(format!("remote-{}.json", &scope[..16])),
     )
-}
-
-fn local_scoped_paths(data_dir: &Path, device: &str) -> (PathBuf, PathBuf) {
-    scoped_paths(data_dir, "local://agenthub", device)
 }
 
 pub(crate) fn get_host_client(state: &DesktopState) -> Option<LocalHostClient> {
@@ -85,18 +81,10 @@ pub(crate) fn ensure_host_client(
                     Ok(authorized) => {
                         if !handle.profile.workspace_paths.contains(&authorized) {
                             handle.profile.workspace_paths.push(authorized);
-                            let config = read_config(&state.data_dir).ok();
                             let identity = load_or_create_identity(&state.data_dir)
                                 .map_err(|_| DesktopError::Identity)?;
-                            let (_, profile_path) = match config
-                                .as_ref()
-                                .map(|c| c.server_url.as_str())
-                            {
-                                Some(url) => {
-                                    scoped_paths(&state.data_dir, url, identity.device_id())
-                                }
-                                None => local_scoped_paths(&state.data_dir, identity.device_id()),
-                            };
+                            let (_, profile_path) =
+                                host_database_path(&state.data_dir, identity.device_id());
                             let _ = fs::write(
                                 &profile_path,
                                 serde_json::to_vec(&handle.profile).unwrap_or_default(),
@@ -161,12 +149,8 @@ fn start_host_with_workspaces(
         .unwrap_or_else(default_codex_binary);
 
     let identity = load_or_create_identity(data_dir).map_err(|_| DesktopError::Identity)?;
-
+    let (database, profile_path) = host_database_path(data_dir, identity.device_id());
     let server_url = config.as_ref().map(|c| c.server_url.as_str());
-    let (database, profile_path) = match server_url {
-        Some(url) => scoped_paths(data_dir, url, identity.device_id()),
-        None => local_scoped_paths(data_dir, identity.device_id()),
-    };
 
     if let Ok(bytes) = fs::read(&profile_path)
         && let Ok(saved_profile) = serde_json::from_slice::<RemoteProfile>(&bytes)
@@ -298,8 +282,7 @@ pub(crate) async fn start_remote_host(
                 load_or_create_identity(&data_dir).map_err(|_| "本机设备身份不可用".to_owned())?;
             ensure_device_bound(&config.server_url, &cookie, &identity)
                 .map_err(|_| "设备绑定已失效".to_owned())?;
-            let (database, profile_path) =
-                scoped_paths(&data_dir, &config.server_url, identity.device_id());
+            let (database, profile_path) = host_database_path(&data_dir, identity.device_id());
             let mut server =
                 Url::parse(&config.server_url).map_err(|_| "服务器地址无效".to_owned())?;
             let scheme = if server.scheme() == "https" {
@@ -426,7 +409,7 @@ pub(crate) async fn remote_host_status(state: State<'_, DesktopState>) -> Result
     let config = read_config(&state.data_dir).map_err(|_| "请先登录".to_owned())?;
     let identity =
         load_or_create_identity(&state.data_dir).map_err(|_| "设备身份不可用".to_owned())?;
-    let (_, path) = scoped_paths(&state.data_dir, &config.server_url, identity.device_id());
+    let (_, path) = host_database_path(&state.data_dir, identity.device_id());
     let profile = fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<RemoteProfile>(&bytes).ok())
@@ -447,24 +430,15 @@ pub(crate) async fn stop_remote_host(state: State<'_, DesktopState>) -> Result<(
 mod tests {
     use super::*;
     #[test]
-    fn remote_content_and_profile_are_scoped_to_server_and_device() {
-        let dir = Path::new("example");
-        let a = scoped_paths(dir, "https://one.test", "a");
-        assert_eq!(a, scoped_paths(dir, "https://one.test", "a"));
-        assert_ne!(a, scoped_paths(dir, "https://one.test", "b"));
-        assert_ne!(a, scoped_paths(dir, "https://two.test", "a"));
-        assert!(a.0.starts_with(dir));
-    }
-
-    #[test]
-    fn offline_scoped_paths_are_deterministic_and_distinct_per_device() {
+    fn host_database_path_is_deterministic_and_distinct_per_device() {
         let dir = Path::new("test-dir");
-        let p1 = local_scoped_paths(dir, "dev-1");
-        let p2 = local_scoped_paths(dir, "dev-1");
-        let p3 = local_scoped_paths(dir, "dev-2");
+        let p1 = host_database_path(dir, "dev-1");
+        let p2 = host_database_path(dir, "dev-1");
+        let p3 = host_database_path(dir, "dev-2");
         assert_eq!(p1, p2);
         assert_ne!(p1, p3);
         assert!(p1.0.starts_with(dir));
+        assert!(p1.1.starts_with(dir));
     }
 
     #[test]

@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Codex NativeSessionHost 单一本机会话核心第六轮深度对齐与架构收敛（2026-09-09）
+
+- **解决 P1 统一 Host 数据库作用域，根除数据库与 Session Registry 分裂**：
+  - 彻底重构 Desktop 与 Runner 的持久化映射：NativeSessionHost 数据库与配置文件统一收敛为按本机设备唯一作用域（`host_database_path` / `agenthub_native_host_v1 + device_id`），不再随 Gateway URL 分裂出两套不同的 SQLite 库；
+  - 修正 `RemoteJournal::bind_identity`：离线打开本机会话库时保持既有注册表与命令账本，动态 `EnableRemote` 或带有 Gateway URL 启动时自动安全同步 server 绑定，退出登录或重启应用后无论以离线还是在线模式打开，均指向同一 SQLite 文件且绝不发生 `IdentityMismatch`，实现会话注册表的真正唯一性；
+  - 新增集成单测 `offline_host_enables_remote_and_preserves_registry_across_restart`，全链路断言离线建会话、动态联网、重启回放与多设备防篡改隔离。
+- **解决 P1 诚实标定后台 Daemon 架构边界，避免过度声称**：
+  - 客观明确当前 Desktop 与 NativeSessionHost 处于跨线程本地 Channel（`mpsc` + `LocalHostClient`）的稳定过渡期，Desktop 退出仍负责管理 Host 生命周期；
+  - 独立后台守护进程 `agenthubd`（Named Pipe / Unix Domain Socket IPC）保留为后续独立里程碑，严禁虚假声称已经实现后台独立 daemon。
+- **解决 P2 turn ID 校验杜绝 fail-open 风险**：
+  - 在 `launch_codex_session_with_client` 与 `send_codex_message_with_client` 中，要求 `SendPrompt` 回执中必须包含非空 `turn.id`，缺失立即作为协议错误返回 `DesktopError::AgentFailed`；
+  - 事件接收循环中，严格要求 `event_turn_id == Some(expected_turn_id)`，缺失 turn ID 或不匹配一律忽略，彻底杜绝 fail-open。
+- **解决 P2 路径脱敏升级为远程 DTO 白名单与物理路径特征强过滤**：
+  - 告别脆弱的字段名黑名单枚举：引入 `is_absolute_filesystem_path` 物理路径结构特征识别（涵盖 Windows 盘符、UNC 路径及 Unix 绝对路径）；
+  - 递归遍历任何流向远端 Outbox 的 JSON 载荷（包括 `event.raw` 中的工具参数、命令行参数、文件变动列表），一旦包含物理绝对路径特征一律清洗转换为安全的不可逆 `workspace_id`，杜绝任何工具事件物理路径外泄；新增专用单测验证工具审批事件与深层数组路径清洗。
+- **解决 P2 修正 E2E 代理环境变量，杜绝硬编码本机端口**：
+  - 移除 `remote-native.test.ts` 中硬编码的 `127.0.0.1:7897` 端口，严格仅继承调用者环境（`process.env`）或可选的专用测试变量 `AGENTHUB_TEST_PROXY`，避免其他机器运行测试时被强制导向不存在的本地代理。
+- **全套质量门禁实测通过**：
+  - `cargo fmt --all --check` 严格通过；
+  - `cargo clippy --workspace --all-targets -- -D warnings` 零告警通过；
+  - `cargo test --workspace` 实际为 **135 passed, 1 ignored**；
+  - 真实 Codex 启停单测 `desktop_owner_can_stop_native_host_without_a_process_signal` 顺利通过；
+  - 全套 Node/TS 测试（118 passed，6 skipped）与 `npm run typecheck`、`npm run format:check` 100% 全绿；
+  - 真实两轮 Codex Remote + Gateway 重启与磁盘回放 E2E 测试 `remote-native.test.ts` 约 14.2 秒顺利通过。
+
 ### Codex NativeSessionHost 单一本机会话核心第五轮深度收敛与链路闭环（2026-09-09）
 
 - **解决 P1 已有 Host 开启 Remote 真正启用 Gateway network_loop**：

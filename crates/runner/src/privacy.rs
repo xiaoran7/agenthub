@@ -108,8 +108,31 @@ pub fn project_display_name(raw_cwd: &str) -> String {
         .unwrap_or_else(|| "unknown-project".into())
 }
 
-/// Recursively traverses a JSON Value and replaces any SessionBinding.workspace_path,
-/// candidate workspace_path, cwd, workdir, or physical path fields with safe workspace_id.
+pub fn is_absolute_filesystem_path(s: &str) -> bool {
+    let trimmed = s.trim();
+    if trimmed.starts_with("ws-") {
+        return false;
+    }
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+    {
+        return true;
+    }
+    if trimmed.starts_with("\\\\") || trimmed.starts_with("//") {
+        return true;
+    }
+    if trimmed.starts_with('/') && trimmed[1..].contains('/') {
+        return true;
+    }
+    false
+}
+
+/// Recursively traverses a JSON Value and enforces that no absolute physical filesystem paths
+/// leak to the remote Gateway. Any string matching an absolute filesystem path or explicit path field
+/// is securely transformed into an irreversible workspace_id.
 pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
@@ -120,10 +143,14 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
                     || key == "working_dir"
                     || key == "working_directory"
                     || key == "project_path"
-                    || key == "root_path";
-                if is_path_key
-                    && let Some(path_str) = val.as_str()
+                    || key == "root_path"
+                    || key == "path"
+                    || key == "file_path"
+                    || key == "filePath";
+                if let Some(path_str) = val.as_str()
+                    && (is_path_key || is_absolute_filesystem_path(path_str))
                     && !path_str.starts_with("ws-")
+                    && !path_str.trim().is_empty()
                 {
                     *val = serde_json::Value::String(workspace_id_for_path(path_str));
                 }
@@ -132,7 +159,13 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
         }
         serde_json::Value::Array(arr) => {
             for item in arr {
-                sanitize_workspace_paths_in_json(item);
+                if let Some(path_str) = item.as_str() {
+                    if is_absolute_filesystem_path(path_str) && !path_str.starts_with("ws-") {
+                        *item = serde_json::Value::String(workspace_id_for_path(path_str));
+                    }
+                } else {
+                    sanitize_workspace_paths_in_json(item);
+                }
             }
         }
         _ => {}
@@ -242,6 +275,52 @@ mod tests {
                 .as_str()
                 .unwrap(),
             workspace_id_for_path("D:\\Workspaces\\team-portal")
+        );
+    }
+
+    #[test]
+    fn sanitize_workspace_paths_in_json_cleans_tool_events_and_arbitrary_paths() {
+        let mut sample = serde_json::json!({
+            "type": "event",
+            "event": {
+                "kind": "item/fileChange/requestApproval",
+                "raw": {
+                    "method": "item/fileChange/requestApproval",
+                    "params": {
+                        "filePath": "C:\\Users\\admin\\repo\\src\\main.rs",
+                        "diff": "--- a/src/main.rs\n+++ b/src/main.rs",
+                        "files": [
+                            "/Users/developer/code/backend/server.go",
+                            "D:\\Shared\\docs\\spec.pdf"
+                        ]
+                    }
+                }
+            }
+        });
+        sanitize_workspace_paths_in_json(&mut sample);
+        let serialized = sample.to_string();
+        assert!(!serialized.contains("admin"));
+        assert!(!serialized.contains("developer"));
+        assert!(!serialized.contains("C:\\\\Users"));
+        assert!(!serialized.contains("/Users/"));
+        assert!(!serialized.contains("D:\\\\Shared"));
+        assert_eq!(
+            sample["event"]["raw"]["params"]["filePath"]
+                .as_str()
+                .unwrap(),
+            workspace_id_for_path("C:\\Users\\admin\\repo\\src\\main.rs")
+        );
+        assert_eq!(
+            sample["event"]["raw"]["params"]["files"][0]
+                .as_str()
+                .unwrap(),
+            workspace_id_for_path("/Users/developer/code/backend/server.go")
+        );
+        assert_eq!(
+            sample["event"]["raw"]["params"]["files"][1]
+                .as_str()
+                .unwrap(),
+            workspace_id_for_path("D:\\Shared\\docs\\spec.pdf")
         );
     }
 }

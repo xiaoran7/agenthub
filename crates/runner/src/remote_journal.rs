@@ -70,7 +70,20 @@ impl RemoteJournal {
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        if stored != (device_id.to_owned(), server.to_owned()) {
+        if stored.0 != device_id {
+            return Err(JournalError::IdentityMismatch);
+        }
+        // If re-opening in local/offline mode, keep the existing database without error.
+        if server == "local://agenthub" || server.trim().is_empty() {
+            transaction.commit()?;
+            return Ok(());
+        }
+        if stored.1 == "local://agenthub" || stored.1.trim().is_empty() {
+            transaction.execute(
+                "UPDATE remote_identity SET server=?1 WHERE singleton=1",
+                params![server],
+            )?;
+        } else if stored.1 != server {
             return Err(JournalError::IdentityMismatch);
         }
         transaction.commit()?;
@@ -86,15 +99,13 @@ impl RemoteJournal {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some((_device_id, server)) = stored {
-            if server == "local://agenthub" || server.trim().is_empty() {
-                transaction.execute(
-                    "UPDATE remote_identity SET server=?1 WHERE singleton=1",
-                    params![new_server],
-                )?;
-            } else if server != new_server {
-                return Err(JournalError::IdentityMismatch);
-            }
+        if let Some((_device_id, server)) = stored
+            && server != new_server
+        {
+            transaction.execute(
+                "UPDATE remote_identity SET server=?1 WHERE singleton=1",
+                params![new_server],
+            )?;
         }
         transaction.commit()?;
         Ok(())

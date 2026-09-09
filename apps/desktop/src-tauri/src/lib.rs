@@ -785,7 +785,9 @@ fn launch_codex_session_with_client(
         .result
         .as_ref()
         .and_then(|r| r["turn"]["id"].as_str())
-        .map(str::to_owned);
+        .filter(|id| !id.trim().is_empty())
+        .ok_or(DesktopError::AgentFailed)?
+        .to_owned();
 
     let mut full_response = String::new();
     let mut turn_completed = false;
@@ -799,10 +801,7 @@ fn launch_codex_session_with_client(
                             let event_turn_id = event.raw["params"]["turnId"]
                                 .as_str()
                                 .or_else(|| event.raw["params"]["turn"]["id"].as_str());
-                            if let Some(expected) = expected_turn_id.as_deref()
-                                && let Some(actual) = event_turn_id
-                                && actual != expected
-                            {
+                            if event_turn_id != Some(expected_turn_id.as_str()) {
                                 continue;
                             }
                             if let Some(delta) = event.raw["params"]["delta"].as_str() {
@@ -826,10 +825,7 @@ fn launch_codex_session_with_client(
                             let event_turn_id = event.raw["params"]["turn"]["id"]
                                 .as_str()
                                 .or_else(|| event.raw["params"]["turnId"].as_str());
-                            if let Some(expected) = expected_turn_id.as_deref()
-                                && let Some(actual) = event_turn_id
-                                && actual != expected
-                            {
+                            if event_turn_id != Some(expected_turn_id.as_str()) {
                                 continue;
                             }
                             let status = event.raw["params"]["turn"]["status"]
@@ -961,7 +957,9 @@ fn send_codex_message_with_client(
         .result
         .as_ref()
         .and_then(|r| r["turn"]["id"].as_str())
-        .map(str::to_owned);
+        .filter(|id| !id.trim().is_empty())
+        .ok_or(DesktopError::AgentFailed)?
+        .to_owned();
 
     let mut full_response = String::new();
     let mut turn_completed = false;
@@ -975,10 +973,7 @@ fn send_codex_message_with_client(
                             let event_turn_id = event.raw["params"]["turnId"]
                                 .as_str()
                                 .or_else(|| event.raw["params"]["turn"]["id"].as_str());
-                            if let Some(expected) = expected_turn_id.as_deref()
-                                && let Some(actual) = event_turn_id
-                                && actual != expected
-                            {
+                            if event_turn_id != Some(expected_turn_id.as_str()) {
                                 continue;
                             }
                             if let Some(delta) = event.raw["params"]["delta"].as_str() {
@@ -1002,10 +997,7 @@ fn send_codex_message_with_client(
                             let event_turn_id = event.raw["params"]["turn"]["id"]
                                 .as_str()
                                 .or_else(|| event.raw["params"]["turnId"].as_str());
-                            if let Some(expected) = expected_turn_id.as_deref()
-                                && let Some(actual) = event_turn_id
-                                && actual != expected
-                            {
+                            if event_turn_id != Some(expected_turn_id.as_str()) {
                                 continue;
                             }
                             let status = event.raw["params"]["turn"]["status"]

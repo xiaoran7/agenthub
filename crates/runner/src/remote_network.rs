@@ -792,4 +792,60 @@ mod tests {
         assert!(client.query_workspaces().is_err());
         assert!(client.authorize_workspace(PathBuf::from(".")).is_err());
     }
+
+    #[test]
+    fn offline_host_enables_remote_and_preserves_registry_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("host.sqlite");
+        let dev = "device-alpha";
+        let session = SessionBinding {
+            hub_session_id: "hub-1".into(),
+            provider_session_id: "native-1".into(),
+            workspace_path: PathBuf::from("D:/test"),
+            host_generation: "gen-1".into(),
+            control_connected: false,
+            execution_state: crate::remote_host::ExecutionState::Idle,
+            current_turn_id: None,
+        };
+        // 1. Initial offline cold-start: bind identity with local://agenthub
+        {
+            let mut journal = RemoteJournal::open(&db_path).unwrap();
+            journal.bind_identity(dev, "local://agenthub").unwrap();
+            journal
+                .append(&json!({"type":"ready"}), std::slice::from_ref(&session))
+                .unwrap();
+            assert_eq!(journal.bindings().unwrap().len(), 1);
+        }
+        // 2. Enable remote dynamically: rebind server to Gateway
+        {
+            let mut journal = RemoteJournal::open(&db_path).unwrap();
+            journal
+                .rebind_server_if_local("wss://example.com/v3/remote/ws")
+                .unwrap();
+            assert_eq!(journal.bindings().unwrap().len(), 1);
+        }
+        // 3. Simulate restart: opening in offline mode MUST NOT fail with IdentityMismatch
+        {
+            let mut journal = RemoteJournal::open(&db_path).unwrap();
+            journal.bind_identity(dev, "local://agenthub").unwrap();
+            assert_eq!(journal.bindings().unwrap().len(), 1);
+        }
+        // 4. Simulate opening with the Gateway URL: succeeds and preserves registry
+        {
+            let mut journal = RemoteJournal::open(&db_path).unwrap();
+            journal
+                .bind_identity(dev, "wss://example.com/v3/remote/ws")
+                .unwrap();
+            assert_eq!(journal.bindings().unwrap().len(), 1);
+        }
+        // 5. Tampered device identity on same database MUST be rejected
+        {
+            let mut journal = RemoteJournal::open(&db_path).unwrap();
+            assert!(
+                journal
+                    .bind_identity("device-other", "local://agenthub")
+                    .is_err()
+            );
+        }
+    }
 }
