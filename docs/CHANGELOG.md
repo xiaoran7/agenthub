@@ -1,9 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [2.3.4] - 2026-09-10
 
-### Codex 进程外 daemon 与 Desktop 单核心切换（2026-09-10）
+### Codex 进程外 daemon 与 Desktop 单核心切换，发版打包 v2.3.4
 
+- **全端版本自增至 v2.3.4**（Android `versionCode = 7`），完成 Windows Desktop 安装包（NSIS / MSI）与 Android Debug APK 构建归档，按铁律清理旧版本产物。
+- 交付物保存在 `Deliverables/AgentHub/`：
+  - `AgentHub-v2.3.4-android-debug.apk` (SHA256 `7c55c0c7488716e6dd1bcd1c706a196673ffd994850afb288760505de0e8492d`)
+  - `AgentHub-v2.3.4-windows-x64-setup.exe` (SHA256 `f969b3cd47f28cef6f54b10dc2d3d0ba2cd39712e6b1aad4772254aa173fca3b`)
+  - `AgentHub-v2.3.4-x64.msi` (SHA256 `0096995a0dc36c6b6e5f01dd7f1d96402d9ba80c083b095510b3dabf14d6baf9`)
+  - `AgentHub-v2.3.4-SHA256.txt`
 - 将 `NativeSessionHost` 提升为进程外 daemon：`agent-pulse-runner daemon`、兼容 `remote-run` 与 Desktop 隐藏 `--agenthubd` 模式进入同一主流程，共用一个 `DurableHost`、Session Registry、命令账本和事件日志。
 - 新增当前用户 IPC v2：Windows named pipe 使用当前用户 ACL 并拒绝远程客户端，Unix domain socket 权限为 `0600`；采用 1 MiB 上限的长度前缀 JSON frame、协议版本、`request_id` 与 `snapshot + cursor` 重放，live pending approvals 是 v2 必需快照字段。
 - 本地事件日志与 Gateway outbox 分离，Gateway ACK 不删除 Desktop replay；Desktop-origin 命令收据只写本地日志，Remote 侧改用合法 ready/Host event 同步状态，避免 `unknown_command_receipt` 永久阻塞序列。Remote 关闭期间继续持久化 bounded local log、Session Registry 和命令账本但不积累未来可上传内容，重开仅追加当前脱敏 ready 快照；cursor 过期显式返回 `snapshot_required`。
