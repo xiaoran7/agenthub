@@ -43,6 +43,15 @@ export interface SessionRuntimeContext {
   session_total_tokens?: number;
 }
 
+export interface PendingApproval {
+  approval_id: string;
+  hub_session_id: string;
+  host_generation: string;
+  turn_id: string;
+  can_approve: boolean;
+  can_decline: boolean;
+}
+
 export interface Session {
   event_id: string;
   device_id: string;
@@ -54,6 +63,7 @@ export interface Session {
     state: { activity_status: ActivityStatus; presence: string };
     last_activity_at?: string;
     runtime?: SessionRuntimeContext | null;
+    pending_approval?: PendingApproval | null;
   };
   sync_state?: "local" | "synced";
   archived?: boolean;
@@ -99,7 +109,8 @@ export type SessionTurnEvent =
   | { type: "started" }
   | { type: "assistant_delta"; text: string }
   | { type: "assistant_message"; text: string }
-  | { type: "activity"; label: string };
+  | { type: "activity"; label: string }
+  | { type: "approval_requested"; approval: PendingApproval };
 
 export interface DashboardRealtimeEvent {
   connected: boolean;

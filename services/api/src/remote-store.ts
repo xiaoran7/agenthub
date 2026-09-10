@@ -1,7 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
+  isRemoteWorkspaceId,
   parseRemoteBinding,
+  parseRemotePendingApproval,
   type RemoteBinding,
   type RemoteCommand,
 } from "@agent-pulse/contracts";
@@ -106,6 +108,29 @@ export class RemoteContentStore {
       .get(owner, runner, hub);
     return row ? (JSON.parse(String(row.binding)) as RemoteBinding) : undefined;
   }
+  workspaceStatus(
+    owner: string,
+    runner: string,
+    generation: string,
+    workspace: string,
+  ):
+    | "ready"
+    | "runner_not_ready"
+    | "host_generation_mismatch"
+    | "workspace_not_authorized" {
+    const row = this.db
+      .prepare("SELECT hello FROM remote_runners WHERE owner=? AND runner=?")
+      .get(owner, runner);
+    if (!row?.hello) return "runner_not_ready";
+    const hello = JSON.parse(String(row.hello)) as Record<string, unknown>;
+    if (hello.host_generation !== generation) return "host_generation_mismatch";
+    if (
+      !Array.isArray(hello.workspaces) ||
+      !hello.workspaces.includes(workspace)
+    )
+      return "workspace_not_authorized";
+    return "ready";
+  }
   submit(
     owner: string,
     runner: string,
@@ -202,6 +227,7 @@ export class RemoteContentStore {
     runner: string,
     seq: number,
     payload: Record<string, unknown>,
+    activeGeneration?: string,
   ): void {
     this.register(owner, runner);
     this.transaction(() => {
@@ -226,9 +252,32 @@ export class RemoteContentStore {
       let binding: RemoteBinding | undefined;
       let hub: string | null = null;
       if (payload.type === "event") {
+        requireOnlyKeys(payload, ["type", "event"], "invalid_event");
         const event = payload.event as Record<string, unknown> | undefined;
-        if (!event || typeof event !== "object")
+        if (!event || typeof event !== "object" || Array.isArray(event))
           throw new RemoteStoreError("invalid_event");
+        requireOnlyKeys(
+          event,
+          [
+            "event_id",
+            "host_generation",
+            "binding",
+            "hub_session_id",
+            "provider_session_id",
+            "kind",
+            "raw",
+            "approval_id",
+            "approval",
+          ],
+          "invalid_event",
+        );
+        validateRemoteEventFields(event);
+        const isApprovalEvent =
+          event.kind === "approval_requested" ||
+          event.kind === "approval_resolved" ||
+          event.kind === "unsupported_provider_request";
+        if (isApprovalEvent) validateRemoteApprovalEvent(event);
+        validateRemoteEventRaw(event, isApprovalEvent);
         if (event.binding) binding = parseRemoteBinding(event.binding);
         hub =
           typeof event.hub_session_id === "string"
@@ -236,10 +285,14 @@ export class RemoteContentStore {
             : null;
         if (binding && hub !== binding.hub_session_id)
           throw new RemoteStoreError("binding_conflict");
+        if (
+          binding &&
+          activeGeneration !== undefined &&
+          binding.host_generation !== activeGeneration
+        )
+          binding = undefined;
       } else if (payload.type === "receipt") {
-        const receipt = payload.receipt as Record<string, unknown> | undefined;
-        if (!receipt || typeof receipt.client_cmd_id !== "string")
-          throw new RemoteStoreError("invalid_receipt");
+        const receipt = parseRemoteReceipt(payload.receipt);
         const queued = this.db
           .prepare(
             "SELECT body FROM remote_commands WHERE runner=? AND cmd_id=?",
@@ -250,30 +303,113 @@ export class RemoteContentStore {
         if (receipt.hub_session_id !== command.hub_session_id)
           throw new RemoteStoreError("receipt_session_conflict");
         hub = command.hub_session_id;
-        const result = receipt.result as Record<string, unknown> | undefined;
-        if (result?.binding) binding = parseRemoteBinding(result.binding);
+        if (receipt.result?.binding) binding = receipt.result.binding;
         if (binding && binding.hub_session_id !== hub)
           throw new RemoteStoreError("binding_conflict");
+        if (
+          binding &&
+          activeGeneration !== undefined &&
+          binding.host_generation !== activeGeneration
+        )
+          binding = undefined;
         this.db
           .prepare(
             "UPDATE remote_commands SET receipt=? WHERE runner=? AND cmd_id=?",
           )
           .run(JSON.stringify(receipt), runner, receipt.client_cmd_id);
       } else if (payload.type === "ready") {
+        requireOnlyKeys(
+          payload,
+          [
+            "type",
+            "provider",
+            "host_generation",
+            "workspaces",
+            "sessions",
+            "models",
+            "discovery",
+            "pending_approvals",
+            "attach_running",
+          ],
+          "invalid_ready",
+        );
         if (
           !Array.isArray(payload.sessions) ||
-          !Array.isArray(payload.workspaces)
+          !Array.isArray(payload.workspaces) ||
+          typeof payload.host_generation !== "string" ||
+          !payload.host_generation ||
+          payload.host_generation.length > 128 ||
+          payload.workspaces.some(
+            (workspace) => !isRemoteWorkspaceId(workspace),
+          ) ||
+          new Set(payload.workspaces).size !== payload.workspaces.length
         )
           throw new RemoteStoreError("invalid_ready");
-        for (const item of payload.sessions)
-          this.saveBinding(owner, runner, parseRemoteBinding(item));
-        this.db
-          .prepare("UPDATE remote_runners SET hello=? WHERE runner=?")
-          .run(JSON.stringify(payload), runner);
+        if (payload.pending_approvals !== undefined) {
+          if (!Array.isArray(payload.pending_approvals))
+            throw new RemoteStoreError("invalid_ready");
+          const approvals = payload.pending_approvals.map((item) => {
+            try {
+              return parseRemotePendingApproval(item);
+            } catch {
+              throw new RemoteStoreError("invalid_ready");
+            }
+          });
+          if (
+            new Set(approvals.map((approval) => approval.approval_id)).size !==
+              approvals.length ||
+            approvals.some(
+              (approval) =>
+                approval.host_generation !== payload.host_generation,
+            )
+          )
+            throw new RemoteStoreError("invalid_ready");
+        }
+        const sessions = payload.sessions.map((item) => {
+          try {
+            return parseRemoteBinding(item);
+          } catch {
+            throw new RemoteStoreError("invalid_ready");
+          }
+        });
+        if (
+          sessions.some(
+            (session) => session.host_generation !== payload.host_generation,
+          )
+        )
+          throw new RemoteStoreError("invalid_ready");
+        if (
+          activeGeneration === undefined ||
+          payload.host_generation === activeGeneration
+        ) {
+          const currentHubs = new Set(
+            sessions.map((session) => session.hub_session_id),
+          );
+          for (const session of this.sessions(owner).filter(
+            (item) => item.runner_id === runner,
+          )) {
+            if (!currentHubs.has(session.binding.hub_session_id))
+              this.saveBinding(owner, runner, {
+                ...session.binding,
+                control_connected: false,
+                execution_state: "unknown",
+                current_turn_id: null,
+              });
+          }
+          for (const session of sessions)
+            this.saveBinding(owner, runner, session);
+          this.db
+            .prepare("UPDATE remote_runners SET hello=? WHERE runner=?")
+            .run(JSON.stringify(payload), runner);
+        }
       } else if (payload.type !== "host_lost" && payload.type !== "models")
         throw new RemoteStoreError("invalid_content_type");
       if (binding) this.saveBinding(owner, runner, binding);
-      if (payload.type === "host_lost") {
+      if (
+        payload.type === "host_lost" &&
+        (activeGeneration === undefined ||
+          payload.host_generation === activeGeneration)
+      ) {
         for (const session of this.sessions(owner).filter(
           (item) => item.runner_id === runner,
         )) {
@@ -302,7 +438,7 @@ export class RemoteContentStore {
   ): ContentEvent[] {
     return this.db
       .prepare(
-        "SELECT id,runner,payload FROM remote_events WHERE owner=? AND id>? AND (? IS NULL OR runner=?) AND (? IS NULL OR hub=?) ORDER BY id LIMIT 256",
+        "SELECT id,runner,payload FROM remote_events WHERE owner=? AND id>? AND (? IS NULL OR runner=?) AND (? IS NULL OR hub=? OR (? IS NOT NULL AND runner=? AND hub IS NULL)) ORDER BY id LIMIT 256",
       )
       .all(
         owner,
@@ -311,6 +447,8 @@ export class RemoteContentStore {
         runner ?? null,
         hub ?? null,
         hub ?? null,
+        hub ?? null,
+        runner ?? null,
       )
       .map((row) => ({
         cursor: Number(row.id),
@@ -358,4 +496,251 @@ export class RemoteContentStore {
       throw error;
     }
   }
+}
+
+function requireOnlyKeys(
+  value: Record<string, unknown>,
+  keys: string[],
+  code: string,
+): void {
+  if (Object.keys(value).some((key) => !keys.includes(key)))
+    throw new RemoteStoreError(code);
+}
+
+function validateRemoteEventFields(event: Record<string, unknown>): void {
+  for (const key of ["event_id", "host_generation", "kind"])
+    if (
+      typeof event[key] !== "string" ||
+      !(event[key] as string).trim() ||
+      (event[key] as string).length > 256
+    )
+      throw new RemoteStoreError("invalid_event");
+  for (const key of ["hub_session_id", "provider_session_id", "approval_id"])
+    if (
+      event[key] !== null &&
+      event[key] !== undefined &&
+      (typeof event[key] !== "string" ||
+        !(event[key] as string).trim() ||
+        (event[key] as string).length > 256)
+    )
+      throw new RemoteStoreError("invalid_event");
+  if (event.binding !== null && event.binding !== undefined) {
+    try {
+      const binding = parseRemoteBinding(event.binding);
+      if (
+        binding.host_generation !== event.host_generation ||
+        binding.hub_session_id !== event.hub_session_id ||
+        binding.provider_session_id !== event.provider_session_id
+      )
+        throw new RemoteStoreError("binding_conflict");
+    } catch (error) {
+      if (error instanceof RemoteStoreError) throw error;
+      throw new RemoteStoreError("invalid_event");
+    }
+  }
+}
+
+function validateRemoteApprovalEvent(event: Record<string, unknown>): void {
+  if ("raw" in event) throw new RemoteStoreError("unsafe_approval_event");
+  if (
+    typeof event.event_id !== "string" ||
+    !event.event_id ||
+    event.event_id.length > 128 ||
+    typeof event.host_generation !== "string" ||
+    !event.host_generation ||
+    event.host_generation.length > 128 ||
+    typeof event.hub_session_id !== "string" ||
+    !event.hub_session_id ||
+    event.hub_session_id.length > 128 ||
+    typeof event.approval_id !== "string" ||
+    !/^approval-[0-9a-f]{64}$/u.test(event.approval_id)
+  )
+    throw new RemoteStoreError("invalid_approval_event");
+  if (event.kind === "approval_requested") {
+    let approval;
+    try {
+      approval = parseRemotePendingApproval(event.approval);
+    } catch {
+      throw new RemoteStoreError("invalid_approval_event");
+    }
+    if (
+      approval.approval_id !== event.approval_id ||
+      approval.hub_session_id !== event.hub_session_id ||
+      approval.host_generation !== event.host_generation
+    )
+      throw new RemoteStoreError("invalid_approval_event");
+  } else if (event.approval !== undefined) {
+    throw new RemoteStoreError("invalid_approval_event");
+  }
+}
+
+function validateRemoteEventRaw(
+  event: Record<string, unknown>,
+  isApprovalEvent: boolean,
+): void {
+  if (isApprovalEvent) return;
+  if (event.raw === undefined) return;
+  if (!event.raw || typeof event.raw !== "object" || Array.isArray(event.raw))
+    throw new RemoteStoreError("unsafe_provider_event");
+  const raw = event.raw as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => key !== "params"))
+    throw new RemoteStoreError("unsafe_provider_event");
+  if (
+    !raw.params ||
+    typeof raw.params !== "object" ||
+    Array.isArray(raw.params)
+  )
+    throw new RemoteStoreError("unsafe_provider_event");
+  const params = raw.params as Record<string, unknown>;
+  const only = (keys: string[]): boolean =>
+    Object.keys(params).every((key) => keys.includes(key));
+  const kind = event.kind;
+  if (kind === "turn/started" || kind === "turn/completed") {
+    const turn = params.turn;
+    if (
+      !only(["turn"]) ||
+      !turn ||
+      typeof turn !== "object" ||
+      Array.isArray(turn) ||
+      Object.keys(turn).some((key) => key !== "id") ||
+      typeof (turn as Record<string, unknown>).id !== "string"
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    return;
+  }
+  if (kind === "item/agentMessage/delta") {
+    if (
+      !only(["itemId", "delta"]) ||
+      typeof params.itemId !== "string" ||
+      typeof params.delta !== "string"
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    return;
+  }
+  if (kind === "item/completed") {
+    const item = params.item;
+    if (
+      !only(["item"]) ||
+      !item ||
+      typeof item !== "object" ||
+      Array.isArray(item)
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    const typed = item as Record<string, unknown>;
+    const itemKeys = Object.keys(typed);
+    if (
+      typeof typed.id !== "string" ||
+      (typed.type === "agentMessage" &&
+        (typeof typed.text !== "string" ||
+          itemKeys.some((key) => !["id", "type", "text"].includes(key)))) ||
+      (typed.type === "commandExecution" &&
+        itemKeys.some((key) => !["id", "type"].includes(key))) ||
+      !["agentMessage", "commandExecution"].includes(typed.type as string)
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    return;
+  }
+  throw new RemoteStoreError("unsafe_provider_event");
+}
+
+interface RemoteReceipt {
+  client_cmd_id: string;
+  hub_session_id: string;
+  status: "accepted" | "rejected" | "failed" | "indeterminate";
+  code: string | null;
+  result: {
+    binding?: RemoteBinding;
+    turn?: { id: string };
+    approval_id?: string;
+    response_sent?: boolean;
+  } | null;
+}
+
+function parseRemoteReceipt(value: unknown): RemoteReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new RemoteStoreError("invalid_receipt");
+  const receipt = value as Record<string, unknown>;
+  if (
+    Object.keys(receipt).some(
+      (key) =>
+        ![
+          "client_cmd_id",
+          "hub_session_id",
+          "status",
+          "code",
+          "result",
+        ].includes(key),
+    ) ||
+    typeof receipt.client_cmd_id !== "string" ||
+    !receipt.client_cmd_id.trim() ||
+    receipt.client_cmd_id.length > 128 ||
+    typeof receipt.hub_session_id !== "string" ||
+    !receipt.hub_session_id.trim() ||
+    receipt.hub_session_id.length > 128 ||
+    !["accepted", "rejected", "failed", "indeterminate"].includes(
+      receipt.status as string,
+    ) ||
+    (receipt.code !== null &&
+      (typeof receipt.code !== "string" || receipt.code.length > 128))
+  )
+    throw new RemoteStoreError("invalid_receipt");
+  let result: RemoteReceipt["result"] = null;
+  if (receipt.result !== null) {
+    if (
+      !receipt.result ||
+      typeof receipt.result !== "object" ||
+      Array.isArray(receipt.result)
+    )
+      throw new RemoteStoreError("invalid_receipt");
+    const rawResult = receipt.result as Record<string, unknown>;
+    if (
+      Object.keys(rawResult).some(
+        (key) =>
+          !["binding", "turn", "approval_id", "response_sent"].includes(key),
+      )
+    )
+      throw new RemoteStoreError("invalid_receipt");
+    result = {};
+    if (rawResult.binding !== undefined) {
+      try {
+        result.binding = parseRemoteBinding(rawResult.binding);
+      } catch {
+        throw new RemoteStoreError("invalid_receipt");
+      }
+    }
+    if (rawResult.turn !== undefined) {
+      const turn = rawResult.turn as Record<string, unknown>;
+      if (
+        !rawResult.turn ||
+        typeof rawResult.turn !== "object" ||
+        Array.isArray(rawResult.turn) ||
+        Object.keys(turn).some((key) => key !== "id") ||
+        typeof turn.id !== "string" ||
+        !turn.id ||
+        turn.id.length > 256
+      )
+        throw new RemoteStoreError("invalid_receipt");
+      result.turn = { id: turn.id };
+    }
+    if (rawResult.approval_id !== undefined) {
+      if (
+        typeof rawResult.approval_id !== "string" ||
+        !/^approval-[0-9a-f]{64}$/u.test(rawResult.approval_id)
+      )
+        throw new RemoteStoreError("invalid_receipt");
+      result.approval_id = rawResult.approval_id;
+    }
+    if (rawResult.response_sent !== undefined) {
+      if (typeof rawResult.response_sent !== "boolean")
+        throw new RemoteStoreError("invalid_receipt");
+      result.response_sent = rawResult.response_sent;
+    }
+  }
+  return {
+    client_cmd_id: receipt.client_cmd_id,
+    hub_session_id: receipt.hub_session_id,
+    status: receipt.status as RemoteReceipt["status"],
+    code: receipt.code as string | null,
+    result,
+  };
 }

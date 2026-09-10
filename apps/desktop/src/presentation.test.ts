@@ -7,6 +7,7 @@ import {
   agentShortLabel,
   groupSessionsByProvider,
   groupSessionsByWorkspace,
+  hasActiveTurn,
   isAttentionSession,
   permissionFieldLabel,
   relativeTime,
@@ -93,6 +94,16 @@ describe("desktop presentation", () => {
       { name: "ClaudeSpace", sessions: [sessions[0], sessions[2]] },
       { name: "Solum", sessions: [sessions[1]] },
     ]);
+  });
+
+  it("restores active turn state from daemon activity status", () => {
+    expect(hasActiveTurn("WORKING")).toBe(true);
+    expect(hasActiveTurn("WAITING_PERMISSION")).toBe(true);
+    expect(hasActiveTurn("WAITING_INPUT")).toBe(true);
+    expect(hasActiveTurn("IDLE")).toBe(false);
+    expect(hasActiveTurn("COMPLETED")).toBe(false);
+    expect(hasActiveTurn("FAILED")).toBe(false);
+    expect(hasActiveTurn("UNKNOWN")).toBe(false);
   });
 
   it("identifies sessions requiring attention", () => {

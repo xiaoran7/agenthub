@@ -76,12 +76,12 @@ fn discovery_only_exports_authorized_metadata_and_never_grants_control() {
     assert!(!result.to_string().contains("private"));
     assert!(host.sessions().is_empty());
 }
-fn connect(dir: &tempfile::TempDir, hub: &str) -> RemoteCommand {
+fn connect(dir: &tempfile::TempDir, hub: &str, generation: &str) -> RemoteCommand {
     let ws_id = agent_pulse_runner::privacy::workspace_id_for_path(&dir.path().to_string_lossy());
     RemoteCommand {
         client_cmd_id: format!("create-{hub}"),
         hub_session_id: hub.into(),
-        host_generation: None,
+        host_generation: Some(generation.into()),
         command: RemoteAction::Connect {
             mode: ConnectMode::Create,
             workspace_path: ws_id.into(),
@@ -105,7 +105,11 @@ fn bind(dir: &tempfile::TempDir, fake: &Fake, host: &mut NativeSessionHost<Fake>
         "thread/start",
         json!({"thread": {"id": "native-real", "status": {"type":"idle"}}}),
     );
-    assert_eq!(host.handle_command(connect(dir, "hub")).status, "accepted");
+    let generation = host.generation().to_owned();
+    assert_eq!(
+        host.handle_command(connect(dir, "hub", &generation)).status,
+        "accepted"
+    );
 }
 fn start_turn(fake: &Fake, host: &mut NativeSessionHost<Fake>, id: &str) {
     fake.expect(
@@ -125,7 +129,7 @@ fn start_turn(fake: &Fake, host: &mut NativeSessionHost<Fake>, id: &str) {
 #[test]
 fn create_uses_native_identity_and_never_reexecutes_duplicate_commands() {
     let (dir, fake, mut host) = setup();
-    let command = connect(&dir, "hub");
+    let command = connect(&dir, "hub", host.generation());
     fake.expect(
         "thread/start",
         json!({"thread": {"id":"native-real", "status":{"type":"idle"}}}),
@@ -189,6 +193,125 @@ fn two_turns_share_native_id_and_only_native_completion_releases_busy_state() {
 }
 
 #[test]
+fn archive_uses_the_bound_native_session_and_rejects_busy_sessions() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    fake.expect("thread/archive", json!({"thread": {"id": "native-real"}}));
+    let archive = control(
+        &host,
+        "archive",
+        RemoteAction::SetArchived { archived: true },
+    );
+    assert_eq!(host.handle_command(archive).status, "accepted");
+    assert_eq!(
+        fake.0.lock().unwrap().calls.last().unwrap().1["threadId"],
+        "native-real"
+    );
+
+    start_turn(&fake, &mut host, "turn-active");
+    let busy = control(
+        &host,
+        "unarchive",
+        RemoteAction::SetArchived { archived: false },
+    );
+    assert_eq!(
+        host.handle_command(busy).code.as_deref(),
+        Some("session_busy_or_unknown")
+    );
+}
+
+#[test]
+fn pending_approval_projection_is_actionable_bounded_and_ephemeral() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-1");
+    fake.event(json!({
+        "id": 7,
+        "method": "item/commandExecution/requestApproval",
+        "params": {
+            "threadId": "native-real",
+            "turnId": "turn-1",
+            "command": "private command",
+            "availableDecisions": ["decline"]
+        }
+    }));
+    let approval_id = host.poll().unwrap()[0].approval_id.clone().unwrap();
+    let digest = approval_id
+        .strip_prefix("approval-")
+        .expect("opaque approval prefix");
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    assert!(!approval_id.contains("native-real"));
+    assert!(!approval_id.ends_with(":7"));
+    let approvals = host.pending_approvals();
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0].approval_id, approval_id);
+    assert_eq!(approvals[0].hub_session_id, "hub");
+    assert_eq!(approvals[0].host_generation, host.generation());
+    assert_eq!(approvals[0].turn_id, "turn-1");
+    assert!(!approvals[0].can_approve);
+    assert!(approvals[0].can_decline);
+    let encoded = serde_json::to_value(&approvals[0]).unwrap();
+    for forbidden in ["request_id", "raw", "command", "diff", "path"] {
+        assert!(encoded.get(forbidden).is_none());
+    }
+
+    let action = RemoteAction::ResolveApproval {
+        approval_id,
+        approved: false,
+    };
+    assert_eq!(
+        host.handle_command(control(&host, "decline", action))
+            .status,
+        "accepted"
+    );
+    assert!(host.pending_approvals().is_empty());
+
+    fake.event(json!({
+        "id": 8,
+        "method": "item/fileChange/requestApproval",
+        "params": {"threadId":"native-real","turnId":"turn-1"}
+    }));
+    host.poll().unwrap();
+    assert_eq!(host.pending_approvals().len(), 1);
+    fake.event(json!({"method":"turn/completed","params":{"threadId":"native-real","turn":{"id":"turn-1","status":"completed"}}}));
+    host.poll().unwrap();
+    assert!(host.pending_approvals().is_empty());
+
+    start_turn(&fake, &mut host, "turn-2");
+    fake.event(json!({
+        "id": 9,
+        "method": "item/fileChange/requestApproval",
+        "params": {"threadId":"native-real","turnId":"turn-2"}
+    }));
+    let approval_id = host.poll().unwrap()[0].approval_id.clone().unwrap();
+    assert_eq!(host.pending_approvals().len(), 1);
+    fake.event(json!({"method":"serverRequest/resolved","params":{"threadId":"native-real","requestId":9}}));
+    let resolved = host.poll().unwrap();
+    assert_eq!(resolved[0].kind, "approval_resolved");
+    assert_eq!(
+        resolved[0].approval_id.as_deref(),
+        Some(approval_id.as_str())
+    );
+    assert!(host.pending_approvals().is_empty());
+
+    fake.event(json!({
+        "id": 10,
+        "method": "item/fileChange/requestApproval",
+        "params": {"threadId":"native-real","turnId":"turn-2"}
+    }));
+    host.poll().unwrap();
+    assert_eq!(host.pending_approvals().len(), 1);
+    fake.0.lock().unwrap().lost = true;
+    assert!(host.poll().is_err());
+    assert!(host.pending_approvals().is_empty());
+}
+
+#[test]
 fn approval_preserves_request_id_fences_generation_and_rejects_replays() {
     let (dir, fake, mut host) = setup();
     bind(&dir, &fake, &mut host);
@@ -198,6 +321,10 @@ fn approval_preserves_request_id_fences_generation_and_rejects_replays() {
     let events = host.poll().unwrap();
     assert_eq!(events[0].raw, raw);
     let approval_id = events[0].approval_id.clone().unwrap();
+    assert_eq!(
+        events[0].approval.as_ref().unwrap().approval_id,
+        approval_id
+    );
     let action = RemoteAction::ResolveApproval {
         approval_id: approval_id.clone(),
         approved: true,
@@ -273,7 +400,7 @@ fn transport_loss_is_unknown_and_never_automatically_reexecutes_a_prompt() {
 #[test]
 fn resume_reads_before_loading_and_preserves_provider_identity() {
     let (dir, fake, mut host) = setup();
-    let mut command = connect(&dir, "hub");
+    let mut command = connect(&dir, "hub", host.generation());
     if let RemoteAction::Connect {
         mode,
         provider_session_id,
@@ -299,7 +426,7 @@ fn resume_reads_before_loading_and_preserves_provider_identity() {
 #[test]
 fn known_active_external_session_is_never_resumed_or_attached() {
     let (dir, fake, mut host) = setup();
-    let mut command = connect(&dir, "hub");
+    let mut command = connect(&dir, "hub", host.generation());
     if let RemoteAction::Connect {
         mode,
         provider_session_id,
@@ -329,7 +456,8 @@ fn known_active_external_session_is_never_resumed_or_attached() {
 fn missing_native_id_fails_instead_of_fabricating_a_session() {
     let (dir, fake, mut host) = setup();
     fake.expect("thread/start", json!({"thread":{}}));
-    let receipt = host.handle_command(connect(&dir, "hub"));
+    let generation = host.generation().to_owned();
+    let receipt = host.handle_command(connect(&dir, "hub", &generation));
     assert_eq!(receipt.status, "indeterminate");
     assert!(host.sessions().is_empty());
 }
@@ -338,8 +466,11 @@ fn missing_native_id_fails_instead_of_fabricating_a_session() {
 fn unauthorized_workspace_is_rejected_before_any_provider_call() {
     let (_, fake, mut host) = setup();
     let other = tempfile::tempdir().unwrap();
+    let generation = host.generation().to_owned();
     assert_eq!(
-        host.handle_command(connect(&other, "hub")).code.as_deref(),
+        host.handle_command(connect(&other, "hub", &generation))
+            .code
+            .as_deref(),
         Some("workspace_not_authorized")
     );
     assert!(fake.0.lock().unwrap().calls.is_empty());
@@ -348,7 +479,7 @@ fn unauthorized_workspace_is_rejected_before_any_provider_call() {
 #[test]
 fn raw_filesystem_path_is_rejected_as_unauthorized_workspace() {
     let (dir, fake, mut host) = setup();
-    let mut command = connect(&dir, "hub");
+    let mut command = connect(&dir, "hub", host.generation());
     // Submitting raw filesystem path instead of workspace_id must be strictly rejected
     if let RemoteAction::Connect { workspace_path, .. } = &mut command.command {
         *workspace_path = dir.path().to_path_buf();

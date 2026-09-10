@@ -36,5 +36,5 @@ App 中填写：
 - 旧监控调用设备、Session、时间线 GET；Remote 调用账户授权的 v3 查询和命令接口。
 - 远程 Gateway 只允许 HTTPS，明文 HTTP 仅允许回环主机。
 - Bearer 令牌用 Android Keystore AES-256-GCM 加密，配置禁止系统备份。
-- 不读取 Provider Token 或本机 transcript。已接入 Remote 的正文、工具事件与授权目录从 Gateway 读取，仅在界面内存中聚合，不写本地正文数据库。
+- 不读取 Provider Token 或本机 transcript。已接入 Remote 的消息正文、工具完成状态、opaque 审批描述符与授权工作区 ID 从 Gateway 读取，仅在界面内存中聚合，不写本地正文数据库。
 - 旧监控前台每 5 秒刷新；Remote 状态每 1.5 秒、所选会话每 0.5 秒串行刷新。原生推送、后台任务、发布签名尚未接入。

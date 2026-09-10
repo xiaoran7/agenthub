@@ -1,7 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { NativeHostDialog } from "./components/NativeHostDialog";
-import { RemoteConsole } from "../../web/src/components/RemoteConsole";
-import type { RemoteRequest } from "../../web/src/lib/remote";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
@@ -31,7 +29,6 @@ import {
   Pin,
   Play,
   Plus,
-  Radio,
   RefreshCw,
   RotateCcw,
   Search,
@@ -74,6 +71,7 @@ import {
   agentShortLabel,
   getDefaultModel,
   groupSessionsByWorkspace,
+  hasActiveTurn,
   isAttentionSession,
   permissionFieldLabel,
   relativeTime,
@@ -95,12 +93,16 @@ import type {
   Session,
   SessionTimelineEvent,
   SessionTurnEvent,
-  SessionTurnResult,
   Snapshot,
   TgDeviceCodeResponse,
   TgDevicePollResponse,
 } from "./types";
 
+import {
+  cancelSessionTurn,
+  resolveSessionApproval,
+  sendSessionMessage,
+} from "./sessionClient";
 import { SelectDropdown } from "./components/SelectDropdown";
 import {
   SessionContextMenu,
@@ -113,19 +115,8 @@ type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
 type DeviceFilter = "all" | string;
 
-const desktopRemoteRequest: RemoteRequest = async <T,>(
-  path: string,
-  body?: unknown,
-) => {
-  try {
-    return await invoke<T>("remote_gateway_request", {
-      path,
-      body: body ?? null,
-    });
-  } catch (error) {
-    throw new Error(String(error));
-  }
-};
+const isManagedProvider = (agentType: Session["agent_type"]) =>
+  agentType === "codex";
 
 export function App() {
   const demo =
@@ -136,7 +127,6 @@ export function App() {
   );
   const [restoring, setRestoring] = useState(!demo);
   const [error, setError] = useState<string>();
-  const [viewMode, setViewMode] = useState<"dashboard" | "remote">("dashboard");
   const [localHost, setLocalHost] = useState(false);
 
   const restore = useCallback(async () => {
@@ -170,24 +160,11 @@ export function App() {
       />
     );
   }
-  if (!demo && viewMode === "remote")
-    return (
-      <>
-        <RemoteConsole
-          request={desktopRemoteRequest}
-          onAuthenticationRequired={() => setSnapshot(undefined)}
-          onManage={() => setViewMode("dashboard")}
-          onLocalHost={() => setLocalHost(true)}
-        />
-        {localHost && <NativeHostDialog onClose={() => setLocalHost(false)} />}
-      </>
-    );
   return (
     <>
       <Dashboard
         initialSnapshot={snapshot}
         onLogout={() => setSnapshot(undefined)}
-        onOpenRemote={!demo ? () => setViewMode("remote") : undefined}
         onOpenLocalHost={!demo ? () => setLocalHost(true) : undefined}
       />
       {localHost && <NativeHostDialog onClose={() => setLocalHost(false)} />}
@@ -463,12 +440,10 @@ function AuthScreen({
 function Dashboard({
   initialSnapshot,
   onLogout,
-  onOpenRemote,
   onOpenLocalHost,
 }: {
   initialSnapshot: Snapshot;
   onLogout: () => void;
-  onOpenRemote?: () => void;
   onOpenLocalHost?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
@@ -492,7 +467,7 @@ function Dashboard({
   );
   const [launchModalOpen, setLaunchModalOpen] = useState(false);
   const [launchModalProvider, setLaunchModalProvider] =
-    useState<Session["agent_type"]>("claude_code");
+    useState<Session["agent_type"]>("codex");
   const [pinnedSessions, setPinnedSessions] = useState<string[]>(() => {
     try {
       const stored = window.localStorage.getItem("agenthub:pinned-sessions");
@@ -531,7 +506,7 @@ function Dashboard({
   // Quick Task Launcher state
   const [quickPrompt, setQuickPrompt] = useState("");
   const [quickProvider, setQuickProvider] =
-    useState<Session["agent_type"]>("claude_code");
+    useState<Session["agent_type"]>("codex");
   const [quickCwd, setQuickCwd] = useState(
     snapshot.preferences.default_cwd || "",
   );
@@ -777,9 +752,12 @@ function Dashboard({
   }, [sessions]);
 
   useEffect(() => {
-    if (agentFilter !== "all") {
+    if (agentFilter !== "all" && isManagedProvider(agentFilter)) {
       setQuickProvider(agentFilter);
       setLaunchModalProvider(agentFilter);
+    } else {
+      setQuickProvider("codex");
+      setLaunchModalProvider("codex");
     }
   }, [agentFilter]);
 
@@ -897,7 +875,7 @@ function Dashboard({
   const showSystemNotice =
     !snapshot.realtime_connected || sourceIssue !== undefined;
   const selectedProvider =
-    PROVIDER_LIST.find((provider) => provider.type === agentFilter) ??
+    PROVIDER_LIST.find((provider) => provider.type === "codex") ??
     PROVIDER_LIST[0];
 
   // Model catalog comes from the installed agent CLIs (local transcripts),
@@ -926,23 +904,16 @@ function Dashboard({
             </span>
           </button>
           <div className="top-nav-right">
-            {onOpenRemote && (
-              <button
-                type="button"
-                className="top-icon-btn"
-                onClick={onOpenRemote}
-                title="打开远程接管控制台 (Remote)"
-                aria-label="打开远程接管控制台"
-              >
-                <Radio size={15} />
-              </button>
-            )}
             <button
               type="button"
               className="top-icon-btn new-task-btn"
               onClick={() => {
                 setSelectedSessionKey(undefined);
-                if (agentFilter !== "all") setLaunchModalProvider(agentFilter);
+                setLaunchModalProvider(
+                  agentFilter !== "all" && isManagedProvider(agentFilter)
+                    ? agentFilter
+                    : "codex",
+                );
                 setLaunchModalOpen(true);
               }}
               title="新建任务"
@@ -1088,9 +1059,19 @@ function Dashboard({
                       <button
                         type="button"
                         className="provider-action-icon"
-                        title={"在 " + group.name + " 新建会话"}
+                        disabled={
+                          agentFilter === "all" ||
+                          !isManagedProvider(agentFilter)
+                        }
+                        title={
+                          agentFilter !== "all" &&
+                          isManagedProvider(agentFilter)
+                            ? "在 " + group.name + " 新建会话"
+                            : "该 Provider 当前仅支持发现和历史读取"
+                        }
                         onClick={() =>
                           agentFilter !== "all" &&
+                          isManagedProvider(agentFilter) &&
                           openLaunchModalFor(agentFilter)
                         }
                       >
@@ -1530,7 +1511,7 @@ async function pickFolderDialog(start?: string): Promise<string | undefined> {
 
 function LaunchSessionModal({
   open,
-  initialAgentType = "claude_code",
+  initialAgentType = "codex",
   onClose,
   onLaunched,
 }: {
@@ -1581,6 +1562,10 @@ function LaunchSessionModal({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (launching || prompt.trim() === "") return;
+    if (!isManagedProvider(agentType)) {
+      setError("该 Provider 当前仅支持发现和历史读取");
+      return;
+    }
     if (!cwd.trim()) {
       setError("请选择工作目录，Agent 将在该目录中启动");
       return;
@@ -1648,6 +1633,12 @@ function LaunchSessionModal({
                   type="button"
                   className={agentType === item.type ? "selected" : ""}
                   data-provider={item.type}
+                  disabled={!isManagedProvider(item.type)}
+                  title={
+                    isManagedProvider(item.type)
+                      ? `使用 ${item.label} 创建 managed Session`
+                      : `${item.label} 当前仅支持发现和历史读取`
+                  }
                   onClick={() => {
                     setAgentType(item.type);
                     setPermission("");
@@ -1801,8 +1792,14 @@ function SessionControlPanel({
   const [messages, setMessages] = useState<ConversationMessage[]>(
     () => cachedConversation(cacheKey) ?? [],
   );
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(() =>
+    hasActiveTurn(session.payload.state.activity_status),
+  );
   const [cancelling, setCancelling] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState(
+    session.payload.pending_approval ?? undefined,
+  );
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [agentActivity, setAgentActivity] = useState<string>();
   const [error, setError] = useState<string>();
   const [panelView, setPanelView] = useState<
@@ -1863,6 +1860,17 @@ function SessionControlPanel({
     }
     return undefined;
   }, [runtime]);
+
+  useEffect(() => {
+    setPendingApproval(session.payload.pending_approval ?? undefined);
+  }, [session.payload.pending_approval]);
+
+  useEffect(() => {
+    setBusy(hasActiveTurn(session.payload.state.activity_status));
+    if (!hasActiveTurn(session.payload.state.activity_status)) {
+      setCancelling(false);
+    }
+  }, [session.payload.state.activity_status]);
 
   const updateTurnOptions = (patch: TurnOptionsState) => {
     setTurnOptions((current) => {
@@ -2008,6 +2016,7 @@ function SessionControlPanel({
     setPrompt("");
     setBusy(true);
     setError(undefined);
+    setPendingApproval(undefined);
     setAgentActivity(undefined);
     const sentAttachments = attachments;
     setAttachments([]);
@@ -2032,10 +2041,13 @@ function SessionControlPanel({
           );
         } else if (event.type === "activity") {
           setAgentActivity(event.label);
+        } else if (event.type === "approval_requested") {
+          setPendingApproval(event.approval);
+          setAgentActivity("等待审批确认...");
         }
       };
-      const result = await invoke<SessionTurnResult>("send_session_turn", {
-        input: {
+      const result = await sendSessionMessage(
+        {
           agent_type: session.agent_type,
           agent_session_id: session.agent_session_id,
           prompt: nextPrompt,
@@ -2044,7 +2056,7 @@ function SessionControlPanel({
           attachments: sentAttachments,
         },
         onEvent,
-      });
+      );
       if (deltaFrame.current !== undefined) {
         window.cancelAnimationFrame(deltaFrame.current);
         deltaFrame.current = undefined;
@@ -2081,15 +2093,35 @@ function SessionControlPanel({
     if (!busy || cancelling) return;
     setCancelling(true);
     try {
-      await invoke("cancel_session_turn", {
-        input: {
-          agent_type: session.agent_type,
-          agent_session_id: session.agent_session_id,
-        },
+      await cancelSessionTurn({
+        agent_type: session.agent_type,
+        agent_session_id: session.agent_session_id,
       });
     } catch (nextError) {
       setError(errorMessage(nextError));
       setCancelling(false);
+    }
+  };
+
+  const resolveApproval = async (approved: boolean) => {
+    if (!pendingApproval || approvalBusy) return;
+    setApprovalBusy(true);
+    setError(undefined);
+    try {
+      await resolveSessionApproval({
+        agent_type: session.agent_type,
+        agent_session_id: session.agent_session_id,
+        approval_id: pendingApproval.approval_id,
+        approved,
+      });
+      setPendingApproval(undefined);
+      setAgentActivity(
+        approved ? "审批已允许，继续执行..." : "审批已拒绝，等待收敛...",
+      );
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setApprovalBusy(false);
     }
   };
 
@@ -2229,7 +2261,9 @@ function SessionControlPanel({
                 <MessageSquare />
                 <strong>从这里继续会话</strong>
                 <p>
-                  消息直接交给本机 CLI；内容不进入 AgentHub 云端或本地索引。
+                  {isManagedProvider(session.agent_type)
+                    ? "消息交给本机 agenthubd 管理的官方 Runtime。"
+                    : "该 Provider 当前只提供本机历史读取。"}
                 </p>
               </div>
             ) : (
@@ -2255,115 +2289,150 @@ function SessionControlPanel({
           </section>
         )}
 
+        {pendingApproval !== undefined && (
+          <div
+            className="approval-actions"
+            role="group"
+            aria-label="Codex 审批操作"
+          >
+            <span>Codex 正在等待权限确认</span>
+            <button
+              type="button"
+              disabled={approvalBusy || !pendingApproval.can_decline}
+              onClick={() => void resolveApproval(false)}
+            >
+              拒绝
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={approvalBusy || !pendingApproval.can_approve}
+              onClick={() => void resolveApproval(true)}
+            >
+              允许
+            </button>
+          </div>
+        )}
         {error !== undefined && <p className="panel-error">{error}</p>}
 
         {panelView === "conversation" && (
           <div className="composer-container">
-            {attachments.length > 0 && (
-              <div className="attachment-row">
-                {attachments.map((file) => (
-                  <span
-                    className="attachment-chip"
-                    key={file.path}
-                    title={file.path}
-                  >
-                    <Paperclip size={11} />
-                    <span className="attachment-name">{file.name}</span>
+            {!isManagedProvider(session.agent_type) ? (
+              <div className="provider-readonly-notice" role="status">
+                <Eye size={14} />
+                <span>当前 Provider 仅支持发现和历史读取</span>
+              </div>
+            ) : (
+              <>
+                {attachments.length > 0 && (
+                  <div className="attachment-row">
+                    {attachments.map((file) => (
+                      <span
+                        className="attachment-chip"
+                        key={file.path}
+                        title={file.path}
+                      >
+                        <Paperclip size={11} />
+                        <span className="attachment-name">{file.name}</span>
+                        <button
+                          type="button"
+                          aria-label={"移除附件 " + file.name}
+                          onClick={() =>
+                            setAttachments((current) =>
+                              current.filter((item) => item.path !== file.path),
+                            )
+                          }
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <form
+                  className="session-composer modern-composer"
+                  onSubmit={sendMessage}
+                >
+                  <textarea
+                    aria-label="发送给 Agent"
+                    maxLength={16_000}
+                    placeholder="继续这个会话… (Enter 发送，Shift+Enter 换行)"
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void sendMessage(e);
+                      }
+                    }}
+                    disabled={busy}
+                  />
+                  <div className="composer-toolbar">
                     <button
                       type="button"
-                      aria-label={"移除附件 " + file.name}
-                      onClick={() =>
-                        setAttachments((current) =>
-                          current.filter((item) => item.path !== file.path),
-                        )
-                      }
+                      className="tool-ghost-btn"
+                      onClick={() => void attachFiles()}
+                      title="附加文件或文档"
+                      aria-label="附加文件"
+                      disabled={busy}
                     >
-                      <X size={11} />
+                      <Plus size={15} />
                     </button>
-                  </span>
-                ))}
-              </div>
+                    <SelectDropdown
+                      className="ghost"
+                      value={currentModel}
+                      options={models.map((option) => ({
+                        value: option.value,
+                        label: option.label,
+                        desc: option.desc,
+                      }))}
+                      onChange={(val) => updateTurnOptions({ model: val })}
+                      size="sm"
+                      ariaLabel="会话模型"
+                    />
+                    {permissionOptions.length > 1 && (
+                      <SelectDropdown
+                        className="ghost"
+                        value={currentPermission}
+                        options={permissionOptions}
+                        onChange={(val) =>
+                          updateTurnOptions({ permission: val })
+                        }
+                        size="sm"
+                        ariaLabel="权限模式"
+                      />
+                    )}
+                    <span className="composer-spacer" />
+                    {contextSummary && (
+                      <span className="composer-context" title="上下文窗口使用">
+                        {contextSummary}
+                      </span>
+                    )}
+                    {busy ? (
+                      <button
+                        className="composer-send turn-cancel-btn"
+                        type="button"
+                        disabled={cancelling}
+                        onClick={() => void cancelTurn()}
+                        title="停止当前生成"
+                        aria-label="停止"
+                      >
+                        <Square size={14} />
+                      </button>
+                    ) : (
+                      <button
+                        className="composer-send"
+                        type="submit"
+                        aria-label="发送"
+                        disabled={busy || prompt.trim() === ""}
+                      >
+                        <ArrowUp size={15} />
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </>
             )}
-            <form
-              className="session-composer modern-composer"
-              onSubmit={sendMessage}
-            >
-              <textarea
-                aria-label="发送给 Agent"
-                maxLength={16_000}
-                placeholder="继续这个会话… (Enter 发送，Shift+Enter 换行)"
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void sendMessage(e);
-                  }
-                }}
-                disabled={busy}
-              />
-              <div className="composer-toolbar">
-                <button
-                  type="button"
-                  className="tool-ghost-btn"
-                  onClick={() => void attachFiles()}
-                  title="附加文件或文档"
-                  aria-label="附加文件"
-                  disabled={busy}
-                >
-                  <Plus size={15} />
-                </button>
-                <SelectDropdown
-                  className="ghost"
-                  value={currentModel}
-                  options={models.map((option) => ({
-                    value: option.value,
-                    label: option.label,
-                    desc: option.desc,
-                  }))}
-                  onChange={(val) => updateTurnOptions({ model: val })}
-                  size="sm"
-                  ariaLabel="会话模型"
-                />
-                {permissionOptions.length > 1 && (
-                  <SelectDropdown
-                    className="ghost"
-                    value={currentPermission}
-                    options={permissionOptions}
-                    onChange={(val) => updateTurnOptions({ permission: val })}
-                    size="sm"
-                    ariaLabel="权限模式"
-                  />
-                )}
-                <span className="composer-spacer" />
-                {contextSummary && (
-                  <span className="composer-context" title="上下文窗口使用">
-                    {contextSummary}
-                  </span>
-                )}
-                {busy ? (
-                  <button
-                    className="composer-send turn-cancel-btn"
-                    type="button"
-                    disabled={cancelling}
-                    onClick={() => void cancelTurn()}
-                    title="停止当前生成"
-                    aria-label="停止"
-                  >
-                    <Square size={14} />
-                  </button>
-                ) : (
-                  <button
-                    className="composer-send"
-                    type="submit"
-                    aria-label="发送"
-                    disabled={busy || prompt.trim() === ""}
-                  >
-                    <ArrowUp size={15} />
-                  </button>
-                )}
-              </div>
-            </form>
           </div>
         )}
       </aside>

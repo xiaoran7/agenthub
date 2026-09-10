@@ -2539,6 +2539,101 @@ enum ProtocolRead {
     Eof,
 }
 
+fn resolve_codex_app_server_binary(binary: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        resolve_windows_codex_binary(binary).unwrap_or_else(|| binary.to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        binary.to_path_buf()
+    }
+}
+
+#[cfg(windows)]
+fn resolve_windows_codex_binary(binary: &Path) -> Option<PathBuf> {
+    if binary
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+    {
+        return resolve_windows_codex_candidate(binary);
+    }
+
+    let path = env::var_os("PATH")?;
+    let mut executable_fallback = None;
+    for directory in env::split_paths(&path) {
+        for extension in ["cmd", "ps1"] {
+            let candidate = directory.join(format!("{}.{}", binary.display(), extension));
+            if let Some(native) = resolve_windows_codex_candidate(&candidate) {
+                return Some(native);
+            }
+        }
+        let candidate = directory.join(format!("{}.exe", binary.display()));
+        if executable_fallback.is_none() && candidate.is_file() {
+            executable_fallback = candidate.canonicalize().ok().or(Some(candidate));
+        }
+    }
+    executable_fallback
+}
+
+#[cfg(windows)]
+fn resolve_windows_codex_candidate(candidate: &Path) -> Option<PathBuf> {
+    if candidate
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        && candidate.is_file()
+    {
+        return candidate
+            .canonicalize()
+            .ok()
+            .or_else(|| Some(candidate.into()));
+    }
+    if !candidate.is_file()
+        || !candidate
+            .file_stem()
+            .is_some_and(|stem| stem.eq_ignore_ascii_case("codex"))
+    {
+        return None;
+    }
+
+    let parent = candidate.parent()?;
+    let package_root = if parent
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(".bin"))
+    {
+        parent.parent()?.join("@openai").join("codex")
+    } else {
+        parent.join("node_modules").join("@openai").join("codex")
+    };
+    #[cfg(target_arch = "x86_64")]
+    let (platform_package, target) = ("codex-win32-x64", "x86_64-pc-windows-msvc");
+    #[cfg(target_arch = "aarch64")]
+    let (platform_package, target) = ("codex-win32-arm64", "aarch64-pc-windows-msvc");
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    return None;
+
+    for native in [
+        package_root
+            .join("node_modules")
+            .join("@openai")
+            .join(platform_package)
+            .join("vendor")
+            .join(target)
+            .join("bin")
+            .join("codex.exe"),
+        package_root
+            .join("vendor")
+            .join(target)
+            .join("bin")
+            .join("codex.exe"),
+    ] {
+        if native.is_file() {
+            return native.canonicalize().ok().or(Some(native));
+        }
+    }
+    None
+}
+
 pub struct CodexAppServer {
     program: String,
     child: Child,
@@ -2577,9 +2672,10 @@ impl CodexAppServer {
         response_timeout: Duration,
         interactive: bool,
     ) -> Result<Self, CollectorError> {
-        let binary = binary.as_ref();
+        let configured_binary = binary.as_ref();
+        let binary = resolve_codex_app_server_binary(configured_binary);
         let program = binary.display().to_string();
-        let mut command = Command::new(binary);
+        let mut command = Command::new(&binary);
         command
             .args(["app-server", "--listen", "stdio://"])
             .stdin(Stdio::piped())
@@ -3119,6 +3215,37 @@ mod tests {
             path
         };
         (directory, script)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn resolves_only_known_windows_codex_npm_shim_layouts() {
+        let directory = tempfile::tempdir().unwrap();
+        let npm_root = directory.path().join("npm");
+        let shim = npm_root.join("codex.cmd");
+        let native = npm_root
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("bin")
+            .join("codex.exe");
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::write(&shim, "@echo off\r\n").unwrap();
+        fs::write(&native, b"test").unwrap();
+
+        assert_eq!(
+            resolve_windows_codex_candidate(&shim),
+            native.canonicalize().ok()
+        );
+        let unrelated = directory.path().join("other").join("codex.cmd");
+        fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        fs::write(&unrelated, "@echo off\r\n").unwrap();
+        assert!(resolve_windows_codex_candidate(&unrelated).is_none());
     }
 
     #[test]

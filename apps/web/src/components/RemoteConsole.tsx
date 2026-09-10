@@ -162,7 +162,10 @@ export function RemoteConsole({
     () => conversationItems(events, commands),
     [events, commands],
   );
-  const approvals = useMemo(() => pendingApprovals(events), [events]);
+  const approvals = useMemo(
+    () => pendingApprovals(events, session?.binding.hub_session_id ?? ""),
+    [events, session?.binding.hub_session_id],
+  );
   useEffect(() => {
     const confirmed = new Set(
       commands
@@ -217,7 +220,11 @@ export function RemoteConsole({
     }
   };
   const launch = async () => {
-    if (!runner || !workspace) return;
+    const launchRunner = snapshot.runners.find(
+      (item) => item.runner_id === runner,
+    );
+    const generation = launchRunner?.hello?.host_generation;
+    if (!runner || !workspace || !generation) return;
     setBusy(true);
     setError("");
     const attemptKey = JSON.stringify([
@@ -233,7 +240,7 @@ export function RemoteConsole({
       ({
         client_cmd_id: crypto.randomUUID(),
         hub_session_id: crypto.randomUUID(),
-        host_generation: null,
+        host_generation: generation,
         command: {
           action: "connect",
           mode: nativeId ? "resume" : "create",
@@ -424,20 +431,16 @@ export function RemoteConsole({
                 <p className="remote-muted">会话已建立，可以发送第一条消息。</p>
               )}
               {approvals.map((approval) => (
-                <section className="remote-approval" key={approval.id}>
+                <section className="remote-approval" key={approval.approval_id}>
                   <h3>需要你的确认</h3>
-                  <strong>{approval.title}</strong>
-                  <details>
-                    <summary>查看详情</summary>
-                    <pre>{approval.details}</pre>
-                  </details>
+                  <strong>Codex 请求执行受保护的操作</strong>
                   <div>
                     <button
-                      disabled={!connected || busy}
+                      disabled={!connected || busy || !approval.can_decline}
                       onClick={() =>
                         void submit({
                           action: "resolve_approval",
-                          approval_id: approval.id,
+                          approval_id: approval.approval_id,
                           approved: false,
                         })
                       }
@@ -446,11 +449,11 @@ export function RemoteConsole({
                     </button>
                     <button
                       className="remote-primary"
-                      disabled={!connected || busy}
+                      disabled={!connected || busy || !approval.can_approve}
                       onClick={() =>
                         void submit({
                           action: "resolve_approval",
-                          approval_id: approval.id,
+                          approval_id: approval.approval_id,
                           approved: true,
                         })
                       }

@@ -8,6 +8,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::collectors::CodexAppServer;
 
@@ -109,6 +110,9 @@ pub enum RemoteAction {
         approval_id: String,
         approved: bool,
     },
+    SetArchived {
+        archived: bool,
+    },
     Interrupt,
 }
 
@@ -167,6 +171,18 @@ pub struct HostEvent {
     pub raw: Value,
     pub binding: Option<SessionBinding>,
     pub approval_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<PendingApprovalSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingApprovalSnapshot {
+    pub approval_id: String,
+    pub hub_session_id: String,
+    pub host_generation: String,
+    pub turn_id: String,
+    pub can_approve: bool,
+    pub can_decline: bool,
 }
 
 struct PendingApproval {
@@ -191,7 +207,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
 
 impl<T: NativeTransport> NativeSessionHost<T> {
     pub fn new(transport: T, workspaces: Vec<PathBuf>) -> Result<Self, NativeError> {
-        let workspaces = workspaces
+        let mut workspaces = workspaces
             .into_iter()
             .map(|path| {
                 path.canonicalize()
@@ -200,6 +216,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     .ok_or_else(|| NativeError::rejected("workspace_unavailable"))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        workspaces.sort();
+        workspaces.dedup();
         if workspaces.is_empty() {
             return Err(NativeError::rejected("workspace_required"));
         }
@@ -224,6 +242,26 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     }
     pub fn sessions(&self) -> Vec<SessionBinding> {
         self.sessions.values().cloned().collect()
+    }
+    pub fn pending_approvals(&self) -> Vec<PendingApprovalSnapshot> {
+        let mut approvals = self
+            .approvals
+            .iter()
+            .filter(|(_, approval)| approval.supported)
+            .map(|(approval_id, approval)| {
+                let decisions = approval.available_decisions.as_ref();
+                PendingApprovalSnapshot {
+                    approval_id: approval_id.clone(),
+                    hub_session_id: approval.hub_session_id.clone(),
+                    host_generation: self.generation.clone(),
+                    turn_id: approval.turn_id.clone(),
+                    can_approve: decisions.is_none_or(|values| values.contains(&json!("accept"))),
+                    can_decline: decisions.is_none_or(|values| values.contains(&json!("decline"))),
+                }
+            })
+            .collect::<Vec<_>>();
+        approvals.sort_by(|left, right| left.approval_id.cmp(&right.approval_id));
+        approvals
     }
     pub fn workspaces(&self) -> &[PathBuf] {
         &self.workspaces
@@ -340,6 +378,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
 
     fn execute(&mut self, command: &RemoteCommand) -> Result<Value, NativeError> {
         let hub_id = &command.hub_session_id;
+        if command.host_generation.as_deref() != Some(&self.generation) {
+            return Err(NativeError::rejected("host_generation_mismatch"));
+        }
         if let RemoteAction::Connect {
             mode,
             workspace_path,
@@ -450,9 +491,6 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             return Ok(json!({"binding": binding, "provider_response": response}));
         }
 
-        if command.host_generation.as_deref() != Some(&self.generation) {
-            return Err(NativeError::rejected("host_generation_mismatch"));
-        }
         let session = self
             .sessions
             .get(hub_id)
@@ -522,6 +560,24 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 // Native notifications, not the act of sending a response, update execution state.
                 Ok(json!({"approval_id": approval_id, "response_sent": true}))
             }
+            RemoteAction::SetArchived { archived } => {
+                if session.current_turn_id.is_some()
+                    || !matches!(
+                        session.execution_state,
+                        ExecutionState::Idle | ExecutionState::Completed
+                    )
+                {
+                    return Err(NativeError::rejected("session_busy_or_unknown"));
+                }
+                self.transport.request(
+                    if *archived {
+                        "thread/archive"
+                    } else {
+                        "thread/unarchive"
+                    },
+                    json!({"threadId": session.provider_session_id}),
+                )
+            }
             RemoteAction::Interrupt => {
                 let turn_id = session
                     .current_turn_id
@@ -570,6 +626,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             .and_then(|id| self.native_to_hub.get(id))
             .cloned();
         let mut approval_id = None;
+        let mut approval = None;
         let mut kind = method.to_string();
         if let Some(binding) = hub_id.as_ref().and_then(|id| self.sessions.get_mut(id)) {
             match method {
@@ -590,19 +647,30 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         .retain(|_, approval| approval.hub_session_id != binding.hub_session_id);
                 }
                 "serverRequest/resolved" => {
-                    self.approvals.retain(|_, approval| {
-                        approval.hub_session_id != binding.hub_session_id
-                            || approval.request_id != params["requestId"]
-                    });
+                    if let Some(id) = self.approvals.iter().find_map(|(id, approval)| {
+                        (approval.hub_session_id == binding.hub_session_id
+                            && approval.request_id == params["requestId"])
+                            .then(|| id.clone())
+                    }) {
+                        self.approvals.remove(&id);
+                        approval_id = Some(id);
+                        kind = "approval_resolved".into();
+                    }
                 }
                 _ if raw.get("id").is_some() && raw.get("method").is_some() => {
                     let request_id = raw["id"].clone();
                     let turn_id = params["turnId"].as_str().unwrap_or("");
                     if binding.current_turn_id.as_deref() == Some(turn_id) {
-                        let id = format!(
-                            "{}:{}:{}",
-                            self.generation, binding.provider_session_id, request_id
+                        let mut digest = Sha256::new();
+                        digest.update(b"agenthub.approval.v1\0");
+                        digest.update(self.generation.as_bytes());
+                        digest.update([0]);
+                        digest.update(binding.provider_session_id.as_bytes());
+                        digest.update([0]);
+                        digest.update(
+                            serde_json::to_vec(&request_id).unwrap_or_else(|_| b"invalid".to_vec()),
                         );
+                        let id = format!("approval-{:x}", digest.finalize());
                         let supported = matches!(
                             method,
                             "item/commandExecution/requestApproval"
@@ -614,6 +682,20 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                             } else {
                                 ExecutionState::AwaitingInput
                             };
+                            let available_decisions =
+                                params["availableDecisions"].as_array().cloned();
+                            let descriptor = PendingApprovalSnapshot {
+                                approval_id: id.clone(),
+                                hub_session_id: binding.hub_session_id.clone(),
+                                host_generation: self.generation.clone(),
+                                turn_id: turn_id.into(),
+                                can_approve: available_decisions
+                                    .as_ref()
+                                    .is_none_or(|values| values.contains(&json!("accept"))),
+                                can_decline: available_decisions
+                                    .as_ref()
+                                    .is_none_or(|values| values.contains(&json!("decline"))),
+                            };
                             self.approvals
                                 .entry(id.clone())
                                 .or_insert_with(|| PendingApproval {
@@ -621,11 +703,12 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     turn_id: turn_id.into(),
                                     request_id,
                                     supported,
-                                    available_decisions: params["availableDecisions"]
-                                        .as_array()
-                                        .cloned(),
+                                    available_decisions,
                                 });
                             approval_id = Some(id);
+                            if supported {
+                                approval = Some(descriptor);
+                            }
                             kind = if supported {
                                 "approval_requested"
                             } else {
@@ -650,6 +733,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             kind,
             raw,
             approval_id,
+            approval,
         }
     }
 }

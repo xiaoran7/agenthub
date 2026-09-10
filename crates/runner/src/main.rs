@@ -77,7 +77,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Connect a durable native Host to the authenticated v3 Gateway.
+    /// Run the local agenthubd control plane without requiring Gateway connectivity.
+    Daemon {
+        #[arg(long)]
+        codex_binary: PathBuf,
+        #[arg(long, required = true)]
+        workspace: Vec<PathBuf>,
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long, help = "Override the per-device named pipe or Unix socket")]
+        ipc_endpoint: Option<String>,
+    },
+    /// Connect the local agenthubd control plane to the authenticated v3 Gateway.
     RemoteRun {
         #[arg(long)]
         codex_binary: PathBuf,
@@ -87,6 +98,8 @@ enum Command {
         db: PathBuf,
         #[arg(long)]
         server: String,
+        #[arg(long, help = "Override the per-device named pipe or Unix socket")]
+        ipc_endpoint: Option<String>,
     },
     /// Local JSONL control channel for a persistent Codex app-server Host.
     /// This is not yet the authenticated Gateway transport.
@@ -424,15 +437,40 @@ fn main() -> Result<()> {
     let auth_cache = cli.auth_cache;
 
     match cli.command {
+        Command::Daemon {
+            codex_binary,
+            workspace,
+            db,
+            ipc_endpoint,
+        } => {
+            let identity = runtime_identity
+                .ok_or_else(|| anyhow::anyhow!("daemon_requires_device_identity"))?;
+            agent_pulse_runner::daemon::run(agent_pulse_runner::daemon::DaemonConfig {
+                codex_binary,
+                workspaces: workspace,
+                database: db,
+                identity,
+                server: None,
+                ipc_endpoint,
+            })?;
+        }
         Command::RemoteRun {
             codex_binary,
             workspace,
             db,
             server,
+            ipc_endpoint,
         } => {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("remote_requires_bound_device_identity"))?;
-            agent_pulse_runner::remote_network::run(codex_binary, workspace, db, identity, server)?;
+            agent_pulse_runner::daemon::run(agent_pulse_runner::daemon::DaemonConfig {
+                codex_binary,
+                workspaces: workspace,
+                database: db,
+                identity,
+                server: Some(server),
+                ipc_endpoint,
+            })?;
         }
         Command::RemoteHost {
             codex_binary,

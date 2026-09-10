@@ -15,11 +15,16 @@ interface Connection {
   lastSeen: number;
 }
 
+export interface RemoteRouteOptions {
+  isBackpressured?: (socket: WebSocket) => boolean;
+}
+
 export function registerRemoteRoutes(
   app: FastifyInstance,
   devices: GatewayStore,
   auth: OwnerAuthenticator,
   content: RemoteContentStore,
+  options: RemoteRouteOptions = {},
 ): void {
   const connections = new Map<string, Connection>();
   const streams = new Set<() => void>();
@@ -32,10 +37,15 @@ export function registerRemoteRoutes(
     if (!device || device.owner_id !== owner || device.revoked_at)
       throw new RemoteStoreError("device_not_found");
   };
+  const assertCurrentConnection = (connection: Connection): void => {
+    if (connections.get(connection.runner) !== connection)
+      throw new RemoteStoreError("stale_connection");
+  };
   const transmit = (connection: Connection, value: unknown): void => {
     if (
       connection.socket.readyState !== 1 ||
-      connection.socket.bufferedAmount > 1024 * 1024
+      (options.isBackpressured?.(connection.socket) ??
+        connection.socket.bufferedAmount > 1024 * 1024)
     )
       throw new RemoteStoreError("runner_backpressure");
     connection.socket.send(JSON.stringify(value));
@@ -121,14 +131,7 @@ export function registerRemoteRoutes(
             const received = Number(frame.received_command_seq);
             if (received < marks.command_ack || received > marks.command_seq)
               throw new RemoteStoreError("command_journal_mismatch");
-            // Reject a second native Host rather than silently stealing a live Runner.
             const previous = connections.get(device.device_id);
-            if (
-              previous &&
-              previous.socket.readyState === 1 &&
-              previous.generation !== frame.host_generation
-            )
-              throw new RemoteStoreError("runner_already_connected");
             if (previous) previous.socket.close(1000, "connection_replaced");
             connection = {
               socket,
@@ -148,9 +151,9 @@ export function registerRemoteRoutes(
             pump(connection);
             return;
           }
-          if (connections.get(connection.runner) !== connection)
-            throw new RemoteStoreError("stale_connection");
+          assertCurrentConnection(connection);
           await requireDevice(connection.owner, connection.runner);
+          assertCurrentConnection(connection);
           connection.lastSeen = Date.now();
           if (frame.type === "data") {
             if (
@@ -164,6 +167,7 @@ export function registerRemoteRoutes(
               connection.runner,
               Number(frame.seq),
               frame.payload as Record<string, unknown>,
+              connection.generation,
             );
             transmit(connection, {
               type: "ack",
@@ -284,7 +288,18 @@ export function registerRemoteRoutes(
       const conn = connections.get(runner);
       if (!conn || conn.socket.readyState !== 1)
         throw new RemoteStoreError("runner_offline");
-      if (command.command.action !== "connect") {
+      if (command.host_generation !== conn.generation)
+        throw new RemoteStoreError("host_generation_mismatch");
+      if (command.command.action === "connect") {
+        const workspaceStatus = content.workspaceStatus(
+          owner,
+          runner,
+          conn.generation,
+          command.command.workspace_path,
+        );
+        if (workspaceStatus !== "ready")
+          throw new RemoteStoreError(workspaceStatus);
+      } else {
         const binding = content.session(owner, runner, command.hub_session_id);
         if (!binding) throw new RemoteStoreError("session_not_found");
         if (
@@ -295,7 +310,15 @@ export function registerRemoteRoutes(
           throw new RemoteStoreError("session_control_lost");
       }
       const queued = content.submit(owner, runner, command);
-      pump(conn);
+      try {
+        pump(conn);
+      } catch (error) {
+        if (
+          !(error instanceof RemoteStoreError) ||
+          error.code !== "runner_backpressure"
+        )
+          throw error;
+      }
       return reply.status(202).send({
         status: "queued",
         seq: queued.seq,
@@ -311,6 +334,7 @@ export function registerRemoteRoutes(
       const cursor = Number(after ?? 0);
       if (!Number.isSafeInteger(cursor) || cursor < 0)
         throw new RemoteStoreError("invalid_cursor");
+      if (hub && !runner) throw new RemoteStoreError("runner_required");
       return { events: content.events(owner, cursor, runner, hub) };
     },
   );

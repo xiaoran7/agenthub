@@ -12,8 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod remote_desktop;
-use remote_desktop::{RemoteHandle, remote_host_status, start_remote_host, stop_remote_host};
+mod daemon_client;
+use daemon_client::{DaemonClient, remote_host_status, start_remote_host, stop_remote_host};
 
 use agent_pulse_runner::{
     adapters::{
@@ -22,11 +22,9 @@ use agent_pulse_runner::{
         grok,
     },
     collectors::{
-        AgentTurnUpdate, CodexAppServer, CollectorError, LocalSessionContext, TurnOptions,
-        collect_antigravity_session_contexts, collect_claude_session_contexts,
+        LocalSessionContext, collect_antigravity_session_contexts, collect_claude_session_contexts,
         collect_claude_transcripts, collect_codex_local_threads, collect_codex_session_contexts,
-        collect_grok_session_contexts, collect_grok_sessions, find_antigravity_session_cwd,
-        find_grok_session_cwd, run_agent_session_start_streaming, run_agent_session_turn_streaming,
+        collect_grok_session_contexts, collect_grok_sessions,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -177,6 +175,14 @@ struct SessionTurnRef {
 }
 
 #[derive(Debug, Deserialize)]
+struct SessionApprovalInput {
+    agent_type: AgentType,
+    agent_session_id: String,
+    approval_id: String,
+    approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct SessionTimelineInput {
     device_id: String,
     agent_type: AgentType,
@@ -193,9 +199,66 @@ struct SessionConversationInput {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SessionTurnEvent {
     Started,
-    AssistantDelta { text: String },
-    AssistantMessage { text: String },
-    Activity { label: &'static str },
+    AssistantDelta {
+        text: String,
+    },
+    AssistantMessage {
+        text: String,
+    },
+    Activity {
+        label: &'static str,
+    },
+    ApprovalRequested {
+        approval: agent_pulse_runner::remote_host::PendingApprovalSnapshot,
+    },
+}
+
+#[derive(Default)]
+struct CodexAssistantAccumulator {
+    text: String,
+}
+
+impl CodexAssistantAccumulator {
+    fn apply(
+        &mut self,
+        event: &agent_pulse_runner::remote_host::HostEvent,
+        expected_turn_id: &str,
+    ) -> Option<SessionTurnEvent> {
+        let event_turn_id = event.raw["params"]["turnId"]
+            .as_str()
+            .or_else(|| event.raw["params"]["turn"]["id"].as_str());
+        if event_turn_id != Some(expected_turn_id) {
+            return None;
+        }
+        match event.kind.as_str() {
+            "item/agentMessage/delta" => {
+                let delta = event.raw["params"]["delta"].as_str()?;
+                self.text.push_str(delta);
+                Some(SessionTurnEvent::AssistantDelta {
+                    text: delta.to_owned(),
+                })
+            }
+            "item/completed"
+                if event.raw["params"]["item"]["type"].as_str() == Some("agentMessage") =>
+            {
+                let text = event.raw["params"]["item"]["text"].as_str()?;
+                self.text = text.to_owned();
+                Some(SessionTurnEvent::AssistantMessage {
+                    text: self.text.clone(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn finish_with_fallback(&mut self, fallback: Option<&str>) -> String {
+        if self.text.trim().is_empty()
+            && let Some(fallback) = fallback
+        {
+            self.text = fallback.to_owned();
+        }
+        self.text.trim().to_owned()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -218,7 +281,6 @@ struct ArchiveSessionInput {
 struct DesktopPreferencesInput {
     refresh_interval_seconds: u64,
     claude_binary: String,
-    codex_binary: String,
     grok_binary: String,
 }
 
@@ -269,7 +331,6 @@ impl RealtimeHandle {
 }
 
 struct DesktopState {
-    remote: Mutex<Option<RemoteHandle>>,
     data_dir: PathBuf,
     engine: Mutex<Option<EngineHandle>>,
     realtime: Mutex<Option<RealtimeHandle>>,
@@ -324,37 +385,6 @@ async fn restore_session(
     snapshot["sync_running"] = Value::Bool(online);
     snapshot["realtime_connected"] = Value::Bool(online);
     Ok(Some(snapshot))
-}
-
-#[tauri::command]
-async fn remote_gateway_request(
-    path: String,
-    body: Option<Value>,
-    state: State<'_, DesktopState>,
-) -> Result<Value, String> {
-    // Only the fixed remote namespace can use the locally stored account cookie.
-    if !path.starts_with('/') || path.contains("..") || path.contains(['#', '\\', '%']) {
-        return Err("invalid_remote_path".into());
-    }
-    let data_dir = state.data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let config = read_config(&data_dir).map_err(|_| "remote_unavailable")?;
-        let cookie = load_cookie(&config.server_url).map_err(|_| "authentication_required")?;
-        request_json(
-            if body.is_some() { "POST" } else { "GET" },
-            &config.server_url,
-            &format!("/v3/remote{path}"),
-            Some(&cookie),
-            body.as_ref(),
-        )
-        .map_err(|error| match error {
-            DesktopError::InvalidCredentials => "authentication_required",
-            _ => "remote_unavailable",
-        })
-    })
-    .await
-    .map_err(|_| "remote_unavailable".to_owned())?
-    .map_err(str::to_owned)
 }
 
 #[tauri::command]
@@ -502,7 +532,7 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
         let mut seen_families: HashSet<String> = HashSet::new();
 
         if agent == AgentType::Codex
-            && let Some(client) = remote_desktop::get_host_client(state)
+            && let Some(client) = daemon_client::get_daemon_client(state)
             && let Ok(val) = client.query_models()
             && let Some(arr) = val.get("data").and_then(Value::as_array)
             && !arr.is_empty()
@@ -610,6 +640,9 @@ async fn send_session_message(
     if input.prompt.trim().is_empty() || input.prompt.trim().chars().count() > MAX_PROMPT_CHARS {
         return Err(DesktopError::InvalidAction.to_string());
     }
+    if input.agent_type != AgentType::Codex {
+        return Err("当前 Provider 仅支持发现和历史读取；可写 Session 正在接入 agenthubd".into());
+    }
     let key = session_turn_key(input.agent_type, &input.agent_session_id);
     let cancelled = Arc::new(AtomicBool::new(false));
     {
@@ -624,28 +657,23 @@ async fn send_session_message(
     }
     let _ = on_event.send(SessionTurnEvent::Started);
 
-    let client = if input.agent_type == AgentType::Codex {
-        let ensure_res = remote_desktop::ensure_host_client(&state, None);
+    let client = {
+        let required_workspace = find_codex_session_cwd(&input.agent_session_id);
+        let ensure_res = daemon_client::ensure_daemon_client(&state, required_workspace.as_deref());
         match ensure_res {
-            Ok(c) => Some(c),
-            Err(e) => {
+            Ok(client) => client,
+            Err(error) => {
                 if let Ok(mut active_turns) = state.active_turns.lock() {
                     active_turns.remove(&key);
                 }
-                return Err(e.to_string());
+                return Err(error.to_string());
             }
         }
-    } else {
-        None
     };
 
     let data_dir = state.data_dir.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        if let Some(client) = client {
-            send_codex_message_with_client(input, client, &data_dir, &cancelled, on_event)
-        } else {
-            send_session_message_inner(input, &data_dir, &cancelled, on_event)
-        }
+        send_codex_message_with_client(input, client, &data_dir, &cancelled, on_event)
     })
     .await;
     if let Ok(mut active_turns) = state.active_turns.lock() {
@@ -666,43 +694,53 @@ async fn launch_new_session(
     if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(DesktopError::InvalidAction.to_string());
     }
+    if input.agent_type != AgentType::Codex {
+        return Err("当前 Provider 仅支持发现和历史读取；可写 Session 正在接入 agenthubd".into());
+    }
+    let cwd_path = input
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| DesktopError::InvalidAction.to_string())?;
     let cancelled = Arc::new(AtomicBool::new(false));
+    let key = format!("launch:{}", uuid::Uuid::new_v4());
+    {
+        let mut active_turns = state
+            .active_turns
+            .lock()
+            .map_err(|_| DesktopError::AgentFailed.to_string())?;
+        active_turns.insert(key.clone(), cancelled.clone());
+    }
 
-    let client = if input.agent_type == AgentType::Codex {
-        let cwd_path = input
-            .cwd
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .filter(|path| path.is_dir())
-            .ok_or_else(|| DesktopError::InvalidAction.to_string())?;
-        Some(
-            remote_desktop::ensure_host_client(&state, Some(&cwd_path))
-                .map_err(|e| e.to_string())?,
-        )
-    } else {
-        None
+    let client = match daemon_client::ensure_daemon_client(&state, Some(&cwd_path)) {
+        Ok(client) => client,
+        Err(error) => {
+            if let Ok(mut active_turns) = state.active_turns.lock() {
+                active_turns.remove(&key);
+            }
+            return Err(error.to_string());
+        }
     };
 
-    let data_dir = state.data_dir.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        if let Some(client) = client {
-            launch_codex_session_with_client(input, client, &cancelled, on_event)
-        } else {
-            launch_new_session_inner(input, &data_dir, &cancelled, on_event)
-        }
+        launch_codex_session_with_client(input, client, &cancelled, on_event)
     })
     .await
-    .map_err(|_| DesktopError::AgentFailed.to_string())?
-    .map_err(|error| error.to_string())?;
-    Ok(result)
+    .map_err(|_| DesktopError::AgentFailed.to_string())
+    .and_then(|result| result.map_err(|error| error.to_string()));
+    if let Ok(mut active_turns) = state.active_turns.lock() {
+        active_turns.remove(&key);
+    }
+    result
 }
 
 fn launch_codex_session_with_client(
     input: LaunchSessionInput,
-    client: agent_pulse_runner::remote_network::LocalHostClient,
-    _cancelled: &AtomicBool,
+    client: DaemonClient,
+    cancelled: &AtomicBool,
     on_event: Channel<SessionTurnEvent>,
 ) -> Result<Value, DesktopError> {
     let prompt = input.prompt.trim();
@@ -718,13 +756,18 @@ fn launch_codex_session_with_client(
         .canonicalize()
         .map_err(|_| DesktopError::InvalidAction)?;
 
-    let (sub, rx) = client.subscribe(256);
+    let (sub, rx, _initial_snapshot) = client
+        .subscribe(256)
+        .map_err(|_| DesktopError::AgentFailed)?;
 
+    let host_generation = client
+        .query_generation()
+        .map_err(|_| DesktopError::AgentFailed)?;
     let hub_session_id = format!("hub-{}", uuid::Uuid::new_v4());
     let connect_cmd = agent_pulse_runner::remote_host::RemoteCommand {
         client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
         hub_session_id: hub_session_id.clone(),
-        host_generation: None,
+        host_generation: Some(host_generation.clone()),
         command: agent_pulse_runner::remote_host::RemoteAction::Connect {
             mode: agent_pulse_runner::remote_host::ConnectMode::Create,
             workspace_path: PathBuf::from(agent_pulse_runner::privacy::workspace_id_for_path(
@@ -760,9 +803,6 @@ fn launch_codex_session_with_client(
         .as_str()
         .ok_or(DesktopError::AgentFailed)?
         .to_owned();
-    let host_generation = client
-        .query_generation()
-        .map_err(|_| DesktopError::AgentFailed)?;
 
     let _ = on_event.send(SessionTurnEvent::Started);
 
@@ -789,37 +829,35 @@ fn launch_codex_session_with_client(
         .ok_or(DesktopError::AgentFailed)?
         .to_owned();
 
-    let mut full_response = String::new();
+    let mut final_response = String::new();
+    let mut assistant = CodexAssistantAccumulator::default();
     let mut turn_completed = false;
     let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
     while Instant::now() < deadline {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(DesktopError::AgentCancelled);
+        }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(event) => {
                 if event.hub_session_id.as_deref() == Some(&hub_session_id) {
+                    if let Some(message) = assistant.apply(&event, &expected_turn_id) {
+                        let _ = on_event.send(message);
+                    }
                     match event.kind.as_str() {
-                        "item/agentMessage/delta" => {
-                            let event_turn_id = event.raw["params"]["turnId"]
-                                .as_str()
-                                .or_else(|| event.raw["params"]["turn"]["id"].as_str());
-                            if event_turn_id != Some(expected_turn_id.as_str()) {
-                                continue;
-                            }
-                            if let Some(delta) = event.raw["params"]["delta"].as_str() {
-                                full_response.push_str(delta);
-                                let _ = on_event.send(SessionTurnEvent::AssistantDelta {
-                                    text: delta.to_owned(),
-                                });
-                            }
-                        }
                         "turn/started" => {
                             let _ = on_event.send(SessionTurnEvent::Activity {
                                 label: "正在思考与执行...",
                             });
                         }
                         "approval_requested" => {
-                            let _ = on_event.send(SessionTurnEvent::Activity {
-                                label: "等待审批确认...",
-                            });
+                            if let Some(approval) = event.approval {
+                                let _ =
+                                    on_event.send(SessionTurnEvent::ApprovalRequested { approval });
+                            } else {
+                                let _ = on_event.send(SessionTurnEvent::Activity {
+                                    label: "等待审批确认...",
+                                });
+                            }
                         }
                         "turn/completed" => {
                             let event_turn_id = event.raw["params"]["turn"]["id"]
@@ -837,14 +875,15 @@ fn launch_codex_session_with_client(
                             if status != "completed" {
                                 return Err(DesktopError::AgentFailed);
                             }
-                            if full_response.trim().is_empty()
-                                && let Some(text) = event.raw["params"]["turn"]["output"].as_str()
-                            {
-                                full_response = text.to_owned();
+                            let had_streamed_response = !assistant.text.trim().is_empty();
+                            final_response = assistant.finish_with_fallback(
+                                event.raw["params"]["turn"]["output"].as_str(),
+                            );
+                            if !had_streamed_response && !final_response.is_empty() {
+                                let _ = on_event.send(SessionTurnEvent::AssistantMessage {
+                                    text: final_response.clone(),
+                                });
                             }
-                            let _ = on_event.send(SessionTurnEvent::AssistantMessage {
-                                text: full_response.clone(),
-                            });
                             turn_completed = true;
                             break;
                         }
@@ -852,14 +891,14 @@ fn launch_codex_session_with_client(
                     }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) if sub.is_healthy() => continue,
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
     drop(sub);
 
-    if !turn_completed || full_response.trim().is_empty() {
+    if !turn_completed || final_response.is_empty() {
         return Err(DesktopError::AgentFailed);
     }
 
@@ -867,16 +906,16 @@ fn launch_codex_session_with_client(
         "agent_session_id": provider_session_id,
         "agent_type": "codex",
         "cwd": cwd.to_string_lossy(),
-        "response": full_response.trim(),
+        "response": final_response,
         "completed_at": chrono::Utc::now(),
     }))
 }
 
 fn send_codex_message_with_client(
     input: SessionMessageInput,
-    client: agent_pulse_runner::remote_network::LocalHostClient,
+    client: DaemonClient,
     _data_dir: &Path,
-    _cancelled: &AtomicBool,
+    cancelled: &AtomicBool,
     on_event: Channel<SessionTurnEvent>,
 ) -> Result<Value, DesktopError> {
     validate_session_id(&input.agent_session_id)?;
@@ -885,23 +924,36 @@ fn send_codex_message_with_client(
         return Err(DesktopError::InvalidAction);
     }
 
-    let sessions = client.query_sessions().unwrap_or_default();
+    let sessions = client
+        .query_sessions()
+        .map_err(|_| DesktopError::SessionUnavailable)?;
     let existing_binding = sessions
         .iter()
         .find(|s| s.provider_session_id == input.agent_session_id)
         .cloned();
+    let (hub_session_id, cwd, needs_resume) = match existing_binding {
+        Some(binding) => (
+            binding.hub_session_id,
+            binding.workspace_path,
+            !binding.control_connected,
+        ),
+        None => (
+            format!("hub-{}", uuid::Uuid::new_v4()),
+            find_codex_session_cwd(&input.agent_session_id)
+                .or_else(|| std::env::current_dir().ok())
+                .ok_or(DesktopError::SessionUnavailable)?,
+            true,
+        ),
+    };
 
-    let hub_session_id = if let Some(binding) = existing_binding {
-        binding.hub_session_id
-    } else {
-        let cwd = find_codex_session_cwd(&input.agent_session_id)
-            .or_else(|| std::env::current_dir().ok())
-            .ok_or(DesktopError::SessionUnavailable)?;
-        let hub_id = format!("hub-{}", uuid::Uuid::new_v4());
+    let host_generation = client
+        .query_generation()
+        .map_err(|_| DesktopError::AgentFailed)?;
+    if needs_resume {
         let resume_cmd = agent_pulse_runner::remote_host::RemoteCommand {
             client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
-            hub_session_id: hub_id.clone(),
-            host_generation: None,
+            hub_session_id: hub_session_id.clone(),
+            host_generation: Some(host_generation.clone()),
             command: agent_pulse_runner::remote_host::RemoteAction::Connect {
                 mode: agent_pulse_runner::remote_host::ConnectMode::Resume,
                 workspace_path: PathBuf::from(agent_pulse_runner::privacy::workspace_id_for_path(
@@ -931,14 +983,11 @@ fn send_codex_message_with_client(
         if receipt.status != "accepted" {
             return Err(DesktopError::SessionUnavailable);
         }
-        hub_id
-    };
+    }
 
-    let host_generation = client
-        .query_generation()
+    let (sub, rx, _initial_snapshot) = client
+        .subscribe(256)
         .map_err(|_| DesktopError::AgentFailed)?;
-
-    let (sub, rx) = client.subscribe(256);
 
     let prompt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
         client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
@@ -961,37 +1010,35 @@ fn send_codex_message_with_client(
         .ok_or(DesktopError::AgentFailed)?
         .to_owned();
 
-    let mut full_response = String::new();
+    let mut final_response = String::new();
+    let mut assistant = CodexAssistantAccumulator::default();
     let mut turn_completed = false;
     let deadline = Instant::now() + AGENT_TURN_TIMEOUT;
     while Instant::now() < deadline {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(DesktopError::AgentCancelled);
+        }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(event) => {
                 if event.hub_session_id.as_deref() == Some(&hub_session_id) {
+                    if let Some(message) = assistant.apply(&event, &expected_turn_id) {
+                        let _ = on_event.send(message);
+                    }
                     match event.kind.as_str() {
-                        "item/agentMessage/delta" => {
-                            let event_turn_id = event.raw["params"]["turnId"]
-                                .as_str()
-                                .or_else(|| event.raw["params"]["turn"]["id"].as_str());
-                            if event_turn_id != Some(expected_turn_id.as_str()) {
-                                continue;
-                            }
-                            if let Some(delta) = event.raw["params"]["delta"].as_str() {
-                                full_response.push_str(delta);
-                                let _ = on_event.send(SessionTurnEvent::AssistantDelta {
-                                    text: delta.to_owned(),
-                                });
-                            }
-                        }
                         "turn/started" => {
                             let _ = on_event.send(SessionTurnEvent::Activity {
                                 label: "正在思考与执行...",
                             });
                         }
                         "approval_requested" => {
-                            let _ = on_event.send(SessionTurnEvent::Activity {
-                                label: "等待审批确认...",
-                            });
+                            if let Some(approval) = event.approval {
+                                let _ =
+                                    on_event.send(SessionTurnEvent::ApprovalRequested { approval });
+                            } else {
+                                let _ = on_event.send(SessionTurnEvent::Activity {
+                                    label: "等待审批确认...",
+                                });
+                            }
                         }
                         "turn/completed" => {
                             let event_turn_id = event.raw["params"]["turn"]["id"]
@@ -1009,14 +1056,15 @@ fn send_codex_message_with_client(
                             if status != "completed" {
                                 return Err(DesktopError::AgentFailed);
                             }
-                            if full_response.trim().is_empty()
-                                && let Some(text) = event.raw["params"]["turn"]["output"].as_str()
-                            {
-                                full_response = text.to_owned();
+                            let had_streamed_response = !assistant.text.trim().is_empty();
+                            final_response = assistant.finish_with_fallback(
+                                event.raw["params"]["turn"]["output"].as_str(),
+                            );
+                            if !had_streamed_response && !final_response.is_empty() {
+                                let _ = on_event.send(SessionTurnEvent::AssistantMessage {
+                                    text: final_response.clone(),
+                                });
                             }
-                            let _ = on_event.send(SessionTurnEvent::AssistantMessage {
-                                text: full_response.clone(),
-                            });
                             turn_completed = true;
                             break;
                         }
@@ -1024,19 +1072,19 @@ fn send_codex_message_with_client(
                     }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) if sub.is_healthy() => continue,
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
     drop(sub);
 
-    if !turn_completed || full_response.trim().is_empty() {
+    if !turn_completed || final_response.is_empty() {
         return Err(DesktopError::AgentFailed);
     }
 
     Ok(json!({
-        "response": full_response.trim(),
+        "response": final_response,
         "completed_at": chrono::Utc::now(),
     }))
 }
@@ -1086,115 +1134,80 @@ fn find_codex_session_cwd(session_id: &str) -> Option<PathBuf> {
     None
 }
 
-fn launch_new_session_inner(
-    input: LaunchSessionInput,
-    data_dir: &Path,
-    cancelled: &AtomicBool,
-    on_event: Channel<SessionTurnEvent>,
-) -> Result<Value, DesktopError> {
-    let prompt = input.prompt.trim();
-    let config = read_config(data_dir)?;
-    let binary = match input.agent_type {
-        AgentType::ClaudeCode => &config.claude_binary,
-        AgentType::Codex => &config.codex_binary,
-        AgentType::Antigravity => &config.claude_binary,
-        AgentType::GrokBuild => &config.grok_binary,
-    };
-    let cwd = input
-        .cwd
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .filter(|path| path.is_dir())
-        .ok_or(DesktopError::InvalidAction)?;
-    let _ = on_event.send(SessionTurnEvent::Started);
-    let outcome = run_agent_session_start_streaming(
-        input.agent_type,
-        binary,
-        &cwd,
-        prompt,
-        TurnOptions {
-            model: input.model.as_deref(),
-            permission_mode: input.permission_mode.as_deref(),
-        },
-        AGENT_TURN_TIMEOUT,
-        cancelled,
-        move |update| {
-            let event = match update {
-                AgentTurnUpdate::AssistantDelta(text) => SessionTurnEvent::AssistantDelta { text },
-                AgentTurnUpdate::AssistantMessage(text) => {
-                    SessionTurnEvent::AssistantMessage { text }
-                }
-                AgentTurnUpdate::Activity(label) => SessionTurnEvent::Activity { label },
-            };
-            let _ = on_event.send(event);
-        },
-    )
-    .map_err(|error| match error {
-        CollectorError::Cancelled { .. } => DesktopError::AgentCancelled,
-        _ => DesktopError::AgentFailed,
-    })?;
-    if outcome.response.trim().is_empty() {
-        return Err(DesktopError::AgentFailed);
-    }
-    let session_id = outcome
-        .session_id
-        .filter(|id| validate_session_id(id).is_ok())
-        .ok_or(DesktopError::AgentFailed)?;
-    Ok(json!({
-        "agent_session_id": session_id,
-        "agent_type": agent_type_name(input.agent_type),
-        "cwd": cwd.to_string_lossy(),
-        "response": outcome.response.trim(),
-        "completed_at": chrono::Utc::now(),
-    }))
-}
-
 #[tauri::command]
 fn cancel_session_turn(
     input: SessionTurnRef,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
     validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
-    let key = session_turn_key(input.agent_type, &input.agent_session_id);
-    let cancelled = state
-        .active_turns
-        .lock()
-        .map_err(|_| DesktopError::AgentFailed.to_string())?
-        .get(&key)
-        .cloned();
-    if let Some(cancelled) = cancelled {
-        cancelled.store(true, Ordering::Relaxed);
+    if input.agent_type != AgentType::Codex {
+        return Err("当前 Provider 仅支持发现和历史读取".to_owned());
     }
-    if input.agent_type == AgentType::Codex {
-        let client = remote_desktop::get_host_client(&state)
-            .ok_or_else(|| "Codex NativeSessionHost 未在运行".to_owned())?;
-        let sessions = client
-            .query_sessions()
-            .map_err(|e| format!("无法查询会话注册表: {e}"))?;
-        let binding = sessions
-            .iter()
-            .find(|s| s.provider_session_id == input.agent_session_id)
-            .ok_or_else(|| format!("未找到绑定的 Codex 会话 {}", input.agent_session_id))?;
-        let generation = client
-            .query_generation()
-            .map_err(|e| format!("无法获取 Host 代际: {e}"))?;
-        let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+    let client = daemon_client::get_daemon_client(&state)
+        .ok_or_else(|| "Codex NativeSessionHost 未在运行".to_owned())?;
+    let sessions = client
+        .query_sessions()
+        .map_err(|e| format!("无法查询会话注册表: {e}"))?;
+    let binding = sessions
+        .iter()
+        .find(|s| s.provider_session_id == input.agent_session_id)
+        .ok_or_else(|| format!("未找到绑定的 Codex 会话 {}", input.agent_session_id))?;
+    let generation = client
+        .query_generation()
+        .map_err(|e| format!("无法获取 Host 代际: {e}"))?;
+    let interrupt_cmd = agent_pulse_runner::remote_host::RemoteCommand {
+        client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+        hub_session_id: binding.hub_session_id.clone(),
+        host_generation: Some(generation),
+        command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
+    };
+    let receipt = client
+        .execute(interrupt_cmd)
+        .map_err(|e| format!("执行中断指令失败: {e}"))?;
+    if receipt.status != "accepted" {
+        return Err(format!("中断请求被拒绝: {}", receipt.status));
+    }
+    Ok(json!({ "accepted": true, "receipt": receipt }))
+}
+
+#[tauri::command]
+fn resolve_session_approval(
+    input: SessionApprovalInput,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    if input.agent_type != AgentType::Codex
+        || input.approval_id.trim().is_empty()
+        || input.approval_id.len() > 256
+    {
+        return Err(DesktopError::InvalidAction.to_string());
+    }
+    validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
+    let client =
+        daemon_client::get_daemon_client(&state).ok_or_else(|| "agenthubd 未在运行".to_owned())?;
+    let binding = client
+        .query_sessions()
+        .map_err(|error| format!("无法查询会话注册表: {error}"))?
+        .into_iter()
+        .find(|binding| binding.provider_session_id == input.agent_session_id)
+        .ok_or_else(|| "未找到可控的 Codex 会话".to_owned())?;
+    let receipt = client
+        .execute(agent_pulse_runner::remote_host::RemoteCommand {
             client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
-            hub_session_id: binding.hub_session_id.clone(),
-            host_generation: Some(generation),
-            command: agent_pulse_runner::remote_host::RemoteAction::Interrupt,
-        };
-        let receipt = client
-            .execute(interrupt_cmd)
-            .map_err(|e| format!("执行中断指令失败: {e}"))?;
-        if receipt.status != "accepted" {
-            return Err(format!("中断请求被拒绝: {}", receipt.status));
-        }
-        return Ok(json!({ "accepted": true, "receipt": receipt }));
+            hub_session_id: binding.hub_session_id,
+            host_generation: Some(binding.host_generation),
+            command: agent_pulse_runner::remote_host::RemoteAction::ResolveApproval {
+                approval_id: input.approval_id,
+                approved: input.approved,
+            },
+        })
+        .map_err(|error| format!("审批指令发送失败: {error}"))?;
+    if receipt.status != "accepted" {
+        return Err(format!(
+            "审批请求被拒绝: {}",
+            receipt.code.as_deref().unwrap_or(&receipt.status)
+        ));
     }
-    Ok(json!({ "accepted": true }))
+    Ok(json!({"accepted": true, "receipt": receipt}))
 }
 
 #[tauri::command]
@@ -1202,11 +1215,21 @@ async fn set_session_archived(
     input: ArchiveSessionInput,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
+    let client = if input.agent_type == AgentType::Codex {
+        Some(
+            daemon_client::get_daemon_client(&state)
+                .ok_or_else(|| "agenthubd 未在运行".to_owned())?,
+        )
+    } else {
+        None
+    };
     let data_dir = state.data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || set_session_archived_inner(input, &data_dir))
-        .await
-        .map_err(|_| DesktopError::AgentFailed.to_string())?
-        .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        set_session_archived_inner(input, &data_dir, client)
+    })
+    .await
+    .map_err(|_| DesktopError::AgentFailed.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1217,17 +1240,20 @@ async fn save_desktop_preferences(
     let mut config = read_config(&state.data_dir).map_err(|error| error.to_string())?;
     if !(2..=60).contains(&input.refresh_interval_seconds)
         || !valid_binary(&input.claude_binary)
-        || !valid_binary(&input.codex_binary)
         || !valid_binary(&input.grok_binary)
     {
         return Err(DesktopError::InvalidAction.to_string());
     }
+    let identity = load_or_create_identity(&state.data_dir).map_err(|error| error.to_string())?;
     config.refresh_interval_seconds = input.refresh_interval_seconds;
     config.claude_binary = input.claude_binary.trim().to_owned();
-    config.codex_binary = input.codex_binary.trim().to_owned();
     config.grok_binary = input.grok_binary.trim().to_owned();
     write_config(&state.data_dir, &config).map_err(|error| error.to_string())?;
-    Ok(preferences_json(&config))
+    Ok(preferences_json(
+        &state.data_dir,
+        &config,
+        identity.device_id(),
+    ))
 }
 
 #[tauri::command]
@@ -1254,8 +1280,12 @@ async fn set_sync_paused(paused: bool, state: State<'_, DesktopState>) -> Result
 
 #[tauri::command]
 async fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
-    remote_desktop::stop(&state);
-    let config = read_config(&state.data_dir).ok();
+    let data_dir = state.data_dir.clone();
+    let authorization = tauri::async_runtime::spawn_blocking(move || {
+        daemon_client::take_logout_authorization(&data_dir)
+    })
+    .await
+    .map_err(|_| "无法清除本机登录状态".to_owned())??;
     if let Ok(mut engine) = state.engine.lock()
         && let Some(handle) = engine.take()
     {
@@ -1267,19 +1297,15 @@ async fn logout(state: State<'_, DesktopState>) -> Result<(), String> {
             cancelled.store(true, Ordering::Relaxed);
         }
     }
-    if let Some(config) = config {
-        if let Ok(cookie) = load_cookie(&config.server_url) {
-            let _ = request_json(
-                "POST",
-                &config.server_url,
-                "/v1/auth/logout",
-                Some(&cookie),
-                Some(&json!({})),
-            );
-        }
-        let _ = delete_cookie(&config.server_url);
+    if let Some((server_url, cookie)) = authorization {
+        let _ = request_json(
+            "POST",
+            &server_url,
+            "/v1/auth/logout",
+            Some(&cookie),
+            Some(&json!({})),
+        );
     }
-    let _ = fs::remove_file(config_path(&state.data_dir));
     Ok(())
 }
 
@@ -1747,8 +1773,9 @@ fn dashboard_snapshot(
         .adapter_health(AgentType::GrokBuild)
         .map_err(|_| DesktopError::Sync)?;
     let local_contexts = local_session_contexts(state);
-    let host_bindings = remote_desktop::get_host_client(state)
-        .and_then(|c| c.query_sessions().ok())
+    let (host_bindings, pending_approvals) = daemon_client::get_daemon_client(state)
+        .and_then(|client| client.snapshot().ok())
+        .map(|snapshot| (snapshot.sessions, snapshot.pending_approvals))
         .unwrap_or_default();
     let sessions = merge_dashboard_sessions(
         &remote_sessions["sessions"],
@@ -1757,6 +1784,7 @@ fn dashboard_snapshot(
         identity.device_id(),
         &local_contexts,
         &host_bindings,
+        &pending_approvals,
     );
     let running = state
         .engine
@@ -1796,7 +1824,7 @@ fn dashboard_snapshot(
         "sync_running": running,
         "realtime_connected": realtime_connected,
         "server_url": server_url,
-        "preferences": preferences_json(&desktop_config)
+        "preferences": preferences_json(&state.data_dir, &desktop_config, identity.device_id())
     }))
 }
 
@@ -1843,8 +1871,9 @@ fn offline_dashboard_snapshot(
         };
 
     let local_contexts = local_session_contexts(state);
-    let host_bindings = remote_desktop::get_host_client(state)
-        .and_then(|c| c.query_sessions().ok())
+    let (host_bindings, pending_approvals) = daemon_client::get_daemon_client(state)
+        .and_then(|client| client.snapshot().ok())
+        .map(|snapshot| (snapshot.sessions, snapshot.pending_approvals))
         .unwrap_or_default();
     let empty_remote = json!([]);
     let sessions = merge_dashboard_sessions(
@@ -1854,6 +1883,7 @@ fn offline_dashboard_snapshot(
         identity.device_id(),
         &local_contexts,
         &host_bindings,
+        &pending_approvals,
     );
 
     let now_str = chrono::Utc::now().to_rfc3339();
@@ -1903,75 +1933,7 @@ fn offline_dashboard_snapshot(
         "sync_running": false,
         "realtime_connected": false,
         "server_url": desktop_config.server_url,
-        "preferences": preferences_json(&desktop_config)
-    }))
-}
-
-fn send_session_message_inner(
-    input: SessionMessageInput,
-    data_dir: &Path,
-    cancelled: &AtomicBool,
-    on_event: Channel<SessionTurnEvent>,
-) -> Result<Value, DesktopError> {
-    validate_session_id(&input.agent_session_id)?;
-    let prompt = compose_turn_prompt(&input.prompt, &input.attachments)?;
-    if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS * 4 {
-        return Err(DesktopError::InvalidAction);
-    }
-    let config = read_config(data_dir)?;
-    let binary = match input.agent_type {
-        AgentType::ClaudeCode => &config.claude_binary,
-        AgentType::Codex => &config.codex_binary,
-        AgentType::Antigravity => &config.claude_binary,
-        AgentType::GrokBuild => &config.grok_binary,
-    };
-    let project_path = match input.agent_type {
-        AgentType::ClaudeCode => Some(
-            find_claude_session_cwd(&input.agent_session_id)?
-                .ok_or(DesktopError::SessionUnavailable)?,
-        ),
-        AgentType::Codex => None,
-        AgentType::Antigravity => find_antigravity_session_cwd(&input.agent_session_id)
-            .map_err(|_| DesktopError::SessionUnavailable)?,
-        AgentType::GrokBuild => Some(
-            find_grok_session_cwd(&input.agent_session_id)
-                .map_err(|_| DesktopError::SessionUnavailable)?
-                .ok_or(DesktopError::SessionUnavailable)?,
-        ),
-    };
-    let outcome = run_agent_session_turn_streaming(
-        input.agent_type,
-        binary,
-        project_path.as_deref(),
-        &input.agent_session_id,
-        &prompt,
-        TurnOptions {
-            model: input.model.as_deref(),
-            permission_mode: input.permission_mode.as_deref(),
-        },
-        AGENT_TURN_TIMEOUT,
-        cancelled,
-        move |update| {
-            let event = match update {
-                AgentTurnUpdate::AssistantDelta(text) => SessionTurnEvent::AssistantDelta { text },
-                AgentTurnUpdate::AssistantMessage(text) => {
-                    SessionTurnEvent::AssistantMessage { text }
-                }
-                AgentTurnUpdate::Activity(label) => SessionTurnEvent::Activity { label },
-            };
-            let _ = on_event.send(event);
-        },
-    )
-    .map_err(|error| match error {
-        CollectorError::Cancelled { .. } => DesktopError::AgentCancelled,
-        _ => DesktopError::AgentFailed,
-    })?;
-    if outcome.response.trim().is_empty() {
-        return Err(DesktopError::AgentFailed);
-    };
-    Ok(json!({
-        "response": outcome.response.trim(),
-        "completed_at": chrono::Utc::now(),
+        "preferences": preferences_json(&state.data_dir, &desktop_config, identity.device_id())
     }))
 }
 
@@ -2049,6 +2011,7 @@ fn read_attachment_text(path: &str, name: &str) -> Result<(String, String), Desk
 fn set_session_archived_inner(
     input: ArchiveSessionInput,
     data_dir: &Path,
+    daemon: Option<DaemonClient>,
 ) -> Result<Value, DesktopError> {
     validate_session_id(&input.agent_session_id)?;
     if input.project_display_name.chars().count() > 160
@@ -2059,19 +2022,26 @@ fn set_session_archived_inner(
     }
     let mut config = read_config(data_dir)?;
     if input.agent_type == AgentType::Codex {
-        let mut server =
-            CodexAppServer::start_with_timeout(&config.codex_binary, DESKTOP_COLLECTOR_TIMEOUT)
-                .map_err(|_| DesktopError::AgentFailed)?;
-        server
-            .request(
-                if input.archived {
-                    "thread/archive"
-                } else {
-                    "thread/unarchive"
+        let client = daemon.ok_or(DesktopError::AgentFailed)?;
+        let binding = client
+            .query_sessions()
+            .map_err(|_| DesktopError::AgentFailed)?
+            .into_iter()
+            .find(|binding| binding.provider_session_id == input.agent_session_id)
+            .ok_or(DesktopError::SessionUnavailable)?;
+        let receipt = client
+            .execute(agent_pulse_runner::remote_host::RemoteCommand {
+                client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
+                hub_session_id: binding.hub_session_id,
+                host_generation: Some(binding.host_generation),
+                command: agent_pulse_runner::remote_host::RemoteAction::SetArchived {
+                    archived: input.archived,
                 },
-                json!({ "threadId": input.agent_session_id }),
-            )
+            })
             .map_err(|_| DesktopError::AgentFailed)?;
+        if receipt.status != "accepted" {
+            return Err(DesktopError::AgentFailed);
+        }
     }
     config.archived_sessions.retain(|session| {
         session.agent_type != input.agent_type || session.agent_session_id != input.agent_session_id
@@ -2717,11 +2687,17 @@ fn sanitize_timeline_event(event: &Value) -> Value {
     })
 }
 
-fn preferences_json(config: &DesktopConfig) -> Value {
+fn preferences_json(data_dir: &Path, config: &DesktopConfig, device_id: &str) -> Value {
+    let (_, profile_path) = daemon_client::host_database_path(data_dir, device_id);
+    let codex_binary = fs::read(profile_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<daemon_client::DaemonProfile>(&bytes).ok())
+        .map(|profile| profile.codex_binary)
+        .unwrap_or_else(|| config.codex_binary.clone());
     json!({
         "refresh_interval_seconds": config.refresh_interval_seconds,
         "claude_binary": config.claude_binary,
-        "codex_binary": config.codex_binary,
+        "codex_binary": codex_binary,
         "grok_binary": config.grok_binary,
     })
 }
@@ -2749,40 +2725,6 @@ fn validate_identifier(value: &str) -> Result<(), DesktopError> {
 
 fn session_turn_key(agent_type: AgentType, session_id: &str) -> String {
     format!("{}:{session_id}", agent_type_name(agent_type))
-}
-
-fn find_claude_session_cwd(session_id: &str) -> Result<Option<PathBuf>, DesktopError> {
-    let Some(home) = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-    else {
-        return Ok(None);
-    };
-    let projects = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".claude"))
-        .join("projects");
-    let filename = format!("{session_id}.jsonl");
-    let entries = fs::read_dir(projects).map_err(|_| DesktopError::SessionUnavailable)?;
-    for project in entries.flatten() {
-        let path = project.path().join(&filename);
-        let Ok(file) = fs::File::open(path) else {
-            continue;
-        };
-        for line in BufReader::new(file).lines().take(128).map_while(Result::ok) {
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            let Some(cwd) = value.get("cwd").and_then(Value::as_str) else {
-                continue;
-            };
-            let cwd = PathBuf::from(cwd);
-            if cwd.is_absolute() && cwd.is_dir() {
-                return Ok(Some(cwd));
-            }
-        }
-    }
-    Ok(None)
 }
 
 fn start_engine(
@@ -3019,6 +2961,7 @@ fn merge_dashboard_sessions(
     device_id: &str,
     contexts: &HashMap<String, LocalSessionContext>,
     host_bindings: &[agent_pulse_runner::remote_host::SessionBinding],
+    pending_approvals: &[agent_pulse_runner::remote_host::PendingApprovalSnapshot],
 ) -> Vec<Value> {
     let mut sessions = std::collections::BTreeMap::new();
     if let Some(remote) = remote.as_array() {
@@ -3092,9 +3035,14 @@ fn merge_dashboard_sessions(
         } else {
             "PERSISTED"
         };
+        let pending_approval = pending_approvals.iter().find(|approval| {
+            approval.hub_session_id == binding.hub_session_id
+                && approval.host_generation == binding.host_generation
+        });
         if let Some(existing) = sessions.get_mut(&key) {
             existing["payload"]["state"]["activity_status"] = json!(status);
             existing["payload"]["state"]["presence"] = json!(presence);
+            existing["payload"]["pending_approval"] = json!(pending_approval);
         } else {
             let context = contexts.get(&session_context_key(
                 AgentType::Codex,
@@ -3131,6 +3079,7 @@ fn merge_dashboard_sessions(
                         "started_at": chrono::Utc::now().to_rfc3339(),
                         "last_activity_at": chrono::Utc::now().to_rfc3339(),
                         "runtime": context,
+                        "pending_approval": pending_approval,
                     },
                     "sync_state": "local",
                     "archived": false,
@@ -3209,7 +3158,7 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
                 .map(|(key, context)| (key.clone(), context.clone())),
         ),
     }
-    if let Some(client) = remote_desktop::get_host_client(state)
+    if let Some(client) = daemon_client::get_daemon_client(state)
         && let Ok(discovery) = client.discover()
         && let Some(candidates) = discovery.get("candidates").and_then(Value::as_array)
     {
@@ -3773,6 +3722,59 @@ fn machine_name() -> String {
         .unwrap_or_else(|| "这台电脑".to_owned())
 }
 
+pub fn run_daemon_process(data_dir: PathBuf) -> Result<(), String> {
+    if data_dir.as_os_str().is_empty() || !data_dir.is_absolute() {
+        return Err("invalid_daemon_data_dir".into());
+    }
+    fs::create_dir_all(&data_dir).map_err(|_| "daemon_data_dir_unavailable".to_owned())?;
+    let identity = load_or_create_identity(&data_dir).map_err(|error| error.to_string())?;
+    let (database, profile_path) =
+        daemon_client::host_database_path(&data_dir, identity.device_id());
+    let config = read_config(&data_dir).ok();
+    let profile = fs::read(profile_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<daemon_client::DaemonProfile>(&bytes).ok())
+        .ok_or_else(|| "daemon_profile_unavailable".to_owned())?;
+    if profile.workspace_paths.is_empty()
+        || profile.workspace_paths.len() > 32
+        || !valid_binary(&profile.codex_binary)
+        || profile.workspace_paths.iter().any(|path| !path.is_dir())
+    {
+        return Err("daemon_profile_invalid".into());
+    }
+    let server = if profile.remote_enabled {
+        config
+            .and_then(|config| {
+                load_cookie(&config.server_url)
+                    .ok()
+                    .map(|_| config.server_url)
+            })
+            .and_then(|server_url| {
+                let mut server = Url::parse(&server_url).ok()?;
+                server
+                    .set_scheme(if server.scheme() == "https" {
+                        "wss"
+                    } else {
+                        "ws"
+                    })
+                    .ok()?;
+                server.set_path("/v3/remote/ws");
+                Some(server.to_string())
+            })
+    } else {
+        None
+    };
+    agent_pulse_runner::daemon::run(agent_pulse_runner::daemon::DaemonConfig {
+        codex_binary: PathBuf::from(profile.codex_binary),
+        workspaces: profile.workspace_paths,
+        database,
+        identity,
+        server,
+        ipc_endpoint: None,
+    })
+    .map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -3783,9 +3785,9 @@ pub fn run() {
                 engine: Mutex::new(None),
                 realtime: Mutex::new(None),
                 active_turns: Mutex::new(HashMap::new()),
-                remote: Mutex::new(None),
                 session_contexts: Mutex::new(SessionContextCache::default()),
             });
+            daemon_client::ensure_daemon_started(app.state::<DesktopState>().data_dir.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3796,13 +3798,13 @@ pub fn run() {
             poll_tg_device_auth,
             restore_session,
             refresh_dashboard,
-            remote_gateway_request,
             remote_host_status,
             start_remote_host,
             stop_remote_host,
             send_session_message,
             launch_new_session,
             cancel_session_turn,
+            resolve_session_approval,
             set_session_archived,
             save_desktop_preferences,
             set_sync_paused,
@@ -3820,7 +3822,6 @@ pub fn run() {
                 && let Some(state) = app_handle.try_state::<DesktopState>()
             {
                 stop_dashboard_realtime(&state);
-                remote_desktop::stop(&state);
                 if let Ok(active_turns) = state.active_turns.lock() {
                     for cancelled in active_turns.values() {
                         cancelled.store(true, Ordering::Relaxed);
@@ -3838,6 +3839,118 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn codex_host_event(kind: &str, raw: Value) -> agent_pulse_runner::remote_host::HostEvent {
+        agent_pulse_runner::remote_host::HostEvent {
+            event_id: format!("event-{kind}"),
+            host_generation: "generation-1".to_owned(),
+            hub_session_id: Some("hub-1".to_owned()),
+            provider_session_id: Some("thread-1".to_owned()),
+            kind: kind.to_owned(),
+            raw,
+            binding: None,
+            approval_id: None,
+            approval: None,
+        }
+    }
+
+    #[test]
+    fn live_approval_event_preserves_daemon_capabilities() {
+        let serialized = serde_json::to_value(SessionTurnEvent::ApprovalRequested {
+            approval: agent_pulse_runner::remote_host::PendingApprovalSnapshot {
+                approval_id: "approval-1".to_owned(),
+                hub_session_id: "hub-1".to_owned(),
+                host_generation: "generation-1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                can_approve: false,
+                can_decline: true,
+            },
+        })
+        .unwrap();
+
+        assert_eq!(serialized["type"], "approval_requested");
+        assert_eq!(serialized["approval"]["can_approve"], false);
+        assert_eq!(serialized["approval"]["can_decline"], true);
+    }
+
+    #[test]
+    fn codex_final_agent_message_replaces_partial_deltas() {
+        let mut assistant = CodexAssistantAccumulator::default();
+        let delta = codex_host_event(
+            "item/agentMessage/delta",
+            json!({"params": {"turnId": "turn-1", "delta": "partial"}}),
+        );
+        assert!(matches!(
+            assistant.apply(&delta, "turn-1"),
+            Some(SessionTurnEvent::AssistantDelta { text }) if text == "partial"
+        ));
+
+        let completed = codex_host_event(
+            "item/completed",
+            json!({"params": {
+                "turnId": "turn-1",
+                "item": {"type": "agentMessage", "text": "authoritative final"}
+            }}),
+        );
+        assert!(matches!(
+            assistant.apply(&completed, "turn-1"),
+            Some(SessionTurnEvent::AssistantMessage { text }) if text == "authoritative final"
+        ));
+        assert_eq!(
+            assistant.finish_with_fallback(Some("turn fallback")),
+            "authoritative final"
+        );
+    }
+
+    #[test]
+    fn codex_final_agent_message_supplies_response_without_deltas() {
+        let mut assistant = CodexAssistantAccumulator::default();
+        let completed = codex_host_event(
+            "item/completed",
+            json!({"params": {
+                "turn": {"id": "turn-1"},
+                "item": {"type": "agentMessage", "text": "complete response"}
+            }}),
+        );
+
+        assert!(assistant.apply(&completed, "turn-1").is_some());
+        assert_eq!(assistant.finish_with_fallback(None), "complete response");
+    }
+
+    #[test]
+    fn codex_assistant_accumulator_ignores_stale_turn_final_items() {
+        let mut assistant = CodexAssistantAccumulator::default();
+        let completed = codex_host_event(
+            "item/completed",
+            json!({"params": {
+                "turnId": "turn-old",
+                "item": {"type": "agentMessage", "text": "stale response"}
+            }}),
+        );
+
+        assert!(assistant.apply(&completed, "turn-current").is_none());
+        assert_eq!(assistant.finish_with_fallback(None), "");
+    }
+
+    #[test]
+    fn codex_assistant_accumulator_ignores_non_message_completed_items() {
+        let mut assistant = CodexAssistantAccumulator::default();
+        let delta = codex_host_event(
+            "item/agentMessage/delta",
+            json!({"params": {"turnId": "turn-1", "delta": "answer"}}),
+        );
+        let command = codex_host_event(
+            "item/completed",
+            json!({"params": {
+                "turnId": "turn-1",
+                "item": {"type": "commandExecution", "text": "secret output"}
+            }}),
+        );
+
+        assert!(assistant.apply(&delta, "turn-1").is_some());
+        assert!(assistant.apply(&command, "turn-1").is_none());
+        assert_eq!(assistant.finish_with_fallback(None), "answer");
+    }
 
     #[test]
     fn extracts_only_the_session_cookie_pair() {
@@ -4006,8 +4119,15 @@ mod tests {
             "payload": {"project": {"display_name": "remote", "fingerprint": "fp"}}
         }]);
 
-        let merged =
-            merge_dashboard_sessions(&remote, &observations, &[], "device-local", &contexts, &[]);
+        let merged = merge_dashboard_sessions(
+            &remote,
+            &observations,
+            &[],
+            "device-local",
+            &contexts,
+            &[],
+            &[],
+        );
         let local = merged
             .iter()
             .find(|session| session["device_id"] == "device-local")
@@ -4022,6 +4142,36 @@ mod tests {
     }
 
     #[test]
+    fn daemon_profile_is_the_authoritative_codex_binary_for_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = DesktopConfig {
+            server_url: DEFAULT_SERVER_URL.to_owned(),
+            refresh_interval_seconds: 4,
+            claude_binary: "claude-custom".to_owned(),
+            codex_binary: "legacy-codex".to_owned(),
+            grok_binary: "grok-custom".to_owned(),
+            archived_sessions: Vec::new(),
+        };
+        let (_, profile_path) = daemon_client::host_database_path(dir.path(), "device-1");
+        fs::write(
+            profile_path,
+            serde_json::to_vec(&daemon_client::DaemonProfile {
+                workspace_paths: vec![dir.path().to_path_buf()],
+                codex_binary: "profile-codex".to_owned(),
+                remote_enabled: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let preferences = preferences_json(dir.path(), &config, "device-1");
+
+        assert_eq!(preferences["codex_binary"], "profile-codex");
+        assert_eq!(preferences["claude_binary"], "claude-custom");
+        assert_eq!(preferences["grok_binary"], "grok-custom");
+    }
+
+    #[test]
     fn host_session_registry_overrides_dashboard_state_and_populates_missing_session() {
         let contexts = HashMap::new();
         let binding = agent_pulse_runner::remote_host::SessionBinding {
@@ -4033,8 +4183,23 @@ mod tests {
             execution_state: agent_pulse_runner::remote_host::ExecutionState::Completed,
             current_turn_id: None,
         };
-        let merged =
-            merge_dashboard_sessions(&json!([]), &[], &[], "device-local", &contexts, &[binding]);
+        let approval = agent_pulse_runner::remote_host::PendingApprovalSnapshot {
+            approval_id: "approval-1".to_owned(),
+            hub_session_id: "hub-1".to_owned(),
+            host_generation: "gen-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            can_approve: true,
+            can_decline: false,
+        };
+        let merged = merge_dashboard_sessions(
+            &json!([]),
+            &[],
+            &[],
+            "device-local",
+            &contexts,
+            &[binding],
+            &[approval],
+        );
         let found = merged
             .iter()
             .find(|s| s["agent_session_id"] == "session-active")
@@ -4042,6 +4207,36 @@ mod tests {
         assert_eq!(found["payload"]["state"]["activity_status"], "COMPLETED");
         assert_eq!(found["payload"]["state"]["presence"], "LIVE");
         assert_eq!(found["payload"]["source"], "native_host");
+        assert_eq!(
+            found["payload"]["pending_approval"]["approval_id"],
+            "approval-1"
+        );
+        assert_eq!(found["payload"]["pending_approval"]["can_approve"], true);
+        assert_eq!(found["payload"]["pending_approval"]["can_decline"], false);
+    }
+
+    #[test]
+    fn desktop_session_control_uses_only_the_daemon_transport() {
+        let source = include_str!("lib.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        let forbidden = [
+            ["run_with_local", "_control"].concat(),
+            ["create_local_host", "_channel"].concat(),
+            ["send_session", "_turn"].concat(),
+        ];
+        for symbol in forbidden {
+            assert!(!source.contains(&symbol), "obsolete transport: {symbol}");
+        }
+        for command in [
+            "send_session_message,",
+            "launch_new_session,",
+            "cancel_session_turn,",
+            "resolve_session_approval,",
+        ] {
+            assert!(source.contains(command), "missing Tauri command: {command}");
+        }
     }
 
     #[test]
@@ -4049,7 +4244,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let identity = DeviceIdentity::generate();
         let state = DesktopState {
-            remote: Mutex::new(None),
             data_dir: dir.path().to_path_buf(),
             engine: Mutex::new(None),
             realtime: Mutex::new(None),

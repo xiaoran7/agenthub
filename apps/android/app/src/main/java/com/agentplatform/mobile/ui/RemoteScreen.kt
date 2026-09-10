@@ -140,14 +140,16 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                 if (receipt.optString("status") in listOf("rejected", "indeterminate"))
                     Text("请求未确认成功，请检查本机 Agent 状态。", color = MaterialTheme.colorScheme.error)
             }
-            remoteApprovals(events).forEach { (id, params) ->
-                Text(params.optString("command").ifBlank { "文件更改审批" })
-                Text(params.optString("reason"))
+            remoteApprovals(events, selected?.second.orEmpty()).forEach { (id, approval) ->
+                Text("Codex 请求执行受保护的操作")
                 Row {
-                    listOf(true to "允许", false to "拒绝").forEach { (approved, label) ->
-                        TextButton(enabled = connected && !busy, onClick = {
+                    listOf(
+                        true to ("允许" to approval.optBoolean("can_approve")),
+                        false to ("拒绝" to approval.optBoolean("can_decline")),
+                    ).forEach { (approved, labelAndCapability) ->
+                        TextButton(enabled = connected && !busy && labelAndCapability.second, onClick = {
                             control(JSONObject().put("action", "resolve_approval").put("approval_id", id).put("approved", approved))
-                        }) { Text(label) }
+                        }) { Text(labelAndCapability.first) }
                     }
                 }
             }
@@ -168,7 +170,10 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                 items(paths.length()) { index ->
                     val path = paths.getString(index)
                     TextButton(enabled = !busy, onClick = {
-                        submit(runner.getString("runner_id"), UUID.randomUUID().toString(), JSONObject().put("action", "connect").put("mode", "create").put("workspace_path", path).put("sandbox", "read-only").put("approval_policy", "untrusted"))
+                        val hello = runner.optJSONObject("hello") ?: return@TextButton
+                        val generation = hello.optString("host_generation")
+                        if (generation.isEmpty()) return@TextButton
+                        submit(runner.getString("runner_id"), UUID.randomUUID().toString(), JSONObject().put("action", "connect").put("mode", "create").put("workspace_path", path).put("sandbox", "read-only").put("approval_policy", "untrusted"), generation)
                     }) { Text("${runner.getString("runner_id").takeLast(8)} · $path") }
                 }
             }
@@ -189,25 +194,43 @@ private fun remoteConversation(events: List<JSONObject>, commands: List<JSONObje
             "item/agentMessage/delta" -> if (id.isNotEmpty()) result[id] = result[id].orEmpty() + p.optString("delta")
             "item/completed" -> if (id.isNotEmpty()) when (item?.optString("type")) {
                 "agentMessage" -> result[id] = item.optString("text")
-                "commandExecution" -> result[id] = "${item.optString("command")}\n${item.optString("aggregatedOutput")}"
+                "commandExecution" -> result[id] = "工具执行已完成"
             }
         }
     }
     return result.values.toList()
 }
 
-private fun remoteApprovals(events: List<JSONObject>): Map<String, JSONObject> {
+internal fun remoteApprovals(events: List<JSONObject>, hubSessionId: String): Map<String, JSONObject> {
     val pending = linkedMapOf<String, JSONObject>()
     for (envelope in events) {
-        val event = envelope.optJSONObject("payload")?.optJSONObject("event") ?: continue
-        val params = event.optJSONObject("raw")?.optJSONObject("params") ?: JSONObject()
-        when (event.optString("kind")) {
-            "approval_requested" -> pending[event.getString("approval_id")] = params
-            "turn/completed" -> pending.clear()
-            "serverRequest/resolved" -> {
-                val requestId = params.opt("requestId")
-                val id = if (requestId is String) JSONObject.quote(requestId) else requestId?.toString() ?: "null"
-                pending.keys.removeAll { it.endsWith(":$id") }
+        val payload = envelope.optJSONObject("payload") ?: continue
+        when (payload.optString("type")) {
+            "ready" -> payload.optJSONArray("pending_approvals")?.let { approvals ->
+                pending.clear()
+                approvals.objects()
+                    .filter { it.optString("hub_session_id") == hubSessionId }
+                    .forEach { pending[it.getString("approval_id")] = it }
+            }
+            "host_lost" -> pending.clear()
+            "receipt" -> {
+                val receipt = payload.optJSONObject("receipt") ?: continue
+                val result = receipt.optJSONObject("result")
+                if (receipt.optString("status") == "accepted" && result?.optBoolean("response_sent") == true) {
+                    result.optString("approval_id").takeIf { it.isNotEmpty() }?.let(pending::remove)
+                }
+            }
+            "event" -> {
+                val event = payload.optJSONObject("event") ?: continue
+                when (event.optString("kind")) {
+                    "approval_requested" -> event.optJSONObject("approval")
+                        ?.takeIf { it.optString("hub_session_id") == hubSessionId }
+                        ?.let { pending[it.getString("approval_id")] = it }
+                    "approval_resolved" -> event.optString("approval_id")
+                        .takeIf { it.isNotEmpty() }
+                        ?.let(pending::remove)
+                    "turn/completed" -> if (event.optJSONObject("binding")?.optString("hub_session_id") == hubSessionId) pending.clear()
+                }
             }
         }
     }

@@ -14,6 +14,14 @@ export function relativeTime(value: string, now = Date.now()): string {
   return `${Math.floor(seconds / 86_400)} 天前`;
 }
 
+export function hasActiveTurn(status: ActivityStatus): boolean {
+  return (
+    status === "WORKING" ||
+    status === "WAITING_PERMISSION" ||
+    status === "WAITING_INPUT"
+  );
+}
+
 export function statusView(
   status: ActivityStatus,
   presence: string,

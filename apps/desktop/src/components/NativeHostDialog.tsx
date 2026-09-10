@@ -1,170 +1,245 @@
 import { invoke } from "@tauri-apps/api/core";
+import { FolderPlus, Radio, RadioTower, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 interface Profile {
   workspace_paths: string[];
   codex_binary: string;
+  remote_enabled?: boolean;
 }
+
 interface Status {
-  phase: string;
+  phase:
+    "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
   profile: Profile;
 }
-const labels: Record<string, string> = {
-  stopped: "未连接",
-  connecting: "正在连接，或等待网络恢复",
-  connected: "已连接到你的 Hub",
-  stopping: "正在停止",
-  failed: "连接未能继续，请检查 Codex 路径、登录与 Gateway 设置。",
+
+interface HostPollState {
+  phase: Status["phase"];
+  profile: Profile;
+  initialized: boolean;
+  error: string;
+}
+
+export function applyHostStatus(
+  current: HostPollState,
+  status: Status,
+  forceProfile = false,
+): HostPollState {
+  return {
+    phase: status.phase,
+    profile:
+      forceProfile || !current.initialized ? status.profile : current.profile,
+    initialized: true,
+    error: "",
+  };
+}
+
+const initialPollState: HostPollState = {
+  phase: "loading",
+  profile: {
+    workspace_paths: [],
+    codex_binary: "",
+    remote_enabled: false,
+  },
+  initialized: false,
+  error: "",
+};
+
+const statusCopy: Record<Status["phase"], string> = {
+  loading: "正在读取本机状态",
+  starting: "agenthubd 正在启动 Codex Runtime",
+  stopped: "agenthubd 将在首次启动 Codex 会话时自动运行",
+  local: "本地会话可用，Remote 当前关闭",
+  connecting: "Remote 已开启，正在连接 Gateway",
+  connected: "Remote 已连接，其他设备可继续当前会话",
 };
 
 export function NativeHostDialog({ onClose }: { onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [profile, setProfile] = useState<Profile>({
-    workspace_paths: [],
-    codex_binary: "",
-  });
-  const [phase, setPhase] = useState("loading");
-  const [error, setError] = useState("");
+  const [pollState, setPollState] = useState(initialPollState);
+  const { profile, phase } = pollState;
+  const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
-  const editable = ["stopped", "failed"].includes(phase) && !busy;
+  const remoteEnabled = phase === "connecting" || phase === "connected";
+  const daemonRunning = phase !== "loading" && phase !== "stopped";
+
+  const refreshStatus = async (forceProfile = false) => {
+    const status = await invoke<Status>("remote_host_status");
+    setPollState((current) => applyHostStatus(current, status, forceProfile));
+  };
+
   useEffect(() => {
     dialog.current?.showModal();
-    let stopped = false;
-    let initial = true;
+    let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
         const status = await invoke<Status>("remote_host_status");
-        if (stopped) return;
-        setPhase(status.phase);
-        if (initial) {
-          setProfile(status.profile);
-          initial = false;
-        }
+        if (disposed) return;
+        setPollState((current) => applyHostStatus(current, status));
       } catch (failure) {
-        if (!stopped) setError(String(failure));
+        if (!disposed)
+          setPollState((current) => ({
+            ...current,
+            error: String(failure),
+          }));
       }
-      if (!stopped) timer = setTimeout(() => void poll(), 1000);
+      if (!disposed) timer = setTimeout(() => void poll(), 1200);
     };
     void poll();
     return () => {
-      stopped = true;
+      disposed = true;
       clearTimeout(timer);
     };
   }, []);
-  async function selectWorkspace() {
+
+  const selectWorkspace = async () => {
     try {
       const path = await invoke<string | null>("pick_folder", {
         startDir: profile.workspace_paths.at(-1) ?? null,
       });
-      if (path)
-        setProfile((previous) => ({
-          ...previous,
-          workspace_paths: [...new Set([...previous.workspace_paths, path])],
+      if (path) {
+        setPollState((current) => ({
+          ...current,
+          profile: {
+            ...current.profile,
+            workspace_paths: [
+              ...new Set([...current.profile.workspace_paths, path]),
+            ],
+          },
         }));
+      }
     } catch (failure) {
-      setError(String(failure));
+      setActionError(String(failure));
     }
-  }
-  async function changeConnection(start: boolean) {
+  };
+
+  const setRemote = async (enabled: boolean) => {
     setBusy(true);
-    setError("");
+    setActionError("");
     try {
-      await invoke(
-        start ? "start_remote_host" : "stop_remote_host",
-        start ? { input: profile } : undefined,
-      );
-      const status = await invoke<Status>("remote_host_status");
-      setPhase(status.phase);
+      if (enabled) {
+        await invoke("start_remote_host", { input: profile });
+      } else {
+        await invoke("stop_remote_host");
+      }
+      await refreshStatus(true);
     } catch (failure) {
-      setError(String(failure));
+      setActionError(String(failure));
     } finally {
       setBusy(false);
     }
-  }
+  };
+
   return (
     <dialog ref={dialog} className="remote-launch" onCancel={onClose}>
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (editable) void changeConnection(true);
+          if (!remoteEnabled) void setRemote(true);
         }}
       >
         <header>
-          <h2>连接这台电脑</h2>
+          <div>
+            <RadioTower size={18} />
+            <h2>本机与 Remote</h2>
+          </div>
           <button type="button" onClick={onClose} aria-label="关闭">
-            ×
+            <X size={16} />
           </button>
         </header>
-        <p role="status">{labels[phase] ?? "正在读取本机设置…"}</p>
-        {error && <p role="alert">{error}</p>}
+
+        <div className="daemon-status-line" data-phase={phase} role="status">
+          <i aria-hidden="true" />
+          <span>{statusCopy[phase]}</span>
+        </div>
+        {(actionError || pollState.error) && (
+          <p role="alert">{actionError || pollState.error}</p>
+        )}
+
         <label>
           Codex 可执行文件
           <input
             value={profile.codex_binary}
-            disabled={!editable}
+            disabled={busy || phase !== "stopped"}
             onChange={(event) =>
-              setProfile({ ...profile, codex_binary: event.target.value })
+              setPollState((current) => ({
+                ...current,
+                profile: {
+                  ...current.profile,
+                  codex_binary: event.target.value,
+                },
+              }))
             }
-            placeholder="Codex 原生程序路径"
+            placeholder="codex 或 Codex 可执行文件路径"
           />
         </label>
-        <p>
-          Windows 请使用 Codex 安装目录中的 codex.exe。登录由 Codex 自己管理。
-        </p>
-        <label>允许远程使用的工作目录</label>
-        {profile.workspace_paths.map((path) => (
-          <div
-            key={path}
-            style={{ display: "flex", gap: 8, alignItems: "center" }}
-          >
-            <span style={{ overflowWrap: "anywhere", flex: 1 }}>{path}</span>
-            <button
-              type="button"
-              disabled={!editable}
-              onClick={() =>
-                setProfile({
-                  ...profile,
-                  workspace_paths: profile.workspace_paths.filter(
-                    (item) => item !== path,
-                  ),
-                })
-              }
-            >
-              移除
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          disabled={!editable}
-          onClick={() => void selectWorkspace()}
-        >
-          选择目录
-        </button>
-        <p>
-          选中目录内的新会话可从其他设备继续，正文与工具操作会同步到你的
-          Hub。请保持桌面应用开启；停止连接可能中断当前任务。
-        </p>
-        {editable ? (
-          <button
-            className="remote-primary"
-            disabled={
-              !profile.workspace_paths.length || !profile.codex_binary.trim()
-            }
-            type="submit"
-          >
-            启动连接
-          </button>
-        ) : (
+
+        <div className="remote-workspace-heading">
+          <span>允许 Remote 使用的工作目录</span>
           <button
             type="button"
-            disabled={busy || phase === "stopping" || phase === "loading"}
-            onClick={() => void changeConnection(false)}
+            disabled={busy || daemonRunning}
+            onClick={() => void selectWorkspace()}
+            title="添加工作目录"
           >
-            停止本机连接
+            <FolderPlus size={14} />
+            添加
           </button>
-        )}
+        </div>
+        <div className="remote-workspace-list">
+          {profile.workspace_paths.length === 0 ? (
+            <p>开启前先添加至少一个工作目录。</p>
+          ) : (
+            profile.workspace_paths.map((path) => (
+              <div key={path}>
+                <span title={path}>{path}</span>
+                <button
+                  type="button"
+                  disabled={busy || daemonRunning}
+                  onClick={() =>
+                    setPollState((current) => ({
+                      ...current,
+                      profile: {
+                        ...current.profile,
+                        workspace_paths: current.profile.workspace_paths.filter(
+                          (item) => item !== path,
+                        ),
+                      },
+                    }))
+                  }
+                  aria-label={`移除 ${path}`}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <footer>
+          <span>
+            关闭 Remote 只断开 Gateway，本机 agenthubd 和正在运行的 Session
+            会继续。
+          </span>
+          <button
+            type={remoteEnabled ? "button" : "submit"}
+            className={remoteEnabled ? "" : "remote-primary"}
+            disabled={
+              busy ||
+              phase === "loading" ||
+              phase === "starting" ||
+              (!remoteEnabled &&
+                (!profile.workspace_paths.length ||
+                  !profile.codex_binary.trim()))
+            }
+            onClick={remoteEnabled ? () => void setRemote(false) : undefined}
+          >
+            <Radio size={14} />
+            {busy ? "正在更新" : remoteEnabled ? "关闭 Remote" : "开启 Remote"}
+          </button>
+        </footer>
       </form>
     </dialog>
   );

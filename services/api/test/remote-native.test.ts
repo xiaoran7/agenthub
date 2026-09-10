@@ -142,7 +142,7 @@ test(
       await submit({
         client_cmd_id: "native-create",
         hub_session_id: "native-hub",
-        host_generation: null,
+        host_generation: runner.hello.host_generation,
         command: {
           action: "connect",
           mode: "create",

@@ -1,6 +1,7 @@
 import type {
   RemoteBinding,
   RemoteCommand,
+  RemotePendingApproval,
 } from "@agent-pulse/contracts/remote";
 export type RemoteRequest = <T>(path: string, body?: unknown) => Promise<T>;
 export interface RemoteRunner {
@@ -8,6 +9,8 @@ export interface RemoteRunner {
   online: boolean;
   revoked: boolean;
   hello: null | {
+    host_generation: string;
+    pending_approvals?: RemotePendingApproval[];
     workspaces: string[];
     models?: {
       data: Array<{ id: string; model?: string; displayName: string }>;
@@ -36,17 +39,23 @@ export interface RemoteEvent {
   runner_id: string;
   payload: {
     type: string;
+    pending_approvals?: RemotePendingApproval[];
     event?: {
       kind: string;
-      raw: { params?: Record<string, unknown> };
+      raw?: { params?: Record<string, unknown> };
       approval_id?: string;
+      approval?: RemotePendingApproval;
       binding?: RemoteBinding;
     };
     receipt?: {
       client_cmd_id: string;
       status: string;
       code?: string;
-      result?: { turn?: { id: string } };
+      result?: {
+        turn?: { id: string };
+        approval_id?: string;
+        response_sent?: boolean;
+      };
     };
   };
 }
@@ -126,7 +135,7 @@ export function conversationItems(
   for (const event of events) {
     const native = event.payload.event;
     if (!native) continue;
-    const p = native.raw.params ?? {};
+    const p = native.raw?.params ?? {};
     if (native.kind === "turn/started") {
       const turn = p.turn as { id?: string } | undefined;
       const command = prompts.get(turn?.id ?? "");
@@ -175,8 +184,8 @@ export function conversationItems(
       const target = {
         id,
         kind: "tool" as const,
-        text: item.aggregatedOutput ?? "",
-        title: item.command ?? "工具执行",
+        text: "工具执行已完成",
+        title: "工具",
       };
       items.set(id, target);
       result.push(target);
@@ -186,31 +195,48 @@ export function conversationItems(
 }
 export function pendingApprovals(
   events: RemoteEvent[],
-): Array<{ id: string; title: string; details: string }> {
-  const pending = new Map<
-    string,
-    { id: string; title: string; details: string }
-  >();
-  for (const event of events) {
-    const native = event.payload.event;
-    if (native?.kind === "approval_requested" && native.approval_id) {
-      const params = native.raw.params ?? {};
-      pending.set(native.approval_id, {
-        id: native.approval_id,
-        title:
-          typeof params.command === "string" ? params.command : "文件更改审批",
-        details:
-          typeof params.reason === "string"
-            ? params.reason
-            : JSON.stringify(params, null, 2),
-      });
+  hubSessionId: string,
+): RemotePendingApproval[] {
+  const pending = new Map<string, RemotePendingApproval>();
+  for (const envelope of events) {
+    if (
+      envelope.payload.type === "ready" &&
+      Array.isArray(envelope.payload.pending_approvals)
+    ) {
+      pending.clear();
+      for (const approval of envelope.payload.pending_approvals)
+        if (approval.hub_session_id === hubSessionId)
+          pending.set(approval.approval_id, approval);
+      continue;
     }
-    if (native?.kind === "turn/completed") pending.clear();
-    if (native?.kind === "serverRequest/resolved") {
-      const requestId = JSON.stringify(native.raw.params?.requestId);
-      for (const [id] of pending)
-        if (id.endsWith(`:${requestId}`)) pending.delete(id);
+    if (envelope.payload.type === "host_lost") {
+      pending.clear();
+      continue;
     }
+    const native = envelope.payload.event;
+    const receipt = envelope.payload.receipt;
+    if (
+      native?.kind === "approval_requested" &&
+      native.approval &&
+      native.approval.hub_session_id === hubSessionId
+    )
+      pending.set(native.approval.approval_id, native.approval);
+    if (
+      native?.kind === "approval_resolved" &&
+      typeof native.approval_id === "string"
+    )
+      pending.delete(native.approval_id);
+    if (
+      native?.kind === "turn/completed" &&
+      native.binding?.hub_session_id === hubSessionId
+    )
+      pending.clear();
+    if (
+      receipt?.status === "accepted" &&
+      receipt.result?.response_sent === true &&
+      typeof receipt.result.approval_id === "string"
+    )
+      pending.delete(receipt.result.approval_id);
   }
   return [...pending.values()];
 }

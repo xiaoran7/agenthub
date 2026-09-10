@@ -15,6 +15,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fastifyRawBody from "fastify-raw-body";
 import fastifyWebsocket from "@fastify/websocket";
 import { registerRemoteRoutes } from "./remote-routes.js";
+import type { RemoteRouteOptions } from "./remote-routes.js";
 import type { RemoteContentStore } from "./remote-store.js";
 
 import {
@@ -126,6 +127,7 @@ export interface GatewayAppOptions {
   billingProvider?: BillingProvider;
   tgOAuthClient?: TgOAuthClient;
   remoteContent?: RemoteContentStore;
+  remoteRoutes?: RemoteRouteOptions;
   loginRateLimitSecret?: Buffer;
   trustProxy?: boolean;
   bindingCodeFactory?: () => string;
@@ -216,7 +218,13 @@ export function createGatewayApp(
   if (options.remoteContent) {
     const content = options.remoteContent;
     void app.register(async (remoteApp) =>
-      registerRemoteRoutes(remoteApp, store, authenticator, content),
+      registerRemoteRoutes(
+        remoteApp,
+        store,
+        authenticator,
+        content,
+        options.remoteRoutes,
+      ),
     );
   }
 

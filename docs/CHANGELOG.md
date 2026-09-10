@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Codex 进程外 daemon 与 Desktop 单核心切换（2026-09-10）
+
+- 将 `NativeSessionHost` 提升为进程外 daemon：`agent-pulse-runner daemon`、兼容 `remote-run` 与 Desktop 隐藏 `--agenthubd` 模式进入同一主流程，共用一个 `DurableHost`、Session Registry、命令账本和事件日志。
+- 新增当前用户 IPC v2：Windows named pipe 使用当前用户 ACL 并拒绝远程客户端，Unix domain socket 权限为 `0600`；采用 1 MiB 上限的长度前缀 JSON frame、协议版本、`request_id` 与 `snapshot + cursor` 重放，live pending approvals 是 v2 必需快照字段。
+- 本地事件日志与 Gateway outbox 分离，Gateway ACK 不删除 Desktop replay；Desktop-origin 命令收据只写本地日志，Remote 侧改用合法 ready/Host event 同步状态，避免 `unknown_command_receipt` 永久阻塞序列。Remote 关闭期间继续持久化 bounded local log、Session Registry 和命令账本但不积累未来可上传内容，重开仅追加当前脱敏 ready 快照；cursor 过期显式返回 `snapshot_required`。
+- Desktop 移除内嵌 Host 所有权、逐回合 CLI 写路径和独立 Remote Console；Codex 创建、恢复、续聊、审批、中断和归档统一走 daemon，Remote 开关只控制 Gateway 暴露。启动中状态由自动启动、Session 和设置入口统一等待且不重复拉起；Remote 启用、停用、logout 与 profile 提交由同一锁串行化，Dialog 在首次成功轮询时恢复 profile 并清除瞬时错误；退出 Desktop、退出登录和关闭 Remote 不停止本地 Runtime。
+- Gateway 协议、水位或畸形 frame 只 fence 当前 transport epoch，不终止共享 daemon；Remote inbound sequence、完整 command payload 与 intent 原子绑定，receipt 和 received watermark 原子完成，崩溃窗口持久收敛为 `indeterminate`。新 Host generation 替换旧 socket 且旧 close 回调不能注销当前连接；本代际 `ready` 作为 Session 全量集合，遗漏绑定降级为 detached/unknown，旧代际事件不覆盖当前投影。命令完成 Gateway 持久提交后即返回 202，即使即时 socket backpressure 阻止发送，同一 `client_cmd_id` 重试仍返回原序号。
+- Pending approval 使用不含 Provider request ID 的 opaque handle 并进入 live daemon snapshot；本地日志保留 Provider 原始事实，Remote outbox 在同一事务中只写安全描述符投影，Gateway 拒绝含 Provider 顶层 request ID/raw 的审批事件。所有 Remote event raw 和 receipt 进一步收敛为按种类 allowlist：消息仅保留 item/text、turn 仅保留 ID、工具仅保留 item/type 完成状态，完整 `provider_response`、命令、工具输入输出、敏感字段和嵌入式物理路径只留本机；Remote binding 与 `connect` 只接受 daemon 签发的 `ws-*` workspace ID。Web/Android 以 `ready.pending_approvals` 作为 runner 权威全量集合并支持空快照清除，accepted receipt/opaque resolved event 只按 handle 收敛，工具结果统一显示完成状态。Codex 最终 `item/completed` agent message 覆盖暂态 delta，`turn.output` 只作缺失 final item 的兼容回退。
+- Claude Code、Antigravity 与 Grok Build 保留发现和历史读取，managed 写入口明确禁用；daemon 重启后的 Codex binding 先标记 detached，再通过 `thread/read` 验证并显式 `thread/resume`，不抢占活跃外部 writer。
+- Windows Codex npm shim 仅按官方 `@openai/codex` 已知包布局解析原生 `codex.exe`，不执行 shell；journal 首次绑定 Gateway 后禁止切换到另一服务，避免历史 outbox 跨域发送。
+- 自动化验证：`cargo test --workspace` 全绿（180 passed，3 个需要真实 Codex 的用例按默认配置 ignored）；`cargo clippy --workspace --all-targets -- -D warnings`、Rust/Prettier 格式、全工作区 TypeScript 类型检查和 140 项 Node 测试全绿（其中 134 passed，另有 6 个需 PostgreSQL/真实 Codex 的环境型 skipped）；Android `testDebugUnitTest` 与 `lintDebug`、Desktop 与 Web 生产构建通过，Gateway API 无独立 build script 且以 `tsc --noEmit` 通过。此前已完成真实 Desktop hidden daemon 启停与 IPC 测试，以及真实三回合 daemon E2E（同一原生 Session 两轮、daemon 重启、detached 恢复及第三轮 resume，19.24 秒）；本轮未重复执行这 3 个需 `AGENTHUB_TEST_CODEX_BINARY` 的 ignored 用例。`starting` 状态此前已在 1280、360 与 320 px 视口完成真实浏览器验收，状态文案可见、业务控件禁用且无重叠、裁切或页面溢出。
+- 本批不递增版本，不打包、不部署，也不生成安装产物；独立命名二进制与用户级 OS 服务仍属后续范围。
+
 ### 文档治理（2026-09-09）
 
 - 精简 README 与项目规则，统一产品定位、仓库边界、最短开发/验证命令和权威文档导航；当前实现与目标差距只在 `docs/README.md` 维护。

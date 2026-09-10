@@ -60,9 +60,7 @@ export function DesktopSettingsModal({
   const [claudeBinary, setClaudeBinary] = useState(
     preferences.claude_binary || "claude",
   );
-  const [codexBinary, setCodexBinary] = useState(
-    preferences.codex_binary || "codex",
-  );
+  const [codexBinary] = useState(preferences.codex_binary || "codex");
   const [grokBinary, setGrokBinary] = useState(
     preferences.grok_binary || "grok",
   );
@@ -105,7 +103,6 @@ export function DesktopSettingsModal({
           input: {
             refresh_interval_seconds: refreshSeconds,
             claude_binary: claudeBinary,
-            codex_binary: codexBinary,
             grok_binary: grokBinary,
           },
         },
@@ -421,7 +418,8 @@ export function DesktopSettingsModal({
                           <input
                             type="text"
                             value={codexBinary}
-                            onChange={(e) => setCodexBinary(e.target.value)}
+                            disabled
+                            title="请在“本机与 Remote”中配置；agenthubd 运行期间不可更换"
                             placeholder="codex"
                             required
                           />
@@ -536,10 +534,10 @@ export function DesktopSettingsModal({
                           <div className="settings-divider" />
                           <div className="settings-row-item">
                             <div className="row-text">
-                              <strong>本机 Remote Host 守护</strong>
+                              <strong>本机会话 daemon</strong>
                               <p>
-                                启动本机 Codex 远程接管
-                                Host，支持工作目录配置与多端接续。
+                                管理本机 Codex Session
+                                与授权工作目录，并按需开启多端 Remote。
                               </p>
                             </div>
                             <button

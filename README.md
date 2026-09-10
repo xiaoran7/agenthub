@@ -13,7 +13,7 @@ Desktop ──本地 IPC──► agenthubd ──官方协议──► Codex / 
 ```
 
 - **Desktop**：主要工作台。本地管理工作区、创建或恢复 Session、查看工具过程、处理审批；断网时仍可工作。
-- **agenthubd**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等和远程连接；目标形态由 Desktop 自动启动并后台常驻。
+- **agenthubd**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等和远程连接；当前由 Desktop 以隐藏进程模式自动启动，也可通过 `agent-pulse-runner daemon` 启动。尚未提供 OS 服务安装包。
 - **Web**：无需安装的远程完整客户端，用于跨设备查看、续聊、审批和中断。
 - **Android**：移动控制端，强调进度、通知、审批和紧急干预。
 - **Gateway**：只做身份、路由、持久化和回放，不运行 Agent，也不是 Session 真相源。

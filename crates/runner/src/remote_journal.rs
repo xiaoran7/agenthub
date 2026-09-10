@@ -2,12 +2,16 @@
 //! Intent commits precede native side effects; receipts and snapshots commit together.
 
 use crate::remote_host::{
-    CommandReceipt, ExecutionState, NativeSessionHost, NativeTransport, RemoteCommand,
-    SessionBinding,
+    CommandReceipt, ExecutionState, NativeSessionHost, NativeTransport, PendingApprovalSnapshot,
+    RemoteCommand, SessionBinding,
 };
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
+
+const DEFAULT_MAX_LOCAL_EVENTS: i64 = 10_000;
+const MAX_CONFIGURED_LOCAL_EVENTS: i64 = 100_000;
 
 type Result<T> = std::result::Result<T, JournalError>;
 
@@ -30,12 +34,51 @@ pub enum BeginCommand {
     Existing(CommandReceipt),
 }
 
+pub enum BeginInboundCommand {
+    New,
+    CompleteExisting(CommandReceipt),
+    AlreadyCompleted(CommandReceipt),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalSnapshot {
+    pub sessions: Vec<SessionBinding>,
+    pub pending_approvals: Vec<PendingApprovalSnapshot>,
+    pub cursor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalEvent {
+    pub cursor: i64,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum EventsAfter {
+    Events {
+        events: Vec<JournalEvent>,
+        cursor: i64,
+    },
+    SnapshotRequired {
+        snapshot: JournalSnapshot,
+    },
+}
+
 pub struct RemoteJournal {
     connection: Connection,
+    max_local_events: i64,
 }
 
 impl RemoteJournal {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_event_retention(path, DEFAULT_MAX_LOCAL_EVENTS as usize)
+    }
+
+    pub fn open_with_event_retention(
+        path: impl AsRef<Path>,
+        max_local_events: usize,
+    ) -> Result<Self> {
         let connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_millis(250))?;
         // One daemon per journal. Holding SQLite's exclusive lock prevents two
@@ -49,14 +92,23 @@ impl RemoteJournal {
                 hub_id TEXT PRIMARY KEY, native_id TEXT NOT NULL UNIQUE, binding_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS remote_outbox (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, payload_json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS local_events (
+                cursor INTEGER PRIMARY KEY AUTOINCREMENT, payload_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS remote_watermarks (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), sent INTEGER NOT NULL, acked INTEGER NOT NULL);
             INSERT OR IGNORE INTO remote_watermarks VALUES (1,0,0);
             CREATE TABLE IF NOT EXISTS remote_inbound (singleton INTEGER PRIMARY KEY CHECK(singleton=1), received INTEGER NOT NULL);
             INSERT OR IGNORE INTO remote_inbound VALUES (1,0);
+            CREATE TABLE IF NOT EXISTS remote_inbound_commands (
+                seq INTEGER PRIMARY KEY, cmd_id TEXT NOT NULL, command_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS remote_identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), device_id TEXT NOT NULL, server TEXT NOT NULL);
             COMMIT;")?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            max_local_events: i64::try_from(max_local_events)
+                .unwrap_or(MAX_CONFIGURED_LOCAL_EVENTS)
+                .clamp(1, MAX_CONFIGURED_LOCAL_EVENTS),
+        })
     }
 
     pub fn bind_identity(&mut self, device_id: &str, server: &str) -> Result<()> {
@@ -99,9 +151,14 @@ impl RemoteJournal {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some((_device_id, server)) = stored
-            && server != new_server
-        {
+        if let Some((_device_id, server)) = stored {
+            if server == new_server {
+                transaction.commit()?;
+                return Ok(());
+            }
+            if server != "local://agenthub" && !server.trim().is_empty() {
+                return Err(JournalError::IdentityMismatch);
+            }
             transaction.execute(
                 "UPDATE remote_identity SET server=?1 WHERE singleton=1",
                 params![new_server],
@@ -151,7 +208,132 @@ impl RemoteJournal {
         Ok(BeginCommand::New)
     }
 
-    pub fn finish_command(
+    pub fn begin_inbound_command(
+        &mut self,
+        seq: i64,
+        command: &RemoteCommand,
+    ) -> Result<BeginInboundCommand> {
+        let transaction = self.connection.transaction()?;
+        let received: i64 = transaction.query_row(
+            "SELECT received FROM remote_inbound WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        if seq < 1 || seq > received + 1 {
+            return Err(JournalError::InvalidAck);
+        }
+        let serialized = serde_json::to_string(command)?;
+        let inbound: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT cmd_id,command_json FROM remote_inbound_commands WHERE seq=?1",
+                [seq],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stored_id, stored)) = inbound {
+            if stored_id != command.client_cmd_id || stored != serialized {
+                return Err(JournalError::InvalidAck);
+            }
+        } else {
+            if seq <= received {
+                return Err(JournalError::InvalidAck);
+            }
+            transaction.execute(
+                "INSERT INTO remote_inbound_commands(seq,cmd_id,command_json) VALUES (?1,?2,?3)",
+                params![seq, command.client_cmd_id, serialized],
+            )?;
+        }
+
+        let previous: Option<(String, Option<String>)> = transaction
+            .query_row(
+                "SELECT command_json,receipt_json FROM remote_commands WHERE cmd_id=?1",
+                [&command.client_cmd_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let result = if let Some((stored, receipt)) = previous {
+            if stored != serde_json::to_string(command)? {
+                return Err(JournalError::InvalidAck);
+            }
+            if let Some(receipt) = receipt {
+                let receipt = serde_json::from_str(&receipt)?;
+                if seq <= received {
+                    BeginInboundCommand::AlreadyCompleted(receipt)
+                } else {
+                    BeginInboundCommand::CompleteExisting(receipt)
+                }
+            } else {
+                BeginInboundCommand::CompleteExisting(CommandReceipt {
+                    client_cmd_id: command.client_cmd_id.clone(),
+                    hub_session_id: command.hub_session_id.clone(),
+                    status: "indeterminate".into(),
+                    code: Some("previous_execution_unconfirmed".into()),
+                    result: None,
+                })
+            }
+        } else {
+            if seq <= received {
+                return Err(JournalError::InvalidAck);
+            }
+            transaction.execute(
+                "INSERT INTO remote_commands(cmd_id,command_json) VALUES (?1,?2)",
+                params![command.client_cmd_id, serde_json::to_string(command)?],
+            )?;
+            BeginInboundCommand::New
+        };
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    pub fn finish_inbound_command(
+        &mut self,
+        seq: i64,
+        receipt: &CommandReceipt,
+        sessions: &[SessionBinding],
+    ) -> Result<i64> {
+        let transaction = self.connection.transaction()?;
+        let received: i64 = transaction.query_row(
+            "SELECT received FROM remote_inbound WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        if seq != received + 1 {
+            return Err(JournalError::InvalidAck);
+        }
+        let inbound_cmd_id: Option<String> = transaction
+            .query_row(
+                "SELECT cmd_id FROM remote_inbound_commands WHERE seq=?1",
+                [seq],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if inbound_cmd_id.as_deref() != Some(&receipt.client_cmd_id) {
+            return Err(JournalError::InvalidAck);
+        }
+        transaction.execute(
+            "UPDATE remote_commands SET receipt_json=?2 WHERE cmd_id=?1",
+            params![receipt.client_cmd_id, serde_json::to_string(receipt)?],
+        )?;
+        for binding in sessions {
+            persist_binding(&transaction, binding)?;
+        }
+        let remote_payload = json!({"type":"receipt","receipt":projected_remote_receipt(receipt)});
+        transaction.execute(
+            "INSERT INTO remote_outbox(payload_json) VALUES (?1)",
+            [serde_json::to_string(&remote_payload)?],
+        )?;
+        let outbox_seq = transaction.last_insert_rowid();
+        let local_payload = json!({"type":"receipt","receipt":receipt});
+        append_local_event(&transaction, &local_payload, self.max_local_events)?;
+        transaction.execute(
+            "UPDATE remote_inbound SET received=?1 WHERE singleton=1",
+            [seq],
+        )?;
+        transaction.commit()?;
+        Ok(outbox_seq)
+    }
+
+    pub fn finish_local_command(
         &mut self,
         receipt: &CommandReceipt,
         sessions: &[SessionBinding],
@@ -165,30 +347,110 @@ impl RemoteJournal {
             persist_binding(&transaction, binding)?;
         }
         let payload = json!({"type":"receipt","receipt":receipt});
-        transaction.execute(
-            "INSERT INTO remote_outbox(payload_json) VALUES (?1)",
-            [serde_json::to_string(&payload)?],
-        )?;
-        let seq = transaction.last_insert_rowid();
+        let cursor = append_local_event(&transaction, &payload, self.max_local_events)?;
         transaction.commit()?;
-        Ok(seq)
+        Ok(cursor)
     }
 
-    pub fn append(&mut self, payload: &Value, sessions: &[SessionBinding]) -> Result<i64> {
+    pub fn append_projected(
+        &mut self,
+        local_payload: &Value,
+        remote_payload: &Value,
+        sessions: &[SessionBinding],
+    ) -> Result<i64> {
         let transaction = self.connection.transaction()?;
         for binding in sessions {
             persist_binding(&transaction, binding)?;
         }
         transaction.execute(
             "INSERT INTO remote_outbox(payload_json) VALUES (?1)",
-            [serde_json::to_string(payload)?],
+            [serde_json::to_string(remote_payload)?],
         )?;
         let seq = transaction.last_insert_rowid();
+        append_local_event(&transaction, local_payload, self.max_local_events)?;
         transaction.commit()?;
         Ok(seq)
     }
 
+    pub fn append(&mut self, payload: &Value, sessions: &[SessionBinding]) -> Result<i64> {
+        self.append_projected(payload, payload, sessions)
+    }
+
+    pub fn append_local(&mut self, payload: &Value, sessions: &[SessionBinding]) -> Result<i64> {
+        let transaction = self.connection.transaction()?;
+        for binding in sessions {
+            persist_binding(&transaction, binding)?;
+        }
+        let cursor = append_local_event(&transaction, payload, self.max_local_events)?;
+        transaction.commit()?;
+        Ok(cursor)
+    }
+
+    pub fn enqueue_remote(&mut self, payload: &Value) -> Result<i64> {
+        self.connection.execute(
+            "INSERT INTO remote_outbox(payload_json) VALUES (?1)",
+            [serde_json::to_string(payload)?],
+        )?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
     pub fn bindings(&self) -> Result<Vec<SessionBinding>> {
+        self.stored_bindings(true)
+    }
+
+    pub fn snapshot(&self) -> Result<JournalSnapshot> {
+        Ok(JournalSnapshot {
+            sessions: self.stored_bindings(true)?,
+            pending_approvals: Vec::new(),
+            cursor: self.latest_event_cursor()?,
+        })
+    }
+
+    pub fn events_after(&self, after_cursor: i64, limit: usize) -> Result<EventsAfter> {
+        let (earliest, latest): (Option<i64>, Option<i64>) = self.connection.query_row(
+            "SELECT MIN(cursor),MAX(cursor) FROM local_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let latest = latest.unwrap_or(0);
+        let earliest = earliest.unwrap_or(latest + 1);
+        if after_cursor < 0
+            || after_cursor > latest
+            || (earliest <= latest && after_cursor < earliest - 1)
+        {
+            return Ok(EventsAfter::SnapshotRequired {
+                snapshot: self.snapshot()?,
+            });
+        }
+
+        let mut statement = self.connection.prepare(
+            "SELECT cursor,payload_json FROM local_events WHERE cursor>?1 ORDER BY cursor LIMIT ?2",
+        )?;
+        let rows = statement
+            .query_map(params![after_cursor, limit.clamp(1, 256) as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+        let mut events = Vec::new();
+        for row in rows {
+            let (cursor, payload) = row?;
+            events.push(JournalEvent {
+                cursor,
+                payload: serde_json::from_str(&payload)?,
+            });
+        }
+        let cursor = events.last().map_or(after_cursor, |event| event.cursor);
+        Ok(EventsAfter::Events { events, cursor })
+    }
+
+    fn latest_event_cursor(&self) -> Result<i64> {
+        Ok(self.connection.query_row(
+            "SELECT COALESCE(MAX(cursor),0) FROM local_events",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn stored_bindings(&self, detached: bool) -> Result<Vec<SessionBinding>> {
         let mut statement = self
             .connection
             .prepare("SELECT binding_json FROM remote_sessions ORDER BY hub_id")?;
@@ -196,9 +458,11 @@ impl RemoteJournal {
             .query_map([], |row| row.get::<_, String>(0))?
             .map(|row| {
                 let mut binding: SessionBinding = serde_json::from_str(&row?)?;
-                // A registry row does not prove the previous native process is alive.
-                binding.control_connected = false;
-                binding.execution_state = ExecutionState::Unknown;
+                if detached {
+                    // A registry row does not prove the previous native process is alive.
+                    binding.control_connected = false;
+                    binding.execution_state = ExecutionState::Unknown;
+                }
                 Ok(binding)
             })
             .collect()
@@ -233,21 +497,6 @@ impl RemoteJournal {
             [],
             |row| row.get(0),
         )?)
-    }
-
-    pub fn confirm_command_seq(&mut self, seq: i64) -> Result<()> {
-        let received = self.received_command_seq()?;
-        if seq <= received {
-            return Ok(());
-        }
-        if seq != received + 1 {
-            return Err(JournalError::InvalidAck);
-        }
-        self.connection.execute(
-            "UPDATE remote_inbound SET received=?1 WHERE singleton=1",
-            [seq],
-        )?;
-        Ok(())
     }
 
     pub fn mark_sent(&mut self, seq: i64) -> Result<()> {
@@ -297,6 +546,173 @@ fn persist_binding(connection: &Connection, binding: &SessionBinding) -> Result<
     Ok(())
 }
 
+fn append_local_event(
+    connection: &Connection,
+    payload: &Value,
+    max_local_events: i64,
+) -> Result<i64> {
+    connection.execute(
+        "INSERT INTO local_events(payload_json) VALUES (?1)",
+        [serde_json::to_string(payload)?],
+    )?;
+    let cursor = connection.last_insert_rowid();
+    connection.execute(
+        "DELETE FROM local_events WHERE cursor<=?1",
+        [cursor.saturating_sub(max_local_events)],
+    )?;
+    Ok(cursor)
+}
+
+fn projected_remote_receipt(receipt: &CommandReceipt) -> Value {
+    let result = receipt.result.as_ref().and_then(|result| {
+        let mut projected = serde_json::Map::new();
+        if let Some(binding) = result.get("binding") {
+            projected.insert("binding".into(), binding.clone());
+        }
+        if let Some(turn_id) = result.pointer("/turn/id").and_then(Value::as_str) {
+            projected.insert("turn".into(), json!({"id":turn_id}));
+        }
+        for key in ["approval_id", "response_sent"] {
+            if let Some(value) = result.get(key) {
+                projected.insert(key.into(), value.clone());
+            }
+        }
+        (!projected.is_empty()).then_some(Value::Object(projected))
+    });
+    let mut projected = json!({
+        "client_cmd_id": receipt.client_cmd_id,
+        "hub_session_id": receipt.hub_session_id,
+        "status": receipt.status,
+        "code": receipt.code,
+        "result": result,
+    });
+    crate::privacy::sanitize_workspace_paths_in_json(&mut projected);
+    projected
+}
+
+fn projected_remote_event(event: &crate::remote_host::HostEvent) -> Result<Value> {
+    let mut projected = serde_json::to_value(event)?;
+    if let Some(object) = projected.as_object_mut() {
+        object.remove("raw");
+        if let Some(raw) = projected_event_raw(event) {
+            object.insert("raw".into(), raw);
+        }
+    }
+    crate::privacy::sanitize_workspace_paths_in_json(&mut projected);
+    Ok(json!({"type":"event","event":projected}))
+}
+
+fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
+    let params = event.raw.get("params")?;
+    match event.kind.as_str() {
+        "turn/started" | "turn/completed" => params
+            .pointer("/turn/id")
+            .and_then(Value::as_str)
+            .map(|id| json!({"params":{"turn":{"id":id}}})),
+        "item/agentMessage/delta" => {
+            let item_id = params.get("itemId").and_then(Value::as_str)?;
+            let delta = params.get("delta").and_then(Value::as_str)?;
+            Some(json!({"params":{"itemId":item_id,"delta":delta}}))
+        }
+        "item/completed" => {
+            let item = params.get("item")?;
+            let id = item.get("id").and_then(Value::as_str)?;
+            match item.get("type").and_then(Value::as_str)? {
+                "agentMessage" => Some(json!({"params":{"item":{
+                    "id":id,"type":"agentMessage","text":item.get("text").and_then(Value::as_str).unwrap_or_default()
+                }}})),
+                "commandExecution" => Some(json!({"params":{"item":{
+                    "id":id,"type":"commandExecution"
+                }}})),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn remote_receipt_projection_keeps_only_hub_results() {
+    let receipt = CommandReceipt {
+        client_cmd_id: "command-one".into(),
+        hub_session_id: "hub-one".into(),
+        status: "accepted".into(),
+        code: None,
+        result: Some(json!({
+            "binding": {
+                "hub_session_id": "hub-one",
+                "provider_session_id": "native-one",
+                "workspace_path": "C:\\Users\\alice\\private",
+                "host_generation": "generation-one",
+                "control_connected": true,
+                "execution_state": "idle",
+                "current_turn_id": null
+            },
+            "turn": {"id":"turn-one","status":{"type":"inProgress"}},
+            "provider_response": {
+                "thread":{"id":"native-one","cwd":"C:\\Users\\alice\\private"},
+                "access_token":"usable-secret"
+            }
+        })),
+    };
+
+    let projected = projected_remote_receipt(&receipt);
+
+    assert_eq!(projected["result"]["turn"], json!({"id":"turn-one"}));
+    assert!(projected["result"].get("provider_response").is_none());
+    assert!(
+        projected["result"]["binding"]["workspace_path"]
+            .as_str()
+            .is_some_and(|workspace| workspace.starts_with("ws-"))
+    );
+    let serialized = projected.to_string();
+    for forbidden in ["alice", "usable-secret", "provider_response", "inProgress"] {
+        assert!(!serialized.contains(forbidden));
+    }
+    assert_eq!(
+        receipt.result.as_ref().unwrap()["provider_response"]["access_token"],
+        "usable-secret"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn approval_remote_projection_omits_provider_request_payload() {
+    let approval = PendingApprovalSnapshot {
+        approval_id: format!("approval-{}", "a".repeat(64)),
+        hub_session_id: "hub-one".into(),
+        host_generation: "generation-one".into(),
+        turn_id: "turn-one".into(),
+        can_approve: true,
+        can_decline: false,
+    };
+    let event = crate::remote_host::HostEvent {
+        event_id: "event-one".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("native-one".into()),
+        kind: "approval_requested".into(),
+        raw: json!({
+            "id": 7,
+            "method": "item/commandExecution/requestApproval",
+            "params": {"command":"private","reason":"secret","diff":"sensitive"}
+        }),
+        binding: None,
+        approval_id: Some(approval.approval_id.clone()),
+        approval: Some(approval.clone()),
+    };
+    let projected = projected_remote_event(&event).unwrap();
+    assert!(projected["event"].get("raw").is_none());
+    assert_eq!(projected["event"]["approval"], json!(approval));
+    for forbidden in ["private", "secret", "sensitive", "\"id\":7"] {
+        assert!(!projected.to_string().contains(forbidden));
+    }
+    let local = json!({"type":"event","event":event});
+    assert_eq!(local["event"]["raw"]["id"], 7);
+    assert_eq!(local["event"]["raw"]["params"]["command"], "private");
+}
+
 pub struct DurableHost<T: NativeTransport> {
     pub host: NativeSessionHost<T>,
     pub journal: RemoteJournal,
@@ -305,42 +721,92 @@ pub struct DurableHost<T: NativeTransport> {
 impl<T: NativeTransport> DurableHost<T> {
     pub fn new(mut host: NativeSessionHost<T>, journal: RemoteJournal) -> Result<Self> {
         host.restore_detached(journal.bindings()?);
+        let detached = host.sessions();
+        for binding in &detached {
+            persist_binding(&journal.connection, binding)?;
+        }
         Ok(Self { host, journal })
     }
 
-    pub fn handle_command(&mut self, command: RemoteCommand) -> Result<(CommandReceipt, i64)> {
-        match self.journal.begin_command(&command)? {
-            BeginCommand::Existing(receipt) => {
-                let seq = self
-                    .journal
-                    .append(&json!({"type":"receipt","receipt":receipt}), &[])?;
-                Ok((receipt, seq))
+    pub fn snapshot(&self) -> Result<JournalSnapshot> {
+        let mut snapshot = self.journal.snapshot()?;
+        snapshot.sessions = self.host.sessions();
+        snapshot.pending_approvals = self.host.pending_approvals();
+        Ok(snapshot)
+    }
+
+    pub fn events_after(&self, after_cursor: i64, limit: usize) -> Result<EventsAfter> {
+        let mut result = self.journal.events_after(after_cursor, limit)?;
+        if let EventsAfter::SnapshotRequired { snapshot } = &mut result {
+            snapshot.sessions = self.host.sessions();
+            snapshot.pending_approvals = self.host.pending_approvals();
+        }
+        Ok(result)
+    }
+
+    pub fn handle_inbound_command(
+        &mut self,
+        seq: i64,
+        command: RemoteCommand,
+    ) -> Result<CommandReceipt> {
+        match self.journal.begin_inbound_command(seq, &command)? {
+            BeginInboundCommand::AlreadyCompleted(receipt) => Ok(receipt),
+            BeginInboundCommand::CompleteExisting(receipt) => {
+                self.journal
+                    .finish_inbound_command(seq, &receipt, &self.host.sessions())?;
+                Ok(receipt)
             }
-            BeginCommand::New => {
+            BeginInboundCommand::New => {
                 let receipt = self.host.handle_command(command);
-                let seq = self
-                    .journal
-                    .finish_command(&receipt, &self.host.sessions())?;
-                Ok((receipt, seq))
+                self.journal
+                    .finish_inbound_command(seq, &receipt, &self.host.sessions())?;
+                Ok(receipt)
             }
         }
     }
 
-    pub fn poll(&mut self) -> Result<Vec<crate::remote_host::HostEvent>> {
+    pub fn handle_local_command(&mut self, command: RemoteCommand) -> Result<CommandReceipt> {
+        match self.journal.begin_command(&command)? {
+            BeginCommand::Existing(receipt) => {
+                self.journal
+                    .append_local(&json!({"type":"receipt","receipt":receipt}), &[])?;
+                Ok(receipt)
+            }
+            BeginCommand::New => {
+                let receipt = self.host.handle_command(command);
+                self.journal
+                    .finish_local_command(&receipt, &self.host.sessions())?;
+                Ok(receipt)
+            }
+        }
+    }
+
+    pub fn poll(&mut self, remote_enabled: bool) -> Result<Vec<crate::remote_host::HostEvent>> {
         match self.host.poll() {
             Ok(events) => {
                 for event in &events {
                     let bindings = event.binding.iter().cloned().collect::<Vec<_>>();
-                    self.journal
-                        .append(&json!({"type":"event","event":event}), &bindings)?;
+                    let local_payload = json!({"type":"event","event":event});
+                    if remote_enabled {
+                        let remote_payload = projected_remote_event(event)?;
+                        self.journal.append_projected(
+                            &local_payload,
+                            &remote_payload,
+                            &bindings,
+                        )?;
+                    } else {
+                        self.journal.append_local(&local_payload, &bindings)?;
+                    }
                 }
                 Ok(events)
             }
             Err(error) => {
-                self.journal.append(
-                    &json!({"type":"host_lost","code":error.code}),
-                    &self.host.sessions(),
-                )?;
+                let payload = json!({"type":"host_lost","code":error.code});
+                if remote_enabled {
+                    self.journal.append(&payload, &self.host.sessions())?;
+                } else {
+                    self.journal.append_local(&payload, &self.host.sessions())?;
+                }
                 Err(JournalError::HostLost(error.code))
             }
         }

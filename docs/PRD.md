@@ -1,6 +1,6 @@
 # AgentHub 产品需求文档
 
-更新：2026-09-08。
+更新：2026-09-10。
 
 ## 1. 产品定义
 
@@ -87,12 +87,13 @@ Session 分为 `managed` 与 `discovered`。没有控制通道的历史只读；
 
 ## 7. 开发顺序
 
-1. 把 Codex 常驻 Host 提升为本机 `agenthubd` 核心，并定义稳定 IPC。
-2. 让 Desktop 默认工作台通过 IPC 完成创建、恢复、续聊、审批与中断，移除逐回合子进程路径和独立 Remote 模式。
-3. 让同一个 Host 同时服务本地 IPC 与 Gateway 出站连接，统一 Session Registry、命令账本和事件日志。
-4. Web/Android 消费统一能力报告、状态机和命令收据，补齐通知与离线体验。
-5. 在官方协议和认证验证后接入 Claude Code 长时 Host；其他 Provider 按能力逐项开放。
-6. 最后处理多实例 Gateway、OS 服务安装、自动更新和生产容量。
+P0 已完成 Codex 常驻 Host 进程外置、Desktop 本地 IPC、单一 Session Registry/命令账本/事件日志，以及同一 daemon 的可选 Gateway Remote。后续顺序：
+
+1. 将隐藏 daemon 进程升级为可安装、可升级、可诊断的用户级 OS 服务，并补独立停止控制。
+2. Web/Android 完整消费统一能力报告、状态机和命令收据，补齐通知与离线体验。
+3. 在官方协议和认证验证后接入 Claude Code 长时 Host；其他 Provider 按能力逐项开放。
+4. 验证安全 attach/所有权转移；Provider 无可靠支持时保持只读或显式 resume。
+5. 最后处理多实例 Gateway、安装升级和生产容量。
 
 ## 8. 验收标准
 

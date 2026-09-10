@@ -137,6 +137,30 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, val) in map.iter_mut() {
+                let normalized_key = key
+                    .chars()
+                    .filter(|character| character.is_ascii_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>();
+                let is_sensitive_key = normalized_key == "env"
+                    || normalized_key.contains("environment")
+                    || normalized_key.contains("password")
+                    || normalized_key.contains("passwd")
+                    || normalized_key.contains("cookie")
+                    || normalized_key.contains("authorization")
+                    || normalized_key.contains("apikey")
+                    || normalized_key == "token"
+                    || normalized_key.ends_with("token")
+                    || normalized_key.contains("accesstoken")
+                    || normalized_key.contains("refreshtoken")
+                    || normalized_key.contains("privkey")
+                    || normalized_key.contains("privatekey")
+                    || normalized_key == "secret"
+                    || normalized_key.ends_with("secret");
+                if is_sensitive_key {
+                    *val = serde_json::Value::String("[redacted]".into());
+                    continue;
+                }
                 let is_path_key = key == "workspace_path"
                     || key == "cwd"
                     || key == "workdir"
@@ -147,12 +171,15 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
                     || key == "path"
                     || key == "file_path"
                     || key == "filePath";
-                if let Some(path_str) = val.as_str()
-                    && (is_path_key || is_absolute_filesystem_path(path_str))
-                    && !path_str.starts_with("ws-")
-                    && !path_str.trim().is_empty()
-                {
-                    *val = serde_json::Value::String(workspace_id_for_path(path_str));
+                if let Some(path_str) = val.as_str() {
+                    if (is_path_key || is_absolute_filesystem_path(path_str))
+                        && !path_str.starts_with("ws-")
+                        && !path_str.trim().is_empty()
+                    {
+                        *val = serde_json::Value::String(workspace_id_for_path(path_str));
+                    } else if contains_absolute_filesystem_path(path_str) {
+                        *val = serde_json::Value::String("[local_path_redacted]".into());
+                    }
                 }
                 sanitize_workspace_paths_in_json(val);
             }
@@ -162,6 +189,8 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
                 if let Some(path_str) = item.as_str() {
                     if is_absolute_filesystem_path(path_str) && !path_str.starts_with("ws-") {
                         *item = serde_json::Value::String(workspace_id_for_path(path_str));
+                    } else if contains_absolute_filesystem_path(path_str) {
+                        *item = serde_json::Value::String("[local_path_redacted]".into());
                     }
                 } else {
                     sanitize_workspace_paths_in_json(item);
@@ -170,6 +199,19 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
         }
         _ => {}
     }
+}
+
+fn contains_absolute_filesystem_path(value: &str) -> bool {
+    value
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}'
+                )
+        })
+        .map(|token| token.trim_start_matches([':', '=', ',', ';']))
+        .any(is_absolute_filesystem_path)
 }
 
 fn is_current_user_home(trimmed_cwd: &str) -> bool {
@@ -276,6 +318,31 @@ mod tests {
                 .unwrap(),
             workspace_id_for_path("D:\\Workspaces\\team-portal")
         );
+    }
+
+    #[test]
+    fn sanitize_workspace_paths_in_json_redacts_embedded_paths_and_credentials() {
+        let mut sample = serde_json::json!({
+            "command": "cat C:\\Users\\alice\\repo\\.env",
+            "stderr": "failed at /home/alice/private/config.json",
+            "url": "https://example.com/private/resource",
+            "Authorization": "Bearer usable-secret",
+            "access_token": "usable-token",
+            "environment": {"SAFE": "value"}
+        });
+
+        sanitize_workspace_paths_in_json(&mut sample);
+
+        assert_eq!(sample["command"], "[local_path_redacted]");
+        assert_eq!(sample["stderr"], "[local_path_redacted]");
+        assert_eq!(sample["url"], "https://example.com/private/resource");
+        assert_eq!(sample["Authorization"], "[redacted]");
+        assert_eq!(sample["access_token"], "[redacted]");
+        assert_eq!(sample["environment"], "[redacted]");
+        let serialized = sample.to_string();
+        for forbidden in ["alice", "usable-secret", "usable-token"] {
+            assert!(!serialized.contains(forbidden));
+        }
     }
 
     #[test]

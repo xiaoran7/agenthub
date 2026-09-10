@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,17 +35,48 @@ test("retired v2 prototype routes are absent from the default Gateway", async ()
 const binding = {
   hub_session_id: "hub-one",
   provider_session_id: "native-one",
-  workspace_path: "D:/example",
+  workspace_path: "ws-example-0123456789abcdef",
   host_generation: "host-one",
   control_connected: true,
   execution_state: "idle",
   current_turn_id: null,
 };
+const approval = {
+  approval_id: `approval-${"a".repeat(64)}`,
+  hub_session_id: "hub-one",
+  host_generation: "host-one",
+  turn_id: "turn-one",
+  can_approve: true,
+  can_decline: true,
+};
+const ready = (pending_approvals: unknown[]) => ({
+  type: "ready",
+  host_generation: "host-one",
+  workspaces: [binding.workspace_path],
+  sessions: [binding],
+  pending_approvals,
+});
+
+const hostEvent = (kind: string, fields: Record<string, unknown> = {}) => ({
+  event_id: `event-${kind.replaceAll("/", "-")}`,
+  host_generation: "host-one",
+  hub_session_id: "hub-one",
+  provider_session_id: "native-one",
+  kind,
+  binding: null,
+  approval_id: null,
+  ...fields,
+});
+
 const command: RemoteCommand = {
   client_cmd_id: "cmd-one",
   hub_session_id: "hub-one",
-  host_generation: null,
-  command: { action: "connect", mode: "create", workspace_path: "D:/example" },
+  host_generation: "host-one",
+  command: {
+    action: "connect",
+    mode: "create",
+    workspace_path: "ws-example-0123456789abcdef",
+  },
 };
 const receipt = {
   client_cmd_id: "cmd-one",
@@ -54,6 +85,44 @@ const receipt = {
   code: null,
   result: { binding },
 };
+
+async function connectRunner(
+  address: string,
+  privateKey: KeyObject,
+  hostGeneration: string,
+): Promise<{
+  ws: WebSocket;
+  next: (type: string) => Promise<Record<string, unknown>>;
+}> {
+  const ws = new WebSocket(address.replace("http:", "ws:") + "/v3/remote/ws");
+  const frames: Record<string, unknown>[] = [];
+  ws.on("message", (data) =>
+    frames.push(JSON.parse(data.toString()) as Record<string, unknown>),
+  );
+  const next = async (type: string): Promise<Record<string, unknown>> => {
+    for (let attempt = 0; attempt < 500; attempt++) {
+      const index = frames.findIndex((frame) => frame.type === type);
+      if (index >= 0) return frames.splice(index, 1)[0]!;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail(`missing ${type}`);
+  };
+  const challenge = await next("challenge");
+  const signed = Buffer.from(
+    `agenthub.remote.v3\n${runner}\n${String(challenge.nonce)}\n${hostGeneration}\n0`,
+  );
+  ws.send(
+    JSON.stringify({
+      type: "hello",
+      runner_id: runner,
+      host_generation: hostGeneration,
+      received_command_seq: 0,
+      signature: sign(null, signed, privateKey).toString("hex"),
+    }),
+  );
+  assert.equal((await next("hello_ack")).version, 3);
+  return { ws, next };
+}
 
 test("remote content, exact duplicate detection, and commands persist across Gateway restart", () => {
   const dir = mkdtempSync(join(tmpdir(), "agenthub-remote-"));
@@ -100,7 +169,275 @@ test("remote content, exact duplicate detection, and commands persist across Gat
   }
 });
 
-test("device challenge, owner scoping, command receipts, and revocation over real WS", async (t) => {
+test("unsafe provider receipt fields are rejected before persistence", () => {
+  const store = new RemoteContentStore(":memory:");
+  try {
+    const unsafeCommand = { ...command, client_cmd_id: "cmd-unsafe" };
+    const unsafeReceipt = {
+      ...receipt,
+      client_cmd_id: unsafeCommand.client_cmd_id,
+      result: {
+        ...receipt.result,
+        provider_response: {
+          thread: { id: "native-one", cwd: "C:/Users/alice/private" },
+          access_token: "usable-secret",
+        },
+      },
+    };
+    store.submit("owner", runner, unsafeCommand);
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 1, {
+          type: "receipt",
+          receipt: unsafeReceipt,
+        }),
+      /invalid_receipt/u,
+    );
+    assert.equal(store.watermarks(runner).received, 0);
+    assert.equal(
+      store.commandHistory("owner", runner, "hub-one")[0]?.receipt,
+      null,
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test("approval snapshots replace state and unsafe approval events never persist", () => {
+  const store = new RemoteContentStore(":memory:");
+  try {
+    store.register("owner", runner);
+    assert.throws(
+      () => store.receive("owner", runner, 1, { type: "receipt", receipt }),
+      /unknown_command_receipt/u,
+    );
+
+    store.receive("owner", runner, 1, ready([approval]));
+    assert.deepEqual(store.runners("owner")[0]?.hello?.pending_approvals, [
+      approval,
+    ]);
+    assert.deepEqual(
+      store
+        .events("owner", 0, runner, "hub-one")
+        .map((item) => item.payload.type),
+      ["ready"],
+    );
+
+    store.receive("owner", runner, 2, {
+      type: "event",
+      event: hostEvent("approval_requested", {
+        event_id: "event-one",
+        approval_id: approval.approval_id,
+        approval,
+        binding,
+      }),
+    });
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 3, {
+          type: "event",
+          event: hostEvent("approval_requested", {
+            approval_id: approval.approval_id,
+            approval,
+            raw: { id: 7, params: { command: "private" } },
+          }),
+        }),
+      /unsafe_approval_event/u,
+    );
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 3, {
+          type: "event",
+          event: hostEvent("provider_request", {
+            raw: { id: "provider-secret", params: {} },
+          }),
+        }),
+      /unsafe_provider_event/u,
+    );
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 3, {
+          type: "event",
+          event: hostEvent("item/completed", {
+            raw: {
+              params: {
+                item: {
+                  id: "tool-one",
+                  type: "commandExecution",
+                  command: "cat C:/Users/alice/.env",
+                  aggregatedOutput: "usable-secret",
+                },
+              },
+            },
+          }),
+        }),
+      /unsafe_provider_event/u,
+    );
+    for (const extra of [
+      { command: "private command" },
+      { diff: "private diff" },
+      { request_id: 7 },
+    ]) {
+      assert.throws(
+        () =>
+          store.receive("owner", runner, 3, {
+            type: "event",
+            event: {
+              event_id: "event-unsafe",
+              host_generation: "host-one",
+              hub_session_id: "hub-one",
+              provider_session_id: "native-one",
+              kind: "approval_requested",
+              approval_id: approval.approval_id,
+              approval,
+              binding: null,
+              ...extra,
+            },
+          }),
+        /invalid_event/u,
+      );
+    }
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 3, {
+          type: "event",
+          event: {
+            event_id: "event-mismatch",
+            host_generation: "host-other",
+            hub_session_id: "hub-one",
+            provider_session_id: "native-one",
+            kind: "approval_requested",
+            approval_id: approval.approval_id,
+            approval,
+            binding: null,
+          },
+        }),
+      /invalid_approval_event/u,
+    );
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 3, {
+          type: "event",
+          event: {
+            event_id: "event-envelope",
+            host_generation: "host-one",
+            hub_session_id: "hub-one",
+            provider_session_id: "native-one",
+            kind: "approval_requested",
+            approval_id: approval.approval_id,
+            approval,
+            binding: null,
+          },
+          provider_response: { token: "secret" },
+        }),
+      /invalid_event/u,
+    );
+    assert.equal(store.watermarks(runner).received, 2);
+
+    store.receive("owner", runner, 3, ready([]));
+    assert.deepEqual(store.runners("owner")[0]?.hello?.pending_approvals, []);
+    assert.deepEqual(
+      store
+        .events("owner", 0, runner, "hub-one")
+        .map((item) => item.payload.type),
+      ["ready", "event", "ready"],
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test("ready rejects malformed or duplicate workspace identifiers atomically", () => {
+  const store = new RemoteContentStore(":memory:");
+  try {
+    for (const workspaces of [
+      [7],
+      ["D:/private"],
+      ["ws-example-short"],
+      [binding.workspace_path, binding.workspace_path],
+    ]) {
+      assert.throws(
+        () => store.receive("owner", runner, 1, { ...ready([]), workspaces }),
+        /invalid_ready/u,
+      );
+      assert.equal(store.watermarks(runner).received, 0);
+    }
+    store.receive("owner", runner, 1, ready([]));
+    assert.equal(store.watermarks(runner).received, 1);
+  } finally {
+    store.close();
+  }
+});
+
+test("ready snapshots replace current bindings and stale generations cannot overwrite them", () => {
+  const store = new RemoteContentStore(":memory:");
+  const second = {
+    ...binding,
+    hub_session_id: "hub-two",
+    provider_session_id: "native-two",
+  };
+  try {
+    store.receive(
+      "owner",
+      runner,
+      1,
+      { ...ready([]), sessions: [binding, second] },
+      "host-one",
+    );
+    store.receive(
+      "owner",
+      runner,
+      2,
+      { ...ready([]), sessions: [second] },
+      "host-one",
+    );
+    assert.deepEqual(store.session("owner", runner, "hub-one"), {
+      ...binding,
+      control_connected: false,
+      execution_state: "unknown",
+      current_turn_id: null,
+    });
+
+    store.receive(
+      "owner",
+      runner,
+      3,
+      {
+        type: "event",
+        event: hostEvent("turn/started", {
+          host_generation: "host-old",
+          hub_session_id: "hub-two",
+          provider_session_id: "native-two",
+          binding: {
+            ...second,
+            host_generation: "host-old",
+            execution_state: "running",
+            current_turn_id: "turn-stale",
+          },
+        }),
+      },
+      "host-one",
+    );
+    assert.deepEqual(store.session("owner", runner, "hub-two"), second);
+    assert.equal(store.watermarks(runner).received, 3);
+    store.receive(
+      "owner",
+      runner,
+      4,
+      { ...ready([]), host_generation: "host-old", sessions: [] },
+      "host-one",
+    );
+    assert.equal(store.watermarks(runner).received, 4);
+    assert.equal(store.runners("owner")[0]?.hello?.host_generation, "host-one");
+    assert.deepEqual(store.session("owner", runner, "hub-two"), second);
+    store.receive("owner", runner, 5, ready([]), "host-one");
+    assert.equal(store.watermarks(runner).received, 5);
+  } finally {
+    store.close();
+  }
+});
+
+test("device challenge, owner scope, command receipts, and revocation over real WebSocket", async (t) => {
   const keys = generateKeyPairSync("ed25519");
   const publicKey = keys.publicKey
     .export({ format: "der", type: "spki" })
@@ -146,6 +483,8 @@ test("device challenge, owner scoping, command receipts, and revocation over rea
     }),
   );
   assert.equal((await next("hello_ack")).version, 3);
+  ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
+  assert.equal((await next("ack")).seq, 1);
   const url = `/v3/remote/runners/${runner}/commands`;
   assert.equal(
     (
@@ -173,46 +512,45 @@ test("device challenge, owner scoping, command receipts, and revocation over rea
   ws.send(
     JSON.stringify({
       type: "data",
-      seq: 1,
+      seq: 2,
       payload: { type: "receipt", receipt },
     }),
   );
-  assert.equal((await next("ack")).seq, 1);
-  const largeOutput = "x".repeat(2 * 1024 * 1024);
+  assert.equal((await next("ack")).seq, 2);
   ws.send(
     JSON.stringify({
       type: "data",
-      seq: 2,
+      seq: 3,
       payload: {
         type: "event",
-        event: {
-          hub_session_id: "hub-one",
-          kind: "item/completed",
+        event: hostEvent("item/completed", {
           raw: {
             params: {
               item: {
                 id: "large-tool",
                 type: "commandExecution",
-                aggregatedOutput: largeOutput,
               },
             },
           },
-        },
+        }),
       },
     }),
   );
-  assert.equal((await next("ack")).seq, 2);
-  assert.equal(
-    JSON.stringify(
-      (
-        await app.inject({
-          url: "/v3/remote/events",
-          headers: { "x-user-id": "owner" },
-        })
-      ).json(),
-    ).includes(largeOutput),
-    true,
+  assert.equal((await next("ack")).seq, 3);
+  const events = (
+    await app.inject({
+      url: "/v3/remote/events",
+      headers: { "x-user-id": "owner" },
+    })
+  ).json().events;
+  const completedEvent = events.find(
+    (entry: { payload?: { event?: { kind?: string } } }) =>
+      entry.payload?.event?.kind === "item/completed",
   );
+  assert.deepEqual(completedEvent?.payload.event.raw.params.item, {
+    id: "large-tool",
+    type: "commandExecution",
+  });
   const own = await app.inject({
     url: "/v3/remote/sessions",
     headers: { "x-user-id": "owner" },
@@ -244,16 +582,213 @@ test("native identity cannot silently change on the same Hub binding", () => {
       () =>
         store.receive("owner", runner, 2, {
           type: "event",
-          event: {
-            hub_session_id: "hub-one",
+          event: hostEvent("turn/started", {
+            provider_session_id: "different",
             binding: { ...binding, provider_session_id: "different" },
-          },
+          }),
         }),
       /native_identity_changed/u,
     );
     assert.equal(store.watermarks(runner).received, 1);
   } finally {
     store.close();
+  }
+});
+
+test("a durably queued command stays 202 through immediate backpressure and idempotent retry", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  const devices = new InMemoryGatewayStore();
+  await devices.registerDevice("owner", runner, publicKey);
+  const content = new RemoteContentStore(":memory:");
+  let backpressured = false;
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+    remoteRoutes: { isBackpressured: () => backpressured },
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const { ws, next } = await connectRunner(
+    address,
+    keys.privateKey,
+    "host-one",
+  );
+  try {
+    ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
+    assert.equal((await next("ack")).seq, 1);
+    backpressured = true;
+    const first = await app.inject({
+      method: "POST",
+      url: `/v3/remote/runners/${runner}/commands`,
+      headers: { "x-user-id": "owner" },
+      payload: command,
+    });
+    assert.equal(first.statusCode, 202);
+    assert.equal(first.json().seq, 1);
+    assert.equal(content.watermarks(runner).command_seq, 1);
+
+    const retry = await app.inject({
+      method: "POST",
+      url: `/v3/remote/runners/${runner}/commands`,
+      headers: { "x-user-id": "owner" },
+      payload: command,
+    });
+    assert.equal(retry.statusCode, 202);
+    assert.equal(retry.json().seq, 1);
+    assert.equal(content.watermarks(runner).command_seq, 1);
+
+    backpressured = false;
+    ws.send(JSON.stringify({ type: "heartbeat" }));
+    assert.equal((await next("heartbeat_ack")).type, "heartbeat_ack");
+    assert.deepEqual((await next("command")).command, command);
+  } finally {
+    ws.terminate();
+    await app.close();
+  }
+});
+
+test("a new Host generation replaces the old socket without stale close unregistering it", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  const devices = new InMemoryGatewayStore();
+  await devices.registerDevice("owner", runner, publicKey);
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const oldConnection = await connectRunner(
+    address,
+    keys.privateKey,
+    "host-one",
+  );
+  const oldClosed = new Promise<void>((resolve) =>
+    oldConnection.ws.once("close", () => resolve()),
+  );
+  const currentConnection = await connectRunner(
+    address,
+    keys.privateKey,
+    "host-two",
+  );
+  try {
+    await oldClosed;
+    currentConnection.ws.send(
+      JSON.stringify({
+        type: "data",
+        seq: 1,
+        payload: ready([]),
+      }),
+    );
+    assert.equal((await currentConnection.next("ack")).seq, 1);
+    assert.equal(content.runners("owner")[0]?.hello, null);
+    const currentBinding = { ...binding, host_generation: "host-two" };
+    currentConnection.ws.send(
+      JSON.stringify({
+        type: "data",
+        seq: 2,
+        payload: {
+          ...ready([]),
+          host_generation: "host-two",
+          sessions: [currentBinding],
+        },
+      }),
+    );
+    assert.equal((await currentConnection.next("ack")).seq, 2);
+    currentConnection.ws.send(JSON.stringify({ type: "heartbeat" }));
+    assert.equal(
+      (await currentConnection.next("heartbeat_ack")).type,
+      "heartbeat_ack",
+    );
+    const sessions = await app.inject({
+      url: "/v3/remote/sessions",
+      headers: { "x-user-id": "owner" },
+    });
+    assert.equal(sessions.json().runners[0].online, true);
+    assert.equal(sessions.json().sessions[0].binding.control_connected, true);
+    assert.equal(
+      sessions.json().sessions[0].binding.host_generation,
+      "host-two",
+    );
+  } finally {
+    oldConnection.ws.terminate();
+    currentConnection.ws.terminate();
+    await app.close();
+  }
+});
+
+test("connect commands require the current ready generation and workspace authorization", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  const devices = new InMemoryGatewayStore();
+  await devices.registerDevice("owner", runner, publicKey);
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const { ws, next } = await connectRunner(
+    address,
+    keys.privateKey,
+    "host-one",
+  );
+  try {
+    const create = {
+      ...command,
+      client_cmd_id: "connect-guarded",
+      host_generation: "host-one",
+      command: {
+        action: "connect",
+        mode: "create",
+        workspace_path: binding.workspace_path,
+      },
+    } satisfies RemoteCommand;
+    const beforeReady = await app.inject({
+      method: "POST",
+      url: `/v3/remote/runners/${runner}/commands`,
+      headers: { "x-user-id": "owner" },
+      payload: create,
+    });
+    assert.equal(beforeReady.json().error, "runner_not_ready");
+    ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
+    assert.equal((await next("ack")).seq, 1);
+    const unauthorized = await app.inject({
+      method: "POST",
+      url: `/v3/remote/runners/${runner}/commands`,
+      headers: { "x-user-id": "owner" },
+      payload: {
+        ...create,
+        client_cmd_id: "connect-unauthorized",
+        command: {
+          ...create.command,
+          workspace_path: "ws-other-0123456789abcdef",
+        },
+      },
+    });
+    assert.equal(unauthorized.json().error, "workspace_not_authorized");
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/v3/remote/runners/${runner}/commands`,
+      headers: { "x-user-id": "owner" },
+      payload: create,
+    });
+    assert.equal(accepted.statusCode, 202);
+  } finally {
+    ws.terminate();
+    await app.close();
   }
 });
 

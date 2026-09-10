@@ -20,6 +20,15 @@ export interface RemoteCommand {
     | { action: "interrupt" };
 }
 
+export interface RemotePendingApproval {
+  approval_id: string;
+  hub_session_id: string;
+  host_generation: string;
+  turn_id: string;
+  can_approve: boolean;
+  can_decline: boolean;
+}
+
 export interface RemoteBinding {
   hub_session_id: string;
   provider_session_id: string;
@@ -28,6 +37,13 @@ export interface RemoteBinding {
   control_connected: boolean;
   execution_state: string;
   current_turn_id: string | null;
+}
+
+export function isRemoteWorkspaceId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^ws-[A-Za-z0-9_-]{1,24}-[0-9a-f]{16}$/u.test(value)
+  );
 }
 
 export function parseRemoteCommand(value: unknown): RemoteCommand {
@@ -49,7 +65,8 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         "approval_policy",
       ]);
       member(command.mode, ["create", "resume", "attach"]);
-      text(command.workspace_path, 4096);
+      text(command.workspace_path, 256);
+      if (!isRemoteWorkspaceId(command.workspace_path)) invalid();
       if (command.provider_session_id !== undefined)
         text(command.provider_session_id, 256);
       if (command.model !== undefined) text(command.model, 256);
@@ -83,19 +100,55 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
     default:
       invalid();
   }
-  if (command.action !== "connect" && obj.host_generation === null) invalid();
+  if (obj.host_generation === null) invalid();
   return obj as unknown as RemoteCommand;
+}
+
+export function parseRemotePendingApproval(
+  value: unknown,
+): RemotePendingApproval {
+  const approval = object(value);
+  only(approval, [
+    "approval_id",
+    "hub_session_id",
+    "host_generation",
+    "turn_id",
+    "can_approve",
+    "can_decline",
+  ]);
+  text(approval.approval_id, 128);
+  if (!/^approval-[0-9a-f]{64}$/u.test(approval.approval_id as string))
+    invalid();
+  text(approval.hub_session_id, 128);
+  text(approval.host_generation, 128);
+  text(approval.turn_id, 256);
+  if (
+    typeof approval.can_approve !== "boolean" ||
+    typeof approval.can_decline !== "boolean"
+  )
+    invalid();
+  return approval as unknown as RemotePendingApproval;
 }
 
 export function parseRemoteBinding(value: unknown): RemoteBinding {
   const binding = object(value);
+  only(binding, [
+    "hub_session_id",
+    "provider_session_id",
+    "workspace_path",
+    "host_generation",
+    "control_connected",
+    "execution_state",
+    "current_turn_id",
+  ]);
   for (const key of [
     "hub_session_id",
     "provider_session_id",
     "host_generation",
   ])
     text(binding[key], 256);
-  text(binding.workspace_path, 4096);
+  text(binding.workspace_path, 256);
+  if (!isRemoteWorkspaceId(binding.workspace_path)) invalid();
   member(binding.execution_state, [
     "unknown",
     "idle",

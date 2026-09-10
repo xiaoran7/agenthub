@@ -9,6 +9,9 @@ import {
   parseAuthSyncBatch,
   parseDeviceHeartbeat,
   parseDeviceRegistration,
+  parseRemoteBinding,
+  parseRemoteCommand,
+  parseRemotePendingApproval,
   parseSyncBatch,
   unsignedAuthSyncBatchJson,
   unsignedDeviceHeartbeatJson,
@@ -53,6 +56,71 @@ function signedRegistration(bindingCode: string): Record<string, unknown> {
     ).toString("hex"),
   };
 }
+
+test("remote workspaces accept only daemon-issued identifiers", () => {
+  const workspace = "ws-project-0123456789abcdef";
+  const command = {
+    client_cmd_id: "command-one",
+    hub_session_id: "hub-one",
+    host_generation: "generation-one",
+    command: { action: "connect", mode: "create", workspace_path: workspace },
+  };
+  const binding = {
+    hub_session_id: "hub-one",
+    provider_session_id: "native-one",
+    workspace_path: workspace,
+    host_generation: "generation-one",
+    control_connected: true,
+    execution_state: "idle",
+    current_turn_id: null,
+  };
+  assert.deepEqual(parseRemoteCommand(command), command);
+  assert.deepEqual(parseRemoteBinding(binding), binding);
+  for (const unsafe of [
+    { ...command, host_generation: null },
+    {
+      ...command,
+      command: { ...command.command, workspace_path: "D:/private" },
+    },
+    { ...binding, workspace_path: "/home/alice/private" },
+    { ...binding, provider_response: { token: "secret" } },
+  ]) {
+    assert.throws(
+      () =>
+        "command" in unsafe
+          ? parseRemoteCommand(unsafe)
+          : parseRemoteBinding(unsafe),
+      (error: unknown) =>
+        error instanceof ContractError && error.code === "invalid_field",
+    );
+  }
+});
+
+test("remote pending approvals expose only opaque actionable descriptors", () => {
+  const approval = {
+    approval_id: `approval-${"a".repeat(64)}`,
+    hub_session_id: "hub-one",
+    host_generation: "generation-one",
+    turn_id: "turn-one",
+    can_approve: true,
+    can_decline: false,
+  };
+  assert.deepEqual(parseRemotePendingApproval(approval), approval);
+  for (const unsafe of [
+    { ...approval, request_id: 7 },
+    { ...approval, raw: { command: "secret" } },
+    { ...approval, command: "secret" },
+    { ...approval, diff: "secret" },
+    { ...approval, approval_id: "approval-provider-request" },
+    { ...approval, can_approve: "true" },
+  ]) {
+    assert.throws(
+      () => parseRemotePendingApproval(unsafe),
+      (error: unknown) =>
+        error instanceof ContractError && error.code === "invalid_field",
+    );
+  }
+});
 
 test("version 1 cross-language vector validates", () => {
   const batch = parseSyncBatch(fixture);
