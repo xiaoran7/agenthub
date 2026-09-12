@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.3.5] - 2026-09-12
+
+- Web/Android Remote 创建状态与协议边界对齐：保留客户端 `hub_session_id` 作为 correlation key，但将 HTTP 202/queued 明确显示为等待绑定；只有真实 binding 或明确 receipt 终态才收敛为对应状态。
+- Web/Android 统一将 `ws-*` workspace 作为 opaque ID 展示，不再把协议字段当作本机路径 basename；文档明确记录前台轮询、无原生推送和无离线命令队列的当前边界。
+- **全端版本自增至 v2.3.5**（Android `versionCode = 8`），完成 Windows Desktop NSIS/MSI 与 Android Debug APK 构建归档；交付物保存在 `Deliverables/AgentHub/`，并清理旧同平台产物。
+- 交付物 SHA256：Android `b019964680d13a6ee8b00e63e4e1ff9165a3cc6b148d33756cfdddf5fbeeb26e`；Windows NSIS `fb6cb38387a2bccfabecee1a8e892ca247dcd53c8a5a38a787a4fbfa631f0ef1`；Windows MSI `456ff275b21fae3efc96ce348cfb8d08c355cc45f7afe6675edba042a08f370a`。
+- 生产 `platform.tannerlab.xyz` 已切换至提交 `606189f`：API/Web 容器内版本均为 `2.3.5`；API 本机 `/health` 返回 200，Web 本机与公网首页返回 200。公网 `/health` 仍为 404，因公网入口只暴露 Web，API health 仅绑定服务器本机。
+- 生产保留唯一紧邻回滚目录 `/opt/1panel/apps/agent-pulse.backup-pre-v2.3.5-20260912T085122Z` 及上一版本镜像回滚标签；删除更早的 v2.3.4 目录和临时归档。
+
 ## [2.3.4] - 2026-09-10
 
 - 文档与客户端语义对齐：Web/Android 当前明确支持 v3 Remote 的创建、恢复、续聊、事件/收据、审批和中断；创建请求仍遵循 queued → accepted → session-bound，前台轮询不等同于原生推送或离线命令队列。Web/Android 将 `ws-*` workspace ID 作为 opaque 标识展示，避免误作本机路径。
