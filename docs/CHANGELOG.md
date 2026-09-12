@@ -2,8 +2,7 @@
 
 ## [2.3.4] - 2026-09-10
 
-### Codex 进程外 daemon 与 Desktop 单核心切换，发版打包 v2.3.4
-
+- 文档与客户端语义对齐：Web/Android 当前明确支持 v3 Remote 的创建、恢复、续聊、事件/收据、审批和中断；创建请求仍遵循 queued → accepted → session-bound，前台轮询不等同于原生推送或离线命令队列。Web/Android 将 `ws-*` workspace ID 作为 opaque 标识展示，避免误作本机路径。
 - **全端版本自增至 v2.3.4**（Android `versionCode = 7`），完成 Windows Desktop 安装包（NSIS / MSI）与 Android Debug APK 构建归档，按铁律清理旧版本产物。
 - 交付物保存在 `Deliverables/AgentHub/`：
   - `AgentHub-v2.3.4-android-debug.apk` (SHA256 `7c55c0c7488716e6dd1bcd1c706a196673ffd994850afb288760505de0e8492d`)

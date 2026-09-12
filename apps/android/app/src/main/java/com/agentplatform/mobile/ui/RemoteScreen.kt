@@ -23,6 +23,8 @@ import org.json.JSONObject
 
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 private fun encoded(value: String): String = URLEncoder.encode(value, "UTF-8")
+private fun workspaceLabel(workspaceId: String): String =
+    if (workspaceId.startsWith("ws-")) workspaceId.removePrefix("ws-").replace(Regex("-[0-9a-f]{16}$"), "") else workspaceId.substringAfterLast('/').substringAfterLast('\\')
 private fun remoteMessage(error: Exception): String = when ((error as? GatewayException)?.code) {
     "runner_offline" -> "电脑已离线，恢复连接后可继续。"
     "session_control_lost", "host_generation_mismatch" -> "会话连接已失效，请恢复会话后重试。"
@@ -126,7 +128,7 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                 items(sessions) { item ->
                     val b = item.getJSONObject("binding")
                     OutlinedButton(onClick = { selected = item.getString("runner_id") to b.getString("hub_session_id") }, modifier = Modifier.fillMaxWidth()) {
-                        Column { Text(b.getString("workspace_path").substringAfterLast('/').substringAfterLast('\\')); Text("Codex · ${b.getString("provider_session_id").take(12)} · ${if (item.optBoolean("online")) "在线" else "离线"}") }
+                        Column { Text(workspaceLabel(b.getString("workspace_path"))); Text("Codex · ${b.getString("provider_session_id").take(12)} · ${if (item.optBoolean("online")) "在线" else "离线"}") }
                     }
                 }
             }

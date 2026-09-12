@@ -32,6 +32,10 @@ const basename = (path: string) =>
     .replace(/[\\/]+$/u, "")
     .split(/[\\/]/u)
     .pop() ?? path;
+const workspaceLabel = (workspaceId: string) =>
+  workspaceId.startsWith("ws-")
+    ? workspaceId.slice(3).replace(/-[0-9a-f]{16}$/u, "") || workspaceId
+    : basename(workspaceId);
 
 export function RemoteConsole({
   request = remoteRequest,
@@ -297,7 +301,7 @@ export function RemoteConsole({
         {[...groups].map(([group, sessions]) => (
           <section key={group}>
             <h2 title={sessions[0]!.binding.workspace_path}>
-              {basename(sessions[0]!.binding.workspace_path)}
+              {workspaceLabel(sessions[0]!.binding.workspace_path)}
             </h2>
             {sessions.map((item) => (
               <button
@@ -342,7 +346,7 @@ export function RemoteConsole({
           <div>
             <h1>
               {session
-                ? basename(session.binding.workspace_path)
+                ? workspaceLabel(session.binding.workspace_path)
                 : "随时接着做"}
             </h1>
             <p>

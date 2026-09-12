@@ -1,6 +1,6 @@
 # AgentHub Android
 
-独立 Kotlin + Jetpack Compose 客户端。默认远程入口消费 v3 原生会话，支持创建、续聊、审批、中断与恢复；旧只读监控保留。它不是 WebView，也不包含 Runner 或任何 Claude/OpenAI 登录凭据。
+独立 Kotlin + Jetpack Compose 客户端。默认远程入口消费 v3 原生会话，支持 Runner/Workspace 选择、创建 Codex Session、续聊、事件与命令收据、审批、中断与恢复；旧只读监控保留。Remote 状态在页面前台通过轮询刷新，原生推送、后台任务和发布签名尚未接入。它不是 WebView，也不包含 Runner 或任何 Claude/OpenAI 登录凭据。
 
 ## 构建
 

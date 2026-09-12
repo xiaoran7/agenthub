@@ -23,7 +23,7 @@
 | Codex Host    | 进程外 daemon + 常驻 app-server；创建、恢复、多轮、审批、中断可用       | 强化状态对齐和版本兼容                      |
 | Desktop       | 单一 Dashboard 经当前用户 IPC 使用 daemon；Remote 只是 Gateway 暴露开关 | OS 服务安装、升级、诊断与独立停止控制       |
 | Gateway       | v3 单实例 SQLite 内容库、设备签名、命令账本、回放                       | 统一连接管理；需要横向扩展时迁移 PostgreSQL |
-| Web / Android | 可消费 v3 Remote 会话                                                    | 共用能力模型、通知与离线状态                |
+| Web / Android | v3 Remote：Session 列表、Runner/Workspace 选择、Codex 创建/恢复/续聊、事件与命令收据、审批和中断；前台轮询、无原生推送和无离线命令队列 | 共用 capability report、通知与后台/离线同步体验 |
 | Claude Code   | 历史发现只读；managed 写未开放                                           | 验证官方长时协议与认证后实现 Host           |
 | 其他 Provider | 历史发现只读；不声称可写 attach                                          | 仅在 Provider 提供可靠所有权/订阅机制后开放 |
 
