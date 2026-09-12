@@ -1,7 +1,9 @@
 use crate::{
+    conversation,
     daemon_ipc::{self, DaemonRequestHandler},
     daemon_protocol::{DaemonRequest, DaemonResponse},
     device::DeviceIdentity,
+    domain::AgentType,
     remote_network::{
         LocalHostClient, RemoteControl, create_local_host_channel, run_with_local_control,
     },
@@ -32,12 +34,16 @@ struct LocalHandler {
 
 impl DaemonRequestHandler for LocalHandler {
     fn handle(&self, request: DaemonRequest) -> DaemonResponse {
-        if !self.control.ready.load(Ordering::Acquire) {
-            return DaemonResponse::Error {
-                code: "daemon_starting".into(),
-            };
-        }
         match request {
+            // Conversation previews read local provider transcripts directly and
+            // do not need the host channel, so they stay available while starting.
+            DaemonRequest::GetSessionConversation {
+                agent_type,
+                session_id,
+            } => session_conversation_response(agent_type, &session_id),
+            _ if !self.control.ready.load(Ordering::Acquire) => DaemonResponse::Error {
+                code: "daemon_starting".into(),
+            },
             DaemonRequest::GetSnapshot => self
                 .client
                 .snapshot()
@@ -171,6 +177,21 @@ pub fn run(config: DaemonConfig) -> Result<()> {
 
 fn error_response(code: String) -> DaemonResponse {
     DaemonResponse::Error { code }
+}
+
+fn session_conversation_response(agent_type: AgentType, session_id: &str) -> DaemonResponse {
+    if conversation::validate_session_id(session_id).is_err() {
+        return error_response("invalid_session_id".into());
+    }
+    let Some(home) = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+    else {
+        return DaemonResponse::SessionConversation(Vec::new());
+    };
+    DaemonResponse::SessionConversation(conversation::load_session_conversation(
+        &home, agent_type, session_id,
+    ))
 }
 
 #[cfg(test)]

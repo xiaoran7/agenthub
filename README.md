@@ -1,8 +1,8 @@
 # AgentHub
 
-AgentHub 是一个 **local-first 的多 Agent 工作台，并原生提供 Remote 能力**。
+AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**。
 
-它不实现自己的 Agent 推理循环，而是调用 Codex、Claude Code 等官方 Runtime。用户可以在 AgentHub Desktop 中创建、恢复和继续官方 Session；离开电脑后，再从 Web 或 Android 访问同一个 Session。
+它不实现自己的 Agent 推理循环，而是调用 Codex、Claude Code 等官方 Runtime。会话由本机 `agenthubd` 经官方协议托管；离开电脑后，从 Web 或 Android 看到同一 Session 的实时过程，继续对话、处理审批或急停。读取历史只有一个目的：判断并执行“继续”。
 
 ## 产品结构
 
@@ -12,13 +12,13 @@ Desktop ──本地 IPC──► agenthubd ──官方协议──► Codex / 
                          └──主动出站──► Gateway ◄── Web / Android
 ```
 
-- **Desktop**：主要工作台。本地管理工作区、创建或恢复 Session、查看工具过程、处理审批；断网时仍可工作。
+- **Desktop**：本机宿主客户端。选择授权工作区、创建或恢复官方 Session、查看实时过程、处理审批；同时控制 Gateway 暴露开关。它不是通用本地工作台，也不做会话归档浏览。
 - **agenthubd**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等和远程连接；当前由 Desktop 以隐藏进程模式自动启动，也可通过 `agent-pulse-runner daemon` 启动。尚未提供 OS 服务安装包。
 - **Web**：无需安装的远程完整客户端，用于跨设备查看、续聊、审批和中断。
 - **Android**：移动控制端，强调进度、通知、审批和紧急干预。
 - **Gateway**：只做身份、路由、持久化和回放，不运行 Agent，也不是 Session 真相源。
 
-Desktop、Web、Android 是同一产品的三种客户端，不是三套会话系统。创建 Session 是正式能力；“发现历史”“恢复 Session”“连接已运行 Session”则是三种不同语义，不能互相冒充。
+Desktop、Web、Android 是同一产品的三种客户端，不是三套会话系统。官方协议不支持第三方 attach 正在运行的 CLI 进程，因此“远程继续”要求 Session 由 `agenthubd` 托管：**create / resume** 是托管的正式能力；**discover** 只产生恢复候选的只读元数据，不等于取得控制权，三种语义不能互相冒充。
 
 ## 当前能力
 

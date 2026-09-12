@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-12 — Remote-only 定位收口：会话读取收敛为 daemon 单点
+
+产品定位收口为"官方 Agent 会话的统一远程继续入口（Remote-only）"：不做通用本地工作台，读取会话历史只服务于"判断并执行继续"（对齐 ChatGPT Remote 的形态：读取是视图，不是数据集）。
+
+- **transcript 解析收敛单点**：新增 `crates/runner/src/conversation.rs`，Desktop 原先在 Tauri 层直读并解析四家 Provider transcript 文件的约 500 行逻辑（`load_session_conversation`、`find_agent_transcript`、`normalize_local_conversation_items` 及全部文本解码/规范化辅助函数与测试）整体迁入 runner；Desktop 的 `load_session_conversation` 命令改为经 daemon 本地 IPC 代理，前端不再触碰 Provider 文件，消除 runner collectors 与 Tauri 双处解析的格式耦合。
+- **新增本地 IPC 方法**：`DaemonRequest::GetSessionConversation { agent_type, session_id }` / `DaemonResponse::SessionConversation(Vec<Value>)`；该请求不依赖 Host channel 就绪，daemon 启动期即可用。响应增加有界预算（最多 300 条且约 512 KiB 内容），确保不超过 IPC 单帧 1 MiB 上限（`write_frame` 对超限帧会直接 `ipc_frame_too_large`）。
+- **只读浏览降级为恢复候选**：Desktop 与会话面板对非托管能力 Provider（Claude Code、Antigravity、Grok Build）不再加载或渲染全文 transcript，仅展示发现元数据（标题、模型、时间），并提示"尚未接入远程控制"；transcript 预取（prefetch）同样只针对 Codex。文案同步更新（前端空态/只读提示与 Tauri 写入口守卫错误消息）。
+- **文档对齐**：README、PRD、AGENTS.md、docs/README、ARCHITECTURE、Desktop/Runner README 的定位表述从"local-first 多 Agent 工作台 + 原生 Remote"收口为 Remote-only；PRD 明确"不做通用本地工作台、跨会话搜索、历史分析等与远程继续无关的读取功能"；PRD 删除 Desktop "终端与本地设置"工作台承诺（从未实现嵌入式终端）。
+- 附件读取路径复用 runner 导出的 `decode_local_text`（UTF-8/UTF-16 BOM 嗅探解码），不重复实现。
+
+自动化验证：`cargo test --workspace` 全绿（183 passed，3 个需真实 Codex 的用例按默认配置 ignored，含新增 IPC 帧预算/解析/校验测试）；`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 通过；`npm.cmd run typecheck` 通过。本批不递增版本、不打包、不部署；Web/Android 无行为变化（远程回放走 Gateway 事件投影，不读 Provider 文件）。
+
 ## [2.3.5] - 2026-09-12
 
 - Web/Android Remote 创建状态与协议边界对齐：保留客户端 `hub_session_id` 作为 correlation key，但将 HTTP 202/queued 明确显示为等待绑定；只有真实 binding 或明确 receipt 终态才收敛为对应状态。

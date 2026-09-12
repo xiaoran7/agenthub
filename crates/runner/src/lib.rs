@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod auth;
 pub mod auth_worker;
 pub mod collectors;
+pub mod conversation;
 pub mod daemon;
 pub mod daemon_ipc;
 pub mod daemon_protocol;

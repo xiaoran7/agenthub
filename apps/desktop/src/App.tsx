@@ -685,6 +685,9 @@ function Dashboard({
         ),
         ...sessions,
       ]
+        // Transcript previews only exist for remotely controllable providers;
+        // discovery-only sessions never leave bounded metadata.
+        .filter((session) => isManagedProvider(session.agent_type))
         .slice(0, 10)
         .map((session) => ({
           key: sessionKey(session),
@@ -1926,6 +1929,12 @@ function SessionControlPanel({
   useEffect(() => {
     // Demo mode (no Tauri bridge) keeps the seeded sample transcript.
     if (!("__TAURI_INTERNALS__" in window)) return;
+    // Discovery-only sessions expose bounded metadata, never full transcripts:
+    // reading history is reserved for sessions that can be continued remotely.
+    if (!isManagedProvider(session.agent_type)) {
+      setMessages((current) => (current.length > 0 ? [] : current));
+      return;
+    }
     let disposed = false;
     loadConversation(session.agent_type, session.agent_session_id)
       .then((next) => {
@@ -2263,7 +2272,7 @@ function SessionControlPanel({
                 <p>
                   {isManagedProvider(session.agent_type)
                     ? "消息交给本机 agenthubd 管理的官方 Runtime。"
-                    : "该 Provider 当前只提供本机历史读取。"}
+                    : "该 Provider 尚未接入远程控制；接入后可在此查看历史并继续会话。"}
                 </p>
               </div>
             ) : (
@@ -2320,7 +2329,7 @@ function SessionControlPanel({
             {!isManagedProvider(session.agent_type) ? (
               <div className="provider-readonly-notice" role="status">
                 <Eye size={14} />
-                <span>当前 Provider 仅支持发现和历史读取</span>
+                <span>该 Provider 尚未接入远程控制，暂不能发送消息</span>
               </div>
             ) : (
               <>

@@ -139,6 +139,20 @@ impl DaemonClient {
         }
     }
 
+    pub(crate) fn session_conversation(
+        &self,
+        agent_type: AgentType,
+        session_id: &str,
+    ) -> Result<Vec<Value>, String> {
+        match self.call(DaemonRequest::GetSessionConversation {
+            agent_type,
+            session_id: session_id.to_owned(),
+        })? {
+            DaemonResponse::SessionConversation(messages) => Ok(messages),
+            _ => Err("daemon_invalid_response".into()),
+        }
+    }
+
     pub(crate) fn authorize_workspace(&self, workspace: PathBuf) -> Result<PathBuf, String> {
         match self.call(DaemonRequest::AuthorizeWorkspace { workspace })? {
             DaemonResponse::Workspace(workspace) => Ok(workspace),

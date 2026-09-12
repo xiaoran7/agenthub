@@ -1,6 +1,6 @@
 # 项目约束
 
-AgentHub 是 **local-first 的多 Agent 工作台 + 原生 Remote**。Desktop、Web、Android 必须消费同一套 Session 模型；`agenthubd` 是本机会话控制面，Gateway 只中继和回放。
+AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**。Desktop、Web、Android 必须消费同一套 Session 模型；`agenthubd` 是本机会话控制面，Gateway 只中继和回放。读取会话历史只服务于“判断并执行继续”，不做工作台、归档或浏览功能。
 
 通用约束继承 [AGENT.md](../../../AGENT.md)。修改前按任务阅读 [PRD](docs/PRD.md)、[架构](docs/ARCHITECTURE.md)、[远程协议](docs/SYNC_PROTOCOL.md) 与 [坑点](docs/PITFALLS.md)。
 
@@ -8,6 +8,7 @@ AgentHub 是 **local-first 的多 Agent 工作台 + 原生 Remote**。Desktop、
 
 - 不自建 Agent 决策循环，不模拟 Provider 成功状态，不读取或代管 Provider 凭据；登录与推理由官方 Runtime 负责。
 - 允许从 AgentHub 主动创建官方 Session，也允许恢复官方历史。`discover`、`resume`、`attach` 严格区分；发现 PID 或 transcript 不代表取得控制权。
+- 历史读取保持最小面：transcript 解析只在 `agenthubd`（`crates/runner/src/conversation.rs`）单点实现，客户端经本地 IPC 消费；不得在客户端直接解析 Provider 文件，不得为暂不能远程控制的 Provider 提供全文浏览。
 - Desktop 本地操作不得依赖 Gateway。网络中断不销毁 Host，Web/Android 只在本机 Host 可达且控制权明确时允许写操作。
 - 同一原生 Session 默认单写者。不能为了“无缝接管”抢占官方客户端正在持有的 writer；无法验证 attach 时保持只读或显式 resume。
 - Provider 差异保留在适配层和原始事件中；客户端只展示经过能力探测确认的模型、权限、命令与审批动作。

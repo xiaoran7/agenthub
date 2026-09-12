@@ -60,6 +60,7 @@ cargo run -p agent-pulse-runner -- --identity runner-identity.json remote-run `
 ## 隐私与执行边界
 
 - 只读发现只同步白名单元数据，不保留 Prompt、消息、命令、工具载荷、完整路径、transcript、rollout、Token 或 Cookie。
+- 会话正文预览（`GetSessionConversation` IPC）由 `conversation.rs` 单点实现，响应有界（条数与单帧字节预算），只服务于可远程继续会话的展示；Desktop 不直接解析 Provider 文件。
 - managed Remote 可以在用户授权后同步消息正文、工具完成状态和 opaque 审批描述符；完整 Provider 事件、收据、工具命令/参数/输出只保存在本机。
 - 原始凭据不得进入 Gateway、Outbox 或诊断日志。`auth token --reveal` 只允许显式本地操作。
 - `discover`、`resume`、`attach` 和新建 Session 是不同语义；发现 PID、JSONL 或状态库不代表取得控制权。

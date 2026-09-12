@@ -1,6 +1,6 @@
 # AgentHub 文档索引
 
-更新：2026-09-10。
+更新：2026-09-12。
 
 ## 权威文档
 
@@ -21,11 +21,11 @@
 | 范围          | 当前事实                                                                 | 下一步                                      |
 | ------------- | ------------------------------------------------------------------------ | ------------------------------------------- |
 | Codex Host    | 进程外 daemon + 常驻 app-server；创建、恢复、多轮、审批、中断可用       | 强化状态对齐和版本兼容                      |
-| Desktop       | 单一 Dashboard 经当前用户 IPC 使用 daemon；Remote 只是 Gateway 暴露开关 | OS 服务安装、升级、诊断与独立停止控制       |
+| Desktop       | 本机宿主客户端，经当前用户 IPC 使用 daemon；Remote 只是 Gateway 暴露开关；transcript 读取已收敛到 daemon 单点，仅托管能力 Provider 提供会话预览 | OS 服务安装、升级、诊断与独立停止控制       |
 | Gateway       | v3 单实例 SQLite 内容库、设备签名、命令账本、回放                       | 统一连接管理；需要横向扩展时迁移 PostgreSQL |
 | Web / Android | v3 Remote：Session 列表、Runner/Workspace 选择、Codex 创建/恢复/续聊、事件与命令收据、审批和中断；前台轮询、无原生推送和无离线命令队列 | 共用 capability report、通知与后台/离线同步体验 |
-| Claude Code   | 历史发现只读；managed 写未开放                                           | 验证官方长时协议与认证后实现 Host           |
-| 其他 Provider | 历史发现只读；不声称可写 attach                                          | 仅在 Provider 提供可靠所有权/订阅机制后开放 |
+| Claude Code   | 发现仅作恢复候选（有界元数据）；managed 写未开放，无全文浏览             | 验证官方长时协议与认证后实现 Host           |
+| 其他 Provider | 发现仅作恢复候选；不声称可写 attach                                      | 仅在 Provider 提供可靠所有权/订阅机制后开放 |
 
 `agent-pulse-runner` 是当前可执行文件名，`agenthubd` 是已经落地的进程职责；Desktop 通过隐藏 `--agenthubd` 模式启动同一实现。当前没有独立命名的 daemon 二进制或 OS 服务安装包。旧 v1 元数据同步仍保留，但不得承载新的会话正文或被当成 Remote 完成证据。
 

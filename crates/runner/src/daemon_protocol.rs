@@ -1,4 +1,5 @@
 use crate::{
+    domain::AgentType,
     remote_host::{CommandReceipt, RemoteCommand},
     remote_journal::{EventsAfter, JournalSnapshot},
 };
@@ -22,14 +23,29 @@ pub struct DaemonRequestEnvelope {
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum DaemonRequest {
     GetSnapshot,
-    GetEvents { after_cursor: i64, limit: usize },
-    Subscribe { after_cursor: i64 },
-    Execute { command: RemoteCommand },
-    AuthorizeWorkspace { workspace: PathBuf },
-    SetRemoteEnabled { server_url: Option<String> },
+    GetEvents {
+        after_cursor: i64,
+        limit: usize,
+    },
+    Subscribe {
+        after_cursor: i64,
+    },
+    Execute {
+        command: RemoteCommand,
+    },
+    AuthorizeWorkspace {
+        workspace: PathBuf,
+    },
+    SetRemoteEnabled {
+        server_url: Option<String>,
+    },
     GetStatus,
     GetModels,
     Discover,
+    GetSessionConversation {
+        agent_type: AgentType,
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,6 +76,7 @@ pub enum DaemonResponse {
     },
     Models(Value),
     Discovery(Value),
+    SessionConversation(Vec<Value>),
     Error {
         code: String,
     },

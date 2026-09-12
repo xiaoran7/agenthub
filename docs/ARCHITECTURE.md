@@ -1,10 +1,10 @@
 # AgentHub 系统架构
 
-更新：2026-09-10。
+更新：2026-09-12。
 
 ## 1. 架构结论
 
-AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。Desktop 是本地主客户端，Web 与 Android 是远程客户端；Gateway 只是出站通道上的控制中继和持久化层。
+AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。Desktop 是本地宿主客户端，Web 与 Android 是远程客户端；Gateway 只是出站通道上的控制中继和持久化层。读取会话历史只服务于“判断并执行继续”：transcript 解析是 daemon 的单点职责，对暂不能远程控制的 Provider 只展示有界元数据。
 
 ```text
 ┌──────────────────────────── 开发机 ────────────────────────────┐
@@ -55,7 +55,8 @@ Desktop 是 `agenthubd` 的富客户端和当前启动器：
 - 通过版本化本地 IPC 获取快照、订阅事件和提交命令；
 - 提供本地目录选择、Runtime 登录入口、工作区设置和完整过程 UI；
 - Gateway 不可用时保持创建、恢复、续聊、审批和中断；
-- 不直接 `Command::spawn` 每个回合，也不维护另一份 Session 状态机。
+- 不直接 `Command::spawn` 每个回合，也不维护另一份 Session 状态机；
+- 不直接解析 Provider transcript 文件：会话预览经 daemon 的 `GetSessionConversation` IPC 获取，transcript 解析只在 `crates/runner/src/conversation.rs` 单点实现；发现态 Provider 只有有界元数据，无全文浏览。
 
 本地 IPC 已使用 v2 的版本化、长度前缀 JSON frame：Windows 为当前用户 ACL 且拒绝远程客户端的 named pipe，Unix 为当前 UID 命名且权限 `0600` 的 domain socket，单帧上限 1 MiB。请求使用 `request_id` 关联；订阅以包含 live pending approvals 的 `snapshot + cursor` 起步，断流后按最后 cursor 重放，窗口过期显式返回 `snapshot_required`。daemon 启动中是可等待状态，Desktop 的自动启动、Session 和 Remote 设置由同一锁协调，最多拉起一个本进程可见的实例；Remote enable、disable、logout 与 profile 提交也由该锁串行化，运行态切换失败不预写持久状态。
 

@@ -1,6 +1,6 @@
 # AgentHub Desktop
 
-Windows Tauri 客户端。Desktop 是 AgentHub 的本地主工作台，不是官方 Agent 的 UI 自动化层：它通过当前用户 IPC 使用进程外 `agenthubd`，由 daemon 调用官方 Runtime 协议并管理 Session。
+Windows Tauri 客户端。Desktop 是 AgentHub 的本机宿主客户端（Remote-only 定位），不是官方 Agent 的 UI 自动化层，也不是通用本地工作台：它通过当前用户 IPC 使用进程外 `agenthubd`，由 daemon 调用官方 Runtime 协议并管理 Session。
 
 ## 当前实现
 
@@ -8,7 +8,8 @@ Desktop 只有一个 Dashboard 和一套 managed Session 控制路径：
 
 - Codex 创建、恢复、续聊、审批、中断和归档统一进入 daemon 的 `DurableHost`；
 - Remote 只是同一 daemon 的 Gateway 暴露开关，不创建第二个 Host 或第二套 Session UI；
-- Claude Code、Antigravity 与 Grok Build 保留本机发现和历史读取，managed 写入口明确禁用；
+- 会话历史预览经 daemon 的 `GetSessionConversation` IPC 获取，transcript 解析只在 runner 单点实现；Desktop 不直接读取或解析 Provider 文件；
+- Claude Code、Antigravity 与 Grok Build 仅展示发现元数据（恢复候选），无全文浏览，managed 写入口明确禁用；
 - Desktop 先连接现有 daemon，仅在 IPC endpoint 不可用时以自身隐藏 `--agenthubd` 模式启动；
 - Desktop 退出只断开本地订阅，退出登录和关闭 Remote 只停止 Gateway 暴露，本地 Runtime 继续运行；Remote 开启、关闭、退出登录与 profile 提交由同一状态锁串行化。
 
@@ -45,7 +46,7 @@ $env:AGENT_PULSE_SERVER_URL = 'http://127.0.0.1:3001'
 
 - AgentHub 登录 Cookie 保存在 OS Keyring，前端 JavaScript 不接触。
 - 设备私钥留在本机身份文件，不上传。
-- 历史发现只读取白名单元数据；正文仅在用户打开会话时从受限 Provider 来源读取。
+- 历史发现只读取白名单元数据；会话正文预览只在会话可能被远程继续时（当前为 Codex）经 daemon 读取，且响应有界。
 - managed Remote 只把消息正文、工具完成状态和 opaque 审批描述符写入用户授权的 Gateway 内容库；完整 Provider 事件、收据与工具详情留在本机，旧发现 Outbox 不上传正文。
 - Provider 登录由官方 Runtime 管理。旧凭据读取命令是 Runner 的显式 opt-in 兼容能力，不接入新 Host。
 - 授权工作区由本机选择，远端不能提交任意目录或 shell。
