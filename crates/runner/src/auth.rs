@@ -880,11 +880,18 @@ fn run_json_command(
     args: &[&str],
     timeout: Duration,
 ) -> Result<CommandProbe, AuthError> {
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| AuthError::ProcessStart(error.to_string()))?;
     let deadline = std::time::Instant::now() + timeout;

@@ -617,7 +617,7 @@ fn start_daemon_for_data(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0000_0008 | 0x0000_0200);
+        command.creation_flags(0x0800_0000 | 0x0000_0008 | 0x0000_0200);
     }
     command.spawn().map_err(|_| DesktopError::AgentFailed)?;
     Ok(())

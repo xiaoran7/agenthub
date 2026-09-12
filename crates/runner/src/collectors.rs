@@ -3112,7 +3112,7 @@ impl Drop for ChildJob {
 }
 
 /// Place the child in its own process group on Unix so the whole tree can be
-/// signalled at teardown; the Windows equivalent is the Job Object.
+/// signalled at teardown; on Windows, detach console windows so processes run silently.
 fn configure_process_group(command: &mut Command) {
     #[cfg(unix)]
     {
@@ -3120,7 +3120,14 @@ fn configure_process_group(command: &mut Command) {
 
         command.process_group(0);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // CREATE_NO_WINDOW: prevent popping up console windows on desktop.
+        command.creation_flags(0x0800_0000);
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = command;
     }
