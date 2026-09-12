@@ -442,33 +442,13 @@ export function DesktopSettingsModal({
                   </div>
 
                   <div className="settings-card-group">
-                    <h4 className="card-group-title">本地存储与索引状态</h4>
+                    <h4 className="card-group-title">发现状态</h4>
                     <div className="settings-card">
                       <div className="settings-stat-grid">
                         <div className="stat-box">
                           <span className="stat-label">已发现总会话</span>
                           <strong className="stat-value">
                             {snapshot.local.session_count}
-                          </strong>
-                        </div>
-                        <div className="stat-box">
-                          <span className="stat-label">Codex 存储</span>
-                          <strong className="stat-value">
-                            {(
-                              snapshot.local.memory.codex_bytes /
-                              1024 /
-                              1024
-                            ).toFixed(1)}{" "}
-                            MB
-                          </strong>
-                        </div>
-                        <div className="stat-box">
-                          <span className="stat-label">Claude 存储</span>
-                          <strong className="stat-value">
-                            {(
-                              snapshot.local.memory.claude_bytes / 1024
-                            ).toFixed(1)}{" "}
-                            KB
                           </strong>
                         </div>
                       </div>

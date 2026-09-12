@@ -8,6 +8,7 @@
 - **新增本地 IPC 方法**：`DaemonRequest::GetSessionConversation { agent_type, session_id }` / `DaemonResponse::SessionConversation(Vec<Value>)`；该请求不依赖 Host channel 就绪，daemon 启动期即可用。响应增加有界预算（最多 300 条且约 512 KiB 内容），确保不超过 IPC 单帧 1 MiB 上限（`write_frame` 对超限帧会直接 `ipc_frame_too_large`）。
 - **只读浏览降级为恢复候选**：Desktop 与会话面板对非托管能力 Provider（Claude Code、Antigravity、Grok Build）不再加载或渲染全文 transcript，仅展示发现元数据（标题、模型、时间），并提示"尚未接入远程控制"；transcript 预取（prefetch）同样只针对 Codex。文案同步更新（前端空态/只读提示与 Tauri 写入口守卫错误消息）。
 - **文档对齐**：README、PRD、AGENTS.md、docs/README、ARCHITECTURE、Desktop/Runner README 的定位表述从"local-first 多 Agent 工作台 + 原生 Remote"收口为 Remote-only；PRD 明确"不做通用本地工作台、跨会话搜索、历史分析等与远程继续无关的读取功能"；PRD 删除 Desktop "终端与本地设置"工作台承诺（从未实现嵌入式终端）。
+- **清理工作台时代残留**：删除 Tauri 层 `local_memory_summary` 及快照中的 `local.memory` 字段（统计 Claude 记忆文件/Codex 记忆库/Grok 会话的字节数，属于清点式读取，与远程继续无关；Web/Android/Gateway 无消费），设置弹窗"本地存储与索引状态"卡同步收敛为"发现状态"（仅保留已发现会话数）。保留 `find_codex_session_cwd`（恢复流程的工作区预取，元数据级、服务继续语义）。
 - 附件读取路径复用 runner 导出的 `decode_local_text`（UTF-8/UTF-16 BOM 嗅探解码），不重复实现。
 
 自动化验证：`cargo test --workspace` 全绿（183 passed，3 个需真实 Codex 的用例按默认配置 ignored，含新增 IPC 帧预算/解析/校验测试）；`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 通过；`npm.cmd run typecheck` 通过。本批不递增版本、不打包、不部署；Web/Android 无行为变化（远程回放走 Gateway 事件投影，不读 Provider 文件）。

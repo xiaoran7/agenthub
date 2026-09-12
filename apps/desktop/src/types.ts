@@ -130,14 +130,6 @@ export interface LocalInventory {
   pending_events: number;
   session_count: number;
   sources: LocalSource[];
-  memory: {
-    claude_files: number;
-    claude_bytes: number;
-    codex_indexes: number;
-    codex_bytes: number;
-    grok_sessions: number;
-    grok_bytes: number;
-  };
   refreshed_at: string;
 }
 

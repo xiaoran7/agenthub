@@ -2803,14 +2803,6 @@ const demoSnapshot: Snapshot = {
         status: "healthy",
       },
     ],
-    memory: {
-      claude_files: 4,
-      claude_bytes: 4_909,
-      codex_indexes: 1,
-      codex_bytes: 1_306_624,
-      grok_sessions: 4,
-      grok_bytes: 18_432,
-    },
     refreshed_at: new Date().toISOString(),
   },
   preferences: {

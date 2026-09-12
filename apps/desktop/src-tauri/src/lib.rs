@@ -1825,7 +1825,6 @@ fn dashboard_snapshot(
                 local_source_summary(AgentType::Antigravity, &local_sessions, antigravity_health),
                 local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health)
             ],
-            "memory": local_memory_summary(),
             "refreshed_at": chrono::Utc::now()
         },
         "sync_running": running,
@@ -1934,7 +1933,6 @@ fn offline_dashboard_snapshot(
                 local_source_summary(AgentType::Antigravity, &local_sessions, antigravity_health),
                 local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health)
             ],
-            "memory": local_memory_summary(),
             "refreshed_at": chrono::Utc::now()
         },
         "sync_running": false,
@@ -2683,96 +2681,6 @@ fn local_source_summary(
         "status": health.as_ref().map(|value| value.status.as_str()).unwrap_or("scanning"),
         "last_success_at": health.as_ref().and_then(|value| value.last_success_at),
         "error_code": health.and_then(|value| value.last_error_code)
-    })
-}
-
-fn local_memory_summary() -> Value {
-    let Some(home) = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-    else {
-        return json!({
-            "claude_files": 0,
-            "claude_bytes": 0,
-            "codex_indexes": 0,
-            "codex_bytes": 0,
-            "grok_sessions": 0,
-            "grok_bytes": 0
-        });
-    };
-    let claude_projects = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".claude"))
-        .join("projects");
-    let mut claude_files = 0_u64;
-    let mut claude_bytes = 0_u64;
-    if let Ok(projects) = fs::read_dir(claude_projects) {
-        for project in projects.flatten() {
-            let memory = project.path().join("memory");
-            if let Ok(files) = fs::read_dir(memory) {
-                for file in files.flatten() {
-                    if file.file_type().is_ok_and(|kind| kind.is_file()) {
-                        claude_files = claude_files.saturating_add(1);
-                        claude_bytes = claude_bytes.saturating_add(
-                            file.metadata().map(|value| value.len()).unwrap_or_default(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".codex"));
-    let mut codex_indexes = 0_u64;
-    let mut codex_bytes = 0_u64;
-    if let Ok(files) = fs::read_dir(codex_home) {
-        for file in files.flatten() {
-            let name = file.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("memories_")
-                && name.ends_with(".sqlite")
-                && file.file_type().is_ok_and(|kind| kind.is_file())
-            {
-                codex_indexes = codex_indexes.saturating_add(1);
-                codex_bytes = codex_bytes
-                    .saturating_add(file.metadata().map(|value| value.len()).unwrap_or_default());
-            }
-        }
-    }
-    let grok_home = std::env::var_os("GROK_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".grok"));
-    let mut grok_sessions = 0_u64;
-    let mut grok_bytes = 0_u64;
-    let grok_sessions_dir = grok_home.join("sessions");
-    if let Ok(groups) = fs::read_dir(grok_sessions_dir) {
-        for group in groups.flatten() {
-            if !group.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let Ok(children) = fs::read_dir(group.path()) else {
-                continue;
-            };
-            for child in children.flatten() {
-                if !child.file_type().is_ok_and(|kind| kind.is_dir()) {
-                    continue;
-                }
-                let summary = child.path().join("summary.json");
-                if let Ok(metadata) = fs::metadata(summary) {
-                    grok_sessions = grok_sessions.saturating_add(1);
-                    grok_bytes = grok_bytes.saturating_add(metadata.len());
-                }
-            }
-        }
-    }
-    json!({
-        "claude_files": claude_files,
-        "claude_bytes": claude_bytes,
-        "codex_indexes": codex_indexes,
-        "codex_bytes": codex_bytes,
-        "grok_sessions": grok_sessions,
-        "grok_bytes": grok_bytes
     })
 }
 
