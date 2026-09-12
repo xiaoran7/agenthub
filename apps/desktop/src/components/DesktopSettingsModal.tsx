@@ -67,25 +67,10 @@ export function DesktopSettingsModal({
   const [defaultCwd, setDefaultCwd] = useState(
     preferences.default_cwd || "d:/ClaudeSpace",
   );
-  const [editorTarget, setEditorTarget] = useState(
-    preferences.editor_target || "vscode",
-  );
-  const [terminalShell, setTerminalShell] = useState(
-    preferences.terminal_shell || "powershell",
-  );
   const [appLanguage, setAppLanguage] = useState(
     preferences.app_language || "auto",
   );
   const [theme, setTheme] = useState(preferences.theme || "dark");
-  const [permDefault, setPermDefault] = useState(
-    preferences.permission_default ?? true,
-  );
-  const [permAutoReview, setPermAutoReview] = useState(
-    preferences.permission_auto_review ?? true,
-  );
-  const [permFullAccess, setPermFullAccess] = useState(
-    preferences.permission_full_access ?? true,
-  );
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -110,13 +95,8 @@ export function DesktopSettingsModal({
       const fullPreferences: DesktopPreferences = {
         ...next,
         default_cwd: defaultCwd,
-        editor_target: editorTarget,
-        terminal_shell: terminalShell,
         app_language: appLanguage,
         theme,
-        permission_default: permDefault,
-        permission_auto_review: permAutoReview,
-        permission_full_access: permFullAccess,
       };
       window.localStorage.setItem(
         "agenthub:extended-preferences",
@@ -241,116 +221,8 @@ export function DesktopSettingsModal({
               {section === "general" && (
                 <div className="settings-section-block">
                   <div className="settings-card-group">
-                    <h4 className="card-group-title">权限</h4>
-                    <div className="settings-card">
-                      <div className="settings-row-item">
-                        <div className="row-text">
-                          <strong>默认权限</strong>
-                          <p>
-                            默认情况下，Agent
-                            可以读取和编辑其工作空间中的文件。需要时，它可以请求额外访问权限。
-                          </p>
-                        </div>
-                        <label className="ios-toggle">
-                          <input
-                            type="checkbox"
-                            checked={permDefault}
-                            onChange={(e) => setPermDefault(e.target.checked)}
-                          />
-                          <span className="toggle-slider" />
-                        </label>
-                      </div>
-
-                      <div className="settings-divider" />
-
-                      <div className="settings-row-item">
-                        <div className="row-text">
-                          <strong>自动审核</strong>
-                          <p>
-                            Agent 可以读取和编辑其工作空间中的文件。Agent
-                            会自动审查额外访问权限请求。
-                          </p>
-                        </div>
-                        <label className="ios-toggle">
-                          <input
-                            type="checkbox"
-                            checked={permAutoReview}
-                            onChange={(e) =>
-                              setPermAutoReview(e.target.checked)
-                            }
-                          />
-                          <span className="toggle-slider" />
-                        </label>
-                      </div>
-
-                      <div className="settings-divider" />
-
-                      <div className="settings-row-item">
-                        <div className="row-text">
-                          <strong>完全访问权限</strong>
-                          <p>
-                            当 Agent
-                            以完整访问权限运行时，它无需你的批准即可编辑你电脑上的任何文件，并运行可访问网络的命令。
-                          </p>
-                        </div>
-                        <label className="ios-toggle">
-                          <input
-                            type="checkbox"
-                            checked={permFullAccess}
-                            onChange={(e) =>
-                              setPermFullAccess(e.target.checked)
-                            }
-                          />
-                          <span className="toggle-slider" />
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="settings-card-group">
                     <h4 className="card-group-title">常规偏好</h4>
                     <div className="settings-card">
-                      <div className="settings-row-item">
-                        <div className="row-text">
-                          <strong>默认文件打开目标</strong>
-                          <p>默认打开文件和文件夹的编辑器应用。</p>
-                        </div>
-                        <SelectDropdown
-                          value={editorTarget}
-                          options={[
-                            { value: "vscode", label: "VS Code" },
-                            { value: "cursor", label: "Cursor" },
-                            { value: "windsurf", label: "Windsurf" },
-                            { value: "idea", label: "IntelliJ IDEA" },
-                            { value: "system", label: "系统默认" },
-                          ]}
-                          onChange={(val) => setEditorTarget(val)}
-                          size="sm"
-                        />
-                      </div>
-
-                      <div className="settings-divider" />
-
-                      <div className="settings-row-item">
-                        <div className="row-text">
-                          <strong>集成终端 Shell</strong>
-                          <p>选择在集成终端中执行命令的默认 Shell 环境。</p>
-                        </div>
-                        <SelectDropdown
-                          value={terminalShell}
-                          options={[
-                            { value: "powershell", label: "PowerShell" },
-                            { value: "cmd", label: "Command Prompt (CMD)" },
-                            { value: "gitbash", label: "Git Bash" },
-                            { value: "wsl", label: "WSL (Linux)" },
-                          ]}
-                          onChange={(val) => setTerminalShell(val)}
-                          size="sm"
-                        />
-                      </div>
-
-                      <div className="settings-divider" />
-
                       <div className="settings-row-item">
                         <div className="row-text">
                           <strong>语言</strong>
