@@ -110,6 +110,8 @@ import {
 } from "./components/SessionContextMenu";
 import { ConversationItem } from "./components/ConversationRenderer";
 import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
+import { DesktopHeader } from "./components/layout/DesktopHeader";
+import { SessionEmptyState } from "./components/session/SessionEmptyState";
 
 type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
@@ -454,7 +456,7 @@ function Dashboard({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [agentFilter, setAgentFilter] = useState<AgentFilter>("claude_code");
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>("codex");
   const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
   const [alertDismissed, setAlertDismissed] = useState(false);
@@ -489,6 +491,35 @@ function Dashboard({
     }
   });
 
+  // Native Host phase state for real-time indicator
+  const [hostPhase, setHostPhase] = useState<
+    "loading" | "starting" | "stopped" | "local" | "connecting" | "connected"
+  >("loading");
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setHostPhase("local");
+      return;
+    }
+    let active = true;
+    const check = async () => {
+      try {
+        const status = await invoke<{
+          phase: "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
+        }>("remote_host_status");
+        if (active) setHostPhase(status.phase);
+      } catch {
+        if (active) setHostPhase("stopped");
+      }
+    };
+    void check();
+    const timer = setInterval(() => void check(), 2500);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
   // Context Menu & Toast state (Point 11)
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(
     null,
@@ -502,15 +533,6 @@ function Dashboard({
       2500,
     );
   };
-
-  // Quick Task Launcher state
-  const [quickPrompt, setQuickPrompt] = useState("");
-  const [quickProvider, setQuickProvider] =
-    useState<Session["agent_type"]>("codex");
-  const [quickCwd, setQuickCwd] = useState(
-    snapshot.preferences.default_cwd || "",
-  );
-  const [quickLaunching, setQuickLaunching] = useState(false);
 
   const refreshInFlight = useRef(false);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
@@ -755,13 +777,7 @@ function Dashboard({
   }, [sessions]);
 
   useEffect(() => {
-    if (agentFilter !== "all" && isManagedProvider(agentFilter)) {
-      setQuickProvider(agentFilter);
-      setLaunchModalProvider(agentFilter);
-    } else {
-      setQuickProvider("codex");
-      setLaunchModalProvider("codex");
-    }
+    setLaunchModalProvider("codex");
   }, [agentFilter]);
 
   const signOut = async () => {
@@ -778,60 +794,6 @@ function Dashboard({
       setError(errorMessage(nextError));
     } finally {
       setActionBusy(false);
-    }
-  };
-
-  const chooseQuickCwd = async () => {
-    if (!("__TAURI_INTERNALS__" in window)) {
-      showToast("演示模式不支持文件夹选择");
-      return;
-    }
-    try {
-      const picked = await invoke<string | null>("pick_folder", {
-        startDir: quickCwd || null,
-      });
-      if (picked) setQuickCwd(picked);
-    } catch (err) {
-      setError(errorMessage(err));
-    }
-  };
-
-  const handleQuickLaunch = async (event?: FormEvent) => {
-    if (event) event.preventDefault();
-    if (quickLaunching || quickPrompt.trim() === "") return;
-    if (!quickCwd.trim()) {
-      setError("请先选择工作目录，Agent 将在该目录中启动");
-      return;
-    }
-    setQuickLaunching(true);
-    setError(undefined);
-    try {
-      const onEvent = new Channel<SessionTurnEvent>();
-      const result = await invoke<{
-        agent_session_id: string;
-        agent_type: string;
-      }>("launch_new_session", {
-        input: {
-          agent_type: quickProvider,
-          cwd: quickCwd.trim(),
-          prompt: quickPrompt.trim(),
-          model: currentDockModel || undefined,
-        },
-        onEvent,
-      });
-      setQuickPrompt("");
-      await refresh();
-      setSelectedSessionKey(
-        snapshot.device.device_id +
-          ":" +
-          result.agent_type +
-          ":" +
-          result.agent_session_id,
-      );
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setQuickLaunching(false);
     }
   };
 
@@ -877,116 +839,104 @@ function Dashboard({
   );
   const showSystemNotice =
     !snapshot.realtime_connected || sourceIssue !== undefined;
-  const selectedProvider =
-    PROVIDER_LIST.find((provider) => provider.type === "codex") ??
-    PROVIDER_LIST[0];
-
-  // Model catalog comes from the installed agent CLIs (local transcripts),
-  // with the builtin catalog only as a fresh-install fallback.
-  const dockModels = useAgentModels(selectedProvider.type);
-  const storedDockModel = selectedModelsByAgent[selectedProvider.type];
-  const currentDockModel =
-    storedDockModel &&
-    dockModels.some((model) => model.value === storedDockModel)
-      ? storedDockModel
-      : (dockModels[0]?.value ?? "");
 
   return (
-    <main className="claude-app-shell">
-      {/* Left Claude Desktop Sidebar */}
-      <aside className="claude-sidebar" aria-label="侧边栏导航">
-        <div className="sidebar-top-bar">
-          <button
-            type="button"
-            className="sidebar-brand"
-            onClick={() => setSelectedSessionKey(undefined)}
-            aria-label="返回 AgentHub 首页"
-          >
-            <span>
-              <strong>AgentHub</strong>
-            </span>
-          </button>
-          <div className="top-nav-right">
+    <div className="desktop-app-container">
+      <DesktopHeader
+        hostPhase={hostPhase}
+        onOpenHostControl={onOpenLocalHost ?? (() => {})}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onNewSession={() => {
+          setSelectedSessionKey(undefined);
+          setLaunchModalProvider("codex");
+          setLaunchModalOpen(true);
+        }}
+        snapshot={snapshot}
+        onAccountToggle={() => setAccountOpen((v) => !v)}
+        refreshing={refreshing}
+        onRefresh={() => void refresh()}
+      />
+      <main className="claude-app-shell">
+        {/* Left Claude Desktop Sidebar */}
+        <aside className="claude-sidebar" aria-label="侧边栏导航">
+          <div className="sidebar-top-bar">
             <button
               type="button"
-              className="top-icon-btn new-task-btn"
-              onClick={() => {
-                setSelectedSessionKey(undefined);
-                setLaunchModalProvider(
-                  agentFilter !== "all" && isManagedProvider(agentFilter)
-                    ? agentFilter
-                    : "codex",
-                );
-                setLaunchModalOpen(true);
-              }}
-              title="新建任务"
-              aria-label="新建任务"
+              className="sidebar-brand"
+              onClick={() => setSelectedSessionKey(undefined)}
+              aria-label="返回 AgentHub 首页"
             >
-              <Plus size={16} />
+              <span>
+                <strong>AgentHub</strong>
+              </span>
             </button>
-            <button
-              type="button"
-              className={"top-icon-btn " + (searchOpen ? "active" : "")}
-              onClick={() => setSearchOpen((v) => !v)}
-              title="搜索会话"
-              aria-label="搜索会话"
-            >
-              <Search size={15} />
-            </button>
-            <button
-              type="button"
-              className="top-icon-btn"
-              disabled={refreshing}
-              onClick={() => void refresh()}
-              title="刷新本机索引"
-              aria-label="刷新本机索引"
-            >
-              <RefreshCw className={refreshing ? "spin" : ""} size={15} />
-            </button>
-            <button
-              type="button"
-              className="top-icon-btn history-button"
-              disabled={previousSession === undefined}
-              onClick={() =>
-                previousSession &&
-                setSelectedSessionKey(sessionKey(previousSession))
-              }
-              title="上一个会话"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <button
-              type="button"
-              className="top-icon-btn history-button"
-              disabled={nextSession === undefined}
-              onClick={() =>
-                nextSession && setSelectedSessionKey(sessionKey(nextSession))
-              }
-              title="下一个会话"
-            >
-              <ChevronRight size={16} />
-            </button>
+            <div className="top-nav-right">
+              <button
+                type="button"
+                className="top-icon-btn new-task-btn"
+                onClick={() => {
+                  setSelectedSessionKey(undefined);
+                  setLaunchModalProvider("codex");
+                  setLaunchModalOpen(true);
+                }}
+                title="新建任务"
+                aria-label="新建任务"
+              >
+                <Plus size={16} />
+              </button>
+              <button
+                type="button"
+                className={"top-icon-btn " + (searchOpen ? "active" : "")}
+                onClick={() => setSearchOpen((v) => !v)}
+                title="搜索会话"
+                aria-label="搜索会话"
+              >
+                <Search size={15} />
+              </button>
+              <button
+                type="button"
+                className="top-icon-btn"
+                disabled={refreshing}
+                onClick={() => void refresh()}
+                title="刷新本机索引"
+                aria-label="刷新本机索引"
+              >
+                <RefreshCw className={refreshing ? "spin" : ""} size={15} />
+              </button>
+              <button
+                type="button"
+                className="top-icon-btn history-button"
+                disabled={previousSession === undefined}
+                onClick={() =>
+                  previousSession &&
+                  setSelectedSessionKey(sessionKey(previousSession))
+                }
+                title="上一个会话"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <button
+                type="button"
+                className="top-icon-btn history-button"
+                disabled={nextSession === undefined}
+                onClick={() =>
+                  nextSession && setSelectedSessionKey(sessionKey(nextSession))
+                }
+                title="下一个会话"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
           </div>
-        </div>
 
-        {/* Modern Sleek Agent Selector Dropdown (Point 7) */}
-        <div className="sidebar-agent-picker-v2">
-          <span className="picker-label">当前 Agent</span>
-          <SelectDropdown
-            value={agentFilter}
-            options={PROVIDER_LIST.map((provider) => ({
-              value: provider.type,
-              label: provider.label,
-              desc: provider.desc,
-            }))}
-            onChange={(val) => {
-              setAgentFilter(val as AgentFilter);
-              setSelectedSessionKey(undefined);
-            }}
-            size="sm"
-            ariaLabel="选择当前 Agent"
-          />
-        </div>
+          {/* Managed Agent Indicator */}
+          <div className="sidebar-agent-picker-v2">
+            <span className="picker-label">受控 Agent</span>
+            <div className="single-agent-badge">
+              <strong>{PROVIDER_LIST[0]?.label ?? "OpenAI Codex"}</strong>
+              <span className="agent-badge-tag">Managed</span>
+            </div>
+          </div>
 
         {/* Search Box if opened */}
         {searchOpen && (
@@ -1240,147 +1190,18 @@ function Dashboard({
             onClose={() => setSelectedSessionKey(undefined)}
           />
         ) : (
-          <div className="claude-home-stage">
-            {/* Floating system notice: overlays without reflowing the stage. */}
-            {!alertDismissed && showSystemNotice && (
-              <div className="floating-notice" role="status">
-                <div className="alert-content">
-                  <div className="alert-title-row">
-                    <AlertTriangle size={15} className="alert-icon" />
-                    <strong>
-                      {!snapshot.realtime_connected
-                        ? "实时通道暂不可用，已切换为安全轮询"
-                        : agentShortLabel(sourceIssue!.agent_type) +
-                          " 尚未完成本机接入"}
-                    </strong>
-                    <button
-                      type="button"
-                      className="alert-link"
-                      onClick={() => setShowBannerDetails((v) => !v)}
-                    >
-                      {showBannerDetails ? "收起" : "详情"}
-                    </button>
-                  </div>
-                  {showBannerDetails && (
-                    <p className="alert-details-text">
-                      已发现 {snapshot.local.session_count}{" "}
-                      个本机会话，现有数据不会丢失。可在本机设置中检查 CLI
-                      路径与索引周期。
-                    </p>
-                  )}
-                  <div className="alert-actions-row">
-                    <button
-                      type="button"
-                      className="alert-btn"
-                      onClick={() => setSettingsOpen(true)}
-                    >
-                      打开设置
-                    </button>
-                    <button
-                      type="button"
-                      className="alert-btn"
-                      disabled={refreshing}
-                      onClick={() => void refresh()}
-                    >
-                      {refreshing ? "正在检查…" : "重新检查"}
-                    </button>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="alert-close-btn"
-                  onClick={() => setAlertDismissed(true)}
-                  aria-label="关闭通知"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            )}
-
-            <header className="workspace-masthead">
-              <div className="workspace-title-block">
-                <span className="prompt-spark">
-                  <Sparkles size={18} />
-                </span>
-                <h1>接下来做什么，{displayName}？</h1>
-              </div>
-            </header>
-
-            <form onSubmit={handleQuickLaunch} className="claude-prompt-dock">
-              <div className="modern-composer prompt-dock-form">
-                <textarea
-                  rows={1}
-                  placeholder="描述一项任务或提出问题…"
-                  value={quickPrompt}
-                  onChange={(e) => setQuickPrompt(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void handleQuickLaunch();
-                    }
-                  }}
-                  disabled={quickLaunching}
-                />
-                <button
-                  type="submit"
-                  className="composer-send inline-send"
-                  disabled={
-                    quickLaunching || !quickPrompt.trim() || !quickCwd.trim()
-                  }
-                  title={quickCwd ? "发送任务指令" : "先选择工作目录"}
-                >
-                  {quickLaunching ? (
-                    <RefreshCw className="spin" size={15} />
-                  ) : (
-                    <ArrowUp size={15} />
-                  )}
-                </button>
-              </div>
-
-              <div className="prompt-dock-bottom">
-                <button
-                  type="button"
-                  className="dock-path-field"
-                  onClick={() => void chooseQuickCwd()}
-                  title="选择工作目录"
-                >
-                  <Folder size={13} />
-                  <span className="dock-path-text">
-                    {quickCwd || "选择工作目录"}
-                  </span>
-                </button>
-                <div className="dock-bottom-right">
-                  <SelectDropdown
-                    value={currentDockModel}
-                    options={dockModels.map((model) => ({
-                      value: model.value,
-                      label: model.label,
-                      desc: model.desc,
-                    }))}
-                    onChange={(val) => {
-                      setSelectedModelsByAgent((prev) => {
-                        const next = {
-                          ...prev,
-                          [selectedProvider.type]: val,
-                        };
-                        window.localStorage.setItem(
-                          "agenthub:selected-models",
-                          JSON.stringify(next),
-                        );
-                        return next;
-                      });
-                    }}
-                    size="sm"
-                    align="right"
-                    ariaLabel="选择模型"
-                  />
-                  <span className="dock-safety-note">
-                    <ShieldCheck size={12} /> 遵循本机权限
-                  </span>
-                </div>
-              </div>
-            </form>
-          </div>
+          <SessionEmptyState
+            onNewSession={() => {
+              setSelectedSessionKey(undefined);
+              setLaunchModalProvider("codex");
+              setLaunchModalOpen(true);
+            }}
+            onOpenHostControl={onOpenLocalHost ?? (() => {})}
+            hostPhase={hostPhase}
+            workspaceCount={snapshot.local.sources.length}
+            sessionCount={snapshot.sessions.length}
+            displayName={displayName}
+          />
         )}
 
         {/* Global Account, Settings, Launch, ContextMenu Modals */}
@@ -1457,6 +1278,7 @@ function Dashboard({
         )}
       </section>
     </main>
+  </div>
   );
 }
 

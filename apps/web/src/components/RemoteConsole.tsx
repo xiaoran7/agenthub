@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RemoteCommand } from "@agent-pulse/contracts/remote";
+import type { AccountView } from "../lib/account";
 import {
   conversationItems,
   pendingApprovals,
@@ -42,11 +43,15 @@ export function RemoteConsole({
   onAuthenticationRequired,
   onManage,
   onLocalHost,
+  account,
+  onLogout,
 }: {
   request?: RemoteRequest;
   onAuthenticationRequired?: () => void;
   onManage?: () => void;
   onLocalHost?: () => void;
+  account?: AccountView | null;
+  onLogout?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState(empty);
   const [selected, setSelected] = useState("");
@@ -328,17 +333,27 @@ export function RemoteConsole({
           <p className="remote-muted">连接电脑后，在工作区中开始会话。</p>
         )}
         <div className="remote-sidebar-footer">
-          {snapshot.runners.filter((item) => item.online).length} 台电脑在线
-          <button
-            onClick={
-              onManage ??
-              (() => {
-                window.location.href = "/";
-              })
-            }
-          >
-            返回控制台
-          </button>
+          <div className="remote-runner-status">
+            <span className={`remote-status-dot ${snapshot.runners.some((item) => item.online) ? "online" : "offline"}`} />
+            <span>{snapshot.runners.filter((item) => item.online).length} 台电脑在线</span>
+          </div>
+          {onManage && (
+            <button className="remote-action-btn" onClick={onManage} type="button">
+              ＋ 绑定新电脑
+            </button>
+          )}
+          {account?.user && (
+            <div className="remote-account-bar">
+              <span className="remote-account-name" title={account.user.email}>
+                {account.user.display_name || account.user.email}
+              </span>
+              {onLogout && (
+                <button className="remote-logout-btn" onClick={onLogout} type="button">
+                  退出
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </aside>
       <main className="remote-main">

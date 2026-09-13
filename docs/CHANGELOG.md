@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-09-13 — 双端 UI 深度重构：收敛 Remote-only 控制台与清除废弃工作台
+
+针对多次演进导致 UI 割裂、工作台与远程接管冲突的问题，全面重构 Web 端与 Desktop 桌面端：
+
+- **Web 端收拢为统一 Remote Console**：
+  - 根路径 `/` 彻底废除旧版监控大屏（`LegacyPanelPage`，包含图表、团队与计费设置），默认直接渲染现代深色 Remote Console。
+  - 接入顶部/底部 Runner 实时在线状态指示灯、账户条与一键注销；保留电脑绑定弹窗入口（`DeviceConnectDialog`），移除未打通的 SaaS 团队与计费死链接。
+  - 统一深色高质感样式（`remote.css` 扩展加载中全屏、状态指示灯、卡片阴影与响应式排版）。
+- **Desktop 桌面端纠偏与模块化**：
+  - 彻底移除仿 Claude Desktop 本地工作台首页（`claude-prompt-dock`、大输入框、选择工作目录发起任务），纠正“与原生 CLI 竞争”的心智误导。
+  - 新增全新 `SessionEmptyState` 引导组件，突出“工作区 -> 会话接管 -> 状态判定 -> 继续/审批/中断”，明确守护进程 `agenthubd` 的持续接管定位。
+  - 新增常驻顶部 `DesktopHeader` 状态栏：常驻暴露本机 `agenthubd` 状态指示灯（loading/starting/stopped/local/connecting/connected）、已授权工作区数、设置与新建会话按钮。
+  - 侧边栏 Provider 真实化：彻底移除点击不可用的假 Provider（Antigravity、Grok Build），严格收敛展示真实受控 Provider（Codex Managed），消除伪兼容与死路。
+- **验证与门禁**：
+  - Web 端 Next.js 生产构建通过（`npm --workspace=@agent-pulse/web run build`，7/7 页面全绿）。
+  - Desktop 桌面端 Vite 生产构建通过（`npm --workspace=@agent-pulse/desktop run build`，1917 模块无 TS 错误）。
+  - Desktop 单元测试全绿（`vitest run`，4 passed，16 passed）。
+
 ## 2026-09-12 — Remote-only 定位收口：会话读取收敛为 daemon 单点
 
 产品定位收口为"官方 Agent 会话的统一远程继续入口（Remote-only）"：不做通用本地工作台，读取会话历史只服务于"判断并执行继续"（对齐 ChatGPT Remote 的形态：读取是视图，不是数据集）。

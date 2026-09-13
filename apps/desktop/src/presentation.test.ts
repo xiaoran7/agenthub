@@ -77,10 +77,10 @@ describe("desktop presentation", () => {
 
     const groups = groupSessionsByProvider([s1, s2, s3]);
     expect(groups).toHaveLength(2);
-    expect(groups[0].provider).toBe("claude_code");
-    expect(groups[0].sessions).toHaveLength(2);
-    expect(groups[1].provider).toBe("codex");
-    expect(groups[1].sessions).toHaveLength(1);
+    expect(groups[0].provider).toBe("codex");
+    expect(groups[0].sessions).toHaveLength(1);
+    expect(groups[1].provider).toBe("claude_code");
+    expect(groups[1].sessions).toHaveLength(2);
   });
 
   it("groups the selected agent sessions by workspace preserving recency order", () => {

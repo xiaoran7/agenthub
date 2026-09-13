@@ -148,32 +148,11 @@ export const PROVIDER_LIST: ReadonlyArray<{
   desc: string;
 }> = [
   {
-    type: "claude_code",
-    label: "Claude Code",
-    shortLabel: "Claude",
-    defaultModel: "claude-3-7-sonnet",
-    desc: "Anthropic 原生 CLI",
-  },
-  {
     type: "codex",
     label: "OpenAI Codex",
     shortLabel: "Codex",
     defaultModel: "gpt-5.5-codex",
-    desc: "OpenAI 代码助手",
-  },
-  {
-    type: "antigravity",
-    label: "Google Antigravity",
-    shortLabel: "Antigravity",
-    defaultModel: "gemini-3.7-flash",
-    desc: "DeepMind Coding Agent",
-  },
-  {
-    type: "grok_build",
-    label: "Grok Build",
-    shortLabel: "Grok",
-    defaultModel: "grok-4.6",
-    desc: "xAI 全栈开发",
+    desc: "OpenAI 官方代码助手 (Managed)",
   },
 ];
 
