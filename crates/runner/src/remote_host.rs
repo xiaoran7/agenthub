@@ -286,6 +286,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         for mut binding in bindings {
             binding.control_connected = false;
             binding.execution_state = ExecutionState::Unknown;
+            binding.host_generation = self.generation.clone();
             self.native_to_hub.insert(
                 binding.provider_session_id.clone(),
                 binding.hub_session_id.clone(),
