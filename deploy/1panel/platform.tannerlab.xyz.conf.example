@@ -29,6 +29,14 @@ server {
     proxy_set_header X-Forwarded-Proto https;
     proxy_http_version 1.1;
 
+    location = /health {
+        proxy_pass http://127.0.0.1:3101/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     location ^~ /v3/remote/ws {
         proxy_pass http://127.0.0.1:3101;
         proxy_set_header Host $host;
@@ -48,6 +56,16 @@ server {
 
     location ^~ /v1/stream {
         proxy_pass http://127.0.0.1:3100;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_set_header Connection "";
+        add_header X-Accel-Buffering no;
+    }
+
+    location ^~ /v3/remote/stream {
+        proxy_pass http://127.0.0.1:3101;
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 1h;
