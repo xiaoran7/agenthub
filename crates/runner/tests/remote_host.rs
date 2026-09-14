@@ -71,8 +71,9 @@ fn discovery_only_exports_authorized_metadata_and_never_grants_control() {
         {"id":"other","cwd":other.path(),"name":"Outside","status":{"type":"idle"}}
     ],"nextCursor":null}));
     let result = host.discover().unwrap();
-    assert_eq!(result["candidates"].as_array().unwrap().len(), 1);
+    assert_eq!(result["candidates"].as_array().unwrap().len(), 2);
     assert_eq!(result["candidates"][0]["control_connected"], false);
+    assert_eq!(result["candidates"][1]["control_connected"], false);
     assert!(!result.to_string().contains("private"));
     assert!(host.sessions().is_empty());
 }

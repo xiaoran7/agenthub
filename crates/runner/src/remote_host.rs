@@ -197,6 +197,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
     transport: T,
     generation: String,
     workspaces: Vec<PathBuf>,
+    discovered_workspaces: HashMap<String, PathBuf>,
     sessions: HashMap<String, SessionBinding>,
     native_to_hub: HashMap<String, String>,
     approvals: HashMap<String, PendingApproval>,
@@ -225,6 +226,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             transport,
             generation: uuid::Uuid::new_v4().to_string(),
             workspaces,
+            discovered_workspaces: HashMap::new(),
             sessions: HashMap::new(),
             native_to_hub: HashMap::new(),
             approvals: HashMap::new(),
@@ -301,16 +303,35 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     pub fn discover(&mut self) -> Result<Value, NativeError> {
         let response = self
             .transport
-            .request("thread/list", json!({"limit":100}))?;
-        let candidates = response["data"].as_array().into_iter().flatten().filter_map(|thread| {
-            let id = thread["id"].as_str()?;
-            let cwd = dunce::canonicalize(PathBuf::from(thread["cwd"].as_str()?)).ok()?;
-            if !self.workspaces.contains(&cwd) { return None; }
-            Some(json!({"provider_session_id":id,"workspace_path":cwd,
-                "title":thread["name"].as_str().map(|name|name.chars().take(160).collect::<String>()),
-                "execution_state":execution_state(&thread["status"]),"control_connected":false}))
-        }).collect::<Vec<_>>();
-        Ok(json!({"candidates":candidates,"has_more":!response["nextCursor"].is_null()}))
+            .request("thread/list", json!({"limit": 100}))?;
+        let candidates = response["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|thread| {
+                let id = thread["id"].as_str()?;
+                let cwd = dunce::canonicalize(PathBuf::from(thread["cwd"].as_str()?)).ok()?;
+                let ws_id = crate::privacy::workspace_id_for_path(&cwd.to_string_lossy());
+                self.discovered_workspaces.insert(ws_id, cwd.clone());
+                let title = thread["name"]
+                    .as_str()
+                    .filter(|name| !name.trim().is_empty())
+                    .or_else(|| {
+                        thread["preview"]
+                            .as_str()
+                            .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
+                    })
+                    .map(|name| name.chars().take(160).collect::<String>());
+                Some(json!({
+                    "provider_session_id": id,
+                    "workspace_path": cwd,
+                    "title": title,
+                    "execution_state": execution_state(&thread["status"]),
+                    "control_connected": false
+                }))
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"candidates": candidates, "has_more": !response["nextCursor"].is_null()}))
     }
 
     pub fn handle_command(&mut self, command: RemoteCommand) -> CommandReceipt {
@@ -405,6 +426,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 .iter()
                 .find(|w| crate::privacy::workspace_id_for_path(&w.to_string_lossy()) == ws_str)
                 .cloned()
+                .or_else(|| {
+                    if *mode == ConnectMode::Resume {
+                        self.discovered_workspaces.get(ws_str.as_ref()).cloned()
+                    } else {
+                        None
+                    }
+                })
                 .ok_or_else(|| NativeError::rejected("workspace_not_authorized"))?;
             if model.as_ref().is_some_and(|model| model.trim().is_empty()) {
                 return Err(NativeError::rejected("invalid_model"));
@@ -479,7 +507,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             let binding = SessionBinding {
                 hub_session_id: hub_id.clone(),
                 provider_session_id: id.clone(),
-                workspace_path: cwd,
+                workspace_path: cwd.clone(),
                 host_generation: self.generation.clone(),
                 control_connected: true,
                 execution_state: execution_state(&response["thread"]["status"]),
@@ -487,6 +515,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             };
             self.native_to_hub.insert(id, hub_id.clone());
             self.sessions.insert(hub_id.clone(), binding.clone());
+            if !self.workspaces.contains(&cwd) {
+                self.workspaces.push(cwd);
+            }
             return Ok(json!({"binding": binding, "provider_response": response}));
         }
 

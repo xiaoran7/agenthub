@@ -330,55 +330,68 @@ export function RemoteConsole({
     }
   };
 
-  type WorkspaceSessionGroup = {
-    workspacePath: string;
-    runnerId: string;
-    sessions: RemoteSession[];
-    candidates: Array<{
-      provider_session_id: string;
-      workspace_path: string;
-      title: string | null;
-    }>;
-  };
-
-  const groups = useMemo(() => {
-    const map = new Map<string, WorkspaceSessionGroup>();
-
-    // 1. 已建立受控绑定的远程会话
-    for (const item of snapshot.sessions) {
-      const key = `${item.runner_id}\n${item.binding.workspace_path}`;
-      const existing = map.get(key) ?? {
-        workspacePath: item.binding.workspace_path,
-        runnerId: item.runner_id,
-        sessions: [],
-        candidates: [],
+  type FlatSessionItem =
+    | {
+        kind: "active";
+        key: string;
+        session: RemoteSession;
+        title: string;
+        subtitle: string;
+        badge: string;
+      }
+    | {
+        kind: "candidate";
+        key: string;
+        runnerId: string;
+        candidate: {
+          provider_session_id: string;
+          workspace_path: string;
+          title: string | null;
+        };
+        title: string;
+        subtitle: string;
+        badge: string;
       };
-      existing.sessions.push(item);
-      map.set(key, existing);
+
+  const allItems = useMemo(() => {
+    const list: FlatSessionItem[] = [];
+    const activeProviderIds = new Set<string>();
+
+    // 1. 已建立受控绑定的会话（排在最前）
+    for (const item of snapshot.sessions) {
+      activeProviderIds.add(item.binding.provider_session_id);
+      const wsLabel = workspaceLabel(item.binding.workspace_path);
+      list.push({
+        kind: "active",
+        key: key(item),
+        session: item,
+        title: `Codex · ${item.binding.provider_session_id.slice(0, 8)}`,
+        subtitle: `${wsLabel} · ${item.online ? states[item.binding.execution_state] : "电脑离线"}`,
+        badge: "已连接",
+      });
     }
 
-    // 2. 本机发现的历史原生 Codex 会话 candidates（排除已激活绑定的）
-    const activeProviderIds = new Set(
-      snapshot.sessions.map((s) => s.binding.provider_session_id),
-    );
-
+    // 2. 本机扫描发现的所有历史会话（去重排除已绑定的）
     for (const r of snapshot.runners) {
       if (!r.online || !r.hello?.discovery?.candidates) continue;
       for (const cand of r.hello.discovery.candidates) {
         if (activeProviderIds.has(cand.provider_session_id)) continue;
-        const key = `${r.runner_id}\n${cand.workspace_path}`;
-        const existing = map.get(key) ?? {
-          workspacePath: cand.workspace_path,
+        const wsLabel = workspaceLabel(cand.workspace_path);
+        const title =
+          cand.title || `Codex · ${cand.provider_session_id.slice(0, 8)}`;
+        list.push({
+          kind: "candidate",
+          key: `${r.runner_id}/${cand.provider_session_id}`,
           runnerId: r.runner_id,
-          sessions: [],
-          candidates: [],
-        };
-        existing.candidates.push(cand);
-        map.set(key, existing);
+          candidate: cand,
+          title,
+          subtitle: `${wsLabel} · 本机历史`,
+          badge: "点击接管",
+        });
       }
     }
 
-    return map;
+    return list;
   }, [snapshot.sessions, snapshot.runners]);
 
   return (
@@ -402,65 +415,57 @@ export function RemoteConsole({
         >
           ＋ 新建会话
         </button>
-        <div className="remote-nav-label">工作区</div>
+        <div className="remote-nav-label">会话记录</div>
         {onLocalHost && <button onClick={onLocalHost}>连接本机</button>}
-        {[...groups.entries()].map(([groupKey, group]) => (
-          <section key={groupKey}>
-            <h2 title={cleanPath(group.workspacePath)}>
-              {workspaceLabel(group.workspacePath)}
-            </h2>
-            {/* 已受控绑定的会话 */}
-            {group.sessions.map((item) => (
-              <button
-                className={`remote-session ${key(item) === selected ? "selected" : ""}`}
-                key={key(item)}
-                onClick={() => {
-                  setSelected(key(item));
-                  setError("");
-                }}
-              >
-                <span className="remote-session-title">
-                  Codex · {item.binding.provider_session_id.slice(0, 8)}
-                </span>
-                <div className="remote-session-meta">
-                  <small>
-                    {item.online
-                      ? states[item.binding.execution_state]
-                      : "电脑离线"}
-                  </small>
-                  <span className="remote-session-badge">已连接</span>
-                </div>
-              </button>
-            ))}
-            {/* 本机发现但尚未接管的历史会话（点击一键秒级恢复） */}
-            {group.candidates.map((cand) => (
+        <div className="remote-session-list">
+          {allItems.map((item) => {
+            if (item.kind === "active") {
+              const activeSession = item.session;
+              const isSelected = key(activeSession) === selected;
+              return (
+                <button
+                  className={`remote-session ${isSelected ? "selected" : ""}`}
+                  key={item.key}
+                  onClick={() => {
+                    setSelected(key(activeSession));
+                    setError("");
+                  }}
+                >
+                  <span className="remote-session-title">{item.title}</span>
+                  <div className="remote-session-meta">
+                    <small>{item.subtitle}</small>
+                    <span className="remote-session-badge">{item.badge}</span>
+                  </div>
+                </button>
+              );
+            }
+
+            return (
               <button
                 className="remote-session candidate"
-                key={cand.provider_session_id}
-                title={`点击接管：${cand.title ?? cand.provider_session_id}`}
+                key={item.key}
+                title={`点击接管：${item.candidate.title ?? item.candidate.provider_session_id}`}
                 disabled={busy}
                 onClick={() =>
                   void resumeCandidate(
-                    group.runnerId,
-                    cand.workspace_path,
-                    cand.provider_session_id,
+                    item.runnerId,
+                    item.candidate.workspace_path,
+                    item.candidate.provider_session_id,
                   )
                 }
               >
-                <span className="remote-session-title">
-                  {cand.title || `Codex · ${cand.provider_session_id.slice(0, 8)}`}
-                </span>
+                <span className="remote-session-title">{item.title}</span>
                 <div className="remote-session-meta">
-                  <small>本机历史</small>
+                  <small>{item.subtitle}</small>
                   <span className="remote-session-badge candidate">
-                    点击接管
+                    {item.badge}
                   </span>
                 </div>
               </button>
-            ))}
-          </section>
-        ))}
-        {!groups.size && (
+            );
+          })}
+        </div>
+        {!allItems.length && (
           <p className="remote-muted">连接电脑后，在工作区中开始会话。</p>
         )}
         <div className="remote-sidebar-footer">

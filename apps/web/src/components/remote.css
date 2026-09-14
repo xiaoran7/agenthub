@@ -71,6 +71,14 @@
   color: #95969a;
   margin-top: 12px;
 }
+.remote-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
 .remote-sidebar section h2 {
   font-size: 13px;
   font-weight: 500;
