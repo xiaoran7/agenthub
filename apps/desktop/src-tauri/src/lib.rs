@@ -3153,6 +3153,11 @@ pub fn run() {
             pick_files,
             logout
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                window.app_handle().exit(0);
+            }
+        })
         .build(tauri::generate_context!())
         .expect("failed to build AgentHub desktop app")
         .run(|app_handle, event| {
