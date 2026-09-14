@@ -22,9 +22,17 @@ serde_json.workspace = true
 sha2.workspace = true
 tauri = { version = "2.11.1", features = [] }
 thiserror.workspace = true
-ureq.workspace = true
+ureq = { workspace = true, features = ["socks-proxy"] }
 url.workspace = true
 uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true

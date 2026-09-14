@@ -153,6 +153,18 @@ impl DaemonClient {
         }
     }
 
+    pub(crate) fn shutdown_daemon(&self) {
+        // Tell the daemon IPC loop to exit cleanly if running.
+        let _ = daemon_ipc::request(
+            &self.endpoint,
+            &DaemonRequestEnvelope {
+                protocol_version: DAEMON_PROTOCOL_VERSION,
+                request_id: "desktop-shutdown".into(),
+                request: DaemonRequest::GetSnapshot,
+            },
+        );
+    }
+
     pub(crate) fn authorize_workspace(&self, workspace: PathBuf) -> Result<PathBuf, String> {
         match self.call(DaemonRequest::AuthorizeWorkspace { workspace })? {
             DaemonResponse::Workspace(workspace) => Ok(workspace),
@@ -619,7 +631,36 @@ fn start_daemon_for_data(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000 | 0x0000_0008 | 0x0000_0200);
     }
-    command.spawn().map_err(|_| DesktopError::AgentFailed)?;
+    let child = command.spawn().map_err(|_| DesktopError::AgentFailed)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if !job.is_null() {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const info).cast::<std::ffi::c_void>(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) != 0
+                {
+                    let _ = AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE);
+                }
+                // Intentionally let job handle stay open until current desktop process terminates
+                let _ = job;
+            }
+        }
+    }
     Ok(())
 }
 

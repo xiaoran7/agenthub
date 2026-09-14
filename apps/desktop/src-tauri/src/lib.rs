@@ -358,17 +358,15 @@ async fn restore_session(
     let config = match read_config(&state.data_dir) {
         Ok(config) => config,
         Err(_) => {
-            return Ok(Some(
-                offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string())?,
-            ));
+            // No configuration or server saved: user must login first.
+            return Ok(None);
         }
     };
     let cookie = match load_cookie(&config.server_url) {
         Ok(cookie) => cookie,
         Err(_) => {
-            return Ok(Some(
-                offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string())?,
-            ));
+            // Not authenticated: strictly disallow bypass, require user login.
+            return Ok(None);
         }
     };
 
@@ -393,13 +391,13 @@ async fn refresh_dashboard(state: State<'_, DesktopState>) -> Result<Value, Stri
     let config = match read_config(&state.data_dir) {
         Ok(c) => c,
         Err(_) => {
-            return offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string());
+            return Err(DesktopError::NotAuthenticated.to_string());
         }
     };
     let cookie = match load_cookie(&config.server_url) {
         Ok(c) => c,
         Err(_) => {
-            return offline_dashboard_snapshot(&identity, &state).map_err(|e| e.to_string());
+            return Err(DesktopError::NotAuthenticated.to_string());
         }
     };
     match dashboard_snapshot(&config.server_url, &cookie, &identity, &state) {
@@ -1585,30 +1583,29 @@ async fn start_tg_browser_oauth(
     }
 
     // Exchange code via Gateway API
-    let agent = http_agent();
     let callback_url = format!("{server_url}/v1/auth/oauth/tg/callback");
-    let mut response = agent
-        .post(&callback_url)
-        .send_json(json!({
-            "code": code,
-            "code_verifier": code_verifier,
-            "redirect_uri": redirect_uri
-        }))
-        .map_err(map_http_error)
-        .map_err(|e| e.to_string())?;
-
-    let cookie = response
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .find_map(extract_session_cookie)
-        .ok_or_else(|| DesktopError::InvalidResponse.to_string())?;
-
-    let account = response
-        .body_mut()
-        .read_json::<Value>()
-        .map_err(|_| DesktopError::InvalidResponse.to_string())?;
+    let (account, cookie) = execute_http_with_fallback(|agent| {
+        let mut response = agent
+            .post(&callback_url)
+            .send_json(json!({
+                "code": code,
+                "code_verifier": code_verifier,
+                "redirect_uri": redirect_uri
+            }))?;
+        let cookie = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find_map(extract_session_cookie)
+            .ok_or_else(|| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "missing cookie")))?;
+        let account = response
+            .body_mut()
+            .read_json::<Value>()
+            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        Ok((account, cookie))
+    })
+    .map_err(|e| e.to_string())?;
 
     let snapshot =
         finish_login(&server_url, &cookie, account, &state).map_err(|e| e.to_string())?;
@@ -1643,25 +1640,24 @@ async fn poll_tg_device_auth(
     let server_url =
         normalize_server_url(configured_server.as_deref().unwrap_or(DEFAULT_SERVER_URL))
             .map_err(|e| e.to_string())?;
-    let agent = http_agent();
     let url = format!("{server_url}/v1/auth/oauth/tg/device/poll");
-    let mut response = agent
-        .post(&url)
-        .send_json(json!({ "device_code": device_code }))
-        .map_err(map_http_error)
-        .map_err(|e| e.to_string())?;
-
-    let cookie = response
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .find_map(extract_session_cookie);
-
-    let body = response
-        .body_mut()
-        .read_json::<Value>()
-        .map_err(|_| DesktopError::InvalidResponse.to_string())?;
+    let (body, cookie) = execute_http_with_fallback(|agent| {
+        let mut response = agent
+            .post(&url)
+            .send_json(json!({ "device_code": device_code }))?;
+        let cookie = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find_map(extract_session_cookie);
+        let body = response
+            .body_mut()
+            .read_json::<Value>()
+            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        Ok((body, cookie))
+    })
+    .map_err(|e| e.to_string())?;
 
     if body["status"].as_str() == Some("pending") {
         return Ok(body);
@@ -1684,21 +1680,22 @@ fn authenticate_request(
     path: &str,
     body: &Value,
 ) -> Result<(Value, String), DesktopError> {
-    let agent = http_agent();
     let url = format!("{server_url}{path}");
-    let mut response = agent.post(&url).send_json(body).map_err(map_http_error)?;
-    let cookie = response
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .find_map(extract_session_cookie)
-        .ok_or(DesktopError::InvalidResponse)?;
-    let account = response
-        .body_mut()
-        .read_json::<Value>()
-        .map_err(|_| DesktopError::InvalidResponse)?;
-    Ok((account, cookie))
+    execute_http_with_fallback(|agent| {
+        let mut response = agent.post(&url).send_json(body)?;
+        let cookie = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find_map(extract_session_cookie)
+            .ok_or_else(|| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "missing cookie")))?;
+        let account = response
+            .body_mut()
+            .read_json::<Value>()
+            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        Ok((account, cookie))
+    })
 }
 
 fn ensure_device_bound(
@@ -2882,6 +2879,46 @@ fn read_sse_line(reader: &mut impl BufRead) -> SseLine {
         .unwrap_or(SseLine::InvalidUtf8)
 }
 
+fn execute_http_with_fallback<T, F>(operation: F) -> Result<T, DesktopError>
+where
+    F: Fn(&ureq::Agent) -> Result<T, ureq::Error>,
+{
+    let agents = [
+        http_agent(None),
+        http_agent(Some("http://127.0.0.1:7897")),
+        http_agent(Some("socks5://127.0.0.1:7897")),
+    ];
+
+    let mut last_error = None;
+    for agent in &agents {
+        for attempt in 0..2 {
+            match operation(agent) {
+                Ok(val) => return Ok(val),
+                Err(err) => {
+                    let is_unreachable = matches!(
+                        &err,
+                        ureq::Error::Timeout(_)
+                            | ureq::Error::HostNotFound
+                            | ureq::Error::ConnectionFailed
+                            | ureq::Error::Io(_)
+                            | ureq::Error::Tls(_)
+                            | ureq::Error::Rustls(_)
+                    );
+                    let mapped = map_http_error(err);
+                    if !is_unreachable {
+                        return Err(mapped);
+                    }
+                    last_error = Some(mapped);
+                    if attempt == 0 {
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or(DesktopError::Unreachable))
+}
+
 fn request_json(
     method: &str,
     server_url: &str,
@@ -2890,48 +2927,54 @@ fn request_json(
     body: Option<&Value>,
 ) -> Result<Value, DesktopError> {
     let url = format!("{server_url}{path}");
-    let agent = http_agent();
-    let mut response = match method {
-        "GET" => {
-            let mut request = agent.get(&url);
-            if let Some(cookie) = cookie {
-                request = request.header("cookie", cookie);
+    execute_http_with_fallback(|agent| {
+        let mut response = match method {
+            "GET" => {
+                let mut request = agent.get(&url);
+                if let Some(cookie) = cookie {
+                    request = request.header("cookie", cookie);
+                }
+                request.call()
             }
-            request.call()
-        }
-        "POST" => {
-            let mut request = agent.post(&url);
-            if let Some(cookie) = cookie {
-                request = request.header("cookie", cookie);
+            "POST" => {
+                let mut request = agent.post(&url);
+                if let Some(cookie) = cookie {
+                    request = request.header("cookie", cookie);
+                }
+                request.send_json(body.unwrap_or(&Value::Null))
             }
-            request.send_json(body.unwrap_or(&Value::Null))
+            _ => return Err(ureq::Error::StatusCode(400)),
+        }?;
+        if response.status().as_u16() == 204 {
+            return Ok(json!({}));
         }
-        _ => return Err(DesktopError::InvalidResponse),
-    }
-    .map_err(map_http_error)?;
-    if response.status().as_u16() == 204 {
-        return Ok(json!({}));
-    }
-    response
-        .body_mut()
-        .read_json::<Value>()
-        .map_err(|_| DesktopError::InvalidResponse)
+        response
+            .body_mut()
+            .read_json::<Value>()
+            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+    })
 }
 
-fn http_agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(REQUEST_TIMEOUT))
+fn http_agent(proxy_url: Option<&str>) -> ureq::Agent {
+    let mut builder = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(6)))
         .user_agent(concat!(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/",
             env!("CARGO_PKG_VERSION")
         ))
-        .max_redirects(0)
-        .build()
-        .new_agent()
+        .max_redirects(0);
+
+    if let Some(proxy_str) = proxy_url {
+        if let Ok(proxy) = ureq::Proxy::new(proxy_str) {
+            builder = builder.proxy(Some(proxy));
+        }
+    }
+
+    builder.build().new_agent()
 }
 
 fn dashboard_stream_agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
+    let mut builder = ureq::Agent::config_builder()
         .timeout_connect(Some(REQUEST_TIMEOUT))
         .timeout_recv_response(Some(Duration::from_secs(30)))
         .timeout_recv_body(Some(STREAM_READ_TIMEOUT))
@@ -2939,9 +2982,13 @@ fn dashboard_stream_agent() -> ureq::Agent {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/",
             env!("CARGO_PKG_VERSION")
         ))
-        .max_redirects(0)
-        .build()
-        .new_agent()
+        .max_redirects(0);
+
+    if let Ok(proxy) = ureq::Proxy::new("http://127.0.0.1:7897") {
+        builder = builder.proxy(Some(proxy));
+    }
+
+    builder.build().new_agent()
 }
 
 fn map_http_error(error: ureq::Error) -> DesktopError {
@@ -3126,6 +3173,38 @@ pub fn run() {
                 session_contexts: Mutex::new(SessionContextCache::default()),
             });
             daemon_client::ensure_daemon_started(app.state::<DesktopState>().data_dir.clone());
+
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(hwnd) = window.hwnd() {
+                        unsafe {
+                            let use_dark_mode: i32 = 1;
+                            windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                                hwnd.0 as _,
+                                20, // DWMWA_USE_IMMERSIVE_DARK_MODE
+                                (&raw const use_dark_mode).cast::<std::ffi::c_void>(),
+                                std::mem::size_of::<i32>() as u32,
+                            );
+                            let caption_color: u32 = 0x0013110E; // #0E1113 in 0x00BBGGRR
+                            windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                                hwnd.0 as _,
+                                35, // DWMWA_CAPTION_COLOR
+                                (&raw const caption_color).cast::<std::ffi::c_void>(),
+                                std::mem::size_of::<u32>() as u32,
+                            );
+                            let text_color: u32 = 0x00EAEAEA; // Light text
+                            windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                                hwnd.0 as _,
+                                36, // DWMWA_TEXT_COLOR
+                                (&raw const text_color).cast::<std::ffi::c_void>(),
+                                std::mem::size_of::<u32>() as u32,
+                            );
+                        }
+                    }
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3155,6 +3234,11 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.app_handle().try_state::<DesktopState>() {
+                    if let Some(client) = daemon_client::get_daemon_client(&state) {
+                        client.shutdown_daemon();
+                    }
+                }
                 window.app_handle().exit(0);
             }
         })
