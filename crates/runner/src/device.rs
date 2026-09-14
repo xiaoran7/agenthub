@@ -154,7 +154,7 @@ impl DeviceIdentity {
         digest.finalize().into()
     }
 
-    pub(crate) fn sign(&self, message: &[u8]) -> Signature {
+    pub fn sign(&self, message: &[u8]) -> Signature {
         self.signing_key.sign(message)
     }
 }

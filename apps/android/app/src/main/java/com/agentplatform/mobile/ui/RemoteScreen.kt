@@ -252,6 +252,19 @@ private fun remoteConversation(events: List<JSONObject>, commands: List<JSONObje
             "turn/started" -> p.optJSONObject("turn")?.optString("id")?.let { turn -> prompts[turn]?.let { result["user:$turn"] = "你：$it" } }
             "item/agentMessage/delta" -> if (id.isNotEmpty()) result[id] = result[id].orEmpty() + p.optString("delta")
             "item/completed" -> if (id.isNotEmpty()) when (item?.optString("type")) {
+                "userMessage" -> {
+                    val contentArr = item.optJSONArray("content")
+                    val userText = if (contentArr != null) {
+                        (0 until contentArr.length())
+                            .mapNotNull { contentArr.optJSONObject(it) }
+                            .filter { it.optString("type") == "text" }
+                            .map { it.optString("text") }
+                            .joinToString("\n")
+                    } else {
+                        item.optString("text")
+                    }
+                    if (userText.isNotEmpty()) result[id] = "你：$userText"
+                }
                 "agentMessage" -> result[id] = item.optString("text")
                 "commandExecution" -> result[id] = "工具执行已完成"
             }

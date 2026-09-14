@@ -2,7 +2,7 @@
 //! A Host owns one long-lived app-server and never resumes arbitrary live processes.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
 };
 
@@ -203,6 +203,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
     approvals: HashMap<String, PendingApproval>,
     answered_requests: HashSet<String>,
     receipts: HashMap<String, (RemoteCommand, CommandReceipt)>,
+    pending_historical_events: VecDeque<HostEvent>,
     alive: bool,
 }
 
@@ -232,6 +233,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             approvals: HashMap::new(),
             answered_requests: HashSet::new(),
             receipts: HashMap::new(),
+            pending_historical_events: VecDeque::new(),
             alive: true,
         })
     }
@@ -315,7 +317,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             let response = self.transport.request("thread/list", params)?;
             if let Some(items) = response["data"].as_array() {
                 for thread in items {
-                    let Some(id) = thread["id"].as_str() else { continue; };
+                    let Some(id) = thread["id"].as_str() else {
+                        continue;
+                    };
                     let raw_cwd = thread["cwd"].as_str().unwrap_or(".");
                     let cwd = dunce::canonicalize(PathBuf::from(raw_cwd))
                         .unwrap_or_else(|_| PathBuf::from(raw_cwd));
@@ -323,7 +327,10 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     self.discovered_workspaces.insert(ws_id, cwd.clone());
                     self.discovered_workspaces
                         .insert(cwd.to_string_lossy().to_string(), cwd.clone());
-                    let clean = cwd.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+                    let clean = cwd
+                        .to_string_lossy()
+                        .trim_start_matches(r"\\?\")
+                        .to_string();
                     self.discovered_workspaces.insert(clean, cwd.clone());
                     let title = thread["name"]
                         .as_str()
@@ -496,10 +503,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         return Err(NativeError::rejected("native_session_already_bound"));
                     }
                     // Read does not take control. Never resume a known active thread.
-                    let history = self.transport.request(
-                        "thread/read",
-                        json!({"threadId": id, "includeTurns": false}),
-                    )?;
+                    let history = self
+                        .transport
+                        .request("thread/read", json!({"threadId": id, "includeTurns": true}))?;
                     let thread = &history["thread"];
                     if thread["id"].as_str() != Some(id) {
                         return Err(NativeError::rejected("native_id_mismatch"));
@@ -551,11 +557,47 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 execution_state: execution_state(&response["thread"]["status"]),
                 current_turn_id: None,
             };
-            self.native_to_hub.insert(id, hub_id.clone());
+            self.native_to_hub.insert(id.clone(), hub_id.clone());
             self.sessions.insert(hub_id.clone(), binding.clone());
             if !self.workspaces.contains(&cwd) {
                 self.workspaces.push(cwd);
             }
+
+            if let Some(turns) = response["thread"]["turns"].as_array() {
+                for turn in turns {
+                    let turn_id = turn["id"].as_str().unwrap_or_default();
+                    if let Some(items) = turn["items"].as_array() {
+                        for item in items {
+                            let item_type = item["type"].as_str().unwrap_or_default();
+                            if matches!(
+                                item_type,
+                                "userMessage" | "agentMessage" | "commandExecution"
+                            ) {
+                                let synthetic_raw = json!({
+                                    "method": "item/completed",
+                                    "params": {
+                                        "threadId": id,
+                                        "turnId": turn_id,
+                                        "item": item
+                                    }
+                                });
+                                self.pending_historical_events.push_back(HostEvent {
+                                    event_id: uuid::Uuid::new_v4().to_string(),
+                                    host_generation: self.generation.clone(),
+                                    binding: Some(binding.clone()),
+                                    hub_session_id: Some(hub_id.clone()),
+                                    provider_session_id: Some(id.clone()),
+                                    kind: "item/completed".to_string(),
+                                    raw: synthetic_raw,
+                                    approval_id: None,
+                                    approval: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
             return Ok(json!({"binding": binding, "provider_response": response}));
         }
 
@@ -663,6 +705,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         if !self.alive {
             return Ok(Vec::new());
         }
+        let mut events: Vec<HostEvent> = Vec::new();
+        while let Some(evt) = self.pending_historical_events.pop_front() {
+            events.push(evt);
+            if events.len() >= 64 {
+                break;
+            }
+        }
         let messages = match self.transport.drain() {
             Ok(messages) => messages,
             Err(error) => {
@@ -670,7 +719,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 return Err(error);
             }
         };
-        Ok(messages.into_iter().map(|raw| self.consume(raw)).collect())
+        events.extend(messages.into_iter().map(|raw| self.consume(raw)));
+        Ok(events)
     }
 
     fn mark_lost(&mut self) {

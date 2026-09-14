@@ -3,12 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { RemoteConsole } from "../src/components/RemoteConsole";
 import { AccountGate } from "../src/components/AccountGate";
-import { currentAccount, logoutAccount, type AccountView } from "../src/lib/account";
+import {
+  currentAccount,
+  logoutAccount,
+  type AccountView,
+} from "../src/lib/account";
 import { DeviceConnectDialog } from "../src/components/DeviceConnectDialog";
 import { loadConfig, type PanelConfig } from "../src/lib/config";
 
 export default function PanelPage() {
-  const [account, setAccount] = useState<AccountView | null | undefined>(undefined);
+  const [account, setAccount] = useState<AccountView | null | undefined>(
+    undefined,
+  );
   const [config, setConfig] = useState<PanelConfig | undefined>(undefined);
   const [deviceConnectOpen, setDeviceConnectOpen] = useState(false);
 
@@ -25,7 +31,11 @@ export default function PanelPage() {
 
   if (account === undefined) {
     return (
-      <div className="remote-loading-screen" role="status" aria-label="正在连接 AgentHub Remote">
+      <div
+        className="remote-loading-screen"
+        role="status"
+        aria-label="正在连接 AgentHub Remote"
+      >
         <div className="remote-loading-spinner" />
         <p>正在连接 AgentHub…</p>
       </div>
@@ -66,4 +76,3 @@ export default function PanelPage() {
     </>
   );
 }
-

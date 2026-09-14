@@ -12,13 +12,17 @@ import {
 interface SessionEmptyStateProps {
   onNewSession: () => void;
   onOpenHostControl: () => void;
-  hostPhase?: "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
+  hostPhase?:
+    "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
   workspaceCount?: number;
   sessionCount?: number;
   displayName?: string;
 }
 
-const phaseLabels: Record<string, { label: string; tone: "green" | "yellow" | "gray" | "blue" }> = {
+const phaseLabels: Record<
+  string,
+  { label: string; tone: "green" | "yellow" | "gray" | "blue" }
+> = {
   loading: { label: "检测中…", tone: "yellow" },
   starting: { label: "Runtime 启动中", tone: "yellow" },
   stopped: { label: "Daemon 待命", tone: "gray" },
@@ -35,19 +39,26 @@ export function SessionEmptyState({
   sessionCount = 0,
   displayName = "Developer",
 }: SessionEmptyStateProps) {
-  const currentPhase = phaseLabels[hostPhase] ?? { label: hostPhase, tone: "gray" };
+  const currentPhase = phaseLabels[hostPhase] ?? {
+    label: hostPhase,
+    tone: "gray",
+  };
 
   return (
     <div className="session-empty-container">
       <div className="session-empty-card">
         <header className="empty-header">
           <div className="empty-badge">
-            <Radio size={12} className={`pulse-dot tone-${currentPhase.tone}`} />
+            <Radio
+              size={12}
+              className={`pulse-dot tone-${currentPhase.tone}`}
+            />
             <span>Codex Remote Hub</span>
           </div>
           <h1>官方 Agent 远程继续与控制</h1>
           <p className="empty-subtitle">
-            AgentHub 是官方 Agent 的远程接续舱与守护中心。关闭此窗口后，会话仍将在后台由{" "}
+            AgentHub 是官方 Agent
+            的远程接续舱与守护中心。关闭此窗口后，会话仍将在后台由{" "}
             <code>agenthubd</code> 稳定守护。
           </p>
         </header>
@@ -61,7 +72,8 @@ export function SessionEmptyState({
             <div className="feature-content">
               <h3>工作区与会话</h3>
               <p>
-                从左侧边栏选择已有的 Codex 会话进行交互接管。实时流式观察 Agent 思考、审批高风险工具、或直接发送后续指令。
+                从左侧边栏选择已有的 Codex 会话进行交互接管。实时流式观察 Agent
+                思考、审批高风险工具、或直接发送后续指令。
               </p>
               <div className="feature-metrics">
                 <span>
@@ -87,7 +99,8 @@ export function SessionEmptyState({
             <div className="feature-content">
               <h3>本机守护与 Remote</h3>
               <p>
-                控制当前电脑的 Gateway 出站连接开关，管理工作区目录白名单。开启后可在网页端与移动端漫游续聊。
+                控制当前电脑的 Gateway
+                出站连接开关，管理工作区目录白名单。开启后可在网页端与移动端漫游续聊。
               </p>
               <div className="feature-metrics">
                 <span className={`status-pill tone-${currentPhase.tone}`}>
@@ -115,7 +128,8 @@ export function SessionEmptyState({
             <span>无缝接管</span>
           </div>
           <p>
-            在已授权的任意项目目录下运行官方 <code>codex</code>，会话将自动同步到此列表，随时接续。
+            在已授权的任意项目目录下运行官方 <code>codex</code>
+            ，会话将自动同步到此列表，随时接续。
           </p>
         </footer>
       </div>

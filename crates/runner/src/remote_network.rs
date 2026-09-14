@@ -366,7 +366,7 @@ fn remote_ready_payload<T: NativeTransport>(
         .iter()
         .map(|path| crate::privacy::workspace_id_for_path(&path.to_string_lossy()))
         .collect::<Vec<_>>();
-    for (key, _) in durable.host.discovered_workspaces() {
+    for key in durable.host.discovered_workspaces().keys() {
         if key.starts_with("ws-") && !workspaces.contains(key) {
             workspaces.push(key.clone());
         }
@@ -382,7 +382,7 @@ fn remote_ready_payload<T: NativeTransport>(
                 "workspace_path": crate::privacy::workspace_id_for_path(
                     &session.workspace_path.to_string_lossy(),
                 ),
-                "host_generation": session.host_generation,
+                "host_generation": durable.host.generation(),
                 "control_connected": session.control_connected,
                 "execution_state": session.execution_state,
                 "current_turn_id": session.current_turn_id,

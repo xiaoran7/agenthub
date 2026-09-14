@@ -3208,6 +3208,66 @@ pub fn run() {
                     }
                 }
             }
+
+            {
+                use tauri::Manager;
+                let show_i = tauri::menu::MenuItem::with_id(
+                    app,
+                    "show",
+                    "打开 AgentHub",
+                    true,
+                    None::<&str>,
+                )?;
+                let quit_i = tauri::menu::MenuItem::with_id(
+                    app,
+                    "quit",
+                    "退出 AgentHub",
+                    true,
+                    None::<&str>,
+                )?;
+                let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
+
+                let icon = app.default_window_icon().cloned().unwrap();
+                let _tray = tauri::tray::TrayIconBuilder::new()
+                    .icon(icon)
+                    .tooltip("AgentHub - 原生 Coding Agent 远程控制台")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "quit" => {
+                            if let Some(state) = app.try_state::<DesktopState>()
+                                && let Some(client) = daemon_client::get_daemon_client(&state)
+                            {
+                                client.shutdown_daemon();
+                            }
+                            app.exit(0);
+                        }
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3236,13 +3296,9 @@ pub fn run() {
             logout
         ])
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if let Some(state) = window.app_handle().try_state::<DesktopState>()
-                    && let Some(client) = daemon_client::get_daemon_client(&state)
-                {
-                    client.shutdown_daemon();
-                }
-                window.app_handle().exit(0);
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .build(tauri::generate_context!())

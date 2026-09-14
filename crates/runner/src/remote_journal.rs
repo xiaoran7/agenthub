@@ -618,6 +618,16 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
             let item = params.get("item")?;
             let id = item.get("id").and_then(Value::as_str)?;
             match item.get("type").and_then(Value::as_str)? {
+                "userMessage" => {
+                    let mut user_item = json!({"id": id, "type": "userMessage"});
+                    if let Some(content) = item.get("content") {
+                        user_item["content"] = content.clone();
+                    }
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        user_item["text"] = json!(text);
+                    }
+                    Some(json!({"params":{"item": user_item}}))
+                }
                 "agentMessage" => Some(json!({"params":{"item":{
                     "id":id,"type":"agentMessage","text":item.get("text").and_then(Value::as_str).unwrap_or_default()
                 }}})),

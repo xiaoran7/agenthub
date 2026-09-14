@@ -10,7 +10,8 @@ import {
 import type { Snapshot } from "../../types";
 
 interface DesktopHeaderProps {
-  hostPhase?: "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
+  hostPhase?:
+    "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
   onOpenHostControl: () => void;
   onOpenSettings: () => void;
   onNewSession: () => void;

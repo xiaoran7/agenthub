@@ -154,11 +154,33 @@ export function conversationItems(
           text?: string;
           command?: string;
           aggregatedOutput?: string;
+          content?: Array<{ type?: string; text?: string }>;
         }
       | undefined;
     const id = typeof p.itemId === "string" ? p.itemId : item?.id;
     if (!id) continue;
-    if (native.kind === "item/agentMessage/delta") {
+    if (
+      (native.kind === "item/completed" || native.kind === "item/started") &&
+      item?.type === "userMessage" &&
+      !items.has(id)
+    ) {
+      const userText =
+        item.content
+          ?.filter((c) => c.type === "text" && c.text)
+          .map((c) => c.text)
+          .join("\n") ??
+        item.text ??
+        "";
+      if (userText) {
+        const target: ConversationItem = {
+          id,
+          kind: "user",
+          text: userText,
+        };
+        items.set(id, target);
+        result.push(target);
+      }
+    } else if (native.kind === "item/agentMessage/delta") {
       let target = items.get(id);
       if (!target) {
         target = { id, kind: "assistant", text: "" };
