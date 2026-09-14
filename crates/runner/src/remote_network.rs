@@ -360,12 +360,17 @@ fn remote_ready_payload<T: NativeTransport>(
     models: Option<&Value>,
     discovery: Option<&Value>,
 ) -> Value {
-    let workspaces = durable
+    let mut workspaces = durable
         .host
         .workspaces()
         .iter()
         .map(|path| crate::privacy::workspace_id_for_path(&path.to_string_lossy()))
         .collect::<Vec<_>>();
+    for (key, _) in durable.host.discovered_workspaces() {
+        if key.starts_with("ws-") && !workspaces.contains(key) {
+            workspaces.push(key.clone());
+        }
+    }
     let sessions = durable
         .host
         .sessions()

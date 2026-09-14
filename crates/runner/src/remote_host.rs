@@ -268,6 +268,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     pub fn workspaces(&self) -> &[PathBuf] {
         &self.workspaces
     }
+    pub fn discovered_workspaces(&self) -> &HashMap<String, PathBuf> {
+        &self.discovered_workspaces
+    }
     pub fn authorize_workspace(&mut self, path: PathBuf) -> Result<PathBuf, NativeError> {
         let canonical = dunce::canonicalize(&path)
             .ok()
@@ -302,37 +305,51 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     }
 
     pub fn discover(&mut self) -> Result<Value, NativeError> {
-        let response = self
-            .transport
-            .request("thread/list", json!({"limit": 100}))?;
-        let candidates = response["data"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|thread| {
-                let id = thread["id"].as_str()?;
-                let cwd = dunce::canonicalize(PathBuf::from(thread["cwd"].as_str()?)).ok()?;
-                let ws_id = crate::privacy::workspace_id_for_path(&cwd.to_string_lossy());
-                self.discovered_workspaces.insert(ws_id, cwd.clone());
-                let title = thread["name"]
-                    .as_str()
-                    .filter(|name| !name.trim().is_empty())
-                    .or_else(|| {
-                        thread["preview"]
-                            .as_str()
-                            .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
-                    })
-                    .map(|name| name.chars().take(160).collect::<String>());
-                Some(json!({
-                    "provider_session_id": id,
-                    "workspace_path": cwd,
-                    "title": title,
-                    "execution_state": execution_state(&thread["status"]),
-                    "control_connected": false
-                }))
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({"candidates": candidates, "has_more": !response["nextCursor"].is_null()}))
+        let mut candidates = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut params = json!({"limit": 100});
+            if let Some(c) = &cursor {
+                params["cursor"] = json!(c);
+            }
+            let response = self.transport.request("thread/list", params)?;
+            if let Some(items) = response["data"].as_array() {
+                for thread in items {
+                    let Some(id) = thread["id"].as_str() else { continue; };
+                    let raw_cwd = thread["cwd"].as_str().unwrap_or(".");
+                    let cwd = dunce::canonicalize(PathBuf::from(raw_cwd))
+                        .unwrap_or_else(|_| PathBuf::from(raw_cwd));
+                    let ws_id = crate::privacy::workspace_id_for_path(&cwd.to_string_lossy());
+                    self.discovered_workspaces.insert(ws_id, cwd.clone());
+                    self.discovered_workspaces
+                        .insert(cwd.to_string_lossy().to_string(), cwd.clone());
+                    let clean = cwd.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+                    self.discovered_workspaces.insert(clean, cwd.clone());
+                    let title = thread["name"]
+                        .as_str()
+                        .filter(|name| !name.trim().is_empty())
+                        .or_else(|| {
+                            thread["preview"]
+                                .as_str()
+                                .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
+                        })
+                        .map(|name| name.chars().take(160).collect::<String>());
+                    candidates.push(json!({
+                        "provider_session_id": id,
+                        "workspace_path": cwd,
+                        "title": title,
+                        "execution_state": execution_state(&thread["status"]),
+                        "control_connected": false
+                    }));
+                }
+            }
+            if let Some(next) = response["nextCursor"].as_str() {
+                cursor = Some(next.to_string());
+            } else {
+                break;
+            }
+        }
+        Ok(json!({"candidates": candidates, "has_more": false}))
     }
 
     pub fn handle_command(&mut self, command: RemoteCommand) -> CommandReceipt {
@@ -429,7 +446,22 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 .cloned()
                 .or_else(|| {
                     if *mode == ConnectMode::Resume {
-                        self.discovered_workspaces.get(ws_str.as_ref()).cloned()
+                        self.discovered_workspaces
+                            .get(ws_str.as_ref())
+                            .or_else(|| {
+                                let clean = ws_str.trim_start_matches(r"\\?\");
+                                self.discovered_workspaces.get(clean)
+                            })
+                            .or_else(|| {
+                                let computed_id = crate::privacy::workspace_id_for_path(&ws_str);
+                                self.discovered_workspaces.get(&computed_id)
+                            })
+                            .or_else(|| {
+                                self.discovered_workspaces
+                                    .values()
+                                    .find(|p| p.as_path() == workspace_path.as_path())
+                            })
+                            .cloned()
                     } else {
                         None
                     }
@@ -478,11 +510,16 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     ) {
                         return Err(NativeError::rejected("external_session_not_resumable"));
                     }
-                    let original_cwd = thread["cwd"]
-                        .as_str()
-                        .and_then(|path| dunce::canonicalize(PathBuf::from(path)).ok());
-                    if original_cwd.as_ref() != Some(&cwd) {
-                        return Err(NativeError::rejected("resume_workspace_mismatch"));
+                    if let Some(orig_str) = thread["cwd"].as_str() {
+                        let orig_clean = orig_str.trim_start_matches(r"\\?\");
+                        let cwd_str = cwd.to_string_lossy();
+                        let cwd_clean = cwd_str.trim_start_matches(r"\\?\");
+                        if !orig_clean.eq_ignore_ascii_case(cwd_clean) {
+                            let orig_canon = dunce::canonicalize(PathBuf::from(orig_str)).ok();
+                            if orig_canon.as_ref() != Some(&cwd) {
+                                return Err(NativeError::rejected("resume_workspace_mismatch"));
+                            }
+                        }
                     }
                     params["threadId"] = json!(id);
                     "thread/resume"

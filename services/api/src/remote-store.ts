@@ -124,9 +124,16 @@ export class RemoteContentStore {
     if (!row?.hello) return "runner_not_ready";
     const hello = JSON.parse(String(row.hello)) as Record<string, unknown>;
     if (hello.host_generation !== generation) return "host_generation_mismatch";
+    const discoveryCandidates = (
+      hello.discovery as { candidates?: Array<{ workspace_path?: string }> }
+    )?.candidates;
+    const isDiscovered =
+      Array.isArray(discoveryCandidates) &&
+      discoveryCandidates.some((c) => c.workspace_path === workspace);
     if (
-      !Array.isArray(hello.workspaces) ||
-      !hello.workspaces.includes(workspace)
+      !isDiscovered &&
+      (!Array.isArray(hello.workspaces) ||
+        !hello.workspaces.includes(workspace))
     )
       return "workspace_not_authorized";
     return "ready";
