@@ -277,11 +277,110 @@ export function RemoteConsole({
       setBusy(false);
     }
   };
-  const groups = new Map<string, RemoteSession[]>();
-  for (const item of snapshot.sessions) {
-    const group = `${item.runner_id}\n${item.binding.workspace_path}`;
-    groups.set(group, [...(groups.get(group) ?? []), item]);
-  }
+  const resumeCandidate = async (
+    targetRunnerId: string,
+    targetWorkspace: string,
+    providerSessionId: string,
+  ) => {
+    const runnerObj = snapshot.runners.find(
+      (item) => item.runner_id === targetRunnerId,
+    );
+    const generation = runnerObj?.hello?.host_generation;
+    if (!runnerObj || !generation || busy) return;
+    setBusy(true);
+    setError("");
+    const attemptKey = JSON.stringify([
+      "launch",
+      targetRunnerId,
+      targetWorkspace,
+      providerSessionId,
+      "read-only",
+      "",
+    ]);
+    const command =
+      attempts.current.get(attemptKey) ??
+      ({
+        client_cmd_id: crypto.randomUUID(),
+        hub_session_id: crypto.randomUUID(),
+        host_generation: generation,
+        command: {
+          action: "connect",
+          mode: "resume",
+          workspace_path: targetWorkspace,
+          sandbox: "read-only",
+          approval_policy: "untrusted",
+          provider_session_id: providerSessionId,
+        },
+      } satisfies RemoteCommand);
+    attempts.current.set(attemptKey, command);
+    try {
+      await request(
+        `/runners/${encodeURIComponent(targetRunnerId)}/commands`,
+        command,
+      );
+      attempts.current.delete(attemptKey);
+      setSelected(`${targetRunnerId}/${command.hub_session_id}`);
+      refresh.current();
+    } catch (err) {
+      if (err instanceof Error && err.name === "RemoteRequestRejected")
+        attempts.current.delete(attemptKey);
+      setError(remoteError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  type WorkspaceSessionGroup = {
+    workspacePath: string;
+    runnerId: string;
+    sessions: RemoteSession[];
+    candidates: Array<{
+      provider_session_id: string;
+      workspace_path: string;
+      title: string | null;
+    }>;
+  };
+
+  const groups = useMemo(() => {
+    const map = new Map<string, WorkspaceSessionGroup>();
+
+    // 1. 已建立受控绑定的远程会话
+    for (const item of snapshot.sessions) {
+      const key = `${item.runner_id}\n${item.binding.workspace_path}`;
+      const existing = map.get(key) ?? {
+        workspacePath: item.binding.workspace_path,
+        runnerId: item.runner_id,
+        sessions: [],
+        candidates: [],
+      };
+      existing.sessions.push(item);
+      map.set(key, existing);
+    }
+
+    // 2. 本机发现的历史原生 Codex 会话 candidates（排除已激活绑定的）
+    const activeProviderIds = new Set(
+      snapshot.sessions.map((s) => s.binding.provider_session_id),
+    );
+
+    for (const r of snapshot.runners) {
+      if (!r.online || !r.hello?.discovery?.candidates) continue;
+      for (const cand of r.hello.discovery.candidates) {
+        if (activeProviderIds.has(cand.provider_session_id)) continue;
+        const key = `${r.runner_id}\n${cand.workspace_path}`;
+        const existing = map.get(key) ?? {
+          workspacePath: cand.workspace_path,
+          runnerId: r.runner_id,
+          sessions: [],
+          candidates: [],
+        };
+        existing.candidates.push(cand);
+        map.set(key, existing);
+      }
+    }
+
+    return map;
+  }, [snapshot.sessions, snapshot.runners]);
+
   return (
     <div className="remote-console">
       <aside className="remote-sidebar">
@@ -305,12 +404,13 @@ export function RemoteConsole({
         </button>
         <div className="remote-nav-label">工作区</div>
         {onLocalHost && <button onClick={onLocalHost}>连接本机</button>}
-        {[...groups].map(([group, sessions]) => (
-          <section key={group}>
-            <h2 title={cleanPath(sessions[0]!.binding.workspace_path)}>
-              {workspaceLabel(sessions[0]!.binding.workspace_path)}
+        {[...groups.entries()].map(([groupKey, group]) => (
+          <section key={groupKey}>
+            <h2 title={cleanPath(group.workspacePath)}>
+              {workspaceLabel(group.workspacePath)}
             </h2>
-            {sessions.map((item) => (
+            {/* 已受控绑定的会话 */}
+            {group.sessions.map((item) => (
               <button
                 className={`remote-session ${key(item) === selected ? "selected" : ""}`}
                 key={key(item)}
@@ -319,14 +419,43 @@ export function RemoteConsole({
                   setError("");
                 }}
               >
-                <span>
+                <span className="remote-session-title">
                   Codex · {item.binding.provider_session_id.slice(0, 8)}
                 </span>
-                <small>
-                  {item.online
-                    ? states[item.binding.execution_state]
-                    : "电脑离线"}
-                </small>
+                <div className="remote-session-meta">
+                  <small>
+                    {item.online
+                      ? states[item.binding.execution_state]
+                      : "电脑离线"}
+                  </small>
+                  <span className="remote-session-badge">已连接</span>
+                </div>
+              </button>
+            ))}
+            {/* 本机发现但尚未接管的历史会话（点击一键秒级恢复） */}
+            {group.candidates.map((cand) => (
+              <button
+                className="remote-session candidate"
+                key={cand.provider_session_id}
+                title={`点击接管：${cand.title ?? cand.provider_session_id}`}
+                disabled={busy}
+                onClick={() =>
+                  void resumeCandidate(
+                    group.runnerId,
+                    cand.workspace_path,
+                    cand.provider_session_id,
+                  )
+                }
+              >
+                <span className="remote-session-title">
+                  {cand.title || `Codex · ${cand.provider_session_id.slice(0, 8)}`}
+                </span>
+                <div className="remote-session-meta">
+                  <small>本机历史</small>
+                  <span className="remote-session-badge candidate">
+                    点击接管
+                  </span>
+                </div>
               </button>
             ))}
           </section>

@@ -4,6 +4,11 @@ import type {
   RemotePendingApproval,
 } from "@agent-pulse/contracts/remote";
 export type RemoteRequest = <T>(path: string, body?: unknown) => Promise<T>;
+export interface DiscoveryCandidate {
+  provider_session_id: string;
+  workspace_path: string;
+  title: string | null;
+}
 export interface RemoteRunner {
   runner_id: string;
   online: boolean;
@@ -16,11 +21,7 @@ export interface RemoteRunner {
       data: Array<{ id: string; model?: string; displayName: string }>;
     };
     discovery?: {
-      candidates: Array<{
-        provider_session_id: string;
-        workspace_path: string;
-        title: string | null;
-      }>;
+      candidates: DiscoveryCandidate[];
     };
   };
 }

@@ -123,12 +123,69 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
         }
         if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
         if (selected == null) {
-            if (sessions.isEmpty()) Text("连接本机 Runner 后，在这里开始或接续工作。")
+            val activeProviderIds = remember(sessions) {
+                sessions.mapNotNull { it.optJSONObject("binding")?.optString("provider_session_id") }.toSet()
+            }
+            val candidates = remember(snapshot, activeProviderIds) {
+                val list = mutableListOf<Triple<String, String, JSONObject>>()
+                snapshot.optJSONArray("runners")?.objects().orEmpty().filter { it.optBoolean("online") }.forEach { runner ->
+                    val runnerId = runner.optString("runner_id")
+                    val generation = runner.optJSONObject("hello")?.optString("host_generation").orEmpty()
+                    val cands = runner.optJSONObject("hello")?.optJSONObject("discovery")?.optJSONArray("candidates")?.objects().orEmpty()
+                    cands.filter { !activeProviderIds.contains(it.optString("provider_session_id")) }.forEach { cand ->
+                        list.add(Triple(runnerId, generation, cand))
+                    }
+                }
+                list
+            }
+            if (sessions.isEmpty() && candidates.isEmpty()) Text("连接本机 Runner 后，在这里开始或接续工作。")
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(sessions) { item ->
-                    val b = item.getJSONObject("binding")
-                    OutlinedButton(onClick = { selected = item.getString("runner_id") to b.getString("hub_session_id") }, modifier = Modifier.fillMaxWidth()) {
-                        Column { Text(workspaceLabel(b.getString("workspace_path"))); Text("Codex · ${b.getString("provider_session_id").take(12)} · ${if (item.optBoolean("online")) "在线" else "离线"}") }
+                if (sessions.isNotEmpty()) {
+                    item { Text("已接入会话", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
+                    items(sessions) { item ->
+                        val b = item.getJSONObject("binding")
+                        OutlinedButton(onClick = { selected = item.getString("runner_id") to b.getString("hub_session_id") }, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(workspaceLabel(b.getString("workspace_path")))
+                                Text("Codex · ${b.getString("provider_session_id").take(12)} · ${if (item.optBoolean("online")) "在线" else "离线"}")
+                            }
+                        }
+                    }
+                }
+                if (candidates.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        Text("本机历史会话（点击接管）", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary)
+                    }
+                    items(candidates) { (runnerId, generation, cand) ->
+                        val provId = cand.optString("provider_session_id")
+                        val ws = cand.optString("workspace_path")
+                        val title = cand.optString("title").ifBlank { "Codex · ${provId.take(12)}" }
+                        OutlinedButton(
+                            enabled = !busy,
+                            onClick = {
+                                val hubId = UUID.randomUUID().toString()
+                                submit(
+                                    runner = runnerId,
+                                    hub = hubId,
+                                    action = JSONObject()
+                                        .put("action", "connect")
+                                        .put("mode", "resume")
+                                        .put("workspace_path", ws)
+                                        .put("provider_session_id", provId)
+                                        .put("sandbox", "read-only")
+                                        .put("approval_policy", "untrusted"),
+                                    generation = generation
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(workspaceLabel(ws), style = MaterialTheme.typography.labelMedium)
+                                Text(title, maxLines = 1)
+                                Text("点击一键接管", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
                     }
                 }
             }

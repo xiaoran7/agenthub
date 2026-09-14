@@ -90,10 +90,44 @@
   border-color: transparent;
   margin: 3px 0;
   padding: 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+.remote-session:hover {
+  background: #232524;
+}
+.remote-session-title {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: #dcdedc;
+}
+.remote-session-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 4px;
 }
 .remote-session small {
   color: #989da0;
   font-size: 11px;
+}
+.remote-session-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #2a312d;
+  color: #72b28c;
+}
+.remote-session-badge.candidate {
+  background: #2d2f34;
+  color: #9aa0a6;
 }
 .remote-sidebar .remote-session.selected {
   background: #2b2e2c;
