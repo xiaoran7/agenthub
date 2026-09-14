@@ -49,6 +49,7 @@ version = "2.3.7"
 dependencies = [
  "agent-pulse-runner",
  "chrono",
+ "dunce",
  "keyring",
  "rfd",
  "rusqlite",
@@ -74,6 +75,7 @@ dependencies = [
  "chrono",
  "clap",
  "ctrlc",
+ "dunce",
  "ed25519-dalek",
  "hex",
  "hmac",

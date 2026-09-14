@@ -30,9 +30,11 @@ const key = (session: RemoteSession) =>
   `${session.runner_id}/${session.binding.hub_session_id}`;
 const basename = (path: string) =>
   path
+    .replace(/^\\\\\?\\/u, "")
     .replace(/[\\/]+$/u, "")
     .split(/[\\/]/u)
     .pop() ?? path;
+const cleanPath = (path: string) => path.replace(/^\\\\\?\\/u, "");
 const workspaceLabel = (workspaceId: string) =>
   workspaceId.startsWith("ws-")
     ? workspaceId.slice(3).replace(/-[0-9a-f]{16}$/u, "") || workspaceId
@@ -305,7 +307,7 @@ export function RemoteConsole({
         {onLocalHost && <button onClick={onLocalHost}>连接本机</button>}
         {[...groups].map(([group, sessions]) => (
           <section key={group}>
-            <h2 title={sessions[0]!.binding.workspace_path}>
+            <h2 title={cleanPath(sessions[0]!.binding.workspace_path)}>
               {workspaceLabel(sessions[0]!.binding.workspace_path)}
             </h2>
             {sessions.map((item) => (
@@ -334,11 +336,19 @@ export function RemoteConsole({
         )}
         <div className="remote-sidebar-footer">
           <div className="remote-runner-status">
-            <span className={`remote-status-dot ${snapshot.runners.some((item) => item.online) ? "online" : "offline"}`} />
-            <span>{snapshot.runners.filter((item) => item.online).length} 台电脑在线</span>
+            <span
+              className={`remote-status-dot ${snapshot.runners.some((item) => item.online) ? "online" : "offline"}`}
+            />
+            <span>
+              {snapshot.runners.filter((item) => item.online).length} 台电脑在线
+            </span>
           </div>
           {onManage && (
-            <button className="remote-action-btn" onClick={onManage} type="button">
+            <button
+              className="remote-action-btn"
+              onClick={onManage}
+              type="button"
+            >
               ＋ 绑定新电脑
             </button>
           )}
@@ -348,7 +358,11 @@ export function RemoteConsole({
                 {account.user.display_name || account.user.email}
               </span>
               {onLogout && (
-                <button className="remote-logout-btn" onClick={onLogout} type="button">
+                <button
+                  className="remote-logout-btn"
+                  onClick={onLogout}
+                  type="button"
+                >
                   退出
                 </button>
               )}
@@ -572,7 +586,7 @@ export function RemoteConsole({
               <option value="">选择已授权目录</option>
               {runnerInfo?.hello?.workspaces.map((path) => (
                 <option value={path} key={path}>
-                  {path}
+                  {cleanPath(path)}
                 </option>
               ))}
             </select>

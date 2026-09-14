@@ -561,9 +561,7 @@ pub(crate) fn ensure_daemon_client(
     })
     .map_err(|_| DesktopError::AgentFailed)?;
     if let Some(workspace) = required_workspace {
-        let canonical = workspace
-            .canonicalize()
-            .map_err(|_| DesktopError::InvalidAction)?;
+        let canonical = dunce::canonicalize(workspace).map_err(|_| DesktopError::InvalidAction)?;
         client
             .authorize_workspace(canonical.clone())
             .map_err(|_| DesktopError::AgentFailed)?;
@@ -598,7 +596,7 @@ fn start_daemon_for_data(
             remote_enabled: false,
         });
     if let Some(workspace) = required_workspace
-        && let Ok(canonical) = workspace.canonicalize()
+        && let Ok(canonical) = dunce::canonicalize(workspace)
         && canonical.is_dir()
         && !profile.workspace_paths.contains(&canonical)
     {
@@ -606,7 +604,7 @@ fn start_daemon_for_data(
     }
     profile.workspace_paths.retain(|path| path.is_dir());
     if profile.workspace_paths.is_empty()
-        && let Ok(cwd) = std::env::current_dir().and_then(|path| path.canonicalize())
+        && let Ok(cwd) = std::env::current_dir().and_then(|path| dunce::canonicalize(&path))
         && cwd.is_dir()
     {
         profile.workspace_paths.push(cwd);
@@ -637,9 +635,9 @@ fn start_daemon_for_data(
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::Foundation::HANDLE;
         use windows_sys::Win32::System::JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
         };
 
         unsafe {
@@ -682,6 +680,7 @@ fn persist_workspace(
                 .unwrap_or_else(default_codex_binary),
             remote_enabled: false,
         });
+    let workspace = dunce::simplified(&workspace).to_path_buf();
     if !profile.workspace_paths.contains(&workspace) {
         if profile.workspace_paths.len() >= 32 {
             return Err(DesktopError::InvalidAction);
@@ -744,7 +743,7 @@ pub(crate) async fn start_remote_host(
             .workspace_paths
             .into_iter()
             .map(|path| {
-                path.canonicalize()
+                dunce::canonicalize(&path)
                     .ok()
                     .filter(|path| path.is_dir())
                     .ok_or_else(|| "工作目录不存在".to_owned())
@@ -817,7 +816,7 @@ pub(crate) async fn remote_host_status(state: State<'_, DesktopState>) -> Result
     let identity =
         load_or_create_identity(&state.data_dir).map_err(|_| "设备身份不可用".to_owned())?;
     let (_, profile_path) = host_database_path(&state.data_dir, identity.device_id());
-    let profile = fs::read(profile_path)
+    let mut profile = fs::read(profile_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<DaemonProfile>(&bytes).ok())
         .unwrap_or(DaemonProfile {
@@ -827,6 +826,11 @@ pub(crate) async fn remote_host_status(state: State<'_, DesktopState>) -> Result
                 .unwrap_or_else(default_codex_binary),
             remote_enabled: false,
         });
+    profile.workspace_paths = profile
+        .workspace_paths
+        .into_iter()
+        .map(|p| dunce::simplified(&p).to_path_buf())
+        .collect();
     let client = client_for_state(&state).map_err(|error| error.to_string())?;
     let phase = match probe_daemon(&client) {
         DaemonProbe::Ready((_, _, true, true)) => "connected",

@@ -605,7 +605,7 @@ async fn pick_folder(start_dir: Option<String>) -> Result<Option<String>, String
         }
         Ok(dialog
             .pick_folder()
-            .map(|path| path.to_string_lossy().into_owned()))
+            .map(|path| dunce::simplified(&path).to_string_lossy().into_owned()))
     })
     .await
     .map_err(|_| DesktopError::AgentFailed.to_string())?
@@ -628,7 +628,7 @@ async fn pick_files(start_dir: Option<String>) -> Result<Vec<String>, String> {
             .pick_files()
             .unwrap_or_default()
             .into_iter()
-            .map(|path| path.to_string_lossy().into_owned())
+            .map(|path| dunce::simplified(&path).to_string_lossy().into_owned())
             .collect())
     })
     .await
@@ -757,9 +757,7 @@ fn launch_codex_session_with_client(
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
         .ok_or(DesktopError::InvalidAction)?;
-    let cwd = cwd
-        .canonicalize()
-        .map_err(|_| DesktopError::InvalidAction)?;
+    let cwd = dunce::canonicalize(&cwd).map_err(|_| DesktopError::InvalidAction)?;
 
     let (sub, rx, _initial_snapshot) = client
         .subscribe(256)
@@ -1130,7 +1128,7 @@ fn find_codex_session_cwd(session_id: &str) -> Option<PathBuf> {
                 if let Ok(cwd_str) = res {
                     let p = PathBuf::from(cwd_str);
                     if p.is_dir() {
-                        return p.canonicalize().ok().or(Some(p));
+                        return dunce::canonicalize(&p).ok().or(Some(p));
                     }
                 }
             }
@@ -1585,24 +1583,26 @@ async fn start_tg_browser_oauth(
     // Exchange code via Gateway API
     let callback_url = format!("{server_url}/v1/auth/oauth/tg/callback");
     let (account, cookie) = execute_http_with_fallback(|agent| {
-        let mut response = agent
-            .post(&callback_url)
-            .send_json(json!({
-                "code": code,
-                "code_verifier": code_verifier,
-                "redirect_uri": redirect_uri
-            }))?;
+        let mut response = agent.post(&callback_url).send_json(json!({
+            "code": code,
+            "code_verifier": code_verifier,
+            "redirect_uri": redirect_uri
+        }))?;
         let cookie = response
             .headers()
             .get_all("set-cookie")
             .iter()
             .filter_map(|value| value.to_str().ok())
             .find_map(extract_session_cookie)
-            .ok_or_else(|| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "missing cookie")))?;
-        let account = response
-            .body_mut()
-            .read_json::<Value>()
-            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+            .ok_or_else(|| {
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "missing cookie",
+                ))
+            })?;
+        let account = response.body_mut().read_json::<Value>().map_err(|e| {
+            ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
         Ok((account, cookie))
     })
     .map_err(|e| e.to_string())?;
@@ -1651,10 +1651,9 @@ async fn poll_tg_device_auth(
             .iter()
             .filter_map(|value| value.to_str().ok())
             .find_map(extract_session_cookie);
-        let body = response
-            .body_mut()
-            .read_json::<Value>()
-            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        let body = response.body_mut().read_json::<Value>().map_err(|e| {
+            ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
         Ok((body, cookie))
     })
     .map_err(|e| e.to_string())?;
@@ -1689,11 +1688,15 @@ fn authenticate_request(
             .iter()
             .filter_map(|value| value.to_str().ok())
             .find_map(extract_session_cookie)
-            .ok_or_else(|| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "missing cookie")))?;
-        let account = response
-            .body_mut()
-            .read_json::<Value>()
-            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+            .ok_or_else(|| {
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "missing cookie",
+                ))
+            })?;
+        let account = response.body_mut().read_json::<Value>().map_err(|e| {
+            ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
         Ok((account, cookie))
     })
 }
@@ -2964,10 +2967,10 @@ fn http_agent(proxy_url: Option<&str>) -> ureq::Agent {
         ))
         .max_redirects(0);
 
-    if let Some(proxy_str) = proxy_url {
-        if let Ok(proxy) = ureq::Proxy::new(proxy_str) {
-            builder = builder.proxy(Some(proxy));
-        }
+    if let Some(proxy_str) = proxy_url
+        && let Ok(proxy) = ureq::Proxy::new(proxy_str)
+    {
+        builder = builder.proxy(Some(proxy));
     }
 
     builder.build().new_agent()
@@ -3177,31 +3180,31 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 use tauri::Manager;
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Ok(hwnd) = window.hwnd() {
-                        unsafe {
-                            let use_dark_mode: i32 = 1;
-                            windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
-                                hwnd.0 as _,
-                                20, // DWMWA_USE_IMMERSIVE_DARK_MODE
-                                (&raw const use_dark_mode).cast::<std::ffi::c_void>(),
-                                std::mem::size_of::<i32>() as u32,
-                            );
-                            let caption_color: u32 = 0x0013110E; // #0E1113 in 0x00BBGGRR
-                            windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
-                                hwnd.0 as _,
-                                35, // DWMWA_CAPTION_COLOR
-                                (&raw const caption_color).cast::<std::ffi::c_void>(),
-                                std::mem::size_of::<u32>() as u32,
-                            );
-                            let text_color: u32 = 0x00EAEAEA; // Light text
-                            windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
-                                hwnd.0 as _,
-                                36, // DWMWA_TEXT_COLOR
-                                (&raw const text_color).cast::<std::ffi::c_void>(),
-                                std::mem::size_of::<u32>() as u32,
-                            );
-                        }
+                if let Some(window) = app.get_webview_window("main")
+                    && let Ok(hwnd) = window.hwnd()
+                {
+                    unsafe {
+                        let use_dark_mode: i32 = 1;
+                        windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                            hwnd.0 as _,
+                            20, // DWMWA_USE_IMMERSIVE_DARK_MODE
+                            (&raw const use_dark_mode).cast::<std::ffi::c_void>(),
+                            std::mem::size_of::<i32>() as u32,
+                        );
+                        let caption_color: u32 = 0x0013110E; // #0E1113 in 0x00BBGGRR
+                        windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                            hwnd.0 as _,
+                            35, // DWMWA_CAPTION_COLOR
+                            (&raw const caption_color).cast::<std::ffi::c_void>(),
+                            std::mem::size_of::<u32>() as u32,
+                        );
+                        let text_color: u32 = 0x00EAEAEA; // Light text
+                        windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                            hwnd.0 as _,
+                            36, // DWMWA_TEXT_COLOR
+                            (&raw const text_color).cast::<std::ffi::c_void>(),
+                            std::mem::size_of::<u32>() as u32,
+                        );
                     }
                 }
             }
@@ -3234,10 +3237,10 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if let Some(state) = window.app_handle().try_state::<DesktopState>() {
-                    if let Some(client) = daemon_client::get_daemon_client(&state) {
-                        client.shutdown_daemon();
-                    }
+                if let Some(state) = window.app_handle().try_state::<DesktopState>()
+                    && let Some(client) = daemon_client::get_daemon_client(&state)
+                {
+                    client.shutdown_daemon();
                 }
                 window.app_handle().exit(0);
             }

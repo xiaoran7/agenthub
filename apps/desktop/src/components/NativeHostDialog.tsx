@@ -26,10 +26,16 @@ export function applyHostStatus(
   status: Status,
   forceProfile = false,
 ): HostPollState {
+  const profileToUse =
+    forceProfile || !current.initialized ? status.profile : current.profile;
   return {
     phase: status.phase,
-    profile:
-      forceProfile || !current.initialized ? status.profile : current.profile,
+    profile: {
+      ...profileToUse,
+      workspace_paths: (profileToUse.workspace_paths ?? []).map((p) =>
+        p.replace(/^\\\\\?\\/u, ""),
+      ),
+    },
     initialized: true,
     error: "",
   };
@@ -100,12 +106,13 @@ export function NativeHostDialog({ onClose }: { onClose: () => void }) {
         startDir: profile.workspace_paths.at(-1) ?? null,
       });
       if (path) {
+        const cleanPath = path.replace(/^\\\\\?\\/u, "");
         setPollState((current) => ({
           ...current,
           profile: {
             ...current.profile,
             workspace_paths: [
-              ...new Set([...current.profile.workspace_paths, path]),
+              ...new Set([...current.profile.workspace_paths, cleanPath]),
             ],
           },
         }));

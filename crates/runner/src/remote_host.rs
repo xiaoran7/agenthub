@@ -210,7 +210,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         let mut workspaces = workspaces
             .into_iter()
             .map(|path| {
-                path.canonicalize()
+                dunce::canonicalize(&path)
                     .ok()
                     .filter(|path| path.is_dir())
                     .ok_or_else(|| NativeError::rejected("workspace_unavailable"))
@@ -267,8 +267,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         &self.workspaces
     }
     pub fn authorize_workspace(&mut self, path: PathBuf) -> Result<PathBuf, NativeError> {
-        let canonical = path
-            .canonicalize()
+        let canonical = dunce::canonicalize(&path)
             .ok()
             .filter(|p| p.is_dir())
             .ok_or_else(|| NativeError::rejected("workspace_unavailable"))?;
@@ -305,7 +304,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             .request("thread/list", json!({"limit":100}))?;
         let candidates = response["data"].as_array().into_iter().flatten().filter_map(|thread| {
             let id = thread["id"].as_str()?;
-            let cwd = PathBuf::from(thread["cwd"].as_str()?).canonicalize().ok()?;
+            let cwd = dunce::canonicalize(PathBuf::from(thread["cwd"].as_str()?)).ok()?;
             if !self.workspaces.contains(&cwd) { return None; }
             Some(json!({"provider_session_id":id,"workspace_path":cwd,
                 "title":thread["name"].as_str().map(|name|name.chars().take(160).collect::<String>()),
@@ -452,7 +451,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     }
                     let original_cwd = thread["cwd"]
                         .as_str()
-                        .and_then(|path| PathBuf::from(path).canonicalize().ok());
+                        .and_then(|path| dunce::canonicalize(PathBuf::from(path)).ok());
                     if original_cwd.as_ref() != Some(&cwd) {
                         return Err(NativeError::rejected("resume_workspace_mismatch"));
                     }
