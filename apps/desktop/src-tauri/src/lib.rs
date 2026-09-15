@@ -460,6 +460,11 @@ fn builtin_model_catalog(
             ("grok-4", "Grok 4", "xAI 旗舰全栈开发"),
             ("grok-code-fast-1", "Grok Code Fast", "低延迟快速任务"),
         ],
+        AgentType::ZCode => &[
+            ("gemini-3.8-flash-high", "Gemini 3.8 Flash High", "主力快速多模态编码"),
+            ("gemini-3.8-pro", "Gemini 3.8 Pro", "复杂架构与深度工程"),
+            ("claude-sonnet-4-5", "Claude Sonnet 4.5", "代码综合能力"),
+        ],
     }
 }
 
@@ -2648,12 +2653,7 @@ fn session_context_key(agent_type: AgentType, session_id: &str) -> String {
 }
 
 fn agent_type_name(agent_type: AgentType) -> &'static str {
-    match agent_type {
-        AgentType::ClaudeCode => "claude_code",
-        AgentType::Codex => "codex",
-        AgentType::Antigravity => "antigravity",
-        AgentType::GrokBuild => "grok_build",
-    }
+    agent_type.as_str()
 }
 
 fn dashboard_session_key(session: &Value) -> Option<String> {

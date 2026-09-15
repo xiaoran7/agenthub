@@ -321,7 +321,7 @@ function ContextBar({
             ))}
         </SelectControl>
         <div className="provider-segments" aria-label="Agent 来源" role="group">
-          {(["all", "claude_code", "codex"] as const).map((provider) => (
+          {(["all", "claude_code", "codex", "zcode"] as const).map((provider) => (
             <button
               aria-pressed={providerFilter === provider}
               key={provider}

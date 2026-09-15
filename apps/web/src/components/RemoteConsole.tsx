@@ -451,11 +451,13 @@ export function RemoteConsole({
     for (const item of snapshot.sessions) {
       activeProviderIds.add(item.binding.provider_session_id);
       const wsLabel = workspaceLabel(item.binding.workspace_path);
+      const isZCode = item.binding.provider_session_id.startsWith("sess_");
+      const prefix = isZCode ? "ZCode" : "Codex";
       list.push({
         kind: "active",
         key: key(item),
         session: item,
-        title: `Codex · ${item.binding.provider_session_id.slice(0, 8)}`,
+        title: `${prefix} · ${item.binding.provider_session_id.slice(0, 8)}`,
         subtitle: `${wsLabel} · ${item.online ? states[item.binding.execution_state] : "电脑离线"}`,
         badge: "已连接",
       });
@@ -467,8 +469,10 @@ export function RemoteConsole({
       for (const cand of r.hello.discovery.candidates) {
         if (activeProviderIds.has(cand.provider_session_id)) continue;
         const wsLabel = workspaceLabel(cand.workspace_path);
+        const isZCode = cand.provider_session_id.startsWith("sess_");
+        const prefix = isZCode ? "ZCode" : "Codex";
         const title =
-          cand.title || `Codex · ${cand.provider_session_id.slice(0, 8)}`;
+          cand.title || `${prefix} · ${cand.provider_session_id.slice(0, 8)}`;
         list.push({
           kind: "candidate",
           key: `${r.runner_id}/${cand.provider_session_id}`,
@@ -679,7 +683,7 @@ export function RemoteConsole({
               </h1>
               <p>
                 {session
-                  ? `Codex · ${session.online ? (connected ? "会话已连接" : "会话未连接") : "电脑离线"}`
+                  ? `${session.binding.provider_session_id.startsWith("sess_") ? "ZCode" : "Codex"} · ${session.online ? (connected ? "会话已连接" : "会话未连接") : "电脑离线"}`
                   : "电脑执行，随处继续。"}
               </p>
             </div>

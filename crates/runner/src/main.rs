@@ -14,12 +14,13 @@ use agent_pulse_runner::{
         claude,
         codex::{self, CodexThreadContext},
         grok,
+        zcode::{self, ZCodeSessionEntry},
     },
     auth::{AuthManager, AuthProvider},
     auth_worker::AuthWorker,
     collectors::{
         CodexAppServer, collect_antigravity_sessions, collect_claude_transcripts,
-        collect_codex_local_threads, collect_grok_sessions,
+        collect_codex_local_threads, collect_grok_sessions, collect_zcode_sessions,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -28,7 +29,7 @@ use agent_pulse_runner::{
     privacy::ProjectRedactor,
     runtime::{
         AntigravitySessionSource, ClaudeSessionSource, CodexSessionSource, GrokSessionSource,
-        PollPolicy, RunnerRuntime, SessionSource,
+        PollPolicy, RunnerRuntime, SessionSource, ZCodeSessionSource,
     },
     sync::{MAX_SYNC_BATCH_EVENTS, SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
     sync_worker::{SyncPolicy, SyncWorker},
@@ -281,6 +282,8 @@ enum InputFormat {
     AntigravityHook,
     GrokSessions,
     GrokHook,
+    #[value(name = "zcode-sessions")]
+    ZCodeSessions,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -289,6 +292,8 @@ enum Agent {
     Codex,
     Antigravity,
     Grok,
+    #[value(name = "zcode")]
+    ZCode,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -298,6 +303,8 @@ enum AgentSelection {
     Codex,
     Antigravity,
     Grok,
+    #[value(name = "zcode")]
+    ZCode,
 }
 
 impl std::fmt::Display for AgentSelection {
@@ -308,6 +315,7 @@ impl std::fmt::Display for AgentSelection {
             Self::Codex => "codex",
             Self::Antigravity => "antigravity",
             Self::Grok => "grok",
+            Self::ZCode => "zcode",
         })
     }
 }
@@ -498,6 +506,7 @@ fn main() -> Result<()> {
                     &input, &meta, &redactor,
                 )?,
                 Agent::Grok => grok::normalize_hook(&input, &meta, &redactor)?,
+                Agent::ZCode => bail!("ingest-hook is not supported for ZCode (use SQLite database discovery)"),
             };
             let mut outbox = Outbox::open(db)?;
             let sequence = outbox.enqueue(&observation)?;
@@ -609,6 +618,15 @@ fn main() -> Result<()> {
                     let payload = collect_grok_sessions(include_completed)?;
                     grok::normalize_sessions_json(&payload, &meta, &redactor)?
                 }
+                Agent::ZCode => {
+                    let _ = binary;
+                    let payload = collect_zcode_sessions(include_completed)?;
+                    let entries: Vec<ZCodeSessionEntry> = serde_json::from_str(&payload)?;
+                    entries
+                        .iter()
+                        .filter_map(|entry| zcode::normalize_zcode_session(entry, &meta, &redactor))
+                        .collect()
+                }
             };
             let mut outbox = Outbox::open(db)?;
             let sequences = enqueue_all(&mut outbox, &observations)?;
@@ -714,6 +732,9 @@ fn main() -> Result<()> {
             }
             if matches!(agent, AgentSelection::All | AgentSelection::Grok) {
                 sources.push(Box::new(GrokSessionSource::new(include_completed)));
+            }
+            if matches!(agent, AgentSelection::All | AgentSelection::ZCode) {
+                sources.push(Box::new(ZCodeSessionSource::new(include_completed)));
             }
 
             let stop = Arc::new(AtomicBool::new(false));
@@ -1001,6 +1022,7 @@ fn auth_provider(agent: Agent) -> Result<AuthProvider> {
         Agent::Codex => Ok(AuthProvider::Codex),
         Agent::Antigravity => Ok(AuthProvider::Antigravity),
         Agent::Grok => Ok(AuthProvider::GrokBuild),
+        Agent::ZCode => bail!("auth management is not applicable for ZCode"),
     }
 }
 
@@ -1016,6 +1038,7 @@ fn auth_providers(selection: AgentSelection) -> Result<Vec<AuthProvider>> {
         AgentSelection::Codex => Ok(vec![AuthProvider::Codex]),
         AgentSelection::Antigravity => Ok(vec![AuthProvider::Antigravity]),
         AgentSelection::Grok => Ok(vec![AuthProvider::GrokBuild]),
+        AgentSelection::ZCode => Ok(Vec::new()),
     }
 }
 
@@ -1137,6 +1160,13 @@ fn normalize(
         ]),
         InputFormat::GrokSessions => Ok(grok::normalize_sessions_json(input, meta, redactor)?),
         InputFormat::GrokHook => Ok(vec![grok::normalize_hook(input, meta, redactor)?]),
+        InputFormat::ZCodeSessions => {
+            let entries: Vec<ZCodeSessionEntry> = serde_json::from_str(input)?;
+            Ok(entries
+                .iter()
+                .filter_map(|entry| zcode::normalize_zcode_session(entry, meta, redactor))
+                .collect())
+        }
     }
     .and_then(|observations| {
         if observations.is_empty() {

@@ -19,10 +19,12 @@ use crate::{
         claude::{self, ClaudeAdapterError},
         codex::{self, CodexAdapterError, CodexThreadContext},
         grok::{self, GrokAdapterError},
+        zcode::{self, ZCodeAdapterError, ZCodeSessionEntry},
     },
     collectors::{
         CodexAppServer, CollectorError, DEFAULT_COLLECTOR_TIMEOUT, collect_antigravity_sessions,
         collect_claude_transcripts, collect_codex_local_threads, collect_grok_sessions,
+        collect_zcode_sessions,
     },
     domain::{ActivityStatus, AgentType, ObservationMeta, Presence, SessionObservation},
     outbox::{Outbox, OutboxError},
@@ -44,6 +46,8 @@ pub enum SourceError {
     #[error(transparent)]
     GrokAdapter(#[from] GrokAdapterError),
     #[error(transparent)]
+    ZCodeAdapter(#[from] ZCodeAdapterError),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
 
@@ -55,6 +59,7 @@ impl SourceError {
             Self::CodexAdapter(_) => "codex_payload_invalid",
             Self::AntigravityAdapter(_) => "antigravity_payload_invalid",
             Self::GrokAdapter(_) => "grok_payload_invalid",
+            Self::ZCodeAdapter(_) => "zcode_payload_invalid",
             Self::Json(_) => "internal_json_failed",
         }
     }
@@ -259,6 +264,36 @@ impl SessionSource for GrokSessionSource {
     ) -> Result<Vec<SessionObservation>, SourceError> {
         let payload = collect_grok_sessions(self.include_completed)?;
         Ok(grok::normalize_sessions_json(&payload, meta, redactor)?)
+    }
+}
+
+pub struct ZCodeSessionSource {
+    include_completed: bool,
+}
+
+impl ZCodeSessionSource {
+    pub fn new(include_completed: bool) -> Self {
+        Self { include_completed }
+    }
+}
+
+impl SessionSource for ZCodeSessionSource {
+    fn agent_type(&self) -> AgentType {
+        AgentType::ZCode
+    }
+
+    fn collect(
+        &mut self,
+        meta: &ObservationMeta,
+        redactor: &ProjectRedactor,
+    ) -> Result<Vec<SessionObservation>, SourceError> {
+        let payload = collect_zcode_sessions(self.include_completed)?;
+        let entries: Vec<ZCodeSessionEntry> = serde_json::from_str(&payload)?;
+        let observations = entries
+            .iter()
+            .filter_map(|entry| zcode::normalize_zcode_session(entry, meta, redactor))
+            .collect();
+        Ok(observations)
     }
 }
 

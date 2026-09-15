@@ -45,6 +45,9 @@ pub fn load_session_conversation(
     if validate_session_id(session_id).is_err() {
         return Vec::new();
     }
+    if agent_type == AgentType::ZCode {
+        return load_zcode_session_conversation(home, session_id);
+    }
     let Some(path) = find_agent_transcript(home, agent_type, session_id) else {
         return Vec::new();
     };
@@ -108,7 +111,106 @@ fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -
         AgentType::GrokBuild => {
             find_provider_transcript(&home.join(".grok").join("sessions"), session_id, 0)
         }
+        AgentType::ZCode => None,
     }
+}
+
+fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> {
+    let db_path = home.join(".zcode").join("cli").join("db").join("db.sqlite");
+    if !db_path.is_file() {
+        return Vec::new();
+    }
+    let Ok(connection) = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Vec::new();
+    };
+
+    let sql = r#"
+        SELECT
+            json_extract(m.data, '$.role') as role,
+            json_extract(p.data, '$.type') as part_type,
+            p.data
+        FROM message m
+        JOIN part p ON m.id = p.message_id
+        WHERE m.session_id = ?1
+        ORDER BY m.sequence ASC, p.sequence ASC
+        LIMIT 300
+    "#;
+
+    let Ok(mut stmt) = connection.prepare(sql) else {
+        return Vec::new();
+    };
+
+    let rows = match stmt.query_map([session_id], |row| {
+        Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    }) {
+        Ok(mapped) => mapped.filter_map(Result::ok).collect::<Vec<_>>(),
+        Err(_) => return Vec::new(),
+    };
+
+    let mut items = Vec::new();
+    let mut approx_bytes = 0usize;
+
+    for (role_opt, part_type_opt, raw_data) in rows {
+        let Ok(data) = serde_json::from_str::<Value>(&raw_data) else {
+            continue;
+        };
+        let role = role_opt.as_deref().unwrap_or("assistant");
+        let part_type = part_type_opt.as_deref().unwrap_or("");
+
+        let item = match part_type {
+            "text" => {
+                let text = data.get("text").and_then(Value::as_str).unwrap_or("");
+                let clean = clean_message_text(text);
+                if clean.is_empty() {
+                    continue;
+                }
+                conversation_item(role, "message", "", &clean, "completed")
+            }
+            "tool" => {
+                let tool_name = data.get("tool").and_then(Value::as_str).unwrap_or("工具调用");
+                let state = data.get("state");
+                let status = state
+                    .and_then(|s| s.get("status"))
+                    .and_then(Value::as_str)
+                    .map(status_label)
+                    .unwrap_or("completed");
+                let input = state.and_then(|s| s.get("input"));
+                let output = state.and_then(|s| s.get("output"));
+                let label = tool_call_label(tool_name, input);
+                let details = if let Some(out) = output {
+                    compact_json(out)
+                } else if let Some(inp) = input {
+                    compact_json(inp)
+                } else {
+                    String::new()
+                };
+                conversation_item("assistant", "tool", &label, &details, status)
+            }
+            _ => continue,
+        };
+
+        approx_bytes += item
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::len)
+            .unwrap_or_default()
+            + 128;
+        items.push(item);
+        if items.len() >= MAX_CONVERSATION_MESSAGES
+            || approx_bytes >= MAX_CONVERSATION_RESPONSE_BYTES
+        {
+            break;
+        }
+    }
+
+    items
 }
 
 fn find_provider_transcript(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {

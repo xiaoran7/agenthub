@@ -1862,6 +1862,223 @@ pub fn find_antigravity_session_cwd(session_id: &str) -> Result<Option<PathBuf>,
     Ok(cwd.map(PathBuf::from))
 }
 
+const ZCODE_RECENT_SESSION_LIMIT: usize = 100;
+const ZCODE_ALL_SESSION_LIMIT: usize = 1_000;
+
+pub fn discover_zcode_database() -> Result<Option<PathBuf>, CollectorError> {
+    if let Some(path) = env::var_os("ZCODE_DB").filter(|v| !v.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(Some(path));
+        }
+    }
+    if let Some(home) = home_dir() {
+        let db = home.join(".zcode").join("cli").join("db").join("db.sqlite");
+        if db.is_file() {
+            return Ok(Some(db));
+        }
+    }
+    Ok(None)
+}
+
+pub fn collect_zcode_sessions(include_completed: bool) -> Result<String, CollectorError> {
+    let Some(database) = discover_zcode_database()? else {
+        return Ok("[]".to_owned());
+    };
+    collect_zcode_sessions_from(&database, include_completed)
+}
+
+pub fn collect_zcode_sessions_from(
+    database: &Path,
+    include_completed: bool,
+) -> Result<String, CollectorError> {
+    let program = "ZCode session store".to_owned();
+    let connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|source| CollectorError::Database {
+        program: program.clone(),
+        source,
+    })?;
+
+    let limit = if include_completed {
+        ZCODE_ALL_SESSION_LIMIT
+    } else {
+        ZCODE_RECENT_SESSION_LIMIT
+    };
+
+    let sql = r#"
+        SELECT
+            s.id,
+            s.title,
+            s.directory,
+            s.time_created,
+            s.time_updated,
+            (SELECT json_extract(data, '$.role') FROM message WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_role,
+            (SELECT json_extract(data, '$.type') FROM part WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_part_type,
+            (SELECT json_extract(data, '$.tool') FROM part WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_tool_name,
+            (SELECT json_extract(data, '$.state.status') FROM part WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_tool_status
+        FROM session s
+        ORDER BY s.time_updated DESC
+        LIMIT ?1
+    "#;
+
+    let mut statement = connection.prepare(sql).map_err(|source| CollectorError::Database {
+        program: program.clone(),
+        source,
+    })?;
+
+    let rows = statement
+        .query_map([limit as i64], |row| {
+            let session_id: String = row.get(0)?;
+            let title: Option<String> = row.get(1)?;
+            let cwd: Option<String> = row.get(2)?;
+            let time_created: i64 = row.get(3)?;
+            let time_updated: i64 = row.get(4)?;
+            let latest_role: Option<String> = row.get(5)?;
+            let latest_part_type: Option<String> = row.get(6)?;
+            let latest_tool_name: Option<String> = row.get(7)?;
+            let latest_tool_status: Option<String> = row.get(8)?;
+
+            let is_running = match latest_tool_status.as_deref() {
+                Some("running") => true,
+                _ => latest_part_type.as_deref() == Some("step-start"),
+            };
+
+            Ok(crate::adapters::zcode::ZCodeSessionEntry {
+                session_id,
+                title,
+                cwd: cwd.unwrap_or_default(),
+                time_created,
+                time_updated,
+                latest_role,
+                latest_part_type,
+                latest_tool_name,
+                latest_tool_status,
+                is_running,
+            })
+        })
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
+
+    serde_json::to_string(&rows).map_err(|source| CollectorError::InvalidJson { program, source })
+}
+
+pub fn collect_zcode_session_contexts(
+    limit: u32,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let Some(database) = discover_zcode_database()? else {
+        return Ok(Vec::new());
+    };
+    collect_zcode_session_contexts_from(&database, limit)
+}
+
+pub fn collect_zcode_session_contexts_from(
+    database: &Path,
+    limit: u32,
+) -> Result<Vec<LocalSessionContext>, CollectorError> {
+    let program = "ZCode local context".to_owned();
+    let connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|source| CollectorError::Database {
+        program: program.clone(),
+        source,
+    })?;
+
+    let sql = r#"
+        SELECT
+            s.id,
+            s.title,
+            (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as model,
+            (SELECT json_extract(data, '$.mode') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as mode,
+            (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as tokens
+        FROM session s
+        ORDER BY s.time_updated DESC
+        LIMIT ?1
+    "#;
+
+    let mut statement = connection.prepare(sql).map_err(|source| CollectorError::Database {
+        program: program.clone(),
+        source,
+    })?;
+
+    let rows = statement
+        .query_map([limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+            ))
+        })
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
+
+    let mut contexts = Vec::with_capacity(rows.len());
+    for (session_id, title, model, mode, tokens) in rows {
+        let Some(clean_id) = metadata_label(&session_id, MAX_CONFIG_VALUE_CHARS) else {
+            continue;
+        };
+        let mut context = LocalSessionContext::new(crate::domain::AgentType::ZCode, clean_id);
+        context.title = title.and_then(|t| metadata_label(&t, MAX_SESSION_TITLE_CHARS));
+        context.model = model.and_then(|m| metadata_label(&m, MAX_CONFIG_VALUE_CHARS));
+        context.permission_mode = mode.and_then(|m| metadata_label(&m, MAX_CONFIG_VALUE_CHARS));
+        context.session_total_tokens =
+            tokens.and_then(|t| u64::try_from(t).ok()).filter(|t| *t > 0);
+        contexts.push(context);
+    }
+    Ok(contexts)
+}
+
+pub fn find_zcode_session_cwd(session_id: &str) -> Result<Option<PathBuf>, CollectorError> {
+    let Some(database) = discover_zcode_database()? else {
+        return Ok(None);
+    };
+    let program = "ZCode session store".to_owned();
+    let connection = Connection::open_with_flags(
+        &database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|source| CollectorError::Database {
+        program: program.clone(),
+        source,
+    })?;
+
+    let mut statement = connection
+        .prepare("SELECT directory FROM session WHERE id = ?1 LIMIT 1")
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
+
+    let cwd = statement
+        .query_row([session_id], |row| row.get::<_, Option<String>>(0))
+        .ok()
+        .flatten()
+        .filter(|dir| !dir.trim().is_empty())
+        .map(PathBuf::from);
+
+    Ok(cwd)
+}
+
 /// Resume an existing local Agent session and return only the child process'
 /// bounded stdout. Claude/Codex prompts go through stdin; Grok Build uses a
 /// temporary `--prompt-file` so the prompt never appears in the process list.
@@ -1968,6 +2185,15 @@ pub fn run_agent_session_turn_streaming(
             ]);
             Some(prompt_file)
         }
+        crate::domain::AgentType::ZCode => {
+            command.args([
+                "--session",
+                session_id,
+                "--prompt",
+                prompt,
+            ]);
+            None
+        }
     };
     apply_turn_options(&mut command, agent, &options);
     if let Some(project_path) = project_path {
@@ -2044,6 +2270,10 @@ pub fn run_agent_session_start_streaming(
             ]);
             Some(prompt_file)
         }
+        crate::domain::AgentType::ZCode => {
+            command.args(["--prompt", prompt]);
+            None
+        }
     };
     apply_turn_options(&mut command, agent, &options);
     command.current_dir(cwd);
@@ -2096,6 +2326,9 @@ fn apply_turn_options(
                 };
                 command.args(["--sandbox", sandbox]);
             }
+        }
+        crate::domain::AgentType::ZCode => {
+            command.args(["--model", model]);
         }
         crate::domain::AgentType::Antigravity | crate::domain::AgentType::GrokBuild => {}
     }
@@ -2216,7 +2449,9 @@ fn extract_session_id_from_output(agent: crate::domain::AgentType, output: &str)
                 .get("thread_id")
                 .and_then(Value::as_str)
                 .filter(|_| value.get("type").and_then(Value::as_str) == Some("thread.started")),
-            crate::domain::AgentType::Antigravity | crate::domain::AgentType::GrokBuild => [
+            crate::domain::AgentType::Antigravity
+            | crate::domain::AgentType::GrokBuild
+            | crate::domain::AgentType::ZCode => [
                 "session_id",
                 "sessionId",
                 "conversation_id",
@@ -2367,6 +2602,23 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
             }
             _ => None,
         },
+        crate::domain::AgentType::ZCode => {
+            if let Some(text) = value.get("text").and_then(Value::as_str) {
+                return Some(AgentTurnUpdate::AssistantDelta(text.to_owned()));
+            }
+            if let Some(tool) = value.get("tool").and_then(Value::as_str) {
+                return Some(AgentTurnUpdate::Activity(
+                    match crate::adapters::safe_tool_category(Some(tool)).as_deref() {
+                        Some("shell") => "ZCode 正在执行命令",
+                        Some("file_change") => "ZCode 正在修改文件",
+                        Some("file_read") => "ZCode 正在读取文件",
+                        Some("user_input") => "ZCode 正在等待输入",
+                        _ => "ZCode 正在调用工具",
+                    },
+                ));
+            }
+            None
+        }
     }
 }
 
@@ -2460,6 +2712,20 @@ fn final_agent_message(agent: crate::domain::AgentType, output: &str) -> Option<
             let trimmed = collected.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_owned())
         }
+        crate::domain::AgentType::ZCode => output.lines().rev().find_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            if let Some(text) = value
+                .get("text")
+                .or_else(|| value.get("content"))
+                .and_then(Value::as_str)
+            {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_owned());
+                }
+            }
+            None
+        }),
     }
 }
 

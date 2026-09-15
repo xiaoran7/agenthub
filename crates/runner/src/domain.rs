@@ -13,6 +13,7 @@ pub enum AgentType {
     Codex,
     Antigravity,
     GrokBuild,
+    ZCode,
 }
 
 impl AgentType {
@@ -22,6 +23,7 @@ impl AgentType {
             Self::Codex => "codex",
             Self::Antigravity => "antigravity",
             Self::GrokBuild => "grok_build",
+            Self::ZCode => "zcode",
         }
     }
 }
@@ -71,6 +73,9 @@ pub enum ObservationSource {
     GrokActiveSessions,
     ProcessProbe,
     LocalHistory,
+    ZCodeDb,
+    ZCodeHook,
+    ZCodeRollout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

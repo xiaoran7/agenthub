@@ -32,6 +32,7 @@ export const AGENT_LABELS: Record<AgentType, string> = {
   codex: "Codex",
   antigravity: "Antigravity (Google)",
   grok_build: "Grok Build",
+  zcode: "ZCode",
 };
 
 export const WAITING_REASON_LABELS: Record<WaitingReason, string> = {
@@ -62,6 +63,9 @@ export const SOURCE_LABELS: Record<ObservationSource, string> = {
   grok_sessions: "Grok Build 会话",
   grok_hook: "Grok Build Hook",
   grok_active_sessions: "Grok Build 活动会话",
+  zcode_db: "ZCode 本地数据库",
+  zcode_hook: "ZCode Hook",
+  zcode_rollout: "ZCode Rollout",
   process_probe: "进程探测",
   local_history: "本地历史",
 };

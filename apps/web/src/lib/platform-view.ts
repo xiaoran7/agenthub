@@ -53,6 +53,7 @@ export const AGENT_LABELS: Record<AgentType, string> = {
   codex: "Codex",
   antigravity: "Antigravity (Google)",
   grok_build: "Grok Build",
+  zcode: "ZCode",
 };
 
 export interface AuthStatusPresentation {

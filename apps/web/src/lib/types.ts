@@ -76,6 +76,7 @@ const AGENT_TYPES: Record<AgentType, true> = {
   codex: true,
   antigravity: true,
   grok_build: true,
+  zcode: true,
 };
 
 /**

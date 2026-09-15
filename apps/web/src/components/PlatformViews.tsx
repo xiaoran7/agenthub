@@ -166,7 +166,11 @@ export function SessionTable({
                   <span
                     className={`provider-mark provider-${session.agent_type}`}
                   >
-                    {session.agent_type === "claude_code" ? "C" : "X"}
+                    {session.agent_type === "claude_code"
+                      ? "C"
+                      : session.agent_type === "zcode"
+                        ? "Z"
+                        : "X"}
                   </span>
                   {AGENT_LABELS[session.agent_type]}
                 </span>

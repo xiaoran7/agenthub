@@ -41,11 +41,15 @@ export function SessionList({
             >
               <div className="session-card-top">
                 <span
-                  className="session-agent-mark"
+                  className="agent-badge"
                   data-agent={session.agent_type}
                   aria-hidden="true"
                 >
-                  {session.agent_type === "claude_code" ? "C" : "X"}
+                  {session.agent_type === "claude_code"
+                    ? "C"
+                    : session.agent_type === "zcode"
+                      ? "Z"
+                      : "X"}
                 </span>
                 <span className="session-copy">
                   <span className="session-project">

@@ -12,6 +12,7 @@ export const agentTypes = [
   "codex",
   "antigravity",
   "grok_build",
+  "zcode",
 ] as const;
 export const presences = ["LIVE", "PERSISTED", "UNKNOWN"] as const;
 export const activityStatuses = [
@@ -37,6 +38,9 @@ export const observationSources = [
   "grok_active_sessions",
   "process_probe",
   "local_history",
+  "zcode_db",
+  "zcode_hook",
+  "zcode_rollout",
 ] as const;
 export const confidences = [
   "unknown",
