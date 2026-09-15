@@ -217,11 +217,11 @@ export class RemoteContentStore {
       }))
       .filter((row) => row.command.hub_session_id === hub);
   }
-  acknowledgeCommands(runner: string, seq: number): void {
+  acknowledgeCommands(runner: string, seq: number, force = false): void {
     const watermarks = this.watermarks(runner);
     if (
       !Number.isSafeInteger(seq) ||
-      seq < watermarks.command_ack ||
+      (!force && seq < watermarks.command_ack) ||
       seq > watermarks.command_seq
     )
       throw new RemoteStoreError("invalid_command_ack");

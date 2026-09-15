@@ -129,8 +129,11 @@ export function registerRemoteRoutes(
             content.register(device.owner_id, device.device_id);
             const marks = content.watermarks(device.device_id);
             const received = Number(frame.received_command_seq);
-            if (received < marks.command_ack || received > marks.command_seq)
+            if (!Number.isSafeInteger(received) || received < 0 || received > marks.command_seq)
               throw new RemoteStoreError("command_journal_mismatch");
+            if (received < marks.command_ack) {
+              content.acknowledgeCommands(device.device_id, received, true);
+            }
             const previous = connections.get(device.device_id);
             if (previous) previous.socket.close(1000, "connection_replaced");
             connection = {
@@ -162,13 +165,28 @@ export function registerRemoteRoutes(
               Array.isArray(frame.payload)
             )
               throw new RemoteStoreError("invalid_payload");
-            content.receive(
-              connection.owner,
-              connection.runner,
-              Number(frame.seq),
-              frame.payload as Record<string, unknown>,
-              connection.generation,
-            );
+            try {
+              content.receive(
+                connection.owner,
+                connection.runner,
+                Number(frame.seq),
+                frame.payload as Record<string, unknown>,
+                connection.generation,
+              );
+            } catch (err) {
+              if (
+                err instanceof RemoteStoreError &&
+                err.code === "sequence_conflict" &&
+                Number(frame.seq) <=
+                  content.watermarks(connection.runner).received
+              ) {
+                // Runner replayed an older sequence whose payload differed from Gateway canonical log
+                // (e.g. after restart or generation rollover). Do not terminate the connection.
+                // Transmit ACK of the current watermark so the runner can advance past it.
+              } else {
+                throw err;
+              }
+            }
             transmit(connection, {
               type: "ack",
               seq: content.watermarks(connection.runner).received,

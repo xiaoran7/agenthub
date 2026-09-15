@@ -64,7 +64,62 @@ export function RemoteConsole({
   const [busy, setBusy] = useState(false);
   // Keep an uncertain POST's identity when the user retries the same operation.
   const attempts = useRef(new Map<string, RemoteCommand>());
+  const autoResumedRef = useRef<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+
+  // 侧边栏宽度与折叠状态持久化
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("agenthub_remote_sidebar_width");
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 180 && parsed <= 520) return parsed;
+      }
+    }
+    return 280;
+  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window !== "undefined") {
+      return (
+        localStorage.getItem("agenthub_remote_sidebar_collapsed") === "true"
+      );
+    }
+    return false;
+  });
+  const isResizingRef = useRef(false);
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("agenthub_remote_sidebar_collapsed", String(next));
+      return next;
+    });
+  };
+
+  const handleResizerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const delta = moveEvent.clientX - startX;
+      const nextWidth = Math.min(Math.max(startWidth + delta, 180), 520);
+      setSidebarWidth(nextWidth);
+    };
+
+    const onMouseUp = () => {
+      isResizingRef.current = false;
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      localStorage.setItem("agenthub_remote_sidebar_width", String(sidebarWidth));
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [model, setModel] = useState("");
@@ -74,6 +129,7 @@ export function RemoteConsole({
   const [nativeId, setNativeId] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
   const timeline = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const refresh = useRef(() => {});
   const session = snapshot.sessions.find((item) => key(item) === selected);
   const runnerInfo = snapshot.runners.find((item) => item.runner_id === runner);
@@ -81,6 +137,13 @@ export function RemoteConsole({
   const canSend =
     connected &&
     ["idle", "completed"].includes(session?.binding.execution_state ?? "");
+
+  const adjustTextareaHeight = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 28), 220)}px`;
+  };
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -191,6 +254,30 @@ export function RemoteConsole({
     if (pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 300)
       pane.scrollTop = pane.scrollHeight;
   }, [items]);
+
+  // 核心特性：选定会话时全量自动开始恢复接入，无需手动点击恢复
+  useEffect(() => {
+    if (
+      !session ||
+      !session.online ||
+      session.binding.control_connected ||
+      busy
+    )
+      return;
+    const sessionKey = key(session);
+    if (autoResumedRef.current.has(sessionKey)) return;
+    autoResumedRef.current.add(sessionKey);
+    void submit(
+      {
+        action: "connect",
+        mode: "resume",
+        workspace_path: session.binding.workspace_path,
+        provider_session_id: session.binding.provider_session_id,
+      },
+      session,
+    );
+  }, [selected, session?.online, session?.binding.control_connected, busy]);
+
   const latestFailure = [...commands]
     .reverse()
     .find((item) =>
@@ -220,7 +307,10 @@ export function RemoteConsole({
         command,
       );
       attempts.current.delete(attemptKey);
-      if (action.action === "send_prompt") setText("");
+      if (action.action === "send_prompt") {
+        setText("");
+        if (textareaRef.current) textareaRef.current.style.height = "auto";
+      }
       refresh.current();
     } catch (err) {
       if (err instanceof Error && err.name === "RemoteRequestRejected")
@@ -396,9 +486,38 @@ export function RemoteConsole({
 
   return (
     <div className="remote-console">
-      <aside className="remote-sidebar">
-        <div className="remote-brand">
-          AgentHub <span>Remote</span>
+      <aside
+        className={`remote-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}
+        style={{
+          width: sidebarCollapsed ? "0px" : `${sidebarWidth}px`,
+          minWidth: sidebarCollapsed ? "0px" : `${sidebarWidth}px`,
+          maxWidth: sidebarCollapsed ? "0px" : `${sidebarWidth}px`,
+        }}
+      >
+        <div className="remote-sidebar-header">
+          <div className="remote-brand">
+            AgentHub <span>Remote</span>
+          </div>
+          <button
+            type="button"
+            className="remote-icon-btn"
+            title="收起侧边栏"
+            aria-label="收起侧边栏"
+            onClick={toggleSidebar}
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+              <path d="M15 9l-3 3 3 3" />
+            </svg>
+          </button>
         </div>
         <button
           className="remote-primary"
@@ -429,6 +548,22 @@ export function RemoteConsole({
                   onClick={() => {
                     setSelected(key(activeSession));
                     setError("");
+                    if (
+                      activeSession.online &&
+                      !activeSession.binding.control_connected
+                    ) {
+                      void submit(
+                        {
+                          action: "connect",
+                          mode: "resume",
+                          workspace_path:
+                            activeSession.binding.workspace_path,
+                          provider_session_id:
+                            activeSession.binding.provider_session_id,
+                        },
+                        activeSession,
+                      );
+                    }
                   }}
                 >
                   <span className="remote-session-title">{item.title}</span>
@@ -504,19 +639,50 @@ export function RemoteConsole({
           )}
         </div>
       </aside>
+      {!sidebarCollapsed && (
+        <div
+          className="remote-sidebar-resizer"
+          onMouseDown={handleResizerMouseDown}
+          title="拖拽调整侧边栏宽度"
+        />
+      )}
       <main className="remote-main">
         <header>
-          <div>
-            <h1>
-              {session
-                ? workspaceLabel(session.binding.workspace_path)
-                : "随时接着做"}
-            </h1>
-            <p>
-              {session
-                ? `Codex · ${session.online ? (connected ? "会话已连接" : "会话未连接") : "电脑离线"}`
-                : "电脑执行，随处继续。"}
-            </p>
+          <div className="remote-header-left">
+            {sidebarCollapsed && (
+              <button
+                type="button"
+                className="remote-icon-btn expand-btn"
+                title="展开侧边栏"
+                aria-label="展开侧边栏"
+                onClick={toggleSidebar}
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="9" y1="3" x2="9" y2="21" />
+                  <path d="M13 15l3-3-3-3" />
+                </svg>
+              </button>
+            )}
+            <div>
+              <h1>
+                {session
+                  ? workspaceLabel(session.binding.workspace_path)
+                  : "随时接着做"}
+              </h1>
+              <p>
+                {session
+                  ? `Codex · ${session.online ? (connected ? "会话已连接" : "会话未连接") : "电脑离线"}`
+                  : "电脑执行，随处继续。"}
+              </p>
+            </div>
           </div>
           {session?.binding.current_turn_id && (
             <button
@@ -553,8 +719,13 @@ export function RemoteConsole({
           <>
             {!session && <p className="remote-muted">正在等待电脑确认会话…</p>}
             {session && !connected && (
-              <div className="remote-notice">
-                已同步的内容仍可查看。
+              <div className="remote-notice restoring">
+                <span className="remote-notice-spinner" />
+                <span>
+                  {session.online
+                    ? "正在全量恢复连接原生 Agent 会话…"
+                    : "电脑处于离线状态，上线后将自动恢复接入。"}
+                </span>
                 {session.online && (
                   <button
                     disabled={busy}
@@ -568,7 +739,7 @@ export function RemoteConsole({
                       })
                     }
                   >
-                    恢复会话
+                    重试连接
                   </button>
                 )}
               </div>
@@ -632,36 +803,119 @@ export function RemoteConsole({
               ))}
             </div>
             <form
-              className="remote-composer"
+              className="remote-composer-card"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (canSend && text.trim())
+                if (canSend && text.trim()) {
                   void submit({ action: "send_prompt", text });
+                  if (textareaRef.current)
+                    textareaRef.current.style.height = "auto";
+                }
               }}
             >
-              <label htmlFor="remote-prompt">
-                {session
-                  ? !session.online
-                    ? "连接已断开"
-                    : states[session.binding.execution_state]
-                  : "正在连接"}
-              </label>
-              <textarea
-                id="remote-prompt"
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                placeholder={canSend ? "继续这段工作…" : "等待会话就绪后发送"}
-                rows={3}
-                disabled={!connected}
-              />
-              <div>
-                <small>会话内容会同步到你的 Hub</small>
-                <button
-                  className="remote-primary"
-                  disabled={!canSend || busy || !text.trim()}
-                >
-                  发送
-                </button>
+              <div className="remote-composer-input-wrapper">
+                <textarea
+                  ref={textareaRef}
+                  id="remote-prompt"
+                  value={text}
+                  onChange={(event) => {
+                    setText(event.target.value);
+                    adjustTextareaHeight();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      if (canSend && text.trim()) {
+                        void submit({ action: "send_prompt", text });
+                        if (textareaRef.current)
+                          textareaRef.current.style.height = "auto";
+                      }
+                    }
+                  }}
+                  placeholder={
+                    !session
+                      ? "等待电脑确认会话…"
+                      : !session.online
+                        ? "电脑离线，无法发送消息"
+                        : !connected
+                          ? "会话正在自动恢复接入中…"
+                          : canSend
+                            ? "继续这段工作… (Enter 发送, Shift+Enter 换行)"
+                            : "Agent 正在执行中…"
+                  }
+                  rows={1}
+                  disabled={!connected}
+                />
+              </div>
+              <div className="remote-composer-toolbar">
+                <div className="remote-composer-status">
+                  <span
+                    className={`remote-status-pill ${
+                      session?.online
+                        ? connected
+                          ? session?.binding.execution_state === "running"
+                            ? "running"
+                            : "ready"
+                          : "connecting"
+                        : "offline"
+                    }`}
+                  >
+                    <span className="remote-pill-dot" />
+                    {session
+                      ? !session.online
+                        ? "电脑离线"
+                        : !connected
+                          ? "正在恢复…"
+                          : states[session.binding.execution_state] ?? "就绪"
+                      : "正在连接"}
+                  </span>
+                  <span className="remote-composer-hint">
+                    {canSend
+                      ? "Enter 发送 · Shift+Enter 换行"
+                      : "Hub 双向安全同步"}
+                  </span>
+                </div>
+                <div className="remote-composer-actions">
+                  {session?.binding.current_turn_id && (
+                    <button
+                      type="button"
+                      className="remote-interrupt-btn"
+                      title="停止任务"
+                      disabled={!connected || busy}
+                      onClick={() => void submit({ action: "interrupt" })}
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                      >
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                      </svg>
+                      <span>停止</span>
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    className="remote-send-btn"
+                    title={canSend && text.trim() ? "发送" : "等待输入就绪"}
+                    disabled={!canSend || busy || !text.trim()}
+                  >
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="12" y1="19" x2="12" y2="5" />
+                      <polyline points="5 12 12 5 19 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             </form>
           </>

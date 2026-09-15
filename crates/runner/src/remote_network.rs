@@ -696,9 +696,14 @@ fn handle_network_event<T: NativeTransport>(
     match event {
         NetworkEvent::Connected(epoch, server_seq) if epoch >> 32 == current_remote_generation => {
             let (sent, acked) = durable.journal.watermarks()?;
-            if server_seq < acked || server_seq > sent {
+            if server_seq < acked {
                 reject_remote_epoch(control, active, epoch);
                 return Ok(());
+            }
+            if server_seq > sent {
+                for s in (sent + 1)..=server_seq {
+                    let _ = durable.journal.mark_sent(s);
+                }
             }
             match durable.journal.acknowledge(server_seq) {
                 Ok(()) => {}
@@ -728,6 +733,12 @@ fn handle_network_event<T: NativeTransport>(
                         reject_remote_epoch(control, active, epoch);
                         return Ok(());
                     };
+                    let (sent, _) = durable.journal.watermarks()?;
+                    if seq > sent {
+                        for s in (sent + 1)..=seq {
+                            let _ = durable.journal.mark_sent(s);
+                        }
+                    }
                     match durable.journal.acknowledge(seq) {
                         Ok(()) => {}
                         Err(crate::remote_journal::JournalError::InvalidAck) => {
