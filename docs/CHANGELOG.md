@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.1] - 2026-09-15
+
+- **ZCode Agent 全双工远程控制与实时打字机流式输出上线**：
+  - **ZCodeAppServer 原生协议宿主驱动**（`crates/runner/src/collectors.rs`）：通过长生命周期进程直驱 `zcode.cjs app-server`，完成与 ZCode CLI 间的标准 JSON-RPC 交互；实现自动化双向握手应答（`session/requestRuntimePreferences` 与 `interaction/requestOfficialMcpAuthHeaders`），闭环管理 `session/resume`、`session/subscribe`（`desktop-continuous` 流式订阅）、`session/send` 与 `session/stop`。
+  - **多 Provider 路由传输层 `MultiProviderTransport`**（`crates/runner/src/remote_host.rs`）：基于会话 ID 前缀精准分流，`sess_*` 路由至 ZCode，`thr-*` 继续交由 Codex 处理；打通 `thread/read`、`thread/resume`、`turn/start`、`turn/interrupt` 及工作区路径解析。
+  - **事件流与实时打字机转译归一化**：将 ZCode 的 `model.streaming`（`text_delta`）实时转译为 Gateway 与 Web/移动端可消费的 `item/agentMessage/delta` 事件流，实现与 ChatGPT / Codex 一致的丝滑打字机体验；同步转译 `tool.updated` 工具执行状态与回合终态。
+  - **全量会话发现与工作区映射**：自动扫描本机会话数据库并在接管流程中放宽工作区授权判定，确保跨目录历史任务即点即用。
+- **全端版本自增至 v2.4.1**（Android `versionCode = 14`），完成 Windows Desktop NSIS/MSI 与 Android Debug APK 构建归档；交付物保存在 `Deliverables/AgentHub/`，并按铁律清理旧版本产物。
+
 ## [2.3.6] - 2026-09-14
 
 - **双端 UI 深度重构与全面收敛 Remote-only 控制台**：

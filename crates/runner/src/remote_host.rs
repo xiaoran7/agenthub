@@ -4,13 +4,14 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::collectors::CodexAppServer;
+use crate::collectors::{CodexAppServer, ZCodeAppServer};
 
 /// Protocol errors are safe codes; provider payloads belong to the content stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +60,314 @@ impl NativeTransport for CodexAppServer {
     fn drain(&mut self) -> Result<Vec<Value>, NativeError> {
         self.drain_messages()
             .map_err(|_| NativeError::uncertain("provider_transport_lost"))
+    }
+}
+
+pub struct MultiProviderTransport {
+    codex: CodexAppServer,
+    zcode: Option<ZCodeAppServer>,
+    zcode_active_turns: HashMap<String, String>,
+    zcode_buffered_events: VecDeque<Value>,
+    zcode_cached_cwds: HashMap<String, PathBuf>,
+}
+
+impl MultiProviderTransport {
+    pub fn new(codex: CodexAppServer, zcode: Option<ZCodeAppServer>) -> Self {
+        Self {
+            codex,
+            zcode,
+            zcode_active_turns: HashMap::new(),
+            zcode_buffered_events: VecDeque::new(),
+            zcode_cached_cwds: HashMap::new(),
+        }
+    }
+
+    fn ensure_zcode(&mut self) -> Result<&mut ZCodeAppServer, NativeError> {
+        if self.zcode.is_none() {
+            if let Ok(server) = ZCodeAppServer::start_if_available(Duration::from_secs(20)) {
+                self.zcode = Some(server);
+            }
+        }
+        self.zcode
+            .as_mut()
+            .ok_or_else(|| NativeError::rejected("zcode_not_available"))
+    }
+}
+
+impl NativeTransport for MultiProviderTransport {
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, NativeError> {
+        let is_zcode = params
+            .get("threadId")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.starts_with("sess_"));
+
+        match method {
+            "thread/read" if is_zcode => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let zcode = self.ensure_zcode()?;
+                let resume_res = zcode.session_resume(session_id).map_err(|error| match error {
+                    crate::collectors::CollectorError::Protocol { .. } => {
+                        NativeError::rejected("external_session_not_resumable")
+                    }
+                    _ => NativeError::uncertain("provider_transport_lost"),
+                })?;
+                let raw_cwd = resume_res
+                    .pointer("/session/workspace/workspacePath")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .or_else(|| crate::collectors::find_zcode_session_cwd(session_id).ok().flatten())
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let cwd = dunce::canonicalize(&raw_cwd).unwrap_or(raw_cwd);
+                self.zcode_cached_cwds.insert(session_id.to_string(), cwd.clone());
+                let title = resume_res
+                    .pointer("/session/title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd.to_string_lossy(),
+                        "status": { "type": "idle" },
+                        "name": title
+                    }
+                }))
+            }
+            "thread/resume" if is_zcode => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let cwd = self
+                    .zcode_cached_cwds
+                    .get(session_id)
+                    .cloned()
+                    .or_else(|| crate::collectors::find_zcode_session_cwd(session_id).ok().flatten())
+                    .unwrap_or_else(|| PathBuf::from("."));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd.to_string_lossy(),
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "turn/start" if is_zcode => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let zcode = self.ensure_zcode()?;
+                let text = params["input"]
+                    .as_array()
+                    .and_then(|arr| arr.iter().find_map(|item| item["text"].as_str()))
+                    .unwrap_or("");
+                zcode.session_send(session_id, text).map_err(|error| match error {
+                    crate::collectors::CollectorError::Protocol { ref message, .. } => {
+                        NativeError::rejected(message.as_str())
+                    }
+                    _ => NativeError::uncertain("provider_transport_lost"),
+                })?;
+                let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
+                self.zcode_active_turns
+                    .insert(session_id.to_string(), turn_id.clone());
+                self.zcode_buffered_events.push_back(json!({
+                    "method": "turn/started",
+                    "params": {
+                        "threadId": session_id,
+                        "turn": {
+                            "id": turn_id.clone(),
+                            "status": { "type": "inProgress" }
+                        }
+                    }
+                }));
+                Ok(json!({
+                    "turn": {
+                        "id": turn_id,
+                        "status": { "type": "inProgress" }
+                    }
+                }))
+            }
+            "turn/interrupt" if is_zcode => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                if let Some(ref mut zcode) = self.zcode {
+                    let _ = zcode.session_stop(session_id);
+                }
+                Ok(json!({"ok": true}))
+            }
+            "thread/archive" | "thread/unarchive" if is_zcode => {
+                Ok(json!({"ok": true}))
+            }
+            "thread/list" => {
+                let mut response = self.codex.request("thread/list", params).map_err(|error| match error {
+                    crate::collectors::CollectorError::Protocol { .. } => {
+                        NativeError::rejected("provider_rejected")
+                    }
+                    _ => NativeError::uncertain("provider_transport_lost"),
+                })?;
+                if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database() {
+                    if let Ok(payload) = crate::collectors::collect_zcode_sessions_from(&db_path, false) {
+                        if let Ok(entries) = serde_json::from_str::<Vec<crate::adapters::zcode::ZCodeSessionEntry>>(&payload) {
+                            if let Some(items) = response["data"].as_array_mut() {
+                                for entry in entries.into_iter().take(100) {
+                                    items.push(json!({
+                                        "id": entry.session_id,
+                                        "cwd": entry.cwd,
+                                        "name": entry.title,
+                                        "status": { "type": "idle" }
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(response)
+            }
+            _ => self.codex.request(method, params).map_err(|error| match error {
+                crate::collectors::CollectorError::Protocol { .. } => {
+                    NativeError::rejected("provider_rejected")
+                }
+                _ => NativeError::uncertain("provider_transport_lost"),
+            }),
+        }
+    }
+
+    fn respond(&mut self, id: Value, result: Value) -> Result<(), NativeError> {
+        self.codex
+            .respond(id, result)
+            .map_err(|_| NativeError::uncertain("provider_transport_lost"))
+    }
+
+    fn drain(&mut self) -> Result<Vec<Value>, NativeError> {
+        let mut messages: Vec<Value> = self
+            .codex
+            .drain_messages()
+            .map_err(|_| NativeError::uncertain("provider_transport_lost"))?;
+
+        while let Some(evt) = self.zcode_buffered_events.pop_front() {
+            messages.push(evt);
+        }
+
+        if let Some(ref mut zcode) = self.zcode {
+            let raw_events = zcode
+                .drain_messages()
+                .map_err(|_| NativeError::uncertain("provider_transport_lost"))?;
+
+            for raw in raw_events {
+                let method = raw.get("method").and_then(Value::as_str).unwrap_or("");
+                if method == "session/event" {
+                    let params = &raw["params"];
+                    let session_id = params["sessionId"].as_str().unwrap_or("");
+                    let event_type = params["type"].as_str().unwrap_or("");
+                    let payload = &params["payload"];
+                    let active_turn_id = self.zcode_active_turns.get(session_id).cloned();
+
+                    match event_type {
+                        "model.streaming" => {
+                            let delta = payload["delta"].as_str().unwrap_or("");
+                            let part_id = payload["partId"]
+                                .as_str()
+                                .or_else(|| payload["assistantMessageId"].as_str())
+                                .unwrap_or("agent_msg");
+                            if !delta.is_empty() {
+                                messages.push(json!({
+                                    "method": "item/agentMessage/delta",
+                                    "params": {
+                                        "threadId": session_id,
+                                        "itemId": part_id,
+                                        "delta": delta
+                                    }
+                                }));
+                            }
+                        }
+                        "tool.updated" => {
+                            let kind = payload["kind"].as_str().unwrap_or("");
+                            let tool_id = payload["toolCallId"].as_str().unwrap_or("tool_call");
+                            if kind == "started" {
+                                messages.push(json!({
+                                    "method": "item/started",
+                                    "params": {
+                                        "threadId": session_id,
+                                        "item": {
+                                            "id": tool_id,
+                                            "type": "commandExecution"
+                                        }
+                                    }
+                                }));
+                            } else if matches!(kind, "result" | "batch" | "completed") {
+                                messages.push(json!({
+                                    "method": "item/completed",
+                                    "params": {
+                                        "threadId": session_id,
+                                        "item": {
+                                            "id": tool_id,
+                                            "type": "commandExecution"
+                                        }
+                                    }
+                                }));
+                            }
+                        }
+                        "turn.completed" => {
+                            let turn_id = active_turn_id.unwrap_or_else(|| "turn_1".into());
+                            self.zcode_active_turns.remove(session_id);
+                            messages.push(json!({
+                                "method": "turn/completed",
+                                "params": {
+                                    "threadId": session_id,
+                                    "turn": {
+                                        "id": turn_id,
+                                        "status": { "type": "completed" }
+                                    }
+                                }
+                            }));
+                        }
+                        "turn.failed" => {
+                            let turn_id = active_turn_id.unwrap_or_else(|| "turn_1".into());
+                            self.zcode_active_turns.remove(session_id);
+                            messages.push(json!({
+                                "method": "turn/completed",
+                                "params": {
+                                    "threadId": session_id,
+                                    "turn": {
+                                        "id": turn_id,
+                                        "status": { "type": "failed" }
+                                    }
+                                }
+                            }));
+                        }
+                        _ => {}
+                    }
+                } else if method == "state.updated" {
+                    let session_id = raw["params"]["sessionId"].as_str().unwrap_or("");
+                    let patch_status = raw["params"]["patch"]["status"].as_str();
+                    if patch_status == Some("idle") {
+                        if let Some(turn_id) = self.zcode_active_turns.remove(session_id) {
+                            messages.push(json!({
+                                "method": "turn/completed",
+                                "params": {
+                                    "threadId": session_id,
+                                    "turn": {
+                                        "id": turn_id,
+                                        "status": { "type": "completed" }
+                                    }
+                                }
+                            }));
+                        }
+                        messages.push(json!({
+                            "method": "thread/status/changed",
+                            "params": {
+                                "threadId": session_id,
+                                "status": { "type": "idle" }
+                            }
+                        }));
+                    } else if patch_status == Some("running") {
+                        messages.push(json!({
+                            "method": "thread/status/changed",
+                            "params": {
+                                "threadId": session_id,
+                                "status": { "type": "active", "activeFlags": [] }
+                            }
+                        }));
+                    }
+                }
+            }
+        }
+
+        Ok(messages)
     }
 }
 
@@ -469,6 +778,11 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     .find(|p| p.as_path() == workspace_path.as_path())
                             })
                             .cloned()
+                            .or_else(|| {
+                                dunce::canonicalize(workspace_path)
+                                    .ok()
+                                    .filter(|p| p.is_dir())
+                            })
                     } else {
                         None
                     }

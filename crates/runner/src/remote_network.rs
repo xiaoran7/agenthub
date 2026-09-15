@@ -426,8 +426,10 @@ pub fn run_with_local_control(
     };
     let mut journal = RemoteJournal::open(database)?;
     journal.bind_identity(identity.device_id(), &bound_server)?;
-    let native = CodexAppServer::start_interactive(binary, Duration::from_secs(20))
+    let codex = CodexAppServer::start_interactive(binary, Duration::from_secs(20))
         .map_err(|_| anyhow::anyhow!("native_host_start_failed"))?;
+    let zcode = crate::collectors::ZCodeAppServer::start_if_available(Duration::from_secs(20)).ok();
+    let native = crate::remote_host::MultiProviderTransport::new(codex, zcode);
     let host = NativeSessionHost::new(native, workspaces.clone())
         .map_err(|error| anyhow::anyhow!(error.code))?;
     let mut durable = DurableHost::new(host, journal)?;

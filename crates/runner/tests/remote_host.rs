@@ -425,6 +425,33 @@ fn resume_reads_before_loading_and_preserves_provider_identity() {
 }
 
 #[test]
+fn zcode_multi_provider_transport_routes_sess_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex_fake = Fake::default();
+    let mut host = NativeSessionHost::new(codex_fake.clone(), vec![dir.path().into()]).unwrap();
+    let mut command = connect(&dir, "hub-zcode", host.generation());
+    if let RemoteAction::Connect {
+        mode,
+        provider_session_id,
+        ..
+    } = &mut command.command
+    {
+        *mode = ConnectMode::Resume;
+        *provider_session_id = Some("sess_mock_test_123".into());
+    }
+    codex_fake.expect(
+        "thread/read",
+        json!({"thread":{"id":"sess_mock_test_123","cwd":dir.path(),"status":{"type":"idle"}}}),
+    );
+    codex_fake.expect(
+        "thread/resume",
+        json!({"thread":{"id":"sess_mock_test_123","status":{"type":"idle"}}}),
+    );
+    assert_eq!(host.handle_command(command).status, "accepted");
+    assert_eq!(host.sessions()[0].provider_session_id, "sess_mock_test_123");
+}
+
+#[test]
 fn known_active_external_session_is_never_resumed_or_attached() {
     let (dir, fake, mut host) = setup();
     let mut command = connect(&dir, "hub", host.generation());
