@@ -118,7 +118,7 @@ type AgentFilter = "all" | Session["agent_type"];
 type DeviceFilter = "all" | string;
 
 const isManagedProvider = (agentType: Session["agent_type"]) =>
-  agentType === "codex";
+  agentType === "codex" || agentType === "zcode";
 
 export function App() {
   const demo =
@@ -456,7 +456,7 @@ function Dashboard({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [agentFilter, setAgentFilter] = useState<AgentFilter>("codex");
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
   const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
   const [alertDismissed, setAlertDismissed] = useState(false);
@@ -825,7 +825,9 @@ function Dashboard({
   }, [sessions]);
 
   useEffect(() => {
-    setLaunchModalProvider("codex");
+    if (agentFilter !== "all" && isManagedProvider(agentFilter)) {
+      setLaunchModalProvider(agentFilter);
+    }
   }, [agentFilter]);
 
   const signOut = async () => {
@@ -896,7 +898,7 @@ function Dashboard({
         onOpenSettings={() => setSettingsOpen(true)}
         onNewSession={() => {
           setSelectedSessionKey(undefined);
-          setLaunchModalProvider("codex");
+          setLaunchModalProvider(agentFilter === "zcode" ? "zcode" : "codex");
           setLaunchModalOpen(true);
         }}
         snapshot={snapshot}
@@ -924,7 +926,7 @@ function Dashboard({
                 className="top-icon-btn new-task-btn"
                 onClick={() => {
                   setSelectedSessionKey(undefined);
-                  setLaunchModalProvider("codex");
+                  setLaunchModalProvider(agentFilter === "zcode" ? "zcode" : "codex");
                   setLaunchModalOpen(true);
                 }}
                 title="新建任务"
@@ -977,12 +979,39 @@ function Dashboard({
             </div>
           </div>
 
-          {/* Managed Agent Indicator */}
+          {/* Managed Agent Indicator & Selector */}
           <div className="sidebar-agent-picker-v2">
-            <span className="picker-label">受控 Agent</span>
-            <div className="single-agent-badge">
-              <strong>{PROVIDER_LIST[0]?.label ?? "OpenAI Codex"}</strong>
-              <span className="agent-badge-tag">Managed</span>
+            <div className="picker-header-row">
+              <span className="picker-label">受控 Agent</span>
+              <button
+                type="button"
+                className={`agent-filter-all-btn ${agentFilter === "all" ? "active" : ""}`}
+                onClick={() => setAgentFilter("all")}
+                title="显示所有受控 Agent 会话"
+              >
+                全部
+              </button>
+            </div>
+            <div className="managed-agents-list">
+              {PROVIDER_LIST.map((item) => {
+                const isSelected = agentFilter === item.type;
+                return (
+                  <button
+                    key={item.type}
+                    type="button"
+                    className={`single-agent-badge ${isSelected ? "selected" : ""}`}
+                    data-provider={item.type}
+                    onClick={() =>
+                      setAgentFilter(agentFilter === item.type ? "all" : item.type)
+                    }
+                    title={`筛选 ${item.label} 会话`}
+                  >
+                    <span className="agent-badge-dot" />
+                    <strong>{item.label}</strong>
+                    <span className="agent-badge-tag">Managed</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -1242,7 +1271,7 @@ function Dashboard({
             <SessionEmptyState
               onNewSession={() => {
                 setSelectedSessionKey(undefined);
-                setLaunchModalProvider("codex");
+                setLaunchModalProvider(agentFilter === "zcode" ? "zcode" : "codex");
                 setLaunchModalOpen(true);
               }}
               onOpenHostControl={onOpenLocalHost ?? (() => {})}
@@ -1351,6 +1380,12 @@ const PERMISSION_OPTIONS: Record<
   ],
   antigravity: [{ value: "", label: "默认权限" }],
   grok_build: [{ value: "", label: "默认权限" }],
+  zcode: [
+    { value: "", label: "默认执行策略" },
+    { value: "auto-approve", label: "全自动执行" },
+    { value: "on-request", label: "写操作确认" },
+    { value: "read-only", label: "只读审查" },
+  ],
 };
 
 function loadRecentCwds(): string[] {
@@ -2690,6 +2725,7 @@ const demoSnapshot: Snapshot = {
     demoSession("claude_code", "用户增长分析", "IDLE", 25),
     demoSession("codex", "API 网关开发", "WORKING", 1),
     demoSession("codex", "数据导出工具", "UNKNOWN", 180, "PERSISTED"),
+    demoSession("zcode", "AgentHub Remote 核心接入", "WORKING", 1),
     demoSession("antigravity", "搜索体验实验", "IDLE", 44),
     demoSession("grok_build", "AgentHub 采集", "WORKING", 3),
   ],

@@ -42,6 +42,7 @@ export function agentLabel(type: Session["agent_type"]): string {
   if (type === "claude_code") return "Claude Code";
   if (type === "codex") return "Codex";
   if (type === "antigravity") return "Google Antigravity";
+  if (type === "zcode") return "ZCode Agent";
   return "Grok Build";
 }
 
@@ -49,6 +50,7 @@ export function agentShortLabel(type: Session["agent_type"]): string {
   if (type === "claude_code") return "Claude";
   if (type === "codex") return "Codex";
   if (type === "antigravity") return "Antigravity";
+  if (type === "zcode") return "ZCode";
   return "Grok";
 }
 
@@ -56,6 +58,7 @@ export function permissionFieldLabel(type: Session["agent_type"]): string {
   if (type === "claude_code") return "权限模式";
   if (type === "antigravity") return "安全级别";
   if (type === "grok_build") return "Agent 配置";
+  if (type === "zcode") return "执行策略";
   return "审批策略";
 }
 
@@ -125,6 +128,23 @@ export const PROVIDER_MODELS: Record<
       desc: "低延迟快速单步任务",
     },
   ],
+  zcode: [
+    {
+      value: "gemini-3.8-flash-high",
+      label: "Gemini 3.8 Flash High",
+      desc: "极速端到端代码生成与工具调用",
+    },
+    {
+      value: "gemini-2.5-pro",
+      label: "Gemini 2.5 Pro",
+      desc: "超长上下文复杂逻辑架构与多步推理",
+    },
+    {
+      value: "claude-3-7-sonnet",
+      label: "Claude 3.7 Sonnet",
+      desc: "自研混合思考与复杂重构",
+    },
+  ],
 };
 
 export function getProviderModels(type: Session["agent_type"]) {
@@ -153,6 +173,13 @@ export const PROVIDER_LIST: ReadonlyArray<{
     shortLabel: "Codex",
     defaultModel: "gpt-5.5-codex",
     desc: "OpenAI 官方代码助手 (Managed)",
+  },
+  {
+    type: "zcode",
+    label: "ZCode Agent",
+    shortLabel: "ZCode",
+    defaultModel: "gemini-3.8-flash-high",
+    desc: "ZCode 官方编程助手 (Managed)",
   },
 ];
 

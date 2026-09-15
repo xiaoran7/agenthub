@@ -47,8 +47,11 @@ describe("desktop presentation", () => {
   it("names Grok Build after Claude Code and Codex", () => {
     expect(agentLabel("claude_code")).toBe("Claude Code");
     expect(agentLabel("codex")).toBe("Codex");
+    expect(agentLabel("zcode")).toBe("ZCode Agent");
     expect(agentLabel("grok_build")).toBe("Grok Build");
+    expect(agentShortLabel("zcode")).toBe("ZCode");
     expect(agentShortLabel("grok_build")).toBe("Grok");
+    expect(permissionFieldLabel("zcode")).toBe("执行策略");
     expect(permissionFieldLabel("grok_build")).toBe("Agent 配置");
   });
 

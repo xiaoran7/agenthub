@@ -34,6 +34,18 @@ pub struct ZCodeSessionEntry {
     pub is_running: bool,
 }
 
+pub fn normalize_sessions_json(
+    payload: &str,
+    meta: &ObservationMeta,
+    redactor: &ProjectRedactor,
+) -> Result<Vec<SessionObservation>, ZCodeAdapterError> {
+    let entries: Vec<ZCodeSessionEntry> = serde_json::from_str(payload)?;
+    Ok(entries
+        .iter()
+        .filter_map(|entry| normalize_zcode_session(entry, meta, redactor))
+        .collect())
+}
+
 pub fn normalize_zcode_session(
     entry: &ZCodeSessionEntry,
     meta: &ObservationMeta,

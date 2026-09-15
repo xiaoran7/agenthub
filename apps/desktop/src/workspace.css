@@ -21,6 +21,7 @@
   --provider-codex: #4c78c8;
   --provider-antigravity: #2e9188;
   --provider-grok: #8063a8;
+  --provider-zcode: #0ea5e9;
   width: 100%;
   height: 100%;
   display: grid;
@@ -352,6 +353,11 @@
 .provider-group[data-provider="grok_build"],
 [data-provider="grok_build"] {
   --provider-color: var(--provider-grok);
+}
+
+.provider-group[data-provider="zcode"],
+[data-provider="zcode"] {
+  --provider-color: var(--provider-zcode);
 }
 
 .provider-group-header {
@@ -1958,6 +1964,10 @@
 
 .claude-app-shell [data-provider="grok_build"] {
   --provider-color: var(--provider-grok);
+}
+
+.claude-app-shell [data-provider="zcode"] {
+  --provider-color: var(--provider-zcode);
 }
 
 .sr-only {

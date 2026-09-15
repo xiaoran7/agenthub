@@ -183,6 +183,15 @@ export function NativeHostDialog({ onClose }: { onClose: () => void }) {
           />
         </label>
 
+        <label>
+          ZCode 官方服务
+          <input
+            value="ZCode App Server (已就绪)"
+            disabled
+            title="ZCode 驱动由 AgentHub 自动识别并原生接管"
+          />
+        </label>
+
         <div className="remote-workspace-heading">
           <span>允许 Remote 使用的工作目录</span>
           <button

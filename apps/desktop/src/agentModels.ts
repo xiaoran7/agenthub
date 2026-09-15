@@ -86,6 +86,26 @@ export const BUILTIN_MODELS: AgentModelMap = {
       source: "builtin",
     },
   ],
+  zcode: [
+    {
+      value: "gemini-3.8-flash-high",
+      label: "Gemini 3.8 Flash High",
+      desc: "主力高效开发与工具调用",
+      source: "builtin",
+    },
+    {
+      value: "gemini-2.5-pro",
+      label: "Gemini 2.5 Pro",
+      desc: "超长上下文架构与多步骤推理",
+      source: "builtin",
+    },
+    {
+      value: "claude-3-7-sonnet",
+      label: "Claude 3.7 Sonnet",
+      desc: "自研混合思考模型",
+      source: "builtin",
+    },
+  ],
 };
 
 const MODELS_TTL_MS = 60_000;

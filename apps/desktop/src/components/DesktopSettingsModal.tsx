@@ -300,6 +300,19 @@ export function DesktopSettingsModal({
                       <div className="settings-divider" />
                       <div className="settings-input-row">
                         <label>
+                          <span>ZCode Agent CLI</span>
+                          <input
+                            type="text"
+                            value="zcode.cjs app-server (内置驱动)"
+                            disabled
+                            title="由 AgentHub 自动探测本地 ZCode 环境并托管"
+                            placeholder="zcode"
+                          />
+                        </label>
+                      </div>
+                      <div className="settings-divider" />
+                      <div className="settings-input-row">
+                        <label>
                           <span>xAI Grok Build CLI</span>
                           <input
                             type="text"

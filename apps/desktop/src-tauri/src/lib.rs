@@ -20,11 +20,13 @@ use agent_pulse_runner::{
         claude,
         codex::{self, CodexThreadContext},
         grok,
+        zcode,
     },
     collectors::{
         LocalSessionContext, collect_antigravity_session_contexts, collect_claude_session_contexts,
         collect_claude_transcripts, collect_codex_local_threads, collect_codex_session_contexts,
-        collect_grok_session_contexts, collect_grok_sessions,
+        collect_grok_session_contexts, collect_grok_sessions, collect_zcode_session_contexts,
+        collect_zcode_sessions,
     },
     device::DeviceIdentity,
     domain::{AgentType, ObservationMeta, SessionObservation},
@@ -482,6 +484,7 @@ fn model_label(value: &str) -> String {
         builtin_model_catalog(AgentType::Codex),
         builtin_model_catalog(AgentType::Antigravity),
         builtin_model_catalog(AgentType::GrokBuild),
+        builtin_model_catalog(AgentType::ZCode),
     ]
     .into_iter()
     .flatten()
@@ -519,6 +522,7 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
         AgentType::Codex,
         AgentType::Antigravity,
         AgentType::GrokBuild,
+        AgentType::ZCode,
     ] {
         let mut counts: HashMap<String, usize> = HashMap::new();
         for context in contexts.values() {
@@ -650,8 +654,8 @@ async fn send_session_message(
     if input.prompt.trim().is_empty() || input.prompt.trim().chars().count() > MAX_PROMPT_CHARS {
         return Err(DesktopError::InvalidAction.to_string());
     }
-    if input.agent_type != AgentType::Codex {
-        return Err("该 Provider 尚未接入远程控制；可写 Session 将在官方协议验证后开放".into());
+    if input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode {
+        return Err("当前版本仅支持受控 Codex / ZCode 会话继续".into());
     }
     let key = session_turn_key(input.agent_type, &input.agent_session_id);
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -668,7 +672,7 @@ async fn send_session_message(
     let _ = on_event.send(SessionTurnEvent::Started);
 
     let client = {
-        let required_workspace = find_codex_session_cwd(&input.agent_session_id);
+        let required_workspace = find_session_cwd(input.agent_type, &input.agent_session_id);
         let ensure_res = daemon_client::ensure_daemon_client(&state, required_workspace.as_deref());
         match ensure_res {
             Ok(client) => client,
@@ -704,7 +708,7 @@ async fn launch_new_session(
     if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(DesktopError::InvalidAction.to_string());
     }
-    if input.agent_type != AgentType::Codex {
+    if input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode {
         return Err("该 Provider 尚未接入远程控制；可写 Session 将在官方协议验证后开放".into());
     }
     let cwd_path = input
@@ -912,7 +916,7 @@ fn launch_codex_session_with_client(
 
     Ok(json!({
         "agent_session_id": provider_session_id,
-        "agent_type": "codex",
+        "agent_type": input.agent_type.as_str(),
         "cwd": cwd.to_string_lossy(),
         "response": final_response,
         "completed_at": chrono::Utc::now(),
@@ -947,7 +951,7 @@ fn send_codex_message_with_client(
         ),
         None => (
             format!("hub-{}", uuid::Uuid::new_v4()),
-            find_codex_session_cwd(&input.agent_session_id)
+            find_session_cwd(input.agent_type, &input.agent_session_id)
                 .or_else(|| std::env::current_dir().ok())
                 .ok_or(DesktopError::SessionUnavailable)?,
             true,
@@ -1142,24 +1146,65 @@ fn find_codex_session_cwd(session_id: &str) -> Option<PathBuf> {
     None
 }
 
+fn find_zcode_session_cwd(session_id: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    let db_path = home.join(".zcode").join("cli").join("db").join("db.sqlite");
+    if !db_path.is_file() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let res: rusqlite::Result<String> = conn.query_row(
+        "SELECT directory FROM session WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    );
+    if let Ok(dir_str) = res {
+        let p = PathBuf::from(dir_str);
+        if p.is_dir() {
+            return dunce::canonicalize(&p).ok().or(Some(p));
+        }
+    }
+    None
+}
+
+fn find_session_cwd(agent_type: AgentType, session_id: &str) -> Option<PathBuf> {
+    match agent_type {
+        AgentType::ZCode => find_zcode_session_cwd(session_id),
+        AgentType::Codex => find_codex_session_cwd(session_id),
+        _ => {
+            if session_id.starts_with("sess_") {
+                find_zcode_session_cwd(session_id)
+            } else {
+                find_codex_session_cwd(session_id)
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn cancel_session_turn(
     input: SessionTurnRef,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
     validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
-    if input.agent_type != AgentType::Codex {
+    if input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode {
         return Err("该 Provider 尚未接入远程控制".to_owned());
     }
     let client = daemon_client::get_daemon_client(&state)
-        .ok_or_else(|| "Codex NativeSessionHost 未在运行".to_owned())?;
+        .ok_or_else(|| "受控 Agent NativeSessionHost 未在运行".to_owned())?;
     let sessions = client
         .query_sessions()
         .map_err(|e| format!("无法查询会话注册表: {e}"))?;
     let binding = sessions
         .iter()
         .find(|s| s.provider_session_id == input.agent_session_id)
-        .ok_or_else(|| format!("未找到绑定的 Codex 会话 {}", input.agent_session_id))?;
+        .ok_or_else(|| format!("未找到绑定的会话 {}", input.agent_session_id))?;
     let generation = client
         .query_generation()
         .map_err(|e| format!("无法获取 Host 代际: {e}"))?;
@@ -1183,7 +1228,7 @@ fn resolve_session_approval(
     input: SessionApprovalInput,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
-    if input.agent_type != AgentType::Codex
+    if (input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode)
         || input.approval_id.trim().is_empty()
         || input.approval_id.len() > 256
     {
@@ -1197,7 +1242,7 @@ fn resolve_session_approval(
         .map_err(|error| format!("无法查询会话注册表: {error}"))?
         .into_iter()
         .find(|binding| binding.provider_session_id == input.agent_session_id)
-        .ok_or_else(|| "未找到可控的 Codex 会话".to_owned())?;
+        .ok_or_else(|| "未找到可控的会话".to_owned())?;
     let receipt = client
         .execute(agent_pulse_runner::remote_host::RemoteCommand {
             client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
@@ -1223,7 +1268,7 @@ async fn set_session_archived(
     input: ArchiveSessionInput,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
-    let client = if input.agent_type == AgentType::Codex {
+    let client = if input.agent_type == AgentType::Codex || input.agent_type == AgentType::ZCode {
         Some(
             daemon_client::get_daemon_client(&state)
                 .ok_or_else(|| "agenthubd 未在运行".to_owned())?,
@@ -1784,6 +1829,9 @@ fn dashboard_snapshot(
     let grok_health = outbox
         .adapter_health(AgentType::GrokBuild)
         .map_err(|_| DesktopError::Sync)?;
+    let zcode_health = outbox
+        .adapter_health(AgentType::ZCode)
+        .map_err(|_| DesktopError::Sync)?;
     let local_contexts = local_session_contexts(state);
     let (host_bindings, pending_approvals) = daemon_client::get_daemon_client(state)
         .and_then(|client| client.snapshot().ok())
@@ -1828,7 +1876,8 @@ fn dashboard_snapshot(
                 local_source_summary(AgentType::ClaudeCode, &local_sessions, claude_health),
                 local_source_summary(AgentType::Codex, &local_sessions, codex_health),
                 local_source_summary(AgentType::Antigravity, &local_sessions, antigravity_health),
-                local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health)
+                local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health),
+                local_source_summary(AgentType::ZCode, &local_sessions, zcode_health)
             ],
             "refreshed_at": chrono::Utc::now()
         },
@@ -1852,7 +1901,7 @@ fn offline_dashboard_snapshot(
         archived_sessions: Vec::new(),
     });
     let outbox_path = state.data_dir.join("outbox.sqlite");
-    let (stats, local_sessions, claude_health, codex_health, antigravity_health, grok_health) =
+    let (stats, local_sessions, claude_health, codex_health, antigravity_health, grok_health, zcode_health) =
         if let Ok(outbox) = Outbox::open(&outbox_path) {
             (
                 outbox
@@ -1866,6 +1915,7 @@ fn offline_dashboard_snapshot(
                 outbox.adapter_health(AgentType::Codex).ok().flatten(),
                 outbox.adapter_health(AgentType::Antigravity).ok().flatten(),
                 outbox.adapter_health(AgentType::GrokBuild).ok().flatten(),
+                outbox.adapter_health(AgentType::ZCode).ok().flatten(),
             )
         } else {
             (
@@ -1874,6 +1924,7 @@ fn offline_dashboard_snapshot(
                     session_snapshots: 0,
                 },
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,
@@ -1936,7 +1987,8 @@ fn offline_dashboard_snapshot(
                 local_source_summary(AgentType::ClaudeCode, &local_sessions, claude_health),
                 local_source_summary(AgentType::Codex, &local_sessions, codex_health),
                 local_source_summary(AgentType::Antigravity, &local_sessions, antigravity_health),
-                local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health)
+                local_source_summary(AgentType::GrokBuild, &local_sessions, grok_health),
+                local_source_summary(AgentType::ZCode, &local_sessions, zcode_health)
             ],
             "refreshed_at": chrono::Utc::now()
         },
@@ -2384,6 +2436,43 @@ fn bootstrap_local_sessions(
                 .map_err(|_| DesktopError::Sync)?;
         }
     }
+
+    match collect_zcode_sessions(true)
+        .map_err(|error| error.code().to_owned())
+        .and_then(|payload| {
+            zcode::normalize_sessions_json(&payload, &meta, redactor)
+                .map_err(|_| "zcode_payload_invalid".to_owned())
+        }) {
+        Ok(observations) => {
+            for observation in observations {
+                outbox
+                    .enqueue_if_changed(&observation)
+                    .map_err(|_| DesktopError::Sync)?;
+            }
+            outbox
+                .record_adapter_health(
+                    AgentType::ZCode,
+                    meta.observed_at,
+                    true,
+                    0,
+                    next_attempt,
+                    None,
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+        Err(code) => {
+            outbox
+                .record_adapter_health(
+                    AgentType::ZCode,
+                    meta.observed_at,
+                    false,
+                    1,
+                    next_attempt,
+                    Some(&code),
+                )
+                .map_err(|_| DesktopError::Sync)?;
+        }
+    }
     Ok(())
 }
 
@@ -2448,9 +2537,12 @@ fn merge_dashboard_sessions(
             }),
         );
     }
-    // Overwrite or populate authoritative Codex sessions from running NativeSessionHost registry
+    // Overwrite or populate authoritative managed sessions (Codex / ZCode) from running NativeSessionHost registry
     for binding in host_bindings {
-        let key = format!("codex:{}:{}", device_id, binding.provider_session_id);
+        let is_zcode = binding.provider_session_id.starts_with("sess_");
+        let agent_type_str = if is_zcode { "zcode" } else { "codex" };
+        let agent_type = if is_zcode { AgentType::ZCode } else { AgentType::Codex };
+        let key = format!("{}:{}:{}", agent_type_str, device_id, binding.provider_session_id);
         let status = match binding.execution_state {
             agent_pulse_runner::remote_host::ExecutionState::Running => "WORKING",
             agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission => {
@@ -2478,7 +2570,7 @@ fn merge_dashboard_sessions(
             existing["payload"]["pending_approval"] = json!(pending_approval);
         } else {
             let context = contexts.get(&session_context_key(
-                AgentType::Codex,
+                agent_type,
                 &binding.provider_session_id,
             ));
             let project_name = binding
@@ -2495,7 +2587,7 @@ fn merge_dashboard_sessions(
                 json!({
                     "event_id": format!("host:{}", binding.hub_session_id),
                     "device_id": device_id,
-                    "agent_type": "codex",
+                    "agent_type": agent_type_str,
                     "agent_session_id": binding.provider_session_id,
                     "observed_at": chrono::Utc::now().to_rfc3339(),
                     "payload": {
@@ -2570,6 +2662,7 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
     let codex = collect_codex_session_contexts(LOCAL_SESSION_LIMIT);
     let antigravity = collect_antigravity_session_contexts(LOCAL_SESSION_LIMIT as usize);
     let grok = collect_grok_session_contexts(LOCAL_SESSION_LIMIT as usize);
+    let zcode = collect_zcode_session_contexts(LOCAL_SESSION_LIMIT);
     let mut next = HashMap::new();
     match claude {
         Ok(contexts) => insert_session_contexts(&mut next, contexts),
@@ -2597,14 +2690,16 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
     {
         for item in candidates {
             if let Some(id) = item.get("provider_session_id").and_then(Value::as_str) {
-                let key = session_context_key(AgentType::Codex, id);
+                let is_zcode = id.starts_with("sess_");
+                let agent_type = if is_zcode { AgentType::ZCode } else { AgentType::Codex };
+                let key = session_context_key(agent_type, id);
                 let title = item
                     .get("title")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned);
                 let entry = next
                     .entry(key)
-                    .or_insert_with(|| LocalSessionContext::new(AgentType::Codex, id.to_owned()));
+                    .or_insert_with(|| LocalSessionContext::new(agent_type, id.to_owned()));
                 if title.is_some() {
                     entry.title = title;
                 }
@@ -2628,6 +2723,16 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
                 .entries
                 .iter()
                 .filter(|(_, context)| context.agent_type == AgentType::GrokBuild)
+                .map(|(key, context)| (key.clone(), context.clone())),
+        ),
+    }
+    match zcode {
+        Ok(contexts) => insert_session_contexts(&mut next, contexts),
+        Err(_) => next.extend(
+            cache
+                .entries
+                .iter()
+                .filter(|(_, context)| context.agent_type == AgentType::ZCode)
                 .map(|(key, context)| (key.clone(), context.clone())),
         ),
     }

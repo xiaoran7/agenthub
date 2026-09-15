@@ -30,7 +30,7 @@ export interface Device {
 }
 
 export interface SessionRuntimeContext {
-  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
   agent_session_id: string;
   title?: string;
   model?: string;
@@ -55,7 +55,7 @@ export interface PendingApproval {
 export interface Session {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
   agent_session_id: string;
   observed_at: string;
   payload: {
@@ -72,7 +72,7 @@ export interface Session {
 export interface SessionTimelineEvent {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
   agent_session_id: string;
   sequence: number;
   observed_at: string;
@@ -113,7 +113,7 @@ export interface DashboardRealtimeEvent {
 }
 
 export interface LocalSource {
-  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build";
+  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
   session_count: number;
   detected: boolean;
   status: "healthy" | "backoff" | "scanning";
