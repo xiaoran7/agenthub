@@ -1203,11 +1203,15 @@ select {
 }
 
 .provider-claude_code {
-  color: #c3b1ff;
+  color: #ea580c;
 }
 
 .provider-codex {
   color: var(--primary);
+}
+
+.provider-zcode {
+  color: #0ea5e9;
 }
 
 .session-task,

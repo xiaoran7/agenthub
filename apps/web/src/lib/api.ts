@@ -26,6 +26,8 @@ export function devicesUrl(base: string): string {
   return `${base}/v1/devices`;
 }
 
+import type { AgentType } from "@agent-pulse/contracts";
+
 export function deviceBindingsUrl(base: string): string {
   return `${base}/v1/device-bindings`;
 }
@@ -36,7 +38,7 @@ export function deviceUrl(base: string, deviceId: string): string {
 
 export function sessionsUrl(
   base: string,
-  agentType?: "claude_code" | "codex",
+  agentType?: AgentType,
 ): string {
   const query =
     agentType === undefined
@@ -246,7 +248,7 @@ export async function revokeDevice(
 
 export async function fetchSessions(
   config: PanelConfig,
-  agentType?: "claude_code" | "codex",
+  agentType?: AgentType,
 ): Promise<SessionRecord[]> {
   const body = await fetchJson<{ sessions: SessionRecord[] }>(
     sessionsUrl(config.gatewayBase, agentType),

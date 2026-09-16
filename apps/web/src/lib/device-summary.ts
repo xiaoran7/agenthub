@@ -3,7 +3,13 @@ import type { AgentType } from "@agent-pulse/contracts";
 import { matchesTab } from "./classify";
 import type { DeviceRecord, SessionRecord } from "./types";
 
-const AGENT_ORDER: readonly AgentType[] = ["claude_code", "codex"];
+const AGENT_ORDER: readonly AgentType[] = [
+  "claude_code",
+  "codex",
+  "zcode",
+  "antigravity",
+  "grok_build",
+];
 
 export interface DeviceSummary {
   device: DeviceRecord;

@@ -1271,7 +1271,7 @@ function Dashboard({
             <SessionEmptyState
               onNewSession={() => {
                 setSelectedSessionKey(undefined);
-                setLaunchModalProvider(agentFilter === "zcode" ? "zcode" : "codex");
+                setLaunchModalProvider(isManagedProvider(agentFilter) ? agentFilter : "codex");
                 setLaunchModalOpen(true);
               }}
               onOpenHostControl={onOpenLocalHost ?? (() => {})}
@@ -2756,22 +2756,28 @@ function demoSession(
         title:
           agent === "claude_code"
             ? project + "实施计划"
-            : agent === "grok_build"
-              ? project + "采集适配"
-              : project + "接口与测试",
+            : agent === "zcode"
+              ? project + "全栈开发"
+              : agent === "grok_build"
+                ? project + "采集适配"
+                : project + "接口与测试",
         model:
           agent === "claude_code"
             ? "claude-3-7-sonnet"
-            : agent === "grok_build"
-              ? "grok-4.6"
-              : "gpt-5.5-codex",
+            : agent === "zcode"
+              ? "gemini-3.8-flash-high"
+              : agent === "grok_build"
+                ? "grok-4.6"
+                : "gpt-5.5-codex",
         reasoning_effort: agent === "codex" ? "medium" : "high",
         permission_mode:
           agent === "claude_code"
             ? "acceptEdits"
-            : agent === "grok_build"
-              ? "grok-build-plan"
-              : undefined,
+            : agent === "zcode"
+              ? "auto-execute"
+              : agent === "grok_build"
+                ? "grok-build-plan"
+                : undefined,
         approval_policy: agent === "codex" ? "on-request" : undefined,
         sandbox_mode:
           agent === "codex"
@@ -2782,21 +2788,27 @@ function demoSession(
         context_window_tokens:
           agent === "claude_code"
             ? 200_000
-            : agent === "grok_build"
-              ? 256_000
-              : 258_400,
+            : agent === "zcode"
+              ? 1_000_000
+              : agent === "grok_build"
+                ? 256_000
+                : 258_400,
         context_used_tokens:
           agent === "claude_code"
             ? 64_800
-            : agent === "grok_build"
-              ? 48_200
-              : 92_300,
+            : agent === "zcode"
+              ? 85_600
+              : agent === "grok_build"
+                ? 48_200
+                : 92_300,
         session_total_tokens:
           agent === "claude_code"
             ? 91_200
-            : agent === "grok_build"
-              ? 72_400
-              : 184_600,
+            : agent === "zcode"
+              ? 128_000
+              : agent === "grok_build"
+                ? 72_400
+                : 184_600,
       },
     },
   };

@@ -654,8 +654,11 @@ async fn send_session_message(
     if input.prompt.trim().is_empty() || input.prompt.trim().chars().count() > MAX_PROMPT_CHARS {
         return Err(DesktopError::InvalidAction.to_string());
     }
-    if input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode {
-        return Err("当前版本仅支持受控 Codex / ZCode 会话继续".into());
+    if input.agent_type != AgentType::Codex
+        && input.agent_type != AgentType::ZCode
+        && input.agent_type != AgentType::ClaudeCode
+    {
+        return Err("当前版本仅支持受控 Codex / ZCode / Claude Code 会话继续".into());
     }
     let key = session_turn_key(input.agent_type, &input.agent_session_id);
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -708,7 +711,10 @@ async fn launch_new_session(
     if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(DesktopError::InvalidAction.to_string());
     }
-    if input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode {
+    if input.agent_type != AgentType::Codex
+        && input.agent_type != AgentType::ZCode
+        && input.agent_type != AgentType::ClaudeCode
+    {
         return Err("该 Provider 尚未接入远程控制；可写 Session 将在官方协议验证后开放".into());
     }
     let cwd_path = input
@@ -1177,9 +1183,22 @@ fn find_session_cwd(agent_type: AgentType, session_id: &str) -> Option<PathBuf> 
     match agent_type {
         AgentType::ZCode => find_zcode_session_cwd(session_id),
         AgentType::Codex => find_codex_session_cwd(session_id),
+        AgentType::ClaudeCode => {
+            let raw_id = session_id.trim_start_matches("claude_");
+            agent_pulse_runner::collectors::find_claude_session_info(raw_id)
+                .ok()
+                .flatten()
+                .map(|(c, _)| c)
+        }
         _ => {
             if session_id.starts_with("sess_") {
                 find_zcode_session_cwd(session_id)
+            } else if session_id.starts_with("claude_") {
+                let raw_id = session_id.trim_start_matches("claude_");
+                agent_pulse_runner::collectors::find_claude_session_info(raw_id)
+                    .ok()
+                    .flatten()
+                    .map(|(c, _)| c)
             } else {
                 find_codex_session_cwd(session_id)
             }
@@ -1193,7 +1212,10 @@ fn cancel_session_turn(
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
     validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
-    if input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode {
+    if input.agent_type != AgentType::Codex
+        && input.agent_type != AgentType::ZCode
+        && input.agent_type != AgentType::ClaudeCode
+    {
         return Err("该 Provider 尚未接入远程控制".to_owned());
     }
     let client = daemon_client::get_daemon_client(&state)
@@ -1228,7 +1250,9 @@ fn resolve_session_approval(
     input: SessionApprovalInput,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
-    if (input.agent_type != AgentType::Codex && input.agent_type != AgentType::ZCode)
+    if (input.agent_type != AgentType::Codex
+        && input.agent_type != AgentType::ZCode
+        && input.agent_type != AgentType::ClaudeCode)
         || input.approval_id.trim().is_empty()
         || input.approval_id.len() > 256
     {
@@ -1268,7 +1292,10 @@ async fn set_session_archived(
     input: ArchiveSessionInput,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
-    let client = if input.agent_type == AgentType::Codex || input.agent_type == AgentType::ZCode {
+    let client = if input.agent_type == AgentType::Codex
+        || input.agent_type == AgentType::ZCode
+        || input.agent_type == AgentType::ClaudeCode
+    {
         Some(
             daemon_client::get_daemon_client(&state)
                 .ok_or_else(|| "agenthubd 未在运行".to_owned())?,
@@ -2538,11 +2565,24 @@ fn merge_dashboard_sessions(
             }),
         );
     }
-    // Overwrite or populate authoritative managed sessions (Codex / ZCode) from running NativeSessionHost registry
+    // Overwrite or populate authoritative managed sessions (Codex / ZCode / Claude Code) from running NativeSessionHost registry
     for binding in host_bindings {
         let is_zcode = binding.provider_session_id.starts_with("sess_");
-        let agent_type_str = if is_zcode { "zcode" } else { "codex" };
-        let agent_type = if is_zcode { AgentType::ZCode } else { AgentType::Codex };
+        let is_claude = binding.provider_session_id.starts_with("claude_");
+        let agent_type_str = if is_zcode {
+            "zcode"
+        } else if is_claude {
+            "claude_code"
+        } else {
+            "codex"
+        };
+        let agent_type = if is_zcode {
+            AgentType::ZCode
+        } else if is_claude {
+            AgentType::ClaudeCode
+        } else {
+            AgentType::Codex
+        };
         let key = format!("{}:{}:{}", agent_type_str, device_id, binding.provider_session_id);
         let status = match binding.execution_state {
             agent_pulse_runner::remote_host::ExecutionState::Running => "WORKING",
@@ -2692,7 +2732,14 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
         for item in candidates {
             if let Some(id) = item.get("provider_session_id").and_then(Value::as_str) {
                 let is_zcode = id.starts_with("sess_");
-                let agent_type = if is_zcode { AgentType::ZCode } else { AgentType::Codex };
+                let is_claude = id.starts_with("claude_");
+                let agent_type = if is_zcode {
+                    AgentType::ZCode
+                } else if is_claude {
+                    AgentType::ClaudeCode
+                } else {
+                    AgentType::Codex
+                };
                 let key = session_context_key(agent_type, id);
                 let title = item
                     .get("title")

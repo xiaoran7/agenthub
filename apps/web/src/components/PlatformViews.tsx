@@ -548,7 +548,7 @@ function AuthHealthPanel({
         </span>
       </header>
       <div className="auth-health-grid">
-        {(["claude_code", "codex"] as const).map((provider) => {
+        {(["claude_code", "codex", "zcode"] as const).map((provider) => {
           const snapshot = byProvider.get(provider);
           const status =
             snapshot === undefined ? undefined : authStatus(snapshot);
@@ -556,7 +556,11 @@ function AuthHealthPanel({
             <article className="auth-health-card" key={provider}>
               <div className="auth-health-card-head">
                 <span className={`provider-mark provider-${provider}`}>
-                  {provider === "claude_code" ? "C" : "X"}
+                  {provider === "claude_code"
+                    ? "C"
+                    : provider === "zcode"
+                      ? "Z"
+                      : "X"}
                 </span>
                 <strong>{AGENT_LABELS[provider]}</strong>
                 <span
