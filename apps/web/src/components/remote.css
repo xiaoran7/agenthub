@@ -245,6 +245,11 @@
   color: #38bdf8;
   border: 1px solid rgba(14, 165, 233, 0.35);
 }
+.remote-session-badge.claude {
+  background: rgba(234, 88, 12, 0.18);
+  color: #fb923c;
+  border: 1px solid rgba(234, 88, 12, 0.35);
+}
 .remote-session-badge.codex {
   background: rgba(16, 185, 129, 0.15);
   color: #34d399;

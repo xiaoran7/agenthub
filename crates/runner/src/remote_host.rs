@@ -4,6 +4,10 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -69,6 +73,11 @@ pub struct MultiProviderTransport {
     zcode_active_turns: HashMap<String, String>,
     zcode_buffered_events: VecDeque<Value>,
     zcode_cached_cwds: HashMap<String, PathBuf>,
+    claude_binary: PathBuf,
+    claude_active_turns: HashMap<String, String>,
+    claude_cancels: HashMap<String, Arc<AtomicBool>>,
+    claude_buffered_events: Arc<Mutex<VecDeque<Value>>>,
+    claude_cached_cwds: HashMap<String, PathBuf>,
 }
 
 impl MultiProviderTransport {
@@ -79,6 +88,11 @@ impl MultiProviderTransport {
             zcode_active_turns: HashMap::new(),
             zcode_buffered_events: VecDeque::new(),
             zcode_cached_cwds: HashMap::new(),
+            claude_binary: crate::collectors::discover_claude_binary(),
+            claude_active_turns: HashMap::new(),
+            claude_cancels: HashMap::new(),
+            claude_buffered_events: Arc::new(Mutex::new(VecDeque::new())),
+            claude_cached_cwds: HashMap::new(),
         }
     }
 
@@ -102,7 +116,181 @@ impl NativeTransport for MultiProviderTransport {
             .and_then(Value::as_str)
             .is_some_and(|id| id.starts_with("sess_"));
 
+        let is_claude = params
+            .get("threadId")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.starts_with("claude_"));
+
         match method {
+            "thread/read" if is_claude => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let raw_id = session_id.trim_start_matches("claude_");
+                let (cwd, title) = if let Ok(Some((c, t))) = crate::collectors::find_claude_session_info(raw_id) {
+                    (c, t)
+                } else {
+                    (PathBuf::from("."), None)
+                };
+                self.claude_cached_cwds.insert(session_id.to_string(), cwd.clone());
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd.to_string_lossy(),
+                        "status": { "type": "idle" },
+                        "name": title.unwrap_or_else(|| raw_id.to_string())
+                    }
+                }))
+            }
+            "thread/resume" if is_claude => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let cwd = self
+                    .claude_cached_cwds
+                    .get(session_id)
+                    .cloned()
+                    .or_else(|| {
+                        let raw_id = session_id.trim_start_matches("claude_");
+                        crate::collectors::find_claude_session_info(raw_id)
+                            .ok()
+                            .flatten()
+                            .map(|(c, _)| c)
+                    })
+                    .unwrap_or_else(|| PathBuf::from("."));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd.to_string_lossy(),
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "turn/start" if is_claude => {
+                let session_id = params["threadId"].as_str().unwrap_or("").to_string();
+                let raw_id = session_id.trim_start_matches("claude_").to_string();
+                let text = params["input"]
+                    .as_array()
+                    .and_then(|arr| arr.iter().find_map(|item| item["text"].as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
+                self.claude_active_turns
+                    .insert(session_id.clone(), turn_id.clone());
+
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.claude_cancels.insert(session_id.clone(), cancel.clone());
+
+                let events_tx = self.claude_buffered_events.clone();
+                if let Ok(mut q) = events_tx.lock() {
+                    q.push_back(json!({
+                        "method": "turn/started",
+                        "params": {
+                            "threadId": session_id,
+                            "turn": {
+                                "id": turn_id.clone(),
+                                "status": { "type": "inProgress" }
+                            }
+                        }
+                    }));
+                }
+
+                let cwd = self.claude_cached_cwds.get(&session_id).cloned();
+                let binary = self.claude_binary.clone();
+                let session_id_clone = session_id.clone();
+                let turn_id_clone = turn_id.clone();
+
+                std::thread::spawn(move || {
+                    let events_queue = events_tx.clone();
+                    let s_id = session_id_clone.clone();
+                    let on_update = {
+                        let events_queue = events_queue.clone();
+                        let s_id = s_id.clone();
+                        move |update: crate::collectors::AgentTurnUpdate| {
+                            match update {
+                                crate::collectors::AgentTurnUpdate::AssistantDelta(delta) => {
+                                    if let Ok(mut q) = events_queue.lock() {
+                                        q.push_back(json!({
+                                            "method": "item/agentMessage/delta",
+                                            "params": {
+                                                "threadId": s_id,
+                                                "itemId": "claude_msg",
+                                                "delta": delta
+                                            }
+                                        }));
+                                    }
+                                }
+                                crate::collectors::AgentTurnUpdate::AssistantMessage(msg) => {
+                                    if let Ok(mut q) = events_queue.lock() {
+                                        q.push_back(json!({
+                                            "method": "item/agentMessage/delta",
+                                            "params": {
+                                                "threadId": s_id,
+                                                "itemId": "claude_msg",
+                                                "delta": msg
+                                            }
+                                        }));
+                                    }
+                                }
+                                crate::collectors::AgentTurnUpdate::Activity(_) => {
+                                    if let Ok(mut q) = events_queue.lock() {
+                                        q.push_back(json!({
+                                            "method": "item/started",
+                                            "params": {
+                                                "threadId": s_id,
+                                                "item": {
+                                                    "id": "claude_tool",
+                                                    "type": "commandExecution"
+                                                }
+                                            }
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    let outcome = crate::collectors::run_agent_session_turn_streaming(
+                        crate::domain::AgentType::ClaudeCode,
+                        binary,
+                        cwd.as_deref(),
+                        &raw_id,
+                        &text,
+                        crate::collectors::TurnOptions::default(),
+                        Duration::from_secs(600),
+                        &cancel,
+                        on_update,
+                    );
+
+                    if let Ok(mut q) = events_queue.lock() {
+                        let status_type = if outcome.is_ok() { "completed" } else { "failed" };
+                        q.push_back(json!({
+                            "method": "turn/completed",
+                            "params": {
+                                "threadId": session_id_clone,
+                                "turn": {
+                                    "id": turn_id_clone,
+                                    "status": { "type": status_type }
+                                }
+                            }
+                        }));
+                    }
+                });
+
+                Ok(json!({
+                    "turn": {
+                        "id": turn_id,
+                        "status": { "type": "inProgress" }
+                    }
+                }))
+            }
+            "turn/interrupt" if is_claude => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                if let Some(cancel) = self.claude_cancels.get(session_id) {
+                    cancel.store(true, Ordering::SeqCst);
+                }
+                Ok(json!({"ok": true}))
+            }
+            "thread/archive" | "thread/unarchive" if is_claude => {
+                Ok(json!({"ok": true}))
+            }
             "thread/read" if is_zcode => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let zcode = self.ensure_zcode()?;
@@ -215,6 +403,18 @@ impl NativeTransport for MultiProviderTransport {
                         }
                     }
                 }
+                if let Ok(claude_entries) = crate::collectors::collect_claude_sessions_for_remote() {
+                    if let Some(items) = response["data"].as_array_mut() {
+                        for (session_id, cwd, title) in claude_entries {
+                            items.push(json!({
+                                "id": format!("claude_{}", session_id),
+                                "cwd": cwd,
+                                "name": title.unwrap_or_else(|| session_id.clone()),
+                                "status": { "type": "idle" }
+                            }));
+                        }
+                    }
+                }
                 Ok(response)
             }
             _ => self.codex.request(method, params).map_err(|error| match error {
@@ -240,6 +440,12 @@ impl NativeTransport for MultiProviderTransport {
 
         while let Some(evt) = self.zcode_buffered_events.pop_front() {
             messages.push(evt);
+        }
+
+        if let Ok(mut claude_events) = self.claude_buffered_events.lock() {
+            while let Some(evt) = claude_events.pop_front() {
+                messages.push(evt);
+            }
         }
 
         if let Some(ref mut zcode) = self.zcode {

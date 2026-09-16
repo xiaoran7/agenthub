@@ -180,14 +180,20 @@ struct ClaudeTranscriptMetadata {
     session_id: Option<String>,
     cwd: Option<String>,
     timestamp: Option<String>,
+    title: Option<String>,
+    ai_title: Option<String>,
+    custom_title: Option<String>,
+    last_prompt: Option<String>,
+    content: Option<String>,
 }
 
-#[derive(Debug)]
-struct ClaudeTranscriptEntry {
-    session_id: String,
-    cwd: String,
-    started_at_ms: Option<i64>,
-    last_activity_at_ms: Option<i64>,
+#[derive(Debug, Clone)]
+pub struct ClaudeTranscriptEntry {
+    pub session_id: String,
+    pub cwd: String,
+    pub title: Option<String>,
+    pub started_at_ms: Option<i64>,
+    pub last_activity_at_ms: Option<i64>,
 }
 
 /// Enumerates Claude Code's documented local transcript store without invoking
@@ -258,6 +264,7 @@ pub fn collect_claude_transcripts_from(
                 json!({
                     "sessionId": entry.session_id,
                     "cwd": entry.cwd,
+                    "title": entry.title,
                     "kind": "transcript",
                     "state": "persisted",
                     "startedAt": entry.started_at_ms,
@@ -547,6 +554,7 @@ fn read_claude_transcript_metadata(
     let mut reader = BufReader::new(file);
     let mut session_id = None;
     let mut cwd = None;
+    let mut title = None;
     let mut started_at_ms: Option<i64> = None;
 
     // Metadata is repeated on transcript entries. Bound the scan so a damaged
@@ -568,6 +576,15 @@ fn read_claude_transcript_metadata(
         };
         session_id = session_id.or(metadata.session_id);
         cwd = cwd.or(metadata.cwd);
+        if title.is_none() {
+            title = metadata
+                .custom_title
+                .or(metadata.ai_title)
+                .or(metadata.title)
+                .or(metadata.last_prompt)
+                .or(metadata.content)
+                .and_then(|t| metadata_label(&t, MAX_SESSION_TITLE_CHARS));
+        }
         if let Some(timestamp) = metadata.timestamp {
             let parsed = DateTime::parse_from_rfc3339(&timestamp)
                 .ok()
@@ -578,7 +595,7 @@ fn read_claude_transcript_metadata(
                 (current, None) => current,
             };
         }
-        if session_id.is_some() && cwd.is_some() && started_at_ms.is_some() {
+        if session_id.is_some() && cwd.is_some() && started_at_ms.is_some() && title.is_some() {
             break;
         }
     }
@@ -593,9 +610,102 @@ fn read_claude_transcript_metadata(
     Ok(session_id.map(|session_id| ClaudeTranscriptEntry {
         session_id,
         cwd: cwd.unwrap_or_default(),
+        title,
         started_at_ms,
         last_activity_at_ms,
     }))
+}
+
+pub fn discover_claude_binary() -> PathBuf {
+    if let Some(path) = env::var_os("CLAUDE_BINARY").filter(|v| !v.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
+        let local_bin = user_profile.join(".local").join("bin").join("claude.exe");
+        if local_bin.is_file() {
+            return local_bin;
+        }
+        let local_cmd = user_profile.join(".local").join("bin").join("claude.cmd");
+        if local_cmd.is_file() {
+            return local_cmd;
+        }
+    }
+    PathBuf::from("claude")
+}
+
+pub fn find_claude_session_info(
+    session_id: &str,
+) -> Result<Option<(PathBuf, Option<String>)>, CollectorError> {
+    let config_dir = discover_claude_config_dir()?;
+    let projects_dir = config_dir.join("projects");
+    if !projects_dir.is_dir() {
+        return Ok(None);
+    }
+    let program = "Claude transcript lookup".to_owned();
+    let target_filename = format!("{}.jsonl", session_id);
+    for project in fs::read_dir(&projects_dir).map_err(|source| CollectorError::Io {
+        program: program.clone(),
+        source,
+    })? {
+        let Ok(project) = project else { continue };
+        if !project.file_type().is_ok_and(|k| k.is_dir()) {
+            continue;
+        }
+        let candidate_file = project.path().join(&target_filename);
+        if candidate_file.is_file() {
+            if let Some(entry) = read_claude_transcript_metadata(&candidate_file, &program)? {
+                let cwd = PathBuf::from(entry.cwd);
+                let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+                return Ok(Some((cwd, entry.title)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn collect_claude_sessions_for_remote(
+) -> Result<Vec<(String, String, Option<String>)>, CollectorError> {
+    let config_dir = discover_claude_config_dir()?;
+    let projects_dir = config_dir.join("projects");
+    if !projects_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let program = "Claude transcript store".to_owned();
+    let mut entries = Vec::new();
+    for project in fs::read_dir(&projects_dir).map_err(|source| CollectorError::Io {
+        program: program.clone(),
+        source,
+    })? {
+        let Ok(project) = project else { continue };
+        if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(project.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+                || !file.file_type().is_ok_and(|kind| kind.is_file())
+            {
+                continue;
+            }
+            if let Some(entry) = read_claude_transcript_metadata(&path, &program)? {
+                entries.push((
+                    entry.session_id,
+                    entry.cwd,
+                    entry.title,
+                    entry.last_activity_at_ms,
+                ));
+            }
+        }
+    }
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.3));
+    entries.truncate(100);
+    Ok(entries
+        .into_iter()
+        .map(|(id, cwd, title, _)| (id, cwd, title))
+        .collect())
 }
 
 /// Reads Codex's metadata-only state database when an app-server executable is
