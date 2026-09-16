@@ -793,7 +793,9 @@ body,
   overflow: hidden;
   color: #f4f4f5;
   font-weight: 550;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -852,7 +854,9 @@ body,
   background: #0d0d0f;
   border: 1px solid #27272a;
   border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   font-size: 11.5px;
   line-height: 1.6;
   max-height: 280px;
@@ -967,7 +971,9 @@ body,
   background: rgba(251, 146, 60, 0.12);
   border: 1px solid rgba(251, 146, 60, 0.2);
   border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   font-size: 0.88em;
 }
 
@@ -1421,7 +1427,9 @@ body,
   border: none;
   color: #a1a1aa;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .window-control-btn:hover {
@@ -1436,7 +1444,10 @@ body,
 
 /* Sidebar collapse support */
 .claude-sidebar {
-  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease;
+  transition:
+    width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    min-width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.15s ease;
 }
 
 .claude-sidebar.collapsed {
@@ -1554,54 +1565,132 @@ body,
   box-shadow: 0 0 5px rgba(245, 158, 11, 0.6);
 }
 
-/* Context Capacity Trigger & Popover (ZCode style matching 图三) */
-.composer-context-wrapper {
+/* --------------------------------------------------------------------------
+ * Composer Actions & Popovers (ZCode-native Circular Ring & Plus Menu)
+ * ------------------------------------------------------------------------ */
+
+.claude-stage .composer-container,
+.claude-stage .modern-composer,
+.composer-toolbar {
+  overflow: visible !important;
+}
+
+/* Plus Menu Popup */
+.composer-plus-wrapper {
   position: relative;
   display: inline-flex;
   align-items: center;
 }
 
-.composer-context-trigger {
+.composer-plus-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  min-width: 200px;
+  padding: 6px;
+  background: rgba(24, 24, 27, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(16px);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: popover-slide-up 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.plus-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: #d4d4d8;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+
+.plus-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.plus-menu-item .menu-item-icon {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 9999px;
+  justify-content: center;
   color: #a1a1aa;
-  font-size: 11.5px;
-  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.plus-menu-item:hover .menu-item-icon {
+  color: #38bdf8;
+}
+
+.plus-menu-item .menu-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Context Capacity Ring (Matching 图三) */
+.composer-context-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  overflow: visible !important;
+}
+
+.composer-context-ring-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.composer-context-trigger:hover {
+.composer-context-ring-btn:hover {
   background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.15);
-  color: #f4f4f5;
 }
 
-.composer-context-trigger .context-indicator-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #3b82f6;
-  box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+.composer-context-ring-btn.active {
+  background: rgba(255, 255, 255, 0.12);
 }
 
+.context-ring-svg {
+  display: block;
+}
+
+/* Upgraded Context Capacity Popover (No obstruction / clipping) */
 .context-capacity-popover {
   position: absolute;
   bottom: calc(100% + 12px);
-  right: 0;
-  width: 290px;
+  right: -6px;
+  width: 296px;
+  max-height: min(440px, calc(100vh - 180px));
+  overflow-y: auto;
   padding: 16px 18px;
-  background: rgba(24, 24, 27, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(24, 24, 27, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: 12px;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(16px);
-  z-index: 100;
+  box-shadow: 0 20px 42px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(18px);
+  z-index: 9999;
   animation: popover-slide-up 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   user-select: none;
 }

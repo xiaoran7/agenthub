@@ -5,8 +5,8 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -97,10 +97,10 @@ impl MultiProviderTransport {
     }
 
     fn ensure_zcode(&mut self) -> Result<&mut ZCodeAppServer, NativeError> {
-        if self.zcode.is_none() {
-            if let Ok(server) = ZCodeAppServer::start_if_available(Duration::from_secs(20)) {
-                self.zcode = Some(server);
-            }
+        if self.zcode.is_none()
+            && let Ok(server) = ZCodeAppServer::start_if_available(Duration::from_secs(20))
+        {
+            self.zcode = Some(server);
         }
         self.zcode
             .as_mut()
@@ -126,12 +126,14 @@ impl NativeTransport for MultiProviderTransport {
             "thread/read" if is_claude => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("claude_");
-                let (cwd, title) = if let Ok(Some((c, t))) = crate::collectors::find_claude_session_info(raw_id) {
-                    (c, t)
-                } else {
-                    (PathBuf::from("."), None)
-                };
-                self.claude_cached_cwds.insert(session_id.to_string(), cwd.clone());
+                let (cwd, title) =
+                    if let Ok(Some((c, t))) = crate::collectors::find_claude_session_info(raw_id) {
+                        (c, t)
+                    } else {
+                        (PathBuf::from("."), None)
+                    };
+                self.claude_cached_cwds
+                    .insert(session_id.to_string(), cwd.clone());
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -176,7 +178,8 @@ impl NativeTransport for MultiProviderTransport {
                     .insert(session_id.clone(), turn_id.clone());
 
                 let cancel = Arc::new(AtomicBool::new(false));
-                self.claude_cancels.insert(session_id.clone(), cancel.clone());
+                self.claude_cancels
+                    .insert(session_id.clone(), cancel.clone());
 
                 let events_tx = self.claude_buffered_events.clone();
                 if let Ok(mut q) = events_tx.lock() {
@@ -203,45 +206,43 @@ impl NativeTransport for MultiProviderTransport {
                     let on_update = {
                         let events_queue = events_queue.clone();
                         let s_id = s_id.clone();
-                        move |update: crate::collectors::AgentTurnUpdate| {
-                            match update {
-                                crate::collectors::AgentTurnUpdate::AssistantDelta(delta) => {
-                                    if let Ok(mut q) = events_queue.lock() {
-                                        q.push_back(json!({
-                                            "method": "item/agentMessage/delta",
-                                            "params": {
-                                                "threadId": s_id,
-                                                "itemId": "claude_msg",
-                                                "delta": delta
-                                            }
-                                        }));
-                                    }
+                        move |update: crate::collectors::AgentTurnUpdate| match update {
+                            crate::collectors::AgentTurnUpdate::AssistantDelta(delta) => {
+                                if let Ok(mut q) = events_queue.lock() {
+                                    q.push_back(json!({
+                                        "method": "item/agentMessage/delta",
+                                        "params": {
+                                            "threadId": s_id,
+                                            "itemId": "claude_msg",
+                                            "delta": delta
+                                        }
+                                    }));
                                 }
-                                crate::collectors::AgentTurnUpdate::AssistantMessage(msg) => {
-                                    if let Ok(mut q) = events_queue.lock() {
-                                        q.push_back(json!({
-                                            "method": "item/agentMessage/delta",
-                                            "params": {
-                                                "threadId": s_id,
-                                                "itemId": "claude_msg",
-                                                "delta": msg
-                                            }
-                                        }));
-                                    }
+                            }
+                            crate::collectors::AgentTurnUpdate::AssistantMessage(msg) => {
+                                if let Ok(mut q) = events_queue.lock() {
+                                    q.push_back(json!({
+                                        "method": "item/agentMessage/delta",
+                                        "params": {
+                                            "threadId": s_id,
+                                            "itemId": "claude_msg",
+                                            "delta": msg
+                                        }
+                                    }));
                                 }
-                                crate::collectors::AgentTurnUpdate::Activity(_) => {
-                                    if let Ok(mut q) = events_queue.lock() {
-                                        q.push_back(json!({
-                                            "method": "item/started",
-                                            "params": {
-                                                "threadId": s_id,
-                                                "item": {
-                                                    "id": "claude_tool",
-                                                    "type": "commandExecution"
-                                                }
+                            }
+                            crate::collectors::AgentTurnUpdate::Activity(_) => {
+                                if let Ok(mut q) = events_queue.lock() {
+                                    q.push_back(json!({
+                                        "method": "item/started",
+                                        "params": {
+                                            "threadId": s_id,
+                                            "item": {
+                                                "id": "claude_tool",
+                                                "type": "commandExecution"
                                             }
-                                        }));
-                                    }
+                                        }
+                                    }));
                                 }
                             }
                         }
@@ -260,7 +261,11 @@ impl NativeTransport for MultiProviderTransport {
                     );
 
                     if let Ok(mut q) = events_queue.lock() {
-                        let status_type = if outcome.is_ok() { "completed" } else { "failed" };
+                        let status_type = if outcome.is_ok() {
+                            "completed"
+                        } else {
+                            "failed"
+                        };
                         q.push_back(json!({
                             "method": "turn/completed",
                             "params": {
@@ -288,26 +293,31 @@ impl NativeTransport for MultiProviderTransport {
                 }
                 Ok(json!({"ok": true}))
             }
-            "thread/archive" | "thread/unarchive" if is_claude => {
-                Ok(json!({"ok": true}))
-            }
+            "thread/archive" | "thread/unarchive" if is_claude => Ok(json!({"ok": true})),
             "thread/read" if is_zcode => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let zcode = self.ensure_zcode()?;
-                let resume_res = zcode.session_resume(session_id).map_err(|error| match error {
-                    crate::collectors::CollectorError::Protocol { .. } => {
-                        NativeError::rejected("external_session_not_resumable")
-                    }
-                    _ => NativeError::uncertain("provider_transport_lost"),
-                })?;
+                let resume_res = zcode
+                    .session_resume(session_id)
+                    .map_err(|error| match error {
+                        crate::collectors::CollectorError::Protocol { .. } => {
+                            NativeError::rejected("external_session_not_resumable")
+                        }
+                        _ => NativeError::uncertain("provider_transport_lost"),
+                    })?;
                 let raw_cwd = resume_res
                     .pointer("/session/workspace/workspacePath")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .or_else(|| crate::collectors::find_zcode_session_cwd(session_id).ok().flatten())
+                    .or_else(|| {
+                        crate::collectors::find_zcode_session_cwd(session_id)
+                            .ok()
+                            .flatten()
+                    })
                     .unwrap_or_else(|| PathBuf::from("."));
                 let cwd = dunce::canonicalize(&raw_cwd).unwrap_or(raw_cwd);
-                self.zcode_cached_cwds.insert(session_id.to_string(), cwd.clone());
+                self.zcode_cached_cwds
+                    .insert(session_id.to_string(), cwd.clone());
                 let title = resume_res
                     .pointer("/session/title")
                     .and_then(Value::as_str)
@@ -327,7 +337,11 @@ impl NativeTransport for MultiProviderTransport {
                     .zcode_cached_cwds
                     .get(session_id)
                     .cloned()
-                    .or_else(|| crate::collectors::find_zcode_session_cwd(session_id).ok().flatten())
+                    .or_else(|| {
+                        crate::collectors::find_zcode_session_cwd(session_id)
+                            .ok()
+                            .flatten()
+                    })
                     .unwrap_or_else(|| PathBuf::from("."));
                 Ok(json!({
                     "thread": {
@@ -344,12 +358,14 @@ impl NativeTransport for MultiProviderTransport {
                     .as_array()
                     .and_then(|arr| arr.iter().find_map(|item| item["text"].as_str()))
                     .unwrap_or("");
-                zcode.session_send(session_id, text).map_err(|error| match error {
-                    crate::collectors::CollectorError::Protocol { ref message, .. } => {
-                        NativeError::rejected(message.as_str())
-                    }
-                    _ => NativeError::uncertain("provider_transport_lost"),
-                })?;
+                zcode
+                    .session_send(session_id, text)
+                    .map_err(|error| match error {
+                        crate::collectors::CollectorError::Protocol { ref message, .. } => {
+                            NativeError::rejected(message.as_str())
+                        }
+                        _ => NativeError::uncertain("provider_transport_lost"),
+                    })?;
                 let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
                 self.zcode_active_turns
                     .insert(session_id.to_string(), turn_id.clone());
@@ -377,52 +393,57 @@ impl NativeTransport for MultiProviderTransport {
                 }
                 Ok(json!({"ok": true}))
             }
-            "thread/archive" | "thread/unarchive" if is_zcode => {
-                Ok(json!({"ok": true}))
-            }
+            "thread/archive" | "thread/unarchive" if is_zcode => Ok(json!({"ok": true})),
             "thread/list" => {
-                let mut response = self.codex.request("thread/list", params).map_err(|error| match error {
-                    crate::collectors::CollectorError::Protocol { .. } => {
-                        NativeError::rejected("provider_rejected")
-                    }
-                    _ => NativeError::uncertain("provider_transport_lost"),
-                })?;
-                if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database() {
-                    if let Ok(payload) = crate::collectors::collect_zcode_sessions_from(&db_path, false) {
-                        if let Ok(entries) = serde_json::from_str::<Vec<crate::adapters::zcode::ZCodeSessionEntry>>(&payload) {
-                            if let Some(items) = response["data"].as_array_mut() {
-                                for entry in entries.into_iter().take(100) {
-                                    items.push(json!({
-                                        "id": entry.session_id,
-                                        "cwd": entry.cwd,
-                                        "name": entry.title,
-                                        "status": { "type": "idle" }
-                                    }));
-                                }
+                let mut response =
+                    self.codex
+                        .request("thread/list", params)
+                        .map_err(|error| match error {
+                            crate::collectors::CollectorError::Protocol { .. } => {
+                                NativeError::rejected("provider_rejected")
                             }
-                        }
+                            _ => NativeError::uncertain("provider_transport_lost"),
+                        })?;
+                if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database()
+                    && let Ok(payload) =
+                        crate::collectors::collect_zcode_sessions_from(&db_path, false)
+                    && let Ok(entries) = serde_json::from_str::<
+                        Vec<crate::adapters::zcode::ZCodeSessionEntry>,
+                    >(&payload)
+                    && let Some(items) = response["data"].as_array_mut()
+                {
+                    for entry in entries.into_iter().take(100) {
+                        items.push(json!({
+                            "id": entry.session_id,
+                            "cwd": entry.cwd,
+                            "name": entry.title,
+                            "status": { "type": "idle" }
+                        }));
                     }
                 }
-                if let Ok(claude_entries) = crate::collectors::collect_claude_sessions_for_remote() {
-                    if let Some(items) = response["data"].as_array_mut() {
-                        for (session_id, cwd, title) in claude_entries {
-                            items.push(json!({
-                                "id": format!("claude_{}", session_id),
-                                "cwd": cwd,
-                                "name": title.unwrap_or_else(|| session_id.clone()),
-                                "status": { "type": "idle" }
-                            }));
-                        }
+                if let Ok(claude_entries) = crate::collectors::collect_claude_sessions_for_remote()
+                    && let Some(items) = response["data"].as_array_mut()
+                {
+                    for (session_id, cwd, title) in claude_entries {
+                        items.push(json!({
+                            "id": format!("claude_{}", session_id),
+                            "cwd": cwd,
+                            "name": title.unwrap_or_else(|| session_id.clone()),
+                            "status": { "type": "idle" }
+                        }));
                     }
                 }
                 Ok(response)
             }
-            _ => self.codex.request(method, params).map_err(|error| match error {
-                crate::collectors::CollectorError::Protocol { .. } => {
-                    NativeError::rejected("provider_rejected")
-                }
-                _ => NativeError::uncertain("provider_transport_lost"),
-            }),
+            _ => self
+                .codex
+                .request(method, params)
+                .map_err(|error| match error {
+                    crate::collectors::CollectorError::Protocol { .. } => {
+                        NativeError::rejected("provider_rejected")
+                    }
+                    _ => NativeError::uncertain("provider_transport_lost"),
+                }),
         }
     }
 

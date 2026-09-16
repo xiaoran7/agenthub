@@ -36,10 +36,7 @@ export function deviceUrl(base: string, deviceId: string): string {
   return `${base}/v1/devices/${encodeURIComponent(deviceId)}`;
 }
 
-export function sessionsUrl(
-  base: string,
-  agentType?: AgentType,
-): string {
+export function sessionsUrl(base: string, agentType?: AgentType): string {
   const query =
     agentType === undefined
       ? ""

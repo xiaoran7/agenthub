@@ -3846,7 +3846,9 @@
 
 .code-language {
   font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   color: #a1a1aa;
   text-transform: uppercase;
   font-weight: 550;
@@ -3879,7 +3881,9 @@
   margin: 0;
   padding: 12px 14px;
   overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   font-size: 12.5px;
   line-height: 1.6;
   color: #f4f4f5;

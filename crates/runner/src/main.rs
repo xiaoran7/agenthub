@@ -506,7 +506,9 @@ fn main() -> Result<()> {
                     &input, &meta, &redactor,
                 )?,
                 Agent::Grok => grok::normalize_hook(&input, &meta, &redactor)?,
-                Agent::ZCode => bail!("ingest-hook is not supported for ZCode (use SQLite database discovery)"),
+                Agent::ZCode => {
+                    bail!("ingest-hook is not supported for ZCode (use SQLite database discovery)")
+                }
             };
             let mut outbox = Outbox::open(db)?;
             let sequence = outbox.enqueue(&observation)?;

@@ -114,13 +114,16 @@ import { ConversationItem } from "./components/ConversationRenderer";
 import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
 import { DesktopHeader } from "./components/layout/DesktopHeader";
 import { SessionEmptyState } from "./components/session/SessionEmptyState";
-import { ContextCapacityPopover } from "./components/session/ContextCapacityPopover";
+import { ContextCapacityRing } from "./components/session/ContextCapacityPopover";
+import { ComposerPlusMenu } from "./components/session/ComposerPlusMenu";
 
 type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
 type DeviceFilter = "all" | string;
 
-const isManagedProvider = (agentType: AgentFilter): agentType is Session["agent_type"] =>
+const isManagedProvider = (
+  agentType: AgentFilter,
+): agentType is Session["agent_type"] =>
   agentType === "codex" || agentType === "claude_code" || agentType === "zcode";
 
 export function App() {
@@ -617,8 +620,7 @@ function Dashboard({
     () =>
       sessions.filter((session) => {
         const normAgent = normalizeAgentType(session.agent_type);
-        if (agentFilter !== "all" && normAgent !== agentFilter)
-          return false;
+        if (agentFilter !== "all" && normAgent !== agentFilter) return false;
         if (deviceFilter !== "all" && session.device_id !== deviceFilter)
           return false;
         if (session.archived === true) return false;
@@ -927,7 +929,7 @@ function Dashboard({
         canNavigateForward={nextSession !== undefined}
         title={
           selectedSession
-            ? (selectedSession.payload.project.display_name || "AgentHub")
+            ? selectedSession.payload.project.display_name || "AgentHub"
             : undefined
         }
         subtitle={
@@ -957,7 +959,9 @@ function Dashboard({
                 className="top-icon-btn new-task-btn"
                 onClick={() => {
                   setSelectedSessionKey(undefined);
-                  setLaunchModalProvider(isManagedProvider(agentFilter) ? agentFilter : "codex");
+                  setLaunchModalProvider(
+                    isManagedProvider(agentFilter) ? agentFilter : "codex",
+                  );
                   setLaunchModalOpen(true);
                 }}
                 title="新建任务"
@@ -1033,7 +1037,9 @@ function Dashboard({
                     className={`single-agent-badge ${isSelected ? "selected" : ""}`}
                     data-provider={item.type}
                     onClick={() =>
-                      setAgentFilter(agentFilter === item.type ? "all" : item.type)
+                      setAgentFilter(
+                        agentFilter === item.type ? "all" : item.type,
+                      )
                     }
                     title={`筛选 ${item.label} 会话`}
                   >
@@ -1321,7 +1327,9 @@ function Dashboard({
             <SessionEmptyState
               onNewSession={() => {
                 setSelectedSessionKey(undefined);
-                setLaunchModalProvider(isManagedProvider(agentFilter) ? agentFilter : "codex");
+                setLaunchModalProvider(
+                  isManagedProvider(agentFilter) ? agentFilter : "codex",
+                );
                 setLaunchModalOpen(true);
               }}
               onOpenHostControl={onOpenLocalHost ?? (() => {})}
@@ -1763,7 +1771,27 @@ function SessionControlPanel({
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [agentActivity, setAgentActivity] = useState<string>();
   const [error, setError] = useState<string>();
-  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const insertToken = (token: string) => {
+    const el = textareaRef.current;
+    if (!el) {
+      setPrompt((prev) => prev + token);
+      return;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const val = el.value;
+    const next = val.substring(0, start) + token + val.substring(end);
+    setPrompt(next);
+    setTimeout(() => {
+      el.focus();
+      const nextPos = start + token.length;
+      el.setSelectionRange(nextPos, nextPos);
+    }, 10);
+  };
+
   const [attachments, setAttachments] = useState<
     Array<{ name: string; path: string }>
   >([]);
@@ -1807,14 +1835,6 @@ function SessionControlPanel({
     )
       ? sessionOptions.permission
       : "";
-  const contextSummary = useMemo(() => {
-    const used = runtime?.context_used_tokens;
-    const windowSize = runtime?.context_window_tokens;
-    if (used !== undefined && windowSize !== undefined && windowSize > 0) {
-      return Math.min(100, Math.round((used / windowSize) * 100)) + "% 上下文";
-    }
-    return "上下文容量";
-  }, [runtime]);
 
   useEffect(() => {
     setPendingApproval(session.payload.pending_approval ?? undefined);
@@ -1844,6 +1864,47 @@ function SessionControlPanel({
       return next;
     });
   };
+
+  useEffect(() => {
+    // Demo mode (no Tauri bridge) keeps the seeded sample transcript.
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    // Discovery-only sessions expose bounded metadata, never full transcripts:
+    // reading history is reserved for sessions that can be continued remotely.
+    if (!isManagedProvider(session.agent_type)) {
+      setMessages((current) => (current.length > 0 ? [] : current));
+      return;
+    }
+    let disposed = false;
+    loadConversation(session.agent_type, session.agent_session_id)
+      .then((next) => {
+        if (disposed) return;
+        setMessages((current) =>
+          current.length > 0 && sameConversation(current, next)
+            ? current
+            : next,
+        );
+        const firstUser = next.find(
+          (message) =>
+            message.role === "user" &&
+            message.kind === undefined &&
+            message.content.trim().length >= 4,
+        );
+        if (firstUser && !session.payload.runtime?.title) {
+          rememberTitleOverride(cacheKey, firstUser.content);
+        }
+      })
+      .catch((err) => {
+        if (!disposed) setError(errorMessage(err));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    cacheKey,
+    session.agent_session_id,
+    session.agent_type,
+    session.payload.runtime?.title,
+  ]);
 
   useEffect(() => {
     const pane = paneRef.current;
@@ -2068,11 +2129,7 @@ function SessionControlPanel({
           </div>
         </header>
 
-        <section
-          className="conversation-pane"
-          ref={paneRef}
-          aria-live="polite"
-        >
+        <section className="conversation-pane" ref={paneRef} aria-live="polite">
           {messages.length === 0 ? (
             <div className="conversation-empty">
               <MessageSquare />
@@ -2089,11 +2146,7 @@ function SessionControlPanel({
                 message={message}
                 index={index}
                 key={
-                  message.role +
-                  "-" +
-                  (message.kind ?? "message") +
-                  "-" +
-                  index
+                  message.role + "-" + (message.kind ?? "message") + "-" + index
                 }
               />
             ))
@@ -2169,6 +2222,7 @@ function SessionControlPanel({
                 onSubmit={sendMessage}
               >
                 <textarea
+                  ref={textareaRef}
                   aria-label="发送给 Agent"
                   maxLength={16_000}
                   placeholder="继续这个会话… (Enter 发送，Shift+Enter 换行)"
@@ -2183,16 +2237,24 @@ function SessionControlPanel({
                   disabled={busy}
                 />
                 <div className="composer-toolbar">
-                  <button
-                    type="button"
-                    className="tool-ghost-btn"
-                    onClick={() => void attachFiles()}
-                    title="附加文件或文档"
-                    aria-label="附加文件"
-                    disabled={busy}
-                  >
-                    <Plus size={15} />
-                  </button>
+                  <div className="composer-plus-wrapper">
+                    <button
+                      type="button"
+                      className={`tool-ghost-btn ${plusMenuOpen ? "active" : ""}`}
+                      onClick={() => setPlusMenuOpen((prev) => !prev)}
+                      title="快捷能力与附件"
+                      aria-label="快捷能力与附件"
+                      disabled={busy}
+                    >
+                      <Plus size={15} />
+                    </button>
+                    <ComposerPlusMenu
+                      isOpen={plusMenuOpen}
+                      onClose={() => setPlusMenuOpen(false)}
+                      onAttachFiles={() => void attachFiles()}
+                      onInsertToken={insertToken}
+                    />
+                  </div>
                   <SelectDropdown
                     className="ghost"
                     value={currentModel}
@@ -2210,35 +2272,17 @@ function SessionControlPanel({
                       className="ghost"
                       value={currentPermission}
                       options={permissionOptions}
-                      onChange={(val) =>
-                        updateTurnOptions({ permission: val })
-                      }
+                      onChange={(val) => updateTurnOptions({ permission: val })}
                       size="sm"
                       ariaLabel="权限模式"
                     />
                   )}
                   <span className="composer-spacer" />
-                  <div className="composer-context-wrapper">
-                    <button
-                      type="button"
-                      className="composer-context-trigger"
-                      onClick={() => setContextPopoverOpen((prev) => !prev)}
-                      title="查看上下文容量与分布"
-                      aria-label="查看上下文容量与分布"
-                    >
-                      <span className="context-indicator-dot" />
-                      <span className="context-indicator-text">
-                        {contextSummary}
-                      </span>
-                    </button>
-                    <ContextCapacityPopover
-                      runtime={runtime}
-                      messages={messages}
-                      modelName={currentModel}
-                      isOpen={contextPopoverOpen}
-                      onClose={() => setContextPopoverOpen(false)}
-                    />
-                  </div>
+                  <ContextCapacityRing
+                    runtime={runtime}
+                    messages={messages}
+                    modelName={currentModel}
+                  />
                   {busy ? (
                     <button
                       className="composer-send turn-cancel-btn"

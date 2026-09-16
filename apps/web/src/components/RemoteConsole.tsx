@@ -127,14 +127,19 @@ export function RemoteConsole({
       isResizingRef.current = false;
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
-      localStorage.setItem("agenthub_remote_sidebar_width", String(sidebarWidth));
+      localStorage.setItem(
+        "agenthub_remote_sidebar_width",
+        String(sidebarWidth),
+      );
     };
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
   };
 
-  const [providerFilter, setProviderFilter] = useState<"all" | "codex" | "claude" | "zcode">("all");
+  const [providerFilter, setProviderFilter] = useState<
+    "all" | "codex" | "claude" | "zcode"
+  >("all");
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [model, setModel] = useState("");
@@ -467,9 +472,13 @@ export function RemoteConsole({
       activeProviderIds.add(item.binding.provider_session_id);
       const wsLabel = workspaceLabel(item.binding.workspace_path);
       const provider = getProviderInfo(item.binding.provider_session_id);
-      if (providerFilter !== "all" && providerFilter !== provider.type) continue;
+      if (providerFilter !== "all" && providerFilter !== provider.type)
+        continue;
 
-      const rawId = item.binding.provider_session_id.replace(/^(sess_|claude_)/, "");
+      const rawId = item.binding.provider_session_id.replace(
+        /^(sess_|claude_)/,
+        "",
+      );
       list.push({
         kind: "active",
         key: key(item),
@@ -487,11 +496,11 @@ export function RemoteConsole({
         if (activeProviderIds.has(cand.provider_session_id)) continue;
         const wsLabel = workspaceLabel(cand.workspace_path);
         const provider = getProviderInfo(cand.provider_session_id);
-        if (providerFilter !== "all" && providerFilter !== provider.type) continue;
+        if (providerFilter !== "all" && providerFilter !== provider.type)
+          continue;
 
         const rawId = cand.provider_session_id.replace(/^(sess_|claude_)/, "");
-        const title =
-          cand.title || `${provider.name} · ${rawId.slice(0, 8)}`;
+        const title = cand.title || `${provider.name} · ${rawId.slice(0, 8)}`;
         list.push({
           kind: "candidate",
           key: `${r.runner_id}/${cand.provider_session_id}`,
@@ -594,7 +603,9 @@ export function RemoteConsole({
             if (item.kind === "active") {
               const activeSession = item.session;
               const isSelected = key(activeSession) === selected;
-              const pInfo = getProviderInfo(activeSession.binding.provider_session_id);
+              const pInfo = getProviderInfo(
+                activeSession.binding.provider_session_id,
+              );
               return (
                 <button
                   className={`remote-session ${isSelected ? "selected" : ""}`}
@@ -610,8 +621,7 @@ export function RemoteConsole({
                         {
                           action: "connect",
                           mode: "resume",
-                          workspace_path:
-                            activeSession.binding.workspace_path,
+                          workspace_path: activeSession.binding.workspace_path,
                           provider_session_id:
                             activeSession.binding.provider_session_id,
                         },
@@ -623,7 +633,11 @@ export function RemoteConsole({
                   <span className="remote-session-title">{item.title}</span>
                   <div className="remote-session-meta">
                     <small>{item.subtitle}</small>
-                    <span className={`remote-session-badge ${pInfo.badgeClass}`}>{item.badge}</span>
+                    <span
+                      className={`remote-session-badge ${pInfo.badgeClass}`}
+                    >
+                      {item.badge}
+                    </span>
                   </div>
                 </button>
               );
@@ -815,7 +829,13 @@ export function RemoteConsole({
                     className={`remote-message ${item.kind}`}
                     key={item.id}
                   >
-                    <small>{item.kind === "user" ? "你" : getProviderInfo(session?.binding.provider_session_id ?? "").name}</small>
+                    <small>
+                      {item.kind === "user"
+                        ? "你"
+                        : getProviderInfo(
+                            session?.binding.provider_session_id ?? "",
+                          ).name}
+                    </small>
                     <div>{item.text}</div>
                   </article>
                 ),
@@ -826,7 +846,14 @@ export function RemoteConsole({
               {approvals.map((approval) => (
                 <section className="remote-approval" key={approval.approval_id}>
                   <h3>需要你的确认</h3>
-                  <strong>{getProviderInfo(session?.binding.provider_session_id ?? "").name} 请求执行受保护的操作</strong>
+                  <strong>
+                    {
+                      getProviderInfo(
+                        session?.binding.provider_session_id ?? "",
+                      ).name
+                    }{" "}
+                    请求执行受保护的操作
+                  </strong>
                   <div>
                     <button
                       disabled={!connected || busy || !approval.can_decline}
@@ -921,7 +948,7 @@ export function RemoteConsole({
                         ? "电脑离线"
                         : !connected
                           ? "正在恢复…"
-                          : states[session.binding.execution_state] ?? "就绪"
+                          : (states[session.binding.execution_state] ?? "就绪")
                       : "正在连接"}
                   </span>
                   <span className="remote-composer-hint">
@@ -1060,7 +1087,8 @@ export function RemoteConsole({
                       key={item.provider_session_id}
                       value={item.provider_session_id}
                     >
-                      [{provider.name}] 接管：{item.title ?? item.provider_session_id}
+                      [{provider.name}] 接管：
+                      {item.title ?? item.provider_session_id}
                     </option>
                   );
                 })}

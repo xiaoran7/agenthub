@@ -652,19 +652,19 @@ pub fn find_claude_session_info(
             continue;
         }
         let candidate_file = project.path().join(&target_filename);
-        if candidate_file.is_file() {
-            if let Some(entry) = read_claude_transcript_metadata(&candidate_file, &program)? {
-                let cwd = PathBuf::from(entry.cwd);
-                let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
-                return Ok(Some((cwd, entry.title)));
-            }
+        if candidate_file.is_file()
+            && let Some(entry) = read_claude_transcript_metadata(&candidate_file, &program)?
+        {
+            let cwd = PathBuf::from(entry.cwd);
+            let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+            return Ok(Some((cwd, entry.title)));
         }
     }
     Ok(None)
 }
 
-pub fn collect_claude_sessions_for_remote(
-) -> Result<Vec<(String, String, Option<String>)>, CollectorError> {
+pub fn collect_claude_sessions_for_remote()
+-> Result<Vec<(String, String, Option<String>)>, CollectorError> {
     let config_dir = discover_claude_config_dir()?;
     let projects_dir = config_dir.join("projects");
     if !projects_dir.is_dir() {
@@ -2047,10 +2047,12 @@ pub fn collect_zcode_sessions_from(
         LIMIT ?1
     "#;
 
-    let mut statement = connection.prepare(sql).map_err(|source| CollectorError::Database {
-        program: program.clone(),
-        source,
-    })?;
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
 
     let rows = statement
         .query_map([limit as i64], |row| {
@@ -2123,10 +2125,12 @@ pub fn collect_zcode_session_contexts_from(
         LIMIT ?1
     "#;
 
-    let mut statement = connection.prepare(sql).map_err(|source| CollectorError::Database {
-        program: program.clone(),
-        source,
-    })?;
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|source| CollectorError::Database {
+            program: program.clone(),
+            source,
+        })?;
 
     let rows = statement
         .query_map([limit as i64], |row| {
@@ -2157,8 +2161,9 @@ pub fn collect_zcode_session_contexts_from(
         context.title = title.and_then(|t| metadata_label(&t, MAX_SESSION_TITLE_CHARS));
         context.model = model.and_then(|m| metadata_label(&m, MAX_CONFIG_VALUE_CHARS));
         context.permission_mode = mode.and_then(|m| metadata_label(&m, MAX_CONFIG_VALUE_CHARS));
-        context.session_total_tokens =
-            tokens.and_then(|t| u64::try_from(t).ok()).filter(|t| *t > 0);
+        context.session_total_tokens = tokens
+            .and_then(|t| u64::try_from(t).ok())
+            .filter(|t| *t > 0);
         contexts.push(context);
     }
     Ok(contexts)
@@ -2302,12 +2307,7 @@ pub fn run_agent_session_turn_streaming(
             Some(prompt_file)
         }
         crate::domain::AgentType::ZCode => {
-            command.args([
-                "--session",
-                session_id,
-                "--prompt",
-                prompt,
-            ]);
+            command.args(["--session", session_id, "--prompt", prompt]);
             None
         }
     };

@@ -321,16 +321,18 @@ function ContextBar({
             ))}
         </SelectControl>
         <div className="provider-segments" aria-label="Agent 来源" role="group">
-          {(["all", "claude_code", "codex", "zcode"] as const).map((provider) => (
-            <button
-              aria-pressed={providerFilter === provider}
-              key={provider}
-              onClick={() => onProviderFilterChange(provider)}
-              type="button"
-            >
-              {provider === "all" ? "全部" : AGENT_LABELS[provider]}
-            </button>
-          ))}
+          {(["all", "claude_code", "codex", "zcode"] as const).map(
+            (provider) => (
+              <button
+                aria-pressed={providerFilter === provider}
+                key={provider}
+                onClick={() => onProviderFilterChange(provider)}
+                type="button"
+              >
+                {provider === "all" ? "全部" : AGENT_LABELS[provider]}
+              </button>
+            ),
+          )}
         </div>
         <SelectControl
           label="时间范围"

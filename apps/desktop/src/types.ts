@@ -30,11 +30,7 @@ export interface Device {
 }
 
 export type AgentType =
-  | "claude_code"
-  | "codex"
-  | "antigravity"
-  | "grok_build"
-  | "zcode";
+  "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
 
 export function normalizeAgentType(type: unknown): AgentType {
   if (type === "z_code" || type === "zcode") return "zcode";

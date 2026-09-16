@@ -83,7 +83,9 @@ function ParsedAssistantContent({ text }: { text: string }) {
     while ((match = thinkRegex.exec(text)) !== null) {
       const preText = text.slice(lastIndex, match.index);
       if (preText.trim()) {
-        items.push(<MarkdownSection key={`md-${lastIndex}`} content={preText} />);
+        items.push(
+          <MarkdownSection key={`md-${lastIndex}`} content={preText} />,
+        );
       }
       const thinkContent = match[1];
       if (thinkContent.trim()) {
@@ -100,7 +102,9 @@ function ParsedAssistantContent({ text }: { text: string }) {
 
     const remaining = text.slice(lastIndex);
     if (remaining.trim() || items.length === 0) {
-      items.push(<MarkdownSection key={`md-${lastIndex}`} content={remaining} />);
+      items.push(
+        <MarkdownSection key={`md-${lastIndex}`} content={remaining} />,
+      );
     }
     return items;
   }, [text]);
@@ -138,7 +142,9 @@ function ThinkingBlock({
       </summary>
       <div className="thinking-body">
         <div className="thinking-inner-text">
-          <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>
+            {content}
+          </ReactMarkdown>
         </div>
       </div>
     </details>

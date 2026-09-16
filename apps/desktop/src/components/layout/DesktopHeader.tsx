@@ -39,10 +39,16 @@ export function DesktopHeader({
     let unlisten: (() => void) | undefined;
     try {
       const appWindow = getCurrentWindow();
-      appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+      appWindow
+        .isMaximized()
+        .then(setIsMaximized)
+        .catch(() => {});
       appWindow
         .onResized(() => {
-          appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+          appWindow
+            .isMaximized()
+            .then(setIsMaximized)
+            .catch(() => {});
         })
         .then((fn) => {
           unlisten = fn;

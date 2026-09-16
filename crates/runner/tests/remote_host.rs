@@ -475,7 +475,10 @@ fn claude_multi_provider_transport_routes_claude_prefix() {
         json!({"thread":{"id":"claude_mock_test_123","status":{"type":"idle"}}}),
     );
     assert_eq!(host.handle_command(command).status, "accepted");
-    assert_eq!(host.sessions()[0].provider_session_id, "claude_mock_test_123");
+    assert_eq!(
+        host.sessions()[0].provider_session_id,
+        "claude_mock_test_123"
+    );
 }
 
 #[test]

@@ -166,15 +166,15 @@ fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> 
         if data.get("synthetic").and_then(Value::as_bool) == Some(true) {
             continue;
         }
-        if let Some(visibility) = data.pointer("/metadata/visibility").and_then(Value::as_str) {
-            if visibility == "model-only" || visibility == "hidden" {
-                continue;
-            }
+        if let Some(visibility) = data.pointer("/metadata/visibility").and_then(Value::as_str)
+            && (visibility == "model-only" || visibility == "hidden")
+        {
+            continue;
         }
-        if let Some(source) = data.pointer("/metadata/source").and_then(Value::as_str) {
-            if source == "todo_reminder" || source == "system" {
-                continue;
-            }
+        if let Some(source) = data.pointer("/metadata/source").and_then(Value::as_str)
+            && (source == "todo_reminder" || source == "system")
+        {
+            continue;
         }
 
         let role = role_opt.as_deref().unwrap_or("assistant");
@@ -190,7 +190,10 @@ fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> 
                 conversation_item(role, "message", "", &clean, "completed")
             }
             "tool" => {
-                let tool_name = data.get("tool").and_then(Value::as_str).unwrap_or("工具调用");
+                let tool_name = data
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .unwrap_or("工具调用");
                 let state = data.get("state");
                 let status = state
                     .and_then(|s| s.get("status"))

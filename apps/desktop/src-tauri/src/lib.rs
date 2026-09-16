@@ -19,8 +19,7 @@ use agent_pulse_runner::{
     adapters::{
         claude,
         codex::{self, CodexThreadContext},
-        grok,
-        zcode,
+        grok, zcode,
     },
     collectors::{
         LocalSessionContext, collect_antigravity_session_contexts, collect_claude_session_contexts,
@@ -57,7 +56,6 @@ const AGENT_TURN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_PROMPT_CHARS: usize = 16_000;
 const MAX_SESSION_ID_CHARS: usize = 160;
 const MAX_SSE_LINE_BYTES: usize = 64 * 1024;
-const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(45);
 const STREAM_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const SESSION_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(15);
 
@@ -463,7 +461,11 @@ fn builtin_model_catalog(
             ("grok-code-fast-1", "Grok Code Fast", "低延迟快速任务"),
         ],
         AgentType::ZCode => &[
-            ("gemini-3.8-flash-high", "Gemini 3.8 Flash High", "主力快速多模态编码"),
+            (
+                "gemini-3.8-flash-high",
+                "Gemini 3.8 Flash High",
+                "主力快速多模态编码",
+            ),
             ("gemini-3.8-pro", "Gemini 3.8 Pro", "复杂架构与深度工程"),
             ("claude-sonnet-4-5", "Claude Sonnet 4.5", "代码综合能力"),
         ],
@@ -1928,36 +1930,43 @@ fn offline_dashboard_snapshot(
         archived_sessions: Vec::new(),
     });
     let outbox_path = state.data_dir.join("outbox.sqlite");
-    let (stats, local_sessions, claude_health, codex_health, antigravity_health, grok_health, zcode_health) =
-        if let Ok(outbox) = Outbox::open(&outbox_path) {
-            (
-                outbox
-                    .stats()
-                    .unwrap_or(agent_pulse_runner::outbox::OutboxStats {
-                        pending_events: 0,
-                        session_snapshots: 0,
-                    }),
-                outbox.snapshots().unwrap_or_default(),
-                outbox.adapter_health(AgentType::ClaudeCode).ok().flatten(),
-                outbox.adapter_health(AgentType::Codex).ok().flatten(),
-                outbox.adapter_health(AgentType::Antigravity).ok().flatten(),
-                outbox.adapter_health(AgentType::GrokBuild).ok().flatten(),
-                outbox.adapter_health(AgentType::ZCode).ok().flatten(),
-            )
-        } else {
-            (
-                agent_pulse_runner::outbox::OutboxStats {
+    let (
+        stats,
+        local_sessions,
+        claude_health,
+        codex_health,
+        antigravity_health,
+        grok_health,
+        zcode_health,
+    ) = if let Ok(outbox) = Outbox::open(&outbox_path) {
+        (
+            outbox
+                .stats()
+                .unwrap_or(agent_pulse_runner::outbox::OutboxStats {
                     pending_events: 0,
                     session_snapshots: 0,
-                },
-                Vec::new(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        };
+                }),
+            outbox.snapshots().unwrap_or_default(),
+            outbox.adapter_health(AgentType::ClaudeCode).ok().flatten(),
+            outbox.adapter_health(AgentType::Codex).ok().flatten(),
+            outbox.adapter_health(AgentType::Antigravity).ok().flatten(),
+            outbox.adapter_health(AgentType::GrokBuild).ok().flatten(),
+            outbox.adapter_health(AgentType::ZCode).ok().flatten(),
+        )
+    } else {
+        (
+            agent_pulse_runner::outbox::OutboxStats {
+                pending_events: 0,
+                session_snapshots: 0,
+            },
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    };
 
     let local_contexts = local_session_contexts(state);
     let (host_bindings, pending_approvals) = daemon_client::get_daemon_client(state)
@@ -2583,7 +2592,10 @@ fn merge_dashboard_sessions(
         } else {
             AgentType::Codex
         };
-        let key = format!("{}:{}:{}", agent_type_str, device_id, binding.provider_session_id);
+        let key = format!(
+            "{}:{}:{}",
+            agent_type_str, device_id, binding.provider_session_id
+        );
         let status = match binding.execution_state {
             agent_pulse_runner::remote_host::ExecutionState::Running => "WORKING",
             agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission => {
@@ -2883,19 +2895,23 @@ fn dashboard_realtime_loop(
     let mut attempt = 0_u32;
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
-        let result = read_dashboard_stream(app, server_url, cookie, stop, connected);
+        let result = read_dashboard_stream_with_fallback(app, server_url, cookie, stop, connected);
         if stop.load(Ordering::Relaxed) {
             break;
         }
         publish_realtime_state(app, connected, false, false);
-        // Retry policy: a stream that stayed healthy for a while means the
-        // server simply closed it, so reconnect almost immediately. A 429
-        // means every stream slot is busy (e.g. half-open sockets after a
-        // network switch) and reconnecting faster only makes it worse.
+
+        let elapsed = started.elapsed();
+        if elapsed >= Duration::from_secs(15) {
+            // Once a connection maintained stability for >= 15s, reset backoff attempts
+            attempt = 0;
+        }
+
         let delay = match &result {
-            Ok(_) if started.elapsed() >= Duration::from_secs(30) => Duration::from_secs(1),
-            Ok(_) => Duration::from_secs(2),
+            _ if stop.load(Ordering::Relaxed) => break,
             Err(DesktopError::LoginRateLimited) => Duration::from_secs(60),
+            _ if elapsed >= Duration::from_secs(15) => Duration::from_secs(1),
+            Ok(_) => Duration::from_secs(1),
             Err(_) => {
                 attempt = attempt.saturating_add(1);
                 Duration::from_secs(2_u64.saturating_pow(attempt.min(4))).min(STREAM_MAX_BACKOFF)
@@ -2914,7 +2930,45 @@ fn jittered(duration: Duration) -> Duration {
     duration + Duration::from_millis((nanos % 400) as u64)
 }
 
-fn read_dashboard_stream(
+fn read_dashboard_stream_with_fallback(
+    app: &AppHandle,
+    server_url: &str,
+    cookie: &str,
+    stop: &AtomicBool,
+    connected: &AtomicBool,
+) -> Result<(), DesktopError> {
+    let proxy_configs = [
+        None,
+        Some("http://127.0.0.1:7897"),
+        Some("socks5://127.0.0.1:7897"),
+    ];
+
+    let mut last_err = DesktopError::Unreachable;
+    for proxy in proxy_configs {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let agent = dashboard_stream_agent(proxy);
+        match read_dashboard_stream_with_agent(&agent, app, server_url, cookie, stop, connected) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                let is_conn_err = matches!(
+                    err,
+                    DesktopError::Unreachable | DesktopError::InvalidResponse
+                );
+                last_err = err;
+                if !is_conn_err {
+                    // Auth/RateLimit error should not cycle proxies
+                    return Err(last_err);
+                }
+            }
+        }
+    }
+    Err(last_err)
+}
+
+fn read_dashboard_stream_with_agent(
+    agent: &ureq::Agent,
     app: &AppHandle,
     server_url: &str,
     cookie: &str,
@@ -2922,7 +2976,7 @@ fn read_dashboard_stream(
     connected: &AtomicBool,
 ) -> Result<(), DesktopError> {
     let url = format!("{server_url}/v1/stream");
-    let response = dashboard_stream_agent()
+    let response = agent
         .get(&url)
         .header("cookie", cookie)
         .header("accept", "text/event-stream")
@@ -2936,6 +2990,10 @@ fn read_dashboard_stream(
     {
         return Err(DesktopError::InvalidResponse);
     }
+
+    // Immediately mark realtime connected once HTTP 200 SSE handshake succeeds
+    publish_realtime_state(app, connected, true, false);
+
     let mut reader = BufReader::new(response.into_parts().1.into_reader());
     let mut event = String::new();
     loop {
@@ -2951,13 +3009,21 @@ fn read_dashboard_stream(
                 match event.as_str() {
                     "ready" => publish_realtime_state(app, connected, true, false),
                     "sessions" => publish_realtime_state(app, connected, true, true),
-                    _ => {}
+                    "keepalive" | "ping" | "heartbeat" => {
+                        publish_realtime_state(app, connected, true, false);
+                    }
+                    _ => {
+                        publish_realtime_state(app, connected, true, false);
+                    }
                 }
                 event.clear();
             }
             SseLine::Line(line) => {
                 if let Some(value) = line.strip_prefix("event:") {
                     event = value.trim_start().to_owned();
+                } else if line.starts_with(':') {
+                    // Keepalive comment (e.g. ": keepalive")
+                    publish_realtime_state(app, connected, true, false);
                 }
             }
             SseLine::Eof => return Ok(()),
@@ -3129,18 +3195,20 @@ fn http_agent(proxy_url: Option<&str>) -> ureq::Agent {
     builder.build().new_agent()
 }
 
-fn dashboard_stream_agent() -> ureq::Agent {
+fn dashboard_stream_agent(proxy_url: Option<&str>) -> ureq::Agent {
     let mut builder = ureq::Agent::config_builder()
         .timeout_connect(Some(REQUEST_TIMEOUT))
         .timeout_recv_response(Some(Duration::from_secs(30)))
-        .timeout_recv_body(Some(STREAM_READ_TIMEOUT))
+        .timeout_recv_body(None) // Long-lived SSE stream body must NEVER have a timeout
         .user_agent(concat!(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/",
             env!("CARGO_PKG_VERSION")
         ))
         .max_redirects(0);
 
-    if let Ok(proxy) = ureq::Proxy::new("http://127.0.0.1:7897") {
+    if let Some(proxy_str) = proxy_url
+        && let Ok(proxy) = ureq::Proxy::new(proxy_str)
+    {
         builder = builder.proxy(Some(proxy));
     }
 

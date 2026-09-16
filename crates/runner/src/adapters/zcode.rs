@@ -83,7 +83,11 @@ pub fn normalize_zcode_session(
                 _ => (ActivityStatus::Working, None, "active".to_string()),
             }
         } else if entry.latest_role.as_deref() == Some("user") {
-            (ActivityStatus::Working, None, "processing_user_request".to_string())
+            (
+                ActivityStatus::Working,
+                None,
+                "processing_user_request".to_string(),
+            )
         } else {
             (ActivityStatus::Working, None, "working".to_string())
         }
