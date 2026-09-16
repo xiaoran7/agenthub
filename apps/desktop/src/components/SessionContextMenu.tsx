@@ -7,7 +7,7 @@ import {
   FileText,
   CheckCircle2,
 } from "lucide-react";
-import type { Session } from "../types";
+import { normalizeAgentType, type Session } from "../types";
 import { sessionDisplayTitle } from "../presentation";
 
 export interface ContextMenuPosition {
@@ -59,7 +59,7 @@ export function SessionContextMenu({
   if (!position) return null;
 
   const { session } = position;
-  const key = `${session.device_id}:${session.agent_type}:${session.agent_session_id}`;
+  const key = `${session.device_id}:${normalizeAgentType(session.agent_type)}:${session.agent_session_id}`;
   const title = sessionDisplayTitle(session);
   const projectPath = session.payload.project.display_name || "";
 

@@ -36,6 +36,7 @@ import {
   Settings,
   ShieldCheck,
   Sliders,
+  Smartphone,
   Sparkles,
   Square,
   Terminal,
@@ -85,17 +86,18 @@ import {
   replaceAssistantMessage,
   type ConversationMessage,
 } from "./turn-stream";
-import type {
-  ActivityStatus,
-  DesktopPreferences,
-  DashboardRealtimeEvent,
-  LocalSource,
-  Session,
-  SessionTimelineEvent,
-  SessionTurnEvent,
-  Snapshot,
-  TgDeviceCodeResponse,
-  TgDevicePollResponse,
+import {
+  normalizeAgentType,
+  type ActivityStatus,
+  type DesktopPreferences,
+  type DashboardRealtimeEvent,
+  type LocalSource,
+  type Session,
+  type SessionTimelineEvent,
+  type SessionTurnEvent,
+  type Snapshot,
+  type TgDeviceCodeResponse,
+  type TgDevicePollResponse,
 } from "./types";
 
 import {
@@ -112,6 +114,7 @@ import { ConversationItem } from "./components/ConversationRenderer";
 import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
 import { DesktopHeader } from "./components/layout/DesktopHeader";
 import { SessionEmptyState } from "./components/session/SessionEmptyState";
+import { ContextCapacityPopover } from "./components/session/ContextCapacityPopover";
 
 type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
@@ -495,6 +498,7 @@ function Dashboard({
   const [hostPhase, setHostPhase] = useState<
     "loading" | "starting" | "stopped" | "local" | "connecting" | "connected"
   >("loading");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -548,7 +552,14 @@ function Dashboard({
   const [cachedSessions, setCachedSessions] = useState<Session[]>(() => {
     try {
       const stored = window.localStorage.getItem("agenthub:cached-sessions");
-      return stored ? (JSON.parse(stored) as Session[]) : [];
+      if (!stored) return [];
+      const parsed = JSON.parse(stored) as Session[];
+      return parsed
+        .filter((s) => !s.agent_session_id.startsWith("sess_subagent"))
+        .map((s) => ({
+          ...s,
+          agent_type: normalizeAgentType(s.agent_type),
+        }));
     } catch {
       return [];
     }
@@ -559,10 +570,14 @@ function Dashboard({
       setCachedSessions((prev) => {
         const map = new Map<string, Session>();
         for (const s of prev) {
-          map.set(sessionKey(s), s);
+          if (s.agent_session_id.startsWith("sess_subagent")) continue;
+          const norm = { ...s, agent_type: normalizeAgentType(s.agent_type) };
+          map.set(sessionKey(norm), norm);
         }
         for (const s of snapshot.sessions) {
-          map.set(sessionKey(s), s);
+          if (s.agent_session_id.startsWith("sess_subagent")) continue;
+          const norm = { ...s, agent_type: normalizeAgentType(s.agent_type) };
+          map.set(sessionKey(norm), norm);
         }
         const merged = Array.from(map.values());
         try {
@@ -582,11 +597,15 @@ function Dashboard({
     const map = new Map<string, Session>();
     // First fill from cached sessions
     for (const s of cachedSessions) {
-      map.set(sessionKey(s), s);
+      if (s.agent_session_id.startsWith("sess_subagent")) continue;
+      const norm = { ...s, agent_type: normalizeAgentType(s.agent_type) };
+      map.set(sessionKey(norm), norm);
     }
     // Then overwrite with live snapshot sessions (takes precedence)
     for (const s of snapshot.sessions) {
-      map.set(sessionKey(s), s);
+      if (s.agent_session_id.startsWith("sess_subagent")) continue;
+      const norm = { ...s, agent_type: normalizeAgentType(s.agent_type) };
+      map.set(sessionKey(norm), norm);
     }
     return Array.from(map.values()).sort((a, b) =>
       activityTime(b).localeCompare(activityTime(a)),
@@ -597,7 +616,8 @@ function Dashboard({
   const filteredSessions = useMemo(
     () =>
       sessions.filter((session) => {
-        if (agentFilter !== "all" && session.agent_type !== agentFilter)
+        const normAgent = normalizeAgentType(session.agent_type);
+        if (agentFilter !== "all" && normAgent !== agentFilter)
           return false;
         if (deviceFilter !== "all" && session.device_id !== deviceFilter)
           return false;
@@ -607,7 +627,7 @@ function Dashboard({
           session.payload.runtime?.title,
           session.payload.project.display_name,
           session.payload.runtime?.model,
-          session.agent_type,
+          normAgent,
         ]
           .filter(Boolean)
           .join(" ")
@@ -621,11 +641,13 @@ function Dashboard({
     () =>
       groupSessionsByWorkspace(filteredSessions).map((group) => ({
         ...group,
-        sessions: [...group.sessions].sort(
-          (a, b) =>
+        sessions: [...group.sessions].sort((a, b) => {
+          const pinDiff =
             Number(pinnedSessions.includes(sessionKey(b))) -
-            Number(pinnedSessions.includes(sessionKey(a))),
-        ),
+            Number(pinnedSessions.includes(sessionKey(a)));
+          if (pinDiff !== 0) return pinDiff;
+          return activityTime(b).localeCompare(activityTime(a));
+        }),
       })),
     [filteredSessions, pinnedSessions],
   );
@@ -893,22 +915,31 @@ function Dashboard({
   return (
     <div className="desktop-app-container">
       <DesktopHeader
-        hostPhase={hostPhase}
-        onOpenHostControl={onOpenLocalHost ?? (() => {})}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onNewSession={() => {
-          setSelectedSessionKey(undefined);
-          setLaunchModalProvider(isManagedProvider(agentFilter) ? agentFilter : "codex");
-          setLaunchModalOpen(true);
-        }}
-        snapshot={snapshot}
-        onAccountToggle={() => setAccountOpen((v) => !v)}
-        refreshing={refreshing}
-        onRefresh={() => void refresh()}
+        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
+        sidebarCollapsed={sidebarCollapsed}
+        onNavigateBack={() =>
+          previousSession && setSelectedSessionKey(sessionKey(previousSession))
+        }
+        canNavigateBack={previousSession !== undefined}
+        onNavigateForward={() =>
+          nextSession && setSelectedSessionKey(sessionKey(nextSession))
+        }
+        canNavigateForward={nextSession !== undefined}
+        title={
+          selectedSession
+            ? (selectedSession.payload.project.display_name || "AgentHub")
+            : undefined
+        }
+        subtitle={
+          selectedSession ? sessionDisplayTitle(selectedSession) : undefined
+        }
       />
       <main className="claude-app-shell">
         {/* Left Claude Desktop Sidebar */}
-        <aside className="claude-sidebar" aria-label="侧边栏导航">
+        <aside
+          className={`claude-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}
+          aria-label="侧边栏导航"
+        >
           <div className="sidebar-top-bar">
             <button
               type="button"
@@ -1233,24 +1264,43 @@ function Dashboard({
                 className="profile-account-btn"
                 onClick={() => setAccountOpen((open) => !open)}
                 aria-expanded={accountOpen}
+                title="账户设置与注销"
               >
                 <span className="profile-brand-icon" aria-hidden="true">
                   {initials(displayName)}
                 </span>
-                <span className="profile-meta">
+                <span className="profile-name-text">
                   <strong>{displayName}</strong>
-                  <small>
-                    {snapshot.realtime_connected ? "实时连接" : "轮询连接"}
-                    <i
-                      className={
-                        "live-status-dot " +
-                        (snapshot.realtime_connected ? "" : "fallback")
-                      }
-                    />
-                  </small>
                 </span>
-                <ChevronDown size={14} className="profile-chevron" />
               </button>
+
+              <div className="sidebar-footer-actions">
+                <button
+                  type="button"
+                  className="sidebar-footer-action-btn"
+                  onClick={onOpenLocalHost ?? (() => {})}
+                  title={`本机与出站连接: ${snapshot.realtime_connected ? "实时在线" : "轮询"} (${snapshot.local.sources.length} 个工作区)`}
+                  aria-label="本机与出站连接状态"
+                >
+                  <Smartphone size={16} />
+                  <span
+                    className={
+                      "footer-status-indicator " +
+                      (snapshot.realtime_connected ? "online" : "fallback")
+                    }
+                  />
+                </button>
+
+                <button
+                  type="button"
+                  className="sidebar-footer-action-btn"
+                  onClick={() => setSettingsOpen(true)}
+                  title="系统设置 (Ctrl+,)"
+                  aria-label="系统设置"
+                >
+                  <Settings size={16} />
+                </button>
+              </div>
             </div>
           </div>
         </aside>
@@ -1713,13 +1763,7 @@ function SessionControlPanel({
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [agentActivity, setAgentActivity] = useState<string>();
   const [error, setError] = useState<string>();
-  const [panelView, setPanelView] = useState<
-    "context" | "conversation" | "timeline"
-  >("conversation");
-  const [timeline, setTimeline] = useState<SessionTimelineEvent[]>([]);
-  const [timelineLoading, setTimelineLoading] = useState(false);
-  const [timelineError, setTimelineError] = useState<string>();
-  const [timelineReload, setTimelineReload] = useState(0);
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [attachments, setAttachments] = useState<
     Array<{ name: string; path: string }>
   >([]);
@@ -1769,7 +1813,7 @@ function SessionControlPanel({
     if (used !== undefined && windowSize !== undefined && windowSize > 0) {
       return Math.min(100, Math.round((used / windowSize) * 100)) + "% 上下文";
     }
-    return undefined;
+    return "上下文容量";
   }, [runtime]);
 
   useEffect(() => {
@@ -1802,87 +1846,11 @@ function SessionControlPanel({
   };
 
   useEffect(() => {
-    if (panelView !== "timeline") return;
-    let disposed = false;
-    setTimelineLoading(true);
-    setTimelineError(undefined);
-    setTimeline([]);
-    invoke<SessionTimelineEvent[]>("load_session_timeline", {
-      input: {
-        device_id: session.device_id,
-        agent_type: session.agent_type,
-        agent_session_id: session.agent_session_id,
-      },
-    })
-      .then((next) => {
-        if (!disposed) setTimeline(next);
-      })
-      .catch((nextError) => {
-        if (!disposed) setTimelineError(errorMessage(nextError));
-      })
-      .finally(() => {
-        if (!disposed) setTimelineLoading(false);
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [
-    panelView,
-    session.agent_session_id,
-    session.agent_type,
-    session.device_id,
-    timelineReload,
-  ]);
-
-  useEffect(() => {
-    // Demo mode (no Tauri bridge) keeps the seeded sample transcript.
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    // Discovery-only sessions expose bounded metadata, never full transcripts:
-    // reading history is reserved for sessions that can be continued remotely.
-    if (!isManagedProvider(session.agent_type)) {
-      setMessages((current) => (current.length > 0 ? [] : current));
-      return;
-    }
-    let disposed = false;
-    loadConversation(session.agent_type, session.agent_session_id)
-      .then((next) => {
-        if (disposed) return;
-        setMessages((current) =>
-          current.length > 0 && sameConversation(current, next)
-            ? current
-            : next,
-        );
-        const firstUser = next.find(
-          (message) =>
-            message.role === "user" &&
-            message.kind === undefined &&
-            message.content.trim().length >= 4,
-        );
-        if (firstUser && !session.payload.runtime?.title) {
-          rememberTitleOverride(cacheKey, firstUser.content);
-        }
-      })
-      .catch((err) => {
-        if (!disposed) setError(errorMessage(err));
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [
-    cacheKey,
-    session.agent_session_id,
-    session.agent_type,
-    session.payload.runtime?.title,
-  ]);
-
-  // Pin the view to the newest message by scrolling the pane itself; calling
-  // scrollIntoView here would also scroll every ancestor (window included).
-  useEffect(() => {
     const pane = paneRef.current;
-    if (pane && panelView === "conversation") {
+    if (pane) {
       pane.scrollTop = pane.scrollHeight;
     }
-  }, [messages, panelView, busy, agentActivity]);
+  }, [messages, busy, agentActivity]);
 
   const flushDelta = useCallback(() => {
     deltaFrame.current = undefined;
@@ -2100,111 +2068,42 @@ function SessionControlPanel({
           </div>
         </header>
 
-        <nav className="panel-view-switcher" aria-label="会话详情视图">
-          <button
-            type="button"
-            className={panelView === "conversation" ? "active" : ""}
-            onClick={() => setPanelView("conversation")}
-          >
-            <MessageSquare size={14} />
-            <span>对话消息</span>
-          </button>
-          <button
-            type="button"
-            className={panelView === "context" ? "active" : ""}
-            onClick={() => setPanelView("context")}
-          >
-            <Sliders size={14} />
-            <span>运行上下文</span>
-          </button>
-          <button
-            type="button"
-            className={panelView === "timeline" ? "active" : ""}
-            onClick={() => setPanelView("timeline")}
-          >
-            <Activity size={14} />
-            <span>状态时间线</span>
-          </button>
-        </nav>
-
-        {panelView === "context" ? (
-          <section className="session-runtime-context">
-            <dl>
-              <div>
-                <dt>Agent 类型</dt>
-                <dd>{agentLabel(session.agent_type)}</dd>
-              </div>
-              <div>
-                <dt>会话模型</dt>
-                <dd>{runtime?.model ?? "模型未提供"}</dd>
-              </div>
-              <div>
-                <dt>思考 / 推理深度</dt>
-                <dd>{runtime?.reasoning_effort ?? "未配置"}</dd>
-              </div>
-              <div>
-                <dt>{permissionFieldLabel(session.agent_type)}</dt>
-                <dd>{permission ?? "未指定"}</dd>
-              </div>
-              <div>
-                <dt>沙箱模式</dt>
-                <dd>{runtime?.sandbox_mode ?? "未配置"}</dd>
-              </div>
-              <div>
-                <dt>上下文使用</dt>
-                <dd>{formatContextUsage(runtime)}</dd>
-              </div>
-              <div>
-                <dt>会话总消耗</dt>
-                <dd>{formatTokenCount(runtime?.session_total_tokens)}</dd>
-              </div>
-            </dl>
-          </section>
-        ) : panelView === "timeline" ? (
-          <SessionTimelineView
-            events={timeline}
-            loading={timelineLoading}
-            error={timelineError}
-            onReload={() => setTimelineReload((value) => value + 1)}
-          />
-        ) : (
-          <section
-            className="conversation-pane"
-            ref={paneRef}
-            aria-live="polite"
-          >
-            {messages.length === 0 ? (
-              <div className="conversation-empty">
-                <MessageSquare />
-                <strong>从这里继续会话</strong>
-                <p>
-                  {isManagedProvider(session.agent_type)
-                    ? "消息交给本机 agenthubd 管理的官方 Runtime。"
-                    : "该 Provider 尚未接入远程控制；接入后可在此查看历史并继续会话。"}
-                </p>
-              </div>
-            ) : (
-              messages.map((message, index) => (
-                <ConversationItem
-                  message={message}
-                  index={index}
-                  key={
-                    message.role +
-                    "-" +
-                    (message.kind ?? "message") +
-                    "-" +
-                    index
-                  }
-                />
-              ))
-            )}
-            {busy && agentActivity !== undefined && (
-              <div className="agent-thinking">
-                <RefreshCw className="spin" /> {agentActivity}
-              </div>
-            )}
-          </section>
-        )}
+        <section
+          className="conversation-pane"
+          ref={paneRef}
+          aria-live="polite"
+        >
+          {messages.length === 0 ? (
+            <div className="conversation-empty">
+              <MessageSquare />
+              <strong>从这里继续会话</strong>
+              <p>
+                {isManagedProvider(session.agent_type)
+                  ? "消息交给本机 agenthubd 管理的官方 Runtime。"
+                  : "该 Provider 尚未接入远程控制；接入后可在此查看历史并继续会话。"}
+              </p>
+            </div>
+          ) : (
+            messages.map((message, index) => (
+              <ConversationItem
+                message={message}
+                index={index}
+                key={
+                  message.role +
+                  "-" +
+                  (message.kind ?? "message") +
+                  "-" +
+                  index
+                }
+              />
+            ))
+          )}
+          {busy && agentActivity !== undefined && (
+            <div className="agent-thinking">
+              <RefreshCw className="spin" /> {agentActivity}
+            </div>
+          )}
+        </section>
 
         {pendingApproval !== undefined && (
           <div
@@ -2232,126 +2131,140 @@ function SessionControlPanel({
         )}
         {error !== undefined && <p className="panel-error">{error}</p>}
 
-        {panelView === "conversation" && (
-          <div className="composer-container">
-            {!isManagedProvider(session.agent_type) ? (
-              <div className="provider-readonly-notice" role="status">
-                <Eye size={14} />
-                <span>该 Provider 尚未接入远程控制，暂不能发送消息</span>
-              </div>
-            ) : (
-              <>
-                {attachments.length > 0 && (
-                  <div className="attachment-row">
-                    {attachments.map((file) => (
-                      <span
-                        className="attachment-chip"
-                        key={file.path}
-                        title={file.path}
-                      >
-                        <Paperclip size={11} />
-                        <span className="attachment-name">{file.name}</span>
-                        <button
-                          type="button"
-                          aria-label={"移除附件 " + file.name}
-                          onClick={() =>
-                            setAttachments((current) =>
-                              current.filter((item) => item.path !== file.path),
-                            )
-                          }
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <form
-                  className="session-composer modern-composer"
-                  onSubmit={sendMessage}
-                >
-                  <textarea
-                    aria-label="发送给 Agent"
-                    maxLength={16_000}
-                    placeholder="继续这个会话… (Enter 发送，Shift+Enter 换行)"
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        void sendMessage(e);
-                      }
-                    }}
-                    disabled={busy}
-                  />
-                  <div className="composer-toolbar">
-                    <button
-                      type="button"
-                      className="tool-ghost-btn"
-                      onClick={() => void attachFiles()}
-                      title="附加文件或文档"
-                      aria-label="附加文件"
-                      disabled={busy}
+        <div className="composer-container">
+          {!isManagedProvider(session.agent_type) ? (
+            <div className="provider-readonly-notice" role="status">
+              <Eye size={14} />
+              <span>该 Provider 尚未接入远程控制，暂不能发送消息</span>
+            </div>
+          ) : (
+            <>
+              {attachments.length > 0 && (
+                <div className="attachment-row">
+                  {attachments.map((file) => (
+                    <span
+                      className="attachment-chip"
+                      key={file.path}
+                      title={file.path}
                     >
-                      <Plus size={15} />
-                    </button>
+                      <Paperclip size={11} />
+                      <span className="attachment-name">{file.name}</span>
+                      <button
+                        type="button"
+                        aria-label={"移除附件 " + file.name}
+                        onClick={() =>
+                          setAttachments((current) =>
+                            current.filter((item) => item.path !== file.path),
+                          )
+                        }
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <form
+                className="session-composer modern-composer"
+                onSubmit={sendMessage}
+              >
+                <textarea
+                  aria-label="发送给 Agent"
+                  maxLength={16_000}
+                  placeholder="继续这个会话… (Enter 发送，Shift+Enter 换行)"
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void sendMessage(e);
+                    }
+                  }}
+                  disabled={busy}
+                />
+                <div className="composer-toolbar">
+                  <button
+                    type="button"
+                    className="tool-ghost-btn"
+                    onClick={() => void attachFiles()}
+                    title="附加文件或文档"
+                    aria-label="附加文件"
+                    disabled={busy}
+                  >
+                    <Plus size={15} />
+                  </button>
+                  <SelectDropdown
+                    className="ghost"
+                    value={currentModel}
+                    options={models.map((option) => ({
+                      value: option.value,
+                      label: option.label,
+                      desc: option.desc,
+                    }))}
+                    onChange={(val) => updateTurnOptions({ model: val })}
+                    size="sm"
+                    ariaLabel="会话模型"
+                  />
+                  {permissionOptions.length > 1 && (
                     <SelectDropdown
                       className="ghost"
-                      value={currentModel}
-                      options={models.map((option) => ({
-                        value: option.value,
-                        label: option.label,
-                        desc: option.desc,
-                      }))}
-                      onChange={(val) => updateTurnOptions({ model: val })}
+                      value={currentPermission}
+                      options={permissionOptions}
+                      onChange={(val) =>
+                        updateTurnOptions({ permission: val })
+                      }
                       size="sm"
-                      ariaLabel="会话模型"
+                      ariaLabel="权限模式"
                     />
-                    {permissionOptions.length > 1 && (
-                      <SelectDropdown
-                        className="ghost"
-                        value={currentPermission}
-                        options={permissionOptions}
-                        onChange={(val) =>
-                          updateTurnOptions({ permission: val })
-                        }
-                        size="sm"
-                        ariaLabel="权限模式"
-                      />
-                    )}
-                    <span className="composer-spacer" />
-                    {contextSummary && (
-                      <span className="composer-context" title="上下文窗口使用">
+                  )}
+                  <span className="composer-spacer" />
+                  <div className="composer-context-wrapper">
+                    <button
+                      type="button"
+                      className="composer-context-trigger"
+                      onClick={() => setContextPopoverOpen((prev) => !prev)}
+                      title="查看上下文容量与分布"
+                      aria-label="查看上下文容量与分布"
+                    >
+                      <span className="context-indicator-dot" />
+                      <span className="context-indicator-text">
                         {contextSummary}
                       </span>
-                    )}
-                    {busy ? (
-                      <button
-                        className="composer-send turn-cancel-btn"
-                        type="button"
-                        disabled={cancelling}
-                        onClick={() => void cancelTurn()}
-                        title="停止当前生成"
-                        aria-label="停止"
-                      >
-                        <Square size={14} />
-                      </button>
-                    ) : (
-                      <button
-                        className="composer-send"
-                        type="submit"
-                        aria-label="发送"
-                        disabled={busy || prompt.trim() === ""}
-                      >
-                        <ArrowUp size={15} />
-                      </button>
-                    )}
+                    </button>
+                    <ContextCapacityPopover
+                      runtime={runtime}
+                      messages={messages}
+                      modelName={currentModel}
+                      isOpen={contextPopoverOpen}
+                      onClose={() => setContextPopoverOpen(false)}
+                    />
                   </div>
-                </form>
-              </>
-            )}
-          </div>
-        )}
+                  {busy ? (
+                    <button
+                      className="composer-send turn-cancel-btn"
+                      type="button"
+                      disabled={cancelling}
+                      onClick={() => void cancelTurn()}
+                      title="停止当前生成"
+                      aria-label="停止"
+                    >
+                      <Square size={14} />
+                    </button>
+                  ) : (
+                    <button
+                      className="composer-send"
+                      type="submit"
+                      aria-label="发送"
+                      disabled={busy || prompt.trim() === ""}
+                    >
+                      <ArrowUp size={15} />
+                    </button>
+                  )}
+                </div>
+              </form>
+            </>
+          )}
+        </div>
       </aside>
     </div>
   );
@@ -2506,7 +2419,7 @@ function sessionKey(session: Session): string {
   return (
     session.device_id +
     ":" +
-    session.agent_type +
+    normalizeAgentType(session.agent_type) +
     ":" +
     session.agent_session_id
   );

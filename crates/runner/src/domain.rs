@@ -13,6 +13,7 @@ pub enum AgentType {
     Codex,
     Antigravity,
     GrokBuild,
+    #[serde(rename = "zcode", alias = "z_code")]
     ZCode,
 }
 

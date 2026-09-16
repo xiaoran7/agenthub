@@ -1,7 +1,7 @@
-import type { ActivityStatus, Session } from "./types";
+import { normalizeAgentType, type ActivityStatus, type Session } from "./types";
 
 export function activityTime(session: Session): string {
-  return session.payload.last_activity_at ?? session.observed_at;
+  return session.payload?.last_activity_at ?? session.observed_at ?? "";
 }
 
 export function relativeTime(value: string, now = Date.now()): string {
@@ -215,7 +215,9 @@ export function groupSessionsByWorkspace(
   }
   return [...groups.entries()].map(([name, workspaceSessions]) => ({
     name,
-    sessions: workspaceSessions,
+    sessions: [...workspaceSessions].sort((a, b) =>
+      activityTime(b).localeCompare(activityTime(a)),
+    ),
   }));
 }
 
@@ -226,11 +228,12 @@ export function groupSessionsByProvider(sessions: Session[]): ProviderGroup[] {
   }
 
   for (const session of sessions) {
-    const list = groups.get(session.agent_type);
+    const agentType = normalizeAgentType(session.agent_type);
+    const list = groups.get(agentType);
     if (list) {
       list.push(session);
     } else {
-      groups.set(session.agent_type, [session]);
+      groups.set(agentType, [session]);
     }
   }
 
@@ -311,7 +314,8 @@ export function rememberTitleOverride(sessionKey: string, title: string) {
 }
 
 export function sessionDisplayTitle(session: Session): string {
-  const key = `${session.device_id}:${session.agent_type}:${session.agent_session_id}`;
+  const agentType = normalizeAgentType(session.agent_type);
+  const key = `${session.device_id}:${agentType}:${session.agent_session_id}`;
   const override = loadTitleOverrides()[key];
   if (override) return override;
   const explicit = session.payload.runtime?.title?.trim();

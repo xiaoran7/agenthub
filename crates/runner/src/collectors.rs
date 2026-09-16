@@ -2041,6 +2041,8 @@ pub fn collect_zcode_sessions_from(
             s.time_created,
             s.time_updated
         FROM session s
+        WHERE (s.parent_id IS NULL OR s.parent_id = '')
+          AND s.id NOT LIKE 'sess_subagent%'
         ORDER BY s.time_updated DESC
         LIMIT ?1
     "#;
@@ -2115,6 +2117,8 @@ pub fn collect_zcode_session_contexts_from(
             (SELECT json_extract(data, '$.mode') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as mode,
             (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as tokens
         FROM session s
+        WHERE (s.parent_id IS NULL OR s.parent_id = '')
+          AND s.id NOT LIKE 'sess_subagent%'
         ORDER BY s.time_updated DESC
         LIMIT ?1
     "#;

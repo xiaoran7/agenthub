@@ -29,8 +29,24 @@ export interface Device {
   last_seen_at: string;
 }
 
+export type AgentType =
+  | "claude_code"
+  | "codex"
+  | "antigravity"
+  | "grok_build"
+  | "zcode";
+
+export function normalizeAgentType(type: unknown): AgentType {
+  if (type === "z_code" || type === "zcode") return "zcode";
+  if (type === "claude_code" || type === "claudecode") return "claude_code";
+  if (type === "codex") return "codex";
+  if (type === "antigravity") return "antigravity";
+  if (type === "grok_build") return "grok_build";
+  return (type as AgentType) || "codex";
+}
+
 export interface SessionRuntimeContext {
-  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
+  agent_type: AgentType;
   agent_session_id: string;
   title?: string;
   model?: string;
@@ -55,7 +71,7 @@ export interface PendingApproval {
 export interface Session {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
+  agent_type: AgentType;
   agent_session_id: string;
   observed_at: string;
   payload: {
@@ -72,7 +88,7 @@ export interface Session {
 export interface SessionTimelineEvent {
   event_id: string;
   device_id: string;
-  agent_type: "claude_code" | "codex" | "antigravity" | "grok_build" | "zcode";
+  agent_type: AgentType;
   agent_session_id: string;
   sequence: number;
   observed_at: string;

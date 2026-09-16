@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -103,7 +104,7 @@ pub fn normalize_zcode_session(
         status_detail.insert("tool_category".to_string(), cat);
     }
 
-    let observation = SessionObservation::new(
+    let mut observation = SessionObservation::new(
         meta,
         AgentType::ZCode,
         session_id,
@@ -122,6 +123,9 @@ pub fn normalize_zcode_session(
             Confidence::Authoritative
         },
     );
+
+    observation.started_at = DateTime::<Utc>::from_timestamp_millis(entry.time_created);
+    observation.last_activity_at = DateTime::<Utc>::from_timestamp_millis(entry.time_updated);
 
     Some(observation)
 }

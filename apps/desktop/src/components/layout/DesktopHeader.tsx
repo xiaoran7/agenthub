@@ -1,121 +1,193 @@
+import { useState, useEffect } from "react";
 import {
-  Radio,
-  RadioTower,
-  Plus,
-  Settings,
-  CircleUserRound,
-  RefreshCw,
-  FolderTree,
+  ChevronLeft,
+  ChevronRight,
+  Minus,
+  Square,
+  X,
+  PanelLeft,
+  PanelLeftClose,
+  Columns,
+  ChevronDown,
 } from "lucide-react";
-import type { Snapshot } from "../../types";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface DesktopHeaderProps {
-  hostPhase?:
-    "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
-  onOpenHostControl: () => void;
-  onOpenSettings: () => void;
-  onNewSession: () => void;
-  snapshot: Snapshot;
-  onAccountToggle: () => void;
-  refreshing?: boolean;
-  onRefresh?: () => void;
+  onToggleSidebar?: () => void;
+  sidebarCollapsed?: boolean;
+  onNavigateBack?: () => void;
+  canNavigateBack?: boolean;
+  onNavigateForward?: () => void;
+  canNavigateForward?: boolean;
+  title?: string;
+  subtitle?: string;
 }
 
-const phaseInfo: Record<
-  string,
-  { label: string; tone: "green" | "yellow" | "gray" | "blue" }
-> = {
-  loading: { label: "探测中", tone: "yellow" },
-  starting: { label: "Runtime 启动中", tone: "yellow" },
-  stopped: { label: "Daemon 待命", tone: "gray" },
-  local: { label: "本机就绪 (Remote 关)", tone: "blue" },
-  connecting: { label: "连接 Gateway…", tone: "yellow" },
-  connected: { label: "Remote 在线", tone: "green" },
-};
-
 export function DesktopHeader({
-  hostPhase = "local",
-  onOpenHostControl,
-  onOpenSettings,
-  onNewSession,
-  snapshot,
-  onAccountToggle,
-  refreshing = false,
-  onRefresh,
+  onToggleSidebar,
+  sidebarCollapsed = false,
+  onNavigateBack,
+  canNavigateBack = false,
+  onNavigateForward,
+  canNavigateForward = false,
+  title,
+  subtitle,
 }: DesktopHeaderProps) {
-  const current = phaseInfo[hostPhase] ?? { label: hostPhase, tone: "gray" };
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    try {
+      const appWindow = getCurrentWindow();
+      appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+      appWindow
+        .onResized(() => {
+          appWindow.isMaximized().then(setIsMaximized).catch(() => {});
+        })
+        .then((fn) => {
+          unlisten = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // Running outside Tauri (web/test mode)
+    }
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const handleMinimize = () => {
+    try {
+      getCurrentWindow().minimize();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleToggleMaximize = () => {
+    try {
+      getCurrentWindow().toggleMaximize();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleClose = () => {
+    try {
+      getCurrentWindow().close();
+    } catch {
+      // ignore
+    }
+  };
 
   return (
-    <header className="desktop-header">
-      <div className="header-left">
-        <div className="header-brand">
-          <span className="brand-logo">AgentHub</span>
-          <span className="brand-badge">Codex Remote</span>
+    <header className="desktop-header-zcode" data-tauri-drag-region>
+      {/* Left section: Brand logo / mark + Navigation arrows (like [Z] [←] [→]) */}
+      <div className="header-left-zone">
+        <div className="header-brand-mark" title="AgentHub">
+          <span className="brand-letter">A</span>
         </div>
 
-        {/* Native Host status pill */}
-        <button
-          type="button"
-          className="host-status-trigger"
-          onClick={onOpenHostControl}
-          title="点击管理本机守护进程与 Remote 出站连接"
-        >
-          <span className={`status-indicator tone-${current.tone}`} />
-          <span className="status-label">{current.label}</span>
-          <span className="status-workspaces">
-            {snapshot.local.sources.length} 个工作区
-          </span>
-        </button>
-      </div>
-
-      <div className="header-right">
-        {onRefresh && (
+        <div className="header-nav-arrows">
           <button
             type="button"
-            className="header-icon-btn"
-            disabled={refreshing}
-            onClick={onRefresh}
-            title="刷新本机状态"
-            aria-label="刷新本机状态"
+            className="nav-arrow-btn"
+            disabled={!canNavigateBack}
+            onClick={onNavigateBack}
+            title="后退 (Alt+Left)"
+            aria-label="后退"
           >
-            <RefreshCw className={refreshing ? "spin" : ""} size={15} />
+            <ChevronLeft size={16} />
           </button>
+          <button
+            type="button"
+            className="nav-arrow-btn"
+            disabled={!canNavigateForward}
+            onClick={onNavigateForward}
+            title="前进 (Alt+Right)"
+            aria-label="前进"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+
+        {(title || subtitle) && (
+          <div className="header-session-title">
+            {title && <span className="title-text">{title}</span>}
+            {subtitle && <span className="subtitle-text">/ {subtitle}</span>}
+          </div>
         )}
+      </div>
 
-        <button
-          type="button"
-          className="header-icon-btn"
-          onClick={onOpenSettings}
-          title="设置"
-          aria-label="设置"
-        >
-          <Settings size={15} />
-        </button>
+      {/* Center draggable region */}
+      <div className="header-center-zone" data-tauri-drag-region />
 
-        <button
-          type="button"
-          className="header-primary-btn"
-          onClick={onNewSession}
-          title="新建任务会话"
-        >
-          <Plus size={15} />
-          <span>新建会话</span>
-        </button>
+      {/* Right section: Layout toggles + Window controls (like [◨] [▯] [∨] [-] [□] [✕]) */}
+      <div className="header-right-zone">
+        <div className="header-layout-controls">
+          <button
+            type="button"
+            className="layout-action-btn"
+            title="分栏布局视图"
+            aria-label="分栏布局视图"
+          >
+            <Columns size={15} />
+          </button>
 
-        <button
-          type="button"
-          className="header-user-btn"
-          onClick={onAccountToggle}
-          title="账户菜单"
-          aria-label="账户菜单"
-        >
-          <CircleUserRound size={17} />
-          <span className="user-name">
-            {snapshot.account.user.display_name ||
-              snapshot.account.user.email.split("@")[0] ||
-              "用户"}
-          </span>
-        </button>
+          <button
+            type="button"
+            className={`layout-action-btn ${sidebarCollapsed ? "active" : ""}`}
+            onClick={onToggleSidebar}
+            title={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+            aria-label="切换侧边栏"
+          >
+            {sidebarCollapsed ? (
+              <PanelLeft size={15} />
+            ) : (
+              <PanelLeftClose size={15} />
+            )}
+          </button>
+
+          <button
+            type="button"
+            className="layout-action-btn"
+            title="更多视图选项"
+            aria-label="更多视图选项"
+          >
+            <ChevronDown size={15} />
+          </button>
+        </div>
+
+        {/* Native window caption controls */}
+        <div className="window-caption-controls">
+          <button
+            type="button"
+            className="window-control-btn minimize"
+            onClick={handleMinimize}
+            title="最小化"
+            aria-label="最小化"
+          >
+            <Minus size={13} />
+          </button>
+          <button
+            type="button"
+            className="window-control-btn maximize"
+            onClick={handleToggleMaximize}
+            title={isMaximized ? "还原" : "最大化"}
+            aria-label={isMaximized ? "还原" : "最大化"}
+          >
+            <Square size={11} />
+          </button>
+          <button
+            type="button"
+            className="window-control-btn close"
+            onClick={handleClose}
+            title="关闭"
+            aria-label="关闭"
+          >
+            <X size={14} />
+          </button>
+        </div>
       </div>
     </header>
   );

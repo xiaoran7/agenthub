@@ -161,6 +161,22 @@ fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> 
         let Ok(data) = serde_json::from_str::<Value>(&raw_data) else {
             continue;
         };
+
+        // Filter out synthetic background prompts or model-only prompts (such as todo_reminder)
+        if data.get("synthetic").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if let Some(visibility) = data.pointer("/metadata/visibility").and_then(Value::as_str) {
+            if visibility == "model-only" || visibility == "hidden" {
+                continue;
+            }
+        }
+        if let Some(source) = data.pointer("/metadata/source").and_then(Value::as_str) {
+            if source == "todo_reminder" || source == "system" {
+                continue;
+            }
+        }
+
         let role = role_opt.as_deref().unwrap_or("assistant");
         let part_type = part_type_opt.as_deref().unwrap_or("");
 
@@ -710,6 +726,10 @@ fn clean_message_text(text: &str) -> String {
         .replace("<USER_REQUEST>", "")
         .replace("</USER_REQUEST>", "");
     if text.contains("<local-command-caveat>") {
+        return String::new();
+    }
+    // Filter out background automated reminders injected by runners/codex/zcode
+    if text.starts_with("The TodoWrite tool hasn't been used recently") {
         return String::new();
     }
     text.trim().to_owned()
