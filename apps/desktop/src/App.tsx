@@ -117,8 +117,8 @@ type AuthMode = "login" | "register";
 type AgentFilter = "all" | Session["agent_type"];
 type DeviceFilter = "all" | string;
 
-const isManagedProvider = (agentType: Session["agent_type"]) =>
-  agentType === "codex" || agentType === "zcode";
+const isManagedProvider = (agentType: AgentFilter): agentType is Session["agent_type"] =>
+  agentType === "codex" || agentType === "claude_code" || agentType === "zcode";
 
 export function App() {
   const demo =
@@ -898,7 +898,7 @@ function Dashboard({
         onOpenSettings={() => setSettingsOpen(true)}
         onNewSession={() => {
           setSelectedSessionKey(undefined);
-          setLaunchModalProvider(agentFilter === "zcode" ? "zcode" : "codex");
+          setLaunchModalProvider(isManagedProvider(agentFilter) ? agentFilter : "codex");
           setLaunchModalOpen(true);
         }}
         snapshot={snapshot}
@@ -926,7 +926,7 @@ function Dashboard({
                 className="top-icon-btn new-task-btn"
                 onClick={() => {
                   setSelectedSessionKey(undefined);
-                  setLaunchModalProvider(agentFilter === "zcode" ? "zcode" : "codex");
+                  setLaunchModalProvider(isManagedProvider(agentFilter) ? agentFilter : "codex");
                   setLaunchModalOpen(true);
                 }}
                 title="新建任务"

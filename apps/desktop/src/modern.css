@@ -1127,6 +1127,11 @@ body,
   box-shadow: 0 0 6px rgba(76, 120, 200, 0.6);
 }
 
+.single-agent-badge[data-provider="claude_code"] .agent-badge-dot {
+  background: #ea580c;
+  box-shadow: 0 0 6px rgba(234, 88, 12, 0.6);
+}
+
 .single-agent-badge[data-provider="zcode"] .agent-badge-dot {
   background: #0ea5e9;
   box-shadow: 0 0 6px rgba(14, 165, 233, 0.6);

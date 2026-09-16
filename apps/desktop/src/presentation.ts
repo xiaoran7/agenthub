@@ -175,6 +175,13 @@ export const PROVIDER_LIST: ReadonlyArray<{
     desc: "OpenAI 官方代码助手 (Managed)",
   },
   {
+    type: "claude_code",
+    label: "Claude Code",
+    shortLabel: "Claude",
+    defaultModel: "claude-3-7-sonnet",
+    desc: "Anthropic 官方开发助手 (Managed)",
+  },
+  {
     type: "zcode",
     label: "ZCode Agent",
     shortLabel: "ZCode",
