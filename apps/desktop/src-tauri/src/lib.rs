@@ -35,7 +35,7 @@ use agent_pulse_runner::{
     privacy::ProjectRedactor,
     runtime::{
         AntigravitySessionSource, ClaudeSessionSource, CodexSessionSource, GrokSessionSource,
-        PollPolicy, RunnerRuntime, SessionSource,
+        PollPolicy, RunnerRuntime, SessionSource, ZCodeSessionSource,
     },
     sync::MAX_SYNC_BATCH_EVENTS,
     sync_worker::{SyncPolicy, SyncWorker},
@@ -2243,6 +2243,7 @@ fn build_engine(
         )),
         Box::new(AntigravitySessionSource::new(true)),
         Box::new(GrokSessionSource::new(true)),
+        Box::new(ZCodeSessionSource::new(true)),
     ];
     let redactor =
         ProjectRedactor::new(identity.fingerprint_key()).map_err(|_| DesktopError::Sync)?;

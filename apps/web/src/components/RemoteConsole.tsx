@@ -120,6 +120,7 @@ export function RemoteConsole({
     window.addEventListener("mouseup", onMouseUp);
   };
 
+  const [providerFilter, setProviderFilter] = useState<"all" | "codex" | "zcode">("all");
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [model, setModel] = useState("");
@@ -452,6 +453,9 @@ export function RemoteConsole({
       activeProviderIds.add(item.binding.provider_session_id);
       const wsLabel = workspaceLabel(item.binding.workspace_path);
       const isZCode = item.binding.provider_session_id.startsWith("sess_");
+      const providerType = isZCode ? "zcode" : "codex";
+      if (providerFilter !== "all" && providerFilter !== providerType) continue;
+
       const prefix = isZCode ? "ZCode" : "Codex";
       list.push({
         kind: "active",
@@ -470,6 +474,9 @@ export function RemoteConsole({
         if (activeProviderIds.has(cand.provider_session_id)) continue;
         const wsLabel = workspaceLabel(cand.workspace_path);
         const isZCode = cand.provider_session_id.startsWith("sess_");
+        const providerType = isZCode ? "zcode" : "codex";
+        if (providerFilter !== "all" && providerFilter !== providerType) continue;
+
         const prefix = isZCode ? "ZCode" : "Codex";
         const title =
           cand.title || `${prefix} · ${cand.provider_session_id.slice(0, 8)}`;
@@ -486,7 +493,7 @@ export function RemoteConsole({
     }
 
     return list;
-  }, [snapshot.sessions, snapshot.runners]);
+  }, [snapshot.sessions, snapshot.runners, providerFilter]);
 
   return (
     <div className="remote-console">
@@ -538,6 +545,29 @@ export function RemoteConsole({
         >
           ＋ 新建会话
         </button>
+        <div className="remote-filter-pill-row">
+          <button
+            type="button"
+            className={`remote-filter-pill ${providerFilter === "all" ? "active" : ""}`}
+            onClick={() => setProviderFilter("all")}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            className={`remote-filter-pill ${providerFilter === "codex" ? "active" : ""}`}
+            onClick={() => setProviderFilter("codex")}
+          >
+            Codex
+          </button>
+          <button
+            type="button"
+            className={`remote-filter-pill ${providerFilter === "zcode" ? "active" : ""}`}
+            onClick={() => setProviderFilter("zcode")}
+          >
+            ZCode
+          </button>
+        </div>
         <div className="remote-nav-label">会话记录</div>
         {onLocalHost && <button onClick={onLocalHost}>连接本机</button>}
         <div className="remote-session-list">
@@ -573,12 +603,13 @@ export function RemoteConsole({
                   <span className="remote-session-title">{item.title}</span>
                   <div className="remote-session-meta">
                     <small>{item.subtitle}</small>
-                    <span className="remote-session-badge">{item.badge}</span>
+                    <span className={`remote-session-badge ${item.session.binding.provider_session_id.startsWith("sess_") ? "zcode" : "codex"}`}>{item.badge}</span>
                   </div>
                 </button>
               );
             }
 
+            const isCandZCode = item.candidate.provider_session_id.startsWith("sess_");
             return (
               <button
                 className="remote-session candidate"
@@ -596,7 +627,7 @@ export function RemoteConsole({
                 <span className="remote-session-title">{item.title}</span>
                 <div className="remote-session-meta">
                   <small>{item.subtitle}</small>
-                  <span className="remote-session-badge candidate">
+                  <span className={`remote-session-badge ${isCandZCode ? "zcode" : "codex"}`}>
                     {item.badge}
                   </span>
                 </div>
@@ -764,7 +795,7 @@ export function RemoteConsole({
                     className={`remote-message ${item.kind}`}
                     key={item.id}
                   >
-                    <small>{item.kind === "user" ? "你" : "Codex"}</small>
+                    <small>{item.kind === "user" ? "你" : (session?.binding.provider_session_id.startsWith("sess_") ? "ZCode" : "Codex")}</small>
                     <div>{item.text}</div>
                   </article>
                 ),
@@ -775,7 +806,7 @@ export function RemoteConsole({
               {approvals.map((approval) => (
                 <section className="remote-approval" key={approval.approval_id}>
                   <h3>需要你的确认</h3>
-                  <strong>Codex 请求执行受保护的操作</strong>
+                  <strong>{session?.binding.provider_session_id.startsWith("sess_") ? "ZCode" : "Codex"} 请求执行受保护的操作</strong>
                   <div>
                     <button
                       disabled={!connected || busy || !approval.can_decline}

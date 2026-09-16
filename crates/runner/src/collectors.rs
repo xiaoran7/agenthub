@@ -1914,11 +1914,7 @@ pub fn collect_zcode_sessions_from(
             s.title,
             s.directory,
             s.time_created,
-            s.time_updated,
-            (SELECT json_extract(data, '$.role') FROM message WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_role,
-            (SELECT json_extract(data, '$.type') FROM part WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_part_type,
-            (SELECT json_extract(data, '$.tool') FROM part WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_tool_name,
-            (SELECT json_extract(data, '$.state.status') FROM part WHERE session_id = s.id ORDER BY time_created DESC LIMIT 1) as latest_tool_status
+            s.time_updated
         FROM session s
         ORDER BY s.time_updated DESC
         LIMIT ?1
@@ -1936,15 +1932,6 @@ pub fn collect_zcode_sessions_from(
             let cwd: Option<String> = row.get(2)?;
             let time_created: i64 = row.get(3)?;
             let time_updated: i64 = row.get(4)?;
-            let latest_role: Option<String> = row.get(5)?;
-            let latest_part_type: Option<String> = row.get(6)?;
-            let latest_tool_name: Option<String> = row.get(7)?;
-            let latest_tool_status: Option<String> = row.get(8)?;
-
-            let is_running = match latest_tool_status.as_deref() {
-                Some("running") => true,
-                _ => latest_part_type.as_deref() == Some("step-start"),
-            };
 
             Ok(crate::adapters::zcode::ZCodeSessionEntry {
                 session_id,
@@ -1952,11 +1939,11 @@ pub fn collect_zcode_sessions_from(
                 cwd: cwd.unwrap_or_default(),
                 time_created,
                 time_updated,
-                latest_role,
-                latest_part_type,
-                latest_tool_name,
-                latest_tool_status,
-                is_running,
+                latest_role: None,
+                latest_part_type: None,
+                latest_tool_name: None,
+                latest_tool_status: None,
+                is_running: false,
             })
         })
         .map_err(|source| CollectorError::Database {
@@ -3358,7 +3345,12 @@ impl ZCodeAppServer {
             if method == "session/requestRuntimePreferences" {
                 self.respond(
                     req_id.clone(),
-                    json!({"nativeSearchEnhancementsEnabled": false}),
+                    json!({
+                        "nativeSearchEnhancementsEnabled": false,
+                        "memoryEnabled": false,
+                        "askUserQuestionAutoResolutionEnabled": true,
+                        "modelContextBudgetStrategy": "legacy"
+                    }),
                 )?;
                 return Ok(true);
             } else if method == "interaction/requestOfficialMcpAuthHeaders" {

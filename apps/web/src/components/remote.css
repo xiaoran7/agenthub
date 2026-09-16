@@ -212,9 +212,43 @@
   background: #2a312d;
   color: #72b28c;
 }
-.remote-session-badge.candidate {
-  background: #2d2f34;
-  color: #9aa0a6;
+.remote-filter-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.remote-filter-pill {
+  flex: 1;
+  padding: 4px 8px !important;
+  font-size: 11.5px !important;
+  border-radius: 6px !important;
+  border: 1px solid #282a30 !important;
+  background: #17181c !important;
+  color: #8b909a !important;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.remote-filter-pill:hover {
+  background: #202228 !important;
+  color: #d1d5db !important;
+}
+.remote-filter-pill.active {
+  background: #252830 !important;
+  color: #38bdf8 !important;
+  border-color: #38bdf8 !important;
+  font-weight: 600;
+}
+.remote-session-badge.zcode {
+  background: rgba(14, 165, 233, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(14, 165, 233, 0.35);
+}
+.remote-session-badge.codex {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
 }
 .remote-sidebar .remote-session.selected {
   background: #2b2e2c;
@@ -228,7 +262,9 @@
   gap: 12px;
 }
 .remote-main {
+  flex: 1;
   min-width: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
