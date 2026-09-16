@@ -578,7 +578,7 @@ body,
 .composer-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 4px 6px 6px;
 }
 
@@ -737,6 +737,86 @@ body,
 
 .assistant-flow-content {
   color: #f4f4f5;
+}
+
+/* --------------------------------------------------------------------------
+ * Tool Call Groups (Multiple calls collapsed by default)
+ * ------------------------------------------------------------------------ */
+
+.tool-call-group-container {
+  margin: 10px 0;
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 9px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.15s ease;
+}
+
+.tool-call-group-container:hover {
+  border-color: #3f3f46;
+}
+
+.tool-call-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #1c1c20;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease;
+}
+
+.tool-call-group-header:hover {
+  background: #232328;
+}
+
+.tool-group-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #38bdf8;
+  flex-shrink: 0;
+}
+
+.tool-group-title {
+  color: #f4f4f5;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tool-group-preview {
+  color: #a1a1aa;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+.tool-group-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tool-group-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #a1a1aa;
+}
+
+.tool-call-group-body {
+  padding: 8px 10px 10px;
+  background: #141416;
+  border-top: 1px solid #27272a;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .tool-call-accordion {
@@ -1264,8 +1344,51 @@ body,
 }
 
 /* --------------------------------------------------------------------------
- * Desktop Header (ZCode Style Titlebar) & Window Controls
+ * Dropdown Popovers (Z-Index & Upward Direction in Composer)
  * ------------------------------------------------------------------------ */
+
+.custom-select-dropdown {
+  position: relative;
+}
+
+.custom-select-dropdown.open {
+  z-index: 10005 !important;
+}
+
+.select-menu {
+  z-index: 10010 !important;
+}
+
+/* When placed upward (e.g. at the bottom composer toolbar) */
+.custom-select-dropdown.placement-up .select-menu,
+.select-menu.up {
+  top: auto !important;
+  bottom: calc(100% + 6px) !important;
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.65) !important;
+}
+
+/* Ensure composer and container don't clip dropdown popovers */
+.claude-stage .composer-container,
+.claude-stage .session-composer,
+.claude-stage .modern-composer,
+.composer-toolbar {
+  overflow: visible !important;
+}
+
+.composer-toolbar .custom-select-dropdown {
+  position: relative;
+  z-index: 90;
+}
+
+.composer-toolbar .custom-select-dropdown.open {
+  z-index: 10010 !important;
+}
+
+.composer-toolbar .select-menu {
+  bottom: calc(100% + 8px) !important;
+  top: auto !important;
+  box-shadow: 0 -14px 36px rgba(0, 0, 0, 0.75) !important;
+}
 
 .desktop-app-container {
   display: flex;
@@ -1293,6 +1416,7 @@ body,
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   z-index: 50;
   user-select: none;
+  -webkit-app-region: drag;
 }
 
 .header-left-zone {
@@ -1314,12 +1438,14 @@ body,
   font-weight: 800;
   font-size: 13px;
   user-select: none;
+  -webkit-app-region: no-drag;
 }
 
 .header-nav-arrows {
   display: flex;
   align-items: center;
   gap: 2px;
+  -webkit-app-region: no-drag;
 }
 
 .nav-arrow-btn {
@@ -1334,6 +1460,7 @@ body,
   color: #9ca3af;
   cursor: pointer;
   transition: all 0.12s ease;
+  -webkit-app-region: no-drag;
 }
 
 .nav-arrow-btn:hover:not(:disabled) {
@@ -1378,6 +1505,7 @@ body,
   align-items: center;
   height: 100%;
   flex: 0 0 auto;
+  -webkit-app-region: no-drag;
 }
 
 .header-layout-controls {
@@ -1385,6 +1513,7 @@ body,
   align-items: center;
   gap: 4px;
   margin-right: 8px;
+  -webkit-app-region: no-drag;
 }
 
 .layout-action-btn {
@@ -1399,6 +1528,7 @@ body,
   color: #9ca3af;
   cursor: pointer;
   transition: all 0.12s ease;
+  -webkit-app-region: no-drag;
 }
 
 .layout-action-btn:hover {
@@ -1415,6 +1545,7 @@ body,
   display: flex;
   align-items: center;
   height: 100%;
+  -webkit-app-region: no-drag;
 }
 
 .window-control-btn {
@@ -1430,6 +1561,7 @@ body,
   transition:
     background 0.12s ease,
     color 0.12s ease;
+  -webkit-app-region: no-drag;
 }
 
 .window-control-btn:hover {
@@ -1648,6 +1780,7 @@ body,
   display: inline-flex;
   align-items: center;
   overflow: visible !important;
+  margin-right: 4px;
 }
 
 .composer-context-ring-btn {
@@ -2035,4 +2168,421 @@ body,
   background: rgba(255, 255, 255, 0.05);
   padding: 1px 4px;
   border-radius: 3px;
+}
+
+/* --------------------------------------------------------------------------
+ * Settings Modal Buttons (Refined & Scoped, removing bulky pink legacy button)
+ * ------------------------------------------------------------------------ */
+
+.settings-footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px 20px;
+}
+
+.settings-save-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: #2563eb;
+  border: 1px solid #3b82f6;
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
+  transition: all 0.15s ease;
+}
+
+.settings-save-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #60a5fa;
+  transform: translateY(-0.5px);
+}
+
+.settings-save-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #d4d4d8;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-cancel-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+/* --------------------------------------------------------------------------
+ * Sidebar Session Item Enhancements (Larger typography & comfortable row height)
+ * ------------------------------------------------------------------------ */
+
+.sidebar-session-item {
+  min-height: 36px !important;
+  padding: 6px 8px !important;
+  border-radius: 6px !important;
+  margin-bottom: 2px !important;
+  display: flex !important;
+  align-items: center !important;
+  transition: background 0.12s ease !important;
+}
+
+.sidebar-session-item .sidebar-session-open {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  width: 100% !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  text-align: left !important;
+  cursor: pointer !important;
+}
+
+.sidebar-session-title {
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  line-height: 1.4 !important;
+  color: #e4e4e7 !important;
+  letter-spacing: -0.15px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.sidebar-session-item:hover {
+  background: rgba(255, 255, 255, 0.07) !important;
+}
+
+.sidebar-session-item:hover .sidebar-session-title {
+  color: #ffffff !important;
+}
+
+.sidebar-session-item.selected {
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+
+.sidebar-session-item.selected .sidebar-session-title {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+.provider-header-left .provider-title {
+  font-size: 12.5px !important;
+  color: #e4e4e7 !important;
+  font-weight: 600 !important;
+}
+
+/* --------------------------------------------------------------------------
+ * Global High-Contrast Text Overrides (Fixing washed-out text)
+ * ------------------------------------------------------------------------ */
+
+.session-breadcrumb strong {
+  color: #f4f4f5 !important;
+  font-size: 13.5px !important;
+}
+
+.session-breadcrumb small {
+  color: #a1a1aa !important;
+  font-size: 11px !important;
+}
+
+.top-nav-right .top-icon-btn {
+  color: #d4d4d8 !important;
+}
+
+.top-nav-right .top-icon-btn:hover {
+  color: #ffffff !important;
+}
+
+/* --------------------------------------------------------------------------
+ * Multi-Theme Tokens: Dark, Light, and Amber (Warm)
+ * ------------------------------------------------------------------------ */
+
+:root,
+[data-theme="dark"] {
+  --bg-primary: #111110;
+  --bg-secondary: #131314;
+  --bg-sidebar: #151517;
+  --bg-surface: #18181b;
+  --bg-card: #1c1c20;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-contrast: rgba(255, 255, 255, 0.15);
+  --text-primary: #f4f4f5;
+  --text-secondary: #d4d4d8;
+  --text-muted: #a1a1aa;
+  --brand-accent: #2563eb;
+}
+
+[data-theme="light"] {
+  --bg-primary: #f8f9fa;
+  --bg-secondary: #ffffff;
+  --bg-sidebar: #f1f3f5;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-contrast: rgba(0, 0, 0, 0.16);
+  --text-primary: #18181b;
+  --text-secondary: #27272a;
+  --text-muted: #52525b;
+  --brand-accent: #2563eb;
+}
+
+[data-theme="light"] body,
+[data-theme="light"] .desktop-app-container {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-theme="light"] .desktop-header-zcode {
+  background: #ffffff !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+}
+
+[data-theme="light"] .header-session-title .title-text,
+[data-theme="light"] .session-breadcrumb strong {
+  color: #18181b !important;
+}
+
+[data-theme="light"] .header-session-title .subtitle-text,
+[data-theme="light"] .session-breadcrumb small {
+  color: #52525b !important;
+}
+
+[data-theme="light"] .window-control-btn {
+  color: #52525b !important;
+}
+
+[data-theme="light"] .window-control-btn:hover {
+  background: rgba(0, 0, 0, 0.06) !important;
+  color: #09090b !important;
+}
+
+[data-theme="light"] .claude-sidebar {
+  background: var(--bg-sidebar) !important;
+  border-right: 1px solid var(--border-subtle) !important;
+}
+
+[data-theme="light"] .sidebar-session-title {
+  color: #27272a !important;
+}
+
+[data-theme="light"] .sidebar-session-item:hover {
+  background: rgba(0, 0, 0, 0.05) !important;
+}
+
+[data-theme="light"] .sidebar-session-item.selected {
+  background: rgba(0, 0, 0, 0.09) !important;
+}
+
+[data-theme="light"] .sidebar-footer {
+  background: #e9ecef !important;
+  border-top: 1px solid var(--border-subtle) !important;
+}
+
+[data-theme="light"] .profile-name-text {
+  color: #18181b !important;
+}
+
+[data-theme="light"] .claude-stage .session-composer,
+[data-theme="light"] .claude-stage .modern-composer {
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06) !important;
+}
+
+[data-theme="light"] .claude-stage .session-composer textarea {
+  color: #18181b !important;
+}
+
+[data-theme="light"] .claude-stage .session-composer textarea::placeholder {
+  color: #71717a !important;
+}
+
+[data-theme="light"] .tool-call-group-container,
+[data-theme="light"] .tool-call-accordion {
+  background: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+[data-theme="light"] .tool-call-group-header,
+[data-theme="light"] .tool-call-summary {
+  background: #f8f9fa !important;
+  color: #18181b !important;
+}
+
+[data-theme="light"] .tool-call-body {
+  background: #ffffff !important;
+  border-top-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+[data-theme="light"] .tool-name,
+[data-theme="light"] .tool-group-title {
+  color: #18181b !important;
+}
+
+[data-theme="light"] .tool-content-pre {
+  background: #f4f4f5 !important;
+  color: #18181b !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+[data-theme="light"] .user-bubble-pill {
+  background: #2563eb !important;
+  border-color: #3b82f6 !important;
+}
+
+[data-theme="light"] .user-bubble-content .markdown-body,
+[data-theme="light"] .user-bubble-content .markdown-body p {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .assistant-flow-content {
+  color: #18181b !important;
+}
+
+[data-theme="light"] .markdown-body {
+  color: #18181b !important;
+}
+
+[data-theme="light"] .markdown-body h1,
+[data-theme="light"] .markdown-body h2,
+[data-theme="light"] .markdown-body h3,
+[data-theme="light"] .markdown-body h4 {
+  color: #09090b !important;
+}
+
+/* Amber / Warm Terminal Theme */
+[data-theme="amber"] {
+  --bg-primary: #191612;
+  --bg-secondary: #1f1a14;
+  --bg-sidebar: #17130f;
+  --bg-surface: #241e17;
+  --bg-card: #2c251d;
+  --border-subtle: rgba(245, 158, 11, 0.12);
+  --border-contrast: rgba(245, 158, 11, 0.25);
+  --text-primary: #fef3c7;
+  --text-secondary: #fde68a;
+  --text-muted: #d97706;
+  --brand-accent: #f59e0b;
+}
+
+[data-theme="amber"] body,
+[data-theme="amber"] .desktop-app-container {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-theme="amber"] .desktop-header-zcode {
+  background: var(--bg-secondary) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+}
+
+[data-theme="amber"] .header-brand-mark {
+  background: #d97706 !important;
+}
+
+[data-theme="amber"] .claude-sidebar {
+  background: var(--bg-sidebar) !important;
+  border-right: 1px solid var(--border-subtle) !important;
+}
+
+[data-theme="amber"] .sidebar-session-title {
+  color: #fde68a !important;
+}
+
+[data-theme="amber"] .sidebar-session-item:hover {
+  background: rgba(245, 158, 11, 0.08) !important;
+}
+
+[data-theme="amber"] .sidebar-session-item.selected {
+  background: rgba(245, 158, 11, 0.16) !important;
+}
+
+[data-theme="amber"] .sidebar-session-item.selected .sidebar-session-title {
+  color: #fffbeb !important;
+}
+
+[data-theme="amber"] .claude-stage .session-composer,
+[data-theme="amber"] .claude-stage .modern-composer {
+  background: #241e17 !important;
+  border: 1px solid rgba(245, 158, 11, 0.2) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35) !important;
+}
+
+[data-theme="amber"] .claude-stage .session-composer textarea {
+  color: #fef3c7 !important;
+}
+
+[data-theme="amber"] .claude-stage .session-composer textarea::placeholder {
+  color: #b45309 !important;
+}
+
+[data-theme="amber"] .tool-call-group-container,
+[data-theme="amber"] .tool-call-accordion {
+  background: #221c15 !important;
+  border-color: rgba(245, 158, 11, 0.2) !important;
+}
+
+[data-theme="amber"] .tool-call-group-header,
+[data-theme="amber"] .tool-call-summary {
+  background: #2a2219 !important;
+  color: #fef3c7 !important;
+}
+
+[data-theme="amber"] .tool-name,
+[data-theme="amber"] .tool-group-title {
+  color: #fef3c7 !important;
+}
+
+[data-theme="amber"] .tool-call-body {
+  background: #1c1711 !important;
+  border-top-color: rgba(245, 158, 11, 0.15) !important;
+}
+
+[data-theme="amber"] .tool-content-pre {
+  background: #14100b !important;
+  color: #fde68a !important;
+  border-color: rgba(245, 158, 11, 0.15) !important;
+}
+
+[data-theme="amber"] .user-bubble-pill {
+  background: #382c1e !important;
+  border: 1px solid rgba(245, 158, 11, 0.3) !important;
+}
+
+[data-theme="amber"] .user-bubble-content .markdown-body,
+[data-theme="amber"] .user-bubble-content .markdown-body p {
+  color: #fef3c7 !important;
+}
+
+[data-theme="amber"] .markdown-body {
+  color: #fef3c7 !important;
+}
+
+[data-theme="amber"] .markdown-body h1,
+[data-theme="amber"] .markdown-body h2,
+[data-theme="amber"] .markdown-body h3,
+[data-theme="amber"] .markdown-body h4 {
+  color: #fbbf24 !important;
 }

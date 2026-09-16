@@ -2117,7 +2117,8 @@ pub fn collect_zcode_session_contexts_from(
             s.title,
             (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as model,
             (SELECT json_extract(data, '$.mode') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as mode,
-            (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as tokens
+            (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as total_tokens,
+            (SELECT json_extract(data, '$.tokens.input') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as input_tokens
         FROM session s
         WHERE (s.parent_id IS NULL OR s.parent_id = '')
           AND s.id NOT LIKE 'sess_subagent%'
@@ -2140,6 +2141,7 @@ pub fn collect_zcode_session_contexts_from(
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
             ))
         })
         .map_err(|source| CollectorError::Database {
@@ -2153,7 +2155,7 @@ pub fn collect_zcode_session_contexts_from(
         })?;
 
     let mut contexts = Vec::with_capacity(rows.len());
-    for (session_id, title, model, mode, tokens) in rows {
+    for (session_id, title, model, mode, total_tokens, input_tokens) in rows {
         let Some(clean_id) = metadata_label(&session_id, MAX_CONFIG_VALUE_CHARS) else {
             continue;
         };
@@ -2161,9 +2163,14 @@ pub fn collect_zcode_session_contexts_from(
         context.title = title.and_then(|t| metadata_label(&t, MAX_SESSION_TITLE_CHARS));
         context.model = model.and_then(|m| metadata_label(&m, MAX_CONFIG_VALUE_CHARS));
         context.permission_mode = mode.and_then(|m| metadata_label(&m, MAX_CONFIG_VALUE_CHARS));
-        context.session_total_tokens = tokens
+        context.session_total_tokens = total_tokens
             .and_then(|t| u64::try_from(t).ok())
             .filter(|t| *t > 0);
+        let used = input_tokens
+            .and_then(|t| u64::try_from(t).ok())
+            .filter(|t| *t > 0)
+            .or(context.session_total_tokens);
+        context.context_used_tokens = used;
         contexts.push(context);
     }
     Ok(contexts)

@@ -11,6 +11,7 @@ import {
   Wrench,
   AlertCircle,
   CheckCircle2,
+  ChevronDown,
 } from "lucide-react";
 import type { ConversationMessage } from "../turn-stream";
 
@@ -20,6 +21,147 @@ interface ConversationRendererProps {
 }
 
 const RESULT_SEPARATOR = "〔结果〕";
+
+/**
+ * Group consecutive tool / status / command messages together so that long tool
+ * call runs (e.g. 5+ commands or tools) collapse neatly into a single compact block.
+ */
+export type RenderMessageGroup =
+  | { type: "single"; message: ConversationMessage; index: number }
+  | { type: "tool_group"; messages: ConversationMessage[]; startIndex: number };
+
+export function groupConversationMessages(
+  messages: ConversationMessage[],
+): RenderMessageGroup[] {
+  const groups: RenderMessageGroup[] = [];
+  let currentToolBatch: ConversationMessage[] = [];
+  let batchStartIndex = 0;
+
+  const flushToolBatch = () => {
+    if (currentToolBatch.length === 0) return;
+    if (currentToolBatch.length === 1) {
+      groups.push({
+        type: "single",
+        message: currentToolBatch[0],
+        index: batchStartIndex,
+      });
+    } else {
+      groups.push({
+        type: "tool_group",
+        messages: [...currentToolBatch],
+        startIndex: batchStartIndex,
+      });
+    }
+    currentToolBatch = [];
+  };
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const isToolLike =
+      msg.kind === "tool" || msg.kind === "command" || msg.kind === "status";
+
+    if (isToolLike) {
+      if (currentToolBatch.length === 0) {
+        batchStartIndex = i;
+      }
+      currentToolBatch.push(msg);
+    } else {
+      flushToolBatch();
+      groups.push({ type: "single", message: msg, index: i });
+    }
+  }
+  flushToolBatch();
+
+  return groups;
+}
+
+/**
+ * Collapsed Tool Call Group for 2+ consecutive tool executions
+ */
+export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
+  messages,
+}: {
+  messages: ConversationMessage[];
+}) {
+  const [open, setOpen] = useState(false);
+  const count = messages.length;
+  const hasFailed = messages.some((m) => m.status === "failed");
+  const hasRunning = messages.some((m) => m.status === "running");
+
+  // Summary labels preview
+  const previewSummary = useMemo(() => {
+    const names = messages
+      .slice(0, 3)
+      .map(
+        (m) =>
+          m.label ||
+          (m.kind === "command"
+            ? "命令执行"
+            : m.kind === "status"
+              ? "状态更新"
+              : "工具调用"),
+      );
+    if (count > 3) {
+      return `${names.join(" · ")} 等 ${count} 个调用`;
+    }
+    return names.join(" · ");
+  }, [messages, count]);
+
+  return (
+    <div className={`tool-call-group-container ${open ? "open" : ""}`}>
+      <div
+        className="tool-call-group-header"
+        onClick={() => setOpen((prev) => !prev)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((prev) => !prev);
+          }
+        }}
+      >
+        <span className="tool-group-icon">
+          <Wrench size={13} />
+        </span>
+        <strong className="tool-group-title">
+          已执行 {count} 个工具与操作
+        </strong>
+        <span className="tool-group-preview">{previewSummary}</span>
+        <div className="tool-group-right">
+          <span
+            className={`tool-status-pill ${hasFailed ? "failed" : hasRunning ? "running" : "completed"}`}
+          >
+            {hasFailed ? (
+              <>
+                <AlertCircle size={10} /> 异常
+              </>
+            ) : hasRunning ? (
+              <>
+                <Activity size={10} className="spin" /> 运行中
+              </>
+            ) : (
+              <>
+                <CheckCircle2 size={10} /> 完成
+              </>
+            )}
+          </span>
+          <span className="tool-group-chevron">
+            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </span>
+        </div>
+      </div>
+
+      {open && (
+        <div className="tool-call-group-body">
+          {messages.map((item, idx) => (
+            <ToolCallBlock key={idx} message={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
 
 export const ConversationItem = memo(function ConversationItem({
   message,

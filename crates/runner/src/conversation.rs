@@ -80,11 +80,11 @@ pub fn load_session_conversation(
             if messages.len() >= MAX_CONVERSATION_MESSAGES
                 || approx_bytes >= MAX_CONVERSATION_RESPONSE_BYTES
             {
-                return messages;
+                return deduplicate_consecutive_user_messages(messages);
             }
         }
     }
-    messages
+    deduplicate_consecutive_user_messages(messages)
 }
 
 fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -> Option<PathBuf> {
@@ -229,7 +229,39 @@ fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> 
         }
     }
 
-    items
+    deduplicate_consecutive_user_messages(items)
+}
+
+fn deduplicate_consecutive_user_messages(messages: Vec<Value>) -> Vec<Value> {
+    let mut deduped: Vec<Value> = Vec::with_capacity(messages.len());
+    for item in messages {
+        let is_user = item.get("role").and_then(Value::as_str) == Some("user");
+        let content = item
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+
+        if is_user && !content.is_empty() {
+            // If the immediately preceding message is also a user message with identical content,
+            // overwrite/replace it with this later attempt (or skip duplicates).
+            if let Some(prev) = deduped.last_mut() {
+                let prev_is_user = prev.get("role").and_then(Value::as_str) == Some("user");
+                let prev_content = prev
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if prev_is_user && prev_content == content {
+                    // Replace previous duplicate with the updated one
+                    *prev = item;
+                    continue;
+                }
+            }
+        }
+        deduped.push(item);
+    }
+    deduped
 }
 
 fn find_provider_transcript(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {

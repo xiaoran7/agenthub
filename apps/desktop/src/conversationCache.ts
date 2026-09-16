@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { ConversationMessage } from "./turn-stream";
+import { type ConversationMessage, deduplicateMessages } from "./turn-stream";
 
 interface CacheEntry {
   messages: ConversationMessage[];
@@ -15,8 +15,9 @@ const listeners = new Set<(key: string, entry: CacheEntry) => void>();
 const hasTauri = () => "__TAURI_INTERNALS__" in window;
 
 function store(key: string, messages: ConversationMessage[]) {
+  const deduped = deduplicateMessages(messages);
   cache.delete(key);
-  cache.set(key, { messages, fetchedAt: Date.now() });
+  cache.set(key, { messages: deduped, fetchedAt: Date.now() });
   while (cache.size > CACHE_LIMIT) {
     const oldest = cache.keys().next().value;
     if (oldest === undefined) break;
@@ -60,8 +61,9 @@ export function loadConversation(
     input: { agent_type: agentType, agent_session_id: agentSessionId },
   })
     .then((messages) => {
-      store(key, messages);
-      return messages;
+      const deduped = deduplicateMessages(messages);
+      store(key, deduped);
+      return deduped;
     })
     .finally(() => {
       inflight.delete(key);

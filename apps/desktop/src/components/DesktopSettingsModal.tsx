@@ -244,6 +244,28 @@ export function DesktopSettingsModal({
 
                       <div className="settings-row-item">
                         <div className="row-text">
+                          <strong>界面主题风格</strong>
+                          <p>支持深色、浅色以及琥珀色（Amber）暖光主题。</p>
+                        </div>
+                        <SelectDropdown
+                          value={theme}
+                          options={[
+                            { value: "dark", label: "深色模式 (Dark)" },
+                            { value: "light", label: "浅色模式 (Light)" },
+                            { value: "amber", label: "琥珀暖色 (Amber)" },
+                          ]}
+                          onChange={(val) => {
+                            setTheme(val);
+                            document.documentElement.setAttribute("data-theme", val);
+                          }}
+                          size="sm"
+                        />
+                      </div>
+
+                      <div className="settings-divider" />
+
+                      <div className="settings-row-item">
+                        <div className="row-text">
                           <strong>刷新与同步周期</strong>
                           <p>实时通道断开时用于后台安全轮询（秒）。</p>
                         </div>
@@ -428,7 +450,7 @@ export function DesktopSettingsModal({
               <footer className="settings-footer-actions">
                 <button
                   type="button"
-                  className="outline-button"
+                  className="settings-cancel-btn"
                   onClick={onClose}
                   disabled={busy}
                 >
@@ -436,7 +458,7 @@ export function DesktopSettingsModal({
                 </button>
                 <button
                   type="submit"
-                  className="primary-button"
+                  className="settings-save-btn"
                   disabled={busy}
                 >
                   {busy ? (

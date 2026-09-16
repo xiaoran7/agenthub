@@ -110,7 +110,11 @@ import {
   SessionContextMenu,
   type ContextMenuPosition,
 } from "./components/SessionContextMenu";
-import { ConversationItem } from "./components/ConversationRenderer";
+import {
+  ConversationItem,
+  groupConversationMessages,
+  ToolCallGroupBlock,
+} from "./components/ConversationRenderer";
 import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
 import { DesktopHeader } from "./components/layout/DesktopHeader";
 import { SessionEmptyState } from "./components/session/SessionEmptyState";
@@ -149,6 +153,20 @@ export function App() {
       setError(errorMessage(nextError));
     } finally {
       setRestoring(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("agenthub:extended-preferences");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.theme) {
+          document.documentElement.setAttribute("data-theme", parsed.theme);
+        }
+      }
+    } catch {
+      // ignore
     }
   }, []);
 
@@ -2141,15 +2159,27 @@ function SessionControlPanel({
               </p>
             </div>
           ) : (
-            messages.map((message, index) => (
-              <ConversationItem
-                message={message}
-                index={index}
-                key={
-                  message.role + "-" + (message.kind ?? "message") + "-" + index
-                }
-              />
-            ))
+            groupConversationMessages(messages).map((group, groupIdx) => {
+              if (group.type === "tool_group") {
+                return (
+                  <ToolCallGroupBlock
+                    key={`tool-group-${group.startIndex}-${groupIdx}`}
+                    messages={group.messages}
+                  />
+                );
+              }
+              const message = group.message;
+              const index = group.index;
+              return (
+                <ConversationItem
+                  message={message}
+                  index={index}
+                  key={
+                    message.role + "-" + (message.kind ?? "message") + "-" + index
+                  }
+                />
+              );
+            })
           )}
           {busy && agentActivity !== undefined && (
             <div className="agent-thinking">

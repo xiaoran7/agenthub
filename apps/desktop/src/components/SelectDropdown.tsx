@@ -17,6 +17,7 @@ interface SelectDropdownProps<T extends string = string> {
   className?: string;
   size?: "sm" | "md" | "lg";
   align?: "left" | "right";
+  direction?: "up" | "down" | "auto";
   ariaLabel?: string;
 }
 
@@ -29,12 +30,37 @@ export function SelectDropdown<T extends string = string>({
   className = "",
   size = "md",
   align = "left",
+  direction = "auto",
   ariaLabel,
 }: SelectDropdownProps<T>) {
   const [open, setOpen] = useState(false);
+  const [placementUp, setPlacementUp] = useState(direction === "up");
   const containerRef = useRef<HTMLDivElement>(null);
 
   const selectedOption = options.find((opt) => opt.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    if (direction === "up") {
+      setPlacementUp(true);
+      return;
+    }
+    if (direction === "down") {
+      setPlacementUp(false);
+      return;
+    }
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      // When space below is tight (<260px) or space above is larger, open upward
+      if (spaceBelow < 260 && spaceAbove > spaceBelow) {
+        setPlacementUp(true);
+      } else {
+        setPlacementUp(false);
+      }
+    }
+  }, [open, direction]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -77,7 +103,7 @@ export function SelectDropdown<T extends string = string>({
   return (
     <div
       ref={containerRef}
-      className={`custom-select-dropdown ${size} ${open ? "open" : ""} ${disabled ? "disabled" : ""} ${className}`}
+      className={`custom-select-dropdown ${size} ${open ? "open" : ""} ${placementUp ? "placement-up" : "placement-down"} ${disabled ? "disabled" : ""} ${className}`}
     >
       <button
         type="button"
@@ -103,7 +129,11 @@ export function SelectDropdown<T extends string = string>({
       </button>
 
       {open && (
-        <div className={`select-menu ${align}`} role="listbox" tabIndex={-1}>
+        <div
+          className={`select-menu ${align} ${placementUp ? "up" : "down"}`}
+          role="listbox"
+          tabIndex={-1}
+        >
           {options.map((option) => {
             const isSelected = option.value === value;
             return (

@@ -7,8 +7,6 @@ import {
   X,
   PanelLeft,
   PanelLeftClose,
-  Columns,
-  ChevronDown,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -37,6 +35,7 @@ export function DesktopHeader({
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let resizeTimer: number | undefined;
     try {
       const appWindow = getCurrentWindow();
       appWindow
@@ -45,10 +44,14 @@ export function DesktopHeader({
         .catch(() => {});
       appWindow
         .onResized(() => {
-          appWindow
-            .isMaximized()
-            .then(setIsMaximized)
-            .catch(() => {});
+          if (resizeTimer !== undefined) return;
+          resizeTimer = window.setTimeout(() => {
+            resizeTimer = undefined;
+            appWindow
+              .isMaximized()
+              .then(setIsMaximized)
+              .catch(() => {});
+          }, 150);
         })
         .then((fn) => {
           unlisten = fn;
@@ -58,6 +61,7 @@ export function DesktopHeader({
       // Running outside Tauri (web/test mode)
     }
     return () => {
+      if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
       if (unlisten) unlisten();
     };
   }, []);
@@ -86,15 +90,43 @@ export function DesktopHeader({
     }
   };
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Only primary mouse button initiates drag when not clicking on interactive controls
+    if (
+      e.button === 0 &&
+      !(e.target as HTMLElement).closest("button, a, input, select, textarea, [data-no-drag]")
+    ) {
+      try {
+        getCurrentWindow().startDragging();
+      } catch {
+        // ignore outside tauri
+      }
+    }
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if (
+      e.button === 0 &&
+      !(e.target as HTMLElement).closest("button, a, input, select, textarea, [data-no-drag]")
+    ) {
+      handleToggleMaximize();
+    }
+  };
+
   return (
-    <header className="desktop-header-zcode" data-tauri-drag-region>
+    <header
+      className="desktop-header-zcode"
+      data-tauri-drag-region
+      onMouseDown={handleMouseDown}
+      onDoubleClick={handleDoubleClick}
+    >
       {/* Left section: Brand logo / mark + Navigation arrows (like [Z] [←] [→]) */}
-      <div className="header-left-zone">
-        <div className="header-brand-mark" title="AgentHub">
+      <div className="header-left-zone" data-tauri-drag-region>
+        <div className="header-brand-mark" title="AgentHub" data-no-drag>
           <span className="brand-letter">A</span>
         </div>
 
-        <div className="header-nav-arrows">
+        <div className="header-nav-arrows" data-no-drag>
           <button
             type="button"
             className="nav-arrow-btn"
@@ -102,6 +134,7 @@ export function DesktopHeader({
             onClick={onNavigateBack}
             title="后退 (Alt+Left)"
             aria-label="后退"
+            data-tauri-drag-region="false"
           >
             <ChevronLeft size={16} />
           </button>
@@ -112,13 +145,14 @@ export function DesktopHeader({
             onClick={onNavigateForward}
             title="前进 (Alt+Right)"
             aria-label="前进"
+            data-tauri-drag-region="false"
           >
             <ChevronRight size={16} />
           </button>
         </div>
 
         {(title || subtitle) && (
-          <div className="header-session-title">
+          <div className="header-session-title" data-tauri-drag-region>
             {title && <span className="title-text">{title}</span>}
             {subtitle && <span className="subtitle-text">/ {subtitle}</span>}
           </div>
@@ -128,24 +162,16 @@ export function DesktopHeader({
       {/* Center draggable region */}
       <div className="header-center-zone" data-tauri-drag-region />
 
-      {/* Right section: Layout toggles + Window controls (like [◨] [▯] [∨] [-] [□] [✕]) */}
-      <div className="header-right-zone">
-        <div className="header-layout-controls">
-          <button
-            type="button"
-            className="layout-action-btn"
-            title="分栏布局视图"
-            aria-label="分栏布局视图"
-          >
-            <Columns size={15} />
-          </button>
-
+      {/* Right section: Sidebar toggle + Window controls */}
+      <div className="header-right-zone" data-no-drag>
+        <div className="header-layout-controls" data-no-drag>
           <button
             type="button"
             className={`layout-action-btn ${sidebarCollapsed ? "active" : ""}`}
             onClick={onToggleSidebar}
             title={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
             aria-label="切换侧边栏"
+            data-tauri-drag-region="false"
           >
             {sidebarCollapsed ? (
               <PanelLeft size={15} />
@@ -153,25 +179,17 @@ export function DesktopHeader({
               <PanelLeftClose size={15} />
             )}
           </button>
-
-          <button
-            type="button"
-            className="layout-action-btn"
-            title="更多视图选项"
-            aria-label="更多视图选项"
-          >
-            <ChevronDown size={15} />
-          </button>
         </div>
 
         {/* Native window caption controls */}
-        <div className="window-caption-controls">
+        <div className="window-caption-controls" data-no-drag>
           <button
             type="button"
             className="window-control-btn minimize"
             onClick={handleMinimize}
             title="最小化"
             aria-label="最小化"
+            data-tauri-drag-region="false"
           >
             <Minus size={13} />
           </button>
@@ -181,6 +199,7 @@ export function DesktopHeader({
             onClick={handleToggleMaximize}
             title={isMaximized ? "还原" : "最大化"}
             aria-label={isMaximized ? "还原" : "最大化"}
+            data-tauri-drag-region="false"
           >
             <Square size={11} />
           </button>
@@ -190,6 +209,7 @@ export function DesktopHeader({
             onClick={handleClose}
             title="关闭"
             aria-label="关闭"
+            data-tauri-drag-region="false"
           >
             <X size={14} />
           </button>

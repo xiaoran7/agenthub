@@ -47,3 +47,28 @@ export function dropTrailingEmptyAssistant(
     ? current.slice(0, -1)
     : current;
 }
+
+/**
+ * Deduplicate consecutive identical user messages (e.g. from queue resubmits or prompt retries)
+ */
+export function deduplicateMessages(
+  messages: ConversationMessage[],
+): ConversationMessage[] {
+  const deduped: ConversationMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      const prev = deduped[deduped.length - 1];
+      if (
+        prev &&
+        prev.role === "user" &&
+        prev.content.trim() === msg.content.trim()
+      ) {
+        // Overwrite earlier turn with latest
+        deduped[deduped.length - 1] = msg;
+        continue;
+      }
+    }
+    deduped.push(msg);
+  }
+  return deduped;
+}
