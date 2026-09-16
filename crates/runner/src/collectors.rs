@@ -683,6 +683,7 @@ pub fn collect_claude_sessions_for_remote(
         let Ok(files) = fs::read_dir(project.path()) else {
             continue;
         };
+        let mut project_candidates = Vec::new();
         for file in files.flatten() {
             let path = file.path();
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl")
@@ -690,6 +691,20 @@ pub fn collect_claude_sessions_for_remote(
             {
                 continue;
             }
+            let modified = file
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            project_candidates.push((modified, path));
+        }
+        // Limit scanning to most recent files per project to prevent unbounded I/O
+        project_candidates.sort_by_key(|(m, _)| std::cmp::Reverse(*m));
+        project_candidates.truncate(30);
+
+        for (_, path) in project_candidates {
             if let Some(entry) = read_claude_transcript_metadata(&path, &program)? {
                 entries.push((
                     entry.session_id,

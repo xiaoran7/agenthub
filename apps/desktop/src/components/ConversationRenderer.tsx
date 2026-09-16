@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -21,7 +21,9 @@ interface ConversationRendererProps {
 
 const RESULT_SEPARATOR = "〔结果〕";
 
-export function ConversationItem({ message }: ConversationRendererProps) {
+export const ConversationItem = memo(function ConversationItem({
+  message,
+}: ConversationRendererProps) {
   if (
     message.content === "" &&
     message.kind !== "tool" &&
@@ -50,7 +52,7 @@ export function ConversationItem({ message }: ConversationRendererProps) {
       <div className="message-row user-row">
         <div className="user-bubble-pill">
           <div className="user-bubble-content">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>
               {message.content}
             </ReactMarkdown>
           </div>
@@ -67,38 +69,41 @@ export function ConversationItem({ message }: ConversationRendererProps) {
       </div>
     </div>
   );
-}
+});
 
 function ParsedAssistantContent({ text }: { text: string }) {
   // Check for embedded <think>...</think> or <thinking>...</thinking> or <thought>...</thought> tags
-  const thinkRegex =
-    /<(?:think|thinking|thought)>([\s\S]*?)<\/(?:think|thinking|thought)>/gi;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
+  const parts = useMemo(() => {
+    const thinkRegex =
+      /<(?:think|thinking|thought)>([\s\S]*?)<\/(?:think|thinking|thought)>/gi;
+    const items: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
 
-  while ((match = thinkRegex.exec(text)) !== null) {
-    const preText = text.slice(lastIndex, match.index);
-    if (preText.trim()) {
-      parts.push(<MarkdownSection key={`md-${lastIndex}`} content={preText} />);
+    while ((match = thinkRegex.exec(text)) !== null) {
+      const preText = text.slice(lastIndex, match.index);
+      if (preText.trim()) {
+        items.push(<MarkdownSection key={`md-${lastIndex}`} content={preText} />);
+      }
+      const thinkContent = match[1];
+      if (thinkContent.trim()) {
+        items.push(
+          <ThinkingBlock
+            key={`think-${match.index}`}
+            content={thinkContent.trim()}
+            defaultOpen={false}
+          />,
+        );
+      }
+      lastIndex = match.index + match[0].length;
     }
-    const thinkContent = match[1];
-    if (thinkContent.trim()) {
-      parts.push(
-        <ThinkingBlock
-          key={`think-${match.index}`}
-          content={thinkContent.trim()}
-          defaultOpen={false}
-        />,
-      );
-    }
-    lastIndex = match.index + match[0].length;
-  }
 
-  const remaining = text.slice(lastIndex);
-  if (remaining.trim() || parts.length === 0) {
-    parts.push(<MarkdownSection key={`md-${lastIndex}`} content={remaining} />);
-  }
+    const remaining = text.slice(lastIndex);
+    if (remaining.trim() || items.length === 0) {
+      items.push(<MarkdownSection key={`md-${lastIndex}`} content={remaining} />);
+    }
+    return items;
+  }, [text]);
 
   return <>{parts}</>;
 }
@@ -133,7 +138,7 @@ function ThinkingBlock({
       </summary>
       <div className="thinking-body">
         <div className="thinking-inner-text">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{content}</ReactMarkdown>
         </div>
       </div>
     </details>
@@ -209,11 +214,17 @@ function ToolCallBlock({ message }: { message: ConversationMessage }) {
   );
 }
 
-function MarkdownSection({ content }: { content: string }) {
+const REMARK_PLUGINS = [remarkGfm];
+
+const MarkdownSection = memo(function MarkdownSection({
+  content,
+}: {
+  content: string;
+}) {
   return (
     <div className="markdown-body custom-markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
         components={{
           code({ className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || "");
@@ -238,9 +249,15 @@ function MarkdownSection({ content }: { content: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
-function CodeBlock({ language, value }: { language: string; value: string }) {
+const CodeBlock = memo(function CodeBlock({
+  language,
+  value,
+}: {
+  language: string;
+  value: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -282,4 +299,4 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
       </pre>
     </div>
   );
-}
+});
