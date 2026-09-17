@@ -482,7 +482,7 @@ function Dashboard({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>("codex");
   const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
   const [alertDismissed, setAlertDismissed] = useState(false);
@@ -934,6 +934,18 @@ function Dashboard({
   const showSystemNotice =
     !snapshot.realtime_connected || sourceIssue !== undefined;
 
+  // Real smartphone / companion device connection status
+  const isMobileConnected = useMemo(() => {
+    return (
+      snapshot.devices?.some(
+        (d) =>
+          d.online &&
+          !d.revoked &&
+          d.device_id !== snapshot.device.device_id,
+      ) ?? false
+    );
+  }, [snapshot.devices, snapshot.device.device_id]);
+
   return (
     <div className="desktop-app-container">
       <DesktopHeader
@@ -1040,14 +1052,6 @@ function Dashboard({
           <div className="sidebar-agent-picker-v2">
             <div className="picker-header-row">
               <span className="picker-label">受控 Agent</span>
-              <button
-                type="button"
-                className={`agent-filter-all-btn ${agentFilter === "all" ? "active" : ""}`}
-                onClick={() => setAgentFilter("all")}
-                title="显示所有受控 Agent 会话"
-              >
-                全部
-              </button>
             </div>
             <div className="managed-agents-list">
               {PROVIDER_LIST.map((item) => {
@@ -1058,16 +1062,16 @@ function Dashboard({
                     type="button"
                     className={`single-agent-badge ${isSelected ? "selected" : ""}`}
                     data-provider={item.type}
-                    onClick={() =>
-                      setAgentFilter(
-                        agentFilter === item.type ? "all" : item.type,
-                      )
-                    }
+                    onClick={() => setAgentFilter(item.type)}
                     title={`筛选 ${item.label} 会话`}
                   >
                     <span className="agent-badge-dot" />
                     <strong>{item.label}</strong>
-                    <span className="agent-badge-tag">Managed</span>
+                    <span
+                      className={`agent-badge-tag ${item.managed ? "" : "unmanaged"}`}
+                    >
+                      {item.managed ? "Managed" : "Unmanaged"}
+                    </span>
                   </button>
                 );
               })}
@@ -1307,14 +1311,18 @@ function Dashboard({
                   type="button"
                   className="sidebar-footer-action-btn"
                   onClick={onOpenLocalHost ?? (() => {})}
-                  title={`本机与出站连接: ${snapshot.realtime_connected ? "实时在线" : "轮询"} (${snapshot.local.sources.length} 个工作区)`}
-                  aria-label="本机与出站连接状态"
+                  title={`移动端协同设备: ${isMobileConnected ? "已连接" : "未连接"} (本机出站: ${snapshot.realtime_connected ? "实时在线" : "轮询"})`}
+                  aria-label="移动端设备连接状态"
                 >
                   <Smartphone size={16} />
                   <span
                     className={
                       "footer-status-indicator " +
-                      (snapshot.realtime_connected ? "online" : "fallback")
+                      (isMobileConnected
+                        ? "online"
+                        : snapshot.realtime_connected
+                          ? "fallback"
+                          : "offline")
                     }
                   />
                 </button>
@@ -1359,6 +1367,12 @@ function Dashboard({
               workspaceCount={snapshot.local.sources.length}
               sessionCount={snapshot.sessions.length}
               displayName={displayName}
+              activeProviderLabel={
+                agentFilter === "all" ? "Agent" : agentLabel(agentFilter)
+              }
+              activeProviderType={
+                agentFilter === "all" ? "codex" : agentFilter
+              }
             />
           )}
 

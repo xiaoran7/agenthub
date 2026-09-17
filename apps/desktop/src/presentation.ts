@@ -39,18 +39,18 @@ export function statusView(
 }
 
 export function agentLabel(type: Session["agent_type"]): string {
+  if (type === "codex") return "ChatGPT (Codex)";
   if (type === "claude_code") return "Claude Code";
-  if (type === "codex") return "Codex";
-  if (type === "antigravity") return "Google Antigravity";
   if (type === "zcode") return "ZCode Agent";
+  if (type === "antigravity") return "Google Antigravity";
   return "Grok Build";
 }
 
 export function agentShortLabel(type: Session["agent_type"]): string {
+  if (type === "codex") return "ChatGPT";
   if (type === "claude_code") return "Claude";
-  if (type === "codex") return "Codex";
-  if (type === "antigravity") return "Antigravity";
   if (type === "zcode") return "ZCode";
+  if (type === "antigravity") return "Antigravity";
   return "Grok";
 }
 
@@ -166,13 +166,15 @@ export const PROVIDER_LIST: ReadonlyArray<{
   shortLabel: string;
   defaultModel: string;
   desc: string;
+  managed: boolean;
 }> = [
   {
     type: "codex",
-    label: "OpenAI Codex",
-    shortLabel: "Codex",
+    label: "ChatGPT (Codex)",
+    shortLabel: "ChatGPT",
     defaultModel: "gpt-5.5-codex",
     desc: "OpenAI 官方代码助手 (Managed)",
+    managed: true,
   },
   {
     type: "claude_code",
@@ -180,6 +182,7 @@ export const PROVIDER_LIST: ReadonlyArray<{
     shortLabel: "Claude",
     defaultModel: "claude-3-7-sonnet",
     desc: "Anthropic 官方开发助手 (Managed)",
+    managed: true,
   },
   {
     type: "zcode",
@@ -187,6 +190,23 @@ export const PROVIDER_LIST: ReadonlyArray<{
     shortLabel: "ZCode",
     defaultModel: "gemini-3.8-flash-high",
     desc: "ZCode 官方编程助手 (Managed)",
+    managed: true,
+  },
+  {
+    type: "antigravity",
+    label: "Google Antigravity",
+    shortLabel: "Antigravity",
+    defaultModel: "gemini-3.7-flash",
+    desc: "Google DeepMind 开发代理 (Unmanaged)",
+    managed: false,
+  },
+  {
+    type: "grok_build",
+    label: "Grok Build",
+    shortLabel: "Grok",
+    defaultModel: "grok-4.6",
+    desc: "xAI 全栈实时开发 (Unmanaged)",
+    managed: false,
   },
 ];
 

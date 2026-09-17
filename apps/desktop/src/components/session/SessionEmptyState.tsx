@@ -17,6 +17,8 @@ interface SessionEmptyStateProps {
   workspaceCount?: number;
   sessionCount?: number;
   displayName?: string;
+  activeProviderLabel?: string;
+  activeProviderType?: string;
 }
 
 const phaseLabels: Record<
@@ -38,11 +40,24 @@ export function SessionEmptyState({
   workspaceCount = 0,
   sessionCount = 0,
   displayName = "Developer",
+  activeProviderLabel = "OpenAI Codex",
+  activeProviderType = "codex",
 }: SessionEmptyStateProps) {
   const currentPhase = phaseLabels[hostPhase] ?? {
     label: hostPhase,
     tone: "gray",
   };
+
+  const cliCommand =
+    activeProviderType === "claude_code"
+      ? "claude"
+      : activeProviderType === "zcode"
+        ? "zcode"
+        : activeProviderType === "antigravity"
+          ? "antigravity"
+          : activeProviderType === "grok_build"
+            ? "grok"
+            : "codex";
 
   return (
     <div className="session-empty-container">
@@ -53,7 +68,7 @@ export function SessionEmptyState({
               size={12}
               className={`pulse-dot tone-${currentPhase.tone}`}
             />
-            <span>Codex Remote Hub</span>
+            <span>{activeProviderLabel} Remote Hub</span>
           </div>
           <h1>官方 Agent 远程继续与控制</h1>
           <p className="empty-subtitle">
@@ -72,7 +87,7 @@ export function SessionEmptyState({
             <div className="feature-content">
               <h3>工作区与会话</h3>
               <p>
-                从左侧边栏选择已有的 Codex 会话进行交互接管。实时流式观察 Agent
+                从左侧边栏选择已有的 {activeProviderLabel} 会话进行交互接管。实时流式观察 Agent
                 思考、审批高风险工具、或直接发送后续指令。
               </p>
               <div className="feature-metrics">
@@ -86,7 +101,7 @@ export function SessionEmptyState({
                 onClick={onNewSession}
               >
                 <Plus size={15} />
-                <span>新建 Codex 会话</span>
+                <span>新建 {activeProviderLabel} 会话</span>
               </button>
             </div>
           </section>
@@ -128,7 +143,7 @@ export function SessionEmptyState({
             <span>无缝接管</span>
           </div>
           <p>
-            在已授权的任意项目目录下运行官方 <code>codex</code>
+            在已授权的任意项目目录下运行官方 <code>{cliCommand}</code>
             ，会话将自动同步到此列表，随时接续。
           </p>
         </footer>

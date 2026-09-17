@@ -31,22 +31,26 @@ export function useContextMetrics(
   modelName?: string,
 ) {
   return useMemo(() => {
-    // 1. Determine total window tokens
+    // 1. Determine total window tokens dynamically based on runtime or model
     let windowTokens = runtime?.context_window_tokens;
     if (!windowTokens || windowTokens <= 0) {
       const name = (modelName || runtime?.model || "").toLowerCase();
       if (name.includes("gemini")) {
         windowTokens = 1_000_000;
+      } else if (name.includes("claude")) {
+        windowTokens = 200_000;
       } else if (
+        name.includes("gpt-5") ||
         name.includes("gpt-4") ||
+        name.includes("codex") ||
         name.includes("o1") ||
         name.includes("o3")
       ) {
         windowTokens = 200_000;
-      } else if (name.includes("claude-3-7") || name.includes("claude-3-5")) {
-        windowTokens = 200_000;
+      } else if (name.includes("grok")) {
+        windowTokens = 128_000;
       } else {
-        windowTokens = 270_000;
+        windowTokens = 200_000;
       }
     }
 
@@ -91,106 +95,95 @@ export function useContextMetrics(
     // Determine actual used tokens: prioritize the backend runtime reporting
     let used = runtime?.context_used_tokens;
     if (!used || used <= 0) {
-      const estimatedMsgTokens = Math.max(120, Math.round(totalMsgChars / 3.2));
-      const estimatedToolTokens = Math.max(
-        80,
-        Math.round((mcpToolCharCount + systemToolCharCount) / 3.2),
-      );
-      used = estimatedMsgTokens + estimatedToolTokens + 1200;
+      if (totalRecordedChars === 0) {
+        used = 0;
+      } else {
+        const estimatedMsgTokens = Math.round(totalMsgChars / 3.4);
+        const estimatedToolTokens = Math.round(
+          (mcpToolCharCount + systemToolCharCount + skillsCharCount + otherCharCount) / 3.4,
+        );
+        used = Math.max(0, estimatedMsgTokens + estimatedToolTokens);
+      }
     }
 
-    // System prompt baseline (default ~8k tokens in Gemini/ZCode/Claude)
-    const systemPromptTokens = Math.min(
-      Math.round(used * 0.12),
-      Math.max(1500, Math.min(8500, Math.round(used * 0.08))),
-    );
+    // Dynamic system prompt calculation
+    const systemPromptTokens =
+      used > 0
+        ? Math.min(Math.round(used * 0.12), Math.max(800, Math.round(used * 0.08)))
+        : 0;
     const dynamicTokensBudget = Math.max(0, used - systemPromptTokens);
 
-    let rawMsgWeight =
-      totalRecordedChars > 0 ? totalMsgChars / totalRecordedChars : 0.45;
-    let rawMcpWeight =
-      totalRecordedChars > 0 ? mcpToolCharCount / totalRecordedChars : 0.05;
-    let rawSysToolWeight =
-      totalRecordedChars > 0 ? systemToolCharCount / totalRecordedChars : 0.45;
-    let rawSkillsWeight =
-      totalRecordedChars > 0 ? skillsCharCount / totalRecordedChars : 0.02;
-    let rawOtherWeight =
-      totalRecordedChars > 0 ? otherCharCount / totalRecordedChars : 0.03;
+    let msgTokens = 0;
+    let mcpTokens = 0;
+    let sysToolTokens = 0;
+    let skillsTokens = 0;
+    let otherTokens = 0;
 
-    const dynamicWeightSum =
-      rawMsgWeight +
-      rawMcpWeight +
-      rawSysToolWeight +
-      rawSkillsWeight +
-      rawOtherWeight;
-    const norm = dynamicWeightSum > 0 ? dynamicWeightSum : 1;
+    if (totalRecordedChars > 0 && dynamicTokensBudget > 0) {
+      msgTokens = Math.round(dynamicTokensBudget * (totalMsgChars / totalRecordedChars));
+      mcpTokens = Math.round(dynamicTokensBudget * (mcpToolCharCount / totalRecordedChars));
+      sysToolTokens = Math.round(dynamicTokensBudget * (systemToolCharCount / totalRecordedChars));
+      skillsTokens = Math.round(dynamicTokensBudget * (skillsCharCount / totalRecordedChars));
+      otherTokens = Math.max(
+        0,
+        dynamicTokensBudget - (msgTokens + mcpTokens + sysToolTokens + skillsTokens),
+      );
+    }
 
-    const msgTokens = Math.round(dynamicTokensBudget * (rawMsgWeight / norm));
-    const mcpTokens = Math.round(dynamicTokensBudget * (rawMcpWeight / norm));
-    const sysToolTokens = Math.round(
-      dynamicTokensBudget * (rawSysToolWeight / norm),
-    );
-    const skillsTokens = Math.round(
-      dynamicTokensBudget * (rawSkillsWeight / norm),
-    );
-    const otherTokens = Math.max(
-      0,
-      dynamicTokensBudget -
-        (msgTokens + mcpTokens + sysToolTokens + skillsTokens),
-    );
+    const safeDenominator = used > 0 ? used : 1;
 
-    // Only include categories that actually exist or have non-zero percentage
+    // Breakdown categories with explicit 0% detection (0% has no color fill)
     const allCategories: CategoryBreakdown[] = [
       {
         id: "messages",
         label: "对话消息",
         color: "#3b82f6", // Blue
-        percentage: +((msgTokens / used) * 100).toFixed(1),
+        percentage: used > 0 && msgTokens > 0 ? +((msgTokens / safeDenominator) * 100).toFixed(1) : 0,
         tokens: msgTokens,
       },
       {
         id: "system_tools",
         label: "系统工具",
         color: "#38bdf8", // Light Cyan
-        percentage: +((sysToolTokens / used) * 100).toFixed(1),
+        percentage: used > 0 && sysToolTokens > 0 ? +((sysToolTokens / safeDenominator) * 100).toFixed(1) : 0,
         tokens: sysToolTokens,
       },
       {
         id: "mcp_tools",
         label: "MCP 工具",
         color: "#60a5fa", // Sky Blue
-        percentage: +((mcpTokens / used) * 100).toFixed(1),
+        percentage: used > 0 && mcpTokens > 0 ? +((mcpTokens / safeDenominator) * 100).toFixed(1) : 0,
         tokens: mcpTokens,
       },
       {
         id: "system_prompt",
         label: "系统提示词",
         color: "#818cf8", // Indigo
-        percentage: +((systemPromptTokens / used) * 100).toFixed(1),
+        percentage: used > 0 && systemPromptTokens > 0 ? +((systemPromptTokens / safeDenominator) * 100).toFixed(1) : 0,
         tokens: systemPromptTokens,
       },
       {
         id: "skills",
         label: "扩展技能",
         color: "#a78bfa", // Purple
-        percentage: +((skillsTokens / used) * 100).toFixed(1),
+        percentage: used > 0 && skillsTokens > 0 ? +((skillsTokens / safeDenominator) * 100).toFixed(1) : 0,
         tokens: skillsTokens,
       },
       {
         id: "other",
         label: "其他元数据",
         color: "#94a3b8", // Slate
-        percentage: +((otherTokens / used) * 100).toFixed(1),
+        percentage: used > 0 && otherTokens > 0 ? +((otherTokens / safeDenominator) * 100).toFixed(1) : 0,
         tokens: otherTokens,
       },
-    ].filter((c) => c.tokens > 0 || c.percentage > 0);
+    ];
 
-    const pct = Math.min(100, +((used / windowTokens) * 100).toFixed(1));
+    const pct = windowTokens > 0 ? Math.min(100, +((used / windowTokens) * 100).toFixed(1)) : 0;
     // Cache hit rate: dynamic based on context size and prompt caching ratio
-    const hitRate = Math.min(
-      98.2,
-      Math.max(68.0, +(72 + Math.min(24, (used / 200_000) * 22)).toFixed(1)),
-    );
+    const hitRate =
+      used > 0
+        ? Math.min(98.2, Math.max(68.0, +(72 + Math.min(24, (used / 200_000) * 22)).toFixed(1)))
+        : 0;
 
     return {
       usedTokens: used,
@@ -304,33 +297,56 @@ export function ContextCapacityRing({
 
           {/* Multi-color segmented progress bar */}
           <div className="segmented-progress-bar">
-            {metrics.categories.map((cat) => (
-              <div
-                key={cat.id}
-                className="progress-segment"
-                style={{
-                  width: `${cat.percentage}%`,
-                  backgroundColor: cat.color,
-                }}
-                title={`${cat.label}: ${cat.percentage}% (${formatTokens(cat.tokens)})`}
-              />
-            ))}
+            {metrics.categories
+              .filter((cat) => cat.percentage > 0)
+              .map((cat) => (
+                <div
+                  key={cat.id}
+                  className="progress-segment"
+                  style={{
+                    width: `${cat.percentage}%`,
+                    backgroundColor: cat.color,
+                  }}
+                  title={`${cat.label}: ${cat.percentage}% (${formatTokens(cat.tokens)})`}
+                />
+              ))}
           </div>
 
           {/* Breakdown List */}
           <div className="popover-categories">
-            {metrics.categories.map((cat) => (
-              <div key={cat.id} className="category-row">
-                <div className="category-label-group">
+            {metrics.categories.map((cat) => {
+              const isZero = cat.percentage === 0;
+              return (
+                <div
+                  key={cat.id}
+                  className={`category-row ${isZero ? "zero-usage" : ""}`}
+                >
+                  <div className="category-label-group">
+                    <span
+                      className="category-dot"
+                      style={{
+                        backgroundColor: isZero ? "transparent" : cat.color,
+                        border: isZero
+                          ? "1px solid rgba(255, 255, 255, 0.22)"
+                          : "none",
+                      }}
+                    />
+                    <span
+                      className="category-name"
+                      style={{ color: isZero ? "#71717a" : "#d4d4d8" }}
+                    >
+                      {cat.label}
+                    </span>
+                  </div>
                   <span
-                    className="category-dot"
-                    style={{ backgroundColor: cat.color }}
-                  />
-                  <span className="category-name">{cat.label}</span>
+                    className="category-pct"
+                    style={{ color: isZero ? "#71717a" : "#f4f4f5" }}
+                  >
+                    {cat.percentage}%
+                  </span>
                 </div>
-                <span className="category-pct">{cat.percentage}%</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Divider */}

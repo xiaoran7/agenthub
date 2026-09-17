@@ -559,16 +559,32 @@ body,
     0 0 0 1px rgba(255, 255, 255, 0.07) !important;
 }
 
-.claude-stage .session-composer textarea {
+.claude-stage .session-composer textarea,
+.claude-stage .modern-composer textarea,
+.modern-composer textarea {
   min-height: 44px;
   max-height: 220px;
   padding: 10px 12px 2px;
   color: #f4f4f5;
-  background: transparent;
-  border: 0;
-  outline: none;
+  background: transparent !important;
+  border: none !important;
+  border-width: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
   resize: none;
   font-size: 13.5px;
+}
+
+.claude-stage .session-composer textarea:focus,
+.claude-stage .session-composer textarea:focus-visible,
+.claude-stage .modern-composer textarea:focus,
+.claude-stage .modern-composer textarea:focus-visible,
+.modern-composer textarea:focus,
+.modern-composer textarea:focus-visible {
+  border: none !important;
+  border-width: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .claude-stage .session-composer textarea::placeholder {
@@ -1317,8 +1333,8 @@ body,
 }
 
 .single-agent-badge[data-provider="codex"] .agent-badge-dot {
-  background: #4c78c8;
-  box-shadow: 0 0 6px rgba(76, 120, 200, 0.6);
+  background: #10a37f;
+  box-shadow: 0 0 6px rgba(16, 163, 127, 0.6);
 }
 
 .single-agent-badge[data-provider="claude_code"] .agent-badge-dot {
@@ -1331,6 +1347,16 @@ body,
   box-shadow: 0 0 6px rgba(14, 165, 233, 0.6);
 }
 
+.single-agent-badge[data-provider="antigravity"] .agent-badge-dot {
+  background: #2e9188;
+  box-shadow: 0 0 6px rgba(46, 145, 136, 0.6);
+}
+
+.single-agent-badge[data-provider="grok_build"] .agent-badge-dot {
+  background: #8063a8;
+  box-shadow: 0 0 6px rgba(128, 99, 168, 0.6);
+}
+
 .agent-badge-tag {
   font-size: 9.5px;
   font-weight: 600;
@@ -1341,6 +1367,12 @@ body,
   border: 1px solid rgba(16, 185, 129, 0.25);
   padding: 1px 5px;
   border-radius: 4px;
+}
+
+.agent-badge-tag.unmanaged {
+  color: #a1a1aa;
+  background: rgba(161, 161, 170, 0.12);
+  border: 1px solid rgba(161, 161, 170, 0.25);
 }
 
 /* --------------------------------------------------------------------------
@@ -1772,6 +1804,11 @@ body,
 .footer-status-indicator.fallback {
   background: #f59e0b;
   box-shadow: 0 0 5px rgba(245, 158, 11, 0.6);
+}
+
+.footer-status-indicator.offline {
+  background: #71717a;
+  box-shadow: none;
 }
 
 /* --------------------------------------------------------------------------
@@ -2549,19 +2586,19 @@ body,
   color: #09090b !important;
 }
 
-/* Amber / Warm Terminal Theme */
+/* Amber / Warm Terminal Theme (Brighter, vibrant golden amber tone) */
 [data-theme="amber"] {
-  --bg-primary: #191612;
-  --bg-secondary: #1f1a14;
-  --bg-sidebar: #17130f;
-  --bg-surface: #241e17;
-  --bg-card: #2c251d;
-  --border-subtle: rgba(245, 158, 11, 0.12);
-  --border-contrast: rgba(245, 158, 11, 0.25);
-  --text-primary: #fef3c7;
-  --text-secondary: #fde68a;
-  --text-muted: #d97706;
-  --brand-accent: #f59e0b;
+  --bg-primary: #1c150c;
+  --bg-secondary: #261c10;
+  --bg-sidebar: #18120a;
+  --bg-surface: #2b2013;
+  --bg-card: #342718;
+  --border-subtle: rgba(251, 191, 36, 0.16);
+  --border-contrast: rgba(251, 191, 36, 0.35);
+  --text-primary: #fffbeb;
+  --text-secondary: #fef08a;
+  --text-muted: #f59e0b;
+  --brand-accent: #fbbf24;
 }
 
 [data-theme="amber"] body,
@@ -2576,7 +2613,7 @@ body,
 }
 
 [data-theme="amber"] .header-brand-mark {
-  background: #d97706 !important;
+  background: #f59e0b !important;
 }
 
 [data-theme="amber"] .claude-sidebar {
@@ -2585,76 +2622,140 @@ body,
 }
 
 [data-theme="amber"] .sidebar-session-title {
-  color: #fde68a !important;
+  color: #fef08a !important;
 }
 
 [data-theme="amber"] .sidebar-session-item:hover {
-  background: rgba(245, 158, 11, 0.08) !important;
+  background: rgba(251, 191, 36, 0.12) !important;
 }
 
 [data-theme="amber"] .sidebar-session-item.selected {
-  background: rgba(245, 158, 11, 0.16) !important;
+  background: rgba(251, 191, 36, 0.22) !important;
 }
 
 [data-theme="amber"] .sidebar-session-item.selected .sidebar-session-title {
+  color: #ffffff !important;
+}
+
+[data-theme="amber"] .sidebar-footer {
+  background: #20170e !important;
+  border-top: 1px solid var(--border-subtle) !important;
+}
+
+/* Amber Right Stage & Session Panel */
+[data-theme="amber"] .claude-stage,
+[data-theme="amber"] .claude-stage > .session-control-panel-scrim,
+[data-theme="amber"] .claude-stage .session-control-panel,
+[data-theme="amber"] .claude-stage .session-control-panel.fullscreen,
+[data-theme="amber"] .session-empty-container {
+  background: #1e160e !important;
   color: #fffbeb !important;
+}
+
+[data-theme="amber"] .session-empty-card,
+[data-theme="amber"] .empty-feature-card {
+  background: #281e13 !important;
+  border-color: rgba(251, 191, 36, 0.22) !important;
+  color: #fffbeb !important;
+}
+
+[data-theme="amber"] .empty-header h1,
+[data-theme="amber"] .feature-content h3 {
+  color: #fef08a !important;
+}
+
+[data-theme="amber"] .empty-subtitle,
+[data-theme="amber"] .feature-content p {
+  color: #fde68a !important;
+}
+
+[data-theme="amber"] .empty-footer-tip {
+  background: #22180f !important;
+  border-color: rgba(251, 191, 36, 0.18) !important;
+  color: #fde68a !important;
+}
+
+[data-theme="amber"] .claude-stage .session-control-panel > header {
+  background: #241a10 !important;
+  border-bottom: 1px solid rgba(251, 191, 36, 0.18) !important;
+}
+
+[data-theme="amber"] .session-breadcrumb strong {
+  color: #fef08a !important;
+}
+
+[data-theme="amber"] .session-breadcrumb small {
+  color: #f59e0b !important;
 }
 
 [data-theme="amber"] .claude-stage .session-composer,
 [data-theme="amber"] .claude-stage .modern-composer {
-  background: #241e17 !important;
-  border: 1px solid rgba(245, 158, 11, 0.2) !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35) !important;
+  background: #2b2014 !important;
+  border: 1px solid rgba(251, 191, 36, 0.3) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45) !important;
+}
+
+[data-theme="amber"] .claude-stage .session-composer:focus-within,
+[data-theme="amber"] .claude-stage .modern-composer:focus-within {
+  background: #322517 !important;
+  border-color: rgba(251, 191, 36, 0.55) !important;
+  box-shadow:
+    0 6px 26px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(251, 191, 36, 0.2) !important;
 }
 
 [data-theme="amber"] .claude-stage .session-composer textarea {
-  color: #fef3c7 !important;
+  color: #fffbeb !important;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 [data-theme="amber"] .claude-stage .session-composer textarea::placeholder {
-  color: #b45309 !important;
+  color: #d97706 !important;
 }
 
 [data-theme="amber"] .tool-call-group-container,
 [data-theme="amber"] .tool-call-accordion {
-  background: #221c15 !important;
-  border-color: rgba(245, 158, 11, 0.2) !important;
+  background: #291e13 !important;
+  border-color: rgba(251, 191, 36, 0.25) !important;
 }
 
 [data-theme="amber"] .tool-call-group-header,
 [data-theme="amber"] .tool-call-summary {
-  background: #2a2219 !important;
-  color: #fef3c7 !important;
+  background: #332618 !important;
+  color: #fef08a !important;
 }
 
 [data-theme="amber"] .tool-name,
 [data-theme="amber"] .tool-group-title {
-  color: #fef3c7 !important;
+  color: #fef08a !important;
 }
 
 [data-theme="amber"] .tool-call-body {
-  background: #1c1711 !important;
-  border-top-color: rgba(245, 158, 11, 0.15) !important;
+  background: #20170e !important;
+  border-top-color: rgba(251, 191, 36, 0.18) !important;
 }
 
 [data-theme="amber"] .tool-content-pre {
-  background: #14100b !important;
-  color: #fde68a !important;
-  border-color: rgba(245, 158, 11, 0.15) !important;
+  background: #171109 !important;
+  color: #fef08a !important;
+  border-color: rgba(251, 191, 36, 0.18) !important;
 }
 
 [data-theme="amber"] .user-bubble-pill {
-  background: #382c1e !important;
-  border: 1px solid rgba(245, 158, 11, 0.3) !important;
+  background: #42301c !important;
+  border: 1px solid rgba(251, 191, 36, 0.4) !important;
 }
 
 [data-theme="amber"] .user-bubble-content .markdown-body,
 [data-theme="amber"] .user-bubble-content .markdown-body p {
-  color: #fef3c7 !important;
+  color: #fffbeb !important;
 }
 
 [data-theme="amber"] .markdown-body {
-  color: #fef3c7 !important;
+  color: #fffbeb !important;
 }
 
 [data-theme="amber"] .markdown-body h1,
