@@ -22,6 +22,33 @@ interface ConversationRendererProps {
 
 const RESULT_SEPARATOR = "〔结果〕";
 
+/** Clean up user messages by stripping injected system prompts, environment tags, and agent instructions. */
+export function cleanClientUserContent(raw: string): string {
+  if (!raw) return "";
+  let text = raw
+    .replace(/<recommended_plugins>[\s\S]*?<\/recommended_plugins>/gi, "")
+    .replace(/<environment_context>[\s\S]*?<\/environment_context>/gi, "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
+    .replace(/<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/gi, "")
+    .replace(/# AGENTS\.md instructions for[^\n]*\n+/gi, "")
+    .replace(/<USER_REQUEST>/gi, "")
+    .replace(/<\/USER_REQUEST>/gi, "")
+    .trim();
+
+  // If the message contains solely system-level traces or reminders
+  if (
+    text.startsWith("The TodoWrite tool") ||
+    text.startsWith("The following skills are available") ||
+    text.startsWith("Called the Read tool with the following input:") ||
+    text.startsWith("Called the Bash tool with the following input:") ||
+    text.startsWith("Called the Edit tool with the following input:") ||
+    text.startsWith("<local-command-caveat>")
+  ) {
+    return "";
+  }
+  return text;
+}
+
 /**
  * Group consecutive tool / status / command messages together so that long tool
  * call runs (e.g. 5+ commands or tools) collapse neatly into a single compact block.
@@ -190,12 +217,15 @@ export const ConversationItem = memo(function ConversationItem({
 
   // 3. User Message -> Rounded Dark Bubble
   if (message.role === "user") {
+    const cleanContent = cleanClientUserContent(message.content);
+    if (!cleanContent) return null;
+
     return (
       <div className="message-row user-row">
         <div className="user-bubble-pill">
           <div className="user-bubble-content">
             <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>
-              {message.content}
+              {cleanContent}
             </ReactMarkdown>
           </div>
         </div>

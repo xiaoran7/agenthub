@@ -294,15 +294,35 @@ function loadTitleOverrides(): Record<string, string> {
   }
 }
 
+/** Clean up title candidates from user messages, stripping system / environment prompt leakage. */
+export function cleanUserPromptForTitle(raw: string): string {
+  let text = raw
+    .replace(/<recommended_plugins>[\s\S]*?<\/recommended_plugins>/gi, "")
+    .replace(/<environment_context>[\s\S]*?<\/environment_context>/gi, "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
+    .replace(/<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/gi, "")
+    .replace(/# AGENTS\.md instructions for[^\n]*\n+/gi, "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // If text was entirely composed of system instructions or tags
+  if (
+    text.startsWith("<") ||
+    text.startsWith("The following skills are available") ||
+    text.startsWith("Called the ") ||
+    text.startsWith("The TodoWrite tool")
+  ) {
+    return "";
+  }
+  return text.slice(0, 64);
+}
+
 /** Remembers a conversation-derived summary so the sidebar reads like a chat
  * list instead of "agent · working directory". */
 export function rememberTitleOverride(sessionKey: string, title: string) {
-  const clean = title
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 64);
-  if (clean.length < 4) return;
+  const clean = cleanUserPromptForTitle(title);
+  if (clean.length < 2) return;
   const overrides = loadTitleOverrides();
   if (overrides[sessionKey] === clean) return;
   overrides[sessionKey] = clean;

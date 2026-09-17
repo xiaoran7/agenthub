@@ -757,17 +757,123 @@ fn xml_tag(text: &str, tag: &str) -> Option<String> {
 }
 
 fn clean_message_text(text: &str) -> String {
-    let text = text
+    let mut text = text
         .replace("<USER_REQUEST>", "")
         .replace("</USER_REQUEST>", "");
+
     if text.contains("<local-command-caveat>") {
         return String::new();
     }
-    // Filter out background automated reminders injected by runners/codex/zcode
-    if text.starts_with("The TodoWrite tool hasn't been used recently") {
+
+    // 1. Filter out injected system blocks embedded inside a message
+    // Strip <recommended_plugins>...</recommended_plugins>
+    while let Some(start) = text.find("<recommended_plugins>") {
+        if let Some(end) = text[start..].find("</recommended_plugins>") {
+            text.replace_range(start..start + end + "</recommended_plugins>".len(), "");
+        } else {
+            text.truncate(start);
+            break;
+        }
+    }
+
+    // Strip <environment_context>...</environment_context>
+    while let Some(start) = text.find("<environment_context>") {
+        if let Some(end) = text[start..].find("</environment_context>") {
+            text.replace_range(start..start + end + "</environment_context>".len(), "");
+        } else {
+            text.truncate(start);
+            break;
+        }
+    }
+
+    // Strip <system-reminder>...</system-reminder>
+    while let Some(start) = text.find("<system-reminder>") {
+        if let Some(end) = text[start..].find("</system-reminder>") {
+            text.replace_range(start..start + end + "</system-reminder>".len(), "");
+        } else {
+            text.truncate(start);
+            break;
+        }
+    }
+
+    // Strip <instructions>...</instructions>
+    while let Some(start) = text.find("<INSTRUCTIONS>") {
+        if let Some(end) = text[start..].find("</INSTRUCTIONS>") {
+            text.replace_range(start..start + end + "</INSTRUCTIONS>".len(), "");
+        } else {
+            text.truncate(start);
+            break;
+        }
+    }
+
+    // Strip '# AGENTS.md instructions for ...'
+    if let Some(pos) = text.find("# AGENTS.md instructions for") {
+        let rest = &text[pos..];
+        if let Some(newline_pos) = rest.find("\n\n") {
+            text.replace_range(pos..pos + newline_pos + 2, "");
+        } else {
+            text.truncate(pos);
+        }
+    }
+
+    // 2. Clean up empty lines or residual whitespace, then check if it's pure system prompt
+    let cleaned = text.trim();
+    if is_pure_system_prompt(cleaned) {
         return String::new();
     }
-    text.trim().to_owned()
+
+    cleaned.to_owned()
+}
+
+fn is_pure_system_prompt(text: &str) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+
+    // Automated todo reminders
+    if text.starts_with("The TodoWrite tool hasn't been used recently") {
+        return true;
+    }
+
+    // Codex plugin recommendations block
+    if text.starts_with("<recommended_plugins>")
+        || text.contains("Here is a list of plugins that are available but not installed.")
+    {
+        return true;
+    }
+
+    // Codex AGENTS.md rule injection
+    if text.starts_with("# AGENTS.md instructions for")
+        || (text.starts_with("<INSTRUCTIONS>") && text.ends_with("</INSTRUCTIONS>"))
+    {
+        return true;
+    }
+
+    // Codex / runner environment context block
+    if (text.starts_with("<environment_context>") && text.ends_with("</environment_context>"))
+        || (text.contains("<cwd>") && text.contains("<shell>") && text.contains("<timezone>"))
+    {
+        return true;
+    }
+
+    // ZCode system reminder block
+    if (text.starts_with("<system-reminder>") && text.ends_with("</system-reminder>"))
+        || text.starts_with("The following skills are available for use with the Skill tool:")
+        || (text.contains("<untrusted_objective>")
+            && text.contains("Budget:\n- Time spent pursuing goal"))
+    {
+        return true;
+    }
+
+    // ZCode internal automated tool execution transcript injected into user turn
+    if text.starts_with("Called the Read tool with the following input:")
+        || text.starts_with("Called the Bash tool with the following input:")
+        || text.starts_with("Called the Edit tool with the following input:")
+    {
+        return true;
+    }
+
+    false
 }
 
 fn extract_local_text(value: &Value) -> String {
@@ -906,5 +1012,26 @@ mod tests {
             .sum();
         assert!(messages.len() < 40);
         assert!(approx < 600 * 1024);
+    }
+
+    #[test]
+    fn clean_message_text_filters_codex_and_zcode_system_prompts() {
+        let plugins = "<recommended_plugins>\n- Airtable\n- Granola\n</recommended_plugins>";
+        assert!(clean_message_text(plugins).is_empty());
+
+        let agents_md = "# AGENTS.md instructions for D:\\Claudespace\n\n<INSTRUCTIONS>\n遵循 AGENT.md\n</INSTRUCTIONS>";
+        assert!(clean_message_text(agents_md).is_empty());
+
+        let env_ctx = "<environment_context>\n  <cwd>D:\\Claudespace</cwd>\n  <shell>powershell</shell>\n  <timezone>Asia/Shanghai</timezone>\n</environment_context>";
+        assert!(clean_message_text(env_ctx).is_empty());
+
+        let mixed = format!("{plugins}\n\n{agents_md}\n\n{env_ctx}\n\n真实用户提问：请修复Bug");
+        assert_eq!(clean_message_text(&mixed), "真实用户提问：请修复Bug");
+
+        let zcode_reminder = "<system-reminder>\nContinue working toward the active session goal.\n<untrusted_objective>\n任务\n</untrusted_objective>\nBudget:\n- Time spent pursuing goal: 0 seconds\n</system-reminder>";
+        assert!(clean_message_text(zcode_reminder).is_empty());
+
+        let zcode_tool_inject = "Called the Read tool with the following input: {\"file_path\":\"test.rs\"}\nResult of calling the Read tool:\n1\tfn main() {}";
+        assert!(clean_message_text(zcode_tool_inject).is_empty());
     }
 }
