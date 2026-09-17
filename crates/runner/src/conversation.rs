@@ -127,16 +127,26 @@ fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> 
         return Vec::new();
     };
 
+    // Query the latest messages/parts in windowed subquery, then re-sort ASC for chronological preview
     let sql = r#"
         SELECT
-            json_extract(m.data, '$.role') as role,
-            json_extract(p.data, '$.type') as part_type,
-            p.data
-        FROM message m
-        JOIN part p ON m.id = p.message_id
-        WHERE m.session_id = ?1
-        ORDER BY m.sequence ASC, p.sequence ASC
-        LIMIT 300
+            sub.role,
+            sub.part_type,
+            sub.data
+        FROM (
+            SELECT
+                json_extract(m.data, '$.role') as role,
+                json_extract(p.data, '$.type') as part_type,
+                p.data,
+                m.sequence as m_seq,
+                p.sequence as p_seq
+            FROM message m
+            JOIN part p ON m.id = p.message_id
+            WHERE m.session_id = ?1
+            ORDER BY m.sequence DESC, p.sequence DESC
+            LIMIT 600
+        ) sub
+        ORDER BY sub.m_seq ASC, sub.p_seq ASC
     "#;
 
     let Ok(mut stmt) = connection.prepare(sql) else {

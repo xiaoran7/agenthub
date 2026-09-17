@@ -1808,6 +1808,7 @@ function SessionControlPanel({
   const [agentActivity, setAgentActivity] = useState<string>();
   const [error, setError] = useState<string>();
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [refreshingMessages, setRefreshingMessages] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const insertToken = (token: string) => {
@@ -1901,6 +1902,35 @@ function SessionControlPanel({
     });
   };
 
+  const reloadMessages = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!isManagedProvider(session.agent_type)) return;
+    setRefreshingMessages(true);
+    try {
+      const next = await loadConversation(
+        session.agent_type,
+        session.agent_session_id,
+        true,
+      );
+      setMessages((current) =>
+        current.length > 0 && sameConversation(current, next) ? current : next,
+      );
+      const firstUser = next.find(
+        (message) =>
+          message.role === "user" &&
+          message.kind === undefined &&
+          message.content.trim().length >= 4,
+      );
+      if (firstUser && !session.payload.runtime?.title) {
+        rememberTitleOverride(cacheKey, firstUser.content);
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setRefreshingMessages(false);
+    }
+  }, [cacheKey, session.agent_session_id, session.agent_type, session.payload.runtime?.title]);
+
   useEffect(() => {
     // Demo mode (no Tauri bridge) keeps the seeded sample transcript.
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -1910,37 +1940,19 @@ function SessionControlPanel({
       setMessages((current) => (current.length > 0 ? [] : current));
       return;
     }
-    let disposed = false;
-    loadConversation(session.agent_type, session.agent_session_id)
-      .then((next) => {
-        if (disposed) return;
-        setMessages((current) =>
-          current.length > 0 && sameConversation(current, next)
-            ? current
-            : next,
-        );
-        const firstUser = next.find(
-          (message) =>
-            message.role === "user" &&
-            message.kind === undefined &&
-            message.content.trim().length >= 4,
-        );
-        if (firstUser && !session.payload.runtime?.title) {
-          rememberTitleOverride(cacheKey, firstUser.content);
-        }
-      })
-      .catch((err) => {
-        if (!disposed) setError(errorMessage(err));
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [
-    cacheKey,
-    session.agent_session_id,
-    session.agent_type,
-    session.payload.runtime?.title,
-  ]);
+    void reloadMessages();
+  }, [reloadMessages, session.agent_type]);
+
+  // Active polling: auto-refresh conversation when busy or on last_activity_at change
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!isManagedProvider(session.agent_type)) return;
+    const intervalMs = busy ? 3_000 : 10_000;
+    const timer = window.setInterval(() => {
+      void reloadMessages();
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [busy, reloadMessages, session.agent_type, session.payload.last_activity_at]);
 
   useEffect(() => {
     const pane = paneRef.current;
@@ -2136,6 +2148,15 @@ function SessionControlPanel({
               <i />
               {status.label}
             </span>
+            <button
+              className={`icon-button ${refreshingMessages ? "rotating" : ""}`}
+              aria-label="刷新消息"
+              title="刷新消息流"
+              disabled={refreshingMessages}
+              onClick={() => void reloadMessages()}
+            >
+              <RefreshCw size={14} />
+            </button>
             <button
               className="icon-button"
               aria-label="上一个会话"

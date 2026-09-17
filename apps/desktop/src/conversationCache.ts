@@ -51,10 +51,13 @@ export function subscribeConversation(
 export function loadConversation(
   agentType: string,
   agentSessionId: string,
+  forceRefresh = false,
 ): Promise<ConversationMessage[]> {
   const key = `${agentType}:${agentSessionId}`;
-  const running = inflight.get(key);
-  if (running) return running;
+  if (!forceRefresh) {
+    const running = inflight.get(key);
+    if (running) return running;
+  }
   // Outside Tauri (demo mode) keep whatever was seeded instead of wiping it.
   if (!hasTauri()) return Promise.resolve(cachedConversation(key) ?? []);
   const request = invoke<ConversationMessage[]>("load_session_conversation", {
