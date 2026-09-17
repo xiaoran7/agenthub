@@ -364,10 +364,30 @@ fn deduplicate_consecutive_user_messages(messages: Vec<Value>) -> Vec<Value> {
 }
 
 fn find_provider_transcript(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
+    let mut matches = Vec::new();
+    collect_provider_transcripts(root, session_id, depth, &mut matches);
+    // Sort descending by file modification time so that resumed or continued sessions
+    // (e.g. Codex rollouts across days or continuation fragments) pick the newest file
+    matches.sort_by(|a, b| {
+        let mtime_b = b.metadata().and_then(|m| m.modified()).ok();
+        let mtime_a = a.metadata().and_then(|m| m.modified()).ok();
+        mtime_b.cmp(&mtime_a)
+    });
+    matches.into_iter().next()
+}
+
+fn collect_provider_transcripts(
+    root: &Path,
+    session_id: &str,
+    depth: usize,
+    results: &mut Vec<PathBuf>,
+) {
     if depth > 7 {
-        return None;
+        return;
     }
-    let entries = fs::read_dir(root).ok()?;
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
@@ -379,38 +399,52 @@ fn find_provider_transcript(root: &Path, session_id: &str, depth: usize) -> Opti
                 .ancestors()
                 .any(|part| part.file_name().and_then(|value| value.to_str()) == Some(session_id));
             if name.contains(session_id) || parent_matches {
-                return Some(path);
+                results.push(path);
+                continue;
             }
         }
-        if path.is_dir()
-            && let Some(found) = find_provider_transcript(&path, session_id, depth + 1)
-        {
-            return Some(found);
+        if path.is_dir() {
+            collect_provider_transcripts(&path, session_id, depth + 1, results);
         }
     }
-    None
 }
 
 fn find_transcript_file(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
+    let mut matches = Vec::new();
+    collect_transcript_files(root, session_id, depth, &mut matches);
+    matches.sort_by(|a, b| {
+        let mtime_b = b.metadata().and_then(|m| m.modified()).ok();
+        let mtime_a = a.metadata().and_then(|m| m.modified()).ok();
+        mtime_b.cmp(&mtime_a)
+    });
+    matches.into_iter().next()
+}
+
+fn collect_transcript_files(
+    root: &Path,
+    session_id: &str,
+    depth: usize,
+    results: &mut Vec<PathBuf>,
+) {
     if depth > 3 {
-        return None;
+        return;
     }
-    let entries = fs::read_dir(root).ok()?;
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file()
             && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
             && path.file_stem().and_then(|value| value.to_str()) == Some(session_id)
         {
-            return Some(path);
+            results.push(path);
+            continue;
         }
-        if path.is_dir()
-            && let Some(found) = find_transcript_file(&path, session_id, depth + 1)
-        {
-            return Some(found);
+        if path.is_dir() {
+            collect_transcript_files(&path, session_id, depth + 1, results);
         }
     }
-    None
 }
 
 /// Shared local text decoder (UTF-8/UTF-16 with BOM sniffing). Also used by
@@ -1139,7 +1173,10 @@ mod tests {
 
         let mut lines = Vec::new();
         // Opening prompt
-        lines.push(r#"{"type":"user","message":{"role":"user","content":"请开始重构代码架构"}}"#.to_string());
+        lines.push(
+            r#"{"type":"user","message":{"role":"user","content":"请开始重构代码架构"}}"#
+                .to_string(),
+        );
         // Lots of tool calls and outputs in between
         for i in 0..100 {
             lines.push(format!(
@@ -1184,5 +1221,28 @@ mod tests {
 
         let zcode_tool_inject = "Called the Read tool with the following input: {\"file_path\":\"test.rs\"}\nResult of calling the Read tool:\n1\tfn main() {}";
         assert!(clean_message_text(zcode_tool_inject).is_empty());
+    }
+
+    #[test]
+    fn find_provider_transcript_prefers_latest_modified_continuation_file() {
+        let home = tempfile::tempdir().unwrap();
+        let codex_dir = home.path().join(".codex").join("sessions");
+        let day1 = codex_dir.join("2026").join("09").join("15");
+        let day2 = codex_dir.join("2026").join("09").join("17");
+        fs::create_dir_all(&day1).unwrap();
+        fs::create_dir_all(&day2).unwrap();
+
+        let session_id = "01a0a555-5821-71b2-9ce6-efffaffccf8d";
+        let file1 = day1.join(format!("rollout-2026-09-15T21-50-28-{session_id}.jsonl"));
+        let file2 = day2.join(format!(
+            "rollout-2026-09-17T10-18-25-{session_id}_continuation.jsonl"
+        ));
+
+        fs::write(&file1, "{\"type\":\"first\"}\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::write(&file2, "{\"type\":\"latest\"}\n").unwrap();
+
+        let matched = find_provider_transcript(&home.path().join(".codex"), session_id, 0);
+        assert_eq!(matched, Some(file2));
     }
 }

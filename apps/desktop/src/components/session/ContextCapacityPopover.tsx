@@ -100,7 +100,11 @@ export function useContextMetrics(
       } else {
         const estimatedMsgTokens = Math.round(totalMsgChars / 3.4);
         const estimatedToolTokens = Math.round(
-          (mcpToolCharCount + systemToolCharCount + skillsCharCount + otherCharCount) / 3.4,
+          (mcpToolCharCount +
+            systemToolCharCount +
+            skillsCharCount +
+            otherCharCount) /
+            3.4,
         );
         used = Math.max(0, estimatedMsgTokens + estimatedToolTokens);
       }
@@ -109,7 +113,10 @@ export function useContextMetrics(
     // Dynamic system prompt calculation
     const systemPromptTokens =
       used > 0
-        ? Math.min(Math.round(used * 0.12), Math.max(800, Math.round(used * 0.08)))
+        ? Math.min(
+            Math.round(used * 0.12),
+            Math.max(800, Math.round(used * 0.08)),
+          )
         : 0;
     const dynamicTokensBudget = Math.max(0, used - systemPromptTokens);
 
@@ -120,13 +127,22 @@ export function useContextMetrics(
     let otherTokens = 0;
 
     if (totalRecordedChars > 0 && dynamicTokensBudget > 0) {
-      msgTokens = Math.round(dynamicTokensBudget * (totalMsgChars / totalRecordedChars));
-      mcpTokens = Math.round(dynamicTokensBudget * (mcpToolCharCount / totalRecordedChars));
-      sysToolTokens = Math.round(dynamicTokensBudget * (systemToolCharCount / totalRecordedChars));
-      skillsTokens = Math.round(dynamicTokensBudget * (skillsCharCount / totalRecordedChars));
+      msgTokens = Math.round(
+        dynamicTokensBudget * (totalMsgChars / totalRecordedChars),
+      );
+      mcpTokens = Math.round(
+        dynamicTokensBudget * (mcpToolCharCount / totalRecordedChars),
+      );
+      sysToolTokens = Math.round(
+        dynamicTokensBudget * (systemToolCharCount / totalRecordedChars),
+      );
+      skillsTokens = Math.round(
+        dynamicTokensBudget * (skillsCharCount / totalRecordedChars),
+      );
       otherTokens = Math.max(
         0,
-        dynamicTokensBudget - (msgTokens + mcpTokens + sysToolTokens + skillsTokens),
+        dynamicTokensBudget -
+          (msgTokens + mcpTokens + sysToolTokens + skillsTokens),
       );
     }
 
@@ -138,51 +154,78 @@ export function useContextMetrics(
         id: "messages",
         label: "对话消息",
         color: "#3b82f6", // Blue
-        percentage: used > 0 && msgTokens > 0 ? +((msgTokens / safeDenominator) * 100).toFixed(1) : 0,
+        percentage:
+          used > 0 && msgTokens > 0
+            ? +((msgTokens / safeDenominator) * 100).toFixed(1)
+            : 0,
         tokens: msgTokens,
       },
       {
         id: "system_tools",
         label: "系统工具",
         color: "#38bdf8", // Light Cyan
-        percentage: used > 0 && sysToolTokens > 0 ? +((sysToolTokens / safeDenominator) * 100).toFixed(1) : 0,
+        percentage:
+          used > 0 && sysToolTokens > 0
+            ? +((sysToolTokens / safeDenominator) * 100).toFixed(1)
+            : 0,
         tokens: sysToolTokens,
       },
       {
         id: "mcp_tools",
         label: "MCP 工具",
         color: "#60a5fa", // Sky Blue
-        percentage: used > 0 && mcpTokens > 0 ? +((mcpTokens / safeDenominator) * 100).toFixed(1) : 0,
+        percentage:
+          used > 0 && mcpTokens > 0
+            ? +((mcpTokens / safeDenominator) * 100).toFixed(1)
+            : 0,
         tokens: mcpTokens,
       },
       {
         id: "system_prompt",
         label: "系统提示词",
         color: "#818cf8", // Indigo
-        percentage: used > 0 && systemPromptTokens > 0 ? +((systemPromptTokens / safeDenominator) * 100).toFixed(1) : 0,
+        percentage:
+          used > 0 && systemPromptTokens > 0
+            ? +((systemPromptTokens / safeDenominator) * 100).toFixed(1)
+            : 0,
         tokens: systemPromptTokens,
       },
       {
         id: "skills",
         label: "扩展技能",
         color: "#a78bfa", // Purple
-        percentage: used > 0 && skillsTokens > 0 ? +((skillsTokens / safeDenominator) * 100).toFixed(1) : 0,
+        percentage:
+          used > 0 && skillsTokens > 0
+            ? +((skillsTokens / safeDenominator) * 100).toFixed(1)
+            : 0,
         tokens: skillsTokens,
       },
       {
         id: "other",
         label: "其他元数据",
         color: "#94a3b8", // Slate
-        percentage: used > 0 && otherTokens > 0 ? +((otherTokens / safeDenominator) * 100).toFixed(1) : 0,
+        percentage:
+          used > 0 && otherTokens > 0
+            ? +((otherTokens / safeDenominator) * 100).toFixed(1)
+            : 0,
         tokens: otherTokens,
       },
     ];
 
-    const pct = windowTokens > 0 ? Math.min(100, +((used / windowTokens) * 100).toFixed(1)) : 0;
+    const pct =
+      windowTokens > 0
+        ? Math.min(100, +((used / windowTokens) * 100).toFixed(1))
+        : 0;
     // Cache hit rate: dynamic based on context size and prompt caching ratio
     const hitRate =
       used > 0
-        ? Math.min(98.2, Math.max(68.0, +(72 + Math.min(24, (used / 200_000) * 22)).toFixed(1)))
+        ? Math.min(
+            98.2,
+            Math.max(
+              68.0,
+              +(72 + Math.min(24, (used / 200_000) * 22)).toFixed(1),
+            ),
+          )
         : 0;
 
     return {

@@ -87,7 +87,8 @@ export function SessionEmptyState({
             <div className="feature-content">
               <h3>工作区与会话</h3>
               <p>
-                从左侧边栏选择已有的 {activeProviderLabel} 会话进行交互接管。实时流式观察 Agent
+                从左侧边栏选择已有的 {activeProviderLabel}{" "}
+                会话进行交互接管。实时流式观察 Agent
                 思考、审批高风险工具、或直接发送后续指令。
               </p>
               <div className="feature-metrics">

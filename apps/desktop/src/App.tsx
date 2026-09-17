@@ -939,9 +939,7 @@ function Dashboard({
     return (
       snapshot.devices?.some(
         (d) =>
-          d.online &&
-          !d.revoked &&
-          d.device_id !== snapshot.device.device_id,
+          d.online && !d.revoked && d.device_id !== snapshot.device.device_id,
       ) ?? false
     );
   }, [snapshot.devices, snapshot.device.device_id]);
@@ -1370,9 +1368,7 @@ function Dashboard({
               activeProviderLabel={
                 agentFilter === "all" ? "Agent" : agentLabel(agentFilter)
               }
-              activeProviderType={
-                agentFilter === "all" ? "codex" : agentFilter
-              }
+              activeProviderType={agentFilter === "all" ? "codex" : agentFilter}
             />
           )}
 
@@ -1929,7 +1925,12 @@ function SessionControlPanel({
     } finally {
       setRefreshingMessages(false);
     }
-  }, [cacheKey, session.agent_session_id, session.agent_type, session.payload.runtime?.title]);
+  }, [
+    cacheKey,
+    session.agent_session_id,
+    session.agent_type,
+    session.payload.runtime?.title,
+  ]);
 
   useEffect(() => {
     // Demo mode (no Tauri bridge) keeps the seeded sample transcript.
@@ -1955,7 +1956,12 @@ function SessionControlPanel({
       void reloadMessages();
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [busy, reloadMessages, session.agent_type, session.payload.last_activity_at]);
+  }, [
+    busy,
+    reloadMessages,
+    session.agent_type,
+    session.payload.last_activity_at,
+  ]);
 
   useEffect(() => {
     const pane = paneRef.current;
