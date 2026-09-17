@@ -18,6 +18,7 @@ const MAX_SESSION_ID_CHARS: usize = 160;
 const MAX_CONVERSATION_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_CONVERSATION_LINES: usize = 2_000;
 const MAX_CONVERSATION_MESSAGES: usize = 300;
+const HEAD_CONVERSATION_MESSAGES: usize = 20;
 /// Response budget for one IPC frame (`MAX_DAEMON_FRAME_BYTES` is 1 MiB);
 /// keeps the serialized preview comfortably inside a single frame.
 const MAX_CONVERSATION_RESPONSE_BYTES: usize = 512 * 1024;
@@ -68,48 +69,111 @@ pub fn load_session_conversation(
         return Vec::new();
     }
     let content = decode_local_text(&bytes);
-    let mut approx_bytes = 0usize;
     let all_lines = content.lines().collect::<Vec<_>>();
-    let line_window = if all_lines.len() > MAX_CONVERSATION_LINES {
-        &all_lines[all_lines.len() - MAX_CONVERSATION_LINES..]
+    let line_window: Vec<&str> = if all_lines.len() > MAX_CONVERSATION_LINES {
+        // Retain initial head lines (150) so initial user prompt and task intent are never dropped,
+        // and tail lines (remaining up to MAX_CONVERSATION_LINES) for latest turns.
+        const HEAD_LINES: usize = 150;
+        let tail_count = MAX_CONVERSATION_LINES.saturating_sub(HEAD_LINES);
+        let mut selected = Vec::with_capacity(MAX_CONVERSATION_LINES);
+        selected.extend_from_slice(&all_lines[..HEAD_LINES.min(all_lines.len())]);
+        let tail_start = all_lines.len().saturating_sub(tail_count);
+        if tail_start > HEAD_LINES {
+            selected.extend_from_slice(&all_lines[tail_start..]);
+        }
+        selected
     } else {
-        &all_lines[..]
+        all_lines
     };
 
-    // Iterate backwards from the latest line to earliest to collect the most recent conversation items
-    let mut recent_items = Vec::new();
-    for line in line_window.iter().rev() {
+    // Normalize all lines in chronological order
+    let mut all_items = Vec::new();
+    for line in line_window {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         let items = normalize_local_conversation_items(&value);
-        if items.is_empty() {
-            continue;
-        }
-        for item in items.into_iter().rev() {
-            approx_bytes += item
+        all_items.extend(items);
+    }
+
+    if all_items.is_empty() {
+        return Vec::new();
+    }
+
+    let total_count = all_items.len();
+    let total_bytes: usize = all_items
+        .iter()
+        .map(|item| {
+            item.get("content")
+                .and_then(Value::as_str)
+                .map(str::len)
+                .unwrap_or_default()
+                + 128
+        })
+        .sum();
+
+    let final_items = if total_count <= MAX_CONVERSATION_MESSAGES
+        && total_bytes <= MAX_CONVERSATION_RESPONSE_BYTES
+    {
+        all_items
+    } else {
+        // Budget across Head and Tail to guarantee the opening user prompt is never lost
+        let head_budget_bytes = (MAX_CONVERSATION_RESPONSE_BYTES / 4).min(96 * 1024);
+        let mut head = Vec::new();
+        let mut head_bytes = 0usize;
+        for item in all_items.iter().take(HEAD_CONVERSATION_MESSAGES) {
+            let item_bytes = item
                 .get("content")
                 .and_then(Value::as_str)
                 .map(str::len)
                 .unwrap_or_default()
                 + 128;
-            recent_items.push(item);
-            if recent_items.len() >= MAX_CONVERSATION_MESSAGES
-                || approx_bytes >= MAX_CONVERSATION_RESPONSE_BYTES
+            if head_bytes + item_bytes > head_budget_bytes && !head.is_empty() {
+                break;
+            }
+            head_bytes += item_bytes;
+            head.push(item.clone());
+        }
+
+        let remaining_count = MAX_CONVERSATION_MESSAGES.saturating_sub(head.len() + 1);
+        let remaining_bytes = MAX_CONVERSATION_RESPONSE_BYTES.saturating_sub(head_bytes + 256);
+
+        let tail_candidates = &all_items[head.len()..];
+        let mut tail_rev = Vec::new();
+        let mut tail_bytes = 0usize;
+
+        for item in tail_candidates.iter().rev() {
+            let item_bytes = item
+                .get("content")
+                .and_then(Value::as_str)
+                .map(str::len)
+                .unwrap_or_default()
+                + 128;
+            if tail_rev.len() >= remaining_count
+                || (tail_bytes + item_bytes > remaining_bytes && !tail_rev.is_empty())
             {
                 break;
             }
+            tail_bytes += item_bytes;
+            tail_rev.push(item.clone());
         }
-        if recent_items.len() >= MAX_CONVERSATION_MESSAGES
-            || approx_bytes >= MAX_CONVERSATION_RESPONSE_BYTES
-        {
-            break;
-        }
-    }
+        tail_rev.reverse();
 
-    // Reverse back to chronological order (oldest -> newest) for display
-    recent_items.reverse();
-    deduplicate_consecutive_user_messages(recent_items)
+        let mut merged = head;
+        if merged.len() + tail_rev.len() < all_items.len() {
+            merged.push(conversation_item(
+                "system",
+                "status",
+                "历史记录折叠",
+                "已省略中间过长历史记录，保留会话开头与最新进展",
+                "completed",
+            ));
+        }
+        merged.extend(tail_rev);
+        merged
+    };
+
+    deduplicate_consecutive_user_messages(final_items)
 }
 
 fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -> Option<PathBuf> {
@@ -730,8 +794,21 @@ fn normalized_role(value: &Value) -> Option<&'static str> {
 }
 
 fn conversation_item(role: &str, kind: &str, label: &str, content: &str, status: &str) -> Value {
+    let trimmed = content.trim();
+    let max_len = if matches!(kind, "tool" | "status" | "thinking") {
+        3_500
+    } else {
+        16_000
+    };
+    let final_content = if trimmed.chars().count() > max_len {
+        let mut preview: String = trimmed.chars().take(max_len).collect();
+        preview.push_str("\n\n... [输出内容较长，已为会话预览截断]");
+        preview
+    } else {
+        trimmed.to_owned()
+    };
     json!({ "role": role, "kind": kind, "label": label, "status": status,
-        "content": content.trim().chars().take(16_000).collect::<String>() })
+        "content": final_content })
 }
 
 /// Summarizes a tool call as `Name: key argument` so collapsed rows stay
@@ -1021,8 +1098,8 @@ mod tests {
 
         let messages = load_session_conversation(home.path(), AgentType::Codex, "thread-abc");
         assert_eq!(messages.len(), 300);
-        // Bounded tail window retains the most recent 300 messages (msg-100 to msg-399)
-        assert_eq!(messages[0]["content"], "msg-100");
+        // Head-and-tail budgeting retains the initial head (msg-0) and latest tail (msg-399)
+        assert_eq!(messages[0]["content"], "msg-0");
         assert_eq!(messages[299]["content"], "msg-399");
         assert!(load_session_conversation(home.path(), AgentType::Codex, "missing").is_empty());
         assert!(load_session_conversation(home.path(), AgentType::Codex, "../escape").is_empty());
@@ -1049,6 +1126,43 @@ mod tests {
             .sum();
         assert!(messages.len() < 40);
         assert!(approx < 600 * 1024);
+        // Head item is preserved even when the transcript is huge
+        assert!(!messages.is_empty());
+        assert_eq!(messages[0]["role"], "assistant");
+    }
+
+    #[test]
+    fn load_session_conversation_claude_preserves_opening_prompt() {
+        let home = tempfile::tempdir().unwrap();
+        let claude_dir = home.path().join(".claude").join("projects").join("proj-1");
+        fs::create_dir_all(&claude_dir).unwrap();
+
+        let mut lines = Vec::new();
+        // Opening prompt
+        lines.push(r#"{"type":"user","message":{"role":"user","content":"请开始重构代码架构"}}"#.to_string());
+        // Lots of tool calls and outputs in between
+        for i in 0..100 {
+            lines.push(format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"call_{i}","name":"Read","input":{{"file_path":"src/lib.rs"}}}}]}}}}"#
+            ));
+            lines.push(format!(
+                r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"call_{i}","content":"{}"}}]}}}}"#,
+                "output_data_".repeat(200)
+            ));
+        }
+        // Latest assistant turn
+        lines.push(r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"重构已顺利完成！"}]}}"#.to_string());
+
+        fs::write(claude_dir.join("sess-test.jsonl"), lines.join("\n")).unwrap();
+
+        let messages = load_session_conversation(home.path(), AgentType::ClaudeCode, "sess-test");
+        assert!(!messages.is_empty());
+        // Opening prompt is ALWAYS preserved at the head!
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "请开始重构代码架构");
+        // Latest turn is at the tail
+        assert_eq!(messages.last().unwrap()["role"], "assistant");
+        assert_eq!(messages.last().unwrap()["content"], "重构已顺利完成！");
     }
 
     #[test]
