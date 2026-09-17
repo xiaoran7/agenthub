@@ -256,7 +256,10 @@ export function DesktopSettingsModal({
                           ]}
                           onChange={(val) => {
                             setTheme(val);
-                            document.documentElement.setAttribute("data-theme", val);
+                            document.documentElement.setAttribute(
+                              "data-theme",
+                              val,
+                            );
                           }}
                           size="sm"
                         />

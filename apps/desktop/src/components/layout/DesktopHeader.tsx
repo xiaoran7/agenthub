@@ -4,10 +4,12 @@ import {
   ChevronRight,
   Minus,
   Square,
+  Copy,
   X,
   PanelLeft,
   PanelLeftClose,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface DesktopHeaderProps {
@@ -66,36 +68,50 @@ export function DesktopHeader({
     };
   }, []);
 
-  const handleMinimize = () => {
+  const handleMinimize = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     try {
-      getCurrentWindow().minimize();
+      await invoke("desktop_window_minimize");
     } catch {
-      // ignore
+      try {
+        await getCurrentWindow().minimize();
+      } catch {
+        // ignore outside tauri
+      }
     }
   };
 
-  const handleToggleMaximize = () => {
+  const handleToggleMaximize = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     try {
-      getCurrentWindow().toggleMaximize();
+      await invoke("desktop_window_toggle_maximize");
+      setIsMaximized((prev) => !prev);
     } catch {
-      // ignore
+      try {
+        await getCurrentWindow().toggleMaximize();
+        const next = await getCurrentWindow().isMaximized();
+        setIsMaximized(next);
+      } catch {
+        // ignore outside tauri
+      }
     }
   };
 
-  const handleClose = () => {
+  const handleClose = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     try {
-      getCurrentWindow().close();
+      await invoke("desktop_window_close");
     } catch {
-      // ignore
+      try {
+        await getCurrentWindow().close();
+      } catch {
+        // ignore outside tauri
+      }
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    // Only primary mouse button initiates drag when not clicking on interactive controls
-    if (
-      e.button === 0 &&
-      !(e.target as HTMLElement).closest("button, a, input, select, textarea, [data-no-drag]")
-    ) {
+  const handleStartDrag = (e: React.MouseEvent) => {
+    if (e.button === 0) {
       try {
         getCurrentWindow().startDragging();
       } catch {
@@ -104,37 +120,23 @@ export function DesktopHeader({
     }
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    if (
-      e.button === 0 &&
-      !(e.target as HTMLElement).closest("button, a, input, select, textarea, [data-no-drag]")
-    ) {
-      handleToggleMaximize();
-    }
-  };
-
   return (
-    <header
-      className="desktop-header-zcode"
-      data-tauri-drag-region
-      onMouseDown={handleMouseDown}
-      onDoubleClick={handleDoubleClick}
-    >
-      {/* Left section: Brand logo / mark + Navigation arrows (like [Z] [←] [→]) */}
-      <div className="header-left-zone" data-tauri-drag-region>
-        <div className="header-brand-mark" title="AgentHub" data-no-drag>
+    <header className="desktop-header-zcode">
+      {/* Left section: Brand logo / mark + Navigation arrows */}
+      <div className="header-left-zone">
+        <div className="header-brand-mark" title="AgentHub">
           <span className="brand-letter">A</span>
         </div>
 
-        <div className="header-nav-arrows" data-no-drag>
+        <div className="header-nav-arrows">
           <button
             type="button"
             className="nav-arrow-btn"
             disabled={!canNavigateBack}
             onClick={onNavigateBack}
+            onMouseDown={(e) => e.stopPropagation()}
             title="后退 (Alt+Left)"
             aria-label="后退"
-            data-tauri-drag-region="false"
           >
             <ChevronLeft size={16} />
           </button>
@@ -143,16 +145,21 @@ export function DesktopHeader({
             className="nav-arrow-btn"
             disabled={!canNavigateForward}
             onClick={onNavigateForward}
+            onMouseDown={(e) => e.stopPropagation()}
             title="前进 (Alt+Right)"
             aria-label="前进"
-            data-tauri-drag-region="false"
           >
             <ChevronRight size={16} />
           </button>
         </div>
 
         {(title || subtitle) && (
-          <div className="header-session-title" data-tauri-drag-region>
+          <div
+            className="header-session-title"
+            data-tauri-drag-region
+            onMouseDown={handleStartDrag}
+            onDoubleClick={handleToggleMaximize}
+          >
             {title && <span className="title-text">{title}</span>}
             {subtitle && <span className="subtitle-text">/ {subtitle}</span>}
           </div>
@@ -160,18 +167,23 @@ export function DesktopHeader({
       </div>
 
       {/* Center draggable region */}
-      <div className="header-center-zone" data-tauri-drag-region />
+      <div
+        className="header-center-zone"
+        data-tauri-drag-region
+        onMouseDown={handleStartDrag}
+        onDoubleClick={handleToggleMaximize}
+      />
 
       {/* Right section: Sidebar toggle + Window controls */}
-      <div className="header-right-zone" data-no-drag>
-        <div className="header-layout-controls" data-no-drag>
+      <div className="header-right-zone">
+        <div className="header-layout-controls">
           <button
             type="button"
             className={`layout-action-btn ${sidebarCollapsed ? "active" : ""}`}
             onClick={onToggleSidebar}
+            onMouseDown={(e) => e.stopPropagation()}
             title={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
             aria-label="切换侧边栏"
-            data-tauri-drag-region="false"
           >
             {sidebarCollapsed ? (
               <PanelLeft size={15} />
@@ -182,34 +194,34 @@ export function DesktopHeader({
         </div>
 
         {/* Native window caption controls */}
-        <div className="window-caption-controls" data-no-drag>
+        <div className="window-caption-controls">
           <button
             type="button"
             className="window-control-btn minimize"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={handleMinimize}
             title="最小化"
             aria-label="最小化"
-            data-tauri-drag-region="false"
           >
             <Minus size={13} />
           </button>
           <button
             type="button"
             className="window-control-btn maximize"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={handleToggleMaximize}
-            title={isMaximized ? "还原" : "最大化"}
-            aria-label={isMaximized ? "还原" : "最大化"}
-            data-tauri-drag-region="false"
+            title={isMaximized ? "向下还原" : "最大化"}
+            aria-label={isMaximized ? "向下还原" : "最大化"}
           >
-            <Square size={11} />
+            {isMaximized ? <Copy size={11} /> : <Square size={11} />}
           </button>
           <button
             type="button"
             className="window-control-btn close"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={handleClose}
             title="关闭"
             aria-label="关闭"
-            data-tauri-drag-region="false"
           >
             <X size={14} />
           </button>

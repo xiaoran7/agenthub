@@ -3384,6 +3384,26 @@ pub fn run_daemon_process(data_dir: PathBuf) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn desktop_window_minimize(window: tauri::Window) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn desktop_window_toggle_maximize(window: tauri::Window) -> Result<(), String> {
+    let is_max = window.is_maximized().map_err(|e| e.to_string())?;
+    if is_max {
+        window.unmaximize().map_err(|e| e.to_string())
+    } else {
+        window.maximize().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn desktop_window_close(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -3514,6 +3534,9 @@ pub fn run() {
             list_agent_models,
             pick_folder,
             pick_files,
+            desktop_window_minimize,
+            desktop_window_toggle_maximize,
+            desktop_window_close,
             logout
         ])
         .on_window_event(|window, event| {

@@ -158,7 +158,9 @@ export function App() {
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem("agenthub:extended-preferences");
+      const stored = window.localStorage.getItem(
+        "agenthub:extended-preferences",
+      );
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed?.theme) {
@@ -954,7 +956,9 @@ function Dashboard({
           selectedSession ? sessionDisplayTitle(selectedSession) : undefined
         }
       />
-      <main className="claude-app-shell">
+      <main
+        className={`claude-app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      >
         {/* Left Claude Desktop Sidebar */}
         <aside
           className={`claude-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}
@@ -2175,7 +2179,11 @@ function SessionControlPanel({
                   message={message}
                   index={index}
                   key={
-                    message.role + "-" + (message.kind ?? "message") + "-" + index
+                    message.role +
+                    "-" +
+                    (message.kind ?? "message") +
+                    "-" +
+                    index
                   }
                 />
               );

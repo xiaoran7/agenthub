@@ -106,23 +106,37 @@ export function useContextMetrics(
     );
     const dynamicTokensBudget = Math.max(0, used - systemPromptTokens);
 
-    let rawMsgWeight = totalRecordedChars > 0 ? totalMsgChars / totalRecordedChars : 0.45;
-    let rawMcpWeight = totalRecordedChars > 0 ? mcpToolCharCount / totalRecordedChars : 0.05;
-    let rawSysToolWeight = totalRecordedChars > 0 ? systemToolCharCount / totalRecordedChars : 0.45;
-    let rawSkillsWeight = totalRecordedChars > 0 ? skillsCharCount / totalRecordedChars : 0.02;
-    let rawOtherWeight = totalRecordedChars > 0 ? otherCharCount / totalRecordedChars : 0.03;
+    let rawMsgWeight =
+      totalRecordedChars > 0 ? totalMsgChars / totalRecordedChars : 0.45;
+    let rawMcpWeight =
+      totalRecordedChars > 0 ? mcpToolCharCount / totalRecordedChars : 0.05;
+    let rawSysToolWeight =
+      totalRecordedChars > 0 ? systemToolCharCount / totalRecordedChars : 0.45;
+    let rawSkillsWeight =
+      totalRecordedChars > 0 ? skillsCharCount / totalRecordedChars : 0.02;
+    let rawOtherWeight =
+      totalRecordedChars > 0 ? otherCharCount / totalRecordedChars : 0.03;
 
     const dynamicWeightSum =
-      rawMsgWeight + rawMcpWeight + rawSysToolWeight + rawSkillsWeight + rawOtherWeight;
+      rawMsgWeight +
+      rawMcpWeight +
+      rawSysToolWeight +
+      rawSkillsWeight +
+      rawOtherWeight;
     const norm = dynamicWeightSum > 0 ? dynamicWeightSum : 1;
 
     const msgTokens = Math.round(dynamicTokensBudget * (rawMsgWeight / norm));
     const mcpTokens = Math.round(dynamicTokensBudget * (rawMcpWeight / norm));
-    const sysToolTokens = Math.round(dynamicTokensBudget * (rawSysToolWeight / norm));
-    const skillsTokens = Math.round(dynamicTokensBudget * (rawSkillsWeight / norm));
+    const sysToolTokens = Math.round(
+      dynamicTokensBudget * (rawSysToolWeight / norm),
+    );
+    const skillsTokens = Math.round(
+      dynamicTokensBudget * (rawSkillsWeight / norm),
+    );
     const otherTokens = Math.max(
       0,
-      dynamicTokensBudget - (msgTokens + mcpTokens + sysToolTokens + skillsTokens),
+      dynamicTokensBudget -
+        (msgTokens + mcpTokens + sysToolTokens + skillsTokens),
     );
 
     // Only include categories that actually exist or have non-zero percentage
@@ -175,10 +189,7 @@ export function useContextMetrics(
     // Cache hit rate: dynamic based on context size and prompt caching ratio
     const hitRate = Math.min(
       98.2,
-      Math.max(
-        68.0,
-        +(72 + Math.min(24, (used / 200_000) * 22)).toFixed(1),
-      ),
+      Math.max(68.0, +(72 + Math.min(24, (used / 200_000) * 22)).toFixed(1)),
     );
 
     return {
