@@ -1,3 +1,0 @@
-5adab4ee03a1af31f41b910f9354805dad64869f3a5b4507a2fabc276aeb330b *AgentHub-v2.4.5-android-debug.apk
-d0f073b9e7a724ef64903c03b42d42d0e7d29aa6ba14b5341a5c76e1c4a078a6 *AgentHub-v2.4.5-windows-x64-setup.exe
-bec6a3acabce927a14d294792bdee561f82a0d84b3239f4483df7ce761520256 *AgentHub-v2.4.5-x64.msi

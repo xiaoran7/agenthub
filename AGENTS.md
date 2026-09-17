@@ -28,4 +28,4 @@ AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**�
 - Rust 变更运行 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`；TS 变更运行 `npm.cmd test`、`npm.cmd run typecheck`、`npm.cmd run format:check`。
 - 真实 CLI、桌面安装、Android 模拟器/真机、Gateway 重启和生产部署分别记录证据，不能互相替代。
 - 行为、接口与架构决策写入 `docs/CHANGELOG.md`。文档批次可独立提交，不要求运行无关构建。
-- 打包时同步 Android、Node/Tauri、Cargo 与 UI 版本。
+- **强制版本递增铁律**：凡进行代码修复并触发打包或生产部署，必须递增版本号（Patch/Minor）。打包时严格同步全平台：Android（自增 `versionCode` 与 `versionName`）、Node/Tauri、Cargo 与 UI 契约版本，绝对禁止使用相同版本号二次打包。
