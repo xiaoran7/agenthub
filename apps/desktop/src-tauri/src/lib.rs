@@ -13,6 +13,7 @@ use std::{
 };
 
 mod daemon_client;
+pub use daemon_client::safe_daemon_code;
 use daemon_client::{DaemonClient, remote_host_status, start_remote_host, stop_remote_host};
 
 use agent_pulse_runner::{
@@ -67,6 +68,14 @@ enum DesktopError {
     Unreachable,
     #[error("服务器返回了无效响应")]
     InvalidResponse,
+    #[error("本机服务通信失败，请重试（{0}）")]
+    LocalIpc(&'static str),
+    #[error("本机服务启动失败，请检查本机连接设置（{0}）")]
+    LocalStartup(&'static str),
+    #[error("本机服务协议不兼容或响应无效，请更新后重试（{0}）")]
+    LocalProtocol(&'static str),
+    #[error("本机会话读取失败，请重试（{0}）")]
+    LocalConversation(&'static str),
     #[error("登录信息不正确")]
     InvalidCredentials,
     #[error("登录尝试过多，请稍后重试")]
@@ -423,14 +432,16 @@ async fn load_session_conversation(
     input: SessionConversationInput,
     state: State<'_, DesktopState>,
 ) -> Result<Vec<Value>, String> {
-    // The daemon is the single transcript reader: Desktop never parses
-    // provider files itself. Without agenthubd there is no conversation view.
-    let client =
-        daemon_client::get_daemon_client(&state).ok_or(DesktopError::Unreachable.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || load_session_conversation_inner(input, client))
-        .await
-        .map_err(|_| DesktopError::Unreachable.to_string())?
-        .map_err(|error| error.to_string())
+    let data_dir = state.data_dir.clone();
+    // Lock acquisition, startup waits and IPC all run off the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_session_id(&input.agent_session_id)?;
+        let client = daemon_client::ensure_readonly_daemon_client(&data_dir)?;
+        load_session_conversation_inner(input, client)
+    })
+    .await
+    .map_err(|_| DesktopError::LocalIpc("local_worker_failed").to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2197,7 +2208,7 @@ fn load_session_conversation_inner(
     validate_session_id(&input.agent_session_id)?;
     client
         .session_conversation(input.agent_type, &input.agent_session_id)
-        .map_err(|_| DesktopError::Unreachable)
+        .map_err(daemon_client::classify_daemon_error)
 }
 
 fn sanitize_timeline_event(event: &Value) -> Value {
@@ -3352,10 +3363,11 @@ pub fn run_daemon_process(data_dir: PathBuf) -> Result<(), String> {
     let (database, profile_path) =
         daemon_client::host_database_path(&data_dir, identity.device_id());
     let config = read_config(&data_dir).ok();
-    let profile = fs::read(profile_path)
+    let mut profile = fs::read(profile_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<daemon_client::DaemonProfile>(&bytes).ok())
         .ok_or_else(|| "daemon_profile_unavailable".to_owned())?;
+    profile.workspace_paths = daemon_client::normalize_workspaces(profile.workspace_paths);
     if profile.workspace_paths.is_empty()
         || profile.workspace_paths.len() > 32
         || !valid_binary(&profile.codex_binary)
@@ -3488,11 +3500,7 @@ pub fn run() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "quit" => {
-                            if let Some(state) = app.try_state::<DesktopState>()
-                                && let Some(client) = daemon_client::get_daemon_client(&state)
-                            {
-                                client.shutdown_daemon();
-                            }
+                            // The shared daemon outlives this Desktop client.
                             app.exit(0);
                         }
                         "show" => {

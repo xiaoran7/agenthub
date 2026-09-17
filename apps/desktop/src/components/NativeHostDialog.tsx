@@ -21,6 +21,38 @@ interface HostPollState {
   error: string;
 }
 
+// Windows paths compare case-insensitively; Unix paths retain case and backslashes.
+export function normalizeWorkspacePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  return paths.flatMap((path) => {
+    const windows =
+      /^[a-z]:[\\/]/iu.test(path) ||
+      path.startsWith("\\\\") ||
+      path.startsWith("//");
+    let display = path;
+    if (windows) {
+      display = path
+        .replaceAll("\\", "/")
+        .replace(/^\/\/\?\/UNC\//iu, "//")
+        .replace(/^\/\/\?\//u, "");
+      const prefix = display.startsWith("//") ? "//" : "";
+      display =
+        prefix +
+        display
+          .split("/")
+          .filter((part) => part && part !== ".")
+          .join("/");
+      if (/^[a-z]:$/iu.test(display)) display += "/";
+    } else if (display !== "/") {
+      display = display.replace(/\/+$/u, "");
+    }
+    const key = windows ? display.toLowerCase() : display;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [display];
+  });
+}
+
 export function applyHostStatus(
   current: HostPollState,
   status: Status,
@@ -32,8 +64,8 @@ export function applyHostStatus(
     phase: status.phase,
     profile: {
       ...profileToUse,
-      workspace_paths: (profileToUse.workspace_paths ?? []).map((p) =>
-        p.replace(/^\\\\\?\\/u, ""),
+      workspace_paths: normalizeWorkspacePaths(
+        profileToUse.workspace_paths ?? [],
       ),
     },
     initialized: true,
@@ -54,9 +86,9 @@ const initialPollState: HostPollState = {
 
 const statusCopy: Record<Status["phase"], string> = {
   loading: "正在读取本机状态",
-  starting: "agenthubd 正在启动 Codex Runtime",
-  stopped: "agenthubd 将在首次启动 Codex 会话时自动运行",
-  local: "本地会话可用，Remote 当前关闭",
+  starting: "本机连接服务正在启动",
+  stopped: "本机连接服务未运行",
+  local: "本机连接服务正在运行，Remote 当前关闭",
   connecting: "Remote 已开启，正在连接 Gateway",
   connected: "Remote 已连接，其他设备可继续当前会话",
 };
@@ -106,14 +138,14 @@ export function NativeHostDialog({ onClose }: { onClose: () => void }) {
         startDir: profile.workspace_paths.at(-1) ?? null,
       });
       if (path) {
-        const cleanPath = path.replace(/^\\\\\?\\/u, "");
         setPollState((current) => ({
           ...current,
           profile: {
             ...current.profile,
-            workspace_paths: [
-              ...new Set([...current.profile.workspace_paths, cleanPath]),
-            ],
+            workspace_paths: normalizeWorkspacePaths([
+              ...current.profile.workspace_paths,
+              path,
+            ]),
           },
         }));
       }
@@ -183,14 +215,10 @@ export function NativeHostDialog({ onClose }: { onClose: () => void }) {
           />
         </label>
 
-        <label>
-          ZCode 官方服务
-          <input
-            value="ZCode App Server (已就绪)"
-            disabled
-            title="ZCode 驱动由 AgentHub 自动识别并原生接管"
-          />
-        </label>
+        <p>
+          这里只控制本机 Remote 连接；各 Agent
+          的登录与会话能力以实际检测结果为准。
+        </p>
 
         <div className="remote-workspace-heading">
           <span>允许 Remote 使用的工作目录</span>

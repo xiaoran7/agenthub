@@ -33,6 +33,41 @@ fn profile_path(data_dir: &std::path::Path, device_id: &str) -> PathBuf {
 }
 
 #[test]
+fn hidden_daemon_failure_emits_only_safe_code_in_isolated_data_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let identity = DeviceIdentity::generate();
+    identity
+        .save_new(dir.path().join("device-identity.json"))
+        .unwrap();
+    fs::write(
+        profile_path(dir.path(), identity.device_id()),
+        serde_json::to_vec(&serde_json::json!({
+            "workspace_paths": [dir.path()],
+            "codex_binary": dir.path().join("SECRET-nonexistent-provider.exe"),
+            "remote_enabled": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_agent-pulse-desktop"))
+        .arg("--agenthubd")
+        .arg(dir.path())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("CODEX_HOME", dir.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        diagnostic,
+        serde_json::json!({"code": "native_host_start_failed"})
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("SECRET"));
+}
+
+#[test]
 #[ignore = "requires AGENTHUB_TEST_CODEX_BINARY pointing to a working native Codex"]
 fn hidden_agenthubd_mode_starts_the_process_external_host() {
     let codex_binary = PathBuf::from(
@@ -62,9 +97,14 @@ fn hidden_agenthubd_mode_starts_the_process_external_host() {
         Command::new(env!("CARGO_BIN_EXE_agent-pulse-desktop"))
             .arg("--agenthubd")
             .arg(dir.path())
+            .env("HOME", dir.path())
+            .env("USERPROFILE", dir.path())
+            .env("CODEX_HOME", dir.path())
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("CODEX_API_KEY")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null())
             .spawn()
             .unwrap(),
     );
@@ -96,7 +136,7 @@ fn hidden_agenthubd_mode_starts_the_process_external_host() {
         );
         thread::sleep(Duration::from_millis(100));
     };
-    assert_eq!(status, vec![workspace.canonicalize().unwrap()]);
+    assert_eq!(status, vec![dunce::canonicalize(&workspace).unwrap()]);
 
     child.0.kill().unwrap();
     child.0.wait().unwrap();

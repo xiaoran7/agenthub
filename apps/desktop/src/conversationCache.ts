@@ -51,13 +51,13 @@ export function subscribeConversation(
 export function loadConversation(
   agentType: string,
   agentSessionId: string,
-  forceRefresh = false,
+  _forceRefresh = false,
 ): Promise<ConversationMessage[]> {
   const key = `${agentType}:${agentSessionId}`;
-  if (!forceRefresh) {
-    const running = inflight.get(key);
-    if (running) return running;
-  }
+  // Manual refresh and polling share the same in-flight read; older responses
+  // must never overwrite a newer transcript in the cache.
+  const running = inflight.get(key);
+  if (running) return running;
   // Outside Tauri (demo mode) keep whatever was seeded instead of wiping it.
   if (!hasTauri()) return Promise.resolve(cachedConversation(key) ?? []);
   const request = invoke<ConversationMessage[]>("load_session_conversation", {

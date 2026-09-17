@@ -1,13 +1,4 @@
-import {
-  FolderCheck,
-  Radio,
-  Plus,
-  Terminal,
-  ShieldCheck,
-  Cpu,
-  Layers,
-  ArrowRight,
-} from "lucide-react";
+import { FolderCheck, Radio, Plus } from "lucide-react";
 
 interface SessionEmptyStateProps {
   onNewSession: () => void;
@@ -21,17 +12,14 @@ interface SessionEmptyStateProps {
   activeProviderType?: string;
 }
 
-const phaseLabels: Record<
-  string,
-  { label: string; tone: "green" | "yellow" | "gray" | "blue" }
-> = {
-  loading: { label: "检测中…", tone: "yellow" },
-  starting: { label: "Runtime 启动中", tone: "yellow" },
-  stopped: { label: "Daemon 待命", tone: "gray" },
-  local: { label: "本机就绪 (Remote 未开)", tone: "blue" },
-  connecting: { label: "正在连接 Gateway", tone: "yellow" },
-  connected: { label: "Remote 已连接", tone: "green" },
-};
+const phaseLabels = {
+  loading: { label: "正在检查连接…", tone: "yellow" },
+  starting: { label: "正在启动本机服务…", tone: "yellow" },
+  stopped: { label: "本机服务未启动", tone: "gray" },
+  local: { label: "本机会话 · 远程连接未开启", tone: "blue" },
+  connecting: { label: "正在连接远程服务…", tone: "yellow" },
+  connected: { label: "远程已连接", tone: "green" },
+} as const;
 
 export function SessionEmptyState({
   onNewSession,
@@ -39,115 +27,53 @@ export function SessionEmptyState({
   hostPhase = "local",
   workspaceCount = 0,
   sessionCount = 0,
-  displayName = "Developer",
   activeProviderLabel = "OpenAI Codex",
-  activeProviderType = "codex",
 }: SessionEmptyStateProps) {
-  const currentPhase = phaseLabels[hostPhase] ?? {
-    label: hostPhase,
-    tone: "gray",
-  };
-
-  const cliCommand =
-    activeProviderType === "claude_code"
-      ? "claude"
-      : activeProviderType === "zcode"
-        ? "zcode"
-        : activeProviderType === "antigravity"
-          ? "antigravity"
-          : activeProviderType === "grok_build"
-            ? "grok"
-            : "codex";
+  const currentPhase = phaseLabels[hostPhase];
 
   return (
     <div className="session-empty-container">
-      <div className="session-empty-card">
+      <div className="session-empty-content">
         <header className="empty-header">
-          <div className="empty-badge">
+          <div className="empty-badge" role="status">
             <Radio
               size={12}
               className={`pulse-dot tone-${currentPhase.tone}`}
             />
-            <span>{activeProviderLabel} Remote Hub</span>
+            <span>{currentPhase.label}</span>
           </div>
-          <h1>官方 Agent 远程继续与控制</h1>
+          <h1>换个设备，继续会话</h1>
           <p className="empty-subtitle">
-            AgentHub 是官方 Agent
-            的远程接续舱与守护中心。关闭此窗口后，会话仍将在后台由{" "}
-            <code>agenthubd</code> 稳定守护。
+            在这台电脑上新建或恢复会话，开启远程连接后，即可从网页或手机继续。
           </p>
         </header>
-
-        <div className="empty-grid">
-          {/* Card 1: 会话接管 */}
-          <section className="empty-feature-card">
-            <div className="feature-icon-wrapper">
-              <Layers size={20} />
-            </div>
-            <div className="feature-content">
-              <h3>工作区与会话</h3>
-              <p>
-                从左侧边栏选择已有的 {activeProviderLabel}{" "}
-                会话进行交互接管。实时流式观察 Agent
-                思考、审批高风险工具、或直接发送后续指令。
-              </p>
-              <div className="feature-metrics">
-                <span>
-                  当前管理 <strong>{sessionCount}</strong> 个本机会话
-                </span>
-              </div>
-              <button
-                type="button"
-                className="empty-cta-btn primary"
-                onClick={onNewSession}
-              >
-                <Plus size={15} />
-                <span>新建 {activeProviderLabel} 会话</span>
-              </button>
-            </div>
-          </section>
-
-          {/* Card 2: 宿主与暴露 */}
-          <section className="empty-feature-card">
-            <div className="feature-icon-wrapper">
-              <Cpu size={20} />
-            </div>
-            <div className="feature-content">
-              <h3>本机守护与 Remote</h3>
-              <p>
-                控制当前电脑的 Gateway
-                出站连接开关，管理工作区目录白名单。开启后可在网页端与移动端漫游续聊。
-              </p>
-              <div className="feature-metrics">
-                <span className={`status-pill tone-${currentPhase.tone}`}>
-                  {currentPhase.label}
-                </span>
-                <span>
-                  已授权 <strong>{workspaceCount}</strong> 个工作目录
-                </span>
-              </div>
-              <button
-                type="button"
-                className="empty-cta-btn secondary"
-                onClick={onOpenHostControl}
-              >
-                <FolderCheck size={15} />
-                <span>管理工作区与 Remote</span>
-              </button>
-            </div>
-          </section>
+        <div className="empty-actions">
+          <button
+            type="button"
+            className="empty-cta-btn primary"
+            onClick={onNewSession}
+          >
+            <Plus size={15} />
+            <span>新建 {activeProviderLabel} 会话</span>
+          </button>
+          <button
+            type="button"
+            className="empty-cta-btn secondary"
+            onClick={onOpenHostControl}
+          >
+            <FolderCheck size={15} />
+            <span>管理工作目录与远程连接</span>
+          </button>
         </div>
-
-        <footer className="empty-footer-tip">
-          <div className="tip-badge">
-            <Terminal size={13} />
-            <span>无缝接管</span>
-          </div>
-          <p>
-            在已授权的任意项目目录下运行官方 <code>{cliCommand}</code>
-            ，会话将自动同步到此列表，随时接续。
-          </p>
-        </footer>
+        <p className="empty-session-note">
+          {sessionCount > 0
+            ? `左侧有 ${sessionCount} 个会话可供选择；恢复成功后才能继续发送消息。`
+            : "还没有会话，从新建会话开始。"}
+        </p>
+        <p className="empty-footer-tip">
+          已授权 {workspaceCount}{" "}
+          个工作目录。远程使用期间，请保持这台电脑开机并联网。
+        </p>
       </div>
     </div>
   );

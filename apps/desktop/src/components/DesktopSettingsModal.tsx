@@ -1,4 +1,10 @@
-import React, { useState, type FormEvent } from "react";
+import React, { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  applyAppearance,
+  readAppearance,
+  saveAppearance,
+  type Appearance,
+} from "../appearance";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Settings,
@@ -64,13 +70,24 @@ export function DesktopSettingsModal({
   const [grokBinary, setGrokBinary] = useState(
     preferences.grok_binary || "grok",
   );
-  const [defaultCwd, setDefaultCwd] = useState(
-    preferences.default_cwd || "d:/ClaudeSpace",
+  const [appearance] = useState(() => readAppearance(preferences));
+  const savedAppearance = useRef(appearance);
+  const [defaultCwd, setDefaultCwd] = useState(appearance.default_cwd);
+  const [appLanguage, setAppLanguage] = useState<Appearance["app_language"]>(
+    appearance.app_language,
   );
-  const [appLanguage, setAppLanguage] = useState(
-    preferences.app_language || "auto",
+  const [theme, setTheme] = useState<Appearance["theme"]>(appearance.theme);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
   );
-  const [theme, setTheme] = useState(preferences.theme || "dark");
+
+  useEffect(
+    () => () => {
+      applyAppearance(savedAppearance.current);
+      clearTimeout(saveTimer.current);
+    },
+    [],
+  );
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -98,13 +115,18 @@ export function DesktopSettingsModal({
         app_language: appLanguage,
         theme,
       };
-      window.localStorage.setItem(
-        "agenthub:extended-preferences",
-        JSON.stringify(fullPreferences),
-      );
+      const nextAppearance = {
+        theme,
+        app_language: appLanguage,
+        default_cwd: defaultCwd,
+      };
+      saveAppearance(nextAppearance);
+      savedAppearance.current = nextAppearance;
+      applyAppearance(nextAppearance);
       onSaved(fullPreferences);
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2000);
+      clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => setSaveSuccess(false), 2000);
     } catch (nextError) {
       setError(
         typeof nextError === "string" ? nextError : "保存设置失败，请检查参数",

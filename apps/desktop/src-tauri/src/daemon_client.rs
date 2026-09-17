@@ -19,7 +19,133 @@ use std::{
 const DAEMON_EVENT_HEALTH_WINDOW: Duration = Duration::from_secs(35);
 const DAEMON_EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Clone, Deserialize, Serialize)]
+// Only fixed codes leave the process boundary; never retain stderr, paths or credentials.
+pub fn safe_daemon_code(error: &str) -> &'static str {
+    match error {
+        "invalid_daemon_data_dir" => "invalid_daemon_data_dir",
+        "daemon_data_dir_unavailable" => "daemon_data_dir_unavailable",
+        "daemon_profile_unavailable" => "daemon_profile_unavailable",
+        "daemon_profile_invalid" => "daemon_profile_invalid",
+        "daemon_spawn_failed" => "daemon_spawn_failed",
+        "native_host_start_failed" => "native_host_start_failed",
+        "daemon_start_exited" => "daemon_start_exited",
+        "daemon_start_timeout" => "daemon_start_timeout",
+        "daemon_start_ready" => "daemon_start_ready",
+        "daemon_start_failed" => "daemon_start_failed",
+        "daemon_protocol_mismatch" => "daemon_protocol_mismatch",
+        "daemon_invalid_response" => "daemon_invalid_response",
+        "ipc_invalid_json" | "ipc_frame_too_large" => "daemon_invalid_response",
+        "ipc_connect_failed" => "ipc_connect_failed",
+        "ipc_response_timeout" => "ipc_response_timeout",
+        "ipc_response_missing" => "ipc_response_missing",
+        "ipc_read_failed" => "ipc_read_failed",
+        "ipc_write_failed" => "ipc_write_failed",
+        "ipc_truncated_frame" => "ipc_truncated_frame",
+        "ipc_start_timeout" => "ipc_start_timeout",
+        "ipc_thread_start_failed" => "ipc_thread_start_failed",
+        _ => "local_service_failed",
+    }
+}
+
+pub(crate) fn classify_daemon_error(error: String) -> DesktopError {
+    let code = safe_daemon_code(&error);
+    match code {
+        "daemon_protocol_mismatch" | "daemon_invalid_response" => DesktopError::LocalProtocol(code),
+        code if code.starts_with("daemon_")
+            || code == "ipc_start_timeout"
+            || code == "ipc_thread_start_failed"
+            || code == "invalid_daemon_data_dir" =>
+        {
+            DesktopError::LocalStartup(code)
+        }
+        code if code.starts_with("ipc_") => DesktopError::LocalIpc(code),
+        _ => DesktopError::LocalConversation(code),
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct StartupDiagnostic {
+    code: &'static str,
+    observed_at: String,
+}
+static STARTUP_DIAGNOSTICS: Mutex<std::collections::VecDeque<StartupDiagnostic>> =
+    Mutex::new(std::collections::VecDeque::new());
+static STARTING_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
+
+fn record_startup(code: &str) {
+    if let Ok(mut diagnostics) = STARTUP_DIAGNOSTICS.lock() {
+        if diagnostics.len() == 16 {
+            diagnostics.pop_front();
+        }
+        diagnostics.push_back(StartupDiagnostic {
+            code: safe_daemon_code(code),
+            observed_at: chrono::Utc::now().to_rfc3339(),
+        });
+    }
+}
+
+fn drain_startup_diagnostics(mut reader: impl std::io::Read) {
+    let mut buffer = [0u8; 1024];
+    let mut line = Vec::new();
+    let mut oversized = false;
+    while let Ok(count) = reader.read(&mut buffer) {
+        if count == 0 {
+            break;
+        }
+        for byte in &buffer[..count] {
+            if *byte == b'\n' {
+                if let Ok(value) = serde_json::from_slice::<Value>(&line)
+                    && let Some(code) = value.get("code").and_then(Value::as_str)
+                {
+                    let safe = safe_daemon_code(code);
+                    if safe != "local_service_failed" {
+                        record_startup(safe);
+                    }
+                }
+                line.clear();
+                oversized = false;
+            } else if line.len() < 1024 && !oversized {
+                line.push(*byte);
+            } else {
+                line.clear();
+                oversized = true;
+            }
+        }
+    }
+}
+
+fn child_startup_probe(probe: DaemonProbe) -> DaemonProbe {
+    let Ok(mut slot) = STARTING_CHILD.lock() else {
+        return DaemonProbe::Failed("daemon_start_failed".into());
+    };
+    child_startup_probe_with(probe, &mut slot)
+}
+
+fn child_startup_probe_with(
+    probe: DaemonProbe,
+    slot: &mut Option<std::process::Child>,
+) -> DaemonProbe {
+    if matches!(probe, DaemonProbe::Ready(_)) {
+        // Dropping Child does not terminate the independent daemon.
+        slot.take();
+        return probe;
+    }
+    if let Some(child) = slot.as_mut() {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                slot.take();
+                record_startup("daemon_start_exited");
+                return DaemonProbe::Failed("daemon_start_exited".into());
+            }
+            Ok(None) if matches!(probe, DaemonProbe::Absent) => return DaemonProbe::Starting,
+            Err(_) => return DaemonProbe::Failed("daemon_start_failed".into()),
+            _ => {}
+        }
+    }
+    probe
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct DaemonProfile {
     pub workspace_paths: Vec<PathBuf>,
     pub codex_binary: String,
@@ -151,18 +277,6 @@ impl DaemonClient {
             DaemonResponse::SessionConversation(messages) => Ok(messages),
             _ => Err("daemon_invalid_response".into()),
         }
-    }
-
-    pub(crate) fn shutdown_daemon(&self) {
-        // Tell the daemon IPC loop to exit cleanly if running.
-        let _ = daemon_ipc::request(
-            &self.endpoint,
-            &DaemonRequestEnvelope {
-                protocol_version: DAEMON_PROTOCOL_VERSION,
-                request_id: "desktop-shutdown".into(),
-                request: DaemonRequest::GetSnapshot,
-            },
-        );
     }
 
     pub(crate) fn authorize_workspace(&self, workspace: PathBuf) -> Result<PathBuf, String> {
@@ -502,41 +616,77 @@ fn ensure_daemon_ready<F>(client: &DaemonClient, launch: F) -> Result<DaemonStat
 where
     F: FnMut() -> Result<(), String>,
 {
-    ensure_daemon_ready_with(
-        || probe_daemon(client),
+    let result = ensure_daemon_ready_with(
+        || child_startup_probe(probe_daemon(client)),
         launch,
         Instant::now() + Duration::from_secs(30),
-    )
+    );
+    record_startup(
+        result
+            .as_ref()
+            .err()
+            .map(String::as_str)
+            .unwrap_or("daemon_start_ready"),
+    );
+    result
 }
 
 pub(crate) fn ensure_daemon_started(data_dir: PathBuf) {
     thread::spawn(move || {
-        let Ok(identity) = load_or_create_identity(&data_dir) else {
-            return;
-        };
-        let (_, profile_path) = host_database_path(&data_dir, identity.device_id());
-        let valid_profile = fs::read(profile_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<DaemonProfile>(&bytes).ok())
-            .is_some_and(|profile| {
-                !profile.workspace_paths.is_empty()
-                    && profile.workspace_paths.len() <= 32
-                    && valid_binary(&profile.codex_binary)
-                    && profile.workspace_paths.iter().all(|path| path.is_dir())
-            });
-        if !valid_profile {
-            return;
+        if let Err(error) = ensure_readonly_daemon_client(&data_dir) {
+            let code = match error {
+                DesktopError::LocalStartup(code)
+                | DesktopError::LocalIpc(code)
+                | DesktopError::LocalProtocol(code)
+                | DesktopError::LocalConversation(code) => code,
+                _ => "daemon_start_failed",
+            };
+            record_startup(code);
         }
-        let client = DaemonClient {
-            endpoint: daemon_ipc::default_endpoint(identity.device_id()),
-        };
-        let Ok(_launch_guard) = LAUNCH_LOCK.lock() else {
-            return;
-        };
-        let _ = ensure_daemon_ready(&client, || {
-            start_daemon_for_data(&data_dir, None).map_err(|error| error.to_string())
-        });
     });
+}
+
+pub(crate) fn ensure_readonly_daemon_client(data_dir: &Path) -> Result<DaemonClient, DesktopError> {
+    ensure_readonly_daemon_with(data_dir, spawn_daemon)
+}
+
+fn ensure_readonly_daemon_with(
+    data_dir: &Path,
+    mut launch: impl FnMut(&Path) -> Result<(), String>,
+) -> Result<DaemonClient, DesktopError> {
+    let _guard = LAUNCH_LOCK
+        .lock()
+        .map_err(|_| DesktopError::LocalStartup("daemon_start_failed"))?;
+    let identity = load_or_create_identity(data_dir)?;
+    let client = DaemonClient {
+        endpoint: daemon_ipc::default_endpoint(identity.device_id()),
+    };
+    ensure_daemon_ready(&client, || {
+        // Unlike write operations, read recovery must not invent or persist authorization.
+        let (_, profile_path) = host_database_path(data_dir, identity.device_id());
+        read_recovery_profile(&profile_path)?;
+        launch(data_dir)
+    })
+    .map_err(classify_daemon_error)?;
+    Ok(client)
+}
+
+fn read_recovery_profile(path: &Path) -> Result<DaemonProfile, String> {
+    let bytes = fs::read(path).map_err(|_| "daemon_profile_unavailable".to_owned())?;
+    let mut profile: DaemonProfile =
+        serde_json::from_slice(&bytes).map_err(|_| "daemon_profile_invalid".to_owned())?;
+    profile.workspace_paths = normalize_workspaces(profile.workspace_paths);
+    if profile.workspace_paths.is_empty()
+        || profile.workspace_paths.len() > 32
+        || !valid_binary(&profile.codex_binary)
+        || profile
+            .workspace_paths
+            .iter()
+            .any(|p| !p.is_absolute() || !p.is_dir())
+    {
+        return Err("daemon_profile_invalid".into());
+    }
+    Ok(profile)
 }
 
 pub(crate) fn get_daemon_client(state: &DesktopState) -> Option<DaemonClient> {
@@ -598,7 +748,10 @@ fn start_daemon_for_data(
     if let Some(workspace) = required_workspace
         && let Ok(canonical) = dunce::canonicalize(workspace)
         && canonical.is_dir()
-        && !profile.workspace_paths.contains(&canonical)
+        && !profile
+            .workspace_paths
+            .iter()
+            .any(|path| same_workspace(path, &canonical))
     {
         profile.workspace_paths.push(canonical);
     }
@@ -609,6 +762,7 @@ fn start_daemon_for_data(
     {
         profile.workspace_paths.push(cwd);
     }
+    profile.workspace_paths = normalize_workspaces(profile.workspace_paths);
     if profile.workspace_paths.len() > 32 || !valid_binary(&profile.codex_binary) {
         return Err(DesktopError::InvalidAction);
     }
@@ -618,48 +772,83 @@ fn start_daemon_for_data(
     )
     .map_err(|_| DesktopError::Identity)?;
 
-    let mut command = Command::new(std::env::current_exe().map_err(|_| DesktopError::AgentFailed)?);
+    spawn_daemon(data_dir).map_err(classify_daemon_error)
+}
+
+fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
+    let mut command =
+        Command::new(std::env::current_exe().map_err(|_| "daemon_spawn_failed".to_owned())?);
     command.arg("--agenthubd").arg(data_dir);
+    // Raw runtime stderr is discarded, not logged or retained. Only main's
+    // allowlisted failure frame uses stdout (also safe after Desktop exits).
     command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000 | 0x0000_0008 | 0x0000_0200);
     }
-    let child = command.spawn().map_err(|_| DesktopError::AgentFailed)?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::HANDLE;
-        use windows_sys::Win32::System::JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
-        };
-
-        unsafe {
-            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-            if !job.is_null() {
-                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                if SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    (&raw const info).cast::<std::ffi::c_void>(),
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                ) != 0
-                {
-                    let _ = AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE);
-                }
-                // Intentionally let job handle stay open until current desktop process terminates
-                let _ = job;
-            }
-        }
+    // ARCHITECTURE: Desktop exit must not stop the shared background Host.
+    // In particular, do not assign this child to a KILL_ON_JOB_CLOSE Job Object.
+    let mut child = command
+        .spawn()
+        .map_err(|_| "daemon_spawn_failed".to_owned())?;
+    if let Some(stdout) = child.stdout.take() {
+        thread::spawn(move || drain_startup_diagnostics(stdout));
     }
+    *STARTING_CHILD
+        .lock()
+        .map_err(|_| "daemon_start_failed".to_owned())? = Some(child);
     Ok(())
+}
+
+fn normalized_workspace_text(path: &str) -> (String, String) {
+    let windows =
+        path.as_bytes().get(1) == Some(&b':') || path.starts_with("\\\\") || path.starts_with("//");
+    if !windows {
+        let display = if path == "/" {
+            path.to_owned()
+        } else {
+            path.trim_end_matches('/').to_owned()
+        };
+        return (display.clone(), display);
+    }
+    let path = path.replace('\\', "/");
+    let path = if let Some(unc) = path.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else {
+        path.strip_prefix("//?/").unwrap_or(&path).to_owned()
+    };
+    let root = if path.starts_with("//") { "//" } else { "" };
+    let parts: Vec<_> = path
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    let mut display = format!("{root}{}", parts.join("/"));
+    if display.len() == 2 && display.ends_with(':') {
+        display.push('/');
+    }
+    let key = display.to_lowercase();
+    (display, key)
+}
+
+pub(crate) fn normalize_workspaces(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let canonical = dunce::canonicalize(&path).unwrap_or(path);
+            let (display, key) = normalized_workspace_text(&canonical.to_string_lossy());
+            seen.insert(key).then(|| PathBuf::from(display))
+        })
+        .collect()
+}
+
+fn same_workspace(a: &Path, b: &Path) -> bool {
+    normalized_workspace_text(&a.to_string_lossy()).1
+        == normalized_workspace_text(&b.to_string_lossy()).1
 }
 
 fn persist_workspace(
@@ -680,12 +869,10 @@ fn persist_workspace(
                 .unwrap_or_else(default_codex_binary),
             remote_enabled: false,
         });
-    let workspace = dunce::simplified(&workspace).to_path_buf();
-    if !profile.workspace_paths.contains(&workspace) {
-        if profile.workspace_paths.len() >= 32 {
-            return Err(DesktopError::InvalidAction);
-        }
-        profile.workspace_paths.push(workspace);
+    profile.workspace_paths.push(workspace);
+    profile.workspace_paths = normalize_workspaces(profile.workspace_paths);
+    if profile.workspace_paths.len() > 32 {
+        return Err(DesktopError::InvalidAction);
     }
     fs::write(
         profile_path,
@@ -710,17 +897,18 @@ fn gateway_websocket_url(server_url: &str) -> Result<String, String> {
 
 #[tauri::command]
 pub(crate) async fn start_remote_host(
-    input: DaemonProfile,
+    mut input: DaemonProfile,
     state: State<'_, DesktopState>,
 ) -> Result<(), String> {
-    if input.workspace_paths.is_empty()
-        || input.workspace_paths.len() > 32
-        || !valid_binary(&input.codex_binary)
-    {
-        return Err("请选择工作目录和有效的 Codex 可执行文件".to_owned());
-    }
     let data_dir = state.data_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        input.workspace_paths = normalize_workspaces(input.workspace_paths);
+        if input.workspace_paths.is_empty()
+            || input.workspace_paths.len() > 32
+            || !valid_binary(&input.codex_binary)
+        {
+            return Err("请选择工作目录和有效的 Codex 可执行文件".to_owned());
+        }
         let _transition_guard = LAUNCH_LOCK
             .lock()
             .map_err(|_| DesktopError::AgentFailed.to_string())?;
@@ -749,6 +937,7 @@ pub(crate) async fn start_remote_host(
                     .ok_or_else(|| "工作目录不存在".to_owned())
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let workspace_paths = normalize_workspaces(workspace_paths);
         let profile = DaemonProfile {
             workspace_paths: workspace_paths.clone(),
             codex_binary: input.codex_binary,
@@ -781,10 +970,11 @@ pub(crate) async fn start_remote_host(
                     "agenthubd 运行期间不能更换 Codex 可执行文件；请恢复当前设置后重试".to_owned(),
                 );
             }
-            if active_workspaces
-                .iter()
-                .any(|workspace| !workspace_paths.contains(workspace))
-            {
+            if active_workspaces.iter().any(|workspace| {
+                !workspace_paths
+                    .iter()
+                    .any(|path| same_workspace(path, workspace))
+            }) {
                 return Err(
                     "agenthubd 运行期间不能移除已授权工作目录；请保留现有目录后重试".to_owned(),
                 );
@@ -812,10 +1002,16 @@ pub(crate) async fn start_remote_host(
 
 #[tauri::command]
 pub(crate) async fn remote_host_status(state: State<'_, DesktopState>) -> Result<Value, String> {
-    let config = read_config(&state.data_dir).ok();
-    let identity =
-        load_or_create_identity(&state.data_dir).map_err(|_| "设备身份不可用".to_owned())?;
-    let (_, profile_path) = host_database_path(&state.data_dir, identity.device_id());
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || remote_host_status_inner(&data_dir))
+        .await
+        .map_err(|_| "无法读取本机连接状态".to_owned())?
+}
+
+fn remote_host_status_inner(data_dir: &Path) -> Result<Value, String> {
+    let config = read_config(data_dir).ok();
+    let identity = load_or_create_identity(data_dir).map_err(|_| "设备身份不可用".to_owned())?;
+    let (_, profile_path) = host_database_path(data_dir, identity.device_id());
     let mut profile = fs::read(profile_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<DaemonProfile>(&bytes).ok())
@@ -826,21 +1022,23 @@ pub(crate) async fn remote_host_status(state: State<'_, DesktopState>) -> Result
                 .unwrap_or_else(default_codex_binary),
             remote_enabled: false,
         });
-    profile.workspace_paths = profile
-        .workspace_paths
-        .into_iter()
-        .map(|p| dunce::simplified(&p).to_path_buf())
-        .collect();
-    let client = client_for_state(&state).map_err(|error| error.to_string())?;
+    profile.workspace_paths = normalize_workspaces(profile.workspace_paths);
+    let client = DaemonClient {
+        endpoint: daemon_ipc::default_endpoint(identity.device_id()),
+    };
     let phase = match probe_daemon(&client) {
         DaemonProbe::Ready((_, _, true, true)) => "connected",
         DaemonProbe::Ready((_, _, true, false)) => "connecting",
         DaemonProbe::Ready(_) => "local",
         DaemonProbe::Starting => "starting",
         DaemonProbe::Absent => "stopped",
-        DaemonProbe::Failed(error) => return Err(error),
+        DaemonProbe::Failed(error) => return Err(classify_daemon_error(error).to_string()),
     };
-    Ok(json!({"phase":phase,"profile":profile}))
+    let diagnostics = STARTUP_DIAGNOSTICS
+        .lock()
+        .map(|items| items.clone())
+        .unwrap_or_default();
+    Ok(json!({"phase":phase,"profile":profile,"startup_diagnostics":diagnostics}))
 }
 
 fn disable_remote_locked(data_dir: &Path) -> Result<(), String> {
@@ -923,6 +1121,221 @@ pub(crate) async fn stop_remote_host(state: State<'_, DesktopState>) -> Result<(
 mod tests {
     use super::*;
     use agent_pulse_runner::{daemon_ipc::DaemonRequestHandler, remote_journal::JournalEvent};
+
+    #[test]
+    fn workspace_normalization_is_case_insensitive_on_windows_and_unix_preserved() {
+        assert_eq!(
+            normalized_workspace_text("D:\\Project\\Agent-Pulse").1,
+            normalized_workspace_text("d:/project/AGENT-PULSE").1
+        );
+        assert_ne!(
+            normalized_workspace_text("/srv/project").1,
+            normalized_workspace_text("/SRV/project").1
+        );
+        let merged = normalize_workspaces(vec![
+            PathBuf::from("D:\\Project\\Agent-Pulse"),
+            PathBuf::from("d:/project/AGENT-PULSE"),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0]
+                .to_string_lossy()
+                .replace('/', "\\")
+                .to_lowercase(),
+            "d:\\project\\agent-pulse"
+        );
+    }
+
+    #[test]
+    fn readonly_recovery_keeps_profile_and_reports_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = DeviceIdentity::generate();
+        identity
+            .save_new(dir.path().join("device-identity.json"))
+            .unwrap();
+        let workspace = dir.path().join("ws");
+        fs::create_dir(&workspace).unwrap();
+        let (_, profile_path) = host_database_path(dir.path(), identity.device_id());
+        fs::write(
+            &profile_path,
+            serde_json::to_vec(&DaemonProfile {
+                workspace_paths: vec![workspace.clone()],
+                codex_binary: "codex".into(),
+                remote_enabled: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let before = fs::read(&profile_path).unwrap();
+
+        // Only a failing recovery should be recorded, never a fabricated empty read.
+        let error = read_recovery_profile(&profile_path).map(|_| ()).err();
+        assert!(error.is_none());
+
+        let profile = read_recovery_profile(&profile_path).unwrap();
+        assert_eq!(profile.workspace_paths, vec![workspace]);
+        assert!(profile.remote_enabled);
+        assert_eq!(fs::read(&profile_path).unwrap(), before);
+
+        record_startup("daemon_start_exited");
+        let diagnostics = STARTUP_DIAGNOSTICS.lock().unwrap().clone();
+        assert!(diagnostics.iter().any(|d| d.code == "daemon_start_exited"));
+    }
+
+    #[test]
+    fn read_recovery_profile_rejects_invalid_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&DaemonProfile {
+                workspace_paths: vec![dir.path().join("missing")],
+                codex_binary: "codex".into(),
+                remote_enabled: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_recovery_profile(&path).unwrap_err(),
+            "daemon_profile_invalid"
+        );
+        fs::write(&path, b"not-json").unwrap();
+        assert_eq!(
+            read_recovery_profile(&path).unwrap_err(),
+            "daemon_profile_invalid"
+        );
+        assert_eq!(
+            read_recovery_profile(&dir.path().join("absent.json")).unwrap_err(),
+            "daemon_profile_unavailable"
+        );
+    }
+
+    #[test]
+    fn readonly_recovery_launches_once_and_only_reads_over_ipc() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = DeviceIdentity::generate();
+        identity
+            .save_new(dir.path().join("device-identity.json"))
+            .unwrap();
+        let (_, profile_path) = host_database_path(dir.path(), identity.device_id());
+        fs::write(
+            &profile_path,
+            serde_json::to_vec(&DaemonProfile {
+                workspace_paths: vec![dir.path().to_owned()],
+                codex_binary: "codex".into(),
+                remote_enabled: true,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let before = fs::read(&profile_path).unwrap();
+        let endpoint = daemon_ipc::default_endpoint(identity.device_id());
+        let stopped = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let handler: Arc<dyn DaemonRequestHandler> = Arc::new(move |request| {
+            recorded
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&request).unwrap());
+            match request {
+                DaemonRequest::GetStatus => DaemonResponse::Status {
+                    host_generation: "test".into(),
+                    workspaces: vec![],
+                    remote_enabled: true,
+                    remote_connected: false,
+                },
+                DaemonRequest::GetSessionConversation { .. } => DaemonResponse::Error {
+                    code: "ipc_read_failed".into(),
+                },
+                _ => panic!("read recovery must not send a mutating request"),
+            }
+        });
+        let mut server = None;
+        let mut launches = 0;
+        let client = ensure_readonly_daemon_with(dir.path(), |_| {
+            launches += 1;
+            let endpoint = endpoint.clone();
+            let stopped = stopped.clone();
+            let handler = handler.clone();
+            server = Some(thread::spawn(move || {
+                daemon_ipc::serve(&endpoint, handler, stopped).map_err(|e| e.to_string())
+            }));
+            Ok(())
+        })
+        .unwrap();
+        let error = load_session_conversation_inner(
+            SessionConversationInput {
+                agent_type: AgentType::Codex,
+                agent_session_id: "test-session".into(),
+            },
+            client,
+        )
+        .unwrap_err();
+        assert!(matches!(error, DesktopError::LocalIpc("ipc_read_failed")));
+        ensure_readonly_daemon_with(dir.path(), |_| panic!("must reuse ready daemon")).unwrap();
+        assert_eq!(launches, 1);
+        assert_eq!(fs::read(profile_path).unwrap(), before);
+        assert!(requests.lock().unwrap().len() >= 3);
+        stop_ipc_server(&endpoint, stopped, server.unwrap());
+    }
+
+    #[test]
+    fn structured_diagnostics_are_allowlisted_and_bounded() {
+        let mut input = vec![b'x'; 8192];
+        input.extend_from_slice(b"\n{\"code\":\"secret-token\"}\n{\"code\":\"daemon_start_timeout\",\"secret\":\"credential\"}\n");
+        drain_startup_diagnostics(std::io::Cursor::new(input));
+        for _ in 0..32 {
+            record_startup("daemon_start_timeout");
+        }
+        let diagnostics = STARTUP_DIAGNOSTICS.lock().unwrap();
+        assert_eq!(diagnostics.len(), 16);
+        let encoded = serde_json::to_string(&*diagnostics).unwrap();
+        assert!(!encoded.contains("credential"));
+        assert!(!encoded.contains("secret-token"));
+    }
+
+    #[test]
+    fn exited_startup_child_is_not_misreported_as_timeout() {
+        #[cfg(windows)]
+        let mut command = {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "exit", "7"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut c = Command::new("sh");
+            c.args(["-c", "exit 7"]);
+            c
+        };
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        let mut slot = Some(child);
+        assert!(
+            matches!(child_startup_probe_with(DaemonProbe::Absent, &mut slot),
+            DaemonProbe::Failed(code) if code == "daemon_start_exited")
+        );
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn safe_daemon_code_never_leaks_unknown_details() {
+        assert_eq!(
+            safe_daemon_code("daemon_profile_invalid"),
+            "daemon_profile_invalid"
+        );
+        assert_eq!(
+            safe_daemon_code("raw provider panic: secret"),
+            "local_service_failed"
+        );
+    }
 
     fn start_ipc_server(
         handler: Arc<dyn DaemonRequestHandler>,

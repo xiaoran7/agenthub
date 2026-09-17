@@ -16,9 +16,7 @@ use std::{
 
 const MAX_SESSION_ID_CHARS: usize = 160;
 const MAX_CONVERSATION_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_CONVERSATION_LINES: usize = 2_000;
 const MAX_CONVERSATION_MESSAGES: usize = 300;
-const HEAD_CONVERSATION_MESSAGES: usize = 20;
 /// Response budget for one IPC frame (`MAX_DAEMON_FRAME_BYTES` is 1 MiB);
 /// keeps the serialized preview comfortably inside a single frame.
 const MAX_CONVERSATION_RESPONSE_BYTES: usize = 512 * 1024;
@@ -49,131 +47,191 @@ pub fn load_session_conversation(
     if agent_type == AgentType::ZCode {
         return load_zcode_session_conversation(home, session_id);
     }
-    let Some(path) = find_agent_transcript(home, agent_type, session_id) else {
-        return Vec::new();
-    };
-    let Ok(mut file) = fs::File::open(path) else {
-        return Vec::new();
-    };
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if file_len > MAX_CONVERSATION_BYTES {
-        let start_pos = file_len.saturating_sub(MAX_CONVERSATION_BYTES);
-        let _ = file.seek(SeekFrom::Start(start_pos));
-    }
-    let mut bytes = Vec::new();
-    if file
-        .take(MAX_CONVERSATION_BYTES)
-        .read_to_end(&mut bytes)
-        .is_err()
-    {
-        return Vec::new();
-    }
-    let content = decode_local_text(&bytes);
-    let all_lines = content.lines().collect::<Vec<_>>();
-    let line_window: Vec<&str> = if all_lines.len() > MAX_CONVERSATION_LINES {
-        // Retain initial head lines (150) so initial user prompt and task intent are never dropped,
-        // and tail lines (remaining up to MAX_CONVERSATION_LINES) for latest turns.
-        const HEAD_LINES: usize = 150;
-        let tail_count = MAX_CONVERSATION_LINES.saturating_sub(HEAD_LINES);
-        let mut selected = Vec::with_capacity(MAX_CONVERSATION_LINES);
-        selected.extend_from_slice(&all_lines[..HEAD_LINES.min(all_lines.len())]);
-        let tail_start = all_lines.len().saturating_sub(tail_count);
-        if tail_start > HEAD_LINES {
-            selected.extend_from_slice(&all_lines[tail_start..]);
+    let mut paths = Vec::new();
+    match agent_type {
+        AgentType::Codex => {
+            collect_provider_transcripts(&home.join(".codex"), session_id, 0, &mut paths)
         }
-        selected
-    } else {
-        all_lines
-    };
-
-    // Normalize all lines in chronological order
-    let mut all_items = Vec::new();
-    for line in line_window {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+        AgentType::ClaudeCode => {
+            collect_transcript_files(&home.join(".claude/projects"), session_id, 0, &mut paths)
+        }
+        _ => paths.extend(find_agent_transcript(home, agent_type, session_id)),
+    }
+    paths.sort();
+    paths.dedup();
+    let mut omitted = paths.len() > 8;
+    if paths.len() > 8 {
+        let tail = paths.split_off(paths.len() - 4);
+        paths.truncate(4);
+        paths.extend(tail);
+    }
+    let file_budget = MAX_CONVERSATION_BYTES / paths.len().max(1) as u64;
+    let mut records = Vec::new();
+    let mut seen = HashMap::<String, usize>::new();
+    for (source, path) in paths.iter().enumerate() {
+        let (lines, partial) = read_transcript_windows(path, file_budget);
+        omitted |= partial;
+        let values: Vec<Value> = lines
+            .iter()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        // A similarly named rollout must not contribute a different session.
+        if values.iter().any(|v| {
+            (v.get("type").and_then(Value::as_str) == Some("session_meta")
+                && v.pointer("/payload/id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id != session_id))
+                || v.get("sessionId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id != session_id)
+        }) {
             continue;
-        };
-        let items = normalize_local_conversation_items(&value);
-        all_items.extend(items);
+        }
+        for value in values {
+            if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            let key = serde_json::to_string(&value).unwrap_or_default();
+            if seen.get(&key).is_some_and(|previous| *previous != source) {
+                continue;
+            }
+            seen.insert(key, source);
+            records.push(value);
+        }
     }
-
-    if all_items.is_empty() {
-        return Vec::new();
-    }
-
-    let total_count = all_items.len();
-    let total_bytes: usize = all_items
+    // Untimestamped records retain source order rather than invented chronology.
+    if records
         .iter()
-        .map(|item| {
-            item.get("content")
-                .and_then(Value::as_str)
-                .map(str::len)
-                .unwrap_or_default()
-                + 128
-        })
-        .sum();
-
-    let final_items = if total_count <= MAX_CONVERSATION_MESSAGES
-        && total_bytes <= MAX_CONVERSATION_RESPONSE_BYTES
+        .all(|v| v.get("timestamp").and_then(Value::as_str).is_some())
     {
-        all_items
-    } else {
-        // Budget across Head and Tail to guarantee the opening user prompt is never lost
-        let head_budget_bytes = (MAX_CONVERSATION_RESPONSE_BYTES / 4).min(96 * 1024);
-        let mut head = Vec::new();
-        let mut head_bytes = 0usize;
-        for item in all_items.iter().take(HEAD_CONVERSATION_MESSAGES) {
-            let item_bytes = item
-                .get("content")
-                .and_then(Value::as_str)
-                .map(str::len)
-                .unwrap_or_default()
-                + 128;
-            if head_bytes + item_bytes > head_budget_bytes && !head.is_empty() {
-                break;
+        records.sort_by(|a, b| a["timestamp"].as_str().cmp(&b["timestamp"].as_str()));
+    }
+    let mut items = Vec::new();
+    let mut tools = HashMap::<String, String>::new();
+    for value in records {
+        if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
+            for block in blocks {
+                if block["type"] == "tool_use"
+                    && let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str())
+                {
+                    tools.insert(id.to_owned(), name.to_owned());
+                }
             }
-            head_bytes += item_bytes;
-            head.push(item.clone());
         }
-
-        let remaining_count = MAX_CONVERSATION_MESSAGES.saturating_sub(head.len() + 1);
-        let remaining_bytes = MAX_CONVERSATION_RESPONSE_BYTES.saturating_sub(head_bytes + 256);
-
-        let tail_candidates = &all_items[head.len()..];
-        let mut tail_rev = Vec::new();
-        let mut tail_bytes = 0usize;
-
-        for item in tail_candidates.iter().rev() {
-            let item_bytes = item
-                .get("content")
-                .and_then(Value::as_str)
-                .map(str::len)
-                .unwrap_or_default()
-                + 128;
-            if tail_rev.len() >= remaining_count
-                || (tail_bytes + item_bytes > remaining_bytes && !tail_rev.is_empty())
+        let mut normalized = normalize_local_conversation_items(&value);
+        if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
+            let mut results = blocks.iter().filter(|b| b["type"] == "tool_result");
+            for item in normalized
+                .iter_mut()
+                .filter(|i| i["role"] == "system" && i["kind"] == "tool")
             {
-                break;
+                if let Some(block) = results.next()
+                    && let Some(name) = block["tool_use_id"].as_str().and_then(|id| tools.get(id))
+                {
+                    item["label"] = Value::String(format!("{name} · 结果"));
+                }
             }
-            tail_bytes += item_bytes;
-            tail_rev.push(item.clone());
         }
-        tail_rev.reverse();
+        items.extend(normalized);
+    }
+    budget_conversation(items, omitted)
+}
 
-        let mut merged = head;
-        if merged.len() + tail_rev.len() < all_items.len() {
-            merged.push(conversation_item(
-                "system",
-                "status",
-                "历史记录折叠",
-                "已省略中间过长历史记录，保留会话开头与最新进展",
-                "completed",
-            ));
-        }
-        merged.extend(tail_rev);
-        merged
+fn read_transcript_windows(path: &Path, budget: u64) -> (Vec<String>, bool) {
+    let Ok(mut file) = fs::File::open(path) else {
+        return (Vec::new(), true);
     };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let partial = len > budget;
+    let head_len = if partial { budget / 4 } else { len };
+    let mut head = Vec::new();
+    if (&mut file).take(head_len).read_to_end(&mut head).is_err() {
+        return (Vec::new(), true);
+    }
+    let mut chunks = Vec::new();
+    if partial {
+        if let Some(end) = head.iter().rposition(|b| *b == b'\n') {
+            head.truncate(end + 1);
+        } else {
+            head.clear();
+        }
+    }
+    chunks.push(head);
+    if partial {
+        let tail_len = budget - head_len;
+        if file
+            .seek(SeekFrom::Start(len.saturating_sub(tail_len)))
+            .is_ok()
+        {
+            let mut tail = Vec::new();
+            if file.take(tail_len).read_to_end(&mut tail).is_ok()
+                && let Some(start) = tail.iter().position(|b| *b == b'\n')
+            {
+                chunks.push(tail[start + 1..].to_vec());
+            }
+        }
+    }
+    let mut invalid = partial;
+    let lines = chunks
+        .into_iter()
+        .flat_map(|bytes| {
+            let text = decode_local_text(&bytes);
+            text.lines().map(str::to_owned).collect::<Vec<_>>()
+        })
+        .filter(|line| {
+            if line.trim().is_empty() {
+                return false;
+            }
+            let valid = serde_json::from_str::<Value>(line).is_ok();
+            invalid |= !valid;
+            valid
+        })
+        .collect();
+    (lines, invalid)
+}
 
-    deduplicate_consecutive_user_messages(final_items)
+fn budget_conversation(items: Vec<Value>, omitted: bool) -> Vec<Value> {
+    let items = deduplicate_consecutive_user_messages(items);
+    let mut selected = std::collections::BTreeSet::new();
+    let mut bytes = 2usize;
+    let budget = MAX_CONVERSATION_RESPONSE_BYTES - 2048;
+    let message = |item: &Value| {
+        item["kind"] == "message" && (item["role"] == "user" || item["role"] == "assistant")
+    };
+    // Protect opening/latest natural-language turns before allocating tool output.
+    let mut order = Vec::new();
+    order.extend(items.iter().position(message));
+    order.extend(items.iter().position(|i| message(i) && i["role"] == "user"));
+    order.extend(
+        items
+            .iter()
+            .rposition(|i| message(i) && i["role"] == "assistant"),
+    );
+    order.extend(
+        items
+            .iter()
+            .rposition(|i| message(i) && i["role"] == "user"),
+    );
+    order.extend((0..items.len()).rev().filter(|i| message(&items[*i])));
+    order.extend((0..items.len()).rev());
+    for i in order {
+        if selected.contains(&i) {
+            continue;
+        }
+        let size = serde_json::to_vec(&items[i])
+            .map(|s| s.len() + 1)
+            .unwrap_or(budget);
+        if selected.len() < MAX_CONVERSATION_MESSAGES - 1 && bytes + size <= budget {
+            selected.insert(i);
+            bytes += size;
+        }
+    }
+    let truncated = selected.len() < items.len() || omitted;
+    let mut output: Vec<Value> = selected.into_iter().map(|i| items[i].clone()).collect();
+    if truncated {
+        output.insert(output.len().min(1), conversation_item("system", "status", "历史记录折叠", "当前为有界会话预览，部分记录未载入或已省略；展示已读取的开场与最新对话，原始历史未修改。", "completed"));
+    }
+    output
 }
 
 fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -> Option<PathBuf> {
@@ -254,7 +312,6 @@ fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> 
     };
 
     let mut items = Vec::new();
-    let mut approx_bytes = 0usize;
 
     for (role_opt, part_type_opt, raw_data) in rows {
         let Ok(data) = serde_json::from_str::<Value>(&raw_data) else {
@@ -314,21 +371,10 @@ fn load_zcode_session_conversation(home: &Path, session_id: &str) -> Vec<Value> 
             _ => continue,
         };
 
-        approx_bytes += item
-            .get("content")
-            .and_then(Value::as_str)
-            .map(str::len)
-            .unwrap_or_default()
-            + 128;
         items.push(item);
-        if items.len() >= MAX_CONVERSATION_MESSAGES
-            || approx_bytes >= MAX_CONVERSATION_RESPONSE_BYTES
-        {
-            break;
-        }
     }
 
-    deduplicate_consecutive_user_messages(items)
+    budget_conversation(items, false)
 }
 
 fn deduplicate_consecutive_user_messages(messages: Vec<Value>) -> Vec<Value> {
@@ -544,6 +590,9 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
         return Vec::new();
     }
 
+    if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
+        return Vec::new();
+    }
     let content = value
         .pointer("/message/content")
         .or_else(|| payload.get("content"))
@@ -835,9 +884,16 @@ fn conversation_item(role: &str, kind: &str, label: &str, content: &str, status:
         16_000
     };
     let final_content = if trimmed.chars().count() > max_len {
-        let mut preview: String = trimmed.chars().take(max_len).collect();
-        preview.push_str("\n\n... [输出内容较长，已为会话预览截断]");
-        preview
+        let head: String = trimmed.chars().take(max_len / 2).collect();
+        let tail: String = trimmed
+            .chars()
+            .rev()
+            .take(max_len / 2)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        format!("{head}\n\n〔内容过长，已省略中段，保留首尾〕\n\n{tail}")
     } else {
         trimmed.to_owned()
     };
@@ -907,7 +963,13 @@ fn clean_message_text(text: &str) -> String {
         .replace("<USER_REQUEST>", "")
         .replace("</USER_REQUEST>", "");
 
-    if text.contains("<local-command-caveat>") {
+    if text
+        .trim_start()
+        .starts_with("Base directory for this skill:")
+        || text.trim_start().starts_with("<local-command-stdout>")
+        || text.trim_start().starts_with("<local-command-stderr>")
+        || text.contains("<local-command-caveat>")
+    {
         return String::new();
     }
 
@@ -1246,3 +1308,7 @@ mod tests {
         assert_eq!(matched, Some(file2));
     }
 }
+
+#[cfg(test)]
+#[path = "conversation_regression.rs"]
+mod regression;

@@ -116,8 +116,10 @@ import {
   ToolCallGroupBlock,
 } from "./components/ConversationRenderer";
 import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
+import { applyAppearance, readAppearance } from "./appearance";
 import { DesktopHeader } from "./components/layout/DesktopHeader";
 import { SessionEmptyState } from "./components/session/SessionEmptyState";
+import { ConversationLoadState } from "./components/session/ConversationLoadState";
 import { ContextCapacityRing } from "./components/session/ContextCapacityPopover";
 import { ComposerPlusMenu } from "./components/session/ComposerPlusMenu";
 
@@ -157,19 +159,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(
-        "agenthub:extended-preferences",
-      );
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed?.theme) {
-          document.documentElement.setAttribute("data-theme", parsed.theme);
-        }
-      }
-    } catch {
-      // ignore
-    }
+    applyAppearance(readAppearance());
   }, []);
 
   useEffect(() => {
@@ -804,7 +794,7 @@ function Dashboard({
         .filter((session) => isManagedProvider(session.agent_type))
         .slice(0, 10)
         .map((session) => ({
-          key: sessionKey(session),
+          key: `${normalizeAgentType(session.agent_type)}:${session.agent_session_id}`,
           agentType: session.agent_type,
           agentSessionId: session.agent_session_id,
         }));
@@ -864,7 +854,10 @@ function Dashboard({
       },
     ] as ConversationMessage[];
     for (const session of sessions) {
-      seedConversation(sessionKey(session), sample);
+      seedConversation(
+        `${normalizeAgentType(session.agent_type)}:${session.agent_session_id}`,
+        sample,
+      );
     }
   }, [sessions]);
 
@@ -1791,7 +1784,10 @@ function SessionControlPanel({
   // Render from the preloaded cache immediately, then verify against the
   // agent transcript and refresh only when the content actually differs.
   const [messages, setMessages] = useState<ConversationMessage[]>(
-    () => cachedConversation(cacheKey) ?? [],
+    () =>
+      cachedConversation(
+        `${normalizeAgentType(session.agent_type)}:${session.agent_session_id}`,
+      ) ?? [],
   );
   const [busy, setBusy] = useState(() =>
     hasActiveTurn(session.payload.state.activity_status),
@@ -1804,7 +1800,12 @@ function SessionControlPanel({
   const [agentActivity, setAgentActivity] = useState<string>();
   const [error, setError] = useState<string>();
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
-  const [refreshingMessages, setRefreshingMessages] = useState(false);
+  const [refreshingMessages, setRefreshingMessages] = useState(
+    () =>
+      "__TAURI_INTERNALS__" in window && isManagedProvider(session.agent_type),
+  );
+  const [conversationError, setConversationError] = useState<string>();
+  const conversationRequest = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const insertToken = (token: string) => {
@@ -1901,13 +1902,16 @@ function SessionControlPanel({
   const reloadMessages = useCallback(async () => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     if (!isManagedProvider(session.agent_type)) return;
+    const request = ++conversationRequest.current;
     setRefreshingMessages(true);
+    setConversationError(undefined);
     try {
       const next = await loadConversation(
         session.agent_type,
         session.agent_session_id,
         true,
       );
+      if (request !== conversationRequest.current) return;
       setMessages((current) =>
         current.length > 0 && sameConversation(current, next) ? current : next,
       );
@@ -1921,9 +1925,10 @@ function SessionControlPanel({
         rememberTitleOverride(cacheKey, firstUser.content);
       }
     } catch (err) {
-      setError(errorMessage(err));
+      if (request === conversationRequest.current)
+        setConversationError(errorMessage(err));
     } finally {
-      setRefreshingMessages(false);
+      if (request === conversationRequest.current) setRefreshingMessages(false);
     }
   }, [
     cacheKey,
@@ -1942,6 +1947,9 @@ function SessionControlPanel({
       return;
     }
     void reloadMessages();
+    return () => {
+      conversationRequest.current += 1;
+    };
   }, [reloadMessages, session.agent_type]);
 
   // Active polling: auto-refresh conversation when busy or on last_activity_at change (with document visibility check)
@@ -2205,15 +2213,12 @@ function SessionControlPanel({
 
         <section className="conversation-pane" ref={paneRef} aria-live="polite">
           {messages.length === 0 ? (
-            <div className="conversation-empty">
-              <MessageSquare />
-              <strong>从这里继续会话</strong>
-              <p>
-                {isManagedProvider(session.agent_type)
-                  ? "消息交给本机 agenthubd 管理的官方 Runtime。"
-                  : "该 Provider 尚未接入远程控制；接入后可在此查看历史并继续会话。"}
-              </p>
-            </div>
+            <ConversationLoadState
+              loading={refreshingMessages}
+              error={conversationError}
+              managed={isManagedProvider(session.agent_type)}
+              onRetry={() => void reloadMessages()}
+            />
           ) : (
             groupConversationMessages(messages).map((group, groupIdx) => {
               if (group.type === "tool_group") {
@@ -2272,7 +2277,16 @@ function SessionControlPanel({
             </button>
           </div>
         )}
-        {error !== undefined && <p className="panel-error">{error}</p>}
+        {messages.length > 0 && conversationError && (
+          <p className="panel-error" role="alert">
+            历史消息刷新失败，当前保留上次内容：{conversationError}
+          </p>
+        )}
+        {error !== undefined && (
+          <p className="panel-error" role="alert">
+            {error}
+          </p>
+        )}
 
         <div className="composer-container">
           {!isManagedProvider(session.agent_type) ? (

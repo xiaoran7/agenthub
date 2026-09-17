@@ -404,21 +404,21 @@ const MarkdownSection = memo(function MarkdownSection({
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
         components={{
-          code({ className, children, ...props }: any) {
-            const match = /language-(\w+)/.exec(className || "");
-            const codeString = String(children).replace(/\n$/, "");
-            if (!props.inline && (match || codeString.includes("\n"))) {
-              return (
-                <CodeBlock
-                  language={match ? match[1] : "text"}
-                  value={codeString}
-                />
-              );
+          pre({ children }) {
+            // The pre node, not newlines or a language hint, identifies a block.
+            // Leave inline code to react-markdown's default renderer.
+            const child = React.Children.toArray(children)[0];
+            if (!React.isValidElement<React.ComponentProps<"code">>(child)) {
+              return <pre>{children}</pre>;
             }
+            const language =
+              /(?:^|\s)language-(\S+)/.exec(child.props.className ?? "")?.[1] ??
+              "text";
             return (
-              <code className={className} {...props}>
-                {children}
-              </code>
+              <CodeBlock
+                language={language}
+                value={String(child.props.children ?? "").replace(/\n$/, "")}
+              />
             );
           },
         }}

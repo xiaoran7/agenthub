@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applyHostStatus } from "./NativeHostDialog";
+import { applyHostStatus, normalizeWorkspacePaths } from "./NativeHostDialog";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { NativeHostDialog } from "./NativeHostDialog";
 
 const empty = {
   phase: "loading" as const,
@@ -21,7 +24,46 @@ const status = {
   },
 };
 
+describe("NativeHostDialog workspace normalization", () => {
+  it("merges Windows aliases case-insensitively and preserves Unix case", () => {
+    expect(
+      normalizeWorkspacePaths([
+        "\\\\?\\D:\\Project\\Agent-Pulse",
+        "d:/project/AGENT-PULSE",
+      ]),
+    ).toEqual(["D:/Project/Agent-Pulse"]);
+    expect(normalizeWorkspacePaths(["/srv/project", "/SRV/project"])).toEqual([
+      "/srv/project",
+      "/SRV/project",
+    ]);
+    expect(normalizeWorkspacePaths(["D:\\"])).toEqual(["D:/"]);
+  });
+
+  it("keeps dialog-added paths and stored paths in the same canonical form", () => {
+    const status = {
+      phase: "stopped" as const,
+      profile: {
+        workspace_paths: ["D:\\Project"],
+        codex_binary: "",
+        remote_enabled: false,
+      },
+    };
+    const applied = applyHostStatus(empty, status);
+    expect(applied.profile.workspace_paths).toEqual(["D:/Project"]);
+  });
+});
+
 describe("NativeHostDialog status recovery", () => {
+  it("does not claim provider readiness or duplicate provider settings", () => {
+    const html = renderToStaticMarkup(
+      createElement(NativeHostDialog, { onClose() {} }),
+    );
+    expect(html).not.toContain("已就绪");
+    expect(html).not.toContain("ZCode App Server");
+    expect(html).not.toContain("Claude 可执行文件");
+    expect(html).toContain("以实际检测结果为准");
+  });
+
   it("hydrates on the first successful poll and clears its poll error", () => {
     expect(applyHostStatus(empty, status)).toEqual({
       ...status,

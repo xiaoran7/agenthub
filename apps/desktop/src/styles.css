@@ -1543,14 +1543,14 @@ input:focus-visible {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-contrast);
   border-radius: 8px;
-  color: var(--text);
-  background: #151512;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-panel);
 }
 .remote-launch::backdrop {
-  background: rgba(4, 4, 3, 0.64);
+  background: var(--bg-scrim);
 }
 .remote-launch form {
   padding: 20px;
@@ -1584,75 +1584,75 @@ input:focus-visible {
   border: 0;
   display: grid;
   place-items: center;
-  color: var(--dim);
+  color: var(--text-secondary);
   background: transparent;
   cursor: pointer;
 }
 .remote-launch label {
   display: grid;
   gap: 6px;
-  color: var(--dim);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 .remote-launch input {
   width: 100%;
   min-height: 38px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-contrast);
   border-radius: 7px;
-  color: var(--text);
-  background: #10100e;
+  color: var(--text-primary);
+  background: var(--bg-primary);
 }
 .daemon-status-line {
   min-height: 38px;
   padding: 0 10px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 7px;
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--dim);
-  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-secondary);
+  background: var(--bg-card-header);
   font-size: 11px;
 }
 .daemon-status-line i {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #7d7a72;
+  background: var(--text-muted);
 }
 .daemon-status-line[data-phase="connected"] i {
-  background: #58b985;
+  background: var(--status-success);
 }
 .daemon-status-line[data-phase="connecting"] i,
 .daemon-status-line[data-phase="starting"] i {
-  background: #d5a44e;
+  background: var(--status-warning);
 }
 .remote-workspace-heading > span {
-  color: var(--dim);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 .remote-workspace-heading button,
 .remote-launch footer button {
   min-height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-contrast);
   border-radius: 7px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--text);
+  color: var(--text-primary);
   background: transparent;
   cursor: pointer;
 }
 .remote-workspace-list {
   max-height: 176px;
   overflow: auto;
-  border-block: 1px solid var(--line-soft);
+  border-block: 1px solid var(--border-subtle);
 }
 .remote-workspace-list > div {
   min-height: 40px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .remote-workspace-list > div:last-child {
   border-bottom: 0;
@@ -1667,7 +1667,7 @@ input:focus-visible {
 }
 .remote-workspace-list > p {
   margin: 12px 0;
-  color: var(--dim);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 .remote-launch footer {
@@ -1677,7 +1677,7 @@ input:focus-visible {
   min-width: 0;
   max-width: 330px;
   flex: 1;
-  color: var(--dim);
+  color: var(--text-secondary);
   font-size: 10px;
   line-height: 1.5;
 }
@@ -1686,14 +1686,29 @@ input:focus-visible {
   white-space: nowrap;
 }
 .remote-launch footer button.remote-primary {
-  border-color: var(--signal);
-  color: #17120f;
-  background: var(--signal);
+  border-color: var(--button-primary);
+  color: var(--button-primary-text);
+  background: var(--button-primary);
 }
 .remote-launch button:disabled,
 .remote-launch input:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.remote-launch button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.remote-launch footer button.remote-primary:hover:not(:disabled) {
+  background: var(--button-primary-hover);
+}
+.remote-launch input:focus-visible,
+.remote-launch button:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+.remote-launch [role="alert"] {
+  color: var(--status-danger);
 }
 
 .approval-actions,
