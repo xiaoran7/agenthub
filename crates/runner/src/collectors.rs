@@ -854,7 +854,7 @@ pub fn collect_codex_session_contexts_from(
     if !columns.contains("id") {
         return Ok(Vec::new());
     }
-    let title = optional_column(&columns, &["title", "name"]);
+    let title = codex_title_expression(&columns);
     let model = optional_column(&columns, &["model"]);
     let effort = optional_column(&columns, &["reasoning_effort"]);
     let approval = optional_column(&columns, &["approval_mode", "approval_policy"]);
@@ -1081,6 +1081,22 @@ fn config_object_label(value: &Value) -> Option<String> {
         .as_str()
         .or_else(|| value.get("type").and_then(Value::as_str))
         .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
+}
+
+fn codex_title_expression(columns: &HashSet<String>) -> String {
+    let mut parts = Vec::new();
+    for col in &["title", "name", "first_user_message", "preview"] {
+        if columns.contains(*col) {
+            parts.push(format!("NULLIF(TRIM({col}), '')"));
+        }
+    }
+    if parts.is_empty() {
+        "NULL".to_owned()
+    } else if parts.len() == 1 {
+        parts.remove(0)
+    } else {
+        format!("COALESCE({})", parts.join(", "))
+    }
 }
 
 fn seconds_expression(columns: &HashSet<String>, millis: &str, seconds: &str) -> String {
@@ -2036,7 +2052,17 @@ pub fn collect_zcode_sessions_from(
     let sql = r#"
         SELECT
             s.id,
-            s.title,
+            COALESCE(
+                NULLIF(TRIM(s.title), ''),
+                (SELECT json_extract(p.data, '$.text')
+                 FROM part p
+                 JOIN message m ON p.message_id = m.id
+                 WHERE m.session_id = s.id
+                   AND json_extract(m.data, '$.role') = 'user'
+                   AND json_extract(p.data, '$.type') = 'text'
+                 ORDER BY m.sequence ASC, p.sequence ASC
+                 LIMIT 1)
+            ) as title,
             s.directory,
             s.time_created,
             s.time_updated
@@ -2114,7 +2140,17 @@ pub fn collect_zcode_session_contexts_from(
     let sql = r#"
         SELECT
             s.id,
-            s.title,
+            COALESCE(
+                NULLIF(TRIM(s.title), ''),
+                (SELECT json_extract(p.data, '$.text')
+                 FROM part p
+                 JOIN message m ON p.message_id = m.id
+                 WHERE m.session_id = s.id
+                   AND json_extract(m.data, '$.role') = 'user'
+                   AND json_extract(p.data, '$.type') = 'text'
+                 ORDER BY m.sequence ASC, p.sequence ASC
+                 LIMIT 1)
+            ) as title,
             (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as model,
             (SELECT json_extract(data, '$.mode') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as mode,
             (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as total_tokens,

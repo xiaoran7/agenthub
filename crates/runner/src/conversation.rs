@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::{
     fs,
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
@@ -51,9 +51,14 @@ pub fn load_session_conversation(
     let Some(path) = find_agent_transcript(home, agent_type, session_id) else {
         return Vec::new();
     };
-    let Ok(file) = fs::File::open(path) else {
+    let Ok(mut file) = fs::File::open(path) else {
         return Vec::new();
     };
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if file_len > MAX_CONVERSATION_BYTES {
+        let start_pos = file_len.saturating_sub(MAX_CONVERSATION_BYTES);
+        let _ = file.seek(SeekFrom::Start(start_pos));
+    }
     let mut bytes = Vec::new();
     if file
         .take(MAX_CONVERSATION_BYTES)
@@ -63,28 +68,48 @@ pub fn load_session_conversation(
         return Vec::new();
     }
     let content = decode_local_text(&bytes);
-    let mut messages = Vec::new();
     let mut approx_bytes = 0usize;
-    for line in content.lines().take(MAX_CONVERSATION_LINES) {
+    let all_lines = content.lines().collect::<Vec<_>>();
+    let line_window = if all_lines.len() > MAX_CONVERSATION_LINES {
+        &all_lines[all_lines.len() - MAX_CONVERSATION_LINES..]
+    } else {
+        &all_lines[..]
+    };
+
+    // Iterate backwards from the latest line to earliest to collect the most recent conversation items
+    let mut recent_items = Vec::new();
+    for line in line_window.iter().rev() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        for item in normalize_local_conversation_items(&value) {
+        let items = normalize_local_conversation_items(&value);
+        if items.is_empty() {
+            continue;
+        }
+        for item in items.into_iter().rev() {
             approx_bytes += item
                 .get("content")
                 .and_then(Value::as_str)
                 .map(str::len)
                 .unwrap_or_default()
                 + 128;
-            messages.push(item);
-            if messages.len() >= MAX_CONVERSATION_MESSAGES
+            recent_items.push(item);
+            if recent_items.len() >= MAX_CONVERSATION_MESSAGES
                 || approx_bytes >= MAX_CONVERSATION_RESPONSE_BYTES
             {
-                return deduplicate_consecutive_user_messages(messages);
+                break;
             }
         }
+        if recent_items.len() >= MAX_CONVERSATION_MESSAGES
+            || approx_bytes >= MAX_CONVERSATION_RESPONSE_BYTES
+        {
+            break;
+        }
     }
-    deduplicate_consecutive_user_messages(messages)
+
+    // Reverse back to chronological order (oldest -> newest) for display
+    recent_items.reverse();
+    deduplicate_consecutive_user_messages(recent_items)
 }
 
 fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -> Option<PathBuf> {
@@ -996,7 +1021,9 @@ mod tests {
 
         let messages = load_session_conversation(home.path(), AgentType::Codex, "thread-abc");
         assert_eq!(messages.len(), 300);
-        assert_eq!(messages[0]["content"], "msg-0");
+        // Bounded tail window retains the most recent 300 messages (msg-100 to msg-399)
+        assert_eq!(messages[0]["content"], "msg-100");
+        assert_eq!(messages[299]["content"], "msg-399");
         assert!(load_session_conversation(home.path(), AgentType::Codex, "missing").is_empty());
         assert!(load_session_conversation(home.path(), AgentType::Codex, "../escape").is_empty());
     }
