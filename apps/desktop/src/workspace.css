@@ -1393,16 +1393,17 @@
   background: #fffdfa;
 }
 
-.claude-stage .session-control-panel h2,
-.claude-stage .session-control-panel strong,
-.claude-stage .session-control-panel dd {
+.claude-stage .session-control-panel > header h2,
+.claude-stage .session-control-summary strong,
+.claude-stage .session-metadata strong,
+.claude-stage .session-metadata dd {
   color: var(--desk-ink);
 }
 
-.claude-stage .session-control-panel p,
-.claude-stage .session-control-panel small,
-.claude-stage .session-control-panel dt,
-.claude-stage .session-control-panel span {
+.claude-stage .session-control-summary p,
+.claude-stage .session-control-summary small,
+.claude-stage .session-metadata small,
+.claude-stage .session-metadata dt {
   color: var(--desk-muted);
 }
 
@@ -1474,14 +1475,14 @@
 }
 
 .claude-stage .turn-message.user p {
-  color: #332f28;
-  background: #e9e3da;
+  color: inherit;
+  background: transparent;
   border-color: var(--desk-line);
 }
 
 .claude-stage .turn-message.assistant p {
-  color: #37332b;
-  background: rgba(255, 255, 255, 0.55);
+  color: inherit;
+  background: transparent;
   border-color: var(--desk-line);
 }
 
@@ -3067,7 +3068,7 @@
 
 .claude-stage .turn-message.user p,
 .claude-stage .turn-message.assistant p {
-  color: #deddd8;
+  color: inherit;
   background: transparent;
   border-color: #30302e;
 }
@@ -3675,7 +3676,6 @@
 
 .assistant-flow-content {
   width: 100%;
-  color: #deded9;
   font-size: 13.5px;
   line-height: 1.72;
 }

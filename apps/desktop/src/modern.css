@@ -976,6 +976,37 @@ body,
   text-transform: uppercase;
 }
 
+.claude-stage .conversation-pane .markdown-body,
+.claude-stage .conversation-pane .assistant-flow-content,
+.claude-stage .conversation-pane .user-bubble-content {
+  color: var(--text-primary, #ffffff);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.claude-stage .conversation-pane .markdown-body p,
+.claude-stage .conversation-pane .markdown-body span,
+.claude-stage .conversation-pane .markdown-body li,
+.claude-stage .conversation-pane .markdown-body dd {
+  color: var(--text-primary, #ffffff);
+}
+
+.claude-stage .conversation-pane .markdown-body strong,
+.claude-stage .conversation-pane .markdown-body b {
+  color: var(--text-heading, #ffffff);
+  font-weight: 650;
+}
+
+.claude-stage .conversation-pane .markdown-body h1,
+.claude-stage .conversation-pane .markdown-body h2,
+.claude-stage .conversation-pane .markdown-body h3,
+.claude-stage .conversation-pane .markdown-body h4,
+.claude-stage .conversation-pane .markdown-body h5,
+.claude-stage .conversation-pane .markdown-body h6 {
+  color: var(--text-heading, #ffffff);
+  font-weight: 700;
+}
+
 .markdown-body {
   color: #ffffff;
   font-size: 14px;
@@ -2548,14 +2579,21 @@ svg.rotating {
 }
 
 [data-theme="dark"] .assistant-flow-content,
-[data-theme="dark"] .markdown-body {
+[data-theme="dark"] .markdown-body,
+[data-theme="dark"] .claude-stage .conversation-pane .markdown-body,
+[data-theme="dark"] .claude-stage .conversation-pane .assistant-flow-content,
+[data-theme="dark"] .claude-stage .conversation-pane .user-bubble-content {
   color: #f5f4ef !important;
 }
 
 [data-theme="dark"] .markdown-body p,
+[data-theme="dark"] .markdown-body span,
 [data-theme="dark"] .markdown-body ul,
 [data-theme="dark"] .markdown-body ol,
-[data-theme="dark"] .markdown-body li {
+[data-theme="dark"] .markdown-body li,
+[data-theme="dark"] .claude-stage .conversation-pane .markdown-body p,
+[data-theme="dark"] .claude-stage .conversation-pane .markdown-body span,
+[data-theme="dark"] .claude-stage .conversation-pane .markdown-body li {
   color: #f5f4ef !important;
 }
 
@@ -2826,14 +2864,21 @@ svg.rotating {
 
 /* High-Contrast Markdown Typography in Claude Light */
 [data-theme="light"] .assistant-flow-content,
-[data-theme="light"] .markdown-body {
+[data-theme="light"] .markdown-body,
+[data-theme="light"] .claude-stage .conversation-pane .markdown-body,
+[data-theme="light"] .claude-stage .conversation-pane .assistant-flow-content,
+[data-theme="light"] .claude-stage .conversation-pane .user-bubble-content {
   color: #1f1e1b !important;
 }
 
 [data-theme="light"] .markdown-body p,
+[data-theme="light"] .markdown-body span,
 [data-theme="light"] .markdown-body ul,
 [data-theme="light"] .markdown-body ol,
-[data-theme="light"] .markdown-body li {
+[data-theme="light"] .markdown-body li,
+[data-theme="light"] .claude-stage .conversation-pane .markdown-body p,
+[data-theme="light"] .claude-stage .conversation-pane .markdown-body span,
+[data-theme="light"] .claude-stage .conversation-pane .markdown-body li {
   color: #1f1e1b !important;
 }
 
@@ -3096,14 +3141,21 @@ svg.rotating {
 
 /* Ultra-High Contrast Markdown Typography in Claude Amber / Sepia */
 [data-theme="amber"] .assistant-flow-content,
-[data-theme="amber"] .markdown-body {
+[data-theme="amber"] .markdown-body,
+[data-theme="amber"] .claude-stage .conversation-pane .markdown-body,
+[data-theme="amber"] .claude-stage .conversation-pane .assistant-flow-content,
+[data-theme="amber"] .claude-stage .conversation-pane .user-bubble-content {
   color: #281f17 !important;
 }
 
 [data-theme="amber"] .markdown-body p,
+[data-theme="amber"] .markdown-body span,
 [data-theme="amber"] .markdown-body ul,
 [data-theme="amber"] .markdown-body ol,
-[data-theme="amber"] .markdown-body li {
+[data-theme="amber"] .markdown-body li,
+[data-theme="amber"] .claude-stage .conversation-pane .markdown-body p,
+[data-theme="amber"] .claude-stage .conversation-pane .markdown-body span,
+[data-theme="amber"] .claude-stage .conversation-pane .markdown-body li {
   color: #281f17 !important;
 }
 
