@@ -951,6 +951,19 @@ fn send_codex_message_with_client(
         .iter()
         .find(|s| s.provider_session_id == input.agent_session_id)
         .cloned();
+
+    if let Some(binding) = &existing_binding {
+        if binding.current_turn_id.is_some()
+            || !matches!(
+                binding.execution_state,
+                agent_pulse_runner::remote_host::ExecutionState::Idle
+                    | agent_pulse_runner::remote_host::ExecutionState::Completed
+            )
+        {
+            return Err(DesktopError::AgentBusy);
+        }
+    }
+
     let (hub_session_id, cwd, needs_resume) = match existing_binding {
         Some(binding) => (
             binding.hub_session_id,

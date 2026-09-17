@@ -1943,12 +1943,15 @@ function SessionControlPanel({
     void reloadMessages();
   }, [reloadMessages, session.agent_type]);
 
-  // Active polling: auto-refresh conversation when busy or on last_activity_at change
+  // Active polling: auto-refresh conversation when busy or on last_activity_at change (with document visibility check)
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     if (!isManagedProvider(session.agent_type)) return;
-    const intervalMs = busy ? 3_000 : 10_000;
+    const intervalMs = busy ? 3_000 : 12_000;
     const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
       void reloadMessages();
     }, intervalMs);
     return () => window.clearInterval(timer);
@@ -2006,6 +2009,14 @@ function SessionControlPanel({
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
     if (busy || prompt.trim() === "") return;
+
+    // Safety pre-flight check: ensure the underlying session isn't running another turn
+    if (hasActiveTurn(session.payload.state.activity_status)) {
+      setBusy(true);
+      setError("该会话正在执行上一轮任务，请等待执行完成或取消后再提交。");
+      return;
+    }
+
     const nextPrompt = prompt.trim();
     setPrompt("");
     setBusy(true);
