@@ -198,7 +198,7 @@ export function NativeHostDialog({ onClose }: { onClose: () => void }) {
         )}
 
         <label>
-          Codex 可执行文件
+          OpenAI Codex CLI
           <input
             value={profile.codex_binary}
             disabled={busy || phase !== "stopped"}
@@ -216,8 +216,7 @@ export function NativeHostDialog({ onClose }: { onClose: () => void }) {
         </label>
 
         <p>
-          这里只控制本机 Remote 连接；各 Agent
-          的登录与会话能力以实际检测结果为准。
+          这里统一控制本机 Remote 守护宿主与工作区授权；各 Agent（ChatGPT、Claude、ZCode、Antigravity、Grok）的登录与会话能力以实际检测结果为准。
         </p>
 
         <div className="remote-workspace-heading">

@@ -554,9 +554,9 @@ export function DesktopSettingsModal({
                           <div className="settings-divider" />
                           <div className="settings-row-item">
                             <div className="row-text">
-                              <strong>本机会话 daemon</strong>
+                              <strong>本机会话守护 (agenthubd)</strong>
                               <p>
-                                管理本机 Codex Session
+                                统一管理本机全 Provider（ChatGPT、Claude、ZCode、Antigravity、Grok）Session
                                 与授权工作目录，并按需开启多端 Remote。
                               </p>
                             </div>
