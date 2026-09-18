@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.4.16] - 2026-09-18
+
+- **全端发版 v2.4.16（Android versionCode = 29 / versionName = 2.4.16）**：
+  - **根治 ZCode 历史会话恢复报错“本机会话不可用”缺陷**：
+    - 根因定位：ZCode app-server 在无头模式由 daemon 启动时，其内存工作区模型目录为空；当继续使用自定义模型（如 `gemini-3.8-flash-high`）的历史会话时，ZCode `session/send` 因模型未注册拒绝执行（RPC -32031 `ZCODE_RUNTIME_MODEL_UNAVAILABLE`）。
+    - 自动同步注册表：解析并读取 `~/.zcode/v2/config.json` 中的 provider/model 配置，在 ZCodeAppServer 初始化与会话恢复（`session/resume` 及 `turn/start`）时自动调用 `workspace/updateProviderRegistry`，注入符合 ZCode Zod Schema 的模型提供商注册表。
+  - **Desktop 桌面端错误暴露与精确诊断**：
+    - 增加 `DesktopError::Detailed(String)`，彻底消除在 `launch_codex_session_with_client` 和 `send_codex_message_with_client` 中对后端错误码的暴力吞咽（原直接报“本机会话已不可用，请刷新后重试”）。
+    - 针对 `invalid_model`、`external_session_not_resumable`、`workspace_not_authorized`、`resume_workspace_mismatch` 等错误码提供精确、友好的中文诊断提示。
+  - **全平台打包交付与生产部署**：Windows Desktop NSIS/MSI、Android APK 归档至 `Deliverables/AgentHub/`，按铁律清理旧版产物，生产容器部署升级。
+
 ## [2.4.15] - 2026-09-17
 
 - **全端发版 v2.4.15（Android versionCode = 28 / versionName = 2.4.15）**：

@@ -3445,6 +3445,74 @@ pub fn resolve_node_executable() -> PathBuf {
     PathBuf::from("node")
 }
 
+pub fn load_zcode_v2_provider_registry() -> Option<Vec<Value>> {
+    let home = home_dir()?;
+    let config_path = home.join(r".zcode\v2\config.json");
+    if !config_path.is_file() {
+        return None;
+    }
+    let data = fs::read_to_string(&config_path).ok()?;
+    let json: Value = serde_json::from_str(&data).ok()?;
+    let providers_obj = json.get("provider")?.as_object()?;
+    let mut providers = Vec::new();
+    for (pid, pdata) in providers_obj {
+        if pdata.get("enabled").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+        let options = pdata.get("options").unwrap_or(&Value::Null);
+        let base_url = options.get("baseURL").and_then(Value::as_str)?;
+        let mut models = Vec::new();
+        if let Some(models_obj) = pdata.get("models").and_then(Value::as_object) {
+            for (mid, mdata) in models_obj {
+                let context = mdata
+                    .pointer("/limit/context")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(128_000);
+                let supports_images = mdata
+                    .pointer("/modalities/input")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().any(|v| v.as_str() == Some("image")))
+                    .unwrap_or(false);
+                models.push(json!({
+                    "modelId": mid,
+                    "label": mid,
+                    "contextWindow": context,
+                    "supportsImages": supports_images
+                }));
+            }
+        }
+        if models.is_empty() {
+            continue;
+        }
+        let raw_kind = pdata.get("kind").and_then(Value::as_str).unwrap_or("openai-compatible");
+        let kind = match raw_kind {
+            "anthropic" | "openai" | "openai-compatible" => raw_kind,
+            _ => "openai-compatible",
+        };
+        let mut entry = json!({
+            "providerId": pid,
+            "kind": kind,
+            "label": pdata.get("name").and_then(Value::as_str).unwrap_or(pid),
+            "baseURL": base_url,
+            "models": models
+        });
+        if let Some(api_key) = options.get("apiKey").and_then(Value::as_str) {
+            if !api_key.trim().is_empty() {
+                entry["apiKey"] = json!({
+                    "source": "inline",
+                    "value": api_key
+                });
+            }
+        }
+        providers.push(entry);
+    }
+    if providers.is_empty() {
+        None
+    } else {
+        Some(providers)
+    }
+}
+
 impl ZCodeAppServer {
     pub fn start_if_available(response_timeout: Duration) -> Result<Self, CollectorError> {
         let script = resolve_zcode_app_server_script().ok_or_else(|| CollectorError::Start {
@@ -3654,7 +3722,37 @@ impl ZCodeAppServer {
             "session/subscribe",
             json!({"sessionId": session_id, "deliveryKind": "desktop-continuous"}),
         );
+        if let Some(ws_path) = resume_res
+            .pointer("/session/workspace/workspacePath")
+            .and_then(Value::as_str)
+        {
+            let _ = self.sync_provider_registry(ws_path);
+        }
         Ok(resume_res)
+    }
+
+    pub fn sync_provider_registry(&mut self, workspace_path: &str) -> Result<(), CollectorError> {
+        if let Some(providers) = load_zcode_v2_provider_registry() {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let _ = self.request(
+                "workspace/updateProviderRegistry",
+                json!({
+                    "workspace": {
+                        "workspaceKey": workspace_path,
+                        "workspacePath": workspace_path
+                    },
+                    "registry": {
+                        "revision": format!("rev-v2-{}", now_ms),
+                        "generatedAt": now_ms,
+                        "providers": providers
+                    }
+                }),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn session_send(

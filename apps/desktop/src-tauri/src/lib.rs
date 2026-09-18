@@ -96,6 +96,8 @@ enum DesktopError {
     InvalidAction,
     #[error("本机会话已不可用，请刷新后重试")]
     SessionUnavailable,
+    #[error("{0}")]
+    Detailed(String),
     #[error("Agent 执行失败；请检查 CLI 登录状态和控制路径")]
     AgentFailed,
     #[error("这个会话已有一个回合正在运行")]
@@ -825,9 +827,13 @@ fn launch_codex_session_with_client(
 
     let receipt = client
         .execute(connect_cmd)
-        .map_err(|_| DesktopError::AgentFailed)?;
+        .map_err(|e| DesktopError::Detailed(format!("启动会话失败: {}", e)))?;
     if receipt.status != "accepted" {
-        return Err(DesktopError::AgentFailed);
+        let detail = receipt
+            .code
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| "session_launch_rejected".into());
+        return Err(DesktopError::Detailed(format!("创建会话被拒绝: {}", detail)));
     }
     let binding_val = receipt.result.ok_or(DesktopError::AgentFailed)?;
     let provider_session_id = binding_val["binding"]["provider_session_id"]
@@ -848,9 +854,13 @@ fn launch_codex_session_with_client(
 
     let send_receipt = client
         .execute(prompt_cmd)
-        .map_err(|_| DesktopError::AgentFailed)?;
+        .map_err(|e| DesktopError::Detailed(format!("发送提示词失败: {}", e)))?;
     if send_receipt.status != "accepted" {
-        return Err(DesktopError::AgentFailed);
+        let detail = send_receipt
+            .code
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| "agent_turn_rejected".into());
+        return Err(DesktopError::Detailed(format!("Agent 拒绝执行: {}", detail)));
     }
     let expected_turn_id = send_receipt
         .result
@@ -1022,9 +1032,20 @@ fn send_codex_message_with_client(
         };
         let receipt = client
             .execute(resume_cmd)
-            .map_err(|_| DesktopError::SessionUnavailable)?;
+            .map_err(|e| DesktopError::Detailed(format!("连接会话失败: {}", e)))?;
         if receipt.status != "accepted" {
-            return Err(DesktopError::SessionUnavailable);
+            let detail = receipt
+                .code
+                .filter(|c| !c.is_empty())
+                .unwrap_or_else(|| "external_session_not_resumable".into());
+            let human_msg = match detail.as_str() {
+                "external_session_not_resumable" => "本机会话不可恢复或模型不可用，请刷新后重试",
+                "workspace_not_authorized" => "工作区目录未授权，请检查工作区设置",
+                "invalid_model" => "指定的模型无效或当前运行时不可用",
+                "resume_workspace_mismatch" => "会话历史工作区与当前工作区不匹配",
+                other => other,
+            };
+            return Err(DesktopError::Detailed(human_msg.to_string()));
         }
     }
 
@@ -1041,9 +1062,13 @@ fn send_codex_message_with_client(
 
     let send_receipt = client
         .execute(prompt_cmd)
-        .map_err(|_| DesktopError::AgentFailed)?;
+        .map_err(|e| DesktopError::Detailed(format!("发送提示词失败: {}", e)))?;
     if send_receipt.status != "accepted" {
-        return Err(DesktopError::AgentFailed);
+        let detail = send_receipt
+            .code
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| "agent_turn_rejected".into());
+        return Err(DesktopError::Detailed(format!("Agent 拒绝执行: {}", detail)));
     }
     let expected_turn_id = send_receipt
         .result

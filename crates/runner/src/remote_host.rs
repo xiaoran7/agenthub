@@ -353,7 +353,11 @@ impl NativeTransport for MultiProviderTransport {
             }
             "turn/start" if is_zcode => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
+                let cached_cwd = self.zcode_cached_cwds.get(session_id).cloned();
                 let zcode = self.ensure_zcode()?;
+                if let Some(cwd) = cached_cwd {
+                    let _ = zcode.sync_provider_registry(&cwd.to_string_lossy());
+                }
                 let text = params["input"]
                     .as_array()
                     .and_then(|arr| arr.iter().find_map(|item| item["text"].as_str()))
