@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.17] - 2026-09-18
+
+- **全端发版 v2.4.17（Android versionCode = 30 / versionName = 2.4.17）**：
+  - **设置面板新增“插件商城” (Plugin Marketplace)**：
+    - 将持续孵化与开发的实验性 Agent 驱动（Google Antigravity 与 xAI Grok Build）收敛至设置中心“插件商城”统一管理，默认不在侧边栏直接裸露，保持主视图极简克制。
+    - 插件商城支持高保真生态卡片：展示插件名称、分类（实验室插件/第三方集成）、版本标签、模型提示、深度描述与一键“获取/启用/停用”状态切换。
+    - 本地持久化与即时联动：用户启用或停用插件后，侧边栏受控 Agent 胶囊选择器与新建会话模态框动态同步更新，配置持久化于本地 LocalStorage。
+  - **全平台打包交付与生产部署**：Windows Desktop NSIS/MSI、Android APK 归档至 `Deliverables/AgentHub/`，按铁律清理旧版产物，生产容器部署升级。
+
 ## [2.4.16] - 2026-09-18
 
 - **全端发版 v2.4.16（Android versionCode = 29 / versionName = 2.4.16）**：

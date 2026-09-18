@@ -36,7 +36,13 @@ import {
   LogOut,
   ExternalLink,
 } from "lucide-react";
-import type { DesktopPreferences, Snapshot } from "../types";
+import type { DesktopPreferences, Session, Snapshot } from "../types";
+import {
+  AGENT_PLUGIN_MARKETPLACE,
+  readPluginState,
+  savePluginState,
+  type AgentPlugin,
+} from "../plugins";
 import { SelectDropdown } from "./SelectDropdown";
 
 interface DesktopSettingsModalProps {
@@ -46,9 +52,10 @@ interface DesktopSettingsModalProps {
   onSaved: (preferences: DesktopPreferences) => void;
   onLogout?: () => void;
   onOpenLocalHost?: () => void;
+  onPluginsChanged?: () => void;
 }
 
-type SettingsSection = "general" | "import" | "connections" | "account";
+type SettingsSection = "general" | "plugins" | "import" | "connections" | "account";
 
 export function DesktopSettingsModal({
   preferences,
@@ -57,6 +64,7 @@ export function DesktopSettingsModal({
   onSaved,
   onLogout,
   onOpenLocalHost,
+  onPluginsChanged,
 }: DesktopSettingsModalProps) {
   const [section, setSection] = useState<SettingsSection>("general");
   const [searchQuery, setSearchQuery] = useState("");
@@ -136,6 +144,23 @@ export function DesktopSettingsModal({
     }
   };
 
+  const [pluginState, setPluginState] = useState(() => readPluginState());
+
+  const togglePlugin = (pluginId: Session["agent_type"]) => {
+    setPluginState((prev) => {
+      const isCurrentlyEnabled = prev.enabledPluginIds.includes(pluginId);
+      const nextIds = isCurrentlyEnabled
+        ? prev.enabledPluginIds.filter((id) => id !== pluginId)
+        : [...prev.enabledPluginIds, pluginId];
+      const nextState = { enabledPluginIds: nextIds };
+      savePluginState(nextState);
+      if (onPluginsChanged) {
+        onPluginsChanged();
+      }
+      return nextState;
+    });
+  };
+
   const navItems: Array<{
     group: string;
     items: Array<{ id: SettingsSection; label: string; icon: React.ReactNode }>;
@@ -144,6 +169,7 @@ export function DesktopSettingsModal({
       group: "核心设置",
       items: [
         { id: "general", label: "常规与刷新", icon: <Settings size={15} /> },
+        { id: "plugins", label: "插件商城", icon: <Puzzle size={15} /> },
         { id: "import", label: "Agent 路径", icon: <Download size={15} /> },
         {
           id: "connections",
@@ -307,6 +333,79 @@ export function DesktopSettingsModal({
                           <span className="range-badge">{refreshSeconds}s</span>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION: PLUGINS MARKETPLACE */}
+              {section === "plugins" && (
+                <div className="settings-section-block">
+                  <div className="settings-card-group">
+                    <div className="plugins-marketplace-header">
+                      <div>
+                        <h4 className="card-group-title" style={{ margin: 0 }}>
+                          插件商城与实验性扩展
+                        </h4>
+                        <p className="plugins-sub-desc">
+                          探索并接入更多 AI 编程助手与实验性 Agent 驱动。开启后将在侧边栏与接管会话中开放对应 Provider。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="plugins-card-grid">
+                      {AGENT_PLUGIN_MARKETPLACE.map((plugin) => {
+                        const isEnabled = pluginState.enabledPluginIds.includes(
+                          plugin.id,
+                        );
+                        return (
+                          <div
+                            key={plugin.id}
+                            className={`plugin-item-card ${isEnabled ? "plugin-installed" : ""}`}
+                          >
+                            <div className="plugin-card-top">
+                              <div className="plugin-icon-box" data-provider={plugin.id}>
+                                <Puzzle size={20} />
+                              </div>
+                              <div className="plugin-header-text">
+                                <div className="plugin-title-row">
+                                  <strong className="plugin-name">{plugin.name}</strong>
+                                  <span className="plugin-badge">{plugin.category}</span>
+                                </div>
+                                <span className="plugin-author">
+                                  {plugin.author} · v{plugin.version}
+                                </span>
+                              </div>
+                              <div className="plugin-action-switch">
+                                <button
+                                  type="button"
+                                  className={`plugin-toggle-btn ${isEnabled ? "active" : ""}`}
+                                  onClick={() => togglePlugin(plugin.id)}
+                                >
+                                  {isEnabled ? "已启用" : "获取 / 启用"}
+                                </button>
+                              </div>
+                            </div>
+
+                            <p className="plugin-summary-text">
+                              {plugin.description}
+                            </p>
+
+                            <div className="plugin-footer-meta">
+                              <div className="plugin-tags-list">
+                                {plugin.tags.map((tag) => (
+                                  <span key={tag} className="plugin-tag-chip">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                              <span className="plugin-model-hint">
+                                默认模型: <code>{plugin.defaultModel}</code>
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>

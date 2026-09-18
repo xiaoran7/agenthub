@@ -117,6 +117,7 @@ import {
 } from "./components/ConversationRenderer";
 import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
 import { applyAppearance, readAppearance } from "./appearance";
+import { isPluginEnabled, readPluginState } from "./plugins";
 import { DesktopHeader } from "./components/layout/DesktopHeader";
 import { SessionEmptyState } from "./components/session/SessionEmptyState";
 import { ConversationLoadState } from "./components/session/ConversationLoadState";
@@ -548,6 +549,11 @@ function Dashboard({
     null,
   );
   const [toastMessage, setToastMessage] = useState<string>();
+
+  const [pluginState, setPluginState] = useState(() => readPluginState());
+  const reloadPlugins = useCallback(() => {
+    setPluginState(readPluginState());
+  }, []);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -1045,7 +1051,9 @@ function Dashboard({
               <span className="picker-label">受控 Agent</span>
             </div>
             <div className="managed-agents-list">
-              {PROVIDER_LIST.map((item) => {
+              {PROVIDER_LIST.filter(
+                (item) => item.managed || pluginState.enabledPluginIds.includes(item.type),
+              ).map((item) => {
                 const isSelected = agentFilter === item.type;
                 return (
                   <button
@@ -1061,7 +1069,7 @@ function Dashboard({
                     <span
                       className={`agent-badge-tag ${item.managed ? "" : "unmanaged"}`}
                     >
-                      {item.managed ? "Managed" : "Unmanaged"}
+                      {item.managed ? "Managed" : "Plugin"}
                     </span>
                   </button>
                 );
@@ -1388,6 +1396,7 @@ function Dashboard({
               }
               onLogout={() => void signOut()}
               onOpenLocalHost={onOpenLocalHost}
+              onPluginsChanged={reloadPlugins}
             />
           )}
           <LaunchSessionModal
@@ -1621,7 +1630,9 @@ function LaunchSessionModal({
           <fieldset className="launch-provider-fieldset">
             <legend>选择目标 Agent</legend>
             <div className="launch-provider-grid">
-              {PROVIDER_LIST.map((item) => (
+              {PROVIDER_LIST.filter(
+                (item) => item.managed || isPluginEnabled(item.type),
+              ).map((item) => (
                 <button
                   key={item.type}
                   type="button"
