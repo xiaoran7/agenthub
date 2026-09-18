@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.18] - 2026-09-19
+
+- **全端发版 v2.4.18（Android versionCode = 31 / versionName = 2.4.18）**：
+  - **对标 ChatGPT Remote 架构：彻底重构 Antigravity 与 Grok 的真实全双工远程接管流**：
+    - 根除前端静态伪配置假象，将 Google Antigravity 与 xAI Grok Build 接入后端统一 Remote 协议总线 `MultiProviderTransport`；
+    - 全面打通底层 `thread/read`、`thread/resume`、`turn/start`、`turn/interrupt` 生命周期调用，实现与官方客户端一致的后台免抢占接管；
+    - 支持会话本地自动扫描（`collect_antigravity_sessions_for_remote` / `collect_grok_sessions_for_remote`）、真实流式增量提取（`item/agentMessage/delta`）与打字机回传；
+    - 桌面端解除白名单限制，无缝接驳真实会话收发与新建驱动；插件商城升级为真实 Remote 运行时生命周期开关。
+  - **全平台打包交付与生产部署**：Windows Desktop NSIS/MSI、Android APK 归档至 `Deliverables/AgentHub/`，按铁律清理旧版产物，生产容器部署升级。
+
 ## [2.4.17] - 2026-09-18
 
 - **全端发版 v2.4.17（Android versionCode = 30 / versionName = 2.4.17）**：

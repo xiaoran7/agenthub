@@ -55,7 +55,8 @@ interface DesktopSettingsModalProps {
   onPluginsChanged?: () => void;
 }
 
-type SettingsSection = "general" | "plugins" | "import" | "connections" | "account";
+type SettingsSection =
+  "general" | "plugins" | "import" | "connections" | "account";
 
 export function DesktopSettingsModal({
   preferences,
@@ -348,7 +349,8 @@ export function DesktopSettingsModal({
                           插件商城与实验性扩展
                         </h4>
                         <p className="plugins-sub-desc">
-                          探索并接入更多 AI 编程助手与实验性 Agent 驱动。开启后将在侧边栏与接管会话中开放对应 Provider。
+                          探索并接入更多 AI 编程助手与实验性 Agent
+                          驱动。开启后将在侧边栏与接管会话中开放对应 Provider。
                         </p>
                       </div>
                     </div>
@@ -364,13 +366,20 @@ export function DesktopSettingsModal({
                             className={`plugin-item-card ${isEnabled ? "plugin-installed" : ""}`}
                           >
                             <div className="plugin-card-top">
-                              <div className="plugin-icon-box" data-provider={plugin.id}>
+                              <div
+                                className="plugin-icon-box"
+                                data-provider={plugin.id}
+                              >
                                 <Puzzle size={20} />
                               </div>
                               <div className="plugin-header-text">
                                 <div className="plugin-title-row">
-                                  <strong className="plugin-name">{plugin.name}</strong>
-                                  <span className="plugin-badge">{plugin.category}</span>
+                                  <strong className="plugin-name">
+                                    {plugin.name}
+                                  </strong>
+                                  <span className="plugin-badge">
+                                    {plugin.category}
+                                  </span>
                                 </div>
                                 <span className="plugin-author">
                                   {plugin.author} · v{plugin.version}

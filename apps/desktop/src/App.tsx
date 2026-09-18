@@ -1052,7 +1052,9 @@ function Dashboard({
             </div>
             <div className="managed-agents-list">
               {PROVIDER_LIST.filter(
-                (item) => item.managed || pluginState.enabledPluginIds.includes(item.type),
+                (item) =>
+                  item.managed ||
+                  pluginState.enabledPluginIds.includes(item.type),
               ).map((item) => {
                 const isSelected = agentFilter === item.type;
                 return (

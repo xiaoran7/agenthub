@@ -2499,7 +2499,11 @@ svg.rotating {
 }
 
 .plugin-item-card.plugin-installed {
-  border-color: color-mix(in srgb, var(--button-primary) 35%, var(--border-subtle));
+  border-color: color-mix(
+    in srgb,
+    var(--button-primary) 35%,
+    var(--border-subtle)
+  );
   background: color-mix(in srgb, var(--button-primary) 3%, var(--bg-surface));
 }
 
@@ -2654,4 +2658,3 @@ svg.rotating {
   border-radius: 4px;
   font-size: 11px;
 }
-

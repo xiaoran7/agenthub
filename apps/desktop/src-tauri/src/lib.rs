@@ -672,8 +672,12 @@ async fn send_session_message(
     if input.agent_type != AgentType::Codex
         && input.agent_type != AgentType::ZCode
         && input.agent_type != AgentType::ClaudeCode
+        && input.agent_type != AgentType::Antigravity
+        && input.agent_type != AgentType::GrokBuild
     {
-        return Err("当前版本仅支持受控 Codex / ZCode / Claude Code 会话继续".into());
+        return Err(
+            "当前版本仅支持受控 Codex / ZCode / Claude Code / Antigravity / Grok 会话继续".into(),
+        );
     }
     let key = session_turn_key(input.agent_type, &input.agent_session_id);
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -729,6 +733,8 @@ async fn launch_new_session(
     if input.agent_type != AgentType::Codex
         && input.agent_type != AgentType::ZCode
         && input.agent_type != AgentType::ClaudeCode
+        && input.agent_type != AgentType::Antigravity
+        && input.agent_type != AgentType::GrokBuild
     {
         return Err("该 Provider 尚未接入远程控制；可写 Session 将在官方协议验证后开放".into());
     }
@@ -833,7 +839,10 @@ fn launch_codex_session_with_client(
             .code
             .filter(|c| !c.is_empty())
             .unwrap_or_else(|| "session_launch_rejected".into());
-        return Err(DesktopError::Detailed(format!("创建会话被拒绝: {}", detail)));
+        return Err(DesktopError::Detailed(format!(
+            "创建会话被拒绝: {}",
+            detail
+        )));
     }
     let binding_val = receipt.result.ok_or(DesktopError::AgentFailed)?;
     let provider_session_id = binding_val["binding"]["provider_session_id"]
@@ -860,7 +869,10 @@ fn launch_codex_session_with_client(
             .code
             .filter(|c| !c.is_empty())
             .unwrap_or_else(|| "agent_turn_rejected".into());
-        return Err(DesktopError::Detailed(format!("Agent 拒绝执行: {}", detail)));
+        return Err(DesktopError::Detailed(format!(
+            "Agent 拒绝执行: {}",
+            detail
+        )));
     }
     let expected_turn_id = send_receipt
         .result
@@ -1068,7 +1080,10 @@ fn send_codex_message_with_client(
             .code
             .filter(|c| !c.is_empty())
             .unwrap_or_else(|| "agent_turn_rejected".into());
-        return Err(DesktopError::Detailed(format!("Agent 拒绝执行: {}", detail)));
+        return Err(DesktopError::Detailed(format!(
+            "Agent 拒绝执行: {}",
+            detail
+        )));
     }
     let expected_turn_id = send_receipt
         .result

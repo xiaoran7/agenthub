@@ -633,6 +633,229 @@ pub fn discover_claude_binary() -> PathBuf {
     PathBuf::from("claude")
 }
 
+pub fn discover_antigravity_binary() -> PathBuf {
+    if let Some(path) = env::var_os("ANTIGRAVITY_BINARY").filter(|v| !v.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
+        let local_bin = user_profile
+            .join(".local")
+            .join("bin")
+            .join("antigravity.exe");
+        if local_bin.is_file() {
+            return local_bin;
+        }
+        let local_cmd = user_profile
+            .join(".local")
+            .join("bin")
+            .join("antigravity.cmd");
+        if local_cmd.is_file() {
+            return local_cmd;
+        }
+    }
+    PathBuf::from("antigravity")
+}
+
+pub fn discover_grok_binary() -> PathBuf {
+    if let Some(path) = env::var_os("GROK_BINARY").filter(|v| !v.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
+        let local_bin = user_profile.join(".local").join("bin").join("grok.exe");
+        if local_bin.is_file() {
+            return local_bin;
+        }
+        let local_cmd = user_profile.join(".local").join("bin").join("grok.cmd");
+        if local_cmd.is_file() {
+            return local_cmd;
+        }
+    }
+    PathBuf::from("grok")
+}
+
+pub fn find_antigravity_session_info(
+    session_id: &str,
+) -> Result<Option<(PathBuf, Option<String>)>, CollectorError> {
+    let Some(home) = discover_antigravity_home()? else {
+        return Ok(None);
+    };
+    let transcript = home
+        .join("brain")
+        .join(session_id)
+        .join(".system_generated")
+        .join("logs")
+        .join("transcript.jsonl");
+    if !transcript.is_file() {
+        return Ok(None);
+    }
+    let (_, cwd, _) = read_antigravity_transcript_sample(&transcript, "Antigravity session store")?;
+    let cwd_path = cwd.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let cwd_path = dunce::canonicalize(&cwd_path).unwrap_or(cwd_path);
+
+    // Try reading first user prompt as title
+    let mut title = None;
+    if let Ok(file) = fs::File::open(&transcript) {
+        let mut reader = BufReader::new(file);
+        for _ in 0..32 {
+            let line = match read_bounded_line(&mut reader) {
+                BoundedLine::Line(line) => line,
+                _ => break,
+            };
+            let Ok(val) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if val.get("type").and_then(Value::as_str) == Some("USER_INPUT") {
+                let content = val.get("content").and_then(Value::as_str).unwrap_or("");
+                title = local_prompt_title(content);
+                if title.is_some() {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(Some((cwd_path, title)))
+}
+
+pub fn collect_antigravity_sessions_for_remote()
+-> Result<Vec<(String, String, Option<String>)>, CollectorError> {
+    let Some(home) = discover_antigravity_home()? else {
+        return Ok(Vec::new());
+    };
+    let brain_dir = home.join("brain");
+    if !brain_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let program = "Antigravity remote session store".to_owned();
+    let mut candidate_transcripts = Vec::new();
+    for entry in read_dir_entries(&brain_dir, &program)? {
+        if !entry.file_type().map(|k| k.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let session_id = entry.file_name().to_string_lossy().to_string();
+        if session_id.starts_with('.') {
+            continue;
+        }
+        let transcript_path = entry
+            .path()
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        if !transcript_path.is_file() {
+            continue;
+        }
+        let modified_at_ms = file_modified_millis(&transcript_path).unwrap_or(0);
+        candidate_transcripts.push((modified_at_ms, session_id, transcript_path));
+    }
+
+    candidate_transcripts.sort_by_key(|(m, _, _)| std::cmp::Reverse(*m));
+    candidate_transcripts.truncate(100);
+
+    let mut sessions = Vec::with_capacity(candidate_transcripts.len());
+    for (_, session_id, transcript_path) in candidate_transcripts {
+        let (_, cwd, _) = read_antigravity_transcript_sample(&transcript_path, &program)?;
+        let mut title = None;
+        if let Ok(file) = fs::File::open(&transcript_path) {
+            let mut reader = BufReader::new(file);
+            for _ in 0..32 {
+                let line = match read_bounded_line(&mut reader) {
+                    BoundedLine::Line(line) => line,
+                    _ => break,
+                };
+                let Ok(val) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if val.get("type").and_then(Value::as_str) == Some("USER_INPUT") {
+                    let content = val.get("content").and_then(Value::as_str).unwrap_or("");
+                    title = local_prompt_title(content);
+                    if title.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+        sessions.push((session_id, cwd.unwrap_or_default(), title));
+    }
+    Ok(sessions)
+}
+
+pub fn find_grok_session_info(
+    session_id: &str,
+) -> Result<Option<(PathBuf, Option<String>)>, CollectorError> {
+    let home = discover_grok_home()?;
+    let program = "Grok session info".to_owned();
+    let sessions_dir = home.join("sessions");
+    if !sessions_dir.is_dir() {
+        return Ok(None);
+    }
+    for group in read_dir_entries(&sessions_dir, &program)? {
+        if !group.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let summary_path = group.path().join(session_id).join("summary.json");
+        if !summary_path.is_file() {
+            continue;
+        }
+        let Some(file) = read_bounded_json_file(&summary_path, GROK_SUMMARY_MAX_BYTES, &program)?
+        else {
+            continue;
+        };
+        let Ok(summary) = serde_json::from_str::<GrokSummaryFile>(&file) else {
+            continue;
+        };
+        let cwd = summary
+            .info
+            .cwd
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+        let title = summary
+            .generated_title
+            .and_then(|value| metadata_label(&value, MAX_SESSION_TITLE_CHARS));
+        return Ok(Some((cwd, title)));
+    }
+    Ok(None)
+}
+
+pub fn collect_grok_sessions_for_remote()
+-> Result<Vec<(String, String, Option<String>)>, CollectorError> {
+    let home = discover_grok_home()?;
+    let program = "Grok remote session store".to_owned();
+    let sessions_dir = home.join("sessions");
+    if !sessions_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut sessions = Vec::new();
+    for group in read_dir_entries(&sessions_dir, &program)? {
+        if !group.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Ok(children) = fs::read_dir(group.path()) else {
+            continue;
+        };
+        for child in children.flatten() {
+            if !child.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let session_id = child.file_name().to_string_lossy().to_string();
+            let summary_path = child.path().join("summary.json");
+            if !summary_path.is_file() {
+                continue;
+            }
+            if let Some(file) =
+                read_bounded_json_file(&summary_path, GROK_SUMMARY_MAX_BYTES, &program)?
+                && let Ok(summary) = serde_json::from_str::<GrokSummaryFile>(&file)
+            {
+                let cwd = summary.info.cwd.unwrap_or_default();
+                let title = summary.generated_title;
+                sessions.push((session_id, cwd, title));
+            }
+        }
+    }
+    sessions.truncate(100);
+    Ok(sessions)
+}
+
 pub fn find_claude_session_info(
     session_id: &str,
 ) -> Result<Option<(PathBuf, Option<String>)>, CollectorError> {
@@ -3484,7 +3707,10 @@ pub fn load_zcode_v2_provider_registry() -> Option<Vec<Value>> {
         if models.is_empty() {
             continue;
         }
-        let raw_kind = pdata.get("kind").and_then(Value::as_str).unwrap_or("openai-compatible");
+        let raw_kind = pdata
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("openai-compatible");
         let kind = match raw_kind {
             "anthropic" | "openai" | "openai-compatible" => raw_kind,
             _ => "openai-compatible",
@@ -3496,13 +3722,13 @@ pub fn load_zcode_v2_provider_registry() -> Option<Vec<Value>> {
             "baseURL": base_url,
             "models": models
         });
-        if let Some(api_key) = options.get("apiKey").and_then(Value::as_str) {
-            if !api_key.trim().is_empty() {
-                entry["apiKey"] = json!({
-                    "source": "inline",
-                    "value": api_key
-                });
-            }
+        if let Some(api_key) = options.get("apiKey").and_then(Value::as_str)
+            && !api_key.trim().is_empty()
+        {
+            entry["apiKey"] = json!({
+                "source": "inline",
+                "value": api_key
+            });
         }
         providers.push(entry);
     }
