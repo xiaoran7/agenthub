@@ -1496,6 +1496,9 @@ input:focus-visible {
   font-size: 11px;
   line-height: 1.6;
 }
+.conversation-empty .outline-button {
+  margin-top: 14px;
+}
 .turn-message {
   margin: 10px 0;
 }

@@ -32,8 +32,8 @@ export function ConversationLoadState({
               : "此 Provider 尚未接入远程控制。")}
       </p>
       {managed && !loading && (
-        <button className="icon-button" type="button" onClick={onRetry}>
-          <RefreshCw size={16} />
+        <button className="outline-button" type="button" onClick={onRetry}>
+          <RefreshCw size={15} />
           重新加载
         </button>
       )}

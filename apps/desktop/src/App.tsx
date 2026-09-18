@@ -131,7 +131,11 @@ type DeviceFilter = "all" | string;
 const isManagedProvider = (
   agentType: AgentFilter,
 ): agentType is Session["agent_type"] =>
-  agentType === "codex" || agentType === "claude_code" || agentType === "zcode";
+  agentType === "codex" ||
+  agentType === "claude_code" ||
+  agentType === "zcode" ||
+  agentType === "antigravity" ||
+  agentType === "grok_build";
 
 export function App() {
   const demo =
