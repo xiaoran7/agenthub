@@ -238,7 +238,10 @@ impl CodexAssistantAccumulator {
         let event_turn_id = event.raw["params"]["turnId"]
             .as_str()
             .or_else(|| event.raw["params"]["turn"]["id"].as_str());
-        if event_turn_id != Some(expected_turn_id) {
+        // If event carries a turnId, verify it matches expected_turn_id; if omitted (e.g. from non-Codex adapters), accept as long as hub_session_id/threadId match
+        if let Some(id) = event_turn_id
+            && id != expected_turn_id
+        {
             return None;
         }
         match event.kind.as_str() {

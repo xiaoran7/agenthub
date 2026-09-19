@@ -235,9 +235,11 @@ impl NativeTransport for MultiProviderTransport {
                 std::thread::spawn(move || {
                     let events_queue = events_tx.clone();
                     let s_id = session_id_clone.clone();
+                    let t_id = turn_id_clone.clone();
                     let on_update = {
                         let events_queue = events_queue.clone();
                         let s_id = s_id.clone();
+                        let t_id = t_id.clone();
                         move |update: crate::collectors::AgentTurnUpdate| match update {
                             crate::collectors::AgentTurnUpdate::AssistantDelta(delta) => {
                                 if let Ok(mut q) = events_queue.lock() {
@@ -245,6 +247,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/agentMessage/delta",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "itemId": "claude_msg",
                                             "delta": delta
                                         }
@@ -257,6 +260,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/agentMessage/delta",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "itemId": "claude_msg",
                                             "delta": msg
                                         }
@@ -269,6 +273,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/started",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "item": {
                                                 "id": "claude_tool",
                                                 "type": "commandExecution"
@@ -407,9 +412,11 @@ impl NativeTransport for MultiProviderTransport {
                 std::thread::spawn(move || {
                     let events_queue = events_tx.clone();
                     let s_id = session_id_clone.clone();
+                    let t_id = turn_id_clone.clone();
                     let on_update = {
                         let events_queue = events_queue.clone();
                         let s_id = s_id.clone();
+                        let t_id = t_id.clone();
                         move |update: crate::collectors::AgentTurnUpdate| match update {
                             crate::collectors::AgentTurnUpdate::AssistantDelta(delta) => {
                                 if let Ok(mut q) = events_queue.lock() {
@@ -417,6 +424,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/agentMessage/delta",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "itemId": "antigravity_msg",
                                             "delta": delta
                                         }
@@ -429,6 +437,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/agentMessage/delta",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "itemId": "antigravity_msg",
                                             "delta": msg
                                         }
@@ -441,6 +450,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/started",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "item": {
                                                 "id": "antigravity_tool",
                                                 "type": "commandExecution"
@@ -577,9 +587,11 @@ impl NativeTransport for MultiProviderTransport {
                 std::thread::spawn(move || {
                     let events_queue = events_tx.clone();
                     let s_id = session_id_clone.clone();
+                    let t_id = turn_id_clone.clone();
                     let on_update = {
                         let events_queue = events_queue.clone();
                         let s_id = s_id.clone();
+                        let t_id = t_id.clone();
                         move |update: crate::collectors::AgentTurnUpdate| match update {
                             crate::collectors::AgentTurnUpdate::AssistantDelta(delta) => {
                                 if let Ok(mut q) = events_queue.lock() {
@@ -587,6 +599,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/agentMessage/delta",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "itemId": "grok_msg",
                                             "delta": delta
                                         }
@@ -599,6 +612,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/agentMessage/delta",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "itemId": "grok_msg",
                                             "delta": msg
                                         }
@@ -611,6 +625,7 @@ impl NativeTransport for MultiProviderTransport {
                                         "method": "item/started",
                                         "params": {
                                             "threadId": s_id,
+                                            "turnId": t_id,
                                             "item": {
                                                 "id": "grok_tool",
                                                 "type": "commandExecution"
@@ -919,11 +934,13 @@ impl NativeTransport for MultiProviderTransport {
                                         .as_str()
                                         .or_else(|| payload["assistantMessageId"].as_str())
                                         .unwrap_or("agent_msg");
+                                    let active_tid = active_turn_id.as_deref().unwrap_or("turn_1");
                                     if !delta.is_empty() {
                                         messages.push(json!({
                                             "method": "item/agentMessage/delta",
                                             "params": {
                                                 "threadId": session_id,
+                                                "turnId": active_tid,
                                                 "itemId": part_id,
                                                 "delta": delta
                                             }
@@ -933,11 +950,13 @@ impl NativeTransport for MultiProviderTransport {
                                 "tool.updated" => {
                                     let kind = payload["kind"].as_str().unwrap_or("");
                                     let tool_id = payload["toolCallId"].as_str().unwrap_or("tool_call");
+                                    let active_tid = active_turn_id.as_deref().unwrap_or("turn_1");
                                     if kind == "started" {
                                         messages.push(json!({
                                             "method": "item/started",
                                             "params": {
                                                 "threadId": session_id,
+                                                "turnId": active_tid,
                                                 "item": {
                                                     "id": tool_id,
                                                     "type": "commandExecution"
@@ -949,6 +968,7 @@ impl NativeTransport for MultiProviderTransport {
                                             "method": "item/completed",
                                             "params": {
                                                 "threadId": session_id,
+                                                "turnId": active_tid,
                                                 "item": {
                                                     "id": tool_id,
                                                     "type": "commandExecution"
