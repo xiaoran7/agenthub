@@ -980,12 +980,19 @@ fn send_codex_message_with_client(
         return Err(DesktopError::InvalidAction);
     }
 
+    let provider_session_id = match input.agent_type {
+        AgentType::ClaudeCode if !input.agent_session_id.starts_with("claude_") => {
+            format!("claude_{}", input.agent_session_id)
+        }
+        _ => input.agent_session_id.clone(),
+    };
+
     let sessions = client
         .query_sessions()
         .map_err(|_| DesktopError::SessionUnavailable)?;
     let existing_binding = sessions
         .iter()
-        .find(|s| s.provider_session_id == input.agent_session_id)
+        .find(|s| s.provider_session_id == provider_session_id || s.provider_session_id == input.agent_session_id)
         .cloned();
 
     if let Some(binding) = &existing_binding
@@ -1007,7 +1014,7 @@ fn send_codex_message_with_client(
         ),
         None => (
             format!("hub-{}", uuid::Uuid::new_v4()),
-            find_session_cwd(input.agent_type, &input.agent_session_id)
+            find_session_cwd(input.agent_type, &provider_session_id)
                 .or_else(|| std::env::current_dir().ok())
                 .ok_or(DesktopError::SessionUnavailable)?,
             true,
@@ -1027,7 +1034,7 @@ fn send_codex_message_with_client(
                 workspace_path: PathBuf::from(agent_pulse_runner::privacy::workspace_id_for_path(
                     &cwd.to_string_lossy(),
                 )),
-                provider_session_id: Some(input.agent_session_id.clone()),
+                provider_session_id: Some(provider_session_id.clone()),
                 model: input.model.filter(|m| !m.trim().is_empty()),
                 sandbox: match input.permission_mode.as_deref() {
                     Some("danger-full-access" | "danger" | "bypass") => {
@@ -1170,6 +1177,9 @@ fn send_codex_message_with_client(
     }
 
     Ok(json!({
+        "agent_session_id": provider_session_id,
+        "agent_type": input.agent_type.as_str(),
+        "cwd": cwd.to_string_lossy(),
         "response": final_response,
         "completed_at": chrono::Utc::now(),
     }))

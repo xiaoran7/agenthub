@@ -517,7 +517,8 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
     ]
     .into_iter()
     .find_map(|path| value.pointer(path).and_then(Value::as_u64))
-    .or(context.context_window_tokens);
+    .or(context.context_window_tokens)
+    .or(Some(200_000));
 }
 
 fn usage_u64(value: &Value, field: &str) -> u64 {

@@ -1602,7 +1602,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 }
             }
 
-            return Ok(json!({"binding": binding, "provider_response": response}));
+            // Bound provider_response in receipt: IPC frame limit is MAX_DAEMON_FRAME_BYTES (1MB).
+            // Retain thread summary (id, cwd, status) and discard large historical turns array.
+            let mut sanitized_response = response.clone();
+            if let Some(thread_obj) = sanitized_response.get_mut("thread").and_then(Value::as_object_mut) {
+                thread_obj.remove("turns");
+            }
+            return Ok(json!({"binding": binding, "provider_response": sanitized_response}));
         }
 
         let session = self
