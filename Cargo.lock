@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agent-pulse-desktop"
-version = "2.4.19"
+version = "2.4.20"
 dependencies = [
  "agent-pulse-runner",
  "chrono",
@@ -68,7 +68,7 @@ dependencies = [
 
 [[package]]
 name = "agent-pulse-runner"
-version = "2.4.19"
+version = "2.4.20"
 dependencies = [
  "aes-gcm",
  "anyhow",

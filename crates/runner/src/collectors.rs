@@ -3723,7 +3723,7 @@ pub fn resolve_zcode_app_server_script() -> Option<PathBuf> {
     if let Some(path) = env::var_os("ZCODE_APP_SERVER_PATH").filter(|v| !v.is_empty()) {
         let candidate = PathBuf::from(path);
         if candidate.is_file() {
-            return candidate.canonicalize().ok().or(Some(candidate));
+            return dunce::canonicalize(&candidate).ok().or(Some(candidate));
         }
     }
     let candidates = [
@@ -3733,13 +3733,13 @@ pub fn resolve_zcode_app_server_script() -> Option<PathBuf> {
     ];
     for candidate in candidates {
         if candidate.is_file() {
-            return candidate.canonicalize().ok().or(Some(candidate));
+            return dunce::canonicalize(&candidate).ok().or(Some(candidate));
         }
     }
     if let Some(home) = home_dir() {
         let local_app = home.join(r"AppData\Local\Programs\zcode\resources\glm\zcode.cjs");
         if local_app.is_file() {
-            return local_app.canonicalize().ok().or(Some(local_app));
+            return dunce::canonicalize(&local_app).ok().or(Some(local_app));
         }
     }
     None
@@ -3749,7 +3749,7 @@ pub fn resolve_node_executable() -> PathBuf {
     if let Some(path) = env::var_os("NODE_BINARY").filter(|v| !v.is_empty()) {
         let candidate = PathBuf::from(path);
         if candidate.is_file() {
-            return candidate;
+            return dunce::canonicalize(&candidate).unwrap_or(candidate);
         }
     }
     let candidates = [
@@ -3758,7 +3758,7 @@ pub fn resolve_node_executable() -> PathBuf {
     ];
     for candidate in candidates {
         if candidate.is_file() {
-            return candidate;
+            return dunce::canonicalize(&candidate).unwrap_or(candidate);
         }
     }
     PathBuf::from("node")
