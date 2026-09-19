@@ -71,6 +71,85 @@ struct StartupDiagnostic {
 static STARTUP_DIAGNOSTICS: Mutex<std::collections::VecDeque<StartupDiagnostic>> =
     Mutex::new(std::collections::VecDeque::new());
 static STARTING_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
+static DAEMON_PROCESS: Mutex<Option<std::process::Child>> = Mutex::new(None);
+#[cfg(windows)]
+struct DesktopJob(windows_sys::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+unsafe impl Send for DesktopJob {}
+#[cfg(windows)]
+impl DesktopJob {
+    fn attach(child: &std::process::Child) -> std::io::Result<Self> {
+        use std::{
+            ffi::c_void,
+            mem::{size_of, zeroed},
+            os::windows::io::AsRawHandle,
+            ptr,
+        };
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            },
+        };
+        unsafe {
+            let handle = CreateJobObjectW(ptr::null(), ptr::null());
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+            information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&raw const information).cast::<c_void>(),
+                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                    .expect("job information size fits u32"),
+            ) == 0
+            {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(handle);
+                return Err(error);
+            }
+            if AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) == 0 {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(handle);
+                return Err(error);
+            }
+            Ok(Self(handle))
+        }
+    }
+}
+#[cfg(windows)]
+impl Drop for DesktopJob {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+#[cfg(windows)]
+static DAEMON_JOB: Mutex<Option<DesktopJob>> = Mutex::new(None);
+
+pub fn terminate_daemon() {
+    if let Ok(mut child_slot) = DAEMON_PROCESS.lock()
+        && let Some(mut child) = child_slot.take()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    if let Ok(mut starting_slot) = STARTING_CHILD.lock()
+        && let Some(mut child) = starting_slot.take()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    #[cfg(windows)]
+    if let Ok(mut job_slot) = DAEMON_JOB.lock() {
+        job_slot.take();
+    }
+}
 
 fn record_startup(code: &str) {
     if let Ok(mut diagnostics) = STARTUP_DIAGNOSTICS.lock() {
@@ -126,8 +205,18 @@ fn child_startup_probe_with(
     slot: &mut Option<std::process::Child>,
 ) -> DaemonProbe {
     if matches!(probe, DaemonProbe::Ready(_)) {
-        // Dropping Child does not terminate the independent daemon.
-        slot.take();
+        // Hand over starting child to DAEMON_PROCESS and assign to DesktopJob
+        if let Some(child) = slot.take() {
+            #[cfg(windows)]
+            if let Ok(job) = DesktopJob::attach(&child) {
+                if let Ok(mut job_slot) = DAEMON_JOB.lock() {
+                    *job_slot = Some(job);
+                }
+            }
+            if let Ok(mut daemon_slot) = DAEMON_PROCESS.lock() {
+                *daemon_slot = Some(child);
+            }
+        }
         return probe;
     }
     if let Some(child) = slot.as_mut() {
@@ -790,11 +879,16 @@ fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000 | 0x0000_0008 | 0x0000_0200);
     }
-    // ARCHITECTURE: Desktop exit must not stop the shared background Host.
-    // In particular, do not assign this child to a KILL_ON_JOB_CLOSE Job Object.
+    // Bind daemon lifecycle to Desktop: assign to DesktopJob so Windows terminates it on exit.
     let mut child = command
         .spawn()
         .map_err(|_| "daemon_spawn_failed".to_owned())?;
+    #[cfg(windows)]
+    if let Ok(job) = DesktopJob::attach(&child) {
+        if let Ok(mut job_slot) = DAEMON_JOB.lock() {
+            *job_slot = Some(job);
+        }
+    }
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || drain_startup_diagnostics(stdout));
     }

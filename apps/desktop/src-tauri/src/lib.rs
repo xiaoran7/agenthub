@@ -3557,7 +3557,7 @@ pub fn run() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "quit" => {
-                            // The shared daemon outlives this Desktop client.
+                            daemon_client::terminate_daemon();
                             app.exit(0);
                         }
                         "show" => {
@@ -3628,6 +3628,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event
                 && let Some(state) = app_handle.try_state::<DesktopState>()
             {
+                daemon_client::terminate_daemon();
                 stop_dashboard_realtime(&state);
                 if let Ok(active_turns) = state.active_turns.lock() {
                     for cancelled in active_turns.values() {
