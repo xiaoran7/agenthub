@@ -831,6 +831,7 @@ fn launch_codex_session_with_client(
                 }
                 _ => agent_pulse_runner::remote_host::CodexApprovalPolicy::OnRequest,
             },
+            agent_type: Some(input.agent_type.as_str().to_string()),
         },
     };
 
@@ -1050,6 +1051,7 @@ fn send_codex_message_with_client(
                     }
                     _ => agent_pulse_runner::remote_host::CodexApprovalPolicy::OnRequest,
                 },
+                agent_type: Some(input.agent_type.as_str().to_string()),
             },
         };
         let receipt = client

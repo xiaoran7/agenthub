@@ -250,6 +250,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             model: None,
             sandbox: CodexSandbox::ReadOnly,
             approval_policy: CodexApprovalPolicy::Untrusted,
+            agent_type: None,
         },
     };
     let receipt = execute(&endpoint, connect);
@@ -336,6 +337,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             model: None,
             sandbox: CodexSandbox::ReadOnly,
             approval_policy: CodexApprovalPolicy::Untrusted,
+            agent_type: None,
         },
     };
     let resumed = execute(&endpoint, resume);

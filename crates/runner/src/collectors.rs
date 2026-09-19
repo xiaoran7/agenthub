@@ -4039,6 +4039,31 @@ impl ZCodeAppServer {
         Ok(messages)
     }
 
+    pub fn session_create(&mut self, workspace_path: &str) -> Result<Value, CollectorError> {
+        let clean_path = workspace_path.trim_start_matches(r"\\?\");
+        let res = self.request(
+            "session/create",
+            json!({
+                "workspace": {
+                    "workspacePath": clean_path,
+                    "workspaceKey": clean_path
+                }
+            }),
+        )?;
+        let session_id = res
+            .pointer("/session/sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !session_id.is_empty() {
+            let _ = self.request(
+                "session/subscribe",
+                json!({"sessionId": session_id, "deliveryKind": "desktop-continuous"}),
+            );
+            let _ = self.sync_provider_registry_with_key(clean_path, clean_path);
+        }
+        Ok(res)
+    }
+
     pub fn session_resume(&mut self, session_id: &str) -> Result<Value, CollectorError> {
         let resume_res = self.request("session/resume", json!({"sessionId": session_id}))?;
         let _ = self.request(

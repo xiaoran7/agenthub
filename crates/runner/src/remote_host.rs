@@ -154,7 +154,75 @@ impl NativeTransport for MultiProviderTransport {
             .and_then(Value::as_str)
             .is_some_and(|id| id.starts_with("grok_"));
 
+        let agent_type = params
+            .get("agentType")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
         match method {
+            "thread/start" if agent_type == "zcode" => {
+                let cwd = params["cwd"].as_str().unwrap_or(".").to_string();
+                let zcode = self.ensure_zcode()?;
+                let res = zcode.session_create(&cwd).map_err(|error| match error {
+                    crate::collectors::CollectorError::Protocol { ref message, .. } => {
+                        NativeError::rejected(message.as_str())
+                    }
+                    _ => NativeError::uncertain("provider_transport_lost"),
+                })?;
+                let session_id = res
+                    .pointer("/session/sessionId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| NativeError::uncertain("provider_missing_native_id"))?
+                    .to_string();
+                self.zcode_cached_cwds
+                    .insert(session_id.clone(), PathBuf::from(&cwd));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd,
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "thread/start" if agent_type == "claude_code" => {
+                let cwd = params["cwd"].as_str().unwrap_or(".").to_string();
+                let session_id = format!("claude_{}", uuid::Uuid::new_v4());
+                self.claude_cached_cwds
+                    .insert(session_id.clone(), PathBuf::from(&cwd));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd,
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "thread/start" if agent_type == "antigravity" => {
+                let cwd = params["cwd"].as_str().unwrap_or(".").to_string();
+                let session_id = format!("antigravity_{}", uuid::Uuid::new_v4());
+                self.antigravity_cached_cwds
+                    .insert(session_id.clone(), PathBuf::from(&cwd));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd,
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "thread/start" if agent_type == "grok_build" => {
+                let cwd = params["cwd"].as_str().unwrap_or(".").to_string();
+                let session_id = format!("grok_{}", uuid::Uuid::new_v4());
+                self.grok_cached_cwds
+                    .insert(session_id.clone(), PathBuf::from(&cwd));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd,
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
             "thread/read" if is_claude => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("claude_");
@@ -1101,6 +1169,8 @@ pub enum RemoteAction {
         sandbox: CodexSandbox,
         #[serde(default)]
         approval_policy: CodexApprovalPolicy,
+        #[serde(default)]
+        agent_type: Option<String>,
     },
     SendPrompt {
         text: String,
@@ -1432,6 +1502,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             model,
             sandbox,
             approval_policy,
+            agent_type,
         } = &command.command
         {
             if *mode == ConnectMode::Attach {
@@ -1485,6 +1556,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 "approvalsReviewer": "user"});
             if let Some(model) = model {
                 params["model"] = json!(model);
+            }
+            if let Some(at) = agent_type {
+                params["agentType"] = json!(at);
             }
             let method = match mode {
                 ConnectMode::Create => {

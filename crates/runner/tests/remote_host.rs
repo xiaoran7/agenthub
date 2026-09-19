@@ -90,6 +90,7 @@ fn connect(dir: &tempfile::TempDir, hub: &str, generation: &str) -> RemoteComman
             model: None,
             sandbox: CodexSandbox::ReadOnly,
             approval_policy: CodexApprovalPolicy::Untrusted,
+            agent_type: None,
         },
     }
 }
