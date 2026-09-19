@@ -3839,6 +3839,11 @@ mod tests {
             context_window_tokens: Some(200_000),
             context_used_tokens: Some(40_000),
             session_total_tokens: None,
+            input_tokens: Some(40_000),
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            reasoning_tokens: None,
         };
         let contexts = HashMap::from([("claude_code:session-1".to_owned(), context)]);
         let remote = json!([{

@@ -44,18 +44,26 @@ pub fn load_session_conversation(
     if validate_session_id(session_id).is_err() {
         return Vec::new();
     }
+    // Remote sessions often arrive prefixed with provider namespaces (e.g. claude_<uuid>, antigravity_<id>, grok_<id>).
+    // Strip provider-specific prefixes so on-disk transcript matching finds the raw file name / UUID.
+    let raw_session_id = session_id
+        .strip_prefix("claude_")
+        .or_else(|| session_id.strip_prefix("antigravity_"))
+        .or_else(|| session_id.strip_prefix("grok_"))
+        .unwrap_or(session_id);
+
     if agent_type == AgentType::ZCode {
         return load_zcode_session_conversation(home, session_id);
     }
     let mut paths = Vec::new();
     match agent_type {
         AgentType::Codex => {
-            collect_provider_transcripts(&home.join(".codex"), session_id, 0, &mut paths)
+            collect_provider_transcripts(&home.join(".codex"), raw_session_id, 0, &mut paths)
         }
         AgentType::ClaudeCode => {
-            collect_transcript_files(&home.join(".claude/projects"), session_id, 0, &mut paths)
+            collect_transcript_files(&home.join(".claude/projects"), raw_session_id, 0, &mut paths)
         }
-        _ => paths.extend(find_agent_transcript(home, agent_type, session_id)),
+        _ => paths.extend(find_agent_transcript(home, agent_type, raw_session_id)),
     }
     paths.sort();
     paths.dedup();
@@ -80,10 +88,10 @@ pub fn load_session_conversation(
             (v.get("type").and_then(Value::as_str) == Some("session_meta")
                 && v.pointer("/payload/id")
                     .and_then(Value::as_str)
-                    .is_some_and(|id| id != session_id))
+                    .is_some_and(|id| id != raw_session_id && id != session_id))
                 || v.get("sessionId")
                     .and_then(Value::as_str)
-                    .is_some_and(|id| id != session_id)
+                    .is_some_and(|id| id != raw_session_id && id != session_id)
         }) {
             continue;
         }
@@ -235,11 +243,17 @@ fn budget_conversation(items: Vec<Value>, omitted: bool) -> Vec<Value> {
 }
 
 fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -> Option<PathBuf> {
+    let raw_session_id = session_id
+        .strip_prefix("claude_")
+        .or_else(|| session_id.strip_prefix("antigravity_"))
+        .or_else(|| session_id.strip_prefix("grok_"))
+        .unwrap_or(session_id);
+
     match agent_type {
         AgentType::ClaudeCode => {
-            find_transcript_file(&home.join(".claude").join("projects"), session_id, 0)
+            find_transcript_file(&home.join(".claude").join("projects"), raw_session_id, 0)
         }
-        AgentType::Codex => find_provider_transcript(&home.join(".codex"), session_id, 0),
+        AgentType::Codex => find_provider_transcript(&home.join(".codex"), raw_session_id, 0),
         AgentType::Antigravity => {
             let roots = [
                 home.join(".gemini").join("antigravity"),
@@ -248,7 +262,7 @@ fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -
             roots.into_iter().find_map(|root| {
                 let direct = root
                     .join("brain")
-                    .join(session_id)
+                    .join(raw_session_id)
                     .join(".system_generated")
                     .join("logs")
                     .join("transcript.jsonl");
@@ -256,7 +270,7 @@ fn find_agent_transcript(home: &Path, agent_type: AgentType, session_id: &str) -
             })
         }
         AgentType::GrokBuild => {
-            find_provider_transcript(&home.join(".grok").join("sessions"), session_id, 0)
+            find_provider_transcript(&home.join(".grok").join("sessions"), raw_session_id, 0)
         }
         AgentType::ZCode => None,
     }
@@ -1306,6 +1320,31 @@ mod tests {
 
         let matched = find_provider_transcript(&home.path().join(".codex"), session_id, 0);
         assert_eq!(matched, Some(file2));
+    }
+
+    #[test]
+    fn test_real_claude_sessions_loading() {
+        let Some(home) = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+        else {
+            return;
+        };
+        let entries = crate::collectors::collect_claude_sessions_for_remote().unwrap();
+        println!("Collected {} claude sessions for remote", entries.len());
+        let mut empty_count = 0;
+        let mut ok_count = 0;
+        for (id, _cwd, _title) in entries.iter() {
+            let prefixed = format!("claude_{}", id);
+            let messages = load_session_conversation(&home, AgentType::ClaudeCode, &prefixed);
+            if messages.is_empty() {
+                empty_count += 1;
+            } else {
+                ok_count += 1;
+            }
+        }
+        println!("WITH PREFIXED ID: ok={}, empty={}", ok_count, empty_count);
+        assert!(ok_count > 30, "Prefixed session IDs must now resolve successfully!");
     }
 }
 

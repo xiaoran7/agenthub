@@ -25,16 +25,16 @@ pub struct NativeError {
 }
 
 impl NativeError {
-    fn rejected(code: &str) -> Self {
+    fn rejected(code: impl AsRef<str>) -> Self {
         Self {
-            code: code.into(),
+            code: code.as_ref().to_owned(),
             outcome_unknown: false,
         }
     }
 
-    fn uncertain(code: &str) -> Self {
+    fn uncertain(code: impl AsRef<str>) -> Self {
         Self {
-            code: code.into(),
+            code: code.as_ref().to_owned(),
             outcome_unknown: true,
         }
     }
@@ -729,8 +729,12 @@ impl NativeTransport for MultiProviderTransport {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let cached_cwd = self.zcode_cached_cwds.get(session_id).cloned();
                 let zcode = self.ensure_zcode()?;
+                // Ensure the session is loaded and subscribed on this zcode child process
+                let _ = zcode.session_resume(session_id);
                 if let Some(cwd) = cached_cwd {
-                    let _ = zcode.sync_provider_registry(&cwd.to_string_lossy());
+                    let cwd_str = cwd.to_string_lossy();
+                    let clean_cwd = cwd_str.trim_start_matches(r"\\?\");
+                    let _ = zcode.sync_provider_registry_with_key(clean_cwd, clean_cwd);
                 }
                 let text = params["input"]
                     .as_array()
@@ -742,7 +746,12 @@ impl NativeTransport for MultiProviderTransport {
                         crate::collectors::CollectorError::Protocol { ref message, .. } => {
                             NativeError::rejected(message.as_str())
                         }
-                        _ => NativeError::uncertain("provider_transport_lost"),
+                        crate::collectors::CollectorError::Timeout { ref program, timeout_ms } => {
+                            NativeError::uncertain(format!("zcode_timeout: {} after {}ms", program, timeout_ms))
+                        }
+                        ref err => {
+                            NativeError::uncertain(format!("zcode_send_failed: {}", err))
+                        }
                     })?;
                 let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
                 self.zcode_active_turns
@@ -857,10 +866,16 @@ impl NativeTransport for MultiProviderTransport {
     }
 
     fn drain(&mut self) -> Result<Vec<Value>, NativeError> {
-        let mut messages: Vec<Value> = self
-            .codex
-            .drain_messages()
-            .map_err(|_| NativeError::uncertain("provider_transport_lost"))?;
+        let mut messages: Vec<Value> = Vec::new();
+        let mut codex_lost = false;
+
+        match self.codex.drain_messages() {
+            Ok(codex_msgs) => messages.extend(codex_msgs),
+            Err(e) => {
+                eprintln!("[MultiProviderTransport] codex drain error: {:?}", e);
+                codex_lost = true;
+            }
+        }
 
         while let Some(evt) = self.zcode_buffered_events.pop_front() {
             messages.push(evt);
@@ -884,129 +899,142 @@ impl NativeTransport for MultiProviderTransport {
             }
         }
 
+        let mut zcode_lost = false;
         if let Some(ref mut zcode) = self.zcode {
-            let raw_events = zcode
-                .drain_messages()
-                .map_err(|_| NativeError::uncertain("provider_transport_lost"))?;
+            match zcode.drain_messages() {
+                Ok(raw_events) => {
+                    for raw in raw_events {
+                        let method = raw.get("method").and_then(Value::as_str).unwrap_or("");
+                        if method == "session/event" {
+                            let params = &raw["params"];
+                            let session_id = params["sessionId"].as_str().unwrap_or("");
+                            let event_type = params["type"].as_str().unwrap_or("");
+                            let payload = &params["payload"];
+                            let active_turn_id = self.zcode_active_turns.get(session_id).cloned();
 
-            for raw in raw_events {
-                let method = raw.get("method").and_then(Value::as_str).unwrap_or("");
-                if method == "session/event" {
-                    let params = &raw["params"];
-                    let session_id = params["sessionId"].as_str().unwrap_or("");
-                    let event_type = params["type"].as_str().unwrap_or("");
-                    let payload = &params["payload"];
-                    let active_turn_id = self.zcode_active_turns.get(session_id).cloned();
-
-                    match event_type {
-                        "model.streaming" => {
-                            let delta = payload["delta"].as_str().unwrap_or("");
-                            let part_id = payload["partId"]
-                                .as_str()
-                                .or_else(|| payload["assistantMessageId"].as_str())
-                                .unwrap_or("agent_msg");
-                            if !delta.is_empty() {
-                                messages.push(json!({
-                                    "method": "item/agentMessage/delta",
-                                    "params": {
-                                        "threadId": session_id,
-                                        "itemId": part_id,
-                                        "delta": delta
+                            match event_type {
+                                "model.streaming" => {
+                                    let delta = payload["delta"].as_str().unwrap_or("");
+                                    let part_id = payload["partId"]
+                                        .as_str()
+                                        .or_else(|| payload["assistantMessageId"].as_str())
+                                        .unwrap_or("agent_msg");
+                                    if !delta.is_empty() {
+                                        messages.push(json!({
+                                            "method": "item/agentMessage/delta",
+                                            "params": {
+                                                "threadId": session_id,
+                                                "itemId": part_id,
+                                                "delta": delta
+                                            }
+                                        }));
                                     }
-                                }));
-                            }
-                        }
-                        "tool.updated" => {
-                            let kind = payload["kind"].as_str().unwrap_or("");
-                            let tool_id = payload["toolCallId"].as_str().unwrap_or("tool_call");
-                            if kind == "started" {
-                                messages.push(json!({
-                                    "method": "item/started",
-                                    "params": {
-                                        "threadId": session_id,
-                                        "item": {
-                                            "id": tool_id,
-                                            "type": "commandExecution"
+                                }
+                                "tool.updated" => {
+                                    let kind = payload["kind"].as_str().unwrap_or("");
+                                    let tool_id = payload["toolCallId"].as_str().unwrap_or("tool_call");
+                                    if kind == "started" {
+                                        messages.push(json!({
+                                            "method": "item/started",
+                                            "params": {
+                                                "threadId": session_id,
+                                                "item": {
+                                                    "id": tool_id,
+                                                    "type": "commandExecution"
+                                                }
+                                            }
+                                        }));
+                                    } else if matches!(kind, "result" | "batch" | "completed") {
+                                        messages.push(json!({
+                                            "method": "item/completed",
+                                            "params": {
+                                                "threadId": session_id,
+                                                "item": {
+                                                    "id": tool_id,
+                                                    "type": "commandExecution"
+                                                }
+                                            }
+                                        }));
+                                    }
+                                }
+                                "turn.completed" => {
+                                    let turn_id = active_turn_id.unwrap_or_else(|| "turn_1".into());
+                                    self.zcode_active_turns.remove(session_id);
+                                    messages.push(json!({
+                                        "method": "turn/completed",
+                                        "params": {
+                                            "threadId": session_id,
+                                            "turn": {
+                                                "id": turn_id,
+                                                "status": { "type": "completed" }
+                                            }
                                         }
-                                    }
-                                }));
-                            } else if matches!(kind, "result" | "batch" | "completed") {
+                                    }));
+                                }
+                                "turn.failed" => {
+                                    let turn_id = active_turn_id.unwrap_or_else(|| "turn_1".into());
+                                    self.zcode_active_turns.remove(session_id);
+                                    messages.push(json!({
+                                        "method": "turn/completed",
+                                        "params": {
+                                            "threadId": session_id,
+                                            "turn": {
+                                                "id": turn_id,
+                                                "status": { "type": "failed" }
+                                            }
+                                        }
+                                    }));
+                                }
+                                _ => {}
+                            }
+                        } else if method == "state.updated" {
+                            let session_id = raw["params"]["sessionId"].as_str().unwrap_or("");
+                            let patch_status = raw["params"]["patch"]["status"].as_str();
+                            if patch_status == Some("idle") {
+                                if let Some(turn_id) = self.zcode_active_turns.remove(session_id) {
+                                    messages.push(json!({
+                                        "method": "turn/completed",
+                                        "params": {
+                                            "threadId": session_id,
+                                            "turn": {
+                                                "id": turn_id,
+                                                "status": { "type": "completed" }
+                                            }
+                                        }
+                                    }));
+                                }
                                 messages.push(json!({
-                                    "method": "item/completed",
+                                    "method": "thread/status/changed",
                                     "params": {
                                         "threadId": session_id,
-                                        "item": {
-                                            "id": tool_id,
-                                            "type": "commandExecution"
-                                        }
+                                        "status": { "type": "idle" }
+                                    }
+                                }));
+                            } else if patch_status == Some("running") {
+                                messages.push(json!({
+                                    "method": "thread/status/changed",
+                                    "params": {
+                                        "threadId": session_id,
+                                        "status": { "type": "active", "activeFlags": [] }
                                     }
                                 }));
                             }
                         }
-                        "turn.completed" => {
-                            let turn_id = active_turn_id.unwrap_or_else(|| "turn_1".into());
-                            self.zcode_active_turns.remove(session_id);
-                            messages.push(json!({
-                                "method": "turn/completed",
-                                "params": {
-                                    "threadId": session_id,
-                                    "turn": {
-                                        "id": turn_id,
-                                        "status": { "type": "completed" }
-                                    }
-                                }
-                            }));
-                        }
-                        "turn.failed" => {
-                            let turn_id = active_turn_id.unwrap_or_else(|| "turn_1".into());
-                            self.zcode_active_turns.remove(session_id);
-                            messages.push(json!({
-                                "method": "turn/completed",
-                                "params": {
-                                    "threadId": session_id,
-                                    "turn": {
-                                        "id": turn_id,
-                                        "status": { "type": "failed" }
-                                    }
-                                }
-                            }));
-                        }
-                        _ => {}
-                    }
-                } else if method == "state.updated" {
-                    let session_id = raw["params"]["sessionId"].as_str().unwrap_or("");
-                    let patch_status = raw["params"]["patch"]["status"].as_str();
-                    if patch_status == Some("idle") {
-                        if let Some(turn_id) = self.zcode_active_turns.remove(session_id) {
-                            messages.push(json!({
-                                "method": "turn/completed",
-                                "params": {
-                                    "threadId": session_id,
-                                    "turn": {
-                                        "id": turn_id,
-                                        "status": { "type": "completed" }
-                                    }
-                                }
-                            }));
-                        }
-                        messages.push(json!({
-                            "method": "thread/status/changed",
-                            "params": {
-                                "threadId": session_id,
-                                "status": { "type": "idle" }
-                            }
-                        }));
-                    } else if patch_status == Some("running") {
-                        messages.push(json!({
-                            "method": "thread/status/changed",
-                            "params": {
-                                "threadId": session_id,
-                                "status": { "type": "active", "activeFlags": [] }
-                            }
-                        }));
                     }
                 }
+                Err(e) => {
+                    eprintln!("[MultiProviderTransport] zcode drain error: {:?}", e);
+                    zcode_lost = true;
+                }
             }
+        }
+        if zcode_lost {
+            self.zcode = None;
+        }
+
+        // Only mark transport lost if codex itself dropped AND there are no other active provider streams
+        if codex_lost && self.zcode.is_none() && self.claude_active_turns.is_empty() && self.antigravity_active_turns.is_empty() && self.grok_active_turns.is_empty() {
+            return Err(NativeError::uncertain("provider_transport_lost"));
         }
 
         Ok(messages)

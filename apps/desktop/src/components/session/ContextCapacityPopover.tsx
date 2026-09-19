@@ -31,7 +31,7 @@ export function useContextMetrics(
   modelName?: string,
 ) {
   return useMemo(() => {
-    // 1. Determine total window tokens dynamically based on runtime or model
+    // 1. Determine total window tokens dynamically based on runtime or model limits
     let windowTokens = runtime?.context_window_tokens;
     if (!windowTokens || windowTokens <= 0) {
       const name = (modelName || runtime?.model || "").toLowerCase();
@@ -49,183 +49,144 @@ export function useContextMetrics(
         windowTokens = 200_000;
       } else if (name.includes("grok")) {
         windowTokens = 128_000;
+      } else if (name.includes("glm")) {
+        windowTokens = 128_000;
       } else {
         windowTokens = 200_000;
       }
     }
 
-    // 2. Count characters accurately from messages by real categories
-    let userMsgCharCount = 0;
-    let assistantMsgCharCount = 0;
-    let mcpToolCharCount = 0;
-    let systemToolCharCount = 0;
-    let skillsCharCount = 0;
-    let otherCharCount = 0;
+    // 2. Extract real token counts if available from runtime
+    const hasDetailedTokens =
+      runtime?.input_tokens != null ||
+      runtime?.cache_read_tokens != null ||
+      runtime?.output_tokens != null;
 
-    for (const m of messages) {
-      const textLen = (m.content || "").length;
-      const label = (m.label || "").toLowerCase();
+    let used = runtime?.context_used_tokens ?? runtime?.input_tokens ?? 0;
+    let hitRate = 0;
+    let allCategories: CategoryBreakdown[] = [];
 
-      if (m.kind === "tool" || m.kind === "command") {
-        if (label.includes("skill") || label.includes("plugin")) {
-          skillsCharCount += textLen;
-        } else if (label.startsWith("mcp__") || label.includes("mcp")) {
-          mcpToolCharCount += textLen;
-        } else {
-          // Standard system tools like Bash, Read, Edit, Write, TaskOutput, etc.
-          systemToolCharCount += textLen;
+    if (hasDetailedTokens) {
+      const cacheRead = runtime?.cache_read_tokens ?? 0;
+      const inputTotal = runtime?.input_tokens ?? used;
+      const promptInput = Math.max(0, inputTotal - cacheRead);
+      const outputTokens = runtime?.output_tokens ?? 0;
+      const reasoningTokens = runtime?.reasoning_tokens ?? 0;
+
+      // Real Cache Hit Rate: exact ratio of cached tokens to total input prompt tokens
+      if (inputTotal > 0 && cacheRead > 0) {
+        hitRate = Math.min(100, +((cacheRead / inputTotal) * 100).toFixed(1));
+      } else {
+        hitRate = 0;
+      }
+
+      const totalActiveTokens = used > 0 ? used : cacheRead + promptInput;
+      const safeDenom = totalActiveTokens > 0 ? totalActiveTokens : 1;
+
+      allCategories = [
+        {
+          id: "cache_read",
+          label: "缓存读取 (Prompt Cache)",
+          color: "#10b981", // Emerald
+          percentage:
+            totalActiveTokens > 0 && cacheRead > 0
+              ? +((cacheRead / safeDenom) * 100).toFixed(1)
+              : 0,
+          tokens: cacheRead,
+        },
+        {
+          id: "prompt_input",
+          label: "提示输入 (New Input)",
+          color: "#3b82f6", // Blue
+          percentage:
+            totalActiveTokens > 0 && promptInput > 0
+              ? +((promptInput / safeDenom) * 100).toFixed(1)
+              : 0,
+          tokens: promptInput,
+        },
+        {
+          id: "output",
+          label: "生成输出 (Completion)",
+          color: "#8b5cf6", // Purple
+          percentage:
+            totalActiveTokens > 0 && outputTokens > 0
+              ? +((outputTokens / safeDenom) * 100).toFixed(1)
+              : 0,
+          tokens: outputTokens,
+        },
+      ];
+
+      if (reasoningTokens > 0) {
+        allCategories.push({
+          id: "reasoning",
+          label: "深度思考 (Reasoning)",
+          color: "#f59e0b", // Amber
+          percentage: +((reasoningTokens / safeDenom) * 100).toFixed(1),
+          tokens: reasoningTokens,
+        });
+      }
+    } else {
+      // 3. Fallback when detailed token breakdown is not reported by provider
+      let userMsgCharCount = 0;
+      let assistantMsgCharCount = 0;
+      let toolCharCount = 0;
+
+      for (const m of messages) {
+        const textLen = (m.content || "").length;
+        if (m.kind === "tool" || m.kind === "command") {
+          toolCharCount += textLen;
+        } else if (m.role === "user") {
+          userMsgCharCount += textLen;
+        } else if (m.role === "assistant") {
+          assistantMsgCharCount += textLen;
         }
-      } else if (m.role === "user") {
-        userMsgCharCount += textLen;
-      } else if (m.role === "assistant") {
-        assistantMsgCharCount += textLen;
-      } else {
-        otherCharCount += textLen;
       }
-    }
 
-    const totalMsgChars = userMsgCharCount + assistantMsgCharCount;
-    const totalRecordedChars =
-      totalMsgChars +
-      mcpToolCharCount +
-      systemToolCharCount +
-      skillsCharCount +
-      otherCharCount;
+      const totalRecordedChars =
+        userMsgCharCount + assistantMsgCharCount + toolCharCount;
+      const safeDenom = used > 0 ? used : 1;
 
-    // Determine actual used tokens: prioritize the backend runtime reporting
-    let used = runtime?.context_used_tokens;
-    if (!used || used <= 0) {
-      if (totalRecordedChars === 0) {
-        used = 0;
+      if (totalRecordedChars > 0 && used > 0) {
+        const msgRatio =
+          (userMsgCharCount + assistantMsgCharCount) / totalRecordedChars;
+        const toolRatio = toolCharCount / totalRecordedChars;
+
+        const msgTokens = Math.round(used * msgRatio);
+        const toolTokens = Math.max(0, used - msgTokens);
+
+        allCategories = [
+          {
+            id: "messages",
+            label: "对话消息",
+            color: "#3b82f6",
+            percentage: +((msgTokens / safeDenom) * 100).toFixed(1),
+            tokens: msgTokens,
+          },
+          {
+            id: "tools",
+            label: "工具调用与结果",
+            color: "#38bdf8",
+            percentage: +((toolTokens / safeDenom) * 100).toFixed(1),
+            tokens: toolTokens,
+          },
+        ];
       } else {
-        const estimatedMsgTokens = Math.round(totalMsgChars / 3.4);
-        const estimatedToolTokens = Math.round(
-          (mcpToolCharCount +
-            systemToolCharCount +
-            skillsCharCount +
-            otherCharCount) /
-            3.4,
-        );
-        used = Math.max(0, estimatedMsgTokens + estimatedToolTokens);
+        allCategories = [
+          {
+            id: "messages",
+            label: "对话上下文",
+            color: "#3b82f6",
+            percentage: 0,
+            tokens: 0,
+          },
+        ];
       }
+      hitRate = 0;
     }
-
-    // Dynamic system prompt calculation
-    const systemPromptTokens =
-      used > 0
-        ? Math.min(
-            Math.round(used * 0.12),
-            Math.max(800, Math.round(used * 0.08)),
-          )
-        : 0;
-    const dynamicTokensBudget = Math.max(0, used - systemPromptTokens);
-
-    let msgTokens = 0;
-    let mcpTokens = 0;
-    let sysToolTokens = 0;
-    let skillsTokens = 0;
-    let otherTokens = 0;
-
-    if (totalRecordedChars > 0 && dynamicTokensBudget > 0) {
-      msgTokens = Math.round(
-        dynamicTokensBudget * (totalMsgChars / totalRecordedChars),
-      );
-      mcpTokens = Math.round(
-        dynamicTokensBudget * (mcpToolCharCount / totalRecordedChars),
-      );
-      sysToolTokens = Math.round(
-        dynamicTokensBudget * (systemToolCharCount / totalRecordedChars),
-      );
-      skillsTokens = Math.round(
-        dynamicTokensBudget * (skillsCharCount / totalRecordedChars),
-      );
-      otherTokens = Math.max(
-        0,
-        dynamicTokensBudget -
-          (msgTokens + mcpTokens + sysToolTokens + skillsTokens),
-      );
-    }
-
-    const safeDenominator = used > 0 ? used : 1;
-
-    // Breakdown categories with explicit 0% detection (0% has no color fill)
-    const allCategories: CategoryBreakdown[] = [
-      {
-        id: "messages",
-        label: "对话消息",
-        color: "#3b82f6", // Blue
-        percentage:
-          used > 0 && msgTokens > 0
-            ? +((msgTokens / safeDenominator) * 100).toFixed(1)
-            : 0,
-        tokens: msgTokens,
-      },
-      {
-        id: "system_tools",
-        label: "系统工具",
-        color: "#38bdf8", // Light Cyan
-        percentage:
-          used > 0 && sysToolTokens > 0
-            ? +((sysToolTokens / safeDenominator) * 100).toFixed(1)
-            : 0,
-        tokens: sysToolTokens,
-      },
-      {
-        id: "mcp_tools",
-        label: "MCP 工具",
-        color: "#60a5fa", // Sky Blue
-        percentage:
-          used > 0 && mcpTokens > 0
-            ? +((mcpTokens / safeDenominator) * 100).toFixed(1)
-            : 0,
-        tokens: mcpTokens,
-      },
-      {
-        id: "system_prompt",
-        label: "系统提示词",
-        color: "#818cf8", // Indigo
-        percentage:
-          used > 0 && systemPromptTokens > 0
-            ? +((systemPromptTokens / safeDenominator) * 100).toFixed(1)
-            : 0,
-        tokens: systemPromptTokens,
-      },
-      {
-        id: "skills",
-        label: "扩展技能",
-        color: "#a78bfa", // Purple
-        percentage:
-          used > 0 && skillsTokens > 0
-            ? +((skillsTokens / safeDenominator) * 100).toFixed(1)
-            : 0,
-        tokens: skillsTokens,
-      },
-      {
-        id: "other",
-        label: "其他元数据",
-        color: "#94a3b8", // Slate
-        percentage:
-          used > 0 && otherTokens > 0
-            ? +((otherTokens / safeDenominator) * 100).toFixed(1)
-            : 0,
-        tokens: otherTokens,
-      },
-    ];
 
     const pct =
       windowTokens > 0
         ? Math.min(100, +((used / windowTokens) * 100).toFixed(1))
-        : 0;
-    // Cache hit rate: dynamic based on context size and prompt caching ratio
-    const hitRate =
-      used > 0
-        ? Math.min(
-            98.2,
-            Math.max(
-              68.0,
-              +(72 + Math.min(24, (used / 200_000) * 22)).toFixed(1),
-            ),
-          )
         : 0;
 
     return {
@@ -398,7 +359,11 @@ export function ContextCapacityRing({
           {/* Footer */}
           <div className="popover-footer">
             <span className="footer-label">平均缓存命中率</span>
-            <span className="footer-value">{metrics.cacheHitRate}%</span>
+            <span className="footer-value">
+              {metrics.cacheHitRate > 0
+                ? `${metrics.cacheHitRate}%`
+                : "0%"}
+            </span>
           </div>
         </div>
       )}

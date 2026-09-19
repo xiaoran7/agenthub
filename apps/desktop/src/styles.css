@@ -1481,8 +1481,9 @@ input:focus-visible {
   text-align: center;
   color: var(--dim);
 }
-.conversation-empty svg {
+.conversation-empty > svg {
   width: 25px;
+  height: 25px;
   margin-bottom: 12px;
   color: var(--signal);
 }
@@ -1498,6 +1499,21 @@ input:focus-visible {
 }
 .conversation-empty .outline-button {
   margin-top: 14px;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  width: auto;
+  min-width: max-content;
+}
+.conversation-empty .outline-button svg {
+  width: 15px;
+  height: 15px;
+  margin-bottom: 0;
+  color: currentColor;
+  flex-shrink: 0;
 }
 .turn-message {
   margin: 10px 0;

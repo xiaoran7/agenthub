@@ -53,6 +53,11 @@ export interface SessionRuntimeContext {
   context_window_tokens?: number;
   context_used_tokens?: number;
   session_total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 export interface PendingApproval {

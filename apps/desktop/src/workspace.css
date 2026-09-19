@@ -1470,7 +1470,7 @@
   color: var(--desk-muted);
 }
 
-.claude-stage .conversation-empty svg {
+.claude-stage .conversation-empty > svg {
   color: var(--text-muted);
 }
 

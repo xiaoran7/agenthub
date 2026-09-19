@@ -154,6 +154,16 @@ pub struct LocalSessionContext {
     pub context_used_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
 }
 
 impl LocalSessionContext {
@@ -170,6 +180,11 @@ impl LocalSessionContext {
             context_window_tokens: None,
             context_used_tokens: None,
             session_total_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            reasoning_tokens: None,
         }
     }
 }
@@ -459,11 +474,19 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
                 .or_else(|| context.reasoning_effort.clone());
             if let Some(usage) = value.pointer("/message/usage") {
-                let input = usage_u64(usage, "input_tokens")
-                    .saturating_add(usage_u64(usage, "cache_creation_input_tokens"))
-                    .saturating_add(usage_u64(usage, "cache_read_input_tokens"));
-                if input > 0 {
-                    context.context_used_tokens = Some(input);
+                let input = usage_u64(usage, "input_tokens");
+                let output = usage_u64(usage, "output_tokens");
+                let cache_read = usage_u64(usage, "cache_read_input_tokens");
+                let cache_write = usage_u64(usage, "cache_creation_input_tokens");
+                let total_input = input
+                    .saturating_add(cache_write)
+                    .saturating_add(cache_read);
+                if total_input > 0 {
+                    context.context_used_tokens = Some(total_input);
+                    context.input_tokens = Some(total_input);
+                    context.output_tokens = Some(output);
+                    context.cache_read_tokens = Some(cache_read);
+                    context.cache_write_tokens = Some(cache_write);
                 }
             }
         }
@@ -1257,9 +1280,17 @@ fn apply_codex_context_line(line: &str, context: &mut LocalSessionContext) {
                 .and_then(Value::as_u64)
                 .or(context.context_window_tokens);
             if let Some(last) = info.get("last_token_usage") {
-                let used = usage_u64(last, "total_tokens").max(usage_u64(last, "input_tokens"));
+                let input = usage_u64(last, "input_tokens");
+                let output = usage_u64(last, "output_tokens");
+                let cache_read = usage_u64(last, "cache_read_input_tokens");
+                let cache_write = usage_u64(last, "cache_creation_input_tokens");
+                let used = usage_u64(last, "total_tokens").max(input.saturating_add(cache_read));
                 if used > 0 {
                     context.context_used_tokens = Some(used);
+                    context.input_tokens = Some(input.saturating_add(cache_read));
+                    context.output_tokens = Some(output);
+                    context.cache_read_tokens = Some(cache_read);
+                    context.cache_write_tokens = Some(cache_write);
                 }
             }
             context.session_total_tokens = info
@@ -2377,7 +2408,11 @@ pub fn collect_zcode_session_contexts_from(
             (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as model,
             (SELECT json_extract(data, '$.mode') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as mode,
             (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as total_tokens,
-            (SELECT json_extract(data, '$.tokens.input') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as input_tokens
+            (SELECT json_extract(data, '$.tokens.input') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as input_tokens,
+            (SELECT json_extract(data, '$.tokens.output') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as output_tokens,
+            (SELECT json_extract(data, '$.tokens.cache.read') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as cache_read_tokens,
+            (SELECT json_extract(data, '$.tokens.cache.write') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as cache_write_tokens,
+            (SELECT json_extract(data, '$.tokens.reasoning') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as reasoning_tokens
         FROM session s
         WHERE (s.parent_id IS NULL OR s.parent_id = '')
           AND s.id NOT LIKE 'sess_subagent%'
@@ -2401,6 +2436,10 @@ pub fn collect_zcode_session_contexts_from(
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<i64>>(4)?,
                 row.get::<_, Option<i64>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
             ))
         })
         .map_err(|source| CollectorError::Database {
@@ -2414,7 +2453,19 @@ pub fn collect_zcode_session_contexts_from(
         })?;
 
     let mut contexts = Vec::with_capacity(rows.len());
-    for (session_id, title, model, mode, total_tokens, input_tokens) in rows {
+    for (
+        session_id,
+        title,
+        model,
+        mode,
+        total_tokens,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        reasoning_tokens,
+    ) in rows
+    {
         let Some(clean_id) = metadata_label(&session_id, MAX_CONFIG_VALUE_CHARS) else {
             continue;
         };
@@ -2430,9 +2481,54 @@ pub fn collect_zcode_session_contexts_from(
             .filter(|t| *t > 0)
             .or(context.session_total_tokens);
         context.context_used_tokens = used;
+        context.input_tokens = input_tokens.and_then(|t| u64::try_from(t).ok()).filter(|t| *t > 0);
+        context.output_tokens = output_tokens.and_then(|t| u64::try_from(t).ok());
+        context.cache_read_tokens = cache_read_tokens.and_then(|t| u64::try_from(t).ok());
+        context.cache_write_tokens = cache_write_tokens.and_then(|t| u64::try_from(t).ok());
+        context.reasoning_tokens = reasoning_tokens.and_then(|t| u64::try_from(t).ok());
+        if let Some(ref m) = context.model {
+            context.context_window_tokens = resolve_zcode_model_context_window(m);
+        }
         contexts.push(context);
     }
     Ok(contexts)
+}
+
+pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
+    if let Some(home) = home_dir() {
+        let config_path = home.join(r".zcode\v2\config.json");
+        if let Ok(data) = fs::read_to_string(&config_path)
+            && let Ok(json) = serde_json::from_str::<Value>(&data)
+            && let Some(providers_obj) = json.get("provider").and_then(Value::as_object)
+        {
+            for (_, pdata) in providers_obj {
+                if let Some(models_obj) = pdata.get("models").and_then(Value::as_object) {
+                    for (mid, mdata) in models_obj {
+                        if mid.eq_ignore_ascii_case(model_name)
+                            || model_name.contains(mid)
+                            || mid.contains(model_name)
+                        {
+                            if let Some(ctx) = mdata.pointer("/limit/context").and_then(Value::as_u64) {
+                                return Some(ctx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let lower = model_name.to_lowercase();
+    if lower.contains("gemini") {
+        Some(1_000_000)
+    } else if lower.contains("claude") {
+        Some(200_000)
+    } else if lower.contains("gpt-5") || lower.contains("gpt-4") || lower.contains("o1") || lower.contains("o3") {
+        Some(200_000)
+    } else if lower.contains("glm") {
+        Some(128_000)
+    } else {
+        Some(128_000)
+    }
 }
 
 pub fn find_zcode_session_cwd(session_id: &str) -> Result<Option<PathBuf>, CollectorError> {
@@ -3187,7 +3283,7 @@ enum ProtocolRead {
     Eof,
 }
 
-fn resolve_codex_app_server_binary(binary: &Path) -> PathBuf {
+pub(crate) fn resolve_codex_app_server_binary(binary: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         resolve_windows_codex_binary(binary).unwrap_or_else(|| binary.to_path_buf())
@@ -3948,27 +4044,41 @@ impl ZCodeAppServer {
             "session/subscribe",
             json!({"sessionId": session_id, "deliveryKind": "desktop-continuous"}),
         );
-        if let Some(ws_path) = resume_res
+        let ws_key = resume_res
+            .pointer("/session/workspace/workspaceKey")
+            .and_then(Value::as_str);
+        let ws_path = resume_res
             .pointer("/session/workspace/workspacePath")
-            .and_then(Value::as_str)
-        {
-            let _ = self.sync_provider_registry(ws_path);
+            .and_then(Value::as_str);
+        if let Some(path) = ws_path.or(ws_key) {
+            let key = ws_key.unwrap_or(path);
+            let _ = self.sync_provider_registry_with_key(key, path);
         }
         Ok(resume_res)
     }
 
     pub fn sync_provider_registry(&mut self, workspace_path: &str) -> Result<(), CollectorError> {
+        self.sync_provider_registry_with_key(workspace_path, workspace_path)
+    }
+
+    pub fn sync_provider_registry_with_key(
+        &mut self,
+        workspace_key: &str,
+        workspace_path: &str,
+    ) -> Result<(), CollectorError> {
         if let Some(providers) = load_zcode_v2_provider_registry() {
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
+            let clean_key = workspace_key.trim_start_matches(r"\\?\");
+            let clean_path = workspace_path.trim_start_matches(r"\\?\");
             let _ = self.request(
                 "workspace/updateProviderRegistry",
                 json!({
                     "workspace": {
-                        "workspaceKey": workspace_path,
-                        "workspacePath": workspace_path
+                        "workspaceKey": clean_key,
+                        "workspacePath": clean_path
                     },
                     "registry": {
                         "revision": format!("rev-v2-{}", now_ms),

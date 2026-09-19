@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.4.19] - 2026-09-19
+
+- **全端发版 v2.4.19（Android versionCode = 32 / versionName = 2.4.19）**：
+  - **根除 Claude Code 会话历史全部无法解析/显示为空缺陷**：
+    - 根因定位：桌面端和远程主机下发的前缀化会话 ID（如 `claude_<uuid>`）传入 `load_session_conversation` 时，底层 transcript 收集逻辑直接对比磁盘文件名（`<uuid>.jsonl`），导致 42 个真实会话中有 41 个因前缀无法命中被当成空会话。
+    - 修复方案：在 `conversation::load_session_conversation` 与 `find_agent_transcript` 中统一规范化 `session_id`，严格剥离 `claude_`、`antigravity_`、`grok_` 等前缀，使磁盘上的 JSONL 历史被 100% 完整解析与展示。
+  - **修复空态“重新加载”按钮文字竖排排版变形 Bug**：
+    - 根因定位：`.conversation-empty` 网格容器下的 `.conversation-empty svg` 选择器对子代 `<RefreshCw />` 图标强行注入了 `margin-bottom: 12px`，同时按钮缺少 `white-space: nowrap` 与横向 flex 排版，导致文字在网格对齐约束下每个汉字折成一行。
+    - 修复方案：严格限定 `.conversation-empty > svg` 作用域，并为 `.conversation-empty .outline-button` 增加 `inline-flex; flex-direction: row; align-items: center; white-space: nowrap; gap: 8px; width: auto;` 及针对按钮内 SVG 图标消除 margin 底部偏移，恢复优雅居中水平排版。
+  - **多 Provider 传输层容错与连接稳定性加固（根治 `provider_transport_lost` 误报）**：
+    - 根因定位：`MultiProviderTransport::drain()` 只要任一底层子进程（如 Codex）读管道断开或单次超时，就会立刻向外传播 `provider_transport_lost` 错误，导致宿主 `mark_lost()` 将所有会话全域标记为断连。
+    - 修复方案：隔离各 Provider 的管道错误，平滑收集所有活跃事件；只有在 Codex 断开且全量活跃 turn 均不存在时才判定整体传输失效，杜绝跨 Provider 的假死断连。
+  - **全平台打包交付与生产部署**：Windows Desktop NSIS/MSI、Android APK 归档至 `Deliverables/AgentHub/`，按铁律清理旧版产物，生产容器部署升级。
+
 ## [2.4.18] - 2026-09-19
 
 - **全端发版 v2.4.18（Android versionCode = 31 / versionName = 2.4.18）**：
