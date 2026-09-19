@@ -12,7 +12,12 @@ export function appendAssistantDelta(
 ): ConversationMessage[] {
   if (delta === "") return current;
   const next = [...current];
+  // Only look backwards until the latest user prompt; never breach turn boundary
   for (let index = next.length - 1; index >= 0; index -= 1) {
+    if (next[index].role === "user") {
+      // Reached the current turn's user message without finding an assistant bubble after it
+      break;
+    }
     if (next[index].role === "assistant") {
       next[index] = {
         ...next[index],
@@ -30,7 +35,12 @@ export function replaceAssistantMessage(
   content: string,
 ): ConversationMessage[] {
   const next = [...current];
+  // Only look backwards until the latest user prompt; never breach turn boundary
   for (let index = next.length - 1; index >= 0; index -= 1) {
+    if (next[index].role === "user") {
+      // Reached the current turn's user message without finding an assistant bubble after it
+      break;
+    }
     if (next[index].role === "assistant") {
       next[index] = { ...next[index], role: "assistant", content };
       return next;

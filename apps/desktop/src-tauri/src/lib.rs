@@ -925,6 +925,7 @@ fn launch_codex_session_with_client(
                             }
                             let status = event.raw["params"]["turn"]["status"]
                                 .as_str()
+                                .or_else(|| event.raw["params"]["turn"]["status"]["type"].as_str())
                                 .unwrap_or("unknown");
                             if status == "interrupted" {
                                 return Err(DesktopError::AgentCancelled);
@@ -1144,6 +1145,7 @@ fn send_codex_message_with_client(
                             }
                             let status = event.raw["params"]["turn"]["status"]
                                 .as_str()
+                                .or_else(|| event.raw["params"]["turn"]["status"]["type"].as_str())
                                 .unwrap_or("unknown");
                             if status == "interrupted" {
                                 return Err(DesktopError::AgentCancelled);

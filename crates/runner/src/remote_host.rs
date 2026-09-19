@@ -377,7 +377,7 @@ impl NativeTransport for MultiProviderTransport {
                                 "threadId": session_id_clone,
                                 "turn": {
                                     "id": turn_id_clone,
-                                    "status": { "type": status_type }
+                                    "status": status_type
                                 }
                             }
                         }));
@@ -554,7 +554,7 @@ impl NativeTransport for MultiProviderTransport {
                                 "threadId": session_id_clone,
                                 "turn": {
                                     "id": turn_id_clone,
-                                    "status": { "type": status_type }
+                                    "status": status_type
                                 }
                             }
                         }));
@@ -729,7 +729,7 @@ impl NativeTransport for MultiProviderTransport {
                                 "threadId": session_id_clone,
                                 "turn": {
                                     "id": turn_id_clone,
-                                    "status": { "type": status_type }
+                                    "status": status_type
                                 }
                             }
                         }));
@@ -1054,7 +1054,7 @@ impl NativeTransport for MultiProviderTransport {
                                             "threadId": session_id,
                                             "turn": {
                                                 "id": turn_id,
-                                                "status": { "type": "completed" }
+                                                "status": "completed"
                                             }
                                         }
                                     }));
@@ -1068,7 +1068,7 @@ impl NativeTransport for MultiProviderTransport {
                                             "threadId": session_id,
                                             "turn": {
                                                 "id": turn_id,
-                                                "status": { "type": "failed" }
+                                                "status": "failed"
                                             }
                                         }
                                     }));
@@ -1086,7 +1086,7 @@ impl NativeTransport for MultiProviderTransport {
                                             "threadId": session_id,
                                             "turn": {
                                                 "id": turn_id,
-                                                "status": { "type": "completed" }
+                                                "status": "completed"
                                             }
                                         }
                                     }));

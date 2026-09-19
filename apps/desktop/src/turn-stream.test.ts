@@ -37,4 +37,36 @@ describe("turn stream state", () => {
       dropTrailingEmptyAssistant(appendAssistantDelta(seeded, "partial")),
     ).toHaveLength(2);
   });
+
+  it("never appends deltas past user prompt into previous assistant turn", () => {
+    // Multi-turn setup: Turn 1 finished, Turn 2 user prompt submitted, but trailing assistant was dropped on error
+    const history: ConversationMessage[] = [
+      { role: "user", content: "turn 1 prompt" },
+      { role: "assistant", content: "turn 1 reply" },
+      { role: "user", content: "turn 2 prompt" },
+    ];
+    // If a late-arriving delta comes in, it must NOT mutate Turn 1's reply!
+    const result = appendAssistantDelta(history, "turn 2 reply");
+    expect(result[1].content).toBe("turn 1 reply");
+    expect(result.at(-1)).toEqual({
+      role: "assistant",
+      content: "turn 2 reply",
+    });
+    expect(result).toHaveLength(4);
+  });
+
+  it("never replaces past user prompt into previous assistant turn", () => {
+    const history: ConversationMessage[] = [
+      { role: "user", content: "turn 1 prompt" },
+      { role: "assistant", content: "turn 1 reply" },
+      { role: "user", content: "turn 2 prompt" },
+    ];
+    const result = replaceAssistantMessage(history, "turn 2 final");
+    expect(result[1].content).toBe("turn 1 reply");
+    expect(result.at(-1)).toEqual({
+      role: "assistant",
+      content: "turn 2 final",
+    });
+    expect(result).toHaveLength(4);
+  });
 });
