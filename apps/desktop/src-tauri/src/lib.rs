@@ -360,6 +360,7 @@ async fn authenticate(
 ) -> Result<Value, String> {
     let snapshot = authenticate_inner(input, &state).map_err(|error| error.to_string())?;
     start_dashboard_realtime(&state, &app).map_err(|error| error.to_string())?;
+    daemon_client::try_connect_remote(&state.data_dir);
     Ok(snapshot)
 }
 
@@ -388,6 +389,7 @@ async fn restore_session(
     if online {
         let _ = start_engine(&state, &config.server_url, &identity);
         let _ = start_dashboard_realtime(&state, &app);
+        daemon_client::try_connect_remote(&state.data_dir);
     }
 
     let mut snapshot = match dashboard_snapshot(&config.server_url, &cookie, &identity, &state) {
@@ -1827,6 +1829,7 @@ async fn poll_tg_device_auth(
         let snapshot =
             finish_login(&server_url, &cookie, account, &state).map_err(|e| e.to_string())?;
         start_dashboard_realtime(&state, &app).map_err(|error| error.to_string())?;
+        daemon_client::try_connect_remote(&state.data_dir);
         return Ok(json!({ "status": "success", "snapshot": snapshot }));
     }
 
@@ -3625,20 +3628,23 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build AgentHub desktop app")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event
-                && let Some(state) = app_handle.try_state::<DesktopState>()
-            {
+            if matches!(
+                event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
                 daemon_client::terminate_daemon();
-                stop_dashboard_realtime(&state);
-                if let Ok(active_turns) = state.active_turns.lock() {
-                    for cancelled in active_turns.values() {
-                        cancelled.store(true, Ordering::Relaxed);
+                if let Some(state) = app_handle.try_state::<DesktopState>() {
+                    stop_dashboard_realtime(&state);
+                    if let Ok(active_turns) = state.active_turns.lock() {
+                        for cancelled in active_turns.values() {
+                            cancelled.store(true, Ordering::Relaxed);
+                        }
                     }
-                }
-                if let Ok(mut engine) = state.engine.lock()
-                    && let Some(handle) = engine.take()
-                {
-                    handle.stop();
+                    if let Ok(mut engine) = state.engine.lock()
+                        && let Some(handle) = engine.take()
+                    {
+                        handle.stop();
+                    }
                 }
             }
         });

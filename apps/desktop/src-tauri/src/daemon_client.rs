@@ -120,6 +120,12 @@ impl DesktopJob {
             Ok(Self(handle))
         }
     }
+
+    fn terminate(&self) {
+        unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
+        }
+    }
 }
 #[cfg(windows)]
 impl Drop for DesktopJob {
@@ -133,21 +139,41 @@ impl Drop for DesktopJob {
 static DAEMON_JOB: Mutex<Option<DesktopJob>> = Mutex::new(None);
 
 pub fn terminate_daemon() {
+    #[cfg(windows)]
+    if let Ok(mut job_slot) = DAEMON_JOB.lock()
+        && let Some(job) = job_slot.take()
+    {
+        job.terminate();
+    }
     if let Ok(mut child_slot) = DAEMON_PROCESS.lock()
         && let Some(mut child) = child_slot.take()
     {
+        let pid = child.id();
         let _ = child.kill();
         let _ = child.wait();
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
     if let Ok(mut starting_slot) = STARTING_CHILD.lock()
         && let Some(mut child) = starting_slot.take()
     {
+        let pid = child.id();
         let _ = child.kill();
         let _ = child.wait();
-    }
-    #[cfg(windows)]
-    if let Ok(mut job_slot) = DAEMON_JOB.lock() {
-        job_slot.take();
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
 }
 
@@ -205,13 +231,14 @@ fn child_startup_probe_with(
     slot: &mut Option<std::process::Child>,
 ) -> DaemonProbe {
     if matches!(probe, DaemonProbe::Ready(_)) {
-        // Hand over starting child to DAEMON_PROCESS and assign to DesktopJob
+        // Hand over starting child to DAEMON_PROCESS and assign to DesktopJob if not attached yet
         if let Some(child) = slot.take() {
             #[cfg(windows)]
-            if let Ok(job) = DesktopJob::attach(&child) {
-                if let Ok(mut job_slot) = DAEMON_JOB.lock() {
-                    *job_slot = Some(job);
-                }
+            if let Ok(mut job_slot) = DAEMON_JOB.lock()
+                && job_slot.is_none()
+                && let Ok(job) = DesktopJob::attach(&child)
+            {
+                *job_slot = Some(job);
             }
             if let Ok(mut daemon_slot) = DAEMON_PROCESS.lock() {
                 *daemon_slot = Some(child);
@@ -234,11 +261,15 @@ fn child_startup_probe_with(
     probe
 }
 
+const fn default_remote_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct DaemonProfile {
     pub workspace_paths: Vec<PathBuf>,
     pub codex_binary: String,
-    #[serde(default)]
+    #[serde(default = "default_remote_enabled")]
     pub remote_enabled: bool,
 }
 
@@ -722,17 +753,57 @@ where
 
 pub(crate) fn ensure_daemon_started(data_dir: PathBuf) {
     thread::spawn(move || {
-        if let Err(error) = ensure_readonly_daemon_client(&data_dir) {
-            let code = match error {
-                DesktopError::LocalStartup(code)
-                | DesktopError::LocalIpc(code)
-                | DesktopError::LocalProtocol(code)
-                | DesktopError::LocalConversation(code) => code,
-                _ => "daemon_start_failed",
-            };
-            record_startup(code);
+        if ensure_readonly_daemon_client(&data_dir).is_err() {
+            let _ = start_daemon_for_data(&data_dir, None);
         }
+        try_connect_remote(&data_dir);
     });
+}
+
+pub(crate) fn try_connect_remote(data_dir: &Path) {
+    let Ok(identity) = load_or_create_identity(data_dir) else {
+        return;
+    };
+    let Ok(config) = read_config(data_dir) else {
+        return;
+    };
+    let Ok(_) = load_cookie(&config.server_url) else {
+        return;
+    };
+    let Ok(ws_url) = gateway_websocket_url(&config.server_url) else {
+        return;
+    };
+    let (_, profile_path) = host_database_path(data_dir, identity.device_id());
+    let profile = fs::read(&profile_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<DaemonProfile>(&bytes).ok())
+        .unwrap_or_else(|| {
+            let mut ws = Vec::new();
+            if let Ok(cwd) = std::env::current_dir().and_then(|p| dunce::canonicalize(&p))
+                && cwd.is_dir()
+            {
+                ws.push(cwd);
+            }
+            let default_p = DaemonProfile {
+                workspace_paths: ws,
+                codex_binary: config.codex_binary.clone(),
+                remote_enabled: true,
+            };
+            if let Ok(bytes) = serde_json::to_vec(&default_p) {
+                let _ = fs::write(&profile_path, bytes);
+            }
+            default_p
+        });
+    if !profile.remote_enabled {
+        return;
+    }
+    let client = DaemonClient {
+        endpoint: daemon_ipc::default_endpoint(identity.device_id()),
+    };
+    let _ = ensure_daemon_ready(&client, || {
+        start_daemon_for_data(data_dir, None).map_err(|e| e.to_string())
+    });
+    let _ = client.set_remote_enabled(Some(ws_url));
 }
 
 pub(crate) fn ensure_readonly_daemon_client(data_dir: &Path) -> Result<DaemonClient, DesktopError> {
@@ -832,7 +903,7 @@ fn start_daemon_for_data(
                 .as_ref()
                 .map(|config| config.codex_binary.clone())
                 .unwrap_or_else(default_codex_binary),
-            remote_enabled: false,
+            remote_enabled: true,
         });
     if let Some(workspace) = required_workspace
         && let Ok(canonical) = dunce::canonicalize(workspace)
@@ -961,7 +1032,7 @@ fn persist_workspace(
                 .as_ref()
                 .map(|config| config.codex_binary.clone())
                 .unwrap_or_else(default_codex_binary),
-            remote_enabled: false,
+            remote_enabled: true,
         });
     profile.workspace_paths.push(workspace);
     profile.workspace_paths = normalize_workspaces(profile.workspace_paths);
@@ -1114,7 +1185,7 @@ fn remote_host_status_inner(data_dir: &Path) -> Result<Value, String> {
             codex_binary: config
                 .map(|config| config.codex_binary)
                 .unwrap_or_else(default_codex_binary),
-            remote_enabled: false,
+            remote_enabled: true,
         });
     profile.workspace_paths = normalize_workspaces(profile.workspace_paths);
     let client = DaemonClient {
