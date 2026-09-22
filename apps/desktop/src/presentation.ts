@@ -369,3 +369,49 @@ export function sessionDisplayTitle(session: Session): string {
   const shortId = session.agent_session_id.slice(0, 8);
   return `会话 (${shortId})`;
 }
+
+export function sessionKey(session: Session): string {
+  return (
+    session.device_id +
+    ":" +
+    normalizeAgentType(session.agent_type) +
+    ":" +
+    session.agent_session_id
+  );
+}
+
+export function formatTokenCount(tokens: number | undefined): string {
+  if (tokens === undefined) return "未提供";
+  if (tokens < 1_000) return tokens + " tokens";
+  if (tokens < 1_000_000) return (tokens / 1_000).toFixed(1) + "K tokens";
+  return (tokens / 1_000_000).toFixed(2) + "M tokens";
+}
+
+export function formatContextUsage(runtime: Session["payload"]["runtime"]): string {
+  const used = runtime?.context_used_tokens;
+  const window = runtime?.context_window_tokens;
+  if (used !== undefined && window !== undefined && window > 0) {
+    const percentage = Math.min(100, Math.round((used / window) * 100));
+    return (
+      formatTokenCount(used) +
+      " / " +
+      formatTokenCount(window) +
+      " · " +
+      percentage +
+      "%"
+    );
+  }
+  if (window !== undefined) return formatTokenCount(window) + " 上限";
+  if (used !== undefined) return formatTokenCount(used) + " 已用 · 上限未提供";
+  return "未提供";
+}
+
+export function initials(value: string): string {
+  const parts = value.trim().split(/\s+/u).filter(Boolean);
+  if (parts.length === 0) return "AP";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
+

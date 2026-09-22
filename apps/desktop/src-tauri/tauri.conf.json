@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AgentHub",
-  "version": "2.4.26",
+  "version": "2.4.27",
   "identifier": "xyz.tannerlab.agenthub",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -37,7 +37,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "shortDescription": "原生 Coding Agent 远程会话入口",
-    "longDescription": "连接本机 Codex，在桌面、网页和手机接续同一原生会话，查看输出、处理审批与中断。"
+    "shortDescription": "\u539f\u751f Coding Agent \u8fdc\u7a0b\u4f1a\u8bdd\u5165\u53e3",
+    "longDescription": "\u8fde\u63a5\u672c\u673a Codex\uff0c\u5728\u684c\u9762\u3001\u7f51\u9875\u548c\u624b\u673a\u63a5\u7eed\u540c\u4e00\u539f\u751f\u4f1a\u8bdd\uff0c\u67e5\u770b\u8f93\u51fa\u3001\u5904\u7406\u5ba1\u6279\u4e0e\u4e2d\u65ad\u3002"
   }
 }
