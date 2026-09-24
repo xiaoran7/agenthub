@@ -699,7 +699,7 @@ fn handle_network_event<T: NativeTransport>(
         NetworkEvent::Connected(epoch, server_seq) if epoch >> 32 == current_remote_generation => {
             let (sent, acked) = durable.journal.watermarks()?;
             if server_seq < acked {
-                reject_remote_epoch(control, active, epoch);
+                reject_remote_epoch(control, active, epoch, &format!("server_seq {server_seq} < acked {acked}"));
                 return Ok(());
             }
             if server_seq > sent {
@@ -710,7 +710,7 @@ fn handle_network_event<T: NativeTransport>(
             match durable.journal.acknowledge(server_seq) {
                 Ok(()) => {}
                 Err(crate::remote_journal::JournalError::InvalidAck) => {
-                    reject_remote_epoch(control, active, epoch);
+                    reject_remote_epoch(control, active, epoch, "journal ack invalid");
                     return Ok(());
                 }
                 Err(error) => return Err(error.into()),
@@ -732,7 +732,7 @@ fn handle_network_event<T: NativeTransport>(
             match frame["type"].as_str() {
                 Some("ack") => {
                     let Some(seq) = frame["seq"].as_i64() else {
-                        reject_remote_epoch(control, active, epoch);
+                        reject_remote_epoch(control, active, epoch, "ack missing seq");
                         return Ok(());
                     };
                     let (sent, _) = durable.journal.watermarks()?;
@@ -744,20 +744,20 @@ fn handle_network_event<T: NativeTransport>(
                     match durable.journal.acknowledge(seq) {
                         Ok(()) => {}
                         Err(crate::remote_journal::JournalError::InvalidAck) => {
-                            reject_remote_epoch(control, active, epoch);
+                            reject_remote_epoch(control, active, epoch, "ack seq invalid");
                         }
                         Err(error) => return Err(error.into()),
                     }
                 }
                 Some("command") => {
                     let Some(seq) = frame["seq"].as_i64() else {
-                        reject_remote_epoch(control, active, epoch);
+                        reject_remote_epoch(control, active, epoch, "command missing seq");
                         return Ok(());
                     };
                     let Ok(command) =
                         serde_json::from_value::<RemoteCommand>(frame["command"].clone())
                     else {
-                        reject_remote_epoch(control, active, epoch);
+                        reject_remote_epoch(control, active, epoch, "command json invalid");
                         return Ok(());
                     };
                     match durable.handle_inbound_command(seq, command) {
@@ -766,7 +766,7 @@ fn handle_network_event<T: NativeTransport>(
                                 .store(durable.journal.received_command_seq()?, Ordering::Relaxed);
                         }
                         Err(crate::remote_journal::JournalError::InvalidAck) => {
-                            reject_remote_epoch(control, active, epoch);
+                            reject_remote_epoch(control, active, epoch, "command ack invalid");
                             return Ok(());
                         }
                         Err(error) => return Err(error.into()),
@@ -779,8 +779,14 @@ fn handle_network_event<T: NativeTransport>(
                     ));
                 }
                 Some("heartbeat_ack") => {}
-                Some("error") => reject_remote_epoch(control, active, epoch),
-                _ => reject_remote_epoch(control, active, epoch),
+                Some("error") => {
+                    eprintln!("[Runner] Received remote error: {:?}", frame);
+                    reject_remote_epoch(control, active, epoch, "received remote error");
+                }
+                _ => {
+                    eprintln!("[Runner] Received unexpected frame: {:?}", frame);
+                    reject_remote_epoch(control, active, epoch, "unexpected frame");
+                }
             }
         }
         _ => {}
@@ -799,13 +805,13 @@ fn remote_epoch_is_active(
         && control.rejected_epoch.load(Ordering::SeqCst) != epoch
 }
 
-fn reject_remote_epoch(control: &RemoteControl, active: &mut Option<u64>, epoch: u64) {
+fn reject_remote_epoch(control: &RemoteControl, active: &mut Option<u64>, epoch: u64, reason: &str) {
     if *active == Some(epoch) {
         *active = None;
     }
     control.connected.store(false, Ordering::Relaxed);
     control.rejected_epoch.store(epoch, Ordering::SeqCst);
-    eprintln!("{{\"code\":\"remote_protocol_rejected\"}}");
+    eprintln!("{{\"code\":\"remote_protocol_rejected\", \"reason\":\"{}\"}}", reason);
 }
 
 fn validate_server(server: &str) -> Result<String> {
@@ -913,6 +919,7 @@ fn network_loop(
             )?;
             let ack = receive(&mut socket)?;
             if ack["type"] != "hello_ack" || ack["version"] != 3 {
+                eprintln!("[Runner Handshake] Server returned non-hello_ack: {:?}", ack);
                 bail!("remote_handshake_rejected");
             }
             events.send(NetworkEvent::Connected(

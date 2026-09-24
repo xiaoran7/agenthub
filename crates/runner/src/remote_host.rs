@@ -1322,6 +1322,7 @@ pub struct HostEvent {
     pub approval_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<PendingApprovalSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<PendingQuestionSnapshot>,

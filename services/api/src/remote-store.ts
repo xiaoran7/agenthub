@@ -275,6 +275,8 @@ export class RemoteContentStore {
             "raw",
             "approval_id",
             "approval",
+            "question_id",
+            "question",
           ],
           "invalid_event",
         );
@@ -282,6 +284,8 @@ export class RemoteContentStore {
         const isApprovalEvent =
           event.kind === "approval_requested" ||
           event.kind === "approval_resolved" ||
+          event.kind === "question_requested" ||
+          event.kind === "question_resolved" ||
           event.kind === "unsupported_provider_request";
         if (isApprovalEvent) validateRemoteApprovalEvent(event);
         validateRemoteEventRaw(event, isApprovalEvent);
@@ -336,6 +340,7 @@ export class RemoteContentStore {
             "models",
             "discovery",
             "pending_approvals",
+            "pending_questions",
             "attach_running",
           ],
           "invalid_ready",
@@ -522,7 +527,7 @@ function validateRemoteEventFields(event: Record<string, unknown>): void {
       (event[key] as string).length > 256
     )
       throw new RemoteStoreError("invalid_event");
-  for (const key of ["hub_session_id", "provider_session_id", "approval_id"])
+  for (const key of ["hub_session_id", "provider_session_id", "approval_id", "question_id"])
     if (
       event[key] !== null &&
       event[key] !== undefined &&

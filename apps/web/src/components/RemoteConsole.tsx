@@ -144,6 +144,7 @@ export function RemoteConsole({
   >("all");
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [agentType, setAgentType] = useState<"zcode" | "codex" | "claude_code">("zcode");
   const [model, setModel] = useState("");
   const [sandbox, setSandbox] = useState<"read-only" | "workspace-write">(
     "read-only",
@@ -359,6 +360,7 @@ export function RemoteConsole({
       runner,
       workspace,
       nativeId,
+      agentType,
       sandbox,
       model,
     ]);
@@ -375,7 +377,9 @@ export function RemoteConsole({
           sandbox,
           approval_policy: "untrusted",
           ...(model ? { model } : {}),
-          ...(nativeId ? { provider_session_id: nativeId } : {}),
+          ...(nativeId
+            ? { provider_session_id: nativeId }
+            : { agent_type: agentType }),
         },
       } satisfies RemoteCommand);
     attempts.current.set(attemptKey, command);
@@ -1215,6 +1219,21 @@ export function RemoteConsole({
                 })}
             </select>
           </label>
+          {!nativeId && (
+            <label>
+              Agent 引擎
+              <select
+                value={agentType}
+                onChange={(event) =>
+                  setAgentType(event.target.value as typeof agentType)
+                }
+              >
+                <option value="zcode">ZCode (Gemini 3.8 / 全功能)</option>
+                <option value="codex">Codex</option>
+                <option value="claude_code">Claude Code</option>
+              </select>
+            </label>
+          )}
           <label>
             模型
             <select

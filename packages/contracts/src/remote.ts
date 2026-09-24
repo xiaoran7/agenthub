@@ -12,6 +12,7 @@ export interface RemoteCommand {
         workspace_path: string;
         provider_session_id?: string;
         model?: string;
+        agent_type?: string;
         sandbox?: "read-only" | "workspace-write" | "danger-full-access";
         approval_policy?: "untrusted" | "on-request" | "never";
       }
@@ -88,6 +89,7 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         "workspace_path",
         "provider_session_id",
         "model",
+        "agent_type",
         "sandbox",
         "approval_policy",
       ]);
@@ -97,6 +99,7 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
       if (command.provider_session_id !== undefined)
         text(command.provider_session_id, 256);
       if (command.model !== undefined) text(command.model, 256);
+      if (command.agent_type !== undefined) text(command.agent_type, 64);
       if (
         command.mode === "create" &&
         command.provider_session_id !== undefined
