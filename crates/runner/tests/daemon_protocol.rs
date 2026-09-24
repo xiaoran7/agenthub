@@ -63,7 +63,13 @@ fn response_and_event_envelopes_preserve_request_identity_and_cursor() {
                 turn_id: "turn-1".into(),
                 can_approve: true,
                 can_decline: true,
+                tool_name: Some("Bash".into()),
+                command_preview: Some("cargo test".into()),
+                path: None,
+                description: None,
+                risk_level: Some("high".into()),
             }],
+            pending_questions: Vec::new(),
             cursor: 9,
         }),
     );
@@ -177,6 +183,7 @@ fn snapshot_required_is_an_explicit_versioned_response() {
             snapshot: JournalSnapshot {
                 sessions: vec![],
                 pending_approvals: vec![],
+                pending_questions: vec![],
                 cursor: 42,
             },
         }),

@@ -359,6 +359,101 @@ fn approval_preserves_request_id_fences_generation_and_rejects_replays() {
 }
 
 #[test]
+fn acp_question_and_approval_metadata_flow() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-1");
+
+    // 1. Verify rich approval metadata extraction
+    fake.event(json!({
+        "id": 101,
+        "method": "item/commandExecution/requestApproval",
+        "params": {
+            "threadId": "native-real",
+            "turnId": "turn-1",
+            "command": "git push origin main",
+            "reason": "Pushing release v2.4.27",
+            "availableDecisions": ["accept", "decline"]
+        }
+    }));
+    let events = host.poll().unwrap();
+    assert_eq!(events.len(), 1);
+    let app = events[0].approval.as_ref().expect("approval snapshot");
+    assert_eq!(app.tool_name.as_deref(), Some("Bash"));
+    assert_eq!(app.command_preview.as_deref(), Some("git push origin main"));
+    assert_eq!(app.description.as_deref(), Some("Pushing release v2.4.27"));
+    assert_eq!(app.risk_level.as_deref(), Some("high"));
+    assert!(app.can_approve);
+    assert!(app.can_decline);
+
+    // Resolve approval
+    let resolve_cmd = control(
+        &host,
+        "res-1",
+        RemoteAction::ResolveApproval {
+            approval_id: app.approval_id.clone(),
+            approved: true,
+        },
+    );
+    assert_eq!(host.handle_command(resolve_cmd).status, "accepted");
+    assert_eq!(
+        fake.0.lock().unwrap().responses,
+        vec![(json!(101), json!({"decision":"accept"}))]
+    );
+    assert!(host.pending_approvals().is_empty());
+
+    // 2. Verify interactive question flow (ACP ask_question)
+    fake.event(json!({
+        "id": 102,
+        "method": "client/askQuestion",
+        "params": {
+            "threadId": "native-real",
+            "turnId": "turn-1",
+            "header": "Approach",
+            "question": "Which database adapter to use?",
+            "options": [
+                {"label": "PostgreSQL (Recommended)", "description": "Production scale"},
+                {"label": "SQLite", "description": "Local embedded"}
+            ]
+        }
+    }));
+    let events = host.poll().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "question_requested");
+    let q = events[0].question.as_ref().expect("question snapshot");
+    assert_eq!(q.header.as_deref(), Some("Approach"));
+    assert_eq!(q.prompt, "Which database adapter to use?");
+    let opts = q.options.as_ref().expect("options");
+    assert_eq!(opts.len(), 2);
+    assert_eq!(opts[0].label, "PostgreSQL (Recommended)");
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::AwaitingInput);
+
+    // Answer the question
+    let answer_cmd = control(
+        &host,
+        "ans-1",
+        RemoteAction::AnswerQuestion {
+            question_id: q.question_id.clone(),
+            answer: json!("PostgreSQL (Recommended)"),
+        },
+    );
+    assert_eq!(host.handle_command(answer_cmd).status, "accepted");
+    assert_eq!(
+        fake.0.lock().unwrap().responses.last(),
+        Some(&(
+            json!(102),
+            json!({
+                "answers": {
+                    "Which database adapter to use?": "PostgreSQL (Recommended)"
+                },
+                "response": "PostgreSQL (Recommended)"
+            })
+        ))
+    );
+    assert!(host.pending_questions().is_empty());
+}
+
+#[test]
 fn interrupt_keeps_running_until_provider_confirmation() {
     let (dir, fake, mut host) = setup();
     bind(&dir, &fake, &mut host);
@@ -450,6 +545,83 @@ fn zcode_multi_provider_transport_routes_sess_prefix() {
     );
     assert_eq!(host.handle_command(command).status, "accepted");
     assert_eq!(host.sessions()[0].provider_session_id, "sess_mock_test_123");
+}
+
+#[test]
+fn zcode_interaction_permission_and_user_input_conversion_flow() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-z1");
+
+    // Simulate ZCode interaction/requestPermission translated to approval
+    fake.event(json!({
+        "id": "zcode_req_42",
+        "method": "item/commandExecution/requestApproval",
+        "params": {
+            "threadId": "native-real",
+            "turnId": "turn-z1",
+            "command": "Write pelican.svg",
+            "filePath": "D:/ClaudeSpace/scratch_zcode_test/pelican.svg",
+            "reason": "Draw pelican graphic",
+            "availableDecisions": ["accept", "decline"]
+        }
+    }));
+    let events = host.poll().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "approval_requested");
+    let approvals = host.pending_approvals();
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0].command_preview.as_deref(), Some("Write pelican.svg"));
+    assert_eq!(approvals[0].path.as_deref(), Some("D:/ClaudeSpace/scratch_zcode_test/pelican.svg"));
+    assert_eq!(approvals[0].tool_name.as_deref(), Some("Bash"));
+
+    let approval_id = approvals[0].approval_id.clone();
+    let resolve_cmd = control(
+        &host,
+        "accept-zcode-approval",
+        RemoteAction::ResolveApproval {
+            approval_id: approval_id.clone(),
+            approved: true,
+        },
+    );
+    assert_eq!(host.handle_command(resolve_cmd).status, "accepted");
+    assert!(host.pending_approvals().is_empty());
+
+    // Simulate ZCode interaction/requestUserInput translated to askQuestion
+    fake.event(json!({
+        "id": "zcode_req_99",
+        "method": "client/askQuestion",
+        "params": {
+            "threadId": "native-real",
+            "turnId": "turn-z1",
+            "prompt": "Which framework would you like for the mini website?",
+            "header": "Framework",
+            "options": [
+                {"label": "React", "description": "Interactive SPA"},
+                {"label": "Vanilla", "description": "Lightweight HTML"}
+            ]
+        }
+    }));
+    let q_events = host.poll().unwrap();
+    assert_eq!(q_events.len(), 1);
+    assert_eq!(q_events[0].kind, "question_requested");
+    let questions = host.pending_questions();
+    assert_eq!(questions.len(), 1);
+    assert_eq!(questions[0].prompt, "Which framework would you like for the mini website?");
+    assert_eq!(questions[0].options.as_ref().unwrap().len(), 2);
+    assert_eq!(questions[0].options.as_ref().unwrap()[0].label, "React");
+
+    let q_id = questions[0].question_id.clone();
+    let answer_cmd = control(
+        &host,
+        "answer-zcode-q",
+        RemoteAction::AnswerQuestion {
+            question_id: q_id,
+            answer: json!({"label": "React"}),
+        },
+    );
+    assert_eq!(host.handle_command(answer_cmd).status, "accepted");
+    assert!(host.pending_questions().is_empty());
 }
 
 #[test]

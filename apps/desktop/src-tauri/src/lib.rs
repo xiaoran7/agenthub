@@ -3649,6 +3649,8 @@ mod tests {
             binding: None,
             approval_id: None,
             approval: None,
+            question_id: None,
+            question: None,
         }
     }
 
@@ -3662,6 +3664,11 @@ mod tests {
                 turn_id: "turn-1".to_owned(),
                 can_approve: false,
                 can_decline: true,
+                tool_name: Some("Bash".into()),
+                command_preview: Some("cargo test".into()),
+                path: None,
+                description: None,
+                risk_level: Some("high".into()),
             },
         })
         .unwrap();
@@ -3932,6 +3939,11 @@ mod tests {
             turn_id: "turn-1".to_owned(),
             can_approve: true,
             can_decline: false,
+            tool_name: Some("Bash".into()),
+            command_preview: Some("cargo test".into()),
+            path: None,
+            description: None,
+            risk_level: Some("high".into()),
         };
         let merged = merge_dashboard_sessions(
             &json!([]),

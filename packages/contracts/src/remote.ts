@@ -17,6 +17,11 @@ export interface RemoteCommand {
       }
     | { action: "send_prompt"; text: string }
     | { action: "resolve_approval"; approval_id: string; approved: boolean }
+    | {
+        action: "answer_question";
+        question_id: string;
+        answer: string | string[];
+      }
     | { action: "interrupt" };
 }
 
@@ -27,6 +32,28 @@ export interface RemotePendingApproval {
   turn_id: string;
   can_approve: boolean;
   can_decline: boolean;
+  tool_name?: string;
+  command_preview?: string;
+  path?: string;
+  description?: string;
+  risk_level?: "low" | "medium" | "high";
+}
+
+export interface RemoteQuestionOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+
+export interface RemotePendingQuestion {
+  question_id: string;
+  hub_session_id: string;
+  host_generation: string;
+  turn_id: string;
+  prompt: string;
+  header?: string;
+  options?: RemoteQuestionOption[];
+  multi_select?: boolean;
 }
 
 export interface RemoteBinding {
@@ -94,6 +121,20 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
       text(command.approval_id, 1024);
       if (typeof command.approved !== "boolean") invalid();
       break;
+    case "answer_question":
+      only(command, ["action", "question_id", "answer"]);
+      text(command.question_id, 1024);
+      if (typeof command.answer === "string") {
+        text(command.answer, 512 * 1024);
+      } else if (Array.isArray(command.answer)) {
+        if (command.answer.length === 0) invalid();
+        for (const item of command.answer) {
+          text(item, 1024);
+        }
+      } else {
+        invalid();
+      }
+      break;
     case "interrupt":
       only(command, ["action"]);
       break;
@@ -115,6 +156,11 @@ export function parseRemotePendingApproval(
     "turn_id",
     "can_approve",
     "can_decline",
+    "tool_name",
+    "command_preview",
+    "path",
+    "description",
+    "risk_level",
   ]);
   text(approval.approval_id, 128);
   if (!/^approval-[0-9a-f]{64}$/u.test(approval.approval_id as string))
@@ -127,7 +173,48 @@ export function parseRemotePendingApproval(
     typeof approval.can_decline !== "boolean"
   )
     invalid();
+  if (approval.tool_name !== undefined) text(approval.tool_name, 128);
+  if (approval.command_preview !== undefined) text(approval.command_preview, 32768);
+  if (approval.path !== undefined) text(approval.path, 1024);
+  if (approval.description !== undefined) text(approval.description, 4096);
+  if (approval.risk_level !== undefined)
+    member(approval.risk_level, ["low", "medium", "high"]);
   return approval as unknown as RemotePendingApproval;
+}
+
+export function parseRemotePendingQuestion(
+  value: unknown,
+): RemotePendingQuestion {
+  const q = object(value);
+  only(q, [
+    "question_id",
+    "hub_session_id",
+    "host_generation",
+    "turn_id",
+    "prompt",
+    "header",
+    "options",
+    "multi_select",
+  ]);
+  text(q.question_id, 128);
+  text(q.hub_session_id, 128);
+  text(q.host_generation, 128);
+  text(q.turn_id, 256);
+  text(q.prompt, 32768);
+  if (q.header !== undefined) text(q.header, 128);
+  if (q.multi_select !== undefined && typeof q.multi_select !== "boolean")
+    invalid();
+  if (q.options !== undefined) {
+    if (!Array.isArray(q.options)) invalid();
+    for (const opt of q.options) {
+      const optObj = object(opt);
+      only(optObj, ["label", "description", "preview"]);
+      text(optObj.label, 256);
+      if (optObj.description !== undefined) text(optObj.description, 2048);
+      if (optObj.preview !== undefined) text(optObj.preview, 8192);
+    }
+  }
+  return q as unknown as RemotePendingQuestion;
 }
 
 export function parseRemoteBinding(value: unknown): RemoteBinding {

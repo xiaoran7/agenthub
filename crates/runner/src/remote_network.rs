@@ -1208,6 +1208,8 @@ mod tests {
             raw: json!({"params": {"delta": "hello"}}),
             approval_id: None,
             approval: None,
+            question_id: None,
+            question: None,
         };
 
         {

@@ -1567,6 +1567,8 @@ mod tests {
             binding: None,
             approval_id: None,
             approval: None,
+            question_id: None,
+            question: None,
         }
     }
 
@@ -1879,7 +1881,13 @@ mod tests {
                     turn_id: "turn-1".into(),
                     can_approve: true,
                     can_decline: true,
+                    tool_name: Some("Bash".into()),
+                    command_preview: Some("ls".into()),
+                    path: None,
+                    description: None,
+                    risk_level: Some("high".into()),
                 }],
+                pending_questions: vec![],
                 cursor: 3,
             }),
             DaemonRequest::GetEvents { after_cursor, .. } => {
@@ -1945,6 +1953,7 @@ mod tests {
                     snapshot: JournalSnapshot {
                         sessions: vec![],
                         pending_approvals: vec![],
+                        pending_questions: vec![],
                         cursor: 9,
                     },
                 })

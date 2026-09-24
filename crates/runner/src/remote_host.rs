@@ -943,6 +943,16 @@ impl NativeTransport for MultiProviderTransport {
     }
 
     fn respond(&mut self, id: Value, result: Value) -> Result<(), NativeError> {
+        // If request ID is string and starts with "zcode_", route to ZCode
+        if let Some(id_str) = id.as_str()
+            && id_str.starts_with("zcode_")
+        {
+            if let Some(ref mut zcode) = self.zcode {
+                let actual_id = id_str.trim_start_matches("zcode_");
+                let parsed_id = actual_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| Value::String(actual_id.to_string()));
+                return zcode.respond(parsed_id, result).map_err(|_| NativeError::uncertain("provider_transport_lost"));
+            }
+        }
         self.codex
             .respond(id, result)
             .map_err(|_| NativeError::uncertain("provider_transport_lost"))
@@ -1107,6 +1117,72 @@ impl NativeTransport for MultiProviderTransport {
                                     }
                                 }));
                             }
+                        } else if method == "interaction/requestPermission" {
+                            let params = &raw["params"];
+                            let session_id = params["sessionId"].as_str().unwrap_or("");
+                            let req_id = raw.get("id").cloned().unwrap_or(Value::Null);
+                            let req_id_str = match &req_id {
+                                Value::Number(n) => format!("zcode_{n}"),
+                                Value::String(s) => format!("zcode_{s}"),
+                                _ => "zcode_req".to_string(),
+                            };
+                            let tool_name = params["toolName"].as_str().unwrap_or("tool");
+                            let reason = params["reason"].as_str().unwrap_or("");
+                            let input = &params["input"];
+                            let command_preview = input.get("command").and_then(Value::as_str)
+                                .or_else(|| input.get("cmd").and_then(Value::as_str));
+                            let path = input.get("file_path").and_then(Value::as_str)
+                                .or_else(|| input.get("path").and_then(Value::as_str));
+
+                            messages.push(json!({
+                                "id": req_id_str,
+                                "method": "item/commandExecution/requestApproval",
+                                "params": {
+                                    "threadId": session_id,
+                                    "command": command_preview.unwrap_or(tool_name),
+                                    "filePath": path,
+                                    "reason": reason,
+                                    "availableDecisions": ["accept", "decline"]
+                                }
+                            }));
+                        } else if method == "interaction/requestUserInput" {
+                            let params = &raw["params"];
+                            let session_id = params["sessionId"].as_str().unwrap_or("");
+                            let req_id = raw.get("id").cloned().unwrap_or(Value::Null);
+                            let req_id_str = match &req_id {
+                                Value::Number(n) => format!("zcode_{n}"),
+                                Value::String(s) => format!("zcode_{s}"),
+                                _ => "zcode_req".to_string(),
+                            };
+                            let prompt = params["prompt"].as_str().unwrap_or("Agent 需要您的输入");
+                            let questions = params.get("questions").and_then(Value::as_array);
+                            let mut options = Vec::new();
+                            let mut header = None;
+                            if let Some(qs) = questions && let Some(first_q) = qs.first() {
+                                header = first_q.get("header").and_then(Value::as_str);
+                                if let Some(opts) = first_q.get("options").and_then(Value::as_array) {
+                                    for opt in opts {
+                                        if let Some(label) = opt.get("label").and_then(Value::as_str) {
+                                            options.push(json!({
+                                                "label": label,
+                                                "description": opt.get("description").and_then(Value::as_str),
+                                                "preview": opt.get("preview").and_then(Value::as_str)
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+
+                            messages.push(json!({
+                                "id": req_id_str,
+                                "method": "client/askQuestion",
+                                "params": {
+                                    "threadId": session_id,
+                                    "prompt": prompt,
+                                    "header": header,
+                                    "options": options
+                                }
+                            }));
                         }
                     }
                 }
@@ -1179,6 +1255,10 @@ pub enum RemoteAction {
         approval_id: String,
         approved: bool,
     },
+    AnswerQuestion {
+        question_id: String,
+        answer: Value,
+    },
     SetArchived {
         archived: bool,
     },
@@ -1242,6 +1322,9 @@ pub struct HostEvent {
     pub approval_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<PendingApprovalSnapshot>,
+    pub question_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<PendingQuestionSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1252,6 +1335,40 @@ pub struct PendingApprovalSnapshot {
     pub turn_id: String,
     pub can_approve: bool,
     pub can_decline: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_level: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOptionSnapshot {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingQuestionSnapshot {
+    pub question_id: String,
+    pub hub_session_id: String,
+    pub host_generation: String,
+    pub turn_id: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<QuestionOptionSnapshot>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_select: Option<bool>,
 }
 
 struct PendingApproval {
@@ -1260,6 +1377,21 @@ struct PendingApproval {
     request_id: Value,
     supported: bool,
     available_decisions: Option<Vec<Value>>,
+    tool_name: Option<String>,
+    command_preview: Option<String>,
+    path: Option<String>,
+    description: Option<String>,
+    risk_level: Option<String>,
+}
+
+struct PendingQuestion {
+    hub_session_id: String,
+    turn_id: String,
+    request_id: Value,
+    prompt: String,
+    header: Option<String>,
+    options: Option<Vec<QuestionOptionSnapshot>>,
+    multi_select: Option<bool>,
 }
 
 pub struct NativeSessionHost<T: NativeTransport> {
@@ -1270,6 +1402,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
     sessions: HashMap<String, SessionBinding>,
     native_to_hub: HashMap<String, String>,
     approvals: HashMap<String, PendingApproval>,
+    questions: HashMap<String, PendingQuestion>,
     answered_requests: HashSet<String>,
     receipts: HashMap<String, (RemoteCommand, CommandReceipt)>,
     pending_historical_events: VecDeque<HostEvent>,
@@ -1300,6 +1433,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             sessions: HashMap::new(),
             native_to_hub: HashMap::new(),
             approvals: HashMap::new(),
+            questions: HashMap::new(),
             answered_requests: HashSet::new(),
             receipts: HashMap::new(),
             pending_historical_events: VecDeque::new(),
@@ -1330,11 +1464,34 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     turn_id: approval.turn_id.clone(),
                     can_approve: decisions.is_none_or(|values| values.contains(&json!("accept"))),
                     can_decline: decisions.is_none_or(|values| values.contains(&json!("decline"))),
+                    tool_name: approval.tool_name.clone(),
+                    command_preview: approval.command_preview.clone(),
+                    path: approval.path.clone(),
+                    description: approval.description.clone(),
+                    risk_level: approval.risk_level.clone(),
                 }
             })
             .collect::<Vec<_>>();
         approvals.sort_by(|left, right| left.approval_id.cmp(&right.approval_id));
         approvals
+    }
+    pub fn pending_questions(&self) -> Vec<PendingQuestionSnapshot> {
+        let mut questions = self
+            .questions
+            .iter()
+            .map(|(question_id, q)| PendingQuestionSnapshot {
+                question_id: question_id.clone(),
+                hub_session_id: q.hub_session_id.clone(),
+                host_generation: self.generation.clone(),
+                turn_id: q.turn_id.clone(),
+                prompt: q.prompt.clone(),
+                header: q.header.clone(),
+                options: q.options.clone(),
+                multi_select: q.multi_select,
+            })
+            .collect::<Vec<_>>();
+        questions.sort_by(|left, right| left.question_id.cmp(&right.question_id));
+        questions
     }
     pub fn workspaces(&self) -> &[PathBuf] {
         &self.workspaces
@@ -1669,6 +1826,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     raw: synthetic_raw,
                                     approval_id: None,
                                     approval: None,
+                                    question_id: None,
+                                    question: None,
                                 });
                             }
                         }
@@ -1754,6 +1913,33 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 // Native notifications, not the act of sending a response, update execution state.
                 Ok(json!({"approval_id": approval_id, "response_sent": true}))
             }
+            RemoteAction::AnswerQuestion {
+                question_id,
+                answer,
+            } => {
+                let question = self
+                    .questions
+                    .get(question_id)
+                    .ok_or_else(|| NativeError::rejected("question_not_pending"))?;
+                if question.hub_session_id != *hub_id
+                    || session.current_turn_id.as_ref() != Some(&question.turn_id)
+                {
+                    return Err(NativeError::rejected("question_session_mismatch"));
+                }
+                // Send RPC response back to provider
+                self.transport.respond(
+                    question.request_id.clone(),
+                    json!({
+                        "answers": {
+                            &question.prompt: answer
+                        },
+                        "response": answer
+                    }),
+                )?;
+                self.questions.remove(question_id);
+                self.answered_requests.insert(question_id.clone());
+                Ok(json!({"question_id": question_id, "response_sent": true}))
+            }
             RemoteAction::SetArchived { archived } => {
                 if session.current_turn_id.is_some()
                     || !matches!(
@@ -1827,8 +2013,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             .as_ref()
             .and_then(|id| self.native_to_hub.get(id))
             .cloned();
-        let mut approval_id = None;
-        let mut approval = None;
+        let mut approval_id: Option<String> = None;
+        let mut approval: Option<PendingApprovalSnapshot> = None;
+        let mut question: Option<PendingQuestionSnapshot> = None;
         let mut kind = method.to_string();
         if let Some(binding) = hub_id.as_ref().and_then(|id| self.sessions.get_mut(id)) {
             match method {
@@ -1847,6 +2034,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     binding.current_turn_id = None;
                     self.approvals
                         .retain(|_, approval| approval.hub_session_id != binding.hub_session_id);
+                    self.questions
+                        .retain(|_, q| q.hub_session_id != binding.hub_session_id);
                 }
                 "serverRequest/resolved" => {
                     if let Some(id) = self.approvals.iter().find_map(|(id, approval)| {
@@ -1857,6 +2046,14 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         self.approvals.remove(&id);
                         approval_id = Some(id);
                         kind = "approval_resolved".into();
+                    }
+                    if let Some(id) = self.questions.iter().find_map(|(id, q)| {
+                        (q.hub_session_id == binding.hub_session_id
+                            && q.request_id == params["requestId"])
+                            .then(|| id.clone())
+                    }) {
+                        self.questions.remove(&id);
+                        kind = "question_resolved".into();
                     }
                 }
                 _ if raw.get("id").is_some() && raw.get("method").is_some() => {
@@ -1873,56 +2070,135 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                             serde_json::to_vec(&request_id).unwrap_or_else(|_| b"invalid".to_vec()),
                         );
                         let id = format!("approval-{:x}", digest.finalize());
-                        let supported = matches!(
-                            method,
-                            "item/commandExecution/requestApproval"
-                                | "item/fileChange/requestApproval"
-                        );
-                        if !self.answered_requests.contains(&id) {
-                            binding.execution_state = if supported {
-                                ExecutionState::AwaitingPermission
-                            } else {
-                                ExecutionState::AwaitingInput
-                            };
-                            let available_decisions =
-                                params["availableDecisions"].as_array().cloned();
-                            let descriptor = PendingApprovalSnapshot {
-                                approval_id: id.clone(),
+                        let is_command_approval = method == "item/commandExecution/requestApproval";
+                        let is_file_approval = method == "item/fileChange/requestApproval";
+                        let is_question_request = method == "item/askUserQuestion"
+                            || method == "item/question"
+                            || method == "client/askQuestion";
+
+                        if is_question_request {
+                            let prompt = params["prompt"]
+                                .as_str()
+                                .or_else(|| params["question"].as_str())
+                                .unwrap_or("Agent 提出了一个问题")
+                                .to_string();
+                            let header = params["header"].as_str().map(str::to_owned);
+                            let multi_select = params["multiSelect"].as_bool();
+                            let options = params["options"].as_array().map(|arr| {
+                                arr.iter()
+                                    .filter_map(|opt| {
+                                        opt["label"].as_str().map(|label| QuestionOptionSnapshot {
+                                            label: label.to_string(),
+                                            description: opt["description"].as_str().map(str::to_owned),
+                                            preview: opt["preview"].as_str().map(str::to_owned),
+                                        })
+                                    })
+                                    .collect::<Vec<_>>()
+                            });
+                            let q_snapshot = PendingQuestionSnapshot {
+                                question_id: id.clone(),
                                 hub_session_id: binding.hub_session_id.clone(),
                                 host_generation: self.generation.clone(),
                                 turn_id: turn_id.into(),
-                                can_approve: available_decisions
-                                    .as_ref()
-                                    .is_none_or(|values| values.contains(&json!("accept"))),
-                                can_decline: available_decisions
-                                    .as_ref()
-                                    .is_none_or(|values| values.contains(&json!("decline"))),
+                                prompt: prompt.clone(),
+                                header: header.clone(),
+                                options: options.clone(),
+                                multi_select,
                             };
-                            self.approvals
-                                .entry(id.clone())
-                                .or_insert_with(|| PendingApproval {
+                            if !self.answered_requests.contains(&id) {
+                                binding.execution_state = ExecutionState::AwaitingInput;
+                                self.questions.insert(
+                                    id.clone(),
+                                    PendingQuestion {
+                                        hub_session_id: binding.hub_session_id.clone(),
+                                        turn_id: turn_id.into(),
+                                        request_id,
+                                        prompt,
+                                        header,
+                                        options,
+                                        multi_select,
+                                    },
+                                );
+                                question = Some(q_snapshot);
+                                kind = "question_requested".into();
+                            }
+                        } else {
+                            let supported = is_command_approval || is_file_approval;
+                            if !self.answered_requests.contains(&id) {
+                                binding.execution_state = if supported {
+                                    ExecutionState::AwaitingPermission
+                                } else {
+                                    ExecutionState::AwaitingInput
+                                };
+                                let available_decisions =
+                                    params["availableDecisions"].as_array().cloned();
+                                let tool_name = if is_command_approval {
+                                    Some("Bash".to_string())
+                                } else if is_file_approval {
+                                    Some("FileChange".to_string())
+                                } else {
+                                    None
+                                };
+                                let command_preview = params["command"].as_str().map(str::to_owned);
+                                let path = params["filePath"].as_str().map(str::to_owned);
+                                let description = params["reason"].as_str().map(str::to_owned);
+                                let risk_level = if is_command_approval {
+                                    Some("high".to_string())
+                                } else if is_file_approval {
+                                    Some("medium".to_string())
+                                } else {
+                                    None
+                                };
+
+                                let descriptor = PendingApprovalSnapshot {
+                                    approval_id: id.clone(),
                                     hub_session_id: binding.hub_session_id.clone(),
+                                    host_generation: self.generation.clone(),
                                     turn_id: turn_id.into(),
-                                    request_id,
-                                    supported,
-                                    available_decisions,
-                                });
-                            approval_id = Some(id);
-                            if supported {
-                                approval = Some(descriptor);
+                                    can_approve: available_decisions
+                                        .as_ref()
+                                        .is_none_or(|values| values.contains(&json!("accept"))),
+                                    can_decline: available_decisions
+                                        .as_ref()
+                                        .is_none_or(|values| values.contains(&json!("decline"))),
+                                    tool_name: tool_name.clone(),
+                                    command_preview: command_preview.clone(),
+                                    path: path.clone(),
+                                    description: description.clone(),
+                                    risk_level: risk_level.clone(),
+                                };
+                                self.approvals
+                                    .entry(id.clone())
+                                    .or_insert_with(|| PendingApproval {
+                                        hub_session_id: binding.hub_session_id.clone(),
+                                        turn_id: turn_id.into(),
+                                        request_id,
+                                        supported,
+                                        available_decisions,
+                                        tool_name,
+                                        command_preview,
+                                        path,
+                                        description,
+                                        risk_level,
+                                    });
+                                approval_id = Some(id);
+                                if supported {
+                                    approval = Some(descriptor);
+                                }
+                                kind = if supported {
+                                    "approval_requested"
+                                } else {
+                                    "unsupported_provider_request"
+                                }
+                                .into();
                             }
-                            kind = if supported {
-                                "approval_requested"
-                            } else {
-                                "unsupported_provider_request"
-                            }
-                            .into();
                         }
                     }
                 }
                 _ => {}
             }
         }
+        let question_id = question.as_ref().map(|q| q.question_id.clone());
         HostEvent {
             event_id: uuid::Uuid::new_v4().to_string(),
             host_generation: self.generation.clone(),
@@ -1936,6 +2212,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             raw,
             approval_id,
             approval,
+            question_id,
+            question,
         }
     }
 }

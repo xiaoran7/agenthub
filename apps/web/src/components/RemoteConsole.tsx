@@ -5,6 +5,7 @@ import type { AccountView } from "../lib/account";
 import {
   conversationItems,
   pendingApprovals,
+  pendingQuestions,
   remoteError,
   remoteRequest,
   type RemoteRequest,
@@ -75,6 +76,7 @@ export function RemoteConsole({
   const [commands, setCommands] = useState<RemoteCommandRecord[]>([]);
   const [error, setError] = useState("");
   const [text, setText] = useState("");
+  const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   // Keep an uncertain POST's identity when the user retries the same operation.
   const attempts = useRef(new Map<string, RemoteCommand>());
@@ -258,6 +260,10 @@ export function RemoteConsole({
   );
   const approvals = useMemo(
     () => pendingApprovals(events, session?.binding.hub_session_id ?? ""),
+    [events, session?.binding.hub_session_id],
+  );
+  const questions = useMemo(
+    () => pendingQuestions(events, session?.binding.hub_session_id ?? ""),
     [events, session?.binding.hub_session_id],
   );
   useEffect(() => {
@@ -845,15 +851,39 @@ export function RemoteConsole({
               )}
               {approvals.map((approval) => (
                 <section className="remote-approval" key={approval.approval_id}>
-                  <h3>需要你的确认</h3>
-                  <strong>
-                    {
-                      getProviderInfo(
-                        session?.binding.provider_session_id ?? "",
-                      ).name
-                    }{" "}
-                    请求执行受保护的操作
-                  </strong>
+                  <div className="remote-approval-header">
+                    <h3>需要你的确认</h3>
+                    {approval.risk_level && (
+                      <span className={`remote-approval-badge ${approval.risk_level}`}>
+                        {approval.risk_level === "high"
+                          ? "高风险"
+                          : approval.risk_level === "medium"
+                            ? "中风险"
+                            : "低风险"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="remote-approval-desc">
+                    <strong>
+                      {
+                        getProviderInfo(
+                          session?.binding.provider_session_id ?? "",
+                        ).name
+                      }
+                    </strong>{" "}
+                    请求执行【{approval.tool_name ?? "系统工具"}】
+                    {approval.description && `：${approval.description}`}
+                  </div>
+                  {approval.command_preview && (
+                    <div className="remote-approval-command-box">
+                      {approval.command_preview}
+                    </div>
+                  )}
+                  {approval.path && !approval.command_preview && (
+                    <div className="remote-approval-command-box">
+                      {approval.path}
+                    </div>
+                  )}
                   <div>
                     <button
                       disabled={!connected || busy || !approval.can_decline}
@@ -879,6 +909,97 @@ export function RemoteConsole({
                       }
                     >
                       允许此次操作
+                    </button>
+                  </div>
+                </section>
+              ))}
+              {questions.map((q) => (
+                <section className="remote-question" key={q.question_id}>
+                  <div className="remote-question-header">
+                    {q.header ?? "Agent 向你提问"}
+                  </div>
+                  <div className="remote-question-prompt">{q.prompt}</div>
+                  {q.options && q.options.length > 0 && (
+                    <div className="remote-question-options">
+                      {q.options.map((opt, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className="remote-option-btn"
+                          disabled={!connected || busy}
+                          onClick={() =>
+                            void submit({
+                              action: "answer_question",
+                              question_id: q.question_id,
+                              answer: opt.label,
+                            })
+                          }
+                        >
+                          <strong>{opt.label}</strong>
+                          {opt.description && (
+                            <span className="remote-option-desc">
+                              {opt.description}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="remote-question-input-row">
+                    <input
+                      type="text"
+                      className="remote-question-input"
+                      placeholder="自定义回答..."
+                      disabled={!connected || busy}
+                      value={questionAnswers[q.question_id] ?? ""}
+                      onChange={(e) =>
+                        setQuestionAnswers((prev) => ({
+                          ...prev,
+                          [q.question_id]: e.target.value,
+                        }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const ans = questionAnswers[q.question_id]?.trim();
+                          if (ans) {
+                            void submit({
+                              action: "answer_question",
+                              question_id: q.question_id,
+                              answer: ans,
+                            });
+                            setQuestionAnswers((prev) => ({
+                              ...prev,
+                              [q.question_id]: "",
+                            }));
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="remote-primary"
+                      disabled={
+                        !connected ||
+                        busy ||
+                        !questionAnswers[q.question_id]?.trim()
+                      }
+                      onClick={() => {
+                        const ans = questionAnswers[q.question_id]?.trim();
+                        if (ans) {
+                          void submit({
+                            action: "answer_question",
+                            question_id: q.question_id,
+                            answer: ans,
+                          });
+                          setQuestionAnswers((prev) => ({
+                            ...prev,
+                            [q.question_id]: "",
+                          }));
+                        }
+                      }}
+                    >
+                      提交回答
                     </button>
                   </div>
                 </section>

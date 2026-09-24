@@ -2,6 +2,7 @@ import type {
   RemoteBinding,
   RemoteCommand,
   RemotePendingApproval,
+  RemotePendingQuestion,
 } from "@agent-pulse/contracts/remote";
 export type RemoteRequest = <T>(path: string, body?: unknown) => Promise<T>;
 export interface DiscoveryCandidate {
@@ -41,11 +42,14 @@ export interface RemoteEvent {
   payload: {
     type: string;
     pending_approvals?: RemotePendingApproval[];
+    pending_questions?: RemotePendingQuestion[];
     event?: {
       kind: string;
       raw?: { params?: Record<string, unknown> };
       approval_id?: string;
       approval?: RemotePendingApproval;
+      question_id?: string;
+      question?: RemotePendingQuestion;
       binding?: RemoteBinding;
     };
     receipt?: {
@@ -55,6 +59,7 @@ export interface RemoteEvent {
       result?: {
         turn?: { id: string };
         approval_id?: string;
+        question_id?: string;
         response_sent?: boolean;
       };
     };
@@ -260,6 +265,60 @@ export function pendingApprovals(
       typeof receipt.result.approval_id === "string"
     )
       pending.delete(receipt.result.approval_id);
+  }
+  return [...pending.values()];
+}
+
+export function pendingQuestions(
+  events: RemoteEvent[],
+  hubSessionId: string,
+): RemotePendingQuestion[] {
+  const pending = new Map<string, RemotePendingQuestion>();
+  for (const envelope of events) {
+    if (
+      envelope.payload.type === "ready" &&
+      Array.isArray(envelope.payload.pending_questions)
+    ) {
+      pending.clear();
+      for (const question of envelope.payload.pending_questions) {
+        if (question.hub_session_id === hubSessionId) {
+          pending.set(question.question_id, question);
+        }
+      }
+      continue;
+    }
+    if (envelope.payload.type === "host_lost") {
+      pending.clear();
+      continue;
+    }
+    const native = envelope.payload.event;
+    const receipt = envelope.payload.receipt;
+    if (
+      native?.kind === "question_requested" &&
+      native.question &&
+      native.question.hub_session_id === hubSessionId
+    ) {
+      pending.set(native.question.question_id, native.question);
+    }
+    if (
+      native?.kind === "question_resolved" &&
+      typeof native.question_id === "string"
+    ) {
+      pending.delete(native.question_id);
+    }
+    if (
+      native?.kind === "turn/completed" &&
+      native.binding?.hub_session_id === hubSessionId
+    ) {
+      pending.clear();
+    }
+    if (
+      receipt?.status === "accepted" &&
+      receipt.result?.response_sent === true &&
+      typeof receipt.result.question_id === "string"
+    ) {
+      pending.delete(receipt.result.question_id);
+    }
   }
   return [...pending.values()];
 }

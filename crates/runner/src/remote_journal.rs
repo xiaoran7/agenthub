@@ -44,6 +44,8 @@ pub enum BeginInboundCommand {
 pub struct JournalSnapshot {
     pub sessions: Vec<SessionBinding>,
     pub pending_approvals: Vec<PendingApprovalSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_questions: Vec<crate::remote_host::PendingQuestionSnapshot>,
     pub cursor: i64,
 }
 
@@ -402,6 +404,7 @@ impl RemoteJournal {
         Ok(JournalSnapshot {
             sessions: self.stored_bindings(true)?,
             pending_approvals: Vec::new(),
+            pending_questions: Vec::new(),
             cursor: self.latest_event_cursor()?,
         })
     }
@@ -696,6 +699,11 @@ fn approval_remote_projection_omits_provider_request_payload() {
         turn_id: "turn-one".into(),
         can_approve: true,
         can_decline: false,
+        tool_name: Some("Bash".into()),
+        command_preview: Some("cargo test".into()),
+        path: None,
+        description: Some("Run unit tests".into()),
+        risk_level: Some("high".into()),
     };
     let event = crate::remote_host::HostEvent {
         event_id: "event-one".into(),
@@ -711,6 +719,8 @@ fn approval_remote_projection_omits_provider_request_payload() {
         binding: None,
         approval_id: Some(approval.approval_id.clone()),
         approval: Some(approval.clone()),
+        question_id: None,
+        question: None,
     };
     let projected = projected_remote_event(&event).unwrap();
     assert!(projected["event"].get("raw").is_none());
@@ -742,6 +752,7 @@ impl<T: NativeTransport> DurableHost<T> {
         let mut snapshot = self.journal.snapshot()?;
         snapshot.sessions = self.host.sessions();
         snapshot.pending_approvals = self.host.pending_approvals();
+        snapshot.pending_questions = self.host.pending_questions();
         Ok(snapshot)
     }
 
@@ -750,6 +761,7 @@ impl<T: NativeTransport> DurableHost<T> {
         if let EventsAfter::SnapshotRequired { snapshot } = &mut result {
             snapshot.sessions = self.host.sessions();
             snapshot.pending_approvals = self.host.pending_approvals();
+            snapshot.pending_questions = self.host.pending_questions();
         }
         Ok(result)
     }
