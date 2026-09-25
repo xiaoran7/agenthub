@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.35] - 2026-09-25
+
+- 侧栏重构为「设备 → Agent → 工作区 → 会话」四层文件夹树，抽离纯函数 `session-tree.ts` 并新增 12 项单测；顶部新增面包屑导航（全部会话 / 设备 / Agent / 工作区 / 会话），可逐级退回，避免在深层节点迷路。Agent 层级从发现元数据判定 Provider，发现报告的名称优先于会话 id 前缀猜测。
+- 根治会话选中失效：树节点此前以 Provider 会话 id 拼 key，而选中态用的是 Hub 会话 id，两者永不相等导致点击无响应与面包屑不更新；现由树直接携带 `sessionKey`，并新增回归单测锁定。
+- 恢复并升级设置页：补回被 `2ad5a6a` 删除的 `SettingsPanel` 接线，重构为整页分区视图（左侧分区导航 + 右侧内容 + 返回控制台），保留账户安全、订阅、团队、审计、连接、设备、等待提醒、安装 8 个分区；设备与 PWA 安装数据改由页面自取，并接入 Service Worker 回执以补上此前缺失的通知呈现凭证。侧栏「＋ 绑定新电脑」按钮移除，设备绑定统一收进设置页。
+- 修复会话区若干 CSS 死选择器：`.remote-message.agent` 永不匹配（实际渲染 `assistant`），导致助手消息没有任何版式约束；`.remote-approval-box`、`.remote-approval-actions`、`.remote-primary-circle`、`.remote-tool-icon` 及一批旧树形类均已删除或重定向。
+- 对话 Markdown 改用 `react-markdown` + `remark-gfm`，修复手写解析器的多处渲染缺陷：有序列表被渲染成无序列表、嵌套列表被拍平、图片退化成字面文本、任务列表与换行不生效、代码块与表格结尾丢失流式光标。
+- 同步 Android、Node、Tauri、Cargo 版本至 2.4.35，Android versionCode 升至 46。
+
 ## [2.4.34] - 2026-09-25
 
 - Web 在电脑端 Host 换代后按新代次自动重连已选会话，触发有界历史回放；同步全平台版本与 Android versionCode 45。

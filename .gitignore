@@ -8,5 +8,11 @@
 *.db-shm
 *.db-wal
 runner-identity.json
+# Local device identity: holds this machine's private key, never commit it.
+local-identity.json
+# Local git bundles produced for offline transfer.
+pulse.bundle
+# Local UI review screenshots and scratch output.
+_scratch/
 .env
 deploy/docker.env

@@ -1,18 +1,20 @@
+"use client";
+
 import { useEffect, useState, type FormEvent } from "react";
 
 import {
   ApiError,
   createDeviceBinding,
   describeApiError,
+  fetchDevices,
   revokeDevice,
   type DeviceBinding,
 } from "../lib/api";
 import type { PanelConfig } from "../lib/config";
 import { normalizeGatewayBase, normalizeUserId } from "../lib/config";
-import { useModalDialog } from "../lib/dialog-focus";
 import type { NotificationState } from "../lib/notifications";
 import { deviceShortId, formatClock } from "../lib/format";
-import type { PwaInstallState } from "../lib/pwa-install";
+import { usePwaInstall, type PwaInstallState } from "../lib/pwa-install";
 import type { DeviceRecord } from "../lib/types";
 import {
   accountErrorMessage,
@@ -47,19 +49,48 @@ import {
   readNotificationState,
 } from "../lib/notifications";
 
-interface SettingsPanelProps {
+interface SettingsPageProps {
   account: AccountView | undefined;
   config: PanelConfig;
   onSave: (config: PanelConfig) => void;
-  devices: DeviceRecord[];
-  onDevicesChanged: () => void;
   onWorkspaceChanged: (account: AccountView) => void;
   notificationPresentedAt: number | undefined;
-  installState: PwaInstallState;
-  onInstall: () => Promise<void>;
   onLoggedOut: () => void;
   onClose: () => void;
 }
+
+type SettingsSectionKey =
+  | "account"
+  | "billing"
+  | "team"
+  | "audit"
+  | "connection"
+  | "devices"
+  | "notifications"
+  | "install";
+
+interface SettingsSectionEntry {
+  key: SettingsSectionKey;
+  label: string;
+  icon: string;
+  requiresAccount: boolean;
+}
+
+const SETTINGS_SECTIONS: readonly SettingsSectionEntry[] = [
+  { key: "account", label: "账户安全", icon: "◎", requiresAccount: true },
+  { key: "billing", label: "订阅方案", icon: "$", requiresAccount: true },
+  { key: "team", label: "团队工作区", icon: "◇", requiresAccount: true },
+  { key: "audit", label: "审计记录", icon: "◌", requiresAccount: true },
+  { key: "connection", label: "连接", icon: "↗", requiresAccount: false },
+  { key: "devices", label: "设备", icon: "◫", requiresAccount: false },
+  {
+    key: "notifications",
+    label: "等待提醒",
+    icon: "◉",
+    requiresAccount: false,
+  },
+  { key: "install", label: "安装到设备", icon: "⌂", requiresAccount: false },
+];
 
 const NOTIFICATION_HINTS: Record<NotificationState, string> = {
   unavailable:
@@ -152,22 +183,22 @@ function auditDetail(event: AuditEvent): string {
   return details.join(" · ");
 }
 
-export function SettingsPanel({
+export function SettingsPage({
   account,
   config,
-  devices,
   onSave,
-  onDevicesChanged,
   onWorkspaceChanged,
   notificationPresentedAt,
-  installState,
-  onInstall,
   onLoggedOut,
   onClose,
-}: SettingsPanelProps) {
+}: SettingsPageProps) {
+  const [activeSection, setActiveSection] =
+    useState<SettingsSectionKey>("account");
   const [gatewayBase, setGatewayBase] = useState(config.gatewayBase);
   const [userId, setUserId] = useState(config.userId);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [devices, setDevices] = useState<DeviceRecord[] | undefined>(undefined);
+  const { state: installState, install: onInstall } = usePwaInstall();
   const [notifications, setNotifications] = useState<
     NotificationState | undefined
   >(undefined);
@@ -210,7 +241,27 @@ export function SettingsPanel({
   const [auditError, setAuditError] = useState<string>();
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditRevision, setAuditRevision] = useState(0);
-  const dialogRef = useModalDialog<HTMLFormElement>(onClose);
+
+  const sections = SETTINGS_SECTIONS.filter(
+    (section) => !section.requiresAccount || account !== undefined,
+  );
+  const activeEntry =
+    sections.find((section) => section.key === activeSection) ??
+    sections.find((section) => section.key === "connection")!;
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchDevices(config)
+      .then((next) => {
+        if (!cancelled) setDevices(next);
+      })
+      .catch((cause) => {
+        if (!cancelled) setDeviceActionError(describeApiError(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config]);
 
   useEffect(() => {
     let cancelled = false;
@@ -625,7 +676,7 @@ export function SettingsPanel({
     setDeviceActionError(undefined);
     try {
       await revokeDevice(config, device.device_id);
-      onDevicesChanged();
+      setDevices(await fetchDevices(config));
     } catch (cause) {
       setDeviceActionError(describeApiError(cause));
     } finally {
@@ -634,41 +685,48 @@ export function SettingsPanel({
   }
 
   return (
-    <div
-      className="settings-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <form
-        ref={dialogRef}
-        className="settings"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        tabIndex={-1}
-        onSubmit={handleSubmit}
-      >
-        <header className="settings-header">
-          <div>
-            <p className="eyebrow">面板设置</p>
-            <h2 id="settings-title">面板设置</h2>
-            <p>管理账户安全、连接、设备与等待提醒。</p>
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="关闭设置"
-            onClick={onClose}
-          >
-            ✕
-          </button>
-        </header>
+    <div className="settings-page">
+      <header className="settings-page-header">
+        <div>
+          <h1>设置</h1>
+          <p>管理账户安全、连接、设备与等待提醒。</p>
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="返回控制台"
+          onClick={onClose}
+        >
+          ← 返回
+        </button>
+      </header>
 
-        <div className="settings-scroll">
-          {account !== undefined && (
+      <div className="settings-page-body">
+        <nav className="settings-page-nav" aria-label="设置分区">
+          {sections.map((section) => (
+            <button
+              key={section.key}
+              type="button"
+              data-active={section.key === activeEntry.key}
+              aria-current={
+                section.key === activeEntry.key ? "page" : undefined
+              }
+              onClick={() => setActiveSection(section.key)}
+            >
+              <span className="settings-section-icon" aria-hidden="true">
+                {section.icon}
+              </span>
+              {section.label}
+            </button>
+          ))}
+        </nav>
+
+        <form
+          className="settings-page-content"
+          aria-label="设置内容"
+          onSubmit={handleSubmit}
+        >
+          {activeEntry.key === "account" && account !== undefined && (
             <section
               className="settings-section"
               aria-labelledby="account-settings"
@@ -821,7 +879,7 @@ export function SettingsPanel({
               )}
             </section>
           )}
-          {account !== undefined && (
+          {activeEntry.key === "billing" && account !== undefined && (
             <section
               className="settings-section"
               aria-labelledby="billing-settings"
@@ -895,7 +953,7 @@ export function SettingsPanel({
               )}
             </section>
           )}
-          {account !== undefined && (
+          {activeEntry.key === "team" && account !== undefined && (
             <section
               className="settings-section"
               aria-labelledby="team-settings"
@@ -1092,7 +1150,7 @@ export function SettingsPanel({
               )}
             </section>
           )}
-          {account !== undefined && (
+          {activeEntry.key === "audit" && account !== undefined && (
             <section
               className="settings-section"
               aria-labelledby="audit-settings"
@@ -1165,242 +1223,256 @@ export function SettingsPanel({
               )}
             </section>
           )}
-          <section
-            className="settings-section"
-            aria-labelledby="connection-settings"
-          >
-            <div className="settings-section-heading">
-              <span className="settings-section-icon" aria-hidden="true">
-                ↗
-              </span>
-              <div>
-                <h3 id="connection-settings">连接</h3>
-                <p>配置面板读取数据时使用的网关。</p>
+          {activeEntry.key === "connection" && (
+            <section
+              className="settings-section"
+              aria-labelledby="connection-settings"
+            >
+              <div className="settings-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ↗
+                </span>
+                <div>
+                  <h3 id="connection-settings">连接</h3>
+                  <p>配置面板读取数据时使用的网关。</p>
+                </div>
               </div>
-            </div>
-            <label>
-              网关地址
-              <input
-                value={gatewayBase}
-                onChange={(event) => setGatewayBase(event.target.value)}
-                placeholder="留空使用当前源（开发代理）"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-            <p className="settings-hint">
-              留空时请求经当前源的 /v1 代理转发；非回环直连地址必须使用 https。
-            </p>
-            <label>
-              用户标识（x-user-id）
-              <input
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-            <p className="settings-hint">
-              仅供显式开启的本地开发模式使用；部署访问令牌只保留在 Web 服务端。
-            </p>
-          </section>
-
-          <section
-            className="settings-section"
-            aria-labelledby="device-settings"
-          >
-            <div className="settings-section-heading">
-              <span className="settings-section-icon" aria-hidden="true">
-                ◫
-              </span>
-              <div>
-                <h3 id="device-settings">设备</h3>
-                <p>绑定新的 Runner，或撤销不再使用的设备。</p>
-              </div>
-            </div>
-            <div className="settings-toggle">
-              <span>绑定新设备</span>
-              <button
-                type="button"
-                className="secondary"
-                disabled={bindingBusy}
-                onClick={() => void generateBindingCode()}
-              >
-                {bindingBusy ? "生成中…" : "生成绑定码"}
-              </button>
-            </div>
-            {binding !== undefined && (
-              <div className="binding-code">
+              <label>
+                网关地址
                 <input
-                  className="mono"
-                  value={binding.binding_code}
-                  readOnly
-                  aria-label="一次性绑定码"
-                  onFocus={(event) => event.currentTarget.select()}
+                  value={gatewayBase}
+                  onChange={(event) => setGatewayBase(event.target.value)}
+                  placeholder="留空使用当前源（开发代理）"
+                  autoComplete="off"
+                  spellCheck={false}
                 />
+              </label>
+              <p className="settings-hint">
+                留空时请求经当前源的 /v1 代理转发；非回环直连地址必须使用
+                https。
+              </p>
+              <label>
+                用户标识（x-user-id）
+                <input
+                  value={userId}
+                  onChange={(event) => setUserId(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <p className="settings-hint">
+                仅供显式开启的本地开发模式使用；部署访问令牌只保留在 Web
+                服务端。
+              </p>
+              <div className="settings-actions">
+                <button type="submit">保存</button>
+              </div>
+            </section>
+          )}
+
+          {activeEntry.key === "devices" && (
+            <section
+              className="settings-section"
+              aria-labelledby="device-settings"
+            >
+              <div className="settings-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ◫
+                </span>
+                <div>
+                  <h3 id="device-settings">设备</h3>
+                  <p>绑定新的 Runner，或撤销不再使用的设备。</p>
+                </div>
+              </div>
+              <div className="settings-toggle">
+                <span>绑定新设备</span>
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void copyBindingCode()}
+                  disabled={bindingBusy}
+                  onClick={() => void generateBindingCode()}
                 >
-                  {bindingCopied ? "已复制" : "复制"}
+                  {bindingBusy ? "生成中…" : "生成绑定码"}
                 </button>
-                <p className="settings-hint">
-                  10 分钟内有效，仅显示在本次设置窗口。
-                </p>
               </div>
-            )}
-            {devices.length > 0 && (
-              <div className="device-management">
-                <span className="settings-subheading">已绑定设备</span>
-                {devices.map((device) => (
-                  <div className="device-management-row" key={device.device_id}>
-                    <span className="device-management-copy">
-                      <span
-                        className="device-dot"
-                        data-online={device.online && !device.revoked}
-                      />
-                      <span>
-                        <span className="mono" title={device.device_id}>
-                          {deviceShortId(device.device_id)}
-                        </span>
-                        <small>
-                          {device.revoked
-                            ? "已撤销"
-                            : device.online
-                              ? "在线"
-                              : "离线"}
-                        </small>
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      className="secondary danger-button"
-                      disabled={
-                        device.revoked || revokingDevice === device.device_id
-                      }
-                      onClick={() => void revoke(device)}
+              {binding !== undefined && (
+                <div className="binding-code">
+                  <input
+                    className="mono"
+                    value={binding.binding_code}
+                    readOnly
+                    aria-label="一次性绑定码"
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => void copyBindingCode()}
+                  >
+                    {bindingCopied ? "已复制" : "复制"}
+                  </button>
+                  <p className="settings-hint">
+                    10 分钟内有效，仅显示在本次设置窗口。
+                  </p>
+                </div>
+              )}
+              {devices === undefined && (
+                <p className="settings-hint">正在读取已绑定设备…</p>
+              )}
+              {devices !== undefined && devices.length > 0 && (
+                <div className="device-management">
+                  <span className="settings-subheading">已绑定设备</span>
+                  {devices.map((device) => (
+                    <div
+                      className="device-management-row"
+                      key={device.device_id}
                     >
-                      {device.revoked
-                        ? "已撤销"
-                        : revokingDevice === device.device_id
-                          ? "撤销中…"
-                          : "撤销"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {deviceActionError !== undefined && (
-              <p className="error-text" role="alert">
-                {deviceActionError}
-              </p>
-            )}
-          </section>
-
-          <section
-            className="settings-section"
-            aria-labelledby="notification-settings"
-          >
-            <div className="settings-section-heading">
-              <span className="settings-section-icon" aria-hidden="true">
-                ◉
-              </span>
-              <div>
-                <h3 id="notification-settings">等待提醒</h3>
-                <p>面板关闭后仍可接收等待输入或权限通知。</p>
-              </div>
-            </div>
-            <div className="settings-toggle">
-              <span>推送通知</span>
-              <button
-                type="button"
-                className="secondary"
-                disabled={
-                  notifications === undefined ||
-                  notificationBusy ||
-                  notifications === "unavailable" ||
-                  notifications === "disabled" ||
-                  notifications === "denied"
-                }
-                aria-pressed={notifications === "on"}
-                onClick={() => void toggleNotifications()}
-              >
-                {notifications === undefined
-                  ? "检查中…"
-                  : notificationBusy
-                    ? "处理中…"
-                    : notifications === "on"
-                      ? "已开启"
-                      : "开启"}
-              </button>
-            </div>
-            <p className="settings-hint">
-              {notifications === undefined
-                ? "正在检查通知能力…"
-                : NOTIFICATION_HINTS[notifications]}
-            </p>
-            {notifications === "on" &&
-              notificationPresentedAt !== undefined && (
-                <p className="settings-receipt" role="status">
-                  最近展示请求：{" "}
-                  {formatClock(new Date(notificationPresentedAt).toISOString())}
-                  。Windows 是否弹出仍受系统设置影响。
+                      <span className="device-management-copy">
+                        <span
+                          className="device-dot"
+                          data-online={device.online && !device.revoked}
+                        />
+                        <span>
+                          <span className="mono" title={device.device_id}>
+                            {deviceShortId(device.device_id)}
+                          </span>
+                          <small>
+                            {device.revoked
+                              ? "已撤销"
+                              : device.online
+                                ? "在线"
+                                : "离线"}
+                          </small>
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="secondary danger-button"
+                        disabled={
+                          device.revoked || revokingDevice === device.device_id
+                        }
+                        onClick={() => void revoke(device)}
+                      >
+                        {device.revoked
+                          ? "已撤销"
+                          : revokingDevice === device.device_id
+                            ? "撤销中…"
+                            : "撤销"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {deviceActionError !== undefined && (
+                <p className="error-text" role="alert">
+                  {deviceActionError}
                 </p>
               )}
-            {notificationError !== undefined && (
-              <p className="error-text" role="alert">
-                {notificationError}
-              </p>
-            )}
-          </section>
+            </section>
+          )}
 
-          <section
-            className="settings-section"
-            aria-labelledby="install-settings"
-          >
-            <div className="settings-section-heading">
-              <span className="settings-section-icon" aria-hidden="true">
-                ⌂
-              </span>
-              <div>
-                <h3 id="install-settings">安装到设备</h3>
-                <p>以独立 PWA 窗口打开 AgentHub。</p>
+          {activeEntry.key === "notifications" && (
+            <section
+              className="settings-section"
+              aria-labelledby="notification-settings"
+            >
+              <div className="settings-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ◉
+                </span>
+                <div>
+                  <h3 id="notification-settings">等待提醒</h3>
+                  <p>面板关闭后仍可接收等待输入或权限通知。</p>
+                </div>
               </div>
-            </div>
-            <div className="settings-toggle">
-              <span>应用安装</span>
-              <button
-                type="button"
-                className="secondary"
-                disabled={installState !== "available"}
-                onClick={() => void installPwa()}
-              >
-                {INSTALL_LABELS[installState]}
-              </button>
-            </div>
-            <p className="settings-hint">{INSTALL_HINTS[installState]}</p>
-            {installError !== undefined && (
-              <p className="error-text" role="alert">
-                {installError}
+              <div className="settings-toggle">
+                <span>推送通知</span>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={
+                    notifications === undefined ||
+                    notificationBusy ||
+                    notifications === "unavailable" ||
+                    notifications === "disabled" ||
+                    notifications === "denied"
+                  }
+                  aria-pressed={notifications === "on"}
+                  onClick={() => void toggleNotifications()}
+                >
+                  {notifications === undefined
+                    ? "检查中…"
+                    : notificationBusy
+                      ? "处理中…"
+                      : notifications === "on"
+                        ? "已开启"
+                        : "开启"}
+                </button>
+              </div>
+              <p className="settings-hint">
+                {notifications === undefined
+                  ? "正在检查通知能力…"
+                  : NOTIFICATION_HINTS[notifications]}
               </p>
-            )}
-          </section>
+              {notifications === "on" &&
+                notificationPresentedAt !== undefined && (
+                  <p className="settings-receipt" role="status">
+                    最近展示请求：{" "}
+                    {formatClock(
+                      new Date(notificationPresentedAt).toISOString(),
+                    )}
+                    。Windows 是否弹出仍受系统设置影响。
+                  </p>
+                )}
+              {notificationError !== undefined && (
+                <p className="error-text" role="alert">
+                  {notificationError}
+                </p>
+              )}
+            </section>
+          )}
+
+          {activeEntry.key === "install" && (
+            <section
+              className="settings-section"
+              aria-labelledby="install-settings"
+            >
+              <div className="settings-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ⌂
+                </span>
+                <div>
+                  <h3 id="install-settings">安装到设备</h3>
+                  <p>以独立 PWA 窗口打开 AgentHub。</p>
+                </div>
+              </div>
+              <div className="settings-toggle">
+                <span>应用安装</span>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={installState !== "available"}
+                  onClick={() => void installPwa()}
+                >
+                  {INSTALL_LABELS[installState]}
+                </button>
+              </div>
+              <p className="settings-hint">{INSTALL_HINTS[installState]}</p>
+              {installError !== undefined && (
+                <p className="error-text" role="alert">
+                  {installError}
+                </p>
+              )}
+            </section>
+          )}
 
           {error !== undefined && (
             <p className="error-text settings-form-error" role="alert">
               {error}
             </p>
           )}
-        </div>
-
-        <footer className="settings-actions">
-          <button type="button" className="secondary" onClick={onClose}>
-            取消
-          </button>
-          <button type="submit">保存</button>
-        </footer>
-      </form>
+        </form>
+      </div>
     </div>
   );
 }

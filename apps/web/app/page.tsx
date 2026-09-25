@@ -8,7 +8,6 @@ import {
   logoutAccount,
   type AccountView,
 } from "../src/lib/account";
-import { DeviceConnectDialog } from "../src/components/DeviceConnectDialog";
 import { loadConfig, type PanelConfig } from "../src/lib/config";
 
 export default function PanelPage() {
@@ -16,7 +15,6 @@ export default function PanelPage() {
     undefined,
   );
   const [config, setConfig] = useState<PanelConfig | undefined>(undefined);
-  const [deviceConnectOpen, setDeviceConnectOpen] = useState(false);
 
   useEffect(() => {
     setConfig(loadConfig(window.localStorage));
@@ -56,23 +54,16 @@ export default function PanelPage() {
   }
 
   return (
-    <>
-      <RemoteConsole
-        onAuthenticationRequired={handleRequireLogin}
-        onManage={() => setDeviceConnectOpen(true)}
-        account={account}
-        onLogout={() => {
-          void logoutAccount().finally(() => {
-            setAccount(null);
-          });
-        }}
-      />
-      {deviceConnectOpen && config !== undefined && (
-        <DeviceConnectDialog
-          config={config}
-          onClose={() => setDeviceConnectOpen(false)}
-        />
-      )}
-    </>
+    <RemoteConsole
+      account={account}
+      config={config}
+      onAuthenticationRequired={handleRequireLogin}
+      onLoggedOut={() => setAccount(null)}
+      onLogout={() => {
+        void logoutAccount().finally(() => {
+          setAccount(null);
+        });
+      }}
+    />
   );
 }

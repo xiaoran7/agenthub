@@ -1,4 +1,6 @@
 /* The active Web console follows the Desktop dark palette and reading layout. */
+/* The reading measure is the product's core typographic decision, so it is
+   defined once here rather than repeated as a literal 1360px in five rules. */
 .remote-console,
 .remote-launch {
   --remote-bg: #1f1e1d;
@@ -16,6 +18,11 @@
   --remote-green: #7ed5a0;
   --remote-amber: #e7b35d;
   --remote-red: #ffaaa4;
+  /* 760px at 14px is ~72 characters: the comfortable end of the measure range.
+     Code and tables overhang to 900px so a fixed measure never fights wide
+     content, and both are centred so the column never breaks the grid. */
+  --remote-measure: 760px;
+  --remote-wide: 900px;
   font-family:
     "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
 }
@@ -190,54 +197,6 @@
   text-align: left;
 }
 
-.remote-device-icon {
-  font-size: 13px;
-}
-
-.remote-device-count,
-.remote-workspace-count {
-  color: var(--remote-muted);
-  background: var(--remote-surface);
-  border-radius: 999px;
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 10px;
-  padding: 1px 6px;
-}
-
-.remote-tree-arrow,
-.remote-tree-arrow-sm {
-  color: var(--remote-muted);
-}
-
-.remote-device-body {
-  padding: 0 0 8px 9px;
-  gap: 2px;
-}
-
-.remote-workspace-header {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border: 0 !important;
-  border-radius: 7px;
-  background: transparent !important;
-  text-align: left;
-}
-
-.remote-workspace-header:hover {
-  background: var(--remote-hover) !important;
-}
-
-.remote-workspace-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
 .remote-workspace-icon {
   color: var(--remote-muted);
   flex: 0 0 auto;
@@ -247,12 +206,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.remote-workspace-sessions {
-  border-left: 1px solid var(--remote-line);
-  margin: 0 0 6px 14px;
-  padding: 1px 0 1px 7px;
 }
 
 .remote-sidebar .remote-session {
@@ -369,41 +322,49 @@
 }
 
 .remote-timeline {
-  padding: 26px max(24px, calc((100% - 1360px) / 2));
-}
-
-.remote-message,
-.remote-tool,
-.remote-approval,
-.remote-question {
-  max-width: 1360px;
-}
-
-.remote-message {
-  margin-bottom: 22px;
-}
-
-.remote-message small {
-  color: var(--remote-muted);
-  font-size: 11px;
-}
-
-.remote-message.user {
-  background: var(--remote-raised);
-  border-color: var(--remote-line);
-  box-shadow: none;
-  max-width: min(78%, 1000px);
+  padding: 26px 32px 20px;
 }
 
 .remote-private-note {
-  max-width: 1360px;
+  max-width: var(--remote-measure);
   margin: 0 auto 18px;
   color: var(--remote-muted);
   font-size: 12px;
 }
 
+/* Assistant turns are anchored by a small provider dot + name plus a very
+   quiet rail, rather than a bubble: the reply stays flat prose, but a glance
+   still finds the turn boundaries in a long wall of text. The rail is a
+   gradient that dies out at the top so it reads as a margin marker, not a box
+   edge. */
+.remote-turn-tag small {
+  color: var(--remote-muted);
+  font-size: 11px;
+}
+.remote-turn-marker {
+  background: var(--remote-blue);
+}
+.remote-message.assistant {
+  margin-bottom: 26px;
+}
+.remote-message.assistant .remote-md-content {
+  border-left: 1px solid var(--remote-line);
+  background: linear-gradient(
+    to right,
+    rgb(255 255 255 / 2.5%),
+    transparent 46px
+  );
+  padding-left: 16px;
+  margin-left: -1px;
+}
+.remote-message.user {
+  background: var(--remote-raised);
+  border-color: var(--remote-line);
+  box-shadow: none;
+}
+
 .remote-tool-group {
-  max-width: 1360px;
+  max-width: var(--remote-wide);
   margin: 0 auto 16px;
   border: 1px solid var(--remote-line);
   border-radius: 9px;
@@ -413,34 +374,49 @@
 .remote-tool-group-summary {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 9px 12px;
   color: var(--remote-secondary);
   cursor: pointer;
   list-style: none;
   font-size: 12px;
+  font-weight: 600;
 }
 
 .remote-tool-group-summary::-webkit-details-marker {
   display: none;
 }
 
+.remote-tool-group-summary:hover {
+  background: var(--remote-raised);
+}
+
 .remote-tool-group-preview {
   min-width: 0;
   flex: 1;
   color: var(--remote-muted);
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The children keep .remote-tool's own bottom margin, which inside a panel
+   reads as ~48px of dead space below the last tool. Collapse it: the panel's
+   own padding is the only spacing that should be there. */
 .remote-tool-group-body {
-  padding: 8px 12px 0;
+  padding: 8px;
   border-top: 1px solid var(--remote-line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-
 .remote-tool-group-body .remote-tool {
   max-width: none;
+  margin: 0;
+}
+.remote-tool-group-body > .remote-tool:last-child {
+  margin-bottom: 0;
 }
 
 .remote-tool-description {
@@ -478,13 +454,21 @@
   border: 1px solid #76504d;
 }
 
+/* The command is the action, the output is the evidence. They used to collapse
+   to the same grey (this rule overwrote .remote-tool-cmd's colour), so the
+   command keeps its amber and only the output is neutralised. */
 .remote-tool-content,
-.remote-tool-cmd,
 .remote-tool-output,
 .remote-code-pre {
   background: var(--remote-sidebar);
   border-color: var(--remote-line);
   color: var(--remote-secondary);
+}
+
+.remote-tool-cmd {
+  background: var(--remote-sidebar);
+  border-color: var(--remote-line);
+  color: var(--remote-amber);
 }
 
 .remote-tool-subhead,
@@ -534,9 +518,11 @@
   color: var(--remote-muted);
 }
 
+/* The composer matches the reading measure exactly (plus its own padding), so
+   a typed line lands on the same left edge as the reply it produces. */
 .remote-composer-card {
-  width: min(1360px, calc(100% - 48px));
-  max-width: 1360px;
+  width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px));
+  max-width: none;
   margin-bottom: 22px;
   border-color: var(--remote-line-strong);
   border-radius: 16px;
@@ -630,9 +616,11 @@
   font-size: 14px;
 }
 
+/* Placeholder and hint are both tertiary, so they step one notch further from
+   the ink than --remote-muted does — otherwise they compete with real text. */
 .remote-composer-input-wrapper textarea::placeholder,
 .remote-composer-hint {
-  color: var(--remote-muted);
+  color: #7d7a73;
 }
 
 .remote-status-pill.ready {
@@ -711,53 +699,66 @@
   line-height: 1.72;
 }
 
-.remote-md-bold,
-.remote-md-heading,
-.remote-md-table th {
+/* react-markdown emits bare elements, so the warm theme targets them the same
+   way the base stylesheet does. */
+.remote-md-content strong,
+.remote-md-content h1,
+.remote-md-content h2,
+.remote-md-content h3,
+.remote-md-content h4,
+.remote-md-content th {
   color: var(--remote-ink);
 }
 
-.remote-md-italic,
-.remote-md-table td {
+.remote-md-content td {
   color: var(--remote-secondary);
 }
 
-.remote-md-inline-code {
+/* Italics need a real tonal step off the body colour, not the same grey. */
+.remote-md-content em {
+  color: #9d9a92;
+}
+
+.remote-md-content code {
   background: #2c2822;
   border-color: var(--remote-line);
   color: #fdba74;
   font-family: "Cascadia Mono", Consolas, monospace;
 }
 
-.remote-md-link,
-.remote-md-link:hover {
+.remote-md-content a,
+.remote-md-content a:hover {
   color: var(--remote-blue);
 }
 
-.remote-md-heading.h1,
-.remote-md-heading.h2,
-.remote-md-table th,
-.remote-md-table td,
-.remote-md-table-wrapper {
+.remote-md-content h1,
+.remote-md-content h2,
+.remote-md-content hr,
+.remote-md-content th,
+.remote-md-content td,
+.remote-md-content .remote-md-table-wrapper {
   border-color: var(--remote-line);
 }
 
-.remote-md-list li::marker {
+.remote-md-content li::marker {
   color: var(--remote-muted);
 }
 
-.remote-md-blockquote {
+.remote-md-content input[type="checkbox"] {
+  accent-color: var(--remote-blue);
+}
+
+.remote-md-content blockquote {
   border-left-color: var(--remote-amber);
   background: #30291f;
   color: var(--remote-secondary);
 }
 
-.remote-md-hr,
-.remote-md-table th {
+.remote-md-content hr {
   background: var(--remote-line);
 }
 
-.remote-md-table th {
+.remote-md-content th {
   background: var(--remote-raised);
 }
 
@@ -772,6 +773,16 @@
   color: var(--remote-ink) !important;
 }
 
+/* Text selection falls back to a cold system blue that fights the warm
+   palette, so it is themed here. */
+.remote-console ::selection {
+  background: rgb(231 179 93 / 28%);
+  color: var(--remote-ink);
+}
+
+/* ================= 移动端适配 (≤ 700px) ================= */
+/* remote.css owns the mobile layout; this file only re-themes it, so the two
+   never fight over the same padding or radius with competing !important. */
 @media (max-width: 700px) {
   .remote-sidebar {
     border-right-color: var(--remote-line);
@@ -790,16 +801,30 @@
   }
 
   .remote-timeline {
-    padding: 16px 14px;
+    padding: 14px 14px 10px;
   }
 
   .remote-message.user {
-    max-width: 90%;
+    max-width: 88%;
   }
 
+  /* At 390px the rail would eat 17px of an already narrow column for a marker
+     the turn tag above already provides, so it drops out on phones. */
+  .remote-message.assistant .remote-md-content {
+    border-left: 0;
+    background: none;
+    padding-left: 0;
+    margin-left: 0;
+  }
+
+  /* Safe-area inset only applies here, so this is the one composer dimension
+     that has to live in the media query. The top margin still holds the fade. */
   .remote-composer-card {
     width: calc(100% - 24px);
-    margin-bottom: max(10px, env(safe-area-inset-bottom));
+    max-width: none;
+    margin: 22px auto max(10px, env(safe-area-inset-bottom));
+    padding: 9px 12px 7px 14px;
+    border-radius: 16px;
   }
 }
 
