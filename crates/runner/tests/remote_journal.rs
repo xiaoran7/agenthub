@@ -1,5 +1,5 @@
 use agent_pulse_runner::{remote_host::*, remote_journal::*};
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn command() -> RemoteCommand {
     RemoteCommand {
@@ -403,6 +403,68 @@ fn bounded_local_log_requires_snapshot_for_expired_or_future_cursors() {
     assert_eq!(events.len(), 3);
     assert_eq!(events[0].cursor, 3);
     assert_eq!(events[2].payload, json!({"event":5}));
+}
+
+#[test]
+fn batched_appends_commit_every_event_and_trim_only_once_at_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut journal =
+        RemoteJournal::open_with_event_retention(dir.path().join("remote.db"), 3).unwrap();
+
+    let payloads: Vec<Value> = (1..=5).map(|index| json!({"event": index})).collect();
+    let batch: Vec<BatchedAppend<'_>> = payloads
+        .iter()
+        .map(|payload| BatchedAppend {
+            local: payload,
+            remote: Some(payload),
+            bindings: &[],
+        })
+        .collect();
+    let cursor = journal.append_batch(&batch).unwrap();
+    assert_eq!(cursor, 5);
+
+    // Trimming runs once against the final cursor, so the batch keeps the same
+    // newest-N window that sequential appends would have produced.
+    let EventsAfter::Events { events, cursor } = journal.events_after(2, 10).unwrap() else {
+        panic!("retention window must still be replayable")
+    };
+    assert_eq!(cursor, 5);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].payload, json!({"event": 3}));
+    assert_eq!(events[2].payload, json!({"event": 5}));
+
+    // Every batched event with a remote projection reached the outbox.
+    assert_eq!(journal.pending(0, 10).unwrap().len(), 5);
+}
+
+#[test]
+fn a_batch_of_local_only_events_skips_the_remote_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut journal = RemoteJournal::open(dir.path().join("remote.db")).unwrap();
+
+    let payloads: Vec<Value> = (1..=3).map(|index| json!({"event": index})).collect();
+    let batch: Vec<BatchedAppend<'_>> = payloads
+        .iter()
+        .map(|payload| BatchedAppend {
+            local: payload,
+            remote: None,
+            bindings: &[],
+        })
+        .collect();
+    assert_eq!(journal.append_batch(&batch).unwrap(), 3);
+
+    assert!(journal.pending(0, 10).unwrap().is_empty());
+    let EventsAfter::Events { events, .. } = journal.events_after(0, 10).unwrap() else {
+        panic!("local events must still be replayable")
+    };
+    assert_eq!(events.len(), 3);
+}
+
+#[test]
+fn an_empty_batch_is_a_no_op_that_leaves_the_cursor_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut journal = RemoteJournal::open(dir.path().join("remote.db")).unwrap();
+    assert_eq!(journal.append_batch(&[]).unwrap(), 0);
 }
 
 #[test]

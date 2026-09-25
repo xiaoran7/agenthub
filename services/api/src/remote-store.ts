@@ -24,6 +24,10 @@ export interface ContentEvent {
   payload: Record<string, unknown>;
 }
 
+/** SQLite allows 32,000 host parameters per statement; 5 per binding row. */
+const BINDING_INSERT_COLUMNS = 5;
+const BINDING_INSERT_PARAMETER_LIMIT = 32_000;
+
 /** Single Gateway instance, explicit content database; not the v1 metadata store. */
 export class RemoteContentStore {
   private db: DatabaseSync;
@@ -394,22 +398,27 @@ export class RemoteContentStore {
           activeGeneration === undefined ||
           payload.host_generation === activeGeneration
         ) {
+          // Read this runner's bindings once instead of scanning every session
+          // the owner owns, then write all changes in a single statement.
+          const existing = this.runnerBindings(owner, runner);
           const currentHubs = new Set(
             sessions.map((session) => session.hub_session_id),
           );
-          for (const session of this.sessions(owner).filter(
-            (item) => item.runner_id === runner,
-          )) {
-            if (!currentHubs.has(session.binding.hub_session_id))
-              this.saveBinding(owner, runner, {
-                ...session.binding,
+          const updates: RemoteBinding[] = [];
+          for (const binding of existing.values()) {
+            if (!currentHubs.has(binding.hub_session_id))
+              updates.push({
+                ...binding,
                 control_connected: false,
                 execution_state: "unknown",
                 current_turn_id: null,
               });
           }
-          for (const session of sessions)
-            this.saveBinding(owner, runner, session);
+          for (const session of sessions) {
+            this.assertNativeIdentity(existing, session);
+            updates.push(session);
+          }
+          this.writeBindings(owner, runner, updates);
           this.db
             .prepare("UPDATE remote_runners SET hello=? WHERE runner=?")
             .run(JSON.stringify(payload), runner);
@@ -422,15 +431,16 @@ export class RemoteContentStore {
         (activeGeneration === undefined ||
           payload.host_generation === activeGeneration)
       ) {
-        for (const session of this.sessions(owner).filter(
-          (item) => item.runner_id === runner,
-        )) {
-          this.saveBinding(owner, runner, {
-            ...session.binding,
+        const existing = this.runnerBindings(owner, runner);
+        this.writeBindings(
+          owner,
+          runner,
+          [...existing.values()].map((binding) => ({
+            ...binding,
             control_connected: false,
             execution_state: "unknown",
-          });
-        }
+          })),
+        );
       }
       this.db
         .prepare(
@@ -477,6 +487,83 @@ export class RemoteContentStore {
         .get(owner)?.cursor ?? 0,
     );
   }
+  /** Every binding one runner currently has, keyed by hub session id. */
+  private runnerBindings(
+    owner: string,
+    runner: string,
+  ): Map<string, RemoteBinding> {
+    const rows = this.db
+      .prepare(
+        "SELECT hub,binding FROM remote_sessions WHERE owner=? AND runner=?",
+      )
+      .all(owner, runner);
+    const found = new Map<string, RemoteBinding>();
+    for (const row of rows) {
+      found.set(
+        String(row.hub),
+        JSON.parse(String(row.binding)) as RemoteBinding,
+      );
+    }
+    return found;
+  }
+
+  /**
+   * A hub session may not be re-pointed at a different native session: the
+   * cached history behind it would silently belong to another conversation.
+   */
+  private assertNativeIdentity(
+    existing: ReadonlyMap<string, RemoteBinding>,
+    incoming: RemoteBinding,
+  ): void {
+    const previous = existing.get(incoming.hub_session_id);
+    if (
+      previous &&
+      previous.provider_session_id !== incoming.provider_session_id
+    )
+      throw new RemoteStoreError("native_identity_changed");
+  }
+
+  /** Writes every binding in one statement instead of one round trip each. */
+  private writeBindings(
+    owner: string,
+    runner: string,
+    bindings: readonly RemoteBinding[],
+  ): void {
+    if (bindings.length === 0) return;
+    // Later entries win, so a binding that is both detached and re-announced
+    // in the same batch keeps the incoming state.
+    const merged = new Map<string, RemoteBinding>();
+    for (const binding of bindings) {
+      merged.set(binding.hub_session_id, binding);
+    }
+    const rows = [...merged.values()];
+    // SQLite caps bound parameters per statement, so very wide ready payloads
+    // are split across several statements rather than failing outright.
+    const perStatement = Math.max(
+      1,
+      Math.floor(BINDING_INSERT_PARAMETER_LIMIT / BINDING_INSERT_COLUMNS),
+    );
+    for (let offset = 0; offset < rows.length; offset += perStatement) {
+      const chunk = rows.slice(offset, offset + perStatement);
+      const placeholders = chunk.map(() => "(?,?,?,?,?)").join(",");
+      const values: (string | number | null)[] = [];
+      for (const binding of chunk) {
+        values.push(
+          owner,
+          runner,
+          binding.hub_session_id,
+          binding.provider_session_id,
+          JSON.stringify(binding),
+        );
+      }
+      this.db
+        .prepare(
+          `INSERT INTO remote_sessions(owner,runner,hub,native,binding) VALUES ${placeholders} ON CONFLICT(runner,hub) DO UPDATE SET binding=excluded.binding`,
+        )
+        .run(...values);
+    }
+  }
+
   private saveBinding(
     owner: string,
     runner: string,
@@ -485,17 +572,7 @@ export class RemoteContentStore {
     const old = this.session(owner, runner, binding.hub_session_id);
     if (old && old.provider_session_id !== binding.provider_session_id)
       throw new RemoteStoreError("native_identity_changed");
-    this.db
-      .prepare(
-        "INSERT INTO remote_sessions(owner,runner,hub,native,binding) VALUES (?,?,?,?,?) ON CONFLICT(runner,hub) DO UPDATE SET binding=excluded.binding",
-      )
-      .run(
-        owner,
-        runner,
-        binding.hub_session_id,
-        binding.provider_session_id,
-        JSON.stringify(binding),
-      );
+    this.writeBindings(owner, runner, [binding]);
   }
   private transaction<T>(work: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -635,10 +712,7 @@ function validateRemoteEventRaw(
     return;
   }
   if (kind === "history/snapshot") {
-    if (
-      !only(["items"]) ||
-      !Array.isArray(params.items)
-    )
+    if (!only(["items"]) || !Array.isArray(params.items))
       throw new RemoteStoreError("unsafe_provider_event");
     for (const item of params.items) {
       if (!item || typeof item !== "object" || Array.isArray(item))
@@ -674,8 +748,12 @@ function validateRemoteEventRaw(
       (typed.type === "commandExecution" &&
         itemKeys.some((key) => !["id", "type"].includes(key))) ||
       (typed.type === "userMessage" &&
-        itemKeys.some((key) => !["id", "type", "text", "content"].includes(key))) ||
-      !["agentMessage", "commandExecution", "userMessage"].includes(typed.type as string)
+        itemKeys.some(
+          (key) => !["id", "type", "text", "content"].includes(key),
+        )) ||
+      !["agentMessage", "commandExecution", "userMessage"].includes(
+        typed.type as string,
+      )
     )
       throw new RemoteStoreError("unsafe_provider_event");
     return;

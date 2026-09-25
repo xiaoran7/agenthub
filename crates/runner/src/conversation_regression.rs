@@ -80,15 +80,17 @@ fn partial_lines_are_not_misparsed_and_single_message_keeps_both_ends() {
         ),
     )
     .unwrap();
-    let (lines, omitted) = read_transcript_windows(&path, 512);
+    let (values, omitted) = read_transcript_windows(&path, 512);
     assert!(omitted);
-    assert!(lines.iter().any(|l| l.contains("start")));
-    assert!(lines.iter().any(|l| l.contains("end")));
-    assert!(
-        lines
-            .iter()
-            .all(|l| serde_json::from_str::<Value>(l).is_ok())
-    );
+    let texts = values
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    assert!(texts.iter().any(|l| l.contains("start")));
+    assert!(texts.iter().any(|l| l.contains("end")));
+    // Every returned record is already-parsed JSON, so a truncated line can
+    // never reach the caller.
+    assert!(values.iter().all(Value::is_object));
     let item = conversation_item(
         "assistant",
         "message",

@@ -238,8 +238,13 @@ export function registerRemoteRoutes(
     const owner = await auth.authenticate(request);
     const runners = content.runners(owner);
     const allowed = new Set<string>();
+    // One batched lookup: this runs on every console poll, so a per-runner
+    // await would add a database round trip per device.
+    const known = await devices.getRegisteredDevices(
+      runners.map((runner) => runner.runner_id),
+    );
     for (const runner of runners) {
-      const device = await devices.getRegisteredDevice(runner.runner_id);
+      const device = known.get(runner.runner_id);
       if (device?.owner_id === owner && !device.revoked_at)
         allowed.add(runner.runner_id);
     }

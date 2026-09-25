@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+性能与健壮性优化，无接口与行为契约变更（`web_sessions.last_seen_at` 的刷新粒度除外，见下）。
+
+- `DurableHost::poll` 由「每个事件一次 SQLite 事务」改为「一次轮询批次一个事务」。此前每条事件都单独 `BEGIN`/`COMMIT`，在 `synchronous=FULL` 下等于逐事件 fsync；事件密集时事务数与事件数 1:1 增长。批内按最终 cursor 裁剪一次，保留窗口与逐条追加完全一致，并有 3 项新测试锁定。
+- 会话 transcript 读取不再对同一行 JSONL 解析两遍：`read_transcript_windows` 直接返回已解析的 `Value`，调用方复用。`invalid`/`omitted` 上报语义保持不变，截断行仍不会外泄给调用方。
+- `ingestAuthBatch` 由「每 snapshot 一次 SELECT + 一次 UPSERT」改为「整批一次读取 + 逐条 UPSERT」，消除 2N 次往返；`checked_at` 新旧比较与去重语义不变。
+- `RemoteContentStore.receive` 处理 `ready` / `host_lost` 时，改为按 `(owner, runner)` 精确查询一次并用单条多行 UPSERT 写回，取代此前「扫描该 owner 全部会话 + 逐条 SELECT + 逐条 UPSERT」。`native_identity_changed` 冲突检测保留，并对超宽 payload 按 SQLite 参数上限自动分批。
+- `/v3/remote/sessions` 的设备归属校验改用新增的 `getRegisteredDevices` 批量查询，取代按 runner 串行的 `getRegisteredDevice`；该接口为 1.5s 轮询路径，此前每台设备一次数据库往返。
+- **语义权衡（需知悉）**：`SessionAuthenticator` 每次认证都会更新 `web_sessions.last_seen_at`，在 1.5s 轮询下会持续产生行版本与 WAL。现改为数据修改 CTE，**每 60 秒最多推进一次**（`SESSION_ACTIVITY_REFRESH_SECONDS`）。会话有效性（`expires_at`、账号状态、工作区成员关系）**仍在每个请求上重新校验**，节流只影响设置页「最近活动」的显示精度，最多滞后约 60 秒。
+
 ## [2.4.35] - 2026-09-25
 
 - 侧栏重构为「设备 → Agent → 工作区 → 会话」四层文件夹树，抽离纯函数 `session-tree.ts` 并新增 12 项单测；顶部新增面包屑导航（全部会话 / 设备 / Agent / 工作区 / 会话），可逐级退回，避免在深层节点迷路。Agent 层级从发现元数据判定 Provider，发现报告的名称优先于会话 id 前缀猜测。

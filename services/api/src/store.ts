@@ -106,6 +106,14 @@ export interface HeartbeatResult {
 
 export interface GatewayStore {
   getRegisteredDevice(deviceId: string): Promise<RegisteredDevice | undefined>;
+  /**
+   * Resolves many devices in one round trip. The remote console re-checks
+   * device ownership on every poll, so this must not degrade to a serial loop
+   * over {@link GatewayStore.getRegisteredDevice}.
+   */
+  getRegisteredDevices(
+    deviceIds: readonly string[],
+  ): Promise<Map<string, RegisteredDevice>>;
   setAuditRecorder?(recorder: Pick<AccountStore, "recordAuditEvent">): void;
   createBindingCode(
     ownerId: string,
@@ -629,6 +637,19 @@ export class InMemoryGatewayStore implements GatewayStore {
   ): Promise<RegisteredDevice | undefined> {
     const device = this.#devices.get(deviceId);
     return device === undefined ? undefined : { ...device };
+  }
+
+  async getRegisteredDevices(
+    deviceIds: readonly string[],
+  ): Promise<Map<string, RegisteredDevice>> {
+    const found = new Map<string, RegisteredDevice>();
+    for (const deviceId of deviceIds) {
+      const device = this.#devices.get(deviceId);
+      if (device !== undefined) {
+        found.set(deviceId, { ...device });
+      }
+    }
+    return found;
   }
 
   async listDevices(ownerId: string): Promise<DeviceView[]> {

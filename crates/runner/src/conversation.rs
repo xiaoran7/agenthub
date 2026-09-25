@@ -77,12 +77,8 @@ pub fn load_session_conversation(
     let mut records = Vec::new();
     let mut seen = HashMap::<String, usize>::new();
     for (source, path) in paths.iter().enumerate() {
-        let (lines, partial) = read_transcript_windows(path, file_budget);
+        let (values, partial) = read_transcript_windows(path, file_budget);
         omitted |= partial;
-        let values: Vec<Value> = lines
-            .iter()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
         // A similarly named rollout must not contribute a different session.
         if values.iter().any(|v| {
             (v.get("type").and_then(Value::as_str) == Some("session_meta")
@@ -145,7 +141,10 @@ pub fn load_session_conversation(
     budget_conversation(items, omitted)
 }
 
-fn read_transcript_windows(path: &Path, budget: u64) -> (Vec<String>, bool) {
+/// Reads the bounded head/tail windows of one transcript and returns the parsed
+/// records. Lines are parsed exactly once here: callers reuse these values
+/// instead of re-parsing the same JSONL text.
+fn read_transcript_windows(path: &Path, budget: u64) -> (Vec<Value>, bool) {
     let Ok(mut file) = fs::File::open(path) else {
         return (Vec::new(), true);
     };
@@ -180,22 +179,28 @@ fn read_transcript_windows(path: &Path, budget: u64) -> (Vec<String>, bool) {
         }
     }
     let mut invalid = partial;
-    let lines = chunks
+    // One parse per line, reused by the caller. `invalid` still marks any line
+    // that failed to parse or was cut mid-record by the window boundary.
+    let values = chunks
         .into_iter()
         .flat_map(|bytes| {
             let text = decode_local_text(&bytes);
             text.lines().map(str::to_owned).collect::<Vec<_>>()
         })
-        .filter(|line| {
+        .filter_map(|line| {
             if line.trim().is_empty() {
-                return false;
+                return None;
             }
-            let valid = serde_json::from_str::<Value>(line).is_ok();
-            invalid |= !valid;
-            valid
+            match serde_json::from_str::<Value>(&line) {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    invalid = true;
+                    None
+                }
+            }
         })
         .collect();
-    (lines, invalid)
+    (values, invalid)
 }
 
 fn budget_conversation(items: Vec<Value>, omitted: bool) -> Vec<Value> {

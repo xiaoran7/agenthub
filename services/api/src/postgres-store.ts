@@ -189,6 +189,15 @@ interface AuditEventRow {
 
 type QuerySql = postgres.Sql | postgres.TransactionSql;
 
+/**
+ * How stale `web_sessions.last_seen_at` may get before authentication refreshes
+ * it. The web console polls roughly every 1.5s, so writing per request would
+ * multiply a cheap read into thousands of row versions a day. The displayed
+ * "recent activity" clock tolerates this much lag; session expiry and
+ * membership are still evaluated on every request.
+ */
+const SESSION_ACTIVITY_REFRESH_SECONDS = 60;
+
 export class PostgresGatewayStore implements GatewayStore, AccountStore {
   readonly #sql: postgres.Sql;
 
@@ -490,6 +499,15 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     digest: string,
     now: string,
   ): Promise<SessionIdentity | undefined> {
+    // Session validity is re-evaluated on every request, but `last_seen_at` only
+    // feeds the "recent activity" display. Writing it per request turns a 1.5s
+    // console poll into a row version and a WAL record per poll, so the
+    // timestamp only advances once per SESSION_ACTIVITY_REFRESH_SECONDS.
+    //
+    // The refresh is a data-modifying CTE that matches nothing once it is
+    // fresh, so the common path costs no write while the read below still
+    // performs the full expiry and membership check on every single request.
+    // One statement, one round trip.
     const rows = await this.#sql<
       Array<{
         actor_user_id: string;
@@ -497,20 +515,29 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         role: WorkspaceRole;
       }>
     >`
-      UPDATE agent_pulse_web_sessions AS sessions
-      SET last_seen_at = clock_timestamp()
-      FROM agent_pulse_users AS users
-      INNER JOIN agent_pulse_workspace_members AS members
-        ON members.user_id = users.user_id
-      WHERE sessions.session_digest = ${digest}
-        AND sessions.user_id = users.user_id
-        AND members.workspace_owner_id = sessions.workspace_owner_id
-        AND sessions.expires_at > ${now}
-        AND users.status = 'active'
-      RETURNING
+      WITH refreshed AS (
+        UPDATE agent_pulse_web_sessions AS sessions
+        SET last_seen_at = clock_timestamp()
+        WHERE sessions.session_digest = ${digest}
+          AND sessions.expires_at > ${now}
+          AND sessions.last_seen_at <=
+            clock_timestamp() - interval '${SESSION_ACTIVITY_REFRESH_SECONDS} seconds'
+        RETURNING sessions.session_digest
+      )
+      SELECT
         sessions.user_id::text AS actor_user_id,
         sessions.workspace_owner_id::text,
         members.role
+      FROM agent_pulse_web_sessions AS sessions
+      INNER JOIN agent_pulse_users AS users
+        ON users.user_id = sessions.user_id
+      INNER JOIN agent_pulse_workspace_members AS members
+        ON members.user_id = users.user_id
+        AND members.workspace_owner_id = sessions.workspace_owner_id
+      WHERE sessions.session_digest = ${digest}
+        AND sessions.expires_at > ${now}
+        AND users.status = 'active'
+      LIMIT 1
     `;
     return rows[0];
   }
@@ -2300,18 +2327,26 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       }
 
       const receivedAt = new Date();
+      // One read for the whole batch instead of a lookup per snapshot.
+      const existingRows = await sql<
+        Array<{
+          agent_type: string;
+          checked_at: unknown;
+          snapshot_data: unknown;
+        }>
+      >`
+        SELECT agent_type, checked_at, snapshot_data
+        FROM agent_platform_auth_snapshots
+        WHERE device_id = ${batch.device_id}
+      `;
+      const existingByProvider = new Map(
+        existingRows.map((row) => [row.agent_type, row] as const),
+      );
       let accepted = 0;
       for (const snapshot of batch.snapshots) {
-        const existing = await sql<
-          Array<{ checked_at: unknown; snapshot_data: unknown }>
-        >`
-          SELECT checked_at, snapshot_data
-          FROM agent_platform_auth_snapshots
-          WHERE device_id = ${batch.device_id}
-            AND agent_type = ${snapshot.provider}
-        `;
-        const existingCheckedAt = existing[0]?.checked_at;
-        const existingSnapshot = existing[0]?.snapshot_data as
+        const existing = existingByProvider.get(snapshot.provider);
+        const existingCheckedAt = existing?.checked_at;
+        const existingSnapshot = existing?.snapshot_data as
           AuthSnapshot | undefined;
         if (
           existingCheckedAt !== undefined &&
@@ -2438,6 +2473,21 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       DeviceRow[]
     >`SELECT * FROM agent_platform_devices WHERE device_id = ${deviceId}`;
     return rows[0] === undefined ? undefined : registeredDevice(rows[0]);
+  }
+
+  async getRegisteredDevices(
+    deviceIds: readonly string[],
+  ): Promise<Map<string, RegisteredDevice>> {
+    if (deviceIds.length === 0) {
+      return new Map();
+    }
+    const rows = await this.#sql<DeviceRow[]>`
+      SELECT * FROM agent_platform_devices
+      WHERE device_id = ANY(${deviceIds as string[]})
+    `;
+    return new Map(
+      rows.map((row) => [row.device_id, registeredDevice(row)] as const),
+    );
   }
 
   async listDevices(ownerId: string): Promise<DeviceView[]> {

@@ -40,6 +40,17 @@ pub enum BeginInboundCommand {
     AlreadyCompleted(CommandReceipt),
 }
 
+/// One host event queued for a batched journal write.
+///
+/// A poll tick drains many events at once. Committing each one separately means
+/// one `synchronous=FULL` fsync per event, so a burst costs a fsync storm.
+pub struct BatchedAppend<'a> {
+    pub local: &'a Value,
+    /// Remote projection; `None` keeps this event local-only.
+    pub remote: Option<&'a Value>,
+    pub bindings: &'a [SessionBinding],
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalSnapshot {
     pub sessions: Vec<SessionBinding>,
@@ -388,6 +399,38 @@ impl RemoteJournal {
         Ok(cursor)
     }
 
+    /// Commits a whole poll tick in one transaction.
+    ///
+    /// Returns the local event cursor of the last appended event. Trimming runs
+    /// once against that final cursor, so a batch never drops events it just
+    /// wrote the way per-event appends would.
+    pub fn append_batch(&mut self, batch: &[BatchedAppend<'_>]) -> Result<i64> {
+        if batch.is_empty() {
+            return self.latest_event_cursor();
+        }
+        let transaction = self.connection.transaction()?;
+        let mut last = 0i64;
+        for item in batch {
+            for binding in item.bindings {
+                persist_binding(&transaction, binding)?;
+            }
+            if let Some(remote) = item.remote {
+                transaction.execute(
+                    "INSERT INTO remote_outbox(payload_json) VALUES (?1)",
+                    [serde_json::to_string(remote)?],
+                )?;
+            }
+            transaction.execute(
+                "INSERT INTO local_events(payload_json) VALUES (?1)",
+                [serde_json::to_string(item.local)?],
+            )?;
+            last = transaction.last_insert_rowid();
+        }
+        trim_local_events(&transaction, last, self.max_local_events)?;
+        transaction.commit()?;
+        Ok(last)
+    }
+
     pub fn enqueue_remote(&mut self, payload: &Value) -> Result<i64> {
         self.connection.execute(
             "INSERT INTO remote_outbox(payload_json) VALUES (?1)",
@@ -559,11 +602,17 @@ fn append_local_event(
         [serde_json::to_string(payload)?],
     )?;
     let cursor = connection.last_insert_rowid();
+    trim_local_events(connection, cursor, max_local_events)?;
+    Ok(cursor)
+}
+
+/// Drops events beyond the retention window, keeping the newest `max` rows.
+fn trim_local_events(connection: &Connection, cursor: i64, max_local_events: i64) -> Result<()> {
     connection.execute(
         "DELETE FROM local_events WHERE cursor<=?1",
         [cursor.saturating_sub(max_local_events)],
     )?;
-    Ok(cursor)
+    Ok(())
 }
 
 fn projected_remote_receipt(receipt: &CommandReceipt) -> Value {
@@ -836,20 +885,35 @@ impl<T: NativeTransport> DurableHost<T> {
     pub fn poll(&mut self, remote_enabled: bool) -> Result<Vec<crate::remote_host::HostEvent>> {
         match self.host.poll() {
             Ok(events) => {
-                for event in &events {
-                    let bindings = event.binding.iter().cloned().collect::<Vec<_>>();
-                    let local_payload = json!({"type":"event","event":event});
-                    if remote_enabled {
-                        let remote_payload = projected_remote_event(event)?;
-                        self.journal.append_projected(
-                            &local_payload,
-                            &remote_payload,
-                            &bindings,
-                        )?;
-                    } else {
-                        self.journal.append_local(&local_payload, &bindings)?;
-                    }
+                if events.is_empty() {
+                    return Ok(events);
                 }
+                // One transaction for the whole tick: per-event commits would
+                // fsync once per drained event under `synchronous=FULL`.
+                let mut local_payloads = Vec::with_capacity(events.len());
+                let mut remote_payloads = Vec::with_capacity(events.len());
+                let mut binding_refs = Vec::with_capacity(events.len());
+                for event in &events {
+                    let bindings: Vec<SessionBinding> = event.binding.iter().cloned().collect();
+                    local_payloads.push(json!({"type":"event","event":event}));
+                    remote_payloads.push(if remote_enabled {
+                        Some(projected_remote_event(event)?)
+                    } else {
+                        None
+                    });
+                    binding_refs.push(bindings);
+                }
+                let batch: Vec<BatchedAppend<'_>> = local_payloads
+                    .iter()
+                    .zip(remote_payloads.iter())
+                    .zip(binding_refs.iter())
+                    .map(|((local, remote), bindings)| BatchedAppend {
+                        local,
+                        remote: remote.as_ref(),
+                        bindings,
+                    })
+                    .collect();
+                self.journal.append_batch(&batch)?;
                 Ok(events)
             }
             Err(error) => {
