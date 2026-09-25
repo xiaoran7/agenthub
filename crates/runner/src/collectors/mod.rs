@@ -4,10 +4,7 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::atomic::{AtomicBool, Ordering},
     thread::{self, JoinHandle},
     time::{Duration, Instant, UNIX_EPOCH},
 };
@@ -17,6 +14,9 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
+
+#[cfg(test)]
+use std::sync::mpsc;
 
 const MAX_PROTOCOL_LINE_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(15);
@@ -2505,13 +2505,12 @@ pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
             for (_, pdata) in providers_obj {
                 if let Some(models_obj) = pdata.get("models").and_then(Value::as_object) {
                     for (mid, mdata) in models_obj {
-                        if mid.eq_ignore_ascii_case(model_name)
+                        if (mid.eq_ignore_ascii_case(model_name)
                             || model_name.contains(mid)
-                            || mid.contains(model_name)
+                            || mid.contains(model_name))
+                            && let Some(ctx) = mdata.pointer("/limit/context").and_then(Value::as_u64)
                         {
-                            if let Some(ctx) = mdata.pointer("/limit/context").and_then(Value::as_u64) {
-                                return Some(ctx);
-                            }
+                            return Some(ctx);
                         }
                     }
                 }
@@ -2521,12 +2520,8 @@ pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
     let lower = model_name.to_lowercase();
     if lower.contains("gemini") {
         Some(1_000_000)
-    } else if lower.contains("claude") {
+    } else if lower.contains("claude") || lower.contains("gpt-5") || lower.contains("gpt-4") || lower.contains("o1") || lower.contains("o3") {
         Some(200_000)
-    } else if lower.contains("gpt-5") || lower.contains("gpt-4") || lower.contains("o1") || lower.contains("o3") {
-        Some(200_000)
-    } else if lower.contains("glm") {
-        Some(128_000)
     } else {
         Some(128_000)
     }

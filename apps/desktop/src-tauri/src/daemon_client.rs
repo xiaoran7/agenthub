@@ -955,10 +955,10 @@ fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|_| "daemon_spawn_failed".to_owned())?;
     #[cfg(windows)]
-    if let Ok(job) = DesktopJob::attach(&child) {
-        if let Ok(mut job_slot) = DAEMON_JOB.lock() {
-            *job_slot = Some(job);
-        }
+    if let Ok(job) = DesktopJob::attach(&child)
+        && let Ok(mut job_slot) = DAEMON_JOB.lock()
+    {
+        *job_slot = Some(job);
     }
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || drain_startup_diagnostics(stdout));

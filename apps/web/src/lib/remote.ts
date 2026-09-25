@@ -9,6 +9,8 @@ export interface DiscoveryCandidate {
   provider_session_id: string;
   workspace_path: string;
   title: string | null;
+  provider?: string;
+  resumable?: boolean;
 }
 export interface RemoteRunner {
   runner_id: string;
@@ -230,7 +232,38 @@ export function conversationItems(
   for (const command of commands)
     if (command.receipt?.result?.turn?.id)
       prompts.set(command.receipt.result.turn.id, command);
-  for (const event of events) {
+  const lastHistoryIndex = events.findLastIndex(
+    (event) =>
+      event.payload.event?.kind === "history/snapshot" &&
+      Array.isArray(event.payload.event.raw?.params?.items) &&
+      (event.payload.event.raw.params.items as unknown[]).length > 0,
+  );
+  if (lastHistoryIndex >= 0) {
+    const history = events[lastHistoryIndex]!.payload.event!.raw!.params!
+      .items as Array<Record<string, unknown>>;
+    for (const [index, entry] of history.entries()) {
+      const role = entry.role;
+      const kind = entry.kind;
+      const value = typeof entry.text === "string" ? entry.text : "";
+      if (kind !== "message" && kind !== "tool" && kind !== "status") continue;
+      if (!value && kind !== "tool") continue;
+      const item: ConversationItem = {
+        id: `history-${events[lastHistoryIndex]!.cursor}-${index}`,
+        kind: kind === "tool" ? "tool" : role === "user" ? "user" : "assistant",
+        text: value,
+      };
+      if (kind === "tool") {
+        item.title = typeof entry.label === "string" ? entry.label : "工具调用";
+        item.output = value;
+        item.status =
+          entry.status === "running" || entry.status === "failed"
+            ? entry.status
+            : "completed";
+      }
+      result.push(item);
+    }
+  }
+  for (const event of events.slice(lastHistoryIndex + 1)) {
     const native = event.payload.event;
     if (!native) continue;
     const p = native.raw?.params ?? {};

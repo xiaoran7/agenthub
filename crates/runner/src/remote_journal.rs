@@ -608,6 +608,10 @@ fn projected_remote_event(event: &crate::remote_host::HostEvent) -> Result<Value
 fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
     let params = event.raw.get("params")?;
     match event.kind.as_str() {
+        "history/snapshot" => params
+            .get("items")
+            .and_then(Value::as_array)
+            .map(|items| json!({"params":{"items":items}})),
         "turn/started" | "turn/completed" => params
             .pointer("/turn/id")
             .and_then(Value::as_str)
@@ -731,6 +735,32 @@ fn approval_remote_projection_omits_provider_request_payload() {
     let local = json!({"type":"event","event":event});
     assert_eq!(local["event"]["raw"]["id"], 7);
     assert_eq!(local["event"]["raw"]["params"]["command"], "private");
+}
+
+#[cfg(test)]
+#[test]
+fn history_snapshot_projects_normalized_items_without_raw_paths() {
+    let event = crate::remote_host::HostEvent {
+        event_id: "history-one".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("sess-one".into()),
+        kind: "history/snapshot".into(),
+        raw: json!({"method":"history/snapshot","params":{
+            "items":[{"role":"user","kind":"message","text":"检查 C:\\Users\\alice\\secret.txt","status":"completed"}],
+            "provider_private":"do-not-send"
+        }}),
+        binding: None,
+        approval_id: None,
+        approval: None,
+        question_id: None,
+        question: None,
+    };
+    let projected = projected_remote_event(&event).unwrap();
+    assert_eq!(projected["event"]["raw"]["params"]["items"].as_array().unwrap().len(), 1);
+    let encoded = projected.to_string();
+    assert!(!encoded.contains("alice"));
+    assert!(!encoded.contains("do-not-send"));
 }
 
 pub struct DurableHost<T: NativeTransport> {

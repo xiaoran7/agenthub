@@ -13,6 +13,7 @@
 ## 2. Session 与 Provider
 
 - `discover`、`read_history`、`resume`、`attach` 是不同能力。发现 PID、JSONL 或状态库不能推导可写控制。
+- Codex app-server 无法启动时仍可从本机状态库发现无正文的会话元数据，但必须标明不可远程恢复；恢复后的旧消息只由 daemon 的单点解析器生成有界快照，不在 Web/Gateway 解析 Provider 文件。
 - 同一 Provider Session 默认单写者。未经协议支持的“接管”容易产生两个 Runtime 或两个 writer。
 - 每回合启动一次 CLI 会破坏长期事件、审批和所有权语义；Desktop 与 Remote 必须共用常驻 Host。
 - Runtime 返回真实 Session ID 之前不能创建成功绑定；跨 Provider 不能复用原生 ID。

@@ -18,6 +18,7 @@ import {
   type RemoteEvent,
   type RemoteCommandRecord,
   type ConversationItem,
+  type DiscoveryCandidate,
 } from "../lib/remote";
 import { MarkdownView } from "./MarkdownView";
 import { RemoteContextCapacity } from "./RemoteContextCapacity";
@@ -63,16 +64,28 @@ function getDeviceLabel(
   return `电脑 · ${runnerId.slice(-6)}`;
 }
 
-function getProviderInfo(providerSessionId: string): {
-  type: "codex" | "zcode" | "claude";
+function getProviderInfo(
+  providerSessionId: string,
+  provider?: string,
+): {
+  type: "codex" | "zcode" | "claude" | "other";
   name: string;
   badgeClass: string;
 } {
-  if (providerSessionId.startsWith("sess_")) {
+  if (provider === "zcode" || providerSessionId.startsWith("sess_")) {
     return { type: "zcode", name: "ZCode", badgeClass: "zcode" };
   }
-  if (providerSessionId.startsWith("claude_")) {
+  if (provider === "claude_code" || providerSessionId.startsWith("claude_")) {
     return { type: "claude", name: "Claude", badgeClass: "claude" };
+  }
+  if (
+    provider === "antigravity" ||
+    providerSessionId.startsWith("antigravity_")
+  ) {
+    return { type: "other", name: "Antigravity", badgeClass: "other" };
+  }
+  if (provider === "grok_build" || providerSessionId.startsWith("grok_")) {
+    return { type: "other", name: "Grok", badgeClass: "other" };
   }
   return { type: "codex", name: "Codex", badgeClass: "codex" };
 }
@@ -614,11 +627,7 @@ export function RemoteConsole({
         key: string;
         runnerId: string;
         workspaceId: string;
-        candidate: {
-          provider_session_id: string;
-          workspace_path: string;
-          title: string | null;
-        };
+        candidate: DiscoveryCandidate;
         title: string;
       };
 
@@ -635,6 +644,17 @@ export function RemoteConsole({
     workspaces: WorkspaceGroup[];
     totalCount: number;
   }
+
+  const discovered = useMemo(() => {
+    const candidates = new Map<string, DiscoveryCandidate>();
+    for (const r of snapshot.runners)
+      for (const candidate of r.hello?.discovery?.candidates ?? [])
+        candidates.set(
+          `${r.runner_id}/${candidate.provider_session_id}`,
+          candidate,
+        );
+    return candidates;
+  }, [snapshot.runners]);
 
   const deviceGroups = useMemo(() => {
     const runnerMap = new Map<string, DeviceGroup>();
@@ -655,8 +675,13 @@ export function RemoteConsole({
 
     // 2. 收集受控活跃会话
     for (const item of snapshot.sessions) {
-      activeProviderIds.add(item.binding.provider_session_id);
-      const provider = getProviderInfo(item.binding.provider_session_id);
+      const providerKey = `${item.runner_id}/${item.binding.provider_session_id}`;
+      activeProviderIds.add(providerKey);
+      const candidate = discovered.get(providerKey);
+      const provider = getProviderInfo(
+        item.binding.provider_session_id,
+        candidate?.provider,
+      );
       if (providerFilter !== "all" && providerFilter !== provider.type)
         continue;
 
@@ -670,7 +695,7 @@ export function RemoteConsole({
         runnerId: item.runner_id,
         workspaceId: item.binding.workspace_path,
         session: item,
-        title: `${provider.name} · ${rawId.slice(0, 8)}`,
+        title: candidate?.title || `${provider.name} · ${rawId.slice(0, 8)}`,
       });
     }
 
@@ -678,8 +703,12 @@ export function RemoteConsole({
     for (const r of snapshot.runners) {
       if (!r.online || !r.hello?.discovery?.candidates) continue;
       for (const cand of r.hello.discovery.candidates) {
-        if (activeProviderIds.has(cand.provider_session_id)) continue;
-        const provider = getProviderInfo(cand.provider_session_id);
+        if (activeProviderIds.has(`${r.runner_id}/${cand.provider_session_id}`))
+          continue;
+        const provider = getProviderInfo(
+          cand.provider_session_id,
+          cand.provider,
+        );
         if (providerFilter !== "all" && providerFilter !== provider.type)
           continue;
 
@@ -743,7 +772,7 @@ export function RemoteConsole({
     });
 
     return result;
-  }, [snapshot.sessions, snapshot.runners, providerFilter]);
+  }, [snapshot.sessions, snapshot.runners, providerFilter, discovered]);
 
   return (
     <div className="remote-console">
@@ -968,6 +997,9 @@ export function RemoteConsole({
                                       key(activeSession) === selected;
                                     const pInfo = getProviderInfo(
                                       activeSession.binding.provider_session_id,
+                                      discovered.get(
+                                        `${activeSession.runner_id}/${activeSession.binding.provider_session_id}`,
+                                      )?.provider,
                                     );
                                     return (
                                       <button
@@ -1024,13 +1056,21 @@ export function RemoteConsole({
 
                                   const pInfo = getProviderInfo(
                                     item.candidate.provider_session_id,
+                                    item.candidate.provider,
                                   );
                                   return (
                                     <button
                                       className="remote-session candidate"
                                       key={item.key}
-                                      title={`点击接管：${item.candidate.title ?? item.candidate.provider_session_id}`}
-                                      disabled={busy}
+                                      title={
+                                        item.candidate.resumable === false
+                                          ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
+                                          : `点击恢复：${item.candidate.title ?? item.candidate.provider_session_id}`
+                                      }
+                                      disabled={
+                                        busy ||
+                                        item.candidate.resumable === false
+                                      }
                                       onClick={() => {
                                         if (isMobile)
                                           setMobileDrawerOpen(false);
@@ -1049,7 +1089,9 @@ export function RemoteConsole({
                                         <span
                                           className={`remote-session-badge ${pInfo.badgeClass}`}
                                         >
-                                          恢复
+                                          {item.candidate.resumable === false
+                                            ? "仅发现"
+                                            : "恢复"}
                                         </span>
                                       </div>
                                     </button>
@@ -1169,7 +1211,7 @@ export function RemoteConsole({
               </h1>
               <p>
                 {session
-                  ? `${session.binding.provider_session_id.startsWith("sess_") ? "ZCode" : "Codex"} · ${session.online ? (connected ? "会话已连接" : "会话未连接") : "电脑离线"}`
+                  ? `${getProviderInfo(session.binding.provider_session_id, discovered.get(`${session.runner_id}/${session.binding.provider_session_id}`)?.provider).name} · ${session.online ? (connected ? "会话已连接" : "会话未连接") : "电脑离线"}`
                   : "电脑执行，随处继续。"}
               </p>
             </div>

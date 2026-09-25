@@ -137,7 +137,22 @@
   padding-right: 3px;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
   -webkit-overflow-scrolling: touch;
+}
+
+.remote-session-tree::-webkit-scrollbar {
+  width: 5px;
+}
+
+.remote-session-tree::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.remote-session-tree::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
 }
 
 .remote-device-group {

@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::collectors::{CodexAppServer, ZCodeAppServer};
+use crate::domain::AgentType;
 
 /// Protocol errors are safe codes; provider payloads belong to the content stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -875,8 +876,17 @@ impl NativeTransport for MultiProviderTransport {
                             _ => NativeError::uncertain("provider_transport_lost"),
                         })?
                 } else {
-                    json!({"data": []})
+                    // A missing app-server must not hide locally discoverable Codex
+                    // sessions. Metadata-only candidates cannot be resumed here.
+                    crate::collectors::collect_codex_local_threads(100)
+                        .unwrap_or_else(|_| json!({"data": [], "nextCursor": null}))
                 };
+                if let Some(items) = response["data"].as_array_mut() {
+                    for item in items {
+                        item["provider"] = json!("codex");
+                        item["resumable"] = json!(self.codex.is_some());
+                    }
+                }
                 if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database()
                     && let Ok(payload) =
                         crate::collectors::collect_zcode_sessions_from(&db_path, false)
@@ -890,6 +900,8 @@ impl NativeTransport for MultiProviderTransport {
                             "id": entry.session_id,
                             "cwd": entry.cwd,
                             "name": entry.title,
+                            "provider": "zcode",
+                            "resumable": true,
                             "status": { "type": "idle" }
                         }));
                     }
@@ -902,6 +914,7 @@ impl NativeTransport for MultiProviderTransport {
                             "id": format!("claude_{}", session_id),
                             "cwd": cwd,
                             "name": title.unwrap_or_else(|| session_id.clone()),
+                            "provider": "claude_code",
                             "status": { "type": "idle" }
                         }));
                     }
@@ -915,6 +928,7 @@ impl NativeTransport for MultiProviderTransport {
                             "id": format!("antigravity_{}", session_id),
                             "cwd": cwd,
                             "name": title.unwrap_or_else(|| session_id.clone()),
+                            "provider": "antigravity",
                             "status": { "type": "idle" }
                         }));
                     }
@@ -927,6 +941,7 @@ impl NativeTransport for MultiProviderTransport {
                             "id": format!("grok_{}", session_id),
                             "cwd": cwd,
                             "name": title.unwrap_or_else(|| session_id.clone()),
+                            "provider": "grok_build",
                             "status": { "type": "idle" }
                         }));
                     }
@@ -954,12 +969,11 @@ impl NativeTransport for MultiProviderTransport {
         // If request ID is string and starts with "zcode_", route to ZCode
         if let Some(id_str) = id.as_str()
             && id_str.starts_with("zcode_")
+            && let Some(ref mut zcode) = self.zcode
         {
-            if let Some(ref mut zcode) = self.zcode {
-                let actual_id = id_str.trim_start_matches("zcode_");
-                let parsed_id = actual_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| Value::String(actual_id.to_string()));
-                return zcode.respond(parsed_id, result).map_err(|_| NativeError::uncertain("provider_transport_lost"));
-            }
+            let actual_id = id_str.trim_start_matches("zcode_");
+            let parsed_id = actual_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| Value::String(actual_id.to_string()));
+            return zcode.respond(parsed_id, result).map_err(|_| NativeError::uncertain("provider_transport_lost"));
         }
         if let Some(ref mut codex) = self.codex {
             codex
@@ -1584,6 +1598,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         .map(|name| name.chars().take(160).collect::<String>());
                     candidates.push(json!({
                         "provider_session_id": id,
+                        "provider": thread["provider"],
+                        "resumable": thread["resumable"],
                         "workspace_path": cwd,
                         "title": title,
                         "execution_state": execution_state(&thread["status"]),
@@ -1847,6 +1863,44 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                             }
                         }
                     }
+                }
+            }
+
+            // Providers without native thread/read replay use the daemon's
+            // single bounded transcript reader after explicit resume. This
+            // normalized snapshot is sent only for a managed session.
+            if *mode == ConnectMode::Resume
+                && response["thread"]["turns"]
+                    .as_array()
+                    .is_none_or(Vec::is_empty)
+                && let Some(home) = crate::collectors::home_dir()
+            {
+                let provider = if id.starts_with("sess_") {
+                    AgentType::ZCode
+                } else if id.starts_with("claude_") {
+                    AgentType::ClaudeCode
+                } else if id.starts_with("antigravity_") {
+                    AgentType::Antigravity
+                } else if id.starts_with("grok_") {
+                    AgentType::GrokBuild
+                } else {
+                    AgentType::Codex
+                };
+                let items = crate::conversation::load_session_conversation(&home, provider, &id);
+                if !items.is_empty() {
+                    self.pending_historical_events.push_back(HostEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        host_generation: self.generation.clone(),
+                        binding: Some(binding.clone()),
+                        hub_session_id: Some(hub_id.clone()),
+                        provider_session_id: Some(id.clone()),
+                        kind: "history/snapshot".to_string(),
+                        raw: json!({"method": "history/snapshot", "params": {"items": items}}),
+                        approval_id: None,
+                        approval: None,
+                        question_id: None,
+                        question: None,
+                    });
                 }
             }
 

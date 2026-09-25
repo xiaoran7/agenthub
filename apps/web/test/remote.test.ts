@@ -144,6 +144,45 @@ test("context ring uses reported values and stays empty without usage", () => {
   );
 });
 
+test("managed history snapshots replace stale replay and retain later live messages", () => {
+  const first = event("item/completed", {
+    item: { id: "old", type: "agentMessage", text: "stale" },
+  });
+  const history = {
+    ...event("history/snapshot", {
+      items: [
+        { role: "user", kind: "message", text: "开始" },
+        { role: "assistant", kind: "message", text: "已完成" },
+        {
+          role: "assistant",
+          kind: "tool",
+          label: "Read",
+          text: "读取结果",
+          status: "completed",
+        },
+      ],
+    }),
+    cursor: 2,
+  };
+  const live = {
+    ...event("item/completed", {
+      item: { id: "new", type: "agentMessage", text: "继续执行" },
+    }),
+    cursor: 3,
+  };
+  const items = conversationItems([first, history, live], []);
+  assert.deepEqual(
+    items.map(({ kind, text }) => [kind, text]),
+    [
+      ["user", "开始"],
+      ["assistant", "已完成"],
+      ["tool", "读取结果"],
+      ["assistant", "继续执行"],
+    ],
+  );
+  assert.equal(items[2]?.title, "Read");
+});
+
 test("ready snapshots restore, scope, and clear opaque approvals", () => {
   const target = approval("a");
   const other = approval("b", "hub-other");
