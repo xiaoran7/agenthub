@@ -436,7 +436,7 @@ export function RemoteConsole({
       busy
     )
       return;
-    const sessionKey = key(session);
+    const sessionKey = `${key(session)}/${session.binding.host_generation}`;
     if (autoResumedRef.current.has(sessionKey)) return;
     autoResumedRef.current.add(sessionKey);
     void submit(
@@ -448,7 +448,13 @@ export function RemoteConsole({
       },
       session,
     );
-  }, [selected, session?.online, session?.binding.control_connected, busy]);
+  }, [
+    selected,
+    session?.online,
+    session?.binding.control_connected,
+    session?.binding.host_generation,
+    busy,
+  ]);
 
   const latestFailure = [...commands]
     .reverse()
