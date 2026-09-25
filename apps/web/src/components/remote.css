@@ -263,7 +263,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow-y: auto;
   min-height: 0;
   flex: 1;
 }
@@ -545,14 +544,15 @@
   }
 }
 .remote-timeline {
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
   min-height: 0;
   overscroll-behavior: contain;
-  padding: 28px max(24px, calc((100% - 840px) / 2));
+  padding: 24px max(20px, calc((100% - 1100px) / 2));
 }
 .remote-message {
-  margin: 0 0 24px;
+  margin: 0 0 20px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -565,28 +565,133 @@
 }
 .remote-message.user {
   background: #252830;
-  padding: 14px 18px;
+  padding: 12px 18px;
   border-radius: 16px;
-  margin-left: 15%;
+  margin-left: 20%;
   border: 1px solid #363a45;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 .remote-message.agent {
   background: transparent;
   padding: 4px 0;
-  margin-right: 5%;
+  margin-right: 0%;
+}
+.remote-message-body {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+.remote-typing-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  margin-left: 4px;
+  vertical-align: -2px;
+  background-color: #38bdf8;
+  border-radius: 1px;
+  animation: remote-blink 0.9s infinite ease-in-out;
+}
+@keyframes remote-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 .remote-tool {
-  border: 1px solid #2e313a;
-  background: #18191e;
-  padding: 10px 14px;
-  border-radius: 8px;
+  border: 1px solid #282b34;
+  background: #15171c;
+  border-radius: 9px;
   margin-bottom: 16px;
   font-size: 13px;
-  transition: border-color 0.15s ease;
+  overflow: hidden;
+  transition: all 0.15s ease;
 }
 .remote-tool:hover {
-  border-color: #3e4350;
+  border-color: #383c48;
+}
+.remote-tool-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #191c22;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  color: #cbd5e1;
+}
+.remote-tool-summary:hover {
+  background: #20242c;
+}
+.remote-tool-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.remote-tool-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.remote-tool-title {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, Consolas, monospace;
+  color: #e2e8f0;
+}
+.remote-tool-status {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.remote-tool-status.running {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+.remote-tool-status.completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.remote-tool-content {
+  padding: 10px 14px;
+  border-top: 1px solid #23262f;
+  background: #111216;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.remote-tool-subhead {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.remote-tool-cmd {
+  margin: 0;
+  padding: 8px 10px;
+  background: #0d0e12;
+  border: 1px solid #1e222a;
+  border-radius: 6px;
+  color: #7dd3fc;
+  font-size: 12px;
+}
+.remote-tool-output {
+  margin: 0;
+  padding: 8px 10px;
+  background: #0d0e12;
+  border: 1px solid #1e222a;
+  border-radius: 6px;
+  color: #94a3b8;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12px;
 }
 .remote-console pre {
   white-space: pre-wrap;
@@ -734,8 +839,8 @@
 }
 .remote-composer-card {
   flex-shrink: 0;
-  max-width: 840px;
-  width: calc(100% - 48px);
+  max-width: 1100px;
+  width: calc(100% - 40px);
   margin: 0 auto 20px;
   padding: 12px 14px 10px 16px;
   border: 1px solid #32353c;

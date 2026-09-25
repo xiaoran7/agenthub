@@ -78,6 +78,10 @@ export interface ConversationItem {
   kind: "user" | "assistant" | "tool";
   text: string;
   title?: string;
+  command?: string;
+  output?: string;
+  description?: string;
+  status?: "running" | "completed" | "failed";
 }
 
 export async function remoteRequest<T>(
@@ -187,17 +191,77 @@ export function conversationItems(
       }
     } else if (native.kind === "item/agentMessage/delta") {
       let target = items.get(id);
+      const deltaText = typeof p.delta === "string" ? p.delta : "";
+      
+      // 过滤裸露在 agentMessage delta 里的工具调用 JSON
+      if (!target && deltaText.trim().startsWith('{"command":') && deltaText.includes('"description":')) {
+        try {
+          const parsed = JSON.parse(deltaText.trim());
+          if (parsed && typeof parsed.command === "string") {
+            const cmd = parsed.command;
+            target = {
+              id,
+              kind: "tool" as const,
+              title: `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`,
+              text: "工具执行中…",
+              command: cmd,
+              description: parsed.description,
+              status: "running",
+            };
+            items.set(id, target);
+            result.push(target);
+            continue;
+          }
+        } catch {
+          // ignore json parse error and treat as text
+        }
+      }
+      
       if (!target) {
         target = { id, kind: "assistant", text: "" };
         items.set(id, target);
         result.push(target);
       }
-      target.text += typeof p.delta === "string" ? p.delta : "";
+      target.text += deltaText;
     } else if (
       native.kind === "item/completed" &&
       item?.type === "agentMessage"
     ) {
       let target = items.get(id);
+      const fullText = item.text ?? "";
+      
+      // 同样检测并过滤 completed 消息中的裸工具 JSON
+      if (fullText.trim().startsWith('{"command":') && fullText.includes('"description":')) {
+        try {
+          const parsed = JSON.parse(fullText.trim());
+          if (parsed && typeof parsed.command === "string") {
+            const cmd = parsed.command;
+            if (!target) {
+              target = {
+                id,
+                kind: "tool" as const,
+                title: `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`,
+                text: "工具执行已完成",
+                command: cmd,
+                description: parsed.description,
+                status: "completed",
+              };
+              items.set(id, target);
+              result.push(target);
+            } else {
+              target.kind = "tool";
+              target.title = `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`;
+              target.command = cmd;
+              target.description = parsed.description;
+              target.status = "completed";
+            }
+            continue;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       if (!target) {
         target = { id, kind: "assistant", text: "" };
         items.set(id, target);
@@ -205,18 +269,34 @@ export function conversationItems(
       }
       target.text = item.text ?? target.text;
     } else if (
-      native.kind === "item/completed" &&
-      item?.type === "commandExecution" &&
-      !items.has(id)
+      (native.kind === "item/completed" || native.kind === "item/started") &&
+      item?.type === "commandExecution"
     ) {
-      const target = {
-        id,
-        kind: "tool" as const,
-        text: "工具执行已完成",
-        title: "工具",
-      };
-      items.set(id, target);
-      result.push(target);
+      let target = items.get(id);
+      if (!target) {
+        const cmd = item.command || (typeof (item as any).input?.command === "string" ? (item as any).input.command : "");
+        const out = item.aggregatedOutput || (item as any).output || "";
+        target = {
+          id,
+          kind: "tool" as const,
+          title: cmd ? `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}` : "工具调用",
+          text: "工具执行已完成",
+          command: cmd || undefined,
+          output: out || undefined,
+          status: native.kind === "item/completed" ? "completed" : "running",
+        };
+        items.set(id, target);
+        result.push(target);
+      } else {
+        if (item.command) target.command = item.command;
+        if (item.aggregatedOutput) {
+          target.output = item.aggregatedOutput;
+        }
+        if (native.kind === "item/completed") {
+          target.status = "completed";
+          target.text = "工具执行已完成";
+        }
+      }
     }
   }
   return result;

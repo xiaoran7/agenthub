@@ -267,13 +267,13 @@ export function RemoteConsole({
         if (batch.events.length) {
           cursor = batch.events[batch.events.length - 1]!.cursor;
           accumulated = [...accumulated, ...batch.events];
-          setEvents(accumulated);
+          setEvents([...accumulated]);
         }
         setCommands(detail.commands);
       } catch (err) {
         if (!stopped) setError(remoteError(err));
       }
-      if (!stopped) timer = setTimeout(() => void poll(), 400);
+      if (!stopped) timer = setTimeout(() => void poll(), 200);
     };
     void poll();
     return () => {
@@ -1110,9 +1110,30 @@ export function RemoteConsole({
             >
               {items.map((item) =>
                 item.kind === "tool" ? (
-                  <details className="remote-tool" key={item.id}>
-                    <summary>{item.title}</summary>
-                    <pre>{item.text}</pre>
+                  <details className={`remote-tool ${item.status || "completed"}`} key={item.id}>
+                    <summary className="remote-tool-summary">
+                      <div className="remote-tool-header-left">
+                        <span className="remote-tool-icon">⚙️</span>
+                        <span className="remote-tool-title">{item.title}</span>
+                      </div>
+                      <span className={`remote-tool-status ${item.status || "completed"}`}>
+                        {item.status === "running" ? "执行中…" : "已完成"}
+                      </span>
+                    </summary>
+                    <div className="remote-tool-content">
+                      {item.command && (
+                        <div className="remote-tool-cmd-section">
+                          <div className="remote-tool-subhead">命令 / 参数</div>
+                          <pre className="remote-tool-cmd">{item.command}</pre>
+                        </div>
+                      )}
+                      {(item.output || item.text) && (
+                        <div className="remote-tool-out-section">
+                          <div className="remote-tool-subhead">执行输出</div>
+                          <pre className="remote-tool-output">{item.output || item.text}</pre>
+                        </div>
+                      )}
+                    </div>
                   </details>
                 ) : (
                   <article
@@ -1126,7 +1147,14 @@ export function RemoteConsole({
                             session?.binding.provider_session_id ?? "",
                           ).name}
                     </small>
-                    <div>{item.text}</div>
+                    <div className="remote-message-body">
+                      {item.text}
+                      {item.kind === "assistant" &&
+                        session?.binding.current_turn_id &&
+                        item === items[items.length - 1] && (
+                          <span className="remote-typing-cursor" aria-hidden="true" />
+                        )}
+                    </div>
                   </article>
                 ),
               )}
