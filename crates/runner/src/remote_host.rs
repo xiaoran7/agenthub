@@ -68,7 +68,7 @@ impl NativeTransport for CodexAppServer {
 }
 
 pub struct MultiProviderTransport {
-    codex: CodexAppServer,
+    codex: Option<CodexAppServer>,
     zcode: Option<ZCodeAppServer>,
     zcode_active_turns: HashMap<String, String>,
     zcode_buffered_events: VecDeque<Value>,
@@ -91,7 +91,7 @@ pub struct MultiProviderTransport {
 }
 
 impl MultiProviderTransport {
-    pub fn new(codex: CodexAppServer, zcode: Option<ZCodeAppServer>) -> Self {
+    pub fn new(codex: Option<CodexAppServer>, zcode: Option<ZCodeAppServer>) -> Self {
         Self {
             codex,
             zcode,
@@ -865,15 +865,18 @@ impl NativeTransport for MultiProviderTransport {
             }
             "thread/archive" | "thread/unarchive" if is_zcode => Ok(json!({"ok": true})),
             "thread/list" => {
-                let mut response =
-                    self.codex
+                let mut response = if let Some(ref mut codex) = self.codex {
+                    codex
                         .request("thread/list", params)
                         .map_err(|error| match error {
                             crate::collectors::CollectorError::Protocol { .. } => {
                                 NativeError::rejected("provider_rejected")
                             }
                             _ => NativeError::uncertain("provider_transport_lost"),
-                        })?;
+                        })?
+                } else {
+                    json!({"data": []})
+                };
                 if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database()
                     && let Ok(payload) =
                         crate::collectors::collect_zcode_sessions_from(&db_path, false)
@@ -930,15 +933,20 @@ impl NativeTransport for MultiProviderTransport {
                 }
                 Ok(response)
             }
-            _ => self
-                .codex
-                .request(method, params)
-                .map_err(|error| match error {
-                    crate::collectors::CollectorError::Protocol { .. } => {
-                        NativeError::rejected("provider_rejected")
-                    }
-                    _ => NativeError::uncertain("provider_transport_lost"),
-                }),
+            _ => {
+                if let Some(ref mut codex) = self.codex {
+                    codex
+                        .request(method, params)
+                        .map_err(|error| match error {
+                            crate::collectors::CollectorError::Protocol { .. } => {
+                                NativeError::rejected("provider_rejected")
+                            }
+                            _ => NativeError::uncertain("provider_transport_lost"),
+                        })
+                } else {
+                    Err(NativeError::rejected("provider_not_available"))
+                }
+            }
         }
     }
 
@@ -953,20 +961,26 @@ impl NativeTransport for MultiProviderTransport {
                 return zcode.respond(parsed_id, result).map_err(|_| NativeError::uncertain("provider_transport_lost"));
             }
         }
-        self.codex
-            .respond(id, result)
-            .map_err(|_| NativeError::uncertain("provider_transport_lost"))
+        if let Some(ref mut codex) = self.codex {
+            codex
+                .respond(id, result)
+                .map_err(|_| NativeError::uncertain("provider_transport_lost"))
+        } else {
+            Err(NativeError::uncertain("provider_transport_lost"))
+        }
     }
 
     fn drain(&mut self) -> Result<Vec<Value>, NativeError> {
         let mut messages: Vec<Value> = Vec::new();
         let mut codex_lost = false;
 
-        match self.codex.drain_messages() {
-            Ok(codex_msgs) => messages.extend(codex_msgs),
-            Err(e) => {
-                eprintln!("[MultiProviderTransport] codex drain error: {:?}", e);
-                codex_lost = true;
+        if let Some(ref mut codex) = self.codex {
+            match codex.drain_messages() {
+                Ok(codex_msgs) => messages.extend(codex_msgs),
+                Err(e) => {
+                    eprintln!("[MultiProviderTransport] codex drain error: {:?}", e);
+                    codex_lost = true;
+                }
             }
         }
 
