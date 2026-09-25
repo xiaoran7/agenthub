@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/.next
+**/dist
+**/build
+target
+Deliverables
+data
+*.env
+deploy/docker.env
+local-identity.json
+pulse.bundle
