@@ -177,7 +177,8 @@ export function parseRemotePendingApproval(
   )
     invalid();
   if (approval.tool_name !== undefined) text(approval.tool_name, 128);
-  if (approval.command_preview !== undefined) text(approval.command_preview, 32768);
+  if (approval.command_preview !== undefined)
+    text(approval.command_preview, 32768);
   if (approval.path !== undefined) text(approval.path, 1024);
   if (approval.description !== undefined) text(approval.description, 4096);
   if (approval.risk_level !== undefined)

@@ -1,11 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Folder, Play, RefreshCw, Sparkles, X } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent,
-} from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAgentModels } from "../../agentModels";
 import { PROVIDER_LIST } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
@@ -71,7 +66,9 @@ export function rememberRecentCwd(cwd: string) {
   }
 }
 
-export async function pickFolderDialog(start?: string): Promise<string | undefined> {
+export async function pickFolderDialog(
+  start?: string,
+): Promise<string | undefined> {
   if (!("__TAURI_INTERNALS__" in window)) return undefined;
   const picked = await invoke<string | null>("pick_folder", {
     startDir: start || null,

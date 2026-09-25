@@ -4,6 +4,10 @@ import test from "node:test";
 
 process.env.AGENT_PULSE_ENFORCE_ENTITLEMENTS = "true";
 
+const TEST_NOW = new Date();
+const testTime = (offsetMs = 0) =>
+  new Date(TEST_NOW.getTime() + offsetMs).toISOString();
+
 import { createGatewayApp } from "../src/app.js";
 import {
   InMemoryAccountStore,
@@ -41,7 +45,7 @@ function accountApp() {
       accounts,
       store,
       authenticator: new SessionAuthenticator(accounts),
-      now: () => new Date("2026-08-13T12:00:00.000Z"),
+      now: () => TEST_NOW,
     }),
   };
 }
@@ -222,7 +226,7 @@ test("email verification is one-time, rate limited, and gates write capabilities
   const accounts = new InMemoryAccountStore();
   const store = new InMemoryGatewayStore();
   const messages: EmailVerificationMessage[] = [];
-  let current = new Date("2026-08-13T12:00:00.000Z");
+  let current = TEST_NOW;
   const app = createGatewayApp({
     accounts,
     store,
@@ -277,10 +281,7 @@ test("email verification is one-time, rate limited, and gates write capabilities
     payload: { token },
   });
   assert.equal(confirmed.statusCode, 200);
-  assert.equal(
-    confirmed.json().user.email_verified_at,
-    "2026-08-13T12:00:00.000Z",
-  );
+  assert.equal(confirmed.json().user.email_verified_at, testTime());
   const replayed = await app.inject({
     method: "POST",
     url: "/v1/auth/email-verifications/confirm",
@@ -289,7 +290,7 @@ test("email verification is one-time, rate limited, and gates write capabilities
   assert.equal(replayed.statusCode, 400);
   assert.equal(replayed.json().error, "invalid_email_verification");
 
-  current = new Date("2026-08-14T12:00:01.000Z");
+  current = new Date(TEST_NOW.getTime() + 24 * 60 * 60 * 1_000 + 1_000);
   const alreadyVerified = await app.inject({
     method: "POST",
     url: "/v1/auth/email-verifications",
@@ -309,7 +310,7 @@ test("failed verification delivery does not strand the account or rate limit ret
     accounts,
     store: new InMemoryGatewayStore(),
     authenticator: new SessionAuthenticator(accounts),
-    now: () => new Date("2026-08-13T12:00:00.000Z"),
+    now: () => TEST_NOW,
     emailVerification: {
       baseUrl: "https://pulse.example",
       sender: {
@@ -451,7 +452,7 @@ test("password reset is non-enumerating, one-time, and revokes every session", a
     accounts,
     store: new InMemoryGatewayStore(),
     authenticator: new SessionAuthenticator(accounts),
-    now: () => new Date("2026-08-13T12:00:00.000Z"),
+    now: () => TEST_NOW,
     emailVerification: {
       baseUrl: "https://pulse.example",
       sender: {
@@ -594,7 +595,7 @@ test("team workspaces enforce roles, invitations, and actor privacy", async () =
     accounts,
     store,
     authenticator: new SessionAuthenticator(accounts),
-    now: () => new Date("2026-08-13T12:00:00.000Z"),
+    now: () => TEST_NOW,
   });
   const register = async (email: string, displayName: string) =>
     app.inject({
@@ -776,7 +777,7 @@ test("audit events are scoped, paginated, and exclude sensitive request data", a
     accounts,
     store: new InMemoryGatewayStore(),
     authenticator: new SessionAuthenticator(accounts),
-    now: () => new Date("2026-08-13T12:00:00.000Z"),
+    now: () => TEST_NOW,
   });
   const password = "correct horse battery staple";
   const register = async (email: string) =>
@@ -911,7 +912,7 @@ test("signed billing events are idempotent, ordered, and preserve paid-through a
     accounts,
     store: new InMemoryGatewayStore(),
     authenticator: new SessionAuthenticator(accounts),
-    now: () => new Date("2026-08-13T12:00:00.000Z"),
+    now: () => TEST_NOW,
     billingVerifier: new BillingEventVerifier(secret),
   });
   const registered = await app.inject({
@@ -931,11 +932,11 @@ test("signed billing events are idempotent, ordered, and preserve paid-through a
     provider_subscription_id: "subscription_1",
     plan: "pro",
     status: "canceled",
-    current_period_end: "2026-09-13T12:00:00.000Z",
-    occurred_at: "2026-08-13T11:59:00.000Z",
+    current_period_end: testTime(31 * 24 * 60 * 60 * 1_000),
+    occurred_at: testTime(-60 * 1_000),
   };
   const send = (body: SubscriptionEvent, signatureBody = body) => {
-    const timestamp = "1786622400";
+    const timestamp = String(Math.floor(TEST_NOW.getTime() / 1_000));
     const signature = createHmac("sha256", secret)
       .update(`${timestamp}.${canonicalSubscriptionEvent(signatureBody)}`)
       .digest("hex");
@@ -969,8 +970,8 @@ test("signed billing events are idempotent, ordered, and preserve paid-through a
     event_id: "22222222-2222-4222-8222-222222222222",
     plan: "free",
     status: "expired",
-    current_period_end: "2026-08-01T00:00:00.000Z",
-    occurred_at: "2026-08-13T11:58:00.000Z",
+    current_period_end: testTime(-12 * 24 * 60 * 60 * 1_000),
+    occurred_at: testTime(-2 * 60 * 1_000),
   };
   const ignored = await send(older);
   assert.equal(ignored.json().applied, false);

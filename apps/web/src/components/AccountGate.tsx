@@ -10,6 +10,7 @@ import {
   requestPasswordReset,
   type AccountView,
 } from "../lib/account";
+import "./account-desktop.css";
 
 export function AccountGate({
   onAuthenticated,
@@ -74,125 +75,40 @@ export function AccountGate({
 
   return (
     <main className="account-entry">
-      <section className="account-signal" aria-label="Agent Hub 状态信号">
-        <div className="account-brand">
-          <span
-            className="account-brand-mark"
-            aria-hidden="true"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              width: 32,
-              height: 32,
-            }}
-          >
-            <svg
-              viewBox="0 0 512 512"
-              width={32}
-              height={32}
-              style={{ filter: "drop-shadow(0 0 8px rgba(0, 229, 255, 0.7))" }}
-            >
-              <g
-                stroke="#00e5ff"
-                strokeWidth="20"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-              >
-                <line x1="256" y1="256" x2="256" y2="136" />
-                <line x1="256" y1="256" x2="360" y2="196" />
-                <line x1="256" y1="256" x2="360" y2="316" />
-                <line x1="256" y1="256" x2="256" y2="376" />
-                <line x1="256" y1="256" x2="152" y2="316" />
-                <line x1="256" y1="256" x2="152" y2="196" />
-                <polygon points="256,136 360,196 360,316 256,376 152,316 152,196" />
-              </g>
-              <g stroke="#00e5ff" strokeWidth="14" fill="#0b0f19">
-                <circle cx="256" cy="136" r="22" />
-                <circle cx="360" cy="196" r="22" />
-                <circle cx="360" cy="316" r="22" />
-                <circle cx="256" cy="376" r="22" />
-                <circle cx="152" cy="316" r="22" />
-                <circle cx="152" cy="196" r="22" />
-              </g>
-              <circle cx="256" cy="256" r="42" fill="#00e5ff" opacity="0.4" />
-              <circle cx="256" cy="256" r="26" fill="#ffffff" />
-            </svg>
-          </span>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              lineHeight: 1.15,
-            }}
-          >
-            <span
-              style={{
-                fontWeight: 800,
-                fontSize: "18px",
-                letterSpacing: "0.02em",
-                color: "#f8fafc",
-              }}
-            >
-              Agent{" "}
-              <span
-                style={{
-                  background:
-                    "linear-gradient(90deg, #00f5d4, #00bbf9, #a855f7)",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                }}
-              >
-                Hub
-              </span>
-            </span>
-            <span
-              style={{
-                fontSize: "11px",
-                color: "#94a3b8",
-                letterSpacing: "0.08em",
-              }}
-            >
-              智能体集成中心
-            </span>
-          </div>
-        </div>
-        <div className="account-hero-visual" aria-hidden="true">
-          <img
-            src="/brand-banner.png"
-            alt="Agent Hub Banner"
-            style={{
-              width: "100%",
-              maxWidth: "520px",
-              borderRadius: "14px",
-              border: "1px solid rgba(0, 229, 255, 0.18)",
-              boxShadow: "0 0 32px rgba(0, 229, 255, 0.12)",
-              marginTop: "24px",
-              marginBottom: "24px",
-            }}
-          />
-        </div>
-        <div className="account-signal-copy">
-          <span>CONTROL PLANE / 01</span>
-          <h1>你的 Agent，保持在线。</h1>
-          <p>
-            统一查看 Claude Code、Codex、Antigravity 与 Grok Build
-            会话，并管理已连接的执行设备。
-          </p>
-        </div>
-        <dl className="account-signal-meta">
-          <div>
-            <dt>通道</dt>
-            <dd>加密会话</dd>
-          </div>
-          <div>
-            <dt>凭据</dt>
-            <dd>仅保留本机</dd>
-          </div>
-        </dl>
-      </section>
       <section className="account-panel">
         <div className="account-panel-inner">
+          <div className="account-brand">
+            <svg
+              width="34"
+              height="34"
+              viewBox="0 0 48 48"
+              fill="none"
+              aria-hidden="true"
+            >
+              <rect
+                x="3"
+                y="3"
+                width="42"
+                height="42"
+                rx="12"
+                fill="currentColor"
+                fillOpacity="0.08"
+                stroke="currentColor"
+                strokeOpacity="0.25"
+                strokeWidth="2.5"
+              />
+              <path
+                d="M12 25h6l3-9 6 16 3-10 3 3h3"
+                stroke="currentColor"
+                strokeWidth="3.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <circle cx="21" cy="16" r="2.2" fill="currentColor" />
+              <circle cx="27" cy="32" r="2.2" fill="currentColor" />
+            </svg>
+            <span>AgentHub</span>
+          </div>
           {mode !== "reset" && (
             <div className="account-tabs" role="tablist" aria-label="账户操作">
               <button

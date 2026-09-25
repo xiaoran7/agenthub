@@ -1,8 +1,4 @@
-import {
-  Activity,
-  AlertTriangle,
-  RefreshCw,
-} from "lucide-react";
+import { Activity, AlertTriangle, RefreshCw } from "lucide-react";
 import type { SessionTimelineEvent } from "../../types";
 import { relativeTime, statusView } from "../../presentation";
 

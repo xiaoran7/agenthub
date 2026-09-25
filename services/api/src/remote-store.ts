@@ -527,7 +527,12 @@ function validateRemoteEventFields(event: Record<string, unknown>): void {
       (event[key] as string).length > 256
     )
       throw new RemoteStoreError("invalid_event");
-  for (const key of ["hub_session_id", "provider_session_id", "approval_id", "question_id"])
+  for (const key of [
+    "hub_session_id",
+    "provider_session_id",
+    "approval_id",
+    "question_id",
+  ])
     if (
       event[key] !== null &&
       event[key] !== undefined &&

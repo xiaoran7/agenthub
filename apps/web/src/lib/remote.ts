@@ -192,9 +192,13 @@ export function conversationItems(
     } else if (native.kind === "item/agentMessage/delta") {
       let target = items.get(id);
       const deltaText = typeof p.delta === "string" ? p.delta : "";
-      
+
       // 过滤裸露在 agentMessage delta 里的工具调用 JSON
-      if (!target && deltaText.trim().startsWith('{"command":') && deltaText.includes('"description":')) {
+      if (
+        !target &&
+        deltaText.trim().startsWith('{"command":') &&
+        deltaText.includes('"description":')
+      ) {
         try {
           const parsed = JSON.parse(deltaText.trim());
           if (parsed && typeof parsed.command === "string") {
@@ -216,7 +220,7 @@ export function conversationItems(
           // ignore json parse error and treat as text
         }
       }
-      
+
       if (!target) {
         target = { id, kind: "assistant", text: "" };
         items.set(id, target);
@@ -229,9 +233,12 @@ export function conversationItems(
     ) {
       let target = items.get(id);
       const fullText = item.text ?? "";
-      
+
       // 同样检测并过滤 completed 消息中的裸工具 JSON
-      if (fullText.trim().startsWith('{"command":') && fullText.includes('"description":')) {
+      if (
+        fullText.trim().startsWith('{"command":') &&
+        fullText.includes('"description":')
+      ) {
         try {
           const parsed = JSON.parse(fullText.trim());
           if (parsed && typeof parsed.command === "string") {
@@ -273,7 +280,11 @@ export function conversationItems(
       item?.type === "commandExecution"
     ) {
       let target = items.get(id);
-      const cmd = item.command || (typeof (item as any).input?.command === "string" ? (item as any).input.command : "");
+      const cmd =
+        item.command ||
+        (typeof (item as any).input?.command === "string"
+          ? (item as any).input.command
+          : "");
       const out = item.aggregatedOutput || (item as any).output || "";
 
       // 如果当前 ID 没有直接命中，但前序有一个处于 running 状态的 tool（来自 agentMessage 拦截的 JSON 参数），则将其合并，防止产生“一个执行中、一个已完成”的割裂重复卡片
@@ -292,8 +303,11 @@ export function conversationItems(
         target = {
           id,
           kind: "tool" as const,
-          title: cmd ? `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}` : "工具调用",
-          text: native.kind === "item/completed" ? "工具执行已完成" : "工具执行中…",
+          title: cmd
+            ? `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`
+            : "工具调用",
+          text:
+            native.kind === "item/completed" ? "工具执行已完成" : "工具执行中…",
           command: cmd || undefined,
           output: out || undefined,
           status: native.kind === "item/completed" ? "completed" : "running",

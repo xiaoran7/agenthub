@@ -360,9 +360,7 @@ export function ContextCapacityRing({
           <div className="popover-footer">
             <span className="footer-label">平均缓存命中率</span>
             <span className="footer-value">
-              {metrics.cacheHitRate > 0
-                ? `${metrics.cacheHitRate}%`
-                : "0%"}
+              {metrics.cacheHitRate > 0 ? `${metrics.cacheHitRate}%` : "0%"}
             </span>
           </div>
         </div>

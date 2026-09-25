@@ -599,8 +599,13 @@
   animation: remote-blink 0.9s infinite ease-in-out;
 }
 @keyframes remote-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 .remote-tool {
   border: 1px solid #282b34;
@@ -1189,10 +1194,22 @@
   margin: 16px 0 8px;
   letter-spacing: -0.2px;
 }
-.remote-md-heading.h1 { font-size: 18px; border-bottom: 1px solid #2d3139; padding-bottom: 4px; }
-.remote-md-heading.h2 { font-size: 16.5px; border-bottom: 1px solid #262930; padding-bottom: 3px; }
-.remote-md-heading.h3 { font-size: 15px; }
-.remote-md-heading.h4 { font-size: 14px; }
+.remote-md-heading.h1 {
+  font-size: 18px;
+  border-bottom: 1px solid #2d3139;
+  padding-bottom: 4px;
+}
+.remote-md-heading.h2 {
+  font-size: 16.5px;
+  border-bottom: 1px solid #262930;
+  padding-bottom: 3px;
+}
+.remote-md-heading.h3 {
+  font-size: 15px;
+}
+.remote-md-heading.h4 {
+  font-size: 14px;
+}
 
 .remote-md-list {
   margin: 6px 0 10px;
@@ -1384,7 +1401,8 @@
     box-shadow: 6px 0 28px rgba(0, 0, 0, 0.75);
     border-right: 1px solid #282a30;
     border-bottom: none;
-    padding: max(16px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom));
+    padding: max(16px, env(safe-area-inset-top)) 14px
+      max(16px, env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
     gap: 12px;

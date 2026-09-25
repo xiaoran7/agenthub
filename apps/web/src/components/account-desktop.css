@@ -1,0 +1,205 @@
+/* Login shares the Desktop type scale and the Remote console's warm neutrals. */
+.account-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  min-height: 100dvh;
+  background: #1f1e1d;
+  color: #f5f4ef;
+  font-family:
+    "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+}
+
+.account-panel {
+  width: 100%;
+  min-width: 0;
+  padding: 32px 20px;
+}
+
+.account-panel-inner {
+  width: min(100%, 440px);
+  max-width: none;
+  margin: 0 auto;
+  padding: 30px;
+  background: #262523;
+  border: 1px solid #3d3b37;
+  border-radius: 18px;
+  box-shadow: 0 18px 52px rgb(0 0 0 / 14%);
+}
+
+.account-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+  color: #f5f4ef;
+  font-family: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  font-size: 19px;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+}
+
+.account-brand svg {
+  color: #ef7fa7;
+  flex: 0 0 auto;
+}
+
+.account-tabs {
+  gap: 24px;
+  margin-bottom: 27px;
+  border-bottom-color: #3d3b37;
+}
+
+.account-tabs button {
+  color: #a8a69e;
+  padding: 9px 0 11px;
+}
+
+.account-tabs button:hover,
+.account-tabs button[aria-selected="true"] {
+  color: #f5f4ef;
+}
+
+.account-tabs button[aria-selected="true"]::after {
+  width: 100%;
+  background: #ef7fa7;
+}
+
+.account-heading > span {
+  color: #ef7fa7;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.account-heading h2 {
+  margin: 9px 0 10px;
+  color: #fff;
+  font-family: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  font-size: 30px;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+}
+
+.account-heading p {
+  color: #a8a69e;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.account-oauth-box {
+  margin-top: 26px;
+  gap: 17px;
+}
+
+.account-oauth-submit {
+  min-height: 46px;
+  background: #e8e6e1;
+  border-color: #e8e6e1;
+  border-radius: 9px;
+  color: #151514;
+  font-weight: 620;
+  box-shadow: none;
+}
+
+.account-oauth-submit:hover:not(:disabled) {
+  background: #fff;
+  border-color: #fff;
+  transform: none;
+}
+
+.oauth-icon {
+  color: #ac536e;
+}
+
+.account-divider {
+  color: #a8a69e;
+}
+
+.account-divider::before,
+.account-divider::after {
+  border-bottom-color: #3d3b37;
+}
+
+.account-form {
+  gap: 15px;
+}
+
+.account-form label > span {
+  color: #d6d4cc;
+  font-weight: 600;
+}
+
+.account-form input {
+  min-height: 45px;
+  background: #1f1e1d;
+  border-color: #605c55;
+  border-radius: 8px;
+  color: #f5f4ef;
+}
+
+.account-form input::placeholder {
+  color: #817e77;
+}
+
+.account-form input:focus {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 2px rgb(147 197 253 / 18%);
+}
+
+.account-submit {
+  min-height: 46px;
+  margin-top: 3px;
+  background: #3b3935;
+  border: 1px solid #605c55;
+  border-radius: 9px;
+  color: #f5f4ef;
+  font-weight: 650;
+}
+
+.account-submit:hover:not(:disabled) {
+  background: #4b4842;
+}
+
+.account-text-action {
+  color: #93c5fd;
+  font-weight: 600;
+}
+
+.account-text-action:hover {
+  color: #c6e2ff;
+}
+
+.account-success {
+  color: #7ed5a0;
+}
+
+.account-error {
+  background: #452b29;
+  border-left-color: #ffaaa4;
+  color: #ffcbc7;
+}
+
+.account-policy {
+  color: #a8a69e;
+}
+
+.account-entry button:focus-visible,
+.account-entry input:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .account-panel {
+    padding: 20px 16px;
+  }
+
+  .account-panel-inner {
+    padding: 25px 20px;
+  }
+
+  .account-heading h2 {
+    font-size: 27px;
+  }
+}

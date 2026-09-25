@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AgentHub - 智能体集成中心",
-  description: "跨设备 Coding Agent 统一监控与远程接入平台。",
+  title: "AgentHub - 远程接续原生 Agent 会话",
+  description: "从 Web 接续电脑上的原生 Agent 会话。",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -21,8 +21,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#111118" },
-    { media: "(prefers-color-scheme: dark)", color: "#111118" },
+    { media: "(prefers-color-scheme: light)", color: "#1f1e1d" },
+    { media: "(prefers-color-scheme: dark)", color: "#1f1e1d" },
   ],
 };
 

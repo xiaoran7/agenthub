@@ -46,14 +46,28 @@ function CopyButton({ text }: { text: string }) {
     >
       {copied ? (
         <>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+          >
             <polyline points="20 6 9 17 4 12" />
           </svg>
           <span>已复制</span>
         </>
       ) : (
         <>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
           </svg>
@@ -83,15 +97,19 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
       nodes.push(
         <strong key={`b-${keyIdx++}`} className="remote-md-bold">
           {token.slice(2, -2)}
-        </strong>
+        </strong>,
       );
     } else if (token.startsWith("`") && token.endsWith("`")) {
       nodes.push(
         <code key={`c-${keyIdx++}`} className="remote-md-inline-code">
           {token.slice(1, -1)}
-        </code>
+        </code>,
       );
-    } else if (token.startsWith("[") && token.includes("](") && token.endsWith(")")) {
+    } else if (
+      token.startsWith("[") &&
+      token.includes("](") &&
+      token.endsWith(")")
+    ) {
       const closeBracket = token.indexOf("](");
       const label = token.slice(1, closeBracket);
       const url = token.slice(closeBracket + 2, -1);
@@ -104,13 +122,13 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
           className="remote-md-link"
         >
           {label}
-        </a>
+        </a>,
       );
     } else if (token.startsWith("*") && token.endsWith("*")) {
       nodes.push(
         <em key={`i-${keyIdx++}`} className="remote-md-italic">
           {token.slice(1, -1)}
-        </em>
+        </em>,
       );
     }
     lastIndex = pattern.lastIndex;
@@ -124,7 +142,8 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
 }
 
 interface BlockSegment {
-  type: "code" | "paragraph" | "header" | "list" | "blockquote" | "table" | "hr";
+  type:
+    "code" | "paragraph" | "header" | "list" | "blockquote" | "table" | "hr";
   language?: string;
   code?: string;
   level?: number;
@@ -192,7 +211,8 @@ function parseMarkdownBlocks(rawText: string): BlockSegment[] {
       const quoteLines: string[] = [];
       while (i < lines.length) {
         const qLine = lines[i];
-        if (qLine === undefined || (!qLine.startsWith("> ") && qLine !== ">")) break;
+        if (qLine === undefined || (!qLine.startsWith("> ") && qLine !== ">"))
+          break;
         quoteLines.push(qLine.replace(/^>\s?/, ""));
         i++;
       }
@@ -213,7 +233,12 @@ function parseMarkdownBlocks(rawText: string): BlockSegment[] {
       const tableLines: string[] = [];
       while (i < lines.length) {
         const tLine = lines[i];
-        if (tLine === undefined || !tLine.includes("|") || tLine.trim().length === 0) break;
+        if (
+          tLine === undefined ||
+          !tLine.includes("|") ||
+          tLine.trim().length === 0
+        )
+          break;
         tableLines.push(tLine);
         i++;
       }
@@ -230,7 +255,8 @@ function parseMarkdownBlocks(rawText: string): BlockSegment[] {
       const listItems: string[] = [];
       while (i < lines.length) {
         const lLine = lines[i];
-        if (lLine === undefined || !/^\s*([*+-]|\d+\.)\s+(.*)$/.test(lLine)) break;
+        if (lLine === undefined || !/^\s*([*+-]|\d+\.)\s+(.*)$/.test(lLine))
+          break;
         const itemText = lLine.replace(/^\s*([*+-]|\d+\.)\s+/, "");
         listItems.push(itemText);
         i++;
@@ -275,7 +301,11 @@ function parseMarkdownBlocks(rawText: string): BlockSegment[] {
   return blocks;
 }
 
-export function MarkdownView({ content, streaming = false, className = "" }: MarkdownViewProps) {
+export function MarkdownView({
+  content,
+  streaming = false,
+  className = "",
+}: MarkdownViewProps) {
   const blocks = useMemo(() => parseMarkdownBlocks(content), [content]);
 
   return (
@@ -307,10 +337,29 @@ export function MarkdownView({ content, streaming = false, className = "" }: Mar
               )}
             </>
           );
-          if (lvl === 1) return <h1 key={idx} className="remote-md-heading h1">{headingContent}</h1>;
-          if (lvl === 2) return <h2 key={idx} className="remote-md-heading h2">{headingContent}</h2>;
-          if (lvl === 3) return <h3 key={idx} className="remote-md-heading h3">{headingContent}</h3>;
-          return <h4 key={idx} className="remote-md-heading h4">{headingContent}</h4>;
+          if (lvl === 1)
+            return (
+              <h1 key={idx} className="remote-md-heading h1">
+                {headingContent}
+              </h1>
+            );
+          if (lvl === 2)
+            return (
+              <h2 key={idx} className="remote-md-heading h2">
+                {headingContent}
+              </h2>
+            );
+          if (lvl === 3)
+            return (
+              <h3 key={idx} className="remote-md-heading h3">
+                {headingContent}
+              </h3>
+            );
+          return (
+            <h4 key={idx} className="remote-md-heading h4">
+              {headingContent}
+            </h4>
+          );
         }
 
         if (block.type === "list") {
@@ -319,9 +368,14 @@ export function MarkdownView({ content, streaming = false, className = "" }: Mar
               {block.items?.map((item, itemIdx) => (
                 <li key={itemIdx}>
                   {renderInlineMarkdown(item)}
-                  {isLastBlock && itemIdx === (block.items?.length ?? 1) - 1 && streaming && (
-                    <span className="remote-typing-cursor" aria-hidden="true" />
-                  )}
+                  {isLastBlock &&
+                    itemIdx === (block.items?.length ?? 1) - 1 &&
+                    streaming && (
+                      <span
+                        className="remote-typing-cursor"
+                        aria-hidden="true"
+                      />
+                    )}
                 </li>
               ))}
             </ul>
@@ -346,7 +400,13 @@ export function MarkdownView({ content, streaming = false, className = "" }: Mar
           const headerCells = firstLine
             .split("|")
             .map((c) => c.trim())
-            .filter((c, i, arr) => (i === 0 && c === "" ? false : i === arr.length - 1 && c === "" ? false : true));
+            .filter((c, i, arr) =>
+              i === 0 && c === ""
+                ? false
+                : i === arr.length - 1 && c === ""
+                  ? false
+                  : true,
+            );
           const rowLines = block.lines.slice(2);
 
           return (
@@ -364,7 +424,13 @@ export function MarkdownView({ content, streaming = false, className = "" }: Mar
                     const cells = rowStr
                       .split("|")
                       .map((c) => c.trim())
-                      .filter((c, i, arr) => (i === 0 && c === "" ? false : i === arr.length - 1 && c === "" ? false : true));
+                      .filter((c, i, arr) =>
+                        i === 0 && c === ""
+                          ? false
+                          : i === arr.length - 1 && c === ""
+                            ? false
+                            : true,
+                      );
                     return (
                       <tr key={rIdx}>
                         {cells.map((cell, cIdx) => (

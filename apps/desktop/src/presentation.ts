@@ -387,7 +387,9 @@ export function formatTokenCount(tokens: number | undefined): string {
   return (tokens / 1_000_000).toFixed(2) + "M tokens";
 }
 
-export function formatContextUsage(runtime: Session["payload"]["runtime"]): string {
+export function formatContextUsage(
+  runtime: Session["payload"]["runtime"],
+): string {
   const used = runtime?.context_used_tokens;
   const window = runtime?.context_window_tokens;
   if (used !== undefined && window !== undefined && window > 0) {
@@ -414,4 +416,3 @@ export function initials(value: string): string {
     .map((part) => part[0]?.toUpperCase())
     .join("");
 }
-
