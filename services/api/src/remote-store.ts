@@ -634,6 +634,27 @@ function validateRemoteEventRaw(
       throw new RemoteStoreError("unsafe_provider_event");
     return;
   }
+  if (kind === "history/snapshot") {
+    if (
+      !only(["items"]) ||
+      !Array.isArray(params.items)
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    for (const item of params.items) {
+      if (!item || typeof item !== "object" || Array.isArray(item))
+        throw new RemoteStoreError("unsafe_provider_event");
+      const entry = item as Record<string, unknown>;
+      if (
+        (entry.role !== undefined && typeof entry.role !== "string") ||
+        (entry.kind !== undefined && typeof entry.kind !== "string") ||
+        (entry.text !== undefined && typeof entry.text !== "string") ||
+        (entry.label !== undefined && typeof entry.label !== "string") ||
+        (entry.status !== undefined && typeof entry.status !== "string")
+      )
+        throw new RemoteStoreError("unsafe_provider_event");
+    }
+    return;
+  }
   if (kind === "item/completed") {
     const item = params.item;
     if (
@@ -652,7 +673,9 @@ function validateRemoteEventRaw(
           itemKeys.some((key) => !["id", "type", "text"].includes(key)))) ||
       (typed.type === "commandExecution" &&
         itemKeys.some((key) => !["id", "type"].includes(key))) ||
-      !["agentMessage", "commandExecution"].includes(typed.type as string)
+      (typed.type === "userMessage" &&
+        itemKeys.some((key) => !["id", "type", "text", "content"].includes(key))) ||
+      !["agentMessage", "commandExecution", "userMessage"].includes(typed.type as string)
     )
       throw new RemoteStoreError("unsafe_provider_event");
     return;
