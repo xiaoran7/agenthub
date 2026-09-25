@@ -6,7 +6,11 @@ import type {
 } from "@agent-pulse/contracts/remote";
 import {
   conversationItems,
+  groupConversationItems,
+  isRedactedPathOnly,
+  latestContextUsage,
   pendingApprovals,
+  readableRemoteText,
   type RemoteEvent,
 } from "../src/lib/remote";
 
@@ -77,6 +81,66 @@ test("native final messages replace deltas without duplicating the answer", () =
       { kind: "assistant", text: "Hello!" },
       { kind: "tool", text: "工具执行已完成" },
     ],
+  );
+});
+
+test("remote tool events merge once and consecutive calls group like Desktop", () => {
+  const items = conversationItems(
+    [
+      event("item/agentMessage/delta", {
+        itemId: "tool-intent",
+        turnId: "turn-1",
+        delta: '{"command":"pwd","description":"检查目录"}',
+      }),
+      event("item/started", {
+        turnId: "turn-1",
+        item: { id: "command-1", type: "commandExecution", command: "pwd" },
+      }),
+      event("item/completed", {
+        turnId: "turn-1",
+        item: {
+          id: "command-1",
+          type: "commandExecution",
+          command: "pwd",
+          aggregatedOutput: "/workspace",
+        },
+      }),
+      event("item/completed", {
+        turnId: "turn-1",
+        item: { id: "command-2", type: "commandExecution", command: "ls" },
+      }),
+    ],
+    [],
+  );
+  assert.equal(items.length, 2);
+  assert.equal(items[0]?.title, "命令执行");
+  assert.equal(items[0]?.status, "completed");
+  assert.equal(items[0]?.output, "/workspace");
+  const groups = groupConversationItems(items);
+  assert.equal(groups[0]?.type, "tool_group");
+  if (groups[0]?.type === "tool_group") assert.equal(groups[0].items.length, 2);
+});
+
+test("redacted local paths read as privacy notices", () => {
+  assert.equal(isRedactedPathOnly("[local_path_redacted]"), true);
+  assert.equal(
+    readableRemoteText("已成功[local_path_redacted]"),
+    "已成功（本机路径已隐藏）",
+  );
+});
+
+test("context ring uses reported values and stays empty without usage", () => {
+  assert.equal(latestContextUsage([]), null);
+  assert.deepEqual(
+    latestContextUsage([
+      event("thread/tokenUsage/updated", {
+        tokenUsage: {
+          last: { inputTokens: 42_000 },
+          modelContextWindow: 200_000,
+        },
+      }),
+    ]),
+    { used: 42_000, window: 200_000, source: "reported" },
   );
 });
 

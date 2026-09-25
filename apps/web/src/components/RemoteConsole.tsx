@@ -4,8 +4,11 @@ import type { RemoteCommand } from "@agent-pulse/contracts/remote";
 import type { AccountView } from "../lib/account";
 import {
   conversationItems,
+  groupConversationItems,
+  isRedactedPathOnly,
   pendingApprovals,
   pendingQuestions,
+  readableRemoteText,
   remoteError,
   remoteRequest,
   type RemoteRequest,
@@ -14,8 +17,10 @@ import {
   type RemoteSession,
   type RemoteEvent,
   type RemoteCommandRecord,
+  type ConversationItem,
 } from "../lib/remote";
 import { MarkdownView } from "./MarkdownView";
+import { RemoteContextCapacity } from "./RemoteContextCapacity";
 import "./remote.css";
 import "./remote-desktop.css";
 
@@ -70,6 +75,100 @@ function getProviderInfo(providerSessionId: string): {
     return { type: "claude", name: "Claude", badgeClass: "claude" };
   }
   return { type: "codex", name: "Codex", badgeClass: "codex" };
+}
+
+function RemoteToolCard({ item }: { item: ConversationItem }) {
+  const status = item.status ?? "completed";
+  return (
+    <details className={`remote-tool ${status}`}>
+      <summary className="remote-tool-summary">
+        <span className="remote-tool-header-left">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            aria-hidden="true"
+          >
+            <path d="m14.7 6.3 3 3M4 20l5.3-1.3L20 8a2.1 2.1 0 0 0-3-3L6.3 15.7 5 21" />
+          </svg>
+          <span className="remote-tool-title">{item.title ?? "工具调用"}</span>
+        </span>
+        <span className={`remote-tool-status ${status}`}>
+          {status === "running"
+            ? "执行中"
+            : status === "failed"
+              ? "失败"
+              : "完成"}
+        </span>
+      </summary>
+      {(item.description || item.command || item.output) && (
+        <div className="remote-tool-content">
+          {item.description && (
+            <p className="remote-tool-description">
+              {readableRemoteText(item.description)}
+            </p>
+          )}
+          {item.command && (
+            <div>
+              <div className="remote-tool-subhead">命令 / 参数</div>
+              <pre className="remote-tool-cmd">
+                {readableRemoteText(item.command)}
+              </pre>
+            </div>
+          )}
+          {item.output && (
+            <div>
+              <div className="remote-tool-subhead">执行结果</div>
+              <pre className="remote-tool-output">
+                {readableRemoteText(item.output)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function RemoteToolGroup({ items }: { items: ConversationItem[] }) {
+  const status = items.some((item) => item.status === "failed")
+    ? "failed"
+    : items.some((item) => item.status === "running")
+      ? "running"
+      : "completed";
+  return (
+    <details className="remote-tool-group">
+      <summary className="remote-tool-group-summary">
+        <span>已执行 {items.length} 个工具与操作</span>
+        <span className="remote-tool-group-preview">
+          {items
+            .slice(0, 3)
+            .map((item) => {
+              const detail = item.description ?? item.command;
+              return detail && !detail.includes("[local_path_redacted]")
+                ? `${item.title ?? "工具调用"} · ${detail.slice(0, 34)}`
+                : (item.title ?? "工具调用");
+            })
+            .join(" · ")}
+        </span>
+        <span className={`remote-tool-status ${status}`}>
+          {status === "running"
+            ? "执行中"
+            : status === "failed"
+              ? "异常"
+              : "完成"}
+        </span>
+      </summary>
+      <div className="remote-tool-group-body">
+        {items.map((item) => (
+          <RemoteToolCard key={item.id} item={item} />
+        ))}
+      </div>
+    </details>
+  );
 }
 
 export function RemoteConsole({
@@ -291,6 +390,7 @@ export function RemoteConsole({
     () => conversationItems(events, commands),
     [events, commands],
   );
+  const itemGroups = useMemo(() => groupConversationItems(items), [items]);
   const approvals = useMemo(
     () => pendingApprovals(events, session?.binding.hub_session_id ?? ""),
     [events, session?.binding.hub_session_id],
@@ -1139,58 +1239,48 @@ export function RemoteConsole({
               ref={timeline}
               aria-label="会话内容"
             >
-              {items.map((item) =>
-                item.kind === "tool" ? (
-                  <details
-                    className={`remote-tool ${item.status || "completed"}`}
-                    key={item.id}
-                  >
-                    <summary className="remote-tool-summary">
-                      <div className="remote-tool-header-left">
-                        <span className="remote-tool-icon">⚙️</span>
-                        <span className="remote-tool-title">{item.title}</span>
-                      </div>
-                      <span
-                        className={`remote-tool-status ${item.status || "completed"}`}
-                      >
-                        {item.status === "running" ? "执行中…" : "已完成"}
-                      </span>
-                    </summary>
-                    <div className="remote-tool-content">
-                      {item.command && (
-                        <div className="remote-tool-cmd-section">
-                          <div className="remote-tool-subhead">命令 / 参数</div>
-                          <pre className="remote-tool-cmd">{item.command}</pre>
-                        </div>
-                      )}
-                      {(item.output || item.text) && (
-                        <div className="remote-tool-out-section">
-                          <div className="remote-tool-subhead">执行输出</div>
-                          <pre className="remote-tool-output">
-                            {item.output || item.text}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  </details>
-                ) : (
+              {itemGroups.map((group) => {
+                if (group.type === "tool_group") {
+                  return (
+                    <RemoteToolGroup
+                      key={group.items[0]?.id}
+                      items={group.items}
+                    />
+                  );
+                }
+                const item = group.item;
+                if (item.kind === "tool")
+                  return <RemoteToolCard key={item.id} item={item} />;
+                if (
+                  item.kind === "assistant" &&
+                  isRedactedPathOnly(item.text)
+                ) {
+                  return (
+                    <p className="remote-private-note" key={item.id}>
+                      本机路径已隐藏
+                    </p>
+                  );
+                }
+                return (
                   <article
                     className={`remote-message ${item.kind}`}
                     key={item.id}
                   >
-                    <small>
-                      {item.kind === "user"
-                        ? "你"
-                        : getProviderInfo(
+                    {item.kind !== "user" && (
+                      <small>
+                        {
+                          getProviderInfo(
                             session?.binding.provider_session_id ?? "",
-                          ).name}
-                    </small>
+                          ).name
+                        }
+                      </small>
+                    )}
                     <div className="remote-message-body">
                       {item.kind === "user" ? (
-                        item.text
+                        readableRemoteText(item.text)
                       ) : (
                         <MarkdownView
-                          content={item.text}
+                          content={readableRemoteText(item.text)}
                           streaming={Boolean(
                             session?.binding.current_turn_id &&
                             item === items[items.length - 1],
@@ -1199,8 +1289,8 @@ export function RemoteConsole({
                       )}
                     </div>
                   </article>
-                ),
-              )}
+                );
+              })}
               {!items.length && session && (
                 <p className="remote-muted">会话已建立，可以发送第一条消息。</p>
               )}
@@ -1439,6 +1529,7 @@ export function RemoteConsole({
                   </span>
                 </div>
                 <div className="remote-composer-actions">
+                  <RemoteContextCapacity events={events} />
                   {session?.binding.current_turn_id && (
                     <button
                       type="button"

@@ -77,11 +77,99 @@ export interface ConversationItem {
   id: string;
   kind: "user" | "assistant" | "tool";
   text: string;
-  title?: string;
-  command?: string;
-  output?: string;
-  description?: string;
+  title?: string | undefined;
+  command?: string | undefined;
+  output?: string | undefined;
+  description?: string | undefined;
   status?: "running" | "completed" | "failed";
+  turnId?: string | undefined;
+}
+
+const REDACTED_PATH = "[local_path_redacted]";
+
+export function readableRemoteText(value: string): string {
+  return value.replaceAll(REDACTED_PATH, "（本机路径已隐藏）");
+}
+
+export function isRedactedPathOnly(value: string): boolean {
+  return value.trim() === REDACTED_PATH;
+}
+
+export type ConversationGroup =
+  | { type: "single"; item: ConversationItem }
+  | { type: "tool_group"; items: ConversationItem[] };
+
+/** Match the Desktop conversation's consecutive tool grouping. */
+export function groupConversationItems(
+  items: ConversationItem[],
+): ConversationGroup[] {
+  const groups: ConversationGroup[] = [];
+  let tools: ConversationItem[] = [];
+  const flush = () => {
+    if (tools.length === 1) groups.push({ type: "single", item: tools[0]! });
+    else if (tools.length > 1)
+      groups.push({ type: "tool_group", items: tools });
+    tools = [];
+  };
+  for (const item of items) {
+    if (item.kind === "tool") tools.push(item);
+    else {
+      flush();
+      groups.push({ type: "single", item });
+    }
+  }
+  flush();
+  return groups;
+}
+
+export interface RemoteContextUsage {
+  used: number;
+  window: number;
+  source: "reported" | "usage_only";
+}
+
+/** Only show a percentage when the Host reports actual token use. */
+export function latestContextUsage(
+  events: RemoteEvent[],
+): RemoteContextUsage | null {
+  const positive = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? value
+      : undefined;
+  for (let index = events.length - 1; index >= 0; index--) {
+    const params = events[index]?.payload.event?.raw?.params;
+    if (!params) continue;
+    const usage = (params.tokenUsage ?? params.token_usage ?? params.usage) as
+      Record<string, unknown> | undefined;
+    const info = (params.info ?? params.turn) as
+      Record<string, unknown> | undefined;
+    const last = (usage?.last ??
+      usage?.last_token_usage ??
+      info?.last_token_usage ??
+      info?.usage) as Record<string, unknown> | undefined;
+    const values = last ?? usage;
+    const used =
+      positive(values?.context_used_tokens) ??
+      positive(values?.contextUsedTokens) ??
+      positive(values?.input_tokens) ??
+      positive(values?.inputTokens);
+    if (!used) continue;
+    const window =
+      positive(usage?.model_context_window) ??
+      positive(usage?.modelContextWindow) ??
+      positive(usage?.context_window_tokens) ??
+      positive(usage?.contextWindowTokens) ??
+      positive(info?.model_context_window) ??
+      positive(info?.context_window_tokens) ??
+      positive(params.model_context_window) ??
+      positive(params.context_window_tokens);
+    return {
+      used,
+      window: window ?? 0,
+      source: window ? "reported" : "usage_only",
+    };
+  }
+  return null;
 }
 
 export async function remoteRequest<T>(
@@ -163,6 +251,12 @@ export function conversationItems(
           text?: string;
           command?: string;
           aggregatedOutput?: string;
+          output?: string;
+          name?: string;
+          tool?: string;
+          server?: string;
+          status?: string;
+          input?: { command?: string } | string;
           content?: Array<{ type?: string; text?: string }>;
         }
       | undefined;
@@ -206,11 +300,12 @@ export function conversationItems(
             target = {
               id,
               kind: "tool" as const,
-              title: `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`,
+              title: "命令执行",
               text: "工具执行中…",
               command: cmd,
               description: parsed.description,
               status: "running",
+              turnId: typeof p.turnId === "string" ? p.turnId : undefined,
             };
             items.set(id, target);
             result.push(target);
@@ -247,17 +342,18 @@ export function conversationItems(
               target = {
                 id,
                 kind: "tool" as const,
-                title: `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`,
+                title: "命令执行",
                 text: "工具执行已完成",
                 command: cmd,
                 description: parsed.description,
                 status: "completed",
+                turnId: typeof p.turnId === "string" ? p.turnId : undefined,
               };
               items.set(id, target);
               result.push(target);
             } else {
               target.kind = "tool";
-              target.title = `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`;
+              target.title = "命令执行";
               target.command = cmd;
               target.description = parsed.description;
               target.status = "completed";
@@ -282,16 +378,24 @@ export function conversationItems(
       let target = items.get(id);
       const cmd =
         item.command ||
-        (typeof (item as any).input?.command === "string"
-          ? (item as any).input.command
+        (typeof item.input === "object" &&
+        typeof item.input?.command === "string"
+          ? item.input.command
           : "");
-      const out = item.aggregatedOutput || (item as any).output || "";
+      const out = item.aggregatedOutput || item.output || "";
 
       // 如果当前 ID 没有直接命中，但前序有一个处于 running 状态的 tool（来自 agentMessage 拦截的 JSON 参数），则将其合并，防止产生“一个执行中、一个已完成”的割裂重复卡片
       if (!target) {
         for (let idx = result.length - 1; idx >= 0; idx--) {
           const prev = result[idx];
-          if (prev && prev.kind === "tool" && prev.status === "running") {
+          if (
+            prev &&
+            prev.kind === "tool" &&
+            prev.status === "running" &&
+            ((typeof p.turnId === "string" && prev.turnId === p.turnId) ||
+              (Boolean(prev.command) && prev.command === cmd)) &&
+            (!prev.command || !cmd || prev.command === cmd)
+          ) {
             target = prev;
             items.set(id, target); // 将 commandExecution ID 也映射到该项
             break;
@@ -303,30 +407,62 @@ export function conversationItems(
         target = {
           id,
           kind: "tool" as const,
-          title: cmd
-            ? `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`
-            : "工具调用",
+          title: "命令执行",
           text:
             native.kind === "item/completed" ? "工具执行已完成" : "工具执行中…",
           command: cmd || undefined,
           output: out || undefined,
-          status: native.kind === "item/completed" ? "completed" : "running",
+          status:
+            item.status === "failed"
+              ? "failed"
+              : native.kind === "item/completed"
+                ? "completed"
+                : "running",
+          turnId: typeof p.turnId === "string" ? p.turnId : undefined,
         };
         items.set(id, target);
         result.push(target);
       } else {
         if (cmd) {
           target.command = cmd;
-          target.title = `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`;
+          target.title = "命令执行";
         }
         if (out) {
           target.output = out;
         }
         if (native.kind === "item/completed") {
-          target.status = "completed";
+          target.status = item.status === "failed" ? "failed" : "completed";
           target.text = "工具执行已完成";
         }
       }
+    } else if (
+      (native.kind === "item/completed" || native.kind === "item/started") &&
+      ["toolCall", "functionCall", "mcpToolCall", "fileChange"].includes(
+        item?.type ?? "",
+      )
+    ) {
+      const label =
+        item?.type === "fileChange"
+          ? "文件修改"
+          : [item?.server, item?.tool ?? item?.name]
+              .filter((part) => typeof part === "string" && part.length > 0)
+              .join(" · ") || "工具调用";
+      let target = items.get(id);
+      if (!target) {
+        target = { id, kind: "tool", text: "", title: label };
+        items.set(id, target);
+        result.push(target);
+      }
+      target.title = label;
+      target.command =
+        typeof item?.input === "string" ? item.input : target.command;
+      target.output = item?.output ?? target.output;
+      target.status =
+        item?.status === "failed"
+          ? "failed"
+          : native.kind === "item/completed"
+            ? "completed"
+            : "running";
     }
   }
   return result;
