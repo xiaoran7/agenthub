@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.30] - 2026-09-25
+
+- **移动端 UI 全面重构与双端协同交付（Web Console 响应式抽屉 + Android Jetpack Compose 原生高质感对话）**：
+  - **版本同步自增**：全端规范自增至 `v2.4.30`（Android `versionCode = 41 / versionName = "2.4.30"`，Web/Desktop package.json 与 Cargo.toml 同步升级）。
+  - **Web 控制台移动端体验重构 (`apps/web`)**：
+    - **抽屉式侧滑导航 (Drawer / Off-canvas)**：打破旧版在手机视口（≤700px）下侧边栏强行挤占 190px 导致屏幕上下割裂的痛点，升级为全高度平滑滑出的侧滑抽屉与 Backdrop 高斯模糊遮罩；
+    - **顶部移动端 Header**：常驻移动端汉堡菜单按钮（☰），点击唤出抽屉，会话或候选任务选中后自动平滑收起；
+    - **移动端底部功能恢复**：完整恢复手机端对电脑在线数监测、添加配对电脑以及账号退出等核心管理能力；
+    - **视口与输入法体验加固**：适配 `100dvh` 与安全区（`safe-area-inset`），优化软键盘输入体验（手机端回车换行防误触发送，独立高亮圆钮触发发送）；
+  - **Android 原生客户端 UI 深度重塑 (`apps/android`)**：
+    - **结构化消息渲染架构**：新增 `MarkdownComponents.kt`，解耦粗糙的纯文本平铺，将事件流解析为强类型 `UiMessage`；
+    - **高质感角色气泡**：User 消息采用右侧高对比度药丸气泡（`RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)`），Assistant 消息采用左侧自然排版；
+    - **轻量 Markdown 与 Obsidian 风格代码块**：支持行内粗体与等宽代码高亮，代码段封装于深色卡片中，提供一键复制代码与语言标头；
+    - **思考过程折叠抽屉 (Thinking Accordion)**：智能捕获 `<think>` 标签，以平滑折叠卡片形式收纳长思考过程，消除长文刷屏；
+    - **ChatGPT 风格药丸式输入条与大拇指友好审批卡片**：圆角输入框内嵌圆形发送按钮，操作审批卡片强化风险警示与拒绝/允许大按钮。
+  - **交付与归档**：
+    - 完成 Web 端类型检查与生产构建；
+    - 完成 Android Gradle 编译构建，生成 `AgentHub-v2.4.30-android-debug.apk` 并计算 SHA-256 校验和归档至 `Deliverables/AgentHub/`；清理旧版安装包。
+
 ## [2.4.19] - 2026-09-19
 
 - **全端发版 v2.4.19（Android versionCode = 32 / versionName = 2.4.19）**：

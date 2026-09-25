@@ -1,13 +1,27 @@
 package com.agentplatform.mobile.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.agentplatform.mobile.data.AgentGateway
 import com.agentplatform.mobile.data.AppConfig
 import com.agentplatform.mobile.data.GatewayException
@@ -33,6 +47,14 @@ private fun remoteMessage(error: Exception): String = when ((error as? GatewayEx
     else -> if ((error as? GatewayException)?.status == 401) "请在设置中重新登录。" else "暂时无法连接远程服务，请检查设置和电脑连接。"
 }
 
+data class UiMessage(
+    val id: String,
+    val role: MessageRole,
+    val text: String,
+    val isStreaming: Boolean = false,
+    val toolTitle: String? = null
+)
+
 @Composable
 fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
     val gateway = remember(config) { AgentGateway(config) }
@@ -46,6 +68,8 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
     var busy by remember { mutableStateOf(false) }
     var create by remember { mutableStateOf(false) }
     val attempts = remember(gateway) { mutableMapOf<String, JSONObject>() }
+    val listState = rememberLazyListState()
+    val isDark = isSystemInDarkTheme()
 
     LaunchedEffect(gateway) {
         while (true) {
@@ -90,6 +114,7 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
     val binding = session?.optJSONObject("binding")
     val connected = session?.optBoolean("online") == true && binding?.optBoolean("control_connected") == true
     val idle = connected && binding?.optString("execution_state") in listOf("idle", "completed")
+
     fun submit(runner: String, hub: String, action: JSONObject, generation: String? = null) {
         if (busy) return
         busy = true
@@ -115,13 +140,58 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
     fun control(action: JSONObject) {
         selected?.let { submit(it.first, it.second, action, binding?.optString("host_generation")) }
     }
+
     BackHandler(selected != null) { selected = null }
-    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = { selected = null }) { Text(if (selected == null) "远程会话" else "返回会话") }
-            TextButton(onClick = { create = true }, enabled = !busy) { Text("新建") }
+
+    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 顶部控制条
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (selected != null) {
+                    TextButton(
+                        onClick = { selected = null },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text("← 会话列表", style = MaterialTheme.typography.labelLarge)
+                    }
+                } else {
+                    Text(
+                        "远程工作台",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            Button(
+                onClick = { create = true },
+                enabled = !busy,
+                shape = RoundedCornerShape(20.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                Text("＋ 新建", fontSize = 13.sp)
+            }
         }
-        if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+
+        if (error.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(10.dp)
+                )
+            }
+        }
+
         if (selected == null) {
             val activeProviderIds = remember(sessions) {
                 sessions.mapNotNull { it.optJSONObject("binding")?.optString("provider_session_id") }.toSet()
@@ -138,135 +208,472 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                 }
                 list
             }
-            if (sessions.isEmpty() && candidates.isEmpty()) Text("连接本机 Runner 后，在这里开始或接续工作。")
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (sessions.isNotEmpty()) {
-                    item { Text("已接入会话", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
-                    items(sessions) { item ->
-                        val b = item.getJSONObject("binding")
-                        OutlinedButton(onClick = { selected = item.getString("runner_id") to b.getString("hub_session_id") }, modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.fillMaxWidth()) {
-                                Text(workspaceLabel(b.getString("workspace_path")))
-                                Text("Codex · ${b.getString("provider_session_id").take(12)} · ${if (item.optBoolean("online")) "在线" else "离线"}")
+
+            if (sessions.isEmpty() && candidates.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "连接电脑 Runner 后，可在此实时接管或创建任务。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (sessions.isNotEmpty()) {
+                        item {
+                            Text(
+                                "已接入活跃会话",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        items(sessions) { item ->
+                            val b = item.getJSONObject("binding")
+                            val isOnline = item.optBoolean("online")
+                            val isControlConnected = b.optBoolean("control_connected")
+                            val pId = b.getString("provider_session_id")
+                            val provName = if (pId.startsWith("sess_")) "ZCode" else if (pId.startsWith("claude_")) "Claude" else "Codex"
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selected = item.getString("runner_id") to b.getString("hub_session_id") }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            workspaceLabel(b.getString("workspace_path")),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            "$provName · ${pId.take(12)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isOnline && isControlConnected) SuccessGreen.copy(alpha = 0.15f) else Color.Gray.copy(alpha = 0.15f)
+                                    ) {
+                                        Text(
+                                            if (isOnline) (if (isControlConnected) "已连接" else "未连接") else "离线",
+                                            color = if (isOnline && isControlConnected) SuccessGreen else Color.Gray,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                if (candidates.isNotEmpty()) {
-                    item {
-                        Spacer(Modifier.height(8.dp))
-                        Text("本机历史会话（点击接管）", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary)
-                    }
-                    items(candidates) { (runnerId, generation, cand) ->
-                        val provId = cand.optString("provider_session_id")
-                        val ws = cand.optString("workspace_path")
-                        val title = cand.optString("title").ifBlank { "Codex · ${provId.take(12)}" }
-                        OutlinedButton(
-                            enabled = !busy,
-                            onClick = {
-                                val hubId = UUID.randomUUID().toString()
-                                submit(
-                                    runner = runnerId,
-                                    hub = hubId,
-                                    action = JSONObject()
-                                        .put("action", "connect")
-                                        .put("mode", "resume")
-                                        .put("workspace_path", ws)
-                                        .put("provider_session_id", provId)
-                                        .put("sandbox", "read-only")
-                                        .put("approval_policy", "untrusted"),
-                                    generation = generation
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(Modifier.fillMaxWidth()) {
-                                Text(workspaceLabel(ws), style = MaterialTheme.typography.labelMedium)
-                                Text(title, maxLines = 1)
-                                Text("点击一键接管", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+
+                    if (candidates.isNotEmpty()) {
+                        item {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "本机历史会话（一键接管）",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        items(candidates) { (runnerId, generation, cand) ->
+                            val provId = cand.optString("provider_session_id")
+                            val ws = cand.optString("workspace_path")
+                            val title = cand.optString("title").ifBlank { "Codex · ${provId.take(12)}" }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !busy) {
+                                        val hubId = UUID.randomUUID().toString()
+                                        submit(
+                                            runner = runnerId,
+                                            hub = hubId,
+                                            action = JSONObject()
+                                                .put("action", "connect")
+                                                .put("mode", "resume")
+                                                .put("workspace_path", ws)
+                                                .put("provider_session_id", provId)
+                                                .put("sandbox", "read-only")
+                                                .put("approval_policy", "untrusted"),
+                                            generation = generation
+                                        )
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            workspaceLabel(ws),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            title,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1
+                                        )
+                                    }
+                                    Text(
+                                        "接管 ↗",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(start = 8.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         } else {
-            Text(if (connected) "已连接 · ${binding?.optString("execution_state")}" else "连接待恢复 · 历史仍可查看")
-            val conversation = remember(events, commands) { remoteConversation(events, commands) }
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(conversation) { Text(it) }
-            }
-            commands.lastOrNull()?.optJSONObject("receipt")?.let { receipt ->
-                if (receipt.optString("status") in listOf("rejected", "indeterminate"))
-                    Text("请求未确认成功，请检查本机 Agent 状态。", color = MaterialTheme.colorScheme.error)
-            }
-            remoteApprovals(events, selected?.second.orEmpty()).forEach { (id, approval) ->
-                Text("Codex 请求执行受保护的操作")
-                Row {
-                    listOf(
-                        true to ("允许" to approval.optBoolean("can_approve")),
-                        false to ("拒绝" to approval.optBoolean("can_decline")),
-                    ).forEach { (approved, labelAndCapability) ->
-                        TextButton(enabled = connected && !busy && labelAndCapability.second, onClick = {
-                            control(JSONObject().put("action", "resolve_approval").put("approval_id", id).put("approved", approved))
-                        }) { Text(labelAndCapability.first) }
+            // 对话详情区
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (connected) SuccessGreen else WaitingAmber)
+                    )
+                    Text(
+                        if (connected) "已连接 · ${binding?.optString("execution_state") ?: "就绪"}" else "恢复连接中…",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (connected && !idle && !busy) {
+                    TextButton(
+                        onClick = { control(JSONObject().put("action", "interrupt")) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("停止任务", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
-            if (!connected && binding != null && session?.optBoolean("online") == true) TextButton(enabled = !busy, onClick = {
-                control(JSONObject().put("action", "connect").put("mode", "resume").put("workspace_path", binding.getString("workspace_path")).put("provider_session_id", binding.getString("provider_session_id")))
-            }) { Text("恢复原生会话") }
-            OutlinedTextField(draft, { draft = it }, modifier = Modifier.fillMaxWidth(), label = { Text("继续这个会话") }, enabled = idle && !busy)
-            Row {
-                Button(enabled = idle && !busy && draft.isNotBlank(), onClick = { control(JSONObject().put("action", "send_prompt").put("text", draft)) }) { Text("发送") }
-                TextButton(enabled = connected && !idle && !busy, onClick = { control(JSONObject().put("action", "interrupt")) }) { Text("停止任务") }
+
+            val conversation = remember(events, commands) { parseStructuredConversation(events, commands) }
+
+            LaunchedEffect(conversation.size) {
+                if (conversation.isNotEmpty()) {
+                    listState.animateScrollToItem(conversation.size - 1)
+                }
             }
-        }
-    }
-    if (create) AlertDialog(onDismissRequest = { create = false }, title = { Text("选择电脑与工作目录") }, text = {
-        LazyColumn {
-            snapshot.optJSONArray("runners")?.objects().orEmpty().filter { it.optBoolean("online") }.forEach { runner ->
-                val paths = runner.optJSONObject("hello")?.optJSONArray("workspaces") ?: JSONArray()
-                items(paths.length()) { index ->
-                    val path = paths.getString(index)
-                    TextButton(enabled = !busy, onClick = {
-                        val hello = runner.optJSONObject("hello") ?: return@TextButton
-                        val generation = hello.optString("host_generation")
-                        if (generation.isEmpty()) return@TextButton
-                        submit(runner.getString("runner_id"), UUID.randomUUID().toString(), JSONObject().put("action", "connect").put("mode", "create").put("workspace_path", path).put("sandbox", "read-only").put("approval_policy", "untrusted"), generation)
-                    }) { Text("${runner.getString("runner_id").takeLast(8)} · $path") }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(conversation, key = { it.id }) { msg ->
+                    when (msg.role) {
+                        MessageRole.USER -> {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                                Surface(
+                                    shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
+                                    color = if (isDark) Color(0xFF2A2B30) else Color(0xFFE5E7EB),
+                                    modifier = Modifier.widthIn(max = 300.dp)
+                                ) {
+                                    Text(
+                                        text = msg.text,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (isDark) Color(0xFFF3F4F6) else Color(0xFF111827),
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                    )
+                                }
+                            }
+                        }
+                        MessageRole.ASSISTANT -> {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    // 思考过程抽屉
+                                    if (msg.text.contains("<think>") && msg.text.contains("</think>")) {
+                                        val start = msg.text.indexOf("<think>") + 7
+                                        val end = msg.text.indexOf("</think>")
+                                        val thought = msg.text.substring(start, end)
+                                        val mainContent = msg.text.substring(end + 8)
+                                        ThinkingAccordion(thought = thought, isGenerating = msg.isStreaming)
+                                        RenderMarkdownContent(content = mainContent, isDark = isDark)
+                                    } else {
+                                        RenderMarkdownContent(content = msg.text, isDark = isDark)
+                                    }
+                                }
+                            }
+                        }
+                        MessageRole.TOOL -> {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text("⚡", fontSize = 12.sp)
+                                    Text(
+                                        msg.toolTitle ?: "工具执行完成",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            // 审批卡片区
+            val approvals = remoteApprovals(events, selected?.second.orEmpty())
+            if (approvals.isNotEmpty()) {
+                approvals.forEach { (id, approval) ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = WaitingAmber.copy(alpha = 0.12f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, WaitingAmber.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("⚠️", fontSize = 14.sp)
+                                Text("操作审批请求", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = WaitingAmber)
+                            }
+                            Text(
+                                approval.optString("message").ifBlank { "Agent 请求执行受保护的操作，请确认是否允许。" },
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = { control(JSONObject().put("action", "resolve_approval").put("approval_id", id).put("approved", false)) },
+                                    enabled = connected && !busy && approval.optBoolean("can_decline", true),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("拒绝")
+                                }
+                                Button(
+                                    onClick = { control(JSONObject().put("action", "resolve_approval").put("approval_id", id).put("approved", true)) },
+                                    enabled = connected && !busy && approval.optBoolean("can_approve", true),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("允许")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!connected && binding != null && session?.optBoolean("online") == true) {
+                Button(
+                    enabled = !busy,
+                    onClick = {
+                        control(JSONObject().put("action", "connect").put("mode", "resume").put("workspace_path", binding.getString("workspace_path")).put("provider_session_id", binding.getString("provider_session_id")))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("恢复原生会话")
+                }
+            }
+
+            // 底部输入区 (对标 ChatGPT 药丸输入条)
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = if (isDark) Color(0xFF1E2025) else Color(0xFFF3F4F6),
+                border = androidx.compose.foundation.BorderStroke(1.dp, if (isDark) Color(0xFF32353C) else Color(0xFFE5E7EB)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = {
+                            Text(
+                                if (connected) (if (idle) "继续这段工作…" else "Agent 正在执行中…") else "等待电脑连接…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent
+                        ),
+                        enabled = idle && !busy,
+                        maxLines = 4
+                    )
+                    IconButton(
+                        onClick = {
+                            if (draft.isNotBlank()) {
+                                control(JSONObject().put("action", "send_prompt").put("text", draft.trim()))
+                            }
+                        },
+                        enabled = idle && !busy && draft.isNotBlank(),
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(if (idle && !busy && draft.isNotBlank()) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.3f))
+                    ) {
+                        Text("↑", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    }
                 }
             }
         }
-    }, confirmButton = { TextButton(onClick = { create = false }) { Text("关闭") } })
+    }
+
+    if (create) {
+        AlertDialog(
+            onDismissRequest = { create = false },
+            title = { Text("选择电脑与工作目录") },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    snapshot.optJSONArray("runners")?.objects().orEmpty().filter { it.optBoolean("online") }.forEach { runner ->
+                        val paths = runner.optJSONObject("hello")?.optJSONArray("workspaces") ?: JSONArray()
+                        items(paths.length()) { index ->
+                            val path = paths.getString(index)
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !busy) {
+                                        val hello = runner.optJSONObject("hello") ?: return@clickable
+                                        val generation = hello.optString("host_generation")
+                                        if (generation.isEmpty()) return@clickable
+                                        submit(
+                                            runner.getString("runner_id"),
+                                            UUID.randomUUID().toString(),
+                                            JSONObject()
+                                                .put("action", "connect")
+                                                .put("mode", "create")
+                                                .put("workspace_path", path)
+                                                .put("sandbox", "read-only")
+                                                .put("approval_policy", "untrusted"),
+                                            generation
+                                        )
+                                    }
+                            ) {
+                                Text(
+                                    "${runner.getString("runner_id").takeLast(8)} · $path",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { create = false }) { Text("取消") }
+            }
+        )
+    }
 }
 
-private fun remoteConversation(events: List<JSONObject>, commands: List<JSONObject>): List<String> {
-    val result = linkedMapOf<String, String>()
-    val prompts = commands.mapNotNull { command -> command.optJSONObject("receipt")?.optJSONObject("result")?.optJSONObject("turn")?.optString("id")?.let { it to command.getJSONObject("command").getJSONObject("command").optString("text") } }.toMap()
+@Composable
+fun RenderMarkdownContent(content: String, isDark: Boolean) {
+    val segments = remember(content) { parseMarkdownSegments(content) }
+    Column(Modifier.fillMaxWidth()) {
+        segments.forEach { seg ->
+            if (seg.isCodeBlock) {
+                CodeBlockSurface(code = seg.text, language = seg.language)
+            } else {
+                Text(
+                    text = buildInlineMarkdown(seg.text, isDark),
+                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                    color = if (isDark) Color(0xFFF3F4F6) else Color(0xFF111827),
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun parseStructuredConversation(events: List<JSONObject>, commands: List<JSONObject>): List<UiMessage> {
+    val result = linkedMapOf<String, UiMessage>()
+    val prompts = commands.mapNotNull { command ->
+        command.optJSONObject("receipt")?.optJSONObject("result")?.optJSONObject("turn")?.optString("id")?.let {
+            it to command.getJSONObject("command").getJSONObject("command").optString("text")
+        }
+    }.toMap()
+
     for (envelope in events) {
         val event = envelope.optJSONObject("payload")?.optJSONObject("event") ?: continue
         val p = event.optJSONObject("raw")?.optJSONObject("params") ?: continue
         val item = p.optJSONObject("item")
         val id = p.optString("itemId").ifBlank { item?.optString("id").orEmpty() }
+
         when (event.optString("kind")) {
-            "turn/started" -> p.optJSONObject("turn")?.optString("id")?.let { turn -> prompts[turn]?.let { result["user:$turn"] = "你：$it" } }
-            "item/agentMessage/delta" -> if (id.isNotEmpty()) result[id] = result[id].orEmpty() + p.optString("delta")
-            "item/completed" -> if (id.isNotEmpty()) when (item?.optString("type")) {
-                "userMessage" -> {
-                    val contentArr = item.optJSONArray("content")
-                    val userText = if (contentArr != null) {
-                        (0 until contentArr.length())
-                            .mapNotNull { contentArr.optJSONObject(it) }
-                            .filter { it.optString("type") == "text" }
-                            .map { it.optString("text") }
-                            .joinToString("\n")
-                    } else {
-                        item.optString("text")
+            "turn/started" -> {
+                p.optJSONObject("turn")?.optString("id")?.let { turn ->
+                    prompts[turn]?.let {
+                        result["user:$turn"] = UiMessage(id = "user:$turn", role = MessageRole.USER, text = it)
                     }
-                    if (userText.isNotEmpty()) result[id] = "你：$userText"
                 }
-                "agentMessage" -> result[id] = item.optString("text")
-                "commandExecution" -> result[id] = "工具执行已完成"
+            }
+            "item/agentMessage/delta" -> {
+                if (id.isNotEmpty()) {
+                    val prev = result[id]?.text.orEmpty()
+                    result[id] = UiMessage(id = id, role = MessageRole.ASSISTANT, text = prev + p.optString("delta"), isStreaming = true)
+                }
+            }
+            "item/completed" -> {
+                if (id.isNotEmpty()) {
+                    when (item?.optString("type")) {
+                        "userMessage" -> {
+                            val contentArr = item.optJSONArray("content")
+                            val userText = if (contentArr != null) {
+                                (0 until contentArr.length())
+                                    .mapNotNull { contentArr.optJSONObject(it) }
+                                    .filter { it.optString("type") == "text" }
+                                    .map { it.optString("text") }
+                                    .joinToString("\n")
+                            } else {
+                                item.optString("text")
+                            }
+                            if (userText.isNotEmpty()) {
+                                result[id] = UiMessage(id = id, role = MessageRole.USER, text = userText)
+                            }
+                        }
+                        "agentMessage" -> {
+                            result[id] = UiMessage(id = id, role = MessageRole.ASSISTANT, text = item.optString("text"), isStreaming = false)
+                        }
+                        "commandExecution" -> {
+                            result[id] = UiMessage(id = id, role = MessageRole.TOOL, text = "", toolTitle = "已执行命令: ${item.optString("command").take(24)}…")
+                        }
+                    }
+                }
             }
         }
     }
