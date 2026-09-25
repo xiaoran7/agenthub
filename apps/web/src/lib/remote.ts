@@ -273,14 +273,27 @@ export function conversationItems(
       item?.type === "commandExecution"
     ) {
       let target = items.get(id);
+      const cmd = item.command || (typeof (item as any).input?.command === "string" ? (item as any).input.command : "");
+      const out = item.aggregatedOutput || (item as any).output || "";
+
+      // 如果当前 ID 没有直接命中，但前序有一个处于 running 状态的 tool（来自 agentMessage 拦截的 JSON 参数），则将其合并，防止产生“一个执行中、一个已完成”的割裂重复卡片
       if (!target) {
-        const cmd = item.command || (typeof (item as any).input?.command === "string" ? (item as any).input.command : "");
-        const out = item.aggregatedOutput || (item as any).output || "";
+        for (let idx = result.length - 1; idx >= 0; idx--) {
+          const prev = result[idx];
+          if (prev && prev.kind === "tool" && prev.status === "running") {
+            target = prev;
+            items.set(id, target); // 将 commandExecution ID 也映射到该项
+            break;
+          }
+        }
+      }
+
+      if (!target) {
         target = {
           id,
           kind: "tool" as const,
           title: cmd ? `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}` : "工具调用",
-          text: "工具执行已完成",
+          text: native.kind === "item/completed" ? "工具执行已完成" : "工具执行中…",
           command: cmd || undefined,
           output: out || undefined,
           status: native.kind === "item/completed" ? "completed" : "running",
@@ -288,9 +301,12 @@ export function conversationItems(
         items.set(id, target);
         result.push(target);
       } else {
-        if (item.command) target.command = item.command;
-        if (item.aggregatedOutput) {
-          target.output = item.aggregatedOutput;
+        if (cmd) {
+          target.command = cmd;
+          target.title = `执行命令: ${cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd}`;
+        }
+        if (out) {
+          target.output = out;
         }
         if (native.kind === "item/completed") {
           target.status = "completed";

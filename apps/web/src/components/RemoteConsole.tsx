@@ -15,6 +15,7 @@ import {
   type RemoteEvent,
   type RemoteCommandRecord,
 } from "../lib/remote";
+import { MarkdownView } from "./MarkdownView";
 import "./remote.css";
 
 const empty: RemoteSnapshot = { cursor: 0, runners: [], sessions: [] };
@@ -1148,12 +1149,19 @@ export function RemoteConsole({
                           ).name}
                     </small>
                     <div className="remote-message-body">
-                      {item.text}
-                      {item.kind === "assistant" &&
-                        session?.binding.current_turn_id &&
-                        item === items[items.length - 1] && (
-                          <span className="remote-typing-cursor" aria-hidden="true" />
-                        )}
+                      {item.kind === "user" ? (
+                        item.text
+                      ) : (
+                        <MarkdownView
+                          content={item.text}
+                          streaming={
+                            Boolean(
+                              session?.binding.current_turn_id &&
+                              item === items[items.length - 1]
+                            )
+                          }
+                        />
+                      )}
                     </div>
                   </article>
                 ),
