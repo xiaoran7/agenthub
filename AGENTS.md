@@ -1,10 +1,22 @@
-# 项目约束
+# 项目规则
+
+## 工作约定
+
+- 只在本项目内维护规则、记忆和产物；跨仓操作须有任务依据。先检查 Git 状态，保留其他会话改动；提交、推送、部署分别按用户授权执行。
+- 按当前代码、清单和配置核对文档；测试、设备验收和生产状态分别报告，历史记录不能证明当前可用。
+- 不提交凭据、私钥、Cookie、真实个人资料或运行数据库。删改前核对路径、归属和用途，不动他人改动、源素材、签名材料及私人日志。
+- 发版或部署必须递增实际产品版本并同步相关清单；Android/Harmony 同步 versionCode/versionName。纯文档整理不虚构发版。
+- README 放启动与导航；本文件放约束；docs 放契约和经验；CHANGELOG 放历史；MEMORY 放偏好。同一事实只维护一处，删改同步修复引用；Markdown 用 UTF-8 无 BOM。
+- 临时产物放本项目 `_scratch/`，交付物用项目既定路径或 `Deliverables/`；验证新版后清理本项目过期产物，保留必要回滚及指定基线。收尾只停止本次启动的进程。
+
+## 项目边界
 
 AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**。Desktop、Web、Android 必须消费同一套 Session 模型；`agenthubd` 是本机会话控制面，Gateway 只中继和回放。读取会话历史只服务于“判断并执行继续”，不做工作台、归档或浏览功能。
 
-通用约束继承 [AGENT.md](../../../AGENT.md)。修改前按任务阅读 [PRD](docs/PRD.md)、[架构](docs/ARCHITECTURE.md)、[远程协议](docs/SYNC_PROTOCOL.md) 与 [坑点](docs/PITFALLS.md)。
 
 ## 产品边界
+
+按任务阅读 [PRD](docs/PRD.md)、[架构](docs/ARCHITECTURE.md)、[远程协议](docs/SYNC_PROTOCOL.md) 与 [坑点](docs/PITFALLS.md)。
 
 - 不自建 Agent 决策循环，不模拟 Provider 成功状态，不读取或代管 Provider 凭据；登录与推理由官方 Runtime 负责。
 - 允许从 AgentHub 主动创建官方 Session，也允许恢复官方历史。`discover`、`resume`、`attach` 严格区分；发现 PID 或 transcript 不代表取得控制权。
@@ -29,3 +41,5 @@ AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**�
 - 真实 CLI、桌面安装、Android 模拟器/真机、Gateway 重启和生产部署分别记录证据，不能互相替代。
 - 行为、接口与架构决策写入 `docs/CHANGELOG.md`。文档批次可独立提交，不要求运行无关构建。
 - **强制版本递增铁律**：凡进行代码修复并触发打包或生产部署，必须递增版本号（Patch/Minor）。打包时严格同步全平台：Android（自增 `versionCode` 与 `versionName`）、Node/Tauri、Cargo 与 UI 契约版本，绝对禁止使用相同版本号二次打包。
+
+长期偏好见 [MEMORY.md](MEMORY.md)。

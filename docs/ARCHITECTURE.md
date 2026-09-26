@@ -71,7 +71,7 @@ Adapter 将统一命令翻译为官方协议，同时保留原始事件：
 
 Codex 首选常驻 app-server。官方 App Server 提供初始化、thread start/resume/read/fork、turn、流式通知和审批 server request，适合富客户端维护长期会话。当前代码已经实现 create/resume/turn/approval/interrupt 的首个 Host。
 
-Claude Code 先保留已验证的 CLI 历史与接续能力。只有在长时输入、事件、审批、认证和 Session ID 均通过真实版本验证后，才加入 managed Remote。Antigravity 与 Grok Build 在等价控制协议建立证据前保持发现/只读。
+Claude Code 已有历史发现与流式续聊实现；长时输入、事件、审批、认证和 Session ID 仍需按实际 CLI 版本分别验收，源码分支不证明所有 managed Remote 语义已通过。Antigravity 与 Grok Build 在等价控制协议建立证据前保持发现/只读。
 
 ### Gateway
 
