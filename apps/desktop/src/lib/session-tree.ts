@@ -270,11 +270,14 @@ export function buildDesktopSessionTree(options: {
         });
       }
 
-      // Sort workspaces by most recent active sessions first
+      // Sort workspace folders:
+      // 1. Folders with the most sessions placed at the top (b.totalCount - a.totalCount)
+      // 2. Tie-break: alphabetically by folder name
       workspaceNodes.sort((a, b) => {
-        const timeA = a.sessions[0]?.activityTime || "";
-        const timeB = b.sessions[0]?.activityTime || "";
-        return timeB.localeCompare(timeA);
+        if (b.totalCount !== a.totalCount) {
+          return b.totalCount - a.totalCount;
+        }
+        return a.name.localeCompare(b.name, "zh-CN", { sensitivity: "base" });
       });
 
       const agentTotalCount = workspaceNodes.reduce(

@@ -182,4 +182,71 @@ describe("Desktop Session Tree", () => {
     expect(codex.workspaces[0].name).toBe("Claudespace");
     expect(codex.totalCount).toBe(1);
   });
+
+  it("sorts workspace folders with the most sessions at top, then alphabetically", () => {
+    // 3 sessions in 'zeta-workspace'
+    const z1 = createMockSession({
+      agent_type: "claude_code",
+      agent_session_id: "z-1",
+      payload: {
+        project: { display_name: "zeta-workspace", fingerprint: "fp-z" },
+        state: { activity_status: "IDLE", presence: "ACTIVE" },
+      },
+    });
+    const z2 = createMockSession({
+      agent_type: "claude_code",
+      agent_session_id: "z-2",
+      payload: {
+        project: { display_name: "zeta-workspace", fingerprint: "fp-z" },
+        state: { activity_status: "IDLE", presence: "ACTIVE" },
+      },
+    });
+    const z3 = createMockSession({
+      agent_type: "claude_code",
+      agent_session_id: "z-3",
+      payload: {
+        project: { display_name: "zeta-workspace", fingerprint: "fp-z" },
+        state: { activity_status: "IDLE", presence: "ACTIVE" },
+      },
+    });
+
+    // 1 session in 'beta-workspace'
+    const b1 = createMockSession({
+      agent_type: "claude_code",
+      agent_session_id: "b-1",
+      payload: {
+        project: { display_name: "beta-workspace", fingerprint: "fp-b" },
+        state: { activity_status: "IDLE", presence: "ACTIVE" },
+      },
+    });
+
+    // 1 session in 'alpha-workspace'
+    const a1 = createMockSession({
+      agent_type: "claude_code",
+      agent_session_id: "a-1",
+      payload: {
+        project: { display_name: "alpha-workspace", fingerprint: "fp-a" },
+        state: { activity_status: "IDLE", presence: "ACTIVE" },
+      },
+    });
+
+    const tree = buildDesktopSessionTree({
+      sessions: [b1, a1, z1, z2, z3],
+      localDeviceId: "dev-1",
+    });
+
+    const claude = tree.devices[0].agents.find(
+      (a) => a.provider === "claude_code",
+    )!;
+    expect(claude.workspaces.length).toBe(3);
+    // 1st: zeta-workspace (3 sessions) - most sessions first
+    expect(claude.workspaces[0].name).toBe("zeta-workspace");
+    expect(claude.workspaces[0].totalCount).toBe(3);
+    // 2nd: alpha-workspace (1 session) - tie-breaker alphabetical ('alpha' < 'beta')
+    expect(claude.workspaces[1].name).toBe("alpha-workspace");
+    expect(claude.workspaces[1].totalCount).toBe(1);
+    // 3rd: beta-workspace (1 session)
+    expect(claude.workspaces[2].name).toBe("beta-workspace");
+    expect(claude.workspaces[2].totalCount).toBe(1);
+  });
 });
