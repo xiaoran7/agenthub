@@ -3029,6 +3029,52 @@ svg.rotating {
   line-height: 1.6;
 }
 
+/* --------------------------------------------------------------------------
+ * App Launch Loading Screen Contrast & Theme Fix
+ * ------------------------------------------------------------------------ */
+
+.loading-screen {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--text-muted) !important;
+  background: var(--bg-primary) !important;
+}
+
+.loading-screen strong {
+  margin-top: 14px;
+  color: var(--text-heading) !important;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.loading-screen > span {
+  font-size: 12.5px;
+  color: var(--text-secondary) !important;
+}
+
+.loading-line {
+  width: 220px;
+  height: 3px;
+  margin-top: 18px;
+  overflow: hidden;
+  background: var(--border-subtle) !important;
+  border-radius: 9999px;
+}
+
+.loading-line i {
+  display: block;
+  width: 44%;
+  height: 100%;
+  background: var(--brand-accent) !important;
+  border-radius: 9999px;
+  animation: scan 1.3s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .context-capacity-popover,
   .composer-plus-menu,

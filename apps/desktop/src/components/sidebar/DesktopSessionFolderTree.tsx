@@ -32,14 +32,14 @@ interface DesktopSessionFolderTreeProps {
 
 const COLLAPSED_DEVICES_KEY = "agenthub:tree-collapsed-devices";
 const COLLAPSED_AGENTS_KEY = "agenthub:tree-collapsed-agents";
-const COLLAPSED_WORKSPACES_KEY = "agenthub:tree-collapsed-workspaces";
+const EXPANDED_WORKSPACES_KEY = "agenthub:tree-expanded-workspaces";
 
 const INITIAL_SESSIONS_COUNT = 8;
 const SESSION_EXPAND_STEP = 16;
 const INITIAL_WORKSPACES_COUNT = 10;
 const WORKSPACE_EXPAND_STEP = 15;
 
-function loadCollapsedSet(storageKey: string): Set<string> {
+function loadSet(storageKey: string): Set<string> {
   try {
     const raw = window.localStorage.getItem(storageKey);
     if (!raw) return new Set();
@@ -50,7 +50,7 @@ function loadCollapsedSet(storageKey: string): Set<string> {
   }
 }
 
-function saveCollapsedSet(storageKey: string, set: Set<string>): void {
+function saveSet(storageKey: string, set: Set<string>): void {
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(Array.from(set)));
   } catch {
@@ -67,13 +67,14 @@ export function DesktopSessionFolderTree({
   query,
 }: DesktopSessionFolderTreeProps) {
   const [collapsedDevices, setCollapsedDevices] = useState<Set<string>>(() =>
-    loadCollapsedSet(COLLAPSED_DEVICES_KEY),
+    loadSet(COLLAPSED_DEVICES_KEY),
   );
   const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(() =>
-    loadCollapsedSet(COLLAPSED_AGENTS_KEY),
+    loadSet(COLLAPSED_AGENTS_KEY),
   );
-  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(
-    () => loadCollapsedSet(COLLAPSED_WORKSPACES_KEY),
+  // Default workspaces to COLLAPSED (only explicitly expanded ones are open)
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(
+    () => loadSet(EXPANDED_WORKSPACES_KEY),
   );
 
   // Pagination states for long session and workspace lists
@@ -82,12 +83,37 @@ export function DesktopSessionFolderTree({
     {},
   );
 
+  const lastSelectedRef = React.useRef<string | undefined>(selectedSessionKey);
+
+  // If user selects/switches to a session, auto-expand that specific workspace
+  useEffect(() => {
+    if (selectedSessionKey && selectedSessionKey !== lastSelectedRef.current) {
+      lastSelectedRef.current = selectedSessionKey;
+      for (const device of tree.devices) {
+        for (const agent of device.agents) {
+          for (const ws of agent.workspaces) {
+            if (ws.sessions.some((s) => s.key === selectedSessionKey)) {
+              setExpandedWorkspaces((prev) => {
+                if (prev.has(ws.id)) return prev;
+                const next = new Set(prev);
+                next.add(ws.id);
+                saveSet(EXPANDED_WORKSPACES_KEY, next);
+                return next;
+              });
+              return;
+            }
+          }
+        }
+      }
+    }
+  }, [selectedSessionKey, tree]);
+
   const toggleDevice = useCallback((id: string) => {
     setCollapsedDevices((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      saveCollapsedSet(COLLAPSED_DEVICES_KEY, next);
+      saveSet(COLLAPSED_DEVICES_KEY, next);
       return next;
     });
   }, []);
@@ -97,17 +123,17 @@ export function DesktopSessionFolderTree({
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      saveCollapsedSet(COLLAPSED_AGENTS_KEY, next);
+      saveSet(COLLAPSED_AGENTS_KEY, next);
       return next;
     });
   }, []);
 
   const toggleWorkspace = useCallback((id: string) => {
-    setCollapsedWorkspaces((prev) => {
+    setExpandedWorkspaces((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      saveCollapsedSet(COLLAPSED_WORKSPACES_KEY, next);
+      saveSet(EXPANDED_WORKSPACES_KEY, next);
       return next;
     });
   }, []);
@@ -254,9 +280,9 @@ export function DesktopSessionFolderTree({
                           ) : (
                             <>
                               {visibleWorkspaces.map((ws) => {
-                                const isWsCollapsed = collapsedWorkspaces.has(
-                                  ws.id,
-                                );
+                                const isWsCollapsed = query
+                                  ? false
+                                  : !expandedWorkspaces.has(ws.id);
 
                                 // Session pagination within Workspace
                                 // If the selected session is in this workspace, ensure it's visible

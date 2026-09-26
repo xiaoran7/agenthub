@@ -51,30 +51,33 @@ input:focus-visible {
   place-content: center;
   justify-items: center;
   gap: 9px;
-  color: var(--muted);
-  background: radial-gradient(circle at 50% 42%, #26231f 0, var(--bg) 46%);
+  color: var(--text-muted);
+  background: var(--bg-primary);
 }
 .loading-screen strong {
   margin-top: 12px;
-  color: var(--text);
+  color: var(--text-heading);
   font-size: 16px;
+  font-weight: 600;
 }
 .loading-screen > span {
   font-size: 12px;
-  color: var(--dim);
+  color: var(--text-secondary);
 }
 .loading-line {
   width: 210px;
-  height: 2px;
+  height: 3px;
   margin-top: 17px;
   overflow: hidden;
-  background: var(--line-soft);
+  background: var(--border-subtle);
+  border-radius: 9999px;
 }
 .loading-line i {
   display: block;
   width: 44%;
   height: 100%;
-  background: var(--signal);
+  background: var(--brand-accent);
+  border-radius: 9999px;
   animation: scan 1.3s ease-in-out infinite;
 }
 

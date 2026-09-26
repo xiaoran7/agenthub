@@ -15,10 +15,9 @@ export function PulseMark({ size = 24 }: { size?: number }) {
         viewBox="0 0 512 512"
         width={size}
         height={size}
-        style={{ filter: "drop-shadow(0 0 6px rgba(0, 229, 255, 0.7))" }}
       >
         <g
-          stroke="#00e5ff"
+          stroke="var(--brand-accent, #c2410c)"
           strokeWidth="20"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -32,7 +31,7 @@ export function PulseMark({ size = 24 }: { size?: number }) {
           <line x1="256" y1="256" x2="152" y2="196" />
           <polygon points="256,136 360,196 360,316 256,376 152,316 152,196" />
         </g>
-        <g stroke="#00e5ff" strokeWidth="14" fill="#0b0f19">
+        <g stroke="var(--brand-accent, #c2410c)" strokeWidth="14" fill="var(--bg-surface, #ffffff)">
           <circle cx="256" cy="136" r="22" />
           <circle cx="360" cy="196" r="22" />
           <circle cx="360" cy="316" r="22" />
@@ -40,8 +39,8 @@ export function PulseMark({ size = 24 }: { size?: number }) {
           <circle cx="152" cy="316" r="22" />
           <circle cx="152" cy="196" r="22" />
         </g>
-        <circle cx="256" cy="256" r="42" fill="#00e5ff" opacity="0.4" />
-        <circle cx="256" cy="256" r="26" fill="#ffffff" />
+        <circle cx="256" cy="256" r="32" fill="var(--brand-accent, #c2410c)" opacity="0.18" />
+        <circle cx="256" cy="256" r="18" fill="var(--brand-accent, #c2410c)" />
       </svg>
     </span>
   );
