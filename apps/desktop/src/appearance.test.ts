@@ -27,11 +27,11 @@ describe("local appearance preferences", () => {
   });
 
   it("validates persisted values and tolerates malformed storage", () => {
-    expect(readAppearance({}, storage("{bad")).theme).toBe("dark");
+    expect(readAppearance({}, storage("{bad")).theme).toBe("light");
     expect(readAppearance({}, storage('{"theme":"unknown"}')).theme).toBe(
-      "dark",
+      "light",
     );
-    expect(readAppearance({}, storage("null")).theme).toBe("dark");
+    expect(readAppearance({}, storage("null")).theme).toBe("light");
     expect(
       readAppearance(
         {},
@@ -41,7 +41,7 @@ describe("local appearance preferences", () => {
           },
         },
       ).theme,
-    ).toBe("dark");
+    ).toBe("light");
   });
 
   it("persists only local appearance, not backend configuration", () => {

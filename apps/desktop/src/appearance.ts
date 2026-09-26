@@ -14,7 +14,7 @@ type AppearanceHints = {
 function normalizeAppearance(value: AppearanceHints): Appearance {
   return {
     theme:
-      value.theme === "light" || value.theme === "amber" ? value.theme : "dark",
+      value.theme === "dark" || value.theme === "amber" ? value.theme : "light",
     app_language:
       value.app_language === "zh-CN" || value.app_language === "en-US"
         ? value.app_language

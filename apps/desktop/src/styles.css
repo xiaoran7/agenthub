@@ -1,23 +1,23 @@
 :root {
   font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif;
-  color: #f5f2ec;
-  background: #11110f;
+  color: var(--text-primary, #1f1e1b);
+  background: var(--bg-primary, #faf9f5);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --bg: #11110f;
-  --surface: #1b1b18;
-  --surface-raised: #23231f;
-  --line: #3a3933;
-  --line-soft: #2a2a26;
-  --text: #f5f2ec;
-  --muted: #b9b5ad;
-  --dim: #817e77;
-  --signal: #ef7fa7;
+  --bg: var(--bg-primary, #faf9f5);
+  --surface: var(--bg-surface, #ffffff);
+  --surface-raised: var(--bg-card, #ffffff);
+  --line: var(--border-subtle, #e5e3dc);
+  --line-soft: var(--border-subtle, #e5e3dc);
+  --text: var(--text-primary, #1f1e1b);
+  --muted: var(--text-muted, #6b6860);
+  --dim: var(--text-muted, #6b6860);
+  --signal: var(--brand-accent, #c2410c);
   --signal-soft: rgba(239, 127, 167, 0.12);
-  --blue: #7aa8ff;
-  --green: #7ed5a0;
-  --amber: #e7b35d;
-  --red: #ef7b74;
+  --blue: var(--status-info, #1d4ed8);
+  --green: var(--status-success, #17683d);
+  --amber: var(--status-warning, #805000);
+  --red: var(--status-danger, #b42318);
 }
 
 * {
@@ -1479,23 +1479,25 @@ input:focus-visible {
   place-items: center;
   align-content: center;
   text-align: center;
-  color: var(--dim);
+  color: var(--text-muted);
 }
 .conversation-empty > svg {
   width: 25px;
   height: 25px;
   margin-bottom: 12px;
-  color: var(--signal);
+  color: var(--brand-accent);
 }
 .conversation-empty strong {
-  color: var(--text);
-  font-size: 14px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
 }
 .conversation-empty p {
-  max-width: 310px;
+  max-width: 320px;
   margin: 7px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
+  color: var(--text-secondary);
 }
 .conversation-empty .outline-button {
   margin-top: 14px;
