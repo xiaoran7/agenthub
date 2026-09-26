@@ -138,4 +138,42 @@ describe("Desktop Session Tree", () => {
     expect(zcodeAgent).toBeUndefined();
     expect(tree.totalSessions).toBe(0);
   });
+
+  it("prioritizes real project workspaces before automated test directories (agenthub-native-*)", () => {
+    const sTest = createMockSession({
+      agent_type: "codex",
+      agent_session_id: "test-sess",
+      observed_at: "2026-09-26T12:00:00Z",
+      payload: {
+        project: {
+          display_name: "agenthub-native-7El6zF",
+          fingerprint: "fp-test",
+        },
+        state: { activity_status: "IDLE", presence: "ACTIVE" },
+        last_activity_at: "2026-09-26T12:00:00Z",
+      },
+    });
+    const sReal = createMockSession({
+      agent_type: "codex",
+      agent_session_id: "real-sess",
+      observed_at: "2026-09-20T12:00:00Z",
+      payload: {
+        project: { display_name: "Claudespace", fingerprint: "fp-real" },
+        state: { activity_status: "IDLE", presence: "ACTIVE" },
+        last_activity_at: "2026-09-20T12:00:00Z",
+      },
+    });
+
+    const tree = buildDesktopSessionTree({
+      sessions: [sTest, sReal],
+      localDeviceId: "dev-1",
+      localDeviceName: "XIAORAN",
+    });
+
+    const codex = tree.devices[0].agents.find((a) => a.provider === "codex")!;
+    expect(codex.workspaces.length).toBe(2);
+    // Real workspace should come first even if the test workspace had newer timestamp
+    expect(codex.workspaces[0].name).toBe("Claudespace");
+    expect(codex.workspaces[1].name).toBe("agenthub-native-7El6zF");
+  });
 });

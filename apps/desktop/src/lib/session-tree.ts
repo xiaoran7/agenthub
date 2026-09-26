@@ -255,8 +255,13 @@ export function buildDesktopSessionTree(options: {
         });
       }
 
-      // Sort workspaces: most recent active sessions first
+      // Sort workspaces: real development workspaces first, automated test dirs last; then most recent active sessions first
       workspaceNodes.sort((a, b) => {
+        const isTestA = a.name.startsWith("agenthub-native-");
+        const isTestB = b.name.startsWith("agenthub-native-");
+        if (isTestA && !isTestB) return 1;
+        if (!isTestA && isTestB) return -1;
+
         const timeA = a.sessions[0]?.activityTime || "";
         const timeB = b.sessions[0]?.activityTime || "";
         return timeB.localeCompare(timeA);

@@ -2961,6 +2961,49 @@ svg.rotating {
   font-style: italic;
 }
 
+.tree-expand-more-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% - 28px);
+  margin: 4px 0 6px 28px;
+  padding: 4px 10px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.tree-expand-more-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+  color: var(--text-primary);
+}
+
+.tree-expand-more-btn .expand-text {
+  font-weight: 500;
+}
+
+.tree-expand-more-btn .expand-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tree-expand-more-btn.tree-expand-more-workspaces {
+  margin: 6px 0 6px 18px;
+  width: calc(100% - 18px);
+  background: var(--bg-subtle);
+  border-style: solid;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .context-capacity-popover,
   .composer-plus-menu,
