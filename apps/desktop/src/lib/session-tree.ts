@@ -75,6 +75,15 @@ export function getDeviceDisplayName(
   return `远程电脑 · ${deviceId.slice(-6)}`;
 }
 
+export function isAutomatedTestWorkspace(displayName?: string): boolean {
+  if (!displayName) return false;
+  return (
+    displayName.startsWith("agenthub-native-") ||
+    displayName.startsWith("agenthub-remote-") ||
+    displayName.startsWith("agenthub-test-")
+  );
+}
+
 export function buildDesktopSessionTree(options: {
   sessions: Session[];
   localDeviceId: string;
@@ -97,10 +106,16 @@ export function buildDesktopSessionTree(options: {
 
   const query = searchQuery.trim().toLowerCase();
 
-  // 1. Filter sessions by plugin enablement and search query
+  // 1. Filter sessions by plugin enablement, automated test directories, and search query
   const eligibleSessions = sessions.filter((s) => {
     const agent = normalizeAgentType(s.agent_type);
     if (!isPluginEnabled(agent)) return false;
+
+    // Filter out automated test workspaces (agenthub-native-*, agenthub-remote-*, etc.)
+    const wsName = s.payload.project.display_name?.trim();
+    if (isAutomatedTestWorkspace(wsName)) {
+      return false;
+    }
 
     if (!query) return true;
     const title = sessionDisplayTitle(s).toLowerCase();
@@ -255,27 +270,27 @@ export function buildDesktopSessionTree(options: {
         });
       }
 
-      // Sort workspaces: real development workspaces first, automated test dirs last; then most recent active sessions first
+      // Sort workspaces by most recent active sessions first
       workspaceNodes.sort((a, b) => {
-        const isTestA = a.name.startsWith("agenthub-native-");
-        const isTestB = b.name.startsWith("agenthub-native-");
-        if (isTestA && !isTestB) return 1;
-        if (!isTestA && isTestB) return -1;
-
         const timeA = a.sessions[0]?.activityTime || "";
         const timeB = b.sessions[0]?.activityTime || "";
         return timeB.localeCompare(timeA);
       });
+
+      const agentTotalCount = workspaceNodes.reduce(
+        (sum, ws) => sum + ws.totalCount,
+        0,
+      );
 
       agentNodes.push({
         provider,
         label: agentLabel(provider),
         shortLabel: agentShortLabel(provider),
         workspaces: workspaceNodes,
-        totalCount: pSessions.length,
+        totalCount: agentTotalCount,
       });
 
-      devTotalCount += pSessions.length;
+      devTotalCount += agentTotalCount;
     }
 
     // Sort agents by AGENT_ORDER

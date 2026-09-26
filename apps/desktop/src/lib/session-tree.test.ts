@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDesktopSessionTree,
   getDeviceDisplayName,
+  isAutomatedTestWorkspace,
 } from "./session-tree";
 import type { Session } from "../types";
 
@@ -139,7 +140,12 @@ describe("Desktop Session Tree", () => {
     expect(tree.totalSessions).toBe(0);
   });
 
-  it("prioritizes real project workspaces before automated test directories (agenthub-native-*)", () => {
+  it("filters out automated test directories (agenthub-native-*, etc.) to keep workspace tree clean", () => {
+    expect(isAutomatedTestWorkspace("agenthub-native-7El6zF")).toBe(true);
+    expect(isAutomatedTestWorkspace("agenthub-remote-123")).toBe(true);
+    expect(isAutomatedTestWorkspace("Claudespace")).toBe(false);
+    expect(isAutomatedTestWorkspace("agenthub")).toBe(false);
+
     const sTest = createMockSession({
       agent_type: "codex",
       agent_session_id: "test-sess",
@@ -171,9 +177,9 @@ describe("Desktop Session Tree", () => {
     });
 
     const codex = tree.devices[0].agents.find((a) => a.provider === "codex")!;
-    expect(codex.workspaces.length).toBe(2);
-    // Real workspace should come first even if the test workspace had newer timestamp
+    // Only real workspace is kept, automated test workspace is completely filtered out
+    expect(codex.workspaces.length).toBe(1);
     expect(codex.workspaces[0].name).toBe("Claudespace");
-    expect(codex.workspaces[1].name).toBe("agenthub-native-7El6zF");
+    expect(codex.totalCount).toBe(1);
   });
 });

@@ -133,7 +133,7 @@ import { SessionEmptyState } from "./components/session/SessionEmptyState";
 import { ConversationLoadState } from "./components/session/ConversationLoadState";
 import { ContextCapacityRing } from "./components/session/ContextCapacityPopover";
 import { ComposerPlusMenu } from "./components/session/ComposerPlusMenu";
-import { buildDesktopSessionTree } from "./lib/session-tree";
+import { buildDesktopSessionTree, isAutomatedTestWorkspace } from "./lib/session-tree";
 import { DesktopSessionFolderTree } from "./components/sidebar/DesktopSessionFolderTree";
 
 import { AuthScreen } from "./components/auth/AuthScreen";
@@ -384,15 +384,17 @@ function Dashboard({
 
   const sessions = useMemo(() => {
     const map = new Map<string, Session>();
-    // First fill from cached sessions
+    // First fill from cached sessions, filtering out automated test sessions
     for (const s of cachedSessions) {
       if (s.agent_session_id.startsWith("sess_subagent")) continue;
+      if (isAutomatedTestWorkspace(s.payload.project.display_name)) continue;
       const norm = { ...s, agent_type: normalizeAgentType(s.agent_type) };
       map.set(sessionKey(norm), norm);
     }
     // Then overwrite with live snapshot sessions (takes precedence)
     for (const s of snapshot.sessions) {
       if (s.agent_session_id.startsWith("sess_subagent")) continue;
+      if (isAutomatedTestWorkspace(s.payload.project.display_name)) continue;
       const norm = { ...s, agent_type: normalizeAgentType(s.agent_type) };
       map.set(sessionKey(norm), norm);
     }
