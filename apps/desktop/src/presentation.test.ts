@@ -187,7 +187,9 @@ describe("desktop presentation", () => {
   });
 
   it("formats detailed timestamp and generates comprehensive tooltip", () => {
-    expect(formatDetailedTime("2026-03-05T08:30:15.000Z")).toContain("2026-03-05");
+    expect(formatDetailedTime("2026-03-05T08:30:15.000Z")).toContain(
+      "2026-03-05",
+    );
     const session = {
       device_id: "dev-1",
       agent_type: "codex",

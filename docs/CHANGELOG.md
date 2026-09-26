@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.4.45] - 2026-09-26
+
+上下文容量明细重构、思考强度控制与认证失败归类：
+
+- **上下文分类改为「只报实测、不造假」**：重写 `ContextCapacityPopover`，分类全部来自 Provider 实际上报的 token 计数（缓存读取 / 新输入 / 思考输出 / 缓存写入 / 生成输出），无上报时按 transcript 字符权重在「工具调用与结果」与「对话消息」间归因，并标注 `measured=false`；不再渲染无法验证的 System prompt、Autocompact buffer 等估算行；
+- **补齐剩余空间与可展开明细**：进度条与列表新增「剩余空间」段（占窗口真实百分比），带明细的分类可点击展开，展开后显示真实条目计数（如工具条目数、消息条目数）；百分比口径统一为「占已用」，与窗口总量解耦；
+- **新增思考强度控制**：`SessionControlPanel` 工具栏按 Provider 能力动态渲染思考强度下拉——Claude Code 暴露实测支持的 `low/medium/high/xhigh/max`，Codex 暴露 `low/medium/high`，ZCode / Antigravity / Grok 不支持故不渲染；默认值回落到 runtime 已上报的 `reasoning_effort`；
+- **思考强度贯通到 CLI**：新增 `TurnOptions.reasoning_effort`，`apply_turn_options` 按 Provider 分派——Claude Code 传 `--effort <level>`，Codex 传 `-c model_reasoning_effort="<level>"`（Codex 无 `--effort` 标志）；`RemoteAction::SendPrompt` 增加可选 `effort` 字段，Codex 走 `turn/start` 的 `effort` 参数，Claude Code 走 CLI 参数，空值一律不下发；
+- **认证失败不再混入对话流**：新增 `authErrors.ts` 识别 CLI 以助手文本形式返回的登录失败（`Not logged in` / `authentication_failed` / `Please run /login` 等），命中时不再将其渲染为助手回复，改为红色错误提示并给出对应修复命令（`/login` 或 `codex login`）；
+- **修复工作区符号链接指向已删除的仓库**：`node_modules/@agent-pulse/*` 四个 workspace 链接仍指向 `D:\Claudespace\Project\Agent-Persona\agent-pulse`（该目录已不存在），导致 `@agent-pulse/contracts` 解析为空类型，apps/web 产生 148 项 `TS2339` 错误且 `@agent-pulse/contracts/remote` 模块无法解析。执行 `npm install` 重新链接后，四个工作区 typecheck 全部通过；同一问题也是 `cargo check -p agent-pulse-desktop` 必然失败的根因（`target/debug/build/tauri-*` 缓存烤死了旧路径），清除陈旧缓存后 Tauri crate 恢复正常编译；
+- **`package-lock.json` 版本号回归同步**：lockfile 中根包与各 workspace 版本此前停留在 2.4.39，与实际版本不一致，随重新安装一并校正；
+- **补齐 `.gitattributes` 行尾规则**：原规则只覆盖 `*.sql/*.rs/*.ts/*.json/*.md`，遗漏 `*.tsx`、`*.css`、`*.html` 等，导致 26 个受版本控制的文件在工作区被写成 CRLF 而 Prettier 期望 LF（13 项 format:check 告警中有 6 项纯由行尾引起）。现补齐 TS/JS/CSS/HTML/SVG/YAML/Kotlin/Shell/PowerShell/XML/TOML/env 规则，明确 `*.bat`/`*.cmd` 保持 CRLF 以便 Windows 启动脚本可执行，并将图片、字体、可执行文件、安装包标记为 binary 不做行尾转换；随后对工作区执行一次 LF 归一化；
+- **全平台版本递增**：版本升级至 2.4.45，Android versionCode 升至 56，Cargo 与 Node 依赖锁文件同步更新；
+- **验证**：`cargo test --workspace` 212 项通过，`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 通过；`npm.cmd test` 全工作区通过（desktop 70 项、api 14 项、contracts 65 项、web 61 项），`npm.cmd run typecheck` 四个工作区全通过，`npm.cmd run format:check` 全仓库 Prettier 干净。
+
 ## [2.4.44] - 2026-09-26
 
 工作区会话同名兜底消除与会话重命名支持：

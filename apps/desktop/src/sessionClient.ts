@@ -15,6 +15,7 @@ interface SessionMessageInput {
   prompt: string;
   model?: string;
   permission_mode?: string;
+  reasoning_effort?: string;
   attachments: Array<{ name: string; path: string }>;
 }
 

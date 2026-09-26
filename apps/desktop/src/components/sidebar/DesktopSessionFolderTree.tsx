@@ -79,10 +79,12 @@ export function DesktopSessionFolderTree({
   );
 
   // Pagination states for long session and workspace lists
-  const [sessionLimits, setSessionLimits] = useState<Record<string, number>>({});
-  const [workspaceLimits, setWorkspaceLimits] = useState<Record<string, number>>(
+  const [sessionLimits, setSessionLimits] = useState<Record<string, number>>(
     {},
   );
+  const [workspaceLimits, setWorkspaceLimits] = useState<
+    Record<string, number>
+  >({});
 
   const lastSelectedRef = React.useRef<string | undefined>(selectedSessionKey);
 
@@ -162,7 +164,9 @@ export function DesktopSessionFolderTree({
   if (tree.devices.length === 0 || (tree.totalSessions === 0 && query)) {
     return (
       <div className="sidebar-empty">
-        <span>{query ? "没有找到匹配的会话" : "正在扫描本机 Agent 会话..."}</span>
+        <span>
+          {query ? "没有找到匹配的会话" : "正在扫描本机 Agent 会话..."}
+        </span>
       </div>
     );
   }
@@ -200,7 +204,9 @@ export function DesktopSessionFolderTree({
               <span className="tree-icon device-icon">
                 <Monitor size={14} />
               </span>
-              <strong className="tree-label device-label">{device.label}</strong>
+              <strong className="tree-label device-label">
+                {device.label}
+              </strong>
               <div className="tree-row-meta">
                 <span className="tree-count-badge">{device.totalCount}</span>
               </div>
@@ -220,8 +226,7 @@ export function DesktopSessionFolderTree({
                   const visibleWorkspaces = agent.workspaces.slice(0, wsLimit);
                   const hasMoreWorkspaces =
                     !query && agent.workspaces.length > wsLimit;
-                  const remainingWorkspaces =
-                    agent.workspaces.length - wsLimit;
+                  const remainingWorkspaces = agent.workspaces.length - wsLimit;
 
                   return (
                     <div
@@ -291,7 +296,8 @@ export function DesktopSessionFolderTree({
                                   (s) => s.key === selectedSessionKey,
                                 );
                                 const baseLimit =
-                                  sessionLimits[ws.id] ?? INITIAL_SESSIONS_COUNT;
+                                  sessionLimits[ws.id] ??
+                                  INITIAL_SESSIONS_COUNT;
                                 const sessionLimit = query
                                   ? ws.sessions.length
                                   : hasSelected

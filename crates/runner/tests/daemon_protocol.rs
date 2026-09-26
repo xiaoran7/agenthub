@@ -16,6 +16,7 @@ fn command() -> RemoteCommand {
         host_generation: Some("generation-1".into()),
         command: RemoteAction::SendPrompt {
             text: "continue".into(),
+            effort: None,
         },
     }
 }

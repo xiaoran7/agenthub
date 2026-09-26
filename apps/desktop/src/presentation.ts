@@ -369,9 +369,7 @@ export function rememberTitleOverride(sessionKey: string, title: string) {
         TITLE_OVERRIDES_KEY,
         JSON.stringify(overrides),
       );
-      window.dispatchEvent(
-        new CustomEvent("agenthub:title-overrides-changed"),
-      );
+      window.dispatchEvent(new CustomEvent("agenthub:title-overrides-changed"));
     } catch {
       // Storage full or unavailable; the in-memory override still applies.
     }

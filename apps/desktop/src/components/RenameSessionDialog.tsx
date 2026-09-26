@@ -75,7 +75,8 @@ export function RenameSessionDialog({
                 width: "100%",
                 padding: "8px 12px",
                 borderRadius: "6px",
-                border: "1px solid var(--border-color, rgba(255, 255, 255, 0.15))",
+                border:
+                  "1px solid var(--border-color, rgba(255, 255, 255, 0.15))",
                 background: "var(--input-bg, rgba(0, 0, 0, 0.2))",
                 color: "inherit",
                 fontSize: "14px",

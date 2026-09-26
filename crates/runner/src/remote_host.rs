@@ -277,7 +277,6 @@ impl NativeTransport for MultiProviderTransport {
                 let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
                 self.claude_active_turns
                     .insert(session_id.clone(), turn_id.clone());
-
                 let cancel = Arc::new(AtomicBool::new(false));
                 self.claude_cancels
                     .insert(session_id.clone(), cancel.clone());
@@ -298,6 +297,12 @@ impl NativeTransport for MultiProviderTransport {
 
                 let cwd = self.claude_cached_cwds.get(&session_id).cloned();
                 let binary = self.claude_binary.clone();
+                // Claude Code takes reasoning effort as a per-turn CLI flag.
+                let effort = params["effort"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned);
                 let session_id_clone = session_id.clone();
                 let turn_id_clone = turn_id.clone();
 
@@ -360,7 +365,10 @@ impl NativeTransport for MultiProviderTransport {
                         cwd.as_deref(),
                         &raw_id,
                         &text,
-                        crate::collectors::TurnOptions::default(),
+                        crate::collectors::TurnOptions {
+                            reasoning_effort: effort.as_deref(),
+                            ..Default::default()
+                        },
                         Duration::from_secs(600),
                         &cancel,
                         on_update,
@@ -1298,6 +1306,9 @@ pub enum RemoteAction {
     },
     SendPrompt {
         text: String,
+        /// Per-turn reasoning effort. Providers that do not accept one ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
     },
     ResolveApproval {
         approval_id: String,
@@ -1945,7 +1956,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             return Err(NativeError::rejected("session_control_lost"));
         }
         match &command.command {
-            RemoteAction::SendPrompt { text } => {
+            RemoteAction::SendPrompt { text, effort } => {
                 if text.trim().is_empty() || text.len() > 512 * 1024 {
                     return Err(NativeError::rejected("invalid_prompt"));
                 }
@@ -1960,11 +1971,18 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 {
                     return Err(NativeError::rejected("session_busy_or_unknown"));
                 }
-                let result = self.transport.request(
-                    "turn/start",
-                    json!({"threadId": session.provider_session_id,
-                    "input": [{"type": "text", "text": text, "text_elements": []}]}),
-                )?;
+                let mut turn_params = json!({"threadId": session.provider_session_id,
+                    "input": [{"type": "text", "text": text, "text_elements": []}]});
+                // Reasoning effort is a per-turn override on Codex; omitting it
+                // keeps whatever the thread was started with.
+                if let Some(effort) = effort
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    turn_params["effort"] = json!(effort);
+                }
+                let result = self.transport.request("turn/start", turn_params)?;
                 let turn_id = result["turn"]["id"]
                     .as_str()
                     .filter(|id| !id.is_empty())

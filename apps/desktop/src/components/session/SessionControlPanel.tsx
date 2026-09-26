@@ -19,6 +19,8 @@ import {
   type FormEvent,
 } from "react";
 import { useAgentModels } from "../../agentModels";
+import { AUTH_FIX_HINT, isAuthFailure } from "../../authErrors";
+import { effortOptionsFor, resolveEffort } from "../../effortOptions";
 import { cachedConversation, loadConversation } from "../../conversationCache";
 import {
   hasActiveTurn,
@@ -58,6 +60,7 @@ import { isManagedProvider, PERMISSION_OPTIONS } from "./LaunchSessionModal";
 export interface TurnOptionsState {
   model?: string;
   permission?: string;
+  effort?: string;
 }
 
 export function sameConversation(
@@ -153,7 +156,9 @@ export function SessionControlPanel({
   });
   const models = useAgentModels(session.agent_type);
   const permissionOptions = PERMISSION_OPTIONS[session.agent_type];
+  const effortOptions = effortOptionsFor(session.agent_type);
   const pendingDelta = useRef("");
+  const authFailureRef = useRef(false);
   const deltaFrame = useRef<number | undefined>(undefined);
   const paneRef = useRef<HTMLElement | null>(null);
   const status = statusView(
@@ -180,6 +185,13 @@ export function SessionControlPanel({
     )
       ? sessionOptions.permission
       : "";
+  // Effort falls back to whatever the provider last reported, so the control
+  // opens on the level the session is actually running at.
+  const currentEffort = resolveEffort(
+    session.agent_type,
+    sessionOptions.effort,
+    runtime?.reasoning_effort,
+  );
 
   useEffect(() => {
     setPendingApproval(session.payload.pending_approval ?? undefined);
@@ -297,9 +309,17 @@ export function SessionControlPanel({
     setMessages((current) => appendAssistantDelta(current, delta));
   }, []);
 
+  /**
+   * A login failure is streamed as ordinary assistant text, so it would appear
+   * in the transcript before the turn resolves. Hold those deltas back and show
+   * them only as an error if the turn really is an auth failure.
+   */
   const handleAssistantDelta = useCallback(
     (delta: string) => {
       pendingDelta.current += delta;
+      if (isAuthFailure(pendingDelta.current)) {
+        authFailureRef.current = true;
+      }
       if (deltaFrame.current === undefined) {
         deltaFrame.current = window.requestAnimationFrame(flushDelta);
       }
@@ -348,6 +368,7 @@ export function SessionControlPanel({
     setError(undefined);
     setPendingApproval(undefined);
     setAgentActivity(undefined);
+    authFailureRef.current = false;
     const sentAttachments = attachments;
     setAttachments([]);
     setMessages((current) => [
@@ -366,6 +387,11 @@ export function SessionControlPanel({
             deltaFrame.current = undefined;
           }
           pendingDelta.current = "";
+          if (isAuthFailure(event.text)) {
+            authFailureRef.current = true;
+            setMessages((current) => dropTrailingEmptyAssistant(current));
+            return;
+          }
           setMessages((current) =>
             replaceAssistantMessage(current, event.text),
           );
@@ -383,6 +409,7 @@ export function SessionControlPanel({
           prompt: nextPrompt,
           model: currentModel || undefined,
           permission_mode: currentPermission || undefined,
+          reasoning_effort: currentEffort || undefined,
           attachments: sentAttachments,
         },
         onEvent,
@@ -392,6 +419,13 @@ export function SessionControlPanel({
         deltaFrame.current = undefined;
       }
       pendingDelta.current = "";
+      // A CLI that cannot authenticate reports it as assistant text. Keep that
+      // out of the transcript and show it as a fixable error instead.
+      if (authFailureRef.current || isAuthFailure(result.response)) {
+        setMessages((current) => dropTrailingEmptyAssistant(current));
+        setError(AUTH_FIX_HINT);
+        return;
+      }
       setMessages((current) =>
         replaceAssistantMessage(current, result.response),
       );
@@ -402,7 +436,9 @@ export function SessionControlPanel({
       }
       pendingDelta.current = "";
       setMessages((current) => dropTrailingEmptyAssistant(current));
-      setError(errorMessage(nextError));
+      setError(
+        authFailureRef.current ? AUTH_FIX_HINT : errorMessage(nextError),
+      );
       // Give the user a chance to retry with the same attachments.
       setAttachments((current) =>
         current.length === 0 && sentAttachments.length > 0
@@ -688,6 +724,20 @@ export function SessionControlPanel({
                       onChange={(val) => updateTurnOptions({ permission: val })}
                       size="sm"
                       ariaLabel="权限模式"
+                    />
+                  )}
+                  {effortOptions.length > 0 && (
+                    <SelectDropdown
+                      className="ghost"
+                      value={currentEffort}
+                      options={effortOptions.map((option) => ({
+                        value: option.value,
+                        label: `思考强度 ${option.label}`,
+                        desc: option.desc,
+                      }))}
+                      onChange={(val) => updateTurnOptions({ effort: val })}
+                      size="sm"
+                      ariaLabel="思考强度"
                     />
                   )}
                   <span className="composer-spacer" />

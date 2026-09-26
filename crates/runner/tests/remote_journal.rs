@@ -8,6 +8,7 @@ fn command() -> RemoteCommand {
         host_generation: Some("generation-one".into()),
         command: RemoteAction::SendPrompt {
             text: "do not repeat this action".into(),
+            effort: None,
         },
     }
 }

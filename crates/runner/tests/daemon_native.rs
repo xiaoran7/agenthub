@@ -266,6 +266,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
         host_generation: Some(generation.clone()),
         command: RemoteAction::SendPrompt {
             text: "Do not use tools. Reply exactly AGENTHUB_DAEMON_OK.".into(),
+            effort: None,
         },
     };
     let first_receipt = execute(&endpoint, first.clone());
@@ -279,6 +280,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
         host_generation: Some(generation),
         command: RemoteAction::SendPrompt {
             text: "Without tools, repeat the exact marker from the previous turn.".into(),
+            effort: None,
         },
     };
     assert_eq!(execute(&endpoint, second).status, "accepted");
@@ -357,6 +359,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
         host_generation: Some(restarted_generation),
         command: RemoteAction::SendPrompt {
             text: "Without tools, reply exactly AGENTHUB_RESTART_OK.".into(),
+            effort: None,
         },
     };
     assert_eq!(execute(&endpoint, third).status, "accepted");

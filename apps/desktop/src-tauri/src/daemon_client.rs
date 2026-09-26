@@ -1750,6 +1750,7 @@ mod tests {
             host_generation: Some("generation-1".into()),
             command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
                 text: "hello".into(),
+                effort: None,
             },
         };
         let receipt = CommandReceipt {

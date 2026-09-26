@@ -123,6 +123,7 @@ fn start_turn(fake: &Fake, host: &mut NativeSessionHost<Fake>, id: &str) {
         id,
         RemoteAction::SendPrompt {
             text: "hello".into(),
+            effort: None,
         },
     );
     assert_eq!(host.handle_command(cmd).status, "accepted");
@@ -165,6 +166,7 @@ fn two_turns_share_native_id_and_only_native_completion_releases_busy_state() {
         "busy",
         RemoteAction::SendPrompt {
             text: "second".into(),
+            effort: None,
         },
     );
     assert_eq!(
@@ -487,6 +489,7 @@ fn transport_loss_is_unknown_and_never_automatically_reexecutes_a_prompt() {
         "uncertain",
         RemoteAction::SendPrompt {
             text: "change something".into(),
+            effort: None,
         },
     );
     let receipt = host.handle_command(command.clone());
@@ -790,6 +793,7 @@ fn unknown_slash_does_not_fall_through_to_prompt() {
         "slash",
         RemoteAction::SendPrompt {
             text: "/compact".into(),
+            effort: None,
         },
     );
     assert_eq!(

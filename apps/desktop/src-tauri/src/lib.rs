@@ -159,6 +159,8 @@ struct SessionMessageInput {
     #[serde(default)]
     permission_mode: Option<String>,
     #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
     attachments: Vec<SessionAttachmentInput>,
 }
 
@@ -177,6 +179,8 @@ struct LaunchSessionInput {
     model: Option<String>,
     #[serde(default)]
     permission_mode: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -864,6 +868,7 @@ fn launch_codex_session_with_client(
         host_generation: Some(host_generation.clone()),
         command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
             text: prompt.to_owned(),
+            effort: input.reasoning_effort,
         },
     };
 
@@ -1087,7 +1092,10 @@ fn send_codex_message_with_client(
         client_cmd_id: format!("cmd-{}", uuid::Uuid::new_v4()),
         hub_session_id: hub_session_id.clone(),
         host_generation: Some(host_generation.clone()),
-        command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt { text: prompt },
+        command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
+            text: prompt,
+            effort: input.reasoning_effort,
+        },
     };
 
     let send_receipt = client

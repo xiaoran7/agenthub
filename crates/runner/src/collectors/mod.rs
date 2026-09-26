@@ -122,6 +122,7 @@ pub enum AgentTurnUpdate {
 pub struct TurnOptions<'a> {
     pub model: Option<&'a str>,
     pub permission_mode: Option<&'a str>,
+    pub reasoning_effort: Option<&'a str>,
 }
 
 /// Outcome of a streamed agent process: final message plus the session id the
@@ -2869,31 +2870,47 @@ fn apply_turn_options(
     agent: crate::domain::AgentType,
     options: &TurnOptions<'_>,
 ) {
-    let Some(model) = options
+    let model = options
         .model
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+        .filter(|value| !value.is_empty());
+    let permission_mode = options
+        .permission_mode
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let effort = options
+        .reasoning_effort
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    // The reasoning flag differs per CLI, so it is applied even when no model
+    // override was picked: effort alone is a valid per-turn override.
+    if let Some(effort) = effort {
+        match agent {
+            crate::domain::AgentType::ClaudeCode => {
+                command.args(["--effort", effort]);
+            }
+            // Codex has no --effort flag; reasoning effort is a config key.
+            crate::domain::AgentType::Codex => {
+                command.args(["-c", &format!("model_reasoning_effort=\"{effort}\"")]);
+            }
+            crate::domain::AgentType::ZCode
+            | crate::domain::AgentType::Antigravity
+            | crate::domain::AgentType::GrokBuild => {}
+        }
+    }
+    let Some(model) = model else {
         return;
     };
     match agent {
         crate::domain::AgentType::ClaudeCode => {
             command.args(["--model", model]);
-            if let Some(mode) = options
-                .permission_mode
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
+            if let Some(mode) = permission_mode {
                 command.args(["--permission-mode", mode]);
             }
         }
         crate::domain::AgentType::Codex => {
             command.args(["-m", model]);
-            if let Some(mode) = options
-                .permission_mode
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
+            if let Some(mode) = permission_mode {
                 let sandbox = match mode {
                     "read-only" | "plan" => "read-only",
                     "bypassPermissions" | "danger-full-access" => "danger-full-access",
@@ -4124,5 +4141,78 @@ mod tests {
 
         assert_eq!(error.code(), "collector_timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn turn_options_pass_reasoning_effort_per_provider() {
+        let args_for = |agent, options: TurnOptions<'_>| {
+            let mut command = Command::new("placeholder");
+            apply_turn_options(&mut command, agent, &options);
+            command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+
+        // Claude Code takes a --effort flag and supports the deep levels.
+        assert_eq!(
+            args_for(
+                crate::domain::AgentType::ClaudeCode,
+                TurnOptions {
+                    reasoning_effort: Some("xhigh"),
+                    ..Default::default()
+                },
+            ),
+            vec!["--effort", "xhigh"]
+        );
+
+        // Codex has no --effort flag: effort is passed as a config override.
+        assert_eq!(
+            args_for(
+                crate::domain::AgentType::Codex,
+                TurnOptions {
+                    reasoning_effort: Some("high"),
+                    ..Default::default()
+                },
+            ),
+            vec!["-c", "model_reasoning_effort=\"high\""]
+        );
+
+        // Providers without a per-turn effort ignore it rather than passing a
+        // flag the CLI would reject.
+        assert!(
+            args_for(
+                crate::domain::AgentType::ZCode,
+                TurnOptions {
+                    reasoning_effort: Some("high"),
+                    ..Default::default()
+                },
+            )
+            .is_empty()
+        );
+
+        // Effort still applies when a model override is absent, and blank
+        // values never reach the command line.
+        assert_eq!(
+            args_for(
+                crate::domain::AgentType::ClaudeCode,
+                TurnOptions {
+                    reasoning_effort: Some("  "),
+                    ..Default::default()
+                },
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            args_for(
+                crate::domain::AgentType::ClaudeCode,
+                TurnOptions {
+                    model: Some("claude-opus-5"),
+                    permission_mode: Some("plan"),
+                    ..Default::default()
+                },
+            ),
+            vec!["--model", "claude-opus-5", "--permission-mode", "plan"]
+        );
     }
 }
