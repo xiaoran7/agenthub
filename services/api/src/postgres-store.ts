@@ -518,10 +518,10 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       WITH refreshed AS (
         UPDATE agent_pulse_web_sessions AS sessions
         SET last_seen_at = clock_timestamp()
-        WHERE sessions.session_digest = ${digest}
-          AND sessions.expires_at > ${now}
+        WHERE sessions.session_digest = ${digest}::text
+          AND sessions.expires_at > ${now}::timestamptz
           AND sessions.last_seen_at <=
-            clock_timestamp() - interval '${SESSION_ACTIVITY_REFRESH_SECONDS} seconds'
+            clock_timestamp() - make_interval(secs => ${SESSION_ACTIVITY_REFRESH_SECONDS}::int)
         RETURNING sessions.session_digest
       )
       SELECT
@@ -534,8 +534,8 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       INNER JOIN agent_pulse_workspace_members AS members
         ON members.user_id = users.user_id
         AND members.workspace_owner_id = sessions.workspace_owner_id
-      WHERE sessions.session_digest = ${digest}
-        AND sessions.expires_at > ${now}
+      WHERE sessions.session_digest = ${digest}::text
+        AND sessions.expires_at > ${now}::timestamptz
         AND users.status = 'active'
       LIMIT 1
     `;
