@@ -12,6 +12,7 @@ import {
   relativeTime,
   statusView,
   isAttentionSession,
+  sessionTooltip,
 } from "../../presentation";
 import type {
   DesktopSessionTree,
@@ -382,6 +383,10 @@ export function DesktopSessionFolderTree({
                                                 data-provider={
                                                   session.agent_type
                                                 }
+                                                title={sessionTooltip(
+                                                  session,
+                                                  item.title,
+                                                )}
                                                 onContextMenu={(e) => {
                                                   e.preventDefault();
                                                   onContextMenu(e, session);
@@ -407,7 +412,10 @@ export function DesktopSessionFolderTree({
                                                 />
                                                 <span
                                                   className="tree-session-title"
-                                                  title={item.title}
+                                                  title={sessionTooltip(
+                                                    session,
+                                                    item.title,
+                                                  )}
                                                 >
                                                   {item.title}
                                                 </span>

@@ -6,6 +6,7 @@ import {
   PlusCircle,
   FileText,
   CheckCircle2,
+  Pencil,
 } from "lucide-react";
 import { normalizeAgentType, type Session } from "../types";
 import { sessionDisplayTitle } from "../presentation";
@@ -22,6 +23,7 @@ interface SessionContextMenuProps {
   isPinned: boolean;
   onTogglePin: (sessionKey: string) => void;
   onNewSessionForAgent: (agentType: Session["agent_type"]) => void;
+  onRenameSession?: (session: Session) => void;
   onShowToast: (message: string) => void;
 }
 
@@ -31,6 +33,7 @@ export function SessionContextMenu({
   isPinned,
   onTogglePin,
   onNewSessionForAgent,
+  onRenameSession,
   onShowToast,
 }: SessionContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -105,6 +108,19 @@ export function SessionContextMenu({
       >
         <Pin size={14} className={isPinned ? "pinned-icon" : ""} />
         <span>{isPinned ? "取消置顶会话" : "置顶当前会话"}</span>
+      </button>
+
+      <button
+        type="button"
+        className="context-menu-item"
+        role="menuitem"
+        onClick={() => {
+          onClose();
+          onRenameSession?.(session);
+        }}
+      >
+        <Pencil size={14} />
+        <span>重命名会话</span>
       </button>
 
       <button

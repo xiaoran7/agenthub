@@ -305,13 +305,23 @@ export function adjacentItem<T>(
 
 const TITLE_OVERRIDES_KEY = "agenthub:title-overrides";
 
+let memoryOverrides: Record<string, string> = {};
+
 function loadTitleOverrides(): Record<string, string> {
-  try {
-    const stored = window.localStorage.getItem(TITLE_OVERRIDES_KEY);
-    return stored ? (JSON.parse(stored) as Record<string, string>) : {};
-  } catch {
-    return {};
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      const stored = window.localStorage.getItem(TITLE_OVERRIDES_KEY);
+      if (stored) {
+        return {
+          ...memoryOverrides,
+          ...(JSON.parse(stored) as Record<string, string>),
+        };
+      }
+    } catch {
+      // ignore
+    }
   }
+  return memoryOverrides;
 }
 
 /** Clean up title candidates from user messages, stripping system / environment prompt leakage. */
@@ -344,30 +354,93 @@ export function rememberTitleOverride(sessionKey: string, title: string) {
   const clean = cleanUserPromptForTitle(title);
   if (clean.length < 2) return;
   const overrides = loadTitleOverrides();
-  if (overrides[sessionKey] === clean) return;
   overrides[sessionKey] = clean;
-  try {
-    window.localStorage.setItem(TITLE_OVERRIDES_KEY, JSON.stringify(overrides));
-  } catch {
-    // Storage full or unavailable; the runtime title still applies.
+  // Also index by provider:sessionId and sessionId for robust lookup across device ID changes
+  const parts = sessionKey.split(":");
+  if (parts.length >= 3) {
+    const providerAndId = `${parts[1]}:${parts[2]}`;
+    overrides[providerAndId] = clean;
+    overrides[parts[2]] = clean;
   }
+  memoryOverrides = { ...overrides };
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage?.setItem(
+        TITLE_OVERRIDES_KEY,
+        JSON.stringify(overrides),
+      );
+      window.dispatchEvent(
+        new CustomEvent("agenthub:title-overrides-changed"),
+      );
+    } catch {
+      // Storage full or unavailable; the in-memory override still applies.
+    }
+  }
+}
+
+export function formatDetailedTime(value?: string): string {
+  if (!value) return "时间未知";
+  const date = new Date(value);
+  if (isNaN(date.getTime())) return "时间未知";
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const y = date.getFullYear();
+  const m = pad(date.getMonth() + 1);
+  const d = pad(date.getDate());
+  const h = pad(date.getHours());
+  const min = pad(date.getMinutes());
+  const s = pad(date.getSeconds());
+  return `${y}-${m}-${d} ${h}:${min}:${s}`;
+}
+
+export function sessionTooltip(session: Session, displayTitle: string): string {
+  const lines: string[] = [displayTitle];
+  lines.push(`会话 ID: ${session.agent_session_id}`);
+  const time = session.payload.last_activity_at || session.observed_at;
+  if (time) {
+    lines.push(`活动时间: ${formatDetailedTime(time)} (${relativeTime(time)})`);
+  }
+  const ws = session.payload.project.display_name?.trim();
+  if (ws && ws !== "unknown" && ws !== "未分类项目") {
+    lines.push(`工作区: ${ws}`);
+  }
+  if (session.payload.runtime?.model) {
+    lines.push(`模型: ${session.payload.runtime.model}`);
+  }
+  if (session.payload.runtime?.permission_mode) {
+    lines.push(`模式: ${session.payload.runtime.permission_mode}`);
+  }
+  return lines.join("\n");
 }
 
 export function sessionDisplayTitle(session: Session): string {
   const agentType = normalizeAgentType(session.agent_type);
   const key = `${session.device_id}:${agentType}:${session.agent_session_id}`;
-  const override = loadTitleOverrides()[key];
+  const overrides = loadTitleOverrides();
+  const override =
+    overrides[key] ||
+    overrides[`${agentType}:${session.agent_session_id}`] ||
+    overrides[session.agent_session_id];
   if (override) return override;
+
   const explicit = session.payload.runtime?.title?.trim();
-  if (explicit && explicit !== "未命名会话" && explicit !== "Untitled") {
+  const project = session.payload.project.display_name?.trim();
+
+  // If explicit title exists, use it as long as it's not a generic placeholder
+  // and NOT identical to the project/workspace name
+  if (
+    explicit &&
+    explicit !== "未命名会话" &&
+    explicit !== "Untitled" &&
+    (!project || explicit.toLowerCase() !== project.toLowerCase())
+  ) {
     return explicit;
   }
-  const project = session.payload.project.display_name?.trim();
-  if (project && project !== "未分类项目" && project !== "unknown") {
-    return project;
-  }
+
+  // Never fall back to project name, because in the folder tree all sessions are
+  // already nested under the workspace folder! Falling back to project name causes
+  // dozens of sessions inside the same workspace to have identical titles.
   const shortId = session.agent_session_id.slice(0, 8);
-  return `会话 (${shortId})`;
+  return `会话 #${shortId}`;
 }
 
 export function sessionKey(session: Session): string {

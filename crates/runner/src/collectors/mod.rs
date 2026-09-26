@@ -1154,7 +1154,17 @@ pub fn collect_codex_session_contexts_from(
             continue;
         };
         let mut context = LocalSessionContext::new(crate::domain::AgentType::Codex, session_id);
-        context.title = title.and_then(|value| metadata_label(&value, MAX_SESSION_TITLE_CHARS));
+        context.title = title.as_deref().and_then(local_prompt_title).or_else(|| {
+            title
+                .as_deref()
+                .and_then(|value| metadata_label(value, MAX_SESSION_TITLE_CHARS))
+                .filter(|t| {
+                    let lower = t.to_lowercase();
+                    lower != "untitled"
+                        && lower != "未命名会话"
+                        && !t.contains("AGENTS.md instructions")
+                })
+        });
         context.model = model.and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
         context.reasoning_effort =
             effort.and_then(|value| metadata_label(&value, MAX_CONFIG_VALUE_CHARS));
@@ -1224,17 +1234,40 @@ fn apply_codex_rollout_context(
             source,
         })?
         .len();
-    let start = length.saturating_sub(LOCAL_CONTEXT_TAIL_BYTES);
     let mut reader = BufReader::new(file);
-    reader
-        .seek(SeekFrom::Start(start))
-        .map_err(|source| CollectorError::Io {
-            program: program.to_owned(),
-            source,
-        })?;
+    scan_codex_context_region(
+        &mut reader,
+        LOCAL_CONTEXT_HEAD_BYTES.min(length),
+        context,
+        program,
+    )?;
+    if length > LOCAL_CONTEXT_HEAD_BYTES {
+        let tail_start = length.saturating_sub(LOCAL_CONTEXT_TAIL_BYTES);
+        reader
+            .seek(SeekFrom::Start(tail_start))
+            .map_err(|source| CollectorError::Io {
+                program: program.to_owned(),
+                source,
+            })?;
+        scan_codex_context_region(
+            &mut reader,
+            length.saturating_sub(tail_start),
+            context,
+            program,
+        )?;
+    }
+    Ok(())
+}
+
+fn scan_codex_context_region(
+    reader: &mut impl BufRead,
+    byte_limit: u64,
+    context: &mut LocalSessionContext,
+    program: &str,
+) -> Result<(), CollectorError> {
     let mut consumed = 0_u64;
-    while consumed < length.saturating_sub(start) {
-        let line = match read_bounded_line(&mut reader) {
+    while consumed < byte_limit {
+        let line = match read_bounded_line(reader) {
             BoundedLine::Line(line) => line,
             BoundedLine::Eof => break,
             BoundedLine::TooLarge => continue,
@@ -1316,6 +1349,23 @@ fn apply_codex_context_line(line: &str, context: &mut LocalSessionContext) {
                 .and_then(Value::as_str);
             if let Some(text) = prompt_text {
                 context.title = local_prompt_title(text);
+            }
+        }
+        Some("response_item")
+            if context.title.is_none()
+                && value.pointer("/payload/role").and_then(Value::as_str) == Some("user") =>
+        {
+            if let Some(content) = value.pointer("/payload/content").and_then(Value::as_array) {
+                for item in content {
+                    if let Some(title) = item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .and_then(local_prompt_title)
+                    {
+                        context.title = Some(title);
+                        break;
+                    }
+                }
             }
         }
         _ => {}
@@ -2231,12 +2281,57 @@ fn local_prompt_title(text: &str) -> Option<String> {
     {
         return None;
     }
-    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-    let clean = line.trim_start_matches(['#', ' ', '>', '-', '*']).trim();
-    if clean.is_empty() || clean.starts_with('<') {
-        return None;
+
+    let mut in_skip_block = false;
+    let skip_tags_start = [
+        "<INSTRUCTIONS>",
+        "<instructions>",
+        "<environment_context>",
+        "<permissions instructions>",
+        "<system-reminder>",
+    ];
+    let skip_tags_end = [
+        "</INSTRUCTIONS>",
+        "</instructions>",
+        "</environment_context>",
+        "</permissions instructions>",
+        "</system-reminder>",
+    ];
+
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+
+        if skip_tags_start.iter().any(|tag| line.contains(tag)) {
+            in_skip_block = true;
+        }
+        if in_skip_block {
+            if skip_tags_end.iter().any(|tag| line.contains(tag)) {
+                in_skip_block = false;
+            }
+            continue;
+        }
+
+        let clean = line
+            .trim_start_matches(['#', ' ', '>', '-', '*', ':'])
+            .trim();
+        if clean.is_empty() || clean.starts_with('<') || clean.starts_with("<!--") {
+            continue;
+        }
+        if clean.starts_with("AGENTS.md instructions")
+            || clean.starts_with("Instructions for")
+            || clean.starts_with("You are ")
+        {
+            continue;
+        }
+        let lower = clean.to_lowercase();
+        if lower == "untitled" || lower == "未命名会话" || lower == "none" || lower == "null" {
+            continue;
+        }
+        return metadata_label(clean, MAX_SESSION_TITLE_CHARS);
     }
-    metadata_label(clean, MAX_SESSION_TITLE_CHARS)
+    None
 }
 
 pub fn find_antigravity_session_cwd(session_id: &str) -> Result<Option<PathBuf>, CollectorError> {
@@ -3843,6 +3938,42 @@ mod tests {
             local_prompt_title("<local-command-caveat>internal</local-command-caveat>").is_none()
         );
         assert!(local_prompt_title("<command-name>/compact</command-name>").is_none());
+        assert!(local_prompt_title("Untitled").is_none());
+        assert!(local_prompt_title("未命名会话").is_none());
+        assert_eq!(
+            local_prompt_title(
+                "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\ninternal\n</INSTRUCTIONS>\n\n实现重命名功能"
+            )
+            .as_deref(),
+            Some("实现重命名功能")
+        );
+    }
+
+    #[test]
+    fn codex_rollout_extracts_title_from_response_item() {
+        let mut context = LocalSessionContext::new(
+            crate::domain::AgentType::Codex,
+            "session-codex-title".to_owned(),
+        );
+        let line = serde_json::json!({
+            "type": "response_item",
+            "payload": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "# AGENTS.md instructions for /test\n<INSTRUCTIONS>\nsecret\n</INSTRUCTIONS>"
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "分析内存泄漏问题"
+                    }
+                ]
+            }
+        })
+        .to_string();
+        apply_codex_context_line(&line, &mut context);
+        assert_eq!(context.title.as_deref(), Some("分析内存泄漏问题"));
     }
 
     #[test]

@@ -120,6 +120,7 @@ import {
   SessionContextMenu,
   type ContextMenuPosition,
 } from "./components/SessionContextMenu";
+import { RenameSessionDialog } from "./components/RenameSessionDialog";
 import {
   ConversationItem,
   groupConversationMessages,
@@ -318,7 +319,25 @@ function Dashboard({
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(
     null,
   );
+  const [renameSession, setRenameSession] = useState<Session | null>(null);
+  const [titleOverridesVersion, setTitleOverridesVersion] = useState(0);
   const [toastMessage, setToastMessage] = useState<string>();
+
+  useEffect(() => {
+    const handleTitleOverridesChanged = () => {
+      setTitleOverridesVersion((v) => v + 1);
+    };
+    window.addEventListener(
+      "agenthub:title-overrides-changed",
+      handleTitleOverridesChanged,
+    );
+    return () => {
+      window.removeEventListener(
+        "agenthub:title-overrides-changed",
+        handleTitleOverridesChanged,
+      );
+    };
+  }, []);
 
   const [pluginState, setPluginState] = useState(() => readPluginState());
   const reloadPlugins = useCallback(() => {
@@ -442,6 +461,7 @@ function Dashboard({
     query,
     snapshot.devices,
     pluginState.enabledPluginIds,
+    titleOverridesVersion,
   ]);
 
   const attentionSessions = useMemo(
@@ -1004,9 +1024,22 @@ function Dashboard({
               onNewSessionForAgent={(agentType) => {
                 openLaunchModalFor(agentType);
               }}
+              onRenameSession={(session) => {
+                setRenameSession(session);
+              }}
               onShowToast={showToast}
             />
           )}
+
+          <RenameSessionDialog
+            session={renameSession}
+            onClose={() => setRenameSession(null)}
+            onRename={(s, newTitle) => {
+              rememberTitleOverride(sessionKey(s), newTitle);
+              setTitleOverridesVersion((v) => v + 1);
+              showToast("已更新会话名称");
+            }}
+          />
 
           {/* Toast Notification Pill */}
           {toastMessage && (

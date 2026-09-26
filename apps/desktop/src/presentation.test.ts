@@ -5,12 +5,16 @@ import {
   adjacentItem,
   agentLabel,
   agentShortLabel,
+  formatDetailedTime,
   groupSessionsByProvider,
   groupSessionsByWorkspace,
   hasActiveTurn,
   isAttentionSession,
   permissionFieldLabel,
   relativeTime,
+  rememberTitleOverride,
+  sessionDisplayTitle,
+  sessionTooltip,
   statusView,
 } from "./presentation";
 import type { Session } from "./types";
@@ -126,5 +130,80 @@ describe("desktop presentation", () => {
         payload: { state: { activity_status: "WORKING" } },
       } as Session),
     ).toBe(false);
+  });
+
+  it("does not fall back to workspace name when title is missing or identical to workspace", () => {
+    const untitledSession = {
+      device_id: "dev-1",
+      agent_type: "codex",
+      agent_session_id: "019d1469-804d-78c2-bb58-a92c3a5ef599",
+      payload: {
+        project: { display_name: "ClaudeSpace" },
+        runtime: { title: "ClaudeSpace" },
+      },
+    } as unknown as Session;
+
+    expect(sessionDisplayTitle(untitledSession)).toBe("会话 #019d1469");
+
+    const noTitleSession = {
+      device_id: "dev-1",
+      agent_type: "codex",
+      agent_session_id: "019d1469-804d-78c2-bb58-a92c3a5ef599",
+      payload: {
+        project: { display_name: "ClaudeSpace" },
+      },
+    } as unknown as Session;
+
+    expect(sessionDisplayTitle(noTitleSession)).toBe("会话 #019d1469");
+  });
+
+  it("prioritizes explicit valid runtime titles", () => {
+    const session = {
+      device_id: "dev-1",
+      agent_type: "claude_code",
+      agent_session_id: "sess-abc",
+      payload: {
+        project: { display_name: "ClaudeSpace" },
+        runtime: { title: "实现会话重命名功能" },
+      },
+    } as unknown as Session;
+
+    expect(sessionDisplayTitle(session)).toBe("实现会话重命名功能");
+  });
+
+  it("prioritizes user custom title overrides and indexes cross-keys", () => {
+    const session = {
+      device_id: "dev-1",
+      agent_type: "codex",
+      agent_session_id: "custom-sess-1234",
+      payload: {
+        project: { display_name: "ClaudeSpace" },
+        runtime: { title: "原始标题" },
+      },
+    } as unknown as Session;
+
+    rememberTitleOverride("dev-1:codex:custom-sess-1234", "重命名后的会话名称");
+    expect(sessionDisplayTitle(session)).toBe("重命名后的会话名称");
+  });
+
+  it("formats detailed timestamp and generates comprehensive tooltip", () => {
+    expect(formatDetailedTime("2026-03-05T08:30:15.000Z")).toContain("2026-03-05");
+    const session = {
+      device_id: "dev-1",
+      agent_type: "codex",
+      agent_session_id: "019d1469-804d-78c2-bb58-a92c3a5ef599",
+      observed_at: "2026-03-05T08:30:15.000Z",
+      payload: {
+        project: { display_name: "ClaudeSpace" },
+        runtime: { model: "o3-mini", permission_mode: "acceptEdits" },
+      },
+    } as unknown as Session;
+
+    const tooltip = sessionTooltip(session, "会话 #019d1469");
+    expect(tooltip).toContain("会话 #019d1469");
+    expect(tooltip).toContain("019d1469-804d-78c2-bb58-a92c3a5ef599");
+    expect(tooltip).toContain("工作区: ClaudeSpace");
+    expect(tooltip).toContain("模型: o3-mini");
+    expect(tooltip).toContain("模式: acceptEdits");
   });
 });
