@@ -881,16 +881,22 @@ function Dashboard({
                   type="button"
                   className="sidebar-footer-action-btn"
                   onClick={onOpenLocalHost ?? (() => {})}
-                  title={`移动端协同设备: ${isMobileConnected ? "已连接" : "未连接"} (本机出站: ${snapshot.realtime_connected ? "实时在线" : "轮询"})`}
-                  aria-label="移动端设备连接状态"
+                  title={
+                    snapshot.realtime_connected
+                      ? `远程已连接 (实时在线)${isMobileConnected ? " · 移动端已协同" : " · 点击管理工作目录与远程连接"}`
+                      : snapshot.sync_running
+                        ? "远程服务连接降级 (轮询中) · 点击检查连接"
+                        : "远程连接未连接 · 点击管理工作目录与远程连接"
+                  }
+                  aria-label="远程连接与移动端协同状态"
                 >
                   <Smartphone size={16} />
                   <span
                     className={
                       "footer-status-indicator " +
-                      (isMobileConnected
+                      (snapshot.realtime_connected
                         ? "online"
-                        : snapshot.realtime_connected
+                        : snapshot.sync_running
                           ? "fallback"
                           : "offline")
                     }
