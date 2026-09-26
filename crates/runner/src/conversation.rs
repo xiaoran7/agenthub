@@ -60,9 +60,12 @@ pub fn load_session_conversation(
         AgentType::Codex => {
             collect_provider_transcripts(&home.join(".codex"), raw_session_id, 0, &mut paths)
         }
-        AgentType::ClaudeCode => {
-            collect_transcript_files(&home.join(".claude/projects"), raw_session_id, 0, &mut paths)
-        }
+        AgentType::ClaudeCode => collect_transcript_files(
+            &home.join(".claude/projects"),
+            raw_session_id,
+            0,
+            &mut paths,
+        ),
         _ => paths.extend(find_agent_transcript(home, agent_type, raw_session_id)),
     }
     paths.sort();
@@ -1349,7 +1352,10 @@ mod tests {
             }
         }
         println!("WITH PREFIXED ID: ok={}, empty={}", ok_count, empty_count);
-        assert!(ok_count > 30, "Prefixed session IDs must now resolve successfully!");
+        assert!(
+            ok_count > 30,
+            "Prefixed session IDs must now resolve successfully!"
+        );
     }
 }
 

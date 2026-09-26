@@ -18,6 +18,22 @@ export interface AgentPlugin {
 
 export const AGENT_PLUGIN_MARKETPLACE: AgentPlugin[] = [
   {
+    id: "zcode",
+    name: "ZCode Agent Remote",
+    shortLabel: "ZCode",
+    category: "官方核心",
+    author: "ZCode Team",
+    version: "2.0.0-remote",
+    iconName: "zcode",
+    summary: "基于 ACP 协议的 ZCode 官方编程助手连接驱动。",
+    description:
+      "面向 ZCode 打造的原生 Remote 运行时与应用服务器连接驱动。支持本地多工作区发现、多模型智能调度、实时流式响应与急停中断。",
+    defaultModel: "gemini-3.8-flash-high",
+    builtin: false,
+    status: "available",
+    tags: ["ZCode", "ACP", "多模型", "应用服务器"],
+  },
+  {
     id: "antigravity",
     name: "Google Antigravity Remote",
     shortLabel: "Antigravity",
@@ -59,6 +75,9 @@ export interface PluginState {
 
 export function readPluginState(): PluginState {
   try {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return { enabledPluginIds: [] };
+    }
     const stored = window.localStorage.getItem(STORAGE_KEY);
     if (!stored) {
       // 默认状态：反重力与 Grok 默认不直接展示，需在插件商城中手动启用
@@ -76,22 +95,20 @@ export function readPluginState(): PluginState {
 
 export function savePluginState(state: PluginState): void {
   try {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(state.enabledPluginIds),
-    );
+    if (typeof window !== "undefined" && window.localStorage) {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(state.enabledPluginIds),
+      );
+    }
   } catch {
     // ignore
   }
 }
 
 export function isPluginEnabled(pluginId: Session["agent_type"]): boolean {
-  // 核心受控 Provider 永久启用
-  if (
-    pluginId === "codex" ||
-    pluginId === "claude_code" ||
-    pluginId === "zcode"
-  ) {
+  // 初始核心受控 Provider 永久启用（仅 Claude Code 与 Codex）
+  if (pluginId === "codex" || pluginId === "claude_code") {
     return true;
   }
   const state = readPluginState();

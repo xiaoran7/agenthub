@@ -1979,6 +1979,31 @@ svg.rotating {
   align-items: center;
 }
 
+.composer-plus-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+
+.composer-plus-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-contrast);
+}
+
+.composer-plus-btn:active {
+  transform: scale(0.96);
+}
+
 .composer-plus-menu {
   position: absolute;
   bottom: calc(100% + 10px);
@@ -2180,6 +2205,21 @@ svg.rotating {
   color: var(--text-primary);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+}
+
+.context-capacity-popover .category-sub-pct {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-weight: normal;
+  margin-left: 2px;
+}
+
+.context-capacity-popover .category-row.zero-usage .category-name,
+.context-capacity-popover .category-row.zero-usage .category-pct,
+.context-capacity-popover .category-row.zero-usage .category-sub-pct {
+  color: var(--text-muted);
+  opacity: 0.5;
 }
 
 .context-capacity-popover .popover-divider {
@@ -2451,14 +2491,36 @@ svg.rotating {
   outline-offset: 2px;
 }
 
-.settings-modal-window .outline-button {
+.settings-modal-window .outline-button,
+.settings-modal-window .settings-action-btn {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 8px;
   color: var(--text-primary);
   background: var(--bg-surface);
-  border-color: var(--border-contrast);
+  border: 1px solid var(--border-contrast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.settings-modal-window .outline-button:hover {
+.settings-modal-window .outline-button:hover,
+.settings-modal-window .settings-action-btn:hover {
   background: var(--bg-hover);
+  border-color: var(--brand-accent);
+}
+
+.settings-modal-window .outline-button svg,
+.settings-modal-window .settings-action-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* --------------------------------------------------------------------------
@@ -2658,3 +2720,254 @@ svg.rotating {
   border-radius: 4px;
   font-size: 11px;
 }
+
+/* --------------------------------------------------------------------------
+ * 4-Level Session Folder Tree (电脑 -> Agent -> 工作区 -> Session)
+ * ------------------------------------------------------------------------ */
+
+.session-folder-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  user-select: none;
+}
+
+.tree-node {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.tree-node-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  color: var(--text-secondary);
+}
+
+.tree-node-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tree-node-row:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: -1px;
+}
+
+.tree-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.tree-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.tree-count-badge {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  padding: 1px 6px;
+  border-radius: 999px;
+  min-width: 16px;
+  text-align: center;
+}
+
+.tree-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.6;
+  transition: all 0.12s ease;
+}
+
+.tree-action-btn:hover {
+  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Level 1: 电脑 (Device / Host) */
+.tree-device-node {
+  margin-bottom: 4px;
+}
+
+.tree-device-row {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 6px 9px;
+  background: var(--bg-card-header);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.tree-device-row .device-icon {
+  color: var(--brand-accent);
+}
+
+.tree-device-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 3px;
+  padding-left: 2px;
+}
+
+/* Level 2: Agent (Provider) */
+.tree-agent-row {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-primary);
+  padding-left: 12px;
+}
+
+.tree-agent-row .agent-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background-color: var(--provider-color, var(--text-muted));
+}
+
+.tree-agent-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Level 3: 工作区 (Workspace) */
+.tree-workspace-row {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding-left: 24px;
+}
+
+.tree-workspace-row .ws-icon {
+  color: var(--text-muted);
+}
+
+.tree-workspace-row:hover .ws-icon {
+  color: var(--brand-accent);
+}
+
+.tree-workspace-row .ws-count {
+  font-size: 10px;
+}
+
+.tree-workspace-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Level 4: Session (会话项) */
+.tree-session-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.tree-session-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tree-session-item.selected {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+  font-weight: 550;
+}
+
+.tree-session-item.selected::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--brand-accent);
+}
+
+.tree-session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-session-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tree-empty-hint {
+  padding: 4px 8px 6px 36px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-capacity-popover,
+  .composer-plus-menu,
+  .session-folder-tree,
+  .tree-node-row {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+

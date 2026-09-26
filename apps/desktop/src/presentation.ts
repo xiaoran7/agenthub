@@ -189,8 +189,8 @@ export const PROVIDER_LIST: ReadonlyArray<{
     label: "ZCode Agent",
     shortLabel: "ZCode",
     defaultModel: "gemini-3.8-flash-high",
-    desc: "ZCode 官方编程助手 (Managed)",
-    managed: true,
+    desc: "ZCode 官方编程助手 (Plugin)",
+    managed: false,
   },
   {
     type: "antigravity",

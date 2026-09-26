@@ -7,15 +7,23 @@
 
 - 规则、长期偏好和相关排障经验迁入本项目，agent 不再依赖父目录共享文档。
 
-## [Unreleased]
+## [2.4.36] - 2026-09-26
 
-性能与健壮性优化，无接口与行为契约变更（`web_sessions.last_seen_at` 的刷新粒度除外，见下）。
+性能、桌面端 UI 现代化与健壮性优化：
 
+- **桌面端 4 级文件夹树状侧边栏**：侧边栏全面重构为「电脑 (Device) → Agent (Provider) → 工作区 (Workspace) → 会话 (Session)」4 级层级树，统一收敛会话组织模式，支持各层级折叠展开记忆；提供清晰的设备状态指示、Agent 快捷发起按钮、工作区文件夹聚类与状态圆点高亮。
+- **设备聚合归一与无用节点剔除**：移除测试阶段写死的伪造设备名；将本机全部会话与历次重装遗留的历史设备碎片 ID 全面收敛聚合至唯一的「本机电脑 (Hostname)」节点下，杜绝单机多设备分裂现象；过滤会话数为 0 的离线空设备，保持侧边栏干净清爽。
+- **开箱 Provider 清理与 ZCode 插件化**：内置受控 Provider 默认仅保留 Claude Code 与 ChatGPT (Codex)；ZCode 下放至插件系统（Plugin Marketplace）作为「官方核心」驱动，用户按需在插件商城中一键启用后方才在新建会话和侧边栏中展示。
+- **新建会话弹窗组件现代化**：`LaunchSessionModal.tsx` 模型与运行权限下拉选择控件由原生粗糙 `<select>` 替换为现代化毛玻璃交互组件 `SelectDropdown`，支持键盘导航与自适应边界吸附；联动 Provider 清单确保非激活插件不外露。
+- **输入框与设置界面微交互修复**：修复输入框底栏加号按钮（`.composer-plus-btn`）无样式渲染为系统粗劣白底方块缺陷，重构为圆角图标胶囊；修复设置弹窗中「管理本机连接」按钮继承 44px 高全局大圆角样式在紧凑行高列表中比例失调问题。
+- **上下文容量弹层 (ContextCapacityPopover) 计算与色彩纠偏**：修正分段百分比计算逻辑，使彩色分段进度条真实反映占模型上下文总窗口的比例，消除百分比相加为 100% 却显示在 83.4% 标题下的视觉与认知歧义；移除硬编码 Tailwind-500 饱和色值，全面接入三套主题的语义状态变量（`--status-success`、`--status-info`、`--status-warning`、`--status-danger`）；修正缓存统计文案为精确的「本轮缓存读取率」，并适配系统减弱动效偏好。
 - `DurableHost::poll` 由「每个事件一次 SQLite 事务」改为「一次轮询批次一个事务」。此前每条事件都单独 `BEGIN`/`COMMIT`，在 `synchronous=FULL` 下等于逐事件 fsync；事件密集时事务数与事件数 1:1 增长。批内按最终 cursor 裁剪一次，保留窗口与逐条追加完全一致，并有 3 项新测试锁定。
 - 会话 transcript 读取不再对同一行 JSONL 解析两遍：`read_transcript_windows` 直接返回已解析的 `Value`，调用方复用。`invalid`/`omitted` 上报语义保持不变，截断行仍不会外泄给调用方。
 - `ingestAuthBatch` 由「每 snapshot 一次 SELECT + 一次 UPSERT」改为「整批一次读取 + 逐条 UPSERT」，消除 2N 次往返；`checked_at` 新旧比较与去重语义不变。
 - `RemoteContentStore.receive` 处理 `ready` / `host_lost` 时，改为按 `(owner, runner)` 精确查询一次并用单条多行 UPSERT 写回，取代此前「扫描该 owner 全部会话 + 逐条 SELECT + 逐条 UPSERT」。`native_identity_changed` 冲突检测保留，并对超宽 payload 按 SQLite 参数上限自动分批。
 - `/v3/remote/sessions` 的设备归属校验改用新增的 `getRegisteredDevices` 批量查询，取代按 runner 串行的 `getRegisteredDevice`；该接口为 1.5s 轮询路径，此前每台设备一次数据库往返。
+- 修复 `zcode_app_server` 环境变量覆盖被忽略导致非预期回退至全局宿主路径缺陷，保证测试环境与物理机环境严格隔离；规范化 `remote_network` 启动失败标准安全错误码 `native_host_start_failed`。
+- 同步全平台版本至 2.4.36，Android versionCode 升至 47。
 - **语义权衡（需知悉）**：`SessionAuthenticator` 每次认证都会更新 `web_sessions.last_seen_at`，在 1.5s 轮询下会持续产生行版本与 WAL。现改为数据修改 CTE，**每 60 秒最多推进一次**（`SESSION_ACTIVITY_REFRESH_SECONDS`）。会话有效性（`expires_at`、账号状态、工作区成员关系）**仍在每个请求上重新校验**，节流只影响设置页「最近活动」的显示精度，最多滞后约 60 秒。
 
 ## [2.4.35] - 2026-09-25

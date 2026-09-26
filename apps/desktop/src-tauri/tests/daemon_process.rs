@@ -55,6 +55,10 @@ fn hidden_daemon_failure_emits_only_safe_code_in_isolated_data_dir() {
         .env("HOME", dir.path())
         .env("USERPROFILE", dir.path())
         .env("CODEX_HOME", dir.path())
+        .env(
+            "ZCODE_APP_SERVER_PATH",
+            dir.path().join("nonexistent-zcode.cjs"),
+        )
         .stdin(Stdio::null())
         .output()
         .unwrap();

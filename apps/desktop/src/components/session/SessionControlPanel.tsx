@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Eye,
   Paperclip,
+  Plus,
   RefreshCw,
   Square,
   X,
@@ -658,7 +659,7 @@ export function SessionControlPanel({
                       onClick={() => setPlusMenuOpen((prev) => !prev)}
                       aria-label="添加附件与常用词"
                     >
-                      +
+                      <Plus size={15} />
                     </button>
                     <ComposerPlusMenu
                       isOpen={plusMenuOpen}

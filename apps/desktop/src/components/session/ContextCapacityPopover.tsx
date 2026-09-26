@@ -13,7 +13,8 @@ interface CategoryBreakdown {
   id: string;
   label: string;
   color: string;
-  percentage: number;
+  percentage: number; // Percentage of total context window
+  shareOfUsed: number; // Percentage of used tokens
   tokens: number;
 }
 
@@ -66,10 +67,14 @@ export function useContextMetrics(
     let hitRate = 0;
     let allCategories: CategoryBreakdown[] = [];
 
+    const safeWindow = windowTokens > 0 ? windowTokens : 1;
+    const safeUsed = used > 0 ? used : 1;
+
     if (hasDetailedTokens) {
       const cacheRead = runtime?.cache_read_tokens ?? 0;
+      const cacheWrite = runtime?.cache_write_tokens ?? 0;
       const inputTotal = runtime?.input_tokens ?? used;
-      const promptInput = Math.max(0, inputTotal - cacheRead);
+      const promptInput = Math.max(0, inputTotal - cacheRead - cacheWrite);
       const outputTokens = runtime?.output_tokens ?? 0;
       const reasoningTokens = runtime?.reasoning_tokens ?? 0;
 
@@ -80,48 +85,57 @@ export function useContextMetrics(
         hitRate = 0;
       }
 
-      const totalActiveTokens = used > 0 ? used : cacheRead + promptInput;
-      const safeDenom = totalActiveTokens > 0 ? totalActiveTokens : 1;
-
       allCategories = [
         {
           id: "cache_read",
           label: "缓存读取 (Prompt Cache)",
-          color: "#10b981", // Emerald
+          color: "var(--status-success)",
           percentage:
-            totalActiveTokens > 0 && cacheRead > 0
-              ? +((cacheRead / safeDenom) * 100).toFixed(1)
-              : 0,
+            cacheRead > 0 ? +((cacheRead / safeWindow) * 100).toFixed(1) : 0,
+          shareOfUsed:
+            cacheRead > 0 ? +((cacheRead / safeUsed) * 100).toFixed(1) : 0,
           tokens: cacheRead,
         },
         {
           id: "prompt_input",
           label: "提示输入 (New Input)",
-          color: "#3b82f6", // Blue
+          color: "var(--status-info)",
           percentage:
-            totalActiveTokens > 0 && promptInput > 0
-              ? +((promptInput / safeDenom) * 100).toFixed(1)
-              : 0,
+            promptInput > 0 ? +((promptInput / safeWindow) * 100).toFixed(1) : 0,
+          shareOfUsed:
+            promptInput > 0 ? +((promptInput / safeUsed) * 100).toFixed(1) : 0,
           tokens: promptInput,
         },
         {
           id: "output",
           label: "生成输出 (Completion)",
-          color: "#8b5cf6", // Purple
+          color: "var(--status-warning)",
           percentage:
-            totalActiveTokens > 0 && outputTokens > 0
-              ? +((outputTokens / safeDenom) * 100).toFixed(1)
-              : 0,
+            outputTokens > 0 ? +((outputTokens / safeWindow) * 100).toFixed(1) : 0,
+          shareOfUsed:
+            outputTokens > 0 ? +((outputTokens / safeUsed) * 100).toFixed(1) : 0,
           tokens: outputTokens,
         },
       ];
+
+      if (cacheWrite > 0) {
+        allCategories.push({
+          id: "cache_write",
+          label: "缓存写入 (Cache Write)",
+          color: "var(--brand-accent)",
+          percentage: +((cacheWrite / safeWindow) * 100).toFixed(1),
+          shareOfUsed: +((cacheWrite / safeUsed) * 100).toFixed(1),
+          tokens: cacheWrite,
+        });
+      }
 
       if (reasoningTokens > 0) {
         allCategories.push({
           id: "reasoning",
           label: "深度思考 (Reasoning)",
-          color: "#f59e0b", // Amber
-          percentage: +((reasoningTokens / safeDenom) * 100).toFixed(1),
+          color: "var(--brand-accent)",
+          percentage: +((reasoningTokens / safeWindow) * 100).toFixed(1),
+          shareOfUsed: +((reasoningTokens / safeUsed) * 100).toFixed(1),
           tokens: reasoningTokens,
         });
       }
@@ -144,7 +158,6 @@ export function useContextMetrics(
 
       const totalRecordedChars =
         userMsgCharCount + assistantMsgCharCount + toolCharCount;
-      const safeDenom = used > 0 ? used : 1;
 
       if (totalRecordedChars > 0 && used > 0) {
         const msgRatio =
@@ -158,15 +171,17 @@ export function useContextMetrics(
           {
             id: "messages",
             label: "对话消息",
-            color: "#3b82f6",
-            percentage: +((msgTokens / safeDenom) * 100).toFixed(1),
+            color: "var(--status-info)",
+            percentage: +((msgTokens / safeWindow) * 100).toFixed(1),
+            shareOfUsed: +((msgTokens / safeUsed) * 100).toFixed(1),
             tokens: msgTokens,
           },
           {
             id: "tools",
             label: "工具调用与结果",
-            color: "#38bdf8",
-            percentage: +((toolTokens / safeDenom) * 100).toFixed(1),
+            color: "var(--status-success)",
+            percentage: +((toolTokens / safeWindow) * 100).toFixed(1),
+            shareOfUsed: +((toolTokens / safeUsed) * 100).toFixed(1),
             tokens: toolTokens,
           },
         ];
@@ -175,8 +190,9 @@ export function useContextMetrics(
           {
             id: "messages",
             label: "对话上下文",
-            color: "#3b82f6",
+            color: "var(--status-info)",
             percentage: 0,
+            shareOfUsed: 0,
             tokens: 0,
           },
         ];
@@ -200,7 +216,7 @@ export function useContextMetrics(
 }
 
 /**
- * ZCode Native Style Circular Progress Ring (matching 图三)
+ * Modern Style Circular Progress Ring
  */
 export function ContextCapacityRing({
   runtime,
@@ -219,12 +235,12 @@ export function ContextCapacityRing({
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (percentage / 100) * circumference;
 
-  // Adaptive ring color based on percentage usage
-  let ringColor = "#3b82f6"; // Primary blue
+  // Adaptive ring color based on percentage usage using theme variables
+  let ringColor = "var(--status-info)";
   if (percentage >= 90) {
-    ringColor = "#ef4444"; // Red
+    ringColor = "var(--status-danger)";
   } else if (percentage >= 70) {
-    ringColor = "#f59e0b"; // Warning amber
+    ringColor = "var(--status-warning)";
   }
 
   useEffect(() => {
@@ -267,7 +283,7 @@ export function ContextCapacityRing({
             cy="10"
             r={radius}
             fill="none"
-            stroke="rgba(255, 255, 255, 0.15)"
+            stroke="var(--border-subtle)"
             strokeWidth="2.2"
           />
           {/* Active Progress Arc */}
@@ -299,7 +315,7 @@ export function ContextCapacityRing({
             </span>
           </div>
 
-          {/* Multi-color segmented progress bar */}
+          {/* Multi-color segmented progress bar representing the entire context window */}
           <div className="segmented-progress-bar">
             {metrics.categories
               .filter((cat) => cat.percentage > 0)
@@ -311,7 +327,7 @@ export function ContextCapacityRing({
                     width: `${cat.percentage}%`,
                     backgroundColor: cat.color,
                   }}
-                  title={`${cat.label}: ${cat.percentage}% (${formatTokens(cat.tokens)})`}
+                  title={`${cat.label}: ${formatTokens(cat.tokens)} (占总窗口 ${cat.percentage}% · 占已用 ${cat.shareOfUsed}%)`}
                 />
               ))}
           </div>
@@ -319,11 +335,16 @@ export function ContextCapacityRing({
           {/* Breakdown List */}
           <div className="popover-categories">
             {metrics.categories.map((cat) => {
-              const isZero = cat.percentage === 0;
+              const isZero = cat.tokens === 0;
               return (
                 <div
                   key={cat.id}
                   className={`category-row ${isZero ? "zero-usage" : ""}`}
+                  title={
+                    !isZero
+                      ? `${cat.label}: ${formatTokens(cat.tokens)} (占总窗口 ${cat.percentage}% · 占当前已用 ${cat.shareOfUsed}%)`
+                      : undefined
+                  }
                 >
                   <div className="category-label-group">
                     <span
@@ -331,22 +352,17 @@ export function ContextCapacityRing({
                       style={{
                         backgroundColor: isZero ? "transparent" : cat.color,
                         border: isZero
-                          ? "1px solid rgba(255, 255, 255, 0.22)"
+                          ? "1px solid var(--border-subtle)"
                           : "none",
                       }}
                     />
-                    <span
-                      className="category-name"
-                      style={{ color: isZero ? "#71717a" : "#d4d4d8" }}
-                    >
-                      {cat.label}
-                    </span>
+                    <span className="category-name">{cat.label}</span>
                   </div>
-                  <span
-                    className="category-pct"
-                    style={{ color: isZero ? "#71717a" : "#f4f4f5" }}
-                  >
-                    {cat.percentage}%
+                  <span className="category-pct">
+                    {formatTokens(cat.tokens)}{" "}
+                    <small className="category-sub-pct">
+                      ({cat.percentage}%)
+                    </small>
                   </span>
                 </div>
               );
@@ -358,7 +374,7 @@ export function ContextCapacityRing({
 
           {/* Footer */}
           <div className="popover-footer">
-            <span className="footer-label">平均缓存命中率</span>
+            <span className="footer-label">本轮缓存读取率</span>
             <span className="footer-value">
               {metrics.cacheHitRate > 0 ? `${metrics.cacheHitRate}%` : "0%"}
             </span>

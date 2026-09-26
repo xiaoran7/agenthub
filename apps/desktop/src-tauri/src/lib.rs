@@ -996,7 +996,10 @@ fn send_codex_message_with_client(
         .map_err(|_| DesktopError::SessionUnavailable)?;
     let existing_binding = sessions
         .iter()
-        .find(|s| s.provider_session_id == provider_session_id || s.provider_session_id == input.agent_session_id)
+        .find(|s| {
+            s.provider_session_id == provider_session_id
+                || s.provider_session_id == input.agent_session_id
+        })
         .cloned();
 
     if let Some(binding) = &existing_binding
@@ -3467,7 +3470,6 @@ pub fn run_daemon_process(data_dir: PathBuf) -> Result<(), String> {
     })
     .map_err(|error| error.to_string())
 }
-
 
 pub mod commands;
 pub use commands::*;

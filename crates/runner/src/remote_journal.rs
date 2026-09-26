@@ -806,7 +806,13 @@ fn history_snapshot_projects_normalized_items_without_raw_paths() {
         question: None,
     };
     let projected = projected_remote_event(&event).unwrap();
-    assert_eq!(projected["event"]["raw"]["params"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        projected["event"]["raw"]["params"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     let encoded = projected.to_string();
     assert!(!encoded.contains("alice"));
     assert!(!encoded.contains("do-not-send"));

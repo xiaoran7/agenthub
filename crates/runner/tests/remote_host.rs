@@ -426,7 +426,10 @@ fn acp_question_and_approval_metadata_flow() {
     let opts = q.options.as_ref().expect("options");
     assert_eq!(opts.len(), 2);
     assert_eq!(opts[0].label, "PostgreSQL (Recommended)");
-    assert_eq!(host.sessions()[0].execution_state, ExecutionState::AwaitingInput);
+    assert_eq!(
+        host.sessions()[0].execution_state,
+        ExecutionState::AwaitingInput
+    );
 
     // Answer the question
     let answer_cmd = control(
@@ -571,8 +574,14 @@ fn zcode_interaction_permission_and_user_input_conversion_flow() {
     assert_eq!(events[0].kind, "approval_requested");
     let approvals = host.pending_approvals();
     assert_eq!(approvals.len(), 1);
-    assert_eq!(approvals[0].command_preview.as_deref(), Some("Write pelican.svg"));
-    assert_eq!(approvals[0].path.as_deref(), Some("D:/ClaudeSpace/scratch_zcode_test/pelican.svg"));
+    assert_eq!(
+        approvals[0].command_preview.as_deref(),
+        Some("Write pelican.svg")
+    );
+    assert_eq!(
+        approvals[0].path.as_deref(),
+        Some("D:/ClaudeSpace/scratch_zcode_test/pelican.svg")
+    );
     assert_eq!(approvals[0].tool_name.as_deref(), Some("Bash"));
 
     let approval_id = approvals[0].approval_id.clone();
@@ -607,7 +616,10 @@ fn zcode_interaction_permission_and_user_input_conversion_flow() {
     assert_eq!(q_events[0].kind, "question_requested");
     let questions = host.pending_questions();
     assert_eq!(questions.len(), 1);
-    assert_eq!(questions[0].prompt, "Which framework would you like for the mini website?");
+    assert_eq!(
+        questions[0].prompt,
+        "Which framework would you like for the mini website?"
+    );
     assert_eq!(questions[0].options.as_ref().unwrap().len(), 2);
     assert_eq!(questions[0].options.as_ref().unwrap()[0].label, "React");
 

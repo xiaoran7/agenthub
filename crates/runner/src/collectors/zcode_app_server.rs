@@ -12,9 +12,8 @@ use std::{
 use serde_json::{Value, json};
 
 use super::{
-    home_dir, MAX_PROTOCOL_LINE_BYTES,
-    BoundedLine, ChildJob, CollectorError, ProtocolRead,
-    configure_process_group, read_bounded_line, sanitize_protocol_message,
+    BoundedLine, ChildJob, CollectorError, MAX_PROTOCOL_LINE_BYTES, ProtocolRead,
+    configure_process_group, home_dir, read_bounded_line, sanitize_protocol_message,
 };
 
 pub struct ZCodeAppServer {
@@ -35,6 +34,7 @@ pub fn resolve_zcode_app_server_script() -> Option<PathBuf> {
         if candidate.is_file() {
             return dunce::canonicalize(&candidate).ok().or(Some(candidate));
         }
+        return None;
     }
     let candidates = [
         PathBuf::from(r"D:\zcode\resources\glm\zcode.cjs"),
@@ -522,4 +522,3 @@ fn read_zcode_protocol(stdout: impl Read, sender: mpsc::Sender<ProtocolRead>) {
         }
     }
 }
-

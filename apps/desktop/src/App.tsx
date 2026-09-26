@@ -133,6 +133,8 @@ import { SessionEmptyState } from "./components/session/SessionEmptyState";
 import { ConversationLoadState } from "./components/session/ConversationLoadState";
 import { ContextCapacityRing } from "./components/session/ContextCapacityPopover";
 import { ComposerPlusMenu } from "./components/session/ComposerPlusMenu";
+import { buildDesktopSessionTree } from "./lib/session-tree";
+import { DesktopSessionFolderTree } from "./components/sidebar/DesktopSessionFolderTree";
 
 import { AuthScreen } from "./components/auth/AuthScreen";
 import { AccountMenu, planLabel } from "./components/layout/AccountMenu";
@@ -423,20 +425,22 @@ function Dashboard({
     [agentFilter, deferredQuery, deviceFilter, sessions],
   );
 
-  const workspaceGroups = useMemo(
-    () =>
-      groupSessionsByWorkspace(filteredSessions).map((group) => ({
-        ...group,
-        sessions: [...group.sessions].sort((a, b) => {
-          const pinDiff =
-            Number(pinnedSessions.includes(sessionKey(b))) -
-            Number(pinnedSessions.includes(sessionKey(a)));
-          if (pinDiff !== 0) return pinDiff;
-          return activityTime(b).localeCompare(activityTime(a));
-        }),
-      })),
-    [filteredSessions, pinnedSessions],
-  );
+  const sessionTree = useMemo(() => {
+    return buildDesktopSessionTree({
+      sessions: sessions.filter((s) => s.archived !== true),
+      localDeviceId: snapshot.device.device_id,
+      localDeviceName: snapshot.device.name,
+      searchQuery: query,
+      registeredDevices: snapshot.devices,
+    });
+  }, [
+    sessions,
+    snapshot.device.device_id,
+    snapshot.device.name,
+    query,
+    snapshot.devices,
+    pluginState.enabledPluginIds,
+  ]);
 
   const attentionSessions = useMemo(
     () => filteredSessions.filter(isAttentionSession),
@@ -813,47 +817,13 @@ function Dashboard({
             </div>
           </div>
 
-          {/* Managed Agent Indicator & Selector */}
-          <div className="sidebar-agent-picker-v2">
-            <div className="picker-header-row">
-              <span className="picker-label">受控 Agent</span>
-            </div>
-            <div className="managed-agents-list">
-              {PROVIDER_LIST.filter(
-                (item) =>
-                  item.managed ||
-                  pluginState.enabledPluginIds.includes(item.type),
-              ).map((item) => {
-                const isSelected = agentFilter === item.type;
-                return (
-                  <button
-                    key={item.type}
-                    type="button"
-                    className={`single-agent-badge ${isSelected ? "selected" : ""}`}
-                    data-provider={item.type}
-                    onClick={() => setAgentFilter(item.type)}
-                    title={`筛选 ${item.label} 会话`}
-                  >
-                    <span className="agent-badge-dot" />
-                    <strong>{item.label}</strong>
-                    <span
-                      className={`agent-badge-tag ${item.managed ? "" : "unmanaged"}`}
-                    >
-                      {item.managed ? "Managed" : "Plugin"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Search Box if opened */}
           {searchOpen && (
             <div className="sidebar-search-box">
               <Search size={14} />
               <input
                 autoFocus
-                placeholder="按名称、模型或项目搜索..."
+                placeholder="搜索电脑、Agent、工作区或会话..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -869,193 +839,22 @@ function Dashboard({
             </div>
           )}
 
-          {/* The selected Agent is grouped by local workspace. */}
+          {/* 4-Level Session Folder Tree (电脑 -> Agent -> 工作区 -> Session) */}
           <div className="sidebar-providers-tree">
-            {workspaceGroups.length === 0 ? (
-              <div className="sidebar-empty">
-                <span>
-                  {query ? "没有匹配的会话" : "正在扫描本机 Agent 会话..."}
-                </span>
-              </div>
-            ) : (
-              workspaceGroups.map((group) => {
-                const isCollapsed = !!collapsedProviders[group.name];
-                const visibleLimit = expandedLimits[group.name] ?? 12;
-                const visibleSessions = group.sessions.slice(0, visibleLimit);
-                const remaining =
-                  group.sessions.length - visibleSessions.length;
-
-                return (
-                  <div
-                    className="provider-group workspace-group"
-                    key={group.name}
-                  >
-                    <div
-                      className="provider-group-header"
-                      onClick={() => toggleProviderCollapse(group.name)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          toggleProviderCollapse(group.name);
-                        }
-                      }}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <div className="provider-header-left">
-                        <span className="provider-chevron">
-                          {isCollapsed ? (
-                            <ChevronRight size={13} />
-                          ) : (
-                            <ChevronDown size={13} />
-                          )}
-                        </span>
-                        <strong className="provider-title">{group.name}</strong>
-                        <span className="provider-count">
-                          {group.sessions.length}
-                        </span>
-                      </div>
-                      <div
-                        className="provider-header-actions"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          type="button"
-                          className="provider-action-icon"
-                          disabled={
-                            agentFilter === "all" ||
-                            !isManagedProvider(agentFilter)
-                          }
-                          title={
-                            agentFilter !== "all" &&
-                            isManagedProvider(agentFilter)
-                              ? "在 " + group.name + " 新建会话"
-                              : "该 Provider 当前仅支持发现和历史读取"
-                          }
-                          onClick={() =>
-                            agentFilter !== "all" &&
-                            isManagedProvider(agentFilter) &&
-                            openLaunchModalFor(agentFilter)
-                          }
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {!isCollapsed && (
-                      <div className="provider-sessions-list">
-                        {visibleSessions.map((session) => {
-                          const isSelected =
-                            selectedSessionKey === sessionKey(session);
-                          const attention = isAttentionSession(session);
-                          const isWorking =
-                            session.payload.state.activity_status === "WORKING";
-                          const title = sessionDisplayTitle(session);
-
-                          return (
-                            <div
-                              key={sessionKey(session)}
-                              className={
-                                "sidebar-session-item " +
-                                (isSelected ? "selected" : "")
-                              }
-                              data-provider={session.agent_type}
-                              title={title}
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                setContextMenu({
-                                  x: e.clientX,
-                                  y: e.clientY,
-                                  session,
-                                });
-                              }}
-                            >
-                              <button
-                                type="button"
-                                className="sidebar-session-open"
-                                onClick={() =>
-                                  setSelectedSessionKey(sessionKey(session))
-                                }
-                              >
-                                <span className="session-status-indicator">
-                                  {attention ? (
-                                    <AlertTriangle
-                                      size={13}
-                                      className="status-warn-icon"
-                                    />
-                                  ) : isWorking ? (
-                                    <i className="status-dot working" />
-                                  ) : (
-                                    <i className="status-dot normal" />
-                                  )}
-                                </span>
-                                <span className="sidebar-session-title">
-                                  {title}
-                                </span>
-                              </button>
-                              <button
-                                type="button"
-                                className={
-                                  "sidebar-pin " +
-                                  (pinnedSessions.includes(sessionKey(session))
-                                    ? "active"
-                                    : "")
-                                }
-                                onClick={() =>
-                                  togglePinnedSession(sessionKey(session))
-                                }
-                                aria-label={
-                                  pinnedSessions.includes(sessionKey(session))
-                                    ? "取消置顶"
-                                    : "置顶会话"
-                                }
-                                title={
-                                  pinnedSessions.includes(sessionKey(session))
-                                    ? "取消置顶"
-                                    : "置顶会话"
-                                }
-                              >
-                                <Pin size={11} />
-                              </button>
-                            </div>
-                          );
-                        })}
-
-                        {remaining > 0 && (
-                          <button
-                            type="button"
-                            className="sidebar-show-more"
-                            onClick={() =>
-                              expandProviderLimit(
-                                group.name,
-                                group.sessions.length,
-                              )
-                            }
-                          >
-                            再显示 {remaining} 个
-                          </button>
-                        )}
-                        {remaining === 0 && group.sessions.length > 12 && (
-                          <button
-                            type="button"
-                            className="sidebar-show-more collapse"
-                            onClick={() =>
-                              setExpandedLimits((current) => ({
-                                ...current,
-                                [group.name]: 12,
-                              }))
-                            }
-                          >
-                            收起
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
+            <DesktopSessionFolderTree
+              tree={sessionTree}
+              selectedSessionKey={selectedSessionKey}
+              onSelectSession={(key) => setSelectedSessionKey(key)}
+              onLaunchForProvider={(provider) => openLaunchModalFor(provider)}
+              onContextMenu={(e, session) =>
+                setContextMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  session,
+                })
+              }
+              query={query}
+            />
           </div>
 
           <div className="sidebar-footer">

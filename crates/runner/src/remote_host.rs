@@ -830,12 +830,14 @@ impl NativeTransport for MultiProviderTransport {
                         crate::collectors::CollectorError::Protocol { ref message, .. } => {
                             NativeError::rejected(message.as_str())
                         }
-                        crate::collectors::CollectorError::Timeout { ref program, timeout_ms } => {
-                            NativeError::uncertain(format!("zcode_timeout: {} after {}ms", program, timeout_ms))
-                        }
-                        ref err => {
-                            NativeError::uncertain(format!("zcode_send_failed: {}", err))
-                        }
+                        crate::collectors::CollectorError::Timeout {
+                            ref program,
+                            timeout_ms,
+                        } => NativeError::uncertain(format!(
+                            "zcode_timeout: {} after {}ms",
+                            program, timeout_ms
+                        )),
+                        ref err => NativeError::uncertain(format!("zcode_send_failed: {}", err)),
                     })?;
                 let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
                 self.zcode_active_turns
@@ -950,14 +952,12 @@ impl NativeTransport for MultiProviderTransport {
             }
             _ => {
                 if let Some(ref mut codex) = self.codex {
-                    codex
-                        .request(method, params)
-                        .map_err(|error| match error {
-                            crate::collectors::CollectorError::Protocol { .. } => {
-                                NativeError::rejected("provider_rejected")
-                            }
-                            _ => NativeError::uncertain("provider_transport_lost"),
-                        })
+                    codex.request(method, params).map_err(|error| match error {
+                        crate::collectors::CollectorError::Protocol { .. } => {
+                            NativeError::rejected("provider_rejected")
+                        }
+                        _ => NativeError::uncertain("provider_transport_lost"),
+                    })
                 } else {
                     Err(NativeError::rejected("provider_not_available"))
                 }
@@ -972,8 +972,13 @@ impl NativeTransport for MultiProviderTransport {
             && let Some(ref mut zcode) = self.zcode
         {
             let actual_id = id_str.trim_start_matches("zcode_");
-            let parsed_id = actual_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| Value::String(actual_id.to_string()));
-            return zcode.respond(parsed_id, result).map_err(|_| NativeError::uncertain("provider_transport_lost"));
+            let parsed_id = actual_id
+                .parse::<u64>()
+                .map(Value::from)
+                .unwrap_or_else(|_| Value::String(actual_id.to_string()));
+            return zcode
+                .respond(parsed_id, result)
+                .map_err(|_| NativeError::uncertain("provider_transport_lost"));
         }
         if let Some(ref mut codex) = self.codex {
             codex
@@ -1055,7 +1060,8 @@ impl NativeTransport for MultiProviderTransport {
                                 }
                                 "tool.updated" => {
                                     let kind = payload["kind"].as_str().unwrap_or("");
-                                    let tool_id = payload["toolCallId"].as_str().unwrap_or("tool_call");
+                                    let tool_id =
+                                        payload["toolCallId"].as_str().unwrap_or("tool_call");
                                     let active_tid = active_turn_id.as_deref().unwrap_or("turn_1");
                                     if kind == "started" {
                                         messages.push(json!({
@@ -1157,9 +1163,13 @@ impl NativeTransport for MultiProviderTransport {
                             let tool_name = params["toolName"].as_str().unwrap_or("tool");
                             let reason = params["reason"].as_str().unwrap_or("");
                             let input = &params["input"];
-                            let command_preview = input.get("command").and_then(Value::as_str)
+                            let command_preview = input
+                                .get("command")
+                                .and_then(Value::as_str)
                                 .or_else(|| input.get("cmd").and_then(Value::as_str));
-                            let path = input.get("file_path").and_then(Value::as_str)
+                            let path = input
+                                .get("file_path")
+                                .and_then(Value::as_str)
                                 .or_else(|| input.get("path").and_then(Value::as_str));
 
                             messages.push(json!({
@@ -1186,11 +1196,16 @@ impl NativeTransport for MultiProviderTransport {
                             let questions = params.get("questions").and_then(Value::as_array);
                             let mut options = Vec::new();
                             let mut header = None;
-                            if let Some(qs) = questions && let Some(first_q) = qs.first() {
+                            if let Some(qs) = questions
+                                && let Some(first_q) = qs.first()
+                            {
                                 header = first_q.get("header").and_then(Value::as_str);
-                                if let Some(opts) = first_q.get("options").and_then(Value::as_array) {
+                                if let Some(opts) = first_q.get("options").and_then(Value::as_array)
+                                {
                                     for opt in opts {
-                                        if let Some(label) = opt.get("label").and_then(Value::as_str) {
+                                        if let Some(label) =
+                                            opt.get("label").and_then(Value::as_str)
+                                        {
                                             options.push(json!({
                                                 "label": label,
                                                 "description": opt.get("description").and_then(Value::as_str),
@@ -1225,7 +1240,12 @@ impl NativeTransport for MultiProviderTransport {
         }
 
         // Only mark transport lost if codex itself dropped AND there are no other active provider streams
-        if codex_lost && self.zcode.is_none() && self.claude_active_turns.is_empty() && self.antigravity_active_turns.is_empty() && self.grok_active_turns.is_empty() {
+        if codex_lost
+            && self.zcode.is_none()
+            && self.claude_active_turns.is_empty()
+            && self.antigravity_active_turns.is_empty()
+            && self.grok_active_turns.is_empty()
+        {
             return Err(NativeError::uncertain("provider_transport_lost"));
         }
 
@@ -1907,7 +1927,10 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             // Bound provider_response in receipt: IPC frame limit is MAX_DAEMON_FRAME_BYTES (1MB).
             // Retain thread summary (id, cwd, status) and discard large historical turns array.
             let mut sanitized_response = response.clone();
-            if let Some(thread_obj) = sanitized_response.get_mut("thread").and_then(Value::as_object_mut) {
+            if let Some(thread_obj) = sanitized_response
+                .get_mut("thread")
+                .and_then(Value::as_object_mut)
+            {
                 thread_obj.remove("turns");
             }
             return Ok(json!({"binding": binding, "provider_response": sanitized_response}));
@@ -2158,7 +2181,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     .filter_map(|opt| {
                                         opt["label"].as_str().map(|label| QuestionOptionSnapshot {
                                             label: label.to_string(),
-                                            description: opt["description"].as_str().map(str::to_owned),
+                                            description: opt["description"]
+                                                .as_str()
+                                                .map(str::to_owned),
                                             preview: opt["preview"].as_str().map(str::to_owned),
                                         })
                                     })
@@ -2236,9 +2261,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     description: description.clone(),
                                     risk_level: risk_level.clone(),
                                 };
-                                self.approvals
-                                    .entry(id.clone())
-                                    .or_insert_with(|| PendingApproval {
+                                self.approvals.entry(id.clone()).or_insert_with(|| {
+                                    PendingApproval {
                                         hub_session_id: binding.hub_session_id.clone(),
                                         turn_id: turn_id.into(),
                                         request_id,
@@ -2249,7 +2273,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                         path,
                                         description,
                                         risk_level,
-                                    });
+                                    }
+                                });
                                 approval_id = Some(id);
                                 if supported {
                                     approval = Some(descriptor);

@@ -6,6 +6,7 @@ import { PROVIDER_LIST } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
 import type { Session, SessionTurnEvent } from "../../types";
 import { errorMessage } from "../auth/AuthScreen";
+import { SelectDropdown } from "../SelectDropdown";
 
 export const isManagedProvider = (
   agentType: string,
@@ -222,33 +223,34 @@ export function LaunchSessionModal({
           </fieldset>
 
           <div className="launch-form-row">
-            <label className="launch-form-field">
+            <div className="launch-form-field">
               <span>模型</span>
-              <select
+              <SelectDropdown
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
+                options={models.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                  desc: option.desc,
+                }))}
+                onChange={(val) => setModel(val)}
                 disabled={models.length <= 1}
-              >
-                {models.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="launch-form-field">
+                size="md"
+                ariaLabel="选择模型"
+              />
+            </div>
+            <div className="launch-form-field">
               <span>运行权限</span>
-              <select
+              <SelectDropdown
                 value={permission}
-                onChange={(e) => setPermission(e.target.value)}
-              >
-                {PERMISSION_OPTIONS[agentType].map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={PERMISSION_OPTIONS[agentType].map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
+                onChange={(val) => setPermission(val)}
+                size="md"
+                ariaLabel="选择运行权限"
+              />
+            </div>
           </div>
 
           <div className="launch-form-field">

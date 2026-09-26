@@ -478,9 +478,7 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 let output = usage_u64(usage, "output_tokens");
                 let cache_read = usage_u64(usage, "cache_read_input_tokens");
                 let cache_write = usage_u64(usage, "cache_creation_input_tokens");
-                let total_input = input
-                    .saturating_add(cache_write)
-                    .saturating_add(cache_read);
+                let total_input = input.saturating_add(cache_write).saturating_add(cache_read);
                 if total_input > 0 {
                     context.context_used_tokens = Some(total_input);
                     context.input_tokens = Some(total_input);
@@ -2482,7 +2480,9 @@ pub fn collect_zcode_session_contexts_from(
             .filter(|t| *t > 0)
             .or(context.session_total_tokens);
         context.context_used_tokens = used;
-        context.input_tokens = input_tokens.and_then(|t| u64::try_from(t).ok()).filter(|t| *t > 0);
+        context.input_tokens = input_tokens
+            .and_then(|t| u64::try_from(t).ok())
+            .filter(|t| *t > 0);
         context.output_tokens = output_tokens.and_then(|t| u64::try_from(t).ok());
         context.cache_read_tokens = cache_read_tokens.and_then(|t| u64::try_from(t).ok());
         context.cache_write_tokens = cache_write_tokens.and_then(|t| u64::try_from(t).ok());
@@ -2508,7 +2508,8 @@ pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
                         if (mid.eq_ignore_ascii_case(model_name)
                             || model_name.contains(mid)
                             || mid.contains(model_name))
-                            && let Some(ctx) = mdata.pointer("/limit/context").and_then(Value::as_u64)
+                            && let Some(ctx) =
+                                mdata.pointer("/limit/context").and_then(Value::as_u64)
                         {
                             return Some(ctx);
                         }
@@ -2520,7 +2521,12 @@ pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
     let lower = model_name.to_lowercase();
     if lower.contains("gemini") {
         Some(1_000_000)
-    } else if lower.contains("claude") || lower.contains("gpt-5") || lower.contains("gpt-4") || lower.contains("o1") || lower.contains("o3") {
+    } else if lower.contains("claude")
+        || lower.contains("gpt-5")
+        || lower.contains("gpt-4")
+        || lower.contains("o1")
+        || lower.contains("o3")
+    {
         Some(200_000)
     } else {
         Some(128_000)
@@ -3374,18 +3380,14 @@ fn resolve_windows_codex_candidate(candidate: &Path) -> Option<PathBuf> {
     None
 }
 
-
 pub mod process;
 pub(crate) use process::*;
 
 pub mod codex_app_server;
 pub use codex_app_server::*;
 
-
 pub mod zcode_app_server;
 pub use zcode_app_server::*;
-
-
 
 #[derive(Debug, Clone)]
 pub struct CollectorBinaries {

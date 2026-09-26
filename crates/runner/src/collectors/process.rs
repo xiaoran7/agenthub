@@ -185,4 +185,3 @@ pub(crate) fn sanitize_protocol_message(message: &str) -> String {
         sanitized
     }
 }
-

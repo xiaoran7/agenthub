@@ -11,10 +11,9 @@ use std::{
 use serde_json::{Value, json};
 
 use super::{
-    resolve_codex_app_server_binary,
-    BoundedLine, ChildJob, CollectorError, DEFAULT_COLLECTOR_TIMEOUT,
-    MAX_PROTOCOL_LINE_BYTES, ProtocolRead, configure_process_group,
-    read_bounded_line, sanitize_protocol_message,
+    BoundedLine, ChildJob, CollectorError, DEFAULT_COLLECTOR_TIMEOUT, MAX_PROTOCOL_LINE_BYTES,
+    ProtocolRead, configure_process_group, read_bounded_line, resolve_codex_app_server_binary,
+    sanitize_protocol_message,
 };
 
 pub struct CodexAppServer {
@@ -376,6 +375,3 @@ pub(crate) fn read_protocol(stdout: impl Read, sender: mpsc::Sender<ProtocolRead
         }
     }
 }
-
-
-
