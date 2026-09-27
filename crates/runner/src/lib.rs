@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod agent_binary;
 pub mod auth;
 pub mod auth_worker;
 pub mod collectors;

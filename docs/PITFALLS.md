@@ -21,6 +21,7 @@
 - Codex 版本和用户配置会改变初始化能力；实验字段即使传 `false` 也可能触发能力门禁。错误应原样降级，不能假报成功。
 - 原生最终消息可能与增量重叠，聚合按 turn/item/block 去重，不按数组尾部盲加。
 - Claude Session 发现不能依赖不存在或版本不稳定的 `claude agents --json`；使用受限历史来源时保持只读边界。
+- Agent CLI 可能多版本并存（Provider 托管安装 + 用户独立安装 + 版本管理器 shim），且 `~/.local/bin` 里的那份无人更新。transcript 格式只增字段：新 binary 能读旧 transcript，**旧 binary 读不了新 transcript，会把它报成 `No conversation found with session ID`**——transcript 文件明明存在。因此发现必须「按探测版本择优」，不能「找到第一个存在的 exe 就返回」；resume 失败后按该错误窄匹配回退到其他候选，并记录 session→binary 兼容关系。通用非零退出、超时、取消都不触发回退：重放可能已部分执行的 turn 是重复副作用。
 - Grok Build 采集只读 `summary.json` / `active_sessions.json` 白名单，不读对话日志或 `auth.json`。
 - 模型、权限、Slash 与上下文能力来自运行时探测；历史中出现过不等于当前账号仍支持。
 

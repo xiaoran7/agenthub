@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.4.46] - 2026-09-27
+
+Agent CLI 二进制发现改为「候选收集 → 版本探测 → 择优 + 回退」：
+
+- **根因修复：AgentHub 会用旧版 Claude Code 去 resume 新版写的会话**。`discover_claude_binary()` 原先硬编码优先 `~/.local/bin/claude.exe`，找到即返回，从不比较版本。在本机实测中，该路径命中 2.1.196，而实际持有会话的 `Claude-3p/claude-code/2.1.281/claude.exe` 为 2.1.281；同一 session id 用旧 binary 执行 `--resume` 必然返回 `No conversation found with session ID`，transcript 本身完好。transcript 格式只增字段，因此**新 binary 能读旧 transcript，旧 binary 读不了新 transcript**——这正是需要「始终选最新版」而非「第一个存在的 exe」的原因；
+- **新增 `agent_binary` 模块**：三段式发现（candidate discovery → `--version` 能力/版本探测 → selection）。排序键为「已知版本优先于未知版本，其次版本号降序，最后按来源 tie-break」，来源优先级 `EnvironmentOverride > ManagedInstall > UserInstall > PathLookup`——版本相同时优先 Provider 托管安装，因为它才是写这些 transcript 的那个 binary；
+- **Managed install 按目录 glob 发现**：`Claude-3p/claude-code/<version>/claude.exe` 的版本号是路径的一部分、每次升级都会变，因此枚举 `<root>/claude-code/*/` 而非写死某个 release；
+- **`--version` 探测带硬超时**：直接用 `Command::output()` 会让一个卡死的 binary 无限期阻塞 daemon 启动，改为显式 `try_wait` 轮询并在超时后 kill 子进程。探测失败的 binary 记为「无版本」而非报错，使发现过程能挺过半安装状态；
+- **同路径去重**：`PATH` 解析与显式目录可能指向同一个 exe，去重后只算一个候选，避免重试时白白多跑一次进程；
+- **resume 失败回退**：新增 `CollectorError::SessionUnreadable`（code `session_unreadable`）。`run_agent_stream_process` 在丢弃 stdout 之前先识别该失败——通用非零退出、超时、取消**都不触发**回退，因为重放一个可能已部分执行的 turn 正是远程命令契约禁止的重复副作用；「会话不可读」发生在模型被调用之前，prompt 从未送达，因此换 binary 重试是安全的；
+- **session → binary 兼容关系记录**：回退成功后把可用的 binary 写入 `~/.agent-pulse/agent-binary-affinity.json`，同一 session 后续 resume 优先命中已记录项、跳过已知失败候选。若最新版本仍读不了某 transcript，回退会自动落到旁边的旧版本安装，而不是锁死；
+- **抽象推广到所有 Provider**：`discover_antigravity_binary()` / `discover_grok_binary()` 原先复制粘贴同一套「找第一个存在的 exe」模板，现统一走 `discover_provider_binary()` 共享实现，多版本并存时同样按版本择优。ZCode 为 node 脚本而非可执行文件，不参与该问题；
+- **override 语义收紧**：`CLAUDE_BINARY` / `GROK_BINARY` / `ANTIGRAVITY_BINARY` 显式指定后，`CandidateSet` 会拒绝再加入任何自动发现的候选——此前 `push` 在 override 之后仍可追加，使 pin 只是「优先」而非「锁定」；
+- **全平台版本递增**：版本升级至 2.4.46，Android versionCode 升至 57，Cargo 与 Node 清单同步更新；
+- **验证**：`cargo test --workspace` 220 项通过（新增 10 项覆盖版本解析、排序键、override 独占、去重、失败回退不重复候选、错误窄匹配），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 通过；本机实测发现排序为 2.1.281 → 2.1.271 → 2.1.196（`claude`）→ 2.1.196（`~/.local/bin`），确认首选已从旧版切换到实际持有会话的版本。
+
+### 遗留（设计债务，非本次 blocker）
+
+- **模型清单与上下文窗口仍按 `AgentType` 分桶**：`list_agent_models_inner` 的 key 是 AgentType，Claude 桶兜底为 `BUILTIN_MODELS.claude_code`；`resolve_zcode_model_context_window` 靠模型名子串猜窗口（`contains("claude")|contains("gpt-5") → 200_000`、`contains("gemini") → 1M`、else `128_000`）。经 CC Switch 路由到 GLM 等上游时，会给出路由不认的模型名或静默错误的窗口。根因是缺少 `router` 这一正交维度——`AgentType` 是扁平枚举，`model` 是自由字符串，没有任何地方记录「当前被路由到哪个上游」。此问题不影响 resume 本身（`thread/resume` 不带 model），故未纳入本次修复；
+- **auth 上报会把路由器凭据当作 Provider 登录态**：`tokens_from_environment(ClaudeCode)` 读 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`，CC Switch 写入的 key 会被计为 Claude 的认证状态。这是凭据分类问题，不是身份识别问题。
+
 ## [2.4.45] - 2026-09-26
 
 上下文容量明细重构、思考强度控制与认证失败归类：

@@ -28,6 +28,9 @@ const LOCAL_CONTEXT_HEAD_BYTES: u64 = 512 * 1024;
 const LOCAL_CONTEXT_TAIL_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SESSION_TITLE_CHARS: usize = 160;
 const MAX_CONFIG_VALUE_CHARS: usize = 96;
+/// Upper bound on a single `--version` probe. Discovery runs on the daemon
+/// startup path, so a wedged binary must cost one short timeout, not a hang.
+const BINARY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum CollectorError {
@@ -39,6 +42,10 @@ pub enum CollectorError {
     },
     #[error("{program} exited unsuccessfully with status {status}")]
     Exit { program: String, status: String },
+    /// The CLI ran but could not read the requested session, which is what an
+    /// older build does when the transcript was written by a newer one.
+    #[error("{program} could not read the requested session")]
+    SessionUnreadable { program: String },
     #[error("failed to communicate with {program}: {source}")]
     Io {
         program: String,
@@ -94,6 +101,7 @@ impl CollectorError {
                 _ => "process_start_failed",
             },
             Self::Exit { .. } => "process_exit_failed",
+            Self::SessionUnreadable { .. } => "session_unreadable",
             Self::Io { .. } => "protocol_io_failed",
             Self::MissingStdio { .. } => "protocol_stdio_missing",
             Self::InvalidJson { .. } => "protocol_invalid_json",
@@ -640,60 +648,57 @@ fn read_claude_transcript_metadata(
 }
 
 pub fn discover_claude_binary() -> PathBuf {
-    if let Some(path) = env::var_os("CLAUDE_BINARY").filter(|v| !v.is_empty()) {
-        return PathBuf::from(path);
-    }
-    if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
-        let local_bin = user_profile.join(".local").join("bin").join("claude.exe");
-        if local_bin.is_file() {
-            return local_bin;
-        }
-        let local_cmd = user_profile.join(".local").join("bin").join("claude.cmd");
-        if local_cmd.is_file() {
-            return local_cmd;
-        }
-    }
-    PathBuf::from("claude")
+    claude_binary_candidates()
+        .into_iter()
+        .next()
+        .map(|candidate| candidate.path)
+        .unwrap_or_else(|| PathBuf::from("claude"))
+}
+
+/// Every Claude Code binary worth trying, best first.
+///
+/// Order is decided by probed version, not by which file was found first: an
+/// older CLI reports a transcript written by a newer one as missing, so the
+/// newest local build is the one most likely to resume a session at all.
+pub fn claude_binary_candidates() -> Vec<crate::agent_binary::BinaryCandidate> {
+    crate::agent_binary::claude_candidates().into_ranked(BINARY_PROBE_TIMEOUT)
 }
 
 pub fn discover_antigravity_binary() -> PathBuf {
-    if let Some(path) = env::var_os("ANTIGRAVITY_BINARY").filter(|v| !v.is_empty()) {
-        return PathBuf::from(path);
-    }
-    if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
-        let local_bin = user_profile
-            .join(".local")
-            .join("bin")
-            .join("antigravity.exe");
-        if local_bin.is_file() {
-            return local_bin;
-        }
-        let local_cmd = user_profile
-            .join(".local")
-            .join("bin")
-            .join("antigravity.cmd");
-        if local_cmd.is_file() {
-            return local_cmd;
-        }
-    }
-    PathBuf::from("antigravity")
+    discover_provider_binary("ANTIGRAVITY_BINARY", "antigravity", &["antigravity"])
 }
 
 pub fn discover_grok_binary() -> PathBuf {
-    if let Some(path) = env::var_os("GROK_BINARY").filter(|v| !v.is_empty()) {
-        return PathBuf::from(path);
-    }
-    if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
-        let local_bin = user_profile.join(".local").join("bin").join("grok.exe");
-        if local_bin.is_file() {
-            return local_bin;
+    discover_provider_binary("GROK_BINARY", "grok", &["grok"])
+}
+
+/// Shared discovery for CLIs that follow the `~/.local/bin` + `PATH` layout.
+///
+/// Newest version wins; the bare name is the last resort so a `PATH`-only
+/// install is still discovered when no candidate on disk can be probed.
+fn discover_provider_binary(env_key: &str, bare_name: &str, stems: &[&str]) -> PathBuf {
+    let mut set = crate::agent_binary::CandidateSet::new();
+    if let Some(path) = env::var_os(env_key).filter(|value| !value.is_empty()) {
+        set.push_override(path);
+    } else if let Some(home) = home_dir() {
+        let local_bin = home.join(".local").join("bin");
+        for stem in stems {
+            set.push_suffixed(
+                &local_bin,
+                stem,
+                crate::agent_binary::CandidateOrigin::UserInstall,
+            );
         }
-        let local_cmd = user_profile.join(".local").join("bin").join("grok.cmd");
-        if local_cmd.is_file() {
-            return local_cmd;
-        }
+        set.push(
+            PathBuf::from(bare_name),
+            crate::agent_binary::CandidateOrigin::PathLookup,
+        );
     }
-    PathBuf::from("grok")
+    set.into_ranked(BINARY_PROBE_TIMEOUT)
+        .into_iter()
+        .next()
+        .map(|candidate| candidate.path)
+        .unwrap_or_else(|| PathBuf::from(bare_name))
 }
 
 pub fn find_antigravity_session_info(
@@ -2691,8 +2696,22 @@ pub fn run_agent_session_turn(
 /// Resume an Agent session while forwarding safe, user-visible progress.
 /// Conversation text is never logged or persisted by this function. The
 /// caller owns the callback destination and cancellation flag.
-#[allow(clippy::too_many_arguments)]
+///
 /// Resumes an existing agent conversation and streams the turn's updates.
+///
+/// When the chosen binary reports that it cannot read the session, the turn is
+/// retried against the remaining local builds of the same CLI. A recorded
+/// session-to-binary affinity is tried first, so the second attempt is usually
+/// the binary that already worked for this session.
+///
+/// The retry is only safe because an unreadable-session failure happens before
+/// the model is ever called: no prompt was delivered, so no other binary can
+/// observe a partially executed turn. The affinity map records which binary
+/// worked so later resumes of the same session skip the failed candidate.
+#[allow(clippy::too_many_arguments)]
+/// The callback is `Clone` because a retried attempt needs a second copy: the
+/// first is moved into the failed process's reader thread. Callers already
+/// build these as `Arc`-based handles, so cloning is a refcount bump.
 pub fn run_agent_session_turn_streaming(
     agent: crate::domain::AgentType,
     binary: impl AsRef<Path>,
@@ -2702,9 +2721,95 @@ pub fn run_agent_session_turn_streaming(
     options: TurnOptions<'_>,
     timeout: Duration,
     cancelled: &AtomicBool,
+    on_update: impl FnMut(AgentTurnUpdate) + Send + Clone + 'static,
+) -> Result<AgentStreamOutcome, CollectorError> {
+    let preferred = binary.as_ref();
+    // Both attempts get their own copy: whichever runs first moves its copy
+    // into that process's reader thread, so a retry still has one to hand.
+    let first_attempt = on_update.clone();
+    let retry_attempt = on_update.clone();
+    match run_agent_session_turn_streaming_once(
+        agent,
+        preferred,
+        project_path,
+        session_id,
+        prompt,
+        options.clone(),
+        timeout,
+        cancelled,
+        first_attempt,
+    ) {
+        Ok(outcome) => Ok(outcome),
+        Err(CollectorError::SessionUnreadable { program }) => {
+            let Some(candidate) = retry_with_alternate_binary(agent, preferred, session_id) else {
+                return Err(CollectorError::SessionUnreadable { program });
+            };
+            match run_agent_session_turn_streaming_once(
+                agent,
+                &candidate,
+                project_path,
+                session_id,
+                prompt,
+                options.clone(),
+                timeout,
+                cancelled,
+                retry_attempt,
+            ) {
+                Ok(outcome) => Ok(outcome),
+                // A second unreadable-session failure means no local build can
+                // read this transcript; the original error is the honest one
+                // to report.
+                Err(_) => Err(CollectorError::SessionUnreadable { program }),
+            }
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Picks the binary to retry a failed resume with: a previously-recorded
+/// working binary for this session, else the best remaining candidate.
+///
+/// Returns `None` when discovery offers nothing beyond the one that just
+/// failed, so a single-install machine reports the error instead of paying for
+/// a pointless second process.
+fn retry_with_alternate_binary(
+    agent: crate::domain::AgentType,
+    failed: &Path,
+    session_id: &str,
+) -> Option<PathBuf> {
+    let candidates = match agent {
+        crate::domain::AgentType::ClaudeCode => claude_binary_candidates(),
+        _ => return None,
+    };
+    let remaining: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| candidate.path != failed)
+        .collect();
+    if remaining.is_empty() {
+        return None;
+    }
+    let session_key = format!("claude:{session_id}");
+    let mut affinity = crate::agent_binary::BinaryAffinity::load();
+    if let Some(known) = affinity.lookup(&session_key, &remaining) {
+        return Some(known);
+    }
+    let best = remaining[0].path.clone();
+    affinity.record(&session_key, &best);
+    Some(best)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_agent_session_turn_streaming_once(
+    agent: crate::domain::AgentType,
+    binary: &Path,
+    project_path: Option<&Path>,
+    session_id: &str,
+    prompt: &str,
+    options: TurnOptions<'_>,
+    timeout: Duration,
+    cancelled: &AtomicBool,
     on_update: impl FnMut(AgentTurnUpdate) + Send + 'static,
 ) -> Result<AgentStreamOutcome, CollectorError> {
-    let binary = binary.as_ref();
     let program = binary.display().to_string();
     let mut command = Command::new(binary);
     let prompt_file = match agent {
@@ -2998,6 +3103,16 @@ fn run_agent_stream_process(
     drop(prompt_file);
     let status = status?;
     if !status.success() {
+        // Distinguish "this build cannot read that transcript" from a generic
+        // non-zero exit before discarding stdout. Only the former is worth
+        // retrying against a different binary; replaying a turn that may have
+        // partially executed is exactly the duplicate side effect the remote
+        // command contract forbids.
+        if let Ok(output) = String::from_utf8(stdout)
+            && crate::agent_binary::is_unreadable_session_failure(&program, &output)
+        {
+            return Err(CollectorError::SessionUnreadable { program });
+        }
         return Err(CollectorError::Exit {
             program,
             status: status.to_string(),
