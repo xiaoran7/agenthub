@@ -67,6 +67,11 @@ export interface PendingApproval {
   turn_id: string;
   can_approve: boolean;
   can_decline: boolean;
+  tool_name?: string;
+  command_preview?: string;
+  path?: string;
+  description?: string;
+  risk_level?: string;
 }
 
 export interface Session {

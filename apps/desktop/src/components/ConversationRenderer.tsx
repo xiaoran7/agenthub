@@ -12,6 +12,10 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
+  FileCode,
+  FileText,
+  Search,
+  HelpCircle,
 } from "lucide-react";
 import type { ConversationMessage } from "../turn-stream";
 
@@ -324,7 +328,10 @@ function ThinkingBlock({
 }
 
 /** Splits `args 〔结果〕 output` payloads produced by the desktop normalizer. */
-function splitToolContent(content: string): { args: string; result: string } {
+export function splitToolContent(content: string): {
+  args: string;
+  result: string;
+} {
   const at = content.indexOf(RESULT_SEPARATOR);
   if (at === -1) return { args: content, result: "" };
   return {
@@ -333,8 +340,161 @@ function splitToolContent(content: string): { args: string; result: string } {
   };
 }
 
-function ToolCallBlock({ message }: { message: ConversationMessage }) {
+export type ToolCategory =
+  "terminal" | "file_read" | "file_edit" | "interactive" | "system";
+
+export function classifyTool(label?: string, kind?: string): ToolCategory {
+  if (kind === "command") return "terminal";
+  const norm = (label || "").toLowerCase();
+  if (
+    norm.startsWith("bash") ||
+    norm.includes("shell") ||
+    norm.includes("exec") ||
+    norm.includes("命令")
+  ) {
+    return "terminal";
+  }
+  if (
+    norm.startsWith("edit") ||
+    norm.startsWith("write") ||
+    norm.includes("patch") ||
+    norm.includes("修改") ||
+    norm.includes("变更")
+  ) {
+    return "file_edit";
+  }
+  if (
+    norm.startsWith("read") ||
+    norm.startsWith("grep") ||
+    norm.startsWith("glob") ||
+    norm.includes("search") ||
+    norm.includes("查看")
+  ) {
+    return "file_read";
+  }
+  if (
+    norm.includes("ask") ||
+    norm.includes("plan") ||
+    norm.includes("question") ||
+    norm.includes("提问") ||
+    norm.includes("规划")
+  ) {
+    return "interactive";
+  }
+  return "system";
+}
+
+export interface DiffStats {
+  additions: number;
+  deletions: number;
+  oldText?: string;
+  newText?: string;
+}
+
+export function parseDiffStats(content: string): DiffStats {
+  let additions = 0;
+  let deletions = 0;
+  let oldText: string | undefined;
+  let newText: string | undefined;
+
+  const trimmed = content.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const oldStr = parsed.old ?? parsed.old_string;
+      const newStr = parsed.new ?? parsed.new_string;
+      if (typeof oldStr === "string" || typeof newStr === "string") {
+        if (typeof oldStr === "string") {
+          oldText = oldStr;
+          deletions = oldStr
+            .split("\n")
+            .filter((l: string) => l.trim() !== "").length;
+        }
+        if (typeof newStr === "string") {
+          newText = newStr;
+          additions = newStr
+            .split("\n")
+            .filter((l: string) => l.trim() !== "").length;
+        }
+        return { additions, deletions, oldText, newText };
+      }
+    } catch {
+      // not simple JSON diff
+    }
+  }
+
+  const lines = content.split("\n");
+  for (const line of lines) {
+    if (
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("@@")
+    ) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      additions++;
+    } else if (line.startsWith("-")) {
+      deletions++;
+    }
+  }
+
+  return { additions, deletions };
+}
+
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface QuestionItem {
+  question: string;
+  header?: string;
+  options?: QuestionOption[];
+  multiSelect?: boolean;
+}
+
+export function parseQuestionData(content: string): QuestionItem[] | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+      return parsed.questions as QuestionItem[];
+    }
+  } catch {
+    // not JSON questions
+  }
+  return null;
+}
+
+export function extractToolPrimaryValue(label?: string, args?: string): string {
+  if (label && label.includes(": ")) {
+    return label.slice(label.indexOf(": ") + 2).trim();
+  }
+  if (args) {
+    const trimmed = args.trim();
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const val =
+          parsed.command ??
+          parsed.file_path ??
+          parsed.path ??
+          parsed.pattern ??
+          parsed.query;
+        if (typeof val === "string") return val;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return label || "";
+}
+
+export function ToolCallBlock({ message }: { message: ConversationMessage }) {
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const failed = message.status === "failed";
   const running = message.status === "running";
   const isCommand = message.kind === "command";
@@ -342,26 +502,94 @@ function ToolCallBlock({ message }: { message: ConversationMessage }) {
   const { args, result } = splitToolContent(message.content);
   const effectiveStatus = running ? "running" : failed ? "failed" : "completed";
 
+  const category = classifyTool(message.label, message.kind);
+  const diffStats = parseDiffStats(args);
+  const questionItems = parseQuestionData(args);
+  const hasDiff = diffStats.additions > 0 || diffStats.deletions > 0;
+  const primaryValue = extractToolPrimaryValue(message.label, args);
+
+  const handleCopyPrimary = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!primaryValue) return;
+    try {
+      await navigator.clipboard.writeText(primaryValue);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+
+  const renderCategoryIcon = () => {
+    switch (category) {
+      case "terminal":
+        return <Terminal size={12} className="tool-category-icon terminal" />;
+      case "file_edit":
+        return <FileCode size={12} className="tool-category-icon edit" />;
+      case "file_read": {
+        const norm = (message.label || "").toLowerCase();
+        if (norm.startsWith("read") || norm.includes("查看")) {
+          return <FileText size={12} className="tool-category-icon read" />;
+        }
+        return <Search size={12} className="tool-category-icon read" />;
+      }
+      case "interactive":
+        return (
+          <HelpCircle size={12} className="tool-category-icon interactive" />
+        );
+      default:
+        return isStatus ? (
+          <Activity size={12} className="tool-category-icon status" />
+        ) : (
+          <Wrench size={12} className="tool-category-icon generic" />
+        );
+    }
+  };
+
   return (
     <details
-      className={`tool-call-accordion ${failed ? "failed" : ""} ${open ? "open" : ""}`}
+      className={`tool-call-accordion tool-cat-${category} ${failed ? "failed" : ""} ${open ? "open" : ""}`}
       open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
     >
       <summary className="tool-call-summary">
-        <span className="tool-icon-badge">
-          {isCommand ? (
-            <Terminal size={12} />
-          ) : isStatus ? (
-            <Activity size={12} />
-          ) : (
-            <Wrench size={12} />
-          )}
-        </span>
+        <span className="tool-icon-badge">{renderCategoryIcon()}</span>
         <strong className="tool-name">
           {message.label ||
             (isCommand ? "命令执行" : isStatus ? "状态更新" : "工具调用")}
         </strong>
+
+        {hasDiff && (
+          <span
+            className="diff-stats-badge"
+            aria-label={`+${diffStats.additions} -${diffStats.deletions}`}
+          >
+            {diffStats.additions > 0 && (
+              <span className="diff-stat-add">+{diffStats.additions}</span>
+            )}
+            {diffStats.deletions > 0 && (
+              <span className="diff-stat-del">-{diffStats.deletions}</span>
+            )}
+          </span>
+        )}
+
+        {primaryValue && (
+          <button
+            type="button"
+            className="tool-quick-copy-btn"
+            onClick={handleCopyPrimary}
+            title={`复制: ${primaryValue}`}
+            aria-label="复制参数"
+          >
+            {copied ? (
+              <Check size={11} className="copy-success" />
+            ) : (
+              <Copy size={11} />
+            )}
+          </button>
+        )}
+
         <span className={`tool-status-pill ${effectiveStatus}`}>
           {failed ? (
             <>
@@ -380,10 +608,71 @@ function ToolCallBlock({ message }: { message: ConversationMessage }) {
         <ChevronRight size={12} className="tool-chevron" />
       </summary>
       <div className="tool-call-body">
-        {args.trim() && <pre className="tool-content-pre">{args}</pre>}
-        {result.trim() && (
+        {questionItems ? (
+          <div className="tool-question-card">
+            {questionItems.map((q, qIdx) => (
+              <div key={qIdx} className="tool-question-item">
+                <div className="tool-question-header">
+                  {q.header && (
+                    <span className="tool-question-tag">{q.header}</span>
+                  )}
+                  <span className="tool-question-text">{q.question}</span>
+                </div>
+                {q.options && q.options.length > 0 && (
+                  <div className="tool-options-list">
+                    {q.options.map((opt, optIdx) => {
+                      const isSelected = result.includes(opt.label);
+                      return (
+                        <div
+                          key={optIdx}
+                          className={`tool-option-item ${isSelected ? "selected" : ""}`}
+                        >
+                          <div className="tool-option-label">
+                            <span>{opt.label}</span>
+                            {isSelected && (
+                              <span className="tool-option-badge">已选择</span>
+                            )}
+                          </div>
+                          {opt.description && (
+                            <div className="tool-option-desc">
+                              {opt.description}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : diffStats.oldText || diffStats.newText ? (
+          <div className="tool-diff-viewer">
+            {diffStats.oldText && (
+              <div className="diff-chunk diff-chunk-del">
+                <div className="diff-chunk-tag">- 变更前</div>
+                <pre className="diff-chunk-pre">{diffStats.oldText}</pre>
+              </div>
+            )}
+            {diffStats.newText && (
+              <div className="diff-chunk diff-chunk-add">
+                <div className="diff-chunk-tag">+ 变更后</div>
+                <pre className="diff-chunk-pre">{diffStats.newText}</pre>
+              </div>
+            )}
+          </div>
+        ) : (
+          args.trim() && <pre className="tool-content-pre">{args}</pre>
+        )}
+        {result.trim() && !questionItems && (
           <div className="tool-result-markdown">
             <span className="tool-result-caption">执行结果</span>
+            <MarkdownSection content={result} />
+          </div>
+        )}
+        {result.trim() && questionItems && !result.startsWith("{") && (
+          <div className="tool-result-markdown">
+            <span className="tool-result-caption">决策反馈</span>
             <MarkdownSection content={result} />
           </div>
         )}

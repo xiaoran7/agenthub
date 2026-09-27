@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.4.47] - 2026-09-27
+
+工具调用可视化、差异比对展示、交互式提问卡片与富上下文审批卡片升级：
+
+- **工具调用多维分类与语义呈现**：新增 `classifyTool` 机制，将工具调用划分为 `terminal`（终端命令）、`file_edit`（文件写入/修改）、`file_read`（读取/搜索）、`interactive`（人机交互/计划确认）与 `system`（系统/状态），按类别呈现专属语义图标与高亮左边框；
+- **文件变更统计徽章与代码差异比对**：新增 `parseDiffStats` 与 `tool-diff-viewer`，自动解析 `Edit`/`Write` 的 JSON（`old`/`new`、`old_string`/`new_string`）及 Unified Diff 格式，展示行增删徽章（`+N -M`）与双色差异比对块（删除红底/新增绿底），消除大段未经处理的原始差异文本堆叠；
+- **交互式提问卡片与决策渲染**：拦截 `AskUserQuestion` 与人机决策载荷，解析多选/单选题目与选项元数据，结构化呈现提问标题、选项卡片及已选答案徽章；
+- **快捷复制命令与路径**：新增 `extractToolPrimaryValue` 与 `tool-quick-copy-btn`，点击一键提取并复制终端命令或操作文件路径，提升日常操作效率；
+- **富上下文操作审批卡片**：升级桌面端会话审批栏为卡片式 `approval-card`，展示结构化工具名称、命令/路径代码预览块与操作说明，配合权限图标与风险分级，避免误审批高风险操作；
+- **Rust Runner 工具标签语义解析拓展**：`crates/runner/src/conversation.rs` 中的 `tool_call_label` 增加对 `questions` 提问数组与 `todos` 待办任务清单的解析，提取首个问题或待办项数生成紧凑直观的标签；
+- **Web 端同步实现差异统计与交互提问**：在 `apps/web` 的 `RemoteConsole.tsx` 同步引入 `remote-diff-badge`、`remote-diff-viewer` 与 `remote-question-card`，保持全端体验对齐并满足 `exactOptionalPropertyTypes` 严格契约；
+- **全平台版本递增**：版本升级至 2.4.47，Android versionCode 升至 58，全平台清单与锁文件同步更新；
+- **验证**：`cargo test --workspace` 全数通过，`cargo clippy` 与 `cargo fmt` 检查通过；桌面端测试 73 项全数通过，Web/Contracts/API 自动化测试与 TypeScript 静态检查全数通过，Prettier 格式 100% 干净。
+
 ## [2.4.46] - 2026-09-27
 
 Agent CLI 二进制发现改为「候选收集 → 版本探测 → 择优 + 回退」：

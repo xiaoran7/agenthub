@@ -175,9 +175,91 @@ function ToolIcon({ kind }: { kind: ToolKind }) {
   );
 }
 
+interface DiffStats {
+  additions: number;
+  deletions: number;
+  oldText?: string | undefined;
+  newText?: string | undefined;
+}
+
+function parseDiffStats(content?: string): DiffStats {
+  if (!content) return { additions: 0, deletions: 0 };
+  let additions = 0;
+  let deletions = 0;
+  let oldText: string | undefined;
+  let newText: string | undefined;
+
+  const trimmed = content.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const oldStr = parsed.old ?? parsed.old_string;
+      const newStr = parsed.new ?? parsed.new_string;
+      if (typeof oldStr === "string" || typeof newStr === "string") {
+        if (typeof oldStr === "string") {
+          oldText = oldStr;
+          deletions = oldStr
+            .split("\n")
+            .filter((l: string) => l.trim() !== "").length;
+        }
+        if (typeof newStr === "string") {
+          newText = newStr;
+          additions = newStr
+            .split("\n")
+            .filter((l: string) => l.trim() !== "").length;
+        }
+        return { additions, deletions, oldText, newText };
+      }
+    } catch {
+      // not simple json
+    }
+  }
+
+  const lines = content.split("\n");
+  for (const line of lines) {
+    if (
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("@@")
+    ) {
+      continue;
+    }
+    if (line.startsWith("+")) additions++;
+    else if (line.startsWith("-")) deletions++;
+  }
+  return { additions, deletions };
+}
+
+interface QuestionItem {
+  question: string;
+  header?: string | undefined;
+  options?:
+    Array<{ label: string; description?: string | undefined }> | undefined;
+  multiSelect?: boolean | undefined;
+}
+
+function parseQuestionData(content?: string): QuestionItem[] | null {
+  if (!content) return null;
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+      return parsed.questions as QuestionItem[];
+    }
+  } catch {
+    // not json
+  }
+  return null;
+}
+
 function RemoteToolCard({ item }: { item: ConversationItem }) {
   const status = item.status ?? "completed";
   const kind = toolKind(item);
+  const diffStats = parseDiffStats(item.command);
+  const questionItems = parseQuestionData(item.command);
+  const hasDiff = diffStats.additions > 0 || diffStats.deletions > 0;
+
   return (
     <details className={`remote-tool ${status}`} data-tool={kind}>
       <summary className="remote-tool-summary">
@@ -200,6 +282,19 @@ function RemoteToolCard({ item }: { item: ConversationItem }) {
             <ToolIcon kind={kind} />
           </span>
           <span className="remote-tool-title">{item.title ?? "工具调用"}</span>
+          {hasDiff && (
+            <span
+              className="remote-diff-badge"
+              aria-label={`+${diffStats.additions} -${diffStats.deletions}`}
+            >
+              {diffStats.additions > 0 && (
+                <span className="diff-add">+{diffStats.additions}</span>
+              )}
+              {diffStats.deletions > 0 && (
+                <span className="diff-del">-{diffStats.deletions}</span>
+              )}
+            </span>
+          )}
         </span>
         <span className={`remote-tool-status ${status}`}>
           {status === "running" && (
@@ -219,15 +314,71 @@ function RemoteToolCard({ item }: { item: ConversationItem }) {
               {readableRemoteText(item.description)}
             </p>
           )}
-          {item.command && (
+          {questionItems ? (
+            <div className="remote-question-card">
+              {questionItems.map((q, qIdx) => (
+                <div key={qIdx} className="remote-question-item">
+                  <div className="remote-question-header">
+                    {q.header && (
+                      <span className="remote-question-tag">{q.header}</span>
+                    )}
+                    <span className="remote-question-text">{q.question}</span>
+                  </div>
+                  {q.options && q.options.length > 0 && (
+                    <div className="remote-options-list">
+                      {q.options.map((opt, optIdx) => {
+                        const isSelected =
+                          item.output?.includes(opt.label) ?? false;
+                        return (
+                          <div
+                            key={optIdx}
+                            className={`remote-option-item ${isSelected ? "selected" : ""}`}
+                          >
+                            <div className="remote-option-label">
+                              <span>{opt.label}</span>
+                              {isSelected && (
+                                <span className="remote-option-badge">
+                                  已选择
+                                </span>
+                              )}
+                            </div>
+                            {opt.description && (
+                              <div className="remote-option-desc">
+                                {opt.description}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : diffStats.oldText || diffStats.newText ? (
+            <div className="remote-diff-viewer">
+              {diffStats.oldText && (
+                <div className="remote-diff-chunk del">
+                  <div className="remote-diff-tag">- 变更前</div>
+                  <pre className="remote-diff-pre">{diffStats.oldText}</pre>
+                </div>
+              )}
+              {diffStats.newText && (
+                <div className="remote-diff-chunk add">
+                  <div className="remote-diff-tag">+ 变更后</div>
+                  <pre className="remote-diff-pre">{diffStats.newText}</pre>
+                </div>
+              )}
+            </div>
+          ) : item.command ? (
             <div>
               <div className="remote-tool-subhead">命令 / 参数</div>
               <pre className="remote-tool-cmd">
                 {readableRemoteText(item.command)}
               </pre>
             </div>
-          )}
-          {item.output && (
+          ) : null}
+          {item.output && !questionItems && (
             <div>
               <div className="remote-tool-subhead">执行结果</div>
               <pre className="remote-tool-output">

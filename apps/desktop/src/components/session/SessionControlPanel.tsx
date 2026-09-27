@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowUp,
   ChevronLeft,
@@ -602,26 +603,64 @@ export function SessionControlPanel({
 
         {pendingApproval !== undefined && (
           <div
-            className="approval-actions"
+            className={`approval-actions ${pendingApproval.tool_name || pendingApproval.command_preview ? "approval-card" : ""}`}
             role="group"
-            aria-label="Codex 审批操作"
+            aria-label="操作审批"
           >
-            <span>Codex 正在等待权限确认</span>
-            <button
-              type="button"
-              disabled={approvalBusy || !pendingApproval.can_decline}
-              onClick={() => void resolveApproval(false)}
-            >
-              拒绝
-            </button>
-            <button
-              type="button"
-              className="primary"
-              disabled={approvalBusy || !pendingApproval.can_approve}
-              onClick={() => void resolveApproval(true)}
-            >
-              允许
-            </button>
+            <div className="approval-info">
+              <span className="approval-prompt-title">
+                <AlertCircle size={14} className="approval-alert-icon" />
+                {pendingApproval.tool_name ? (
+                  <>
+                    <strong className="approval-tool-badge">
+                      {pendingApproval.tool_name}
+                    </strong>{" "}
+                    等待执行确认
+                  </>
+                ) : (
+                  <span>
+                    {session.agent_type === "claude_code"
+                      ? "Claude Code"
+                      : session.agent_type === "codex"
+                        ? "Codex"
+                        : "Agent"}{" "}
+                    正在等待权限确认
+                  </span>
+                )}
+              </span>
+              {pendingApproval.command_preview && (
+                <pre className="approval-preview-command">
+                  <code>{pendingApproval.command_preview}</code>
+                </pre>
+              )}
+              {pendingApproval.path && (
+                <div className="approval-preview-path">
+                  <span>目标路径: {pendingApproval.path}</span>
+                </div>
+              )}
+              {pendingApproval.description && (
+                <p className="approval-preview-desc">
+                  {pendingApproval.description}
+                </p>
+              )}
+            </div>
+            <div className="approval-buttons">
+              <button
+                type="button"
+                disabled={approvalBusy || !pendingApproval.can_decline}
+                onClick={() => void resolveApproval(false)}
+              >
+                拒绝
+              </button>
+              <button
+                type="button"
+                className="primary"
+                disabled={approvalBusy || !pendingApproval.can_approve}
+                onClick={() => void resolveApproval(true)}
+              >
+                允许
+              </button>
+            </div>
           </div>
         )}
         {messages.length > 0 && conversationError && (

@@ -926,7 +926,7 @@ fn conversation_item(role: &str, kind: &str, label: &str, content: &str, status:
 /// Summarizes a tool call as `Name: key argument` so collapsed rows stay
 /// scannable without expanding the payload.
 fn tool_call_label(name: &str, input: Option<&Value>) -> String {
-    const KEY_FIELDS: [&str; 10] = [
+    const KEY_FIELDS: [&str; 12] = [
         "command",
         "file_path",
         "path",
@@ -937,15 +937,37 @@ fn tool_call_label(name: &str, input: Option<&Value>) -> String {
         "prompt",
         "description",
         "skill",
+        "instruction",
+        "message",
     ];
     let detail = input.and_then(|input| {
-        KEY_FIELDS.iter().find_map(|field| {
-            input
-                .get(field)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
+        KEY_FIELDS
+            .iter()
+            .find_map(|field| {
+                input
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                input
+                    .get("questions")
+                    .and_then(Value::as_array)
+                    .and_then(|qs| qs.first())
+                    .and_then(|q| q.get("question").or_else(|| q.get("header")))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                input
+                    .get("todos")
+                    .and_then(Value::as_array)
+                    .map(|todos| format!("{} 项待办", todos.len()))
+            })
     });
     match detail {
         Some(detail) if detail.chars().count() > 96 => {
@@ -1139,6 +1161,36 @@ mod tests {
         assert!(validate_session_id("019abc-session_1").is_ok());
         assert!(validate_session_id("../auth.json").is_err());
         assert!(validate_session_id("bad\nvalue").is_err());
+    }
+
+    #[test]
+    fn tool_call_label_extracts_key_arguments_and_questions() {
+        let bash_input = json!({"command": "cargo test -p runner"});
+        assert_eq!(
+            tool_call_label("Bash", Some(&bash_input)),
+            "Bash: cargo test -p runner"
+        );
+
+        let question_input = json!({
+            "questions": [
+                {
+                    "question": "Which framework to use?",
+                    "header": "Framework"
+                }
+            ]
+        });
+        assert_eq!(
+            tool_call_label("AskUserQuestion", Some(&question_input)),
+            "AskUserQuestion: Which framework to use?"
+        );
+
+        let todo_input = json!({
+            "todos": ["task 1", "task 2", "task 3"]
+        });
+        assert_eq!(
+            tool_call_label("TodoWrite", Some(&todo_input)),
+            "TodoWrite: 3 项待办"
+        );
     }
 
     #[test]

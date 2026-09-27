@@ -969,6 +969,311 @@ body,
   transition: border-color 0.15s ease;
 }
 
+.tool-call-accordion.tool-cat-terminal {
+  border-left: 3px solid var(--text-link);
+}
+
+.tool-call-accordion.tool-cat-file_edit {
+  border-left: 3px solid var(--brand-accent);
+}
+
+.tool-call-accordion.tool-cat-file_read {
+  border-left: 3px solid var(--border-contrast);
+}
+
+.tool-call-accordion.tool-cat-interactive {
+  border-left: 3px solid var(--status-warning);
+}
+
+.tool-category-icon.terminal {
+  color: var(--text-link);
+}
+
+.tool-category-icon.edit {
+  color: var(--brand-accent);
+}
+
+.tool-category-icon.read {
+  color: var(--text-secondary);
+}
+
+.tool-category-icon.interactive {
+  color: var(--status-warning);
+}
+
+.tool-category-icon.status {
+  color: var(--text-muted);
+}
+
+.tool-category-icon.generic {
+  color: var(--text-muted);
+}
+
+.diff-stats-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.diff-stat-add {
+  color: var(--status-success);
+  background: var(--status-success-background);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.diff-stat-del {
+  color: var(--status-danger);
+  background: var(--status-danger-background);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.tool-quick-copy-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 2px 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  transition: all 0.12s ease;
+}
+
+.tool-quick-copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-contrast);
+}
+
+.tool-diff-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.diff-chunk {
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+}
+
+.diff-chunk-del {
+  background: var(--status-danger-background);
+  border-color: var(--status-danger-background);
+}
+
+.diff-chunk-add {
+  background: var(--status-success-background);
+  border-color: var(--status-success-background);
+}
+
+.diff-chunk-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.diff-chunk-del .diff-chunk-tag {
+  color: var(--status-danger);
+}
+
+.diff-chunk-add .diff-chunk-tag {
+  color: var(--status-success);
+}
+
+.diff-chunk-pre {
+  margin: 0;
+  padding: 6px 10px;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.tool-question-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.tool-question-item {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.tool-question-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tool-question-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--status-info-background);
+  color: var(--text-link);
+  text-transform: uppercase;
+}
+
+.tool-question-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tool-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tool-option-item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border-radius: 5px;
+  background: var(--bg-code);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+
+.tool-option-item.selected {
+  border-color: var(--status-success);
+  background: var(--status-success-background);
+}
+
+.tool-option-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.tool-option-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--status-success);
+}
+
+.tool-option-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.approval-actions {
+  margin: 0 24px 10px;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--status-warning);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.approval-actions.approval-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.approval-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+
+.approval-prompt-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.approval-alert-icon {
+  color: var(--status-warning);
+  flex-shrink: 0;
+}
+
+.approval-tool-badge {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--status-warning-background);
+  color: var(--status-warning);
+}
+
+.approval-preview-command {
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--bg-code);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.approval-preview-path {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.approval-preview-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.approval-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .tool-call-accordion:hover {
   border-color: var(--border-contrast);
 }
