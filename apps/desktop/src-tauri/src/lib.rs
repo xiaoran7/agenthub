@@ -593,6 +593,42 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                     }));
                 }
             }
+        } else if agent == AgentType::ClaudeCode
+            && let Some(gateway) = agent_pulse_runner::claude_gateway::discover_claude_gateway()
+            && !gateway.models.is_empty()
+        {
+            for m in &gateway.models {
+                if !m.name.is_empty() && !seen_families.contains(&model_family(&m.name)) {
+                    seen_families.insert(model_family(&m.name));
+                    let label = m
+                        .label
+                        .as_deref()
+                        .filter(|l| !l.trim().is_empty())
+                        .map(|l| format!("{} ({})", m.name, l))
+                        .unwrap_or_else(|| model_label(&m.name).to_string());
+                    models.push(json!({
+                        "value": m.name,
+                        "label": label,
+                        "desc": format!("网关路由模型（{}）", gateway.source),
+                        "source": "gateway"
+                    }));
+                }
+            }
+            for (value, count) in &dynamic {
+                let resolved = gateway
+                    .resolve_model(Some(value))
+                    .unwrap_or_else(|| value.clone());
+                if seen_families.contains(&model_family(&resolved)) {
+                    continue;
+                }
+                seen_families.insert(model_family(&resolved));
+                models.push(json!({
+                    "value": value,
+                    "label": model_label(value),
+                    "desc": format!("本机 Agent 实测（{count} 个会话）"),
+                    "source": "agent"
+                }));
+            }
         } else {
             // For other agents or when Host is not available, populate from local transcripts
             for (value, count) in &dynamic {

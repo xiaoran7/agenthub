@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod agent_binary;
 pub mod auth;
 pub mod auth_worker;
+pub mod claude_gateway;
 pub mod collectors;
 pub mod conversation;
 pub mod daemon;

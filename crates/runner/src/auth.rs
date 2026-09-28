@@ -1004,11 +1004,17 @@ fn tokens_from_environment(provider: AuthProvider) -> Option<TokenSet> {
             tokens.scope = env::var("CLAUDE_CODE_OAUTH_SCOPES")
                 .ok()
                 .filter(|value| !value.is_empty());
-            tokens.auth_mode = if tokens.refresh_token.is_some() || tokens.access_token.is_some() {
-                Some("environment".into())
-            } else {
-                None
-            };
+            if tokens.access_token.is_none()
+                && let Some(gateway) = crate::claude_gateway::discover_claude_gateway()
+            {
+                tokens.access_token = Some(gateway.auth_token);
+                tokens.auth_mode = Some("gateway".into());
+            }
+            if tokens.auth_mode.is_none()
+                && (tokens.refresh_token.is_some() || tokens.access_token.is_some())
+            {
+                tokens.auth_mode = Some("environment".into());
+            }
         }
         AuthProvider::Antigravity => {
             if let Ok(key) = env::var("GEMINI_API_KEY") {

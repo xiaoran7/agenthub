@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.4.48] - 2026-09-28
+
+原生自动探测第三方网关与路由模型映射，支持 CC Switch 开启路由时无缝接管 Claude Code 会话：
+
+- **CC Switch / Claude-3p 本地网关自动探测**：新增 `crates/runner/src/claude_gateway.rs` 核心模块，自动扫描并识别环境变量、`Claude-3p` 与 `Claude` 应用目录下的 `host-creds-*.json` 动态会话凭证及 `configLibrary` 持久化网关配置（`inferenceGatewayBaseUrl` 与 `inferenceGatewayApiKey`）；
+- **动态环境变量自动注入**：当检测到本地网关运行且全局环境变量未显式指定时，自动为 `claude.exe` 子进程注入 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 与 `CLAUDE_CODE_HOST_AUTH_ENV_VAR`，彻底解决 CC Switch 开启路由时 AgentHub 无法接管会话、OAuth 认证过期的根本故障；
+- **网关路由双向模型映射（Reverse Model Mapping）**：针对 CC Switch 路由需要 Claude 别名（如 `claude-fable-5`）而上游/会话转录记录实际模型（如 `gemini-3.8-flash`）导致 400 无效请求/502 错误的问题，设计实现了双向模型解析器 `ClaudeGatewayProfile::resolve_model`，支持精准匹配、标签重写匹配、家族关键字启发式匹配及安全降级；
+- **会话模型自动回溯（Session Model Discovery）**：在 `crates/runner/src/collectors/mod.rs` 引入 `find_claude_session_model`，在接管已有会话时自动从转录流中回溯模型标识，并通过网关解析器转换为网关兼容的路由模型；
+- **全链路模型传递与桌面端模型下拉呈现**：升级 `remote_host.rs` 中的 `MultiProviderTransport`，在 `thread/start`、`thread/resume` 与 `turn/start` 完整缓存并透传模型覆盖；在桌面端 Tauri 后端 `list_agent_models_inner` 中优先展现网关路由配置的可用模型（如 `claude-fable-5 (gemini-3.8-flash-high)`），方便直接选择；
+- **全平台版本递增与锁文件同步**：版本升级至 2.4.48，Android versionCode 升至 59，全平台清单（Cargo、Node、Tauri、Android）同步更新。
+
 ## [2.4.47] - 2026-09-27
 
 工具调用可视化、差异比对展示、交互式提问卡片与富上下文审批卡片升级：

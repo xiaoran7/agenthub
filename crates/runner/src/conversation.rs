@@ -477,7 +477,7 @@ fn collect_provider_transcripts(
     }
 }
 
-fn find_transcript_file(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
+pub(crate) fn find_transcript_file(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
     let mut matches = Vec::new();
     collect_transcript_files(root, session_id, depth, &mut matches);
     matches.sort_by(|a, b| {

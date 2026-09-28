@@ -2798,6 +2798,49 @@ fn retry_with_alternate_binary(
     Some(best)
 }
 
+/// Inspects the Claude Code session transcript to find the model recorded for the session.
+pub fn find_claude_session_model(session_id: &str) -> Option<String> {
+    let home = home_dir()?;
+    let raw_session_id = session_id.strip_prefix("claude_").unwrap_or(session_id);
+    let path = crate::conversation::find_transcript_file(
+        &home.join(".claude").join("projects"),
+        raw_session_id,
+        0,
+    )?;
+    let file = fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    use std::io::BufRead;
+    for line in reader.lines().take(60).flatten() {
+        if let Ok(val) = serde_json::from_str::<Value>(&line) {
+            if let Some(model) = val.pointer("/message/model").and_then(Value::as_str) {
+                let trimmed = model.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            if let Some(model) = val
+                .pointer("/attachment/identity/modelId")
+                .and_then(Value::as_str)
+            {
+                let trimmed = model.trim();
+                if !trimmed.is_empty() {
+                    let cleaned = trimmed.split('[').next().unwrap_or(trimmed).trim();
+                    if !cleaned.is_empty() {
+                        return Some(cleaned.to_string());
+                    }
+                }
+            }
+            if let Some(model) = val.get("model").and_then(Value::as_str) {
+                let trimmed = model.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_agent_session_turn_streaming_once(
     agent: crate::domain::AgentType,
@@ -2876,7 +2919,21 @@ fn run_agent_session_turn_streaming_once(
             None
         }
     };
-    apply_turn_options(&mut command, agent, &options);
+    let mut effective_model = options.model.map(str::to_string);
+    if agent == crate::domain::AgentType::ClaudeCode {
+        if effective_model.is_none() {
+            effective_model = find_claude_session_model(session_id);
+        }
+        if let Some(gateway) = crate::claude_gateway::discover_claude_gateway() {
+            gateway.inject_into_command(&mut command, &mut effective_model);
+        }
+    }
+    let effective_model_ref = effective_model.as_deref();
+    let effective_options = TurnOptions {
+        model: effective_model_ref,
+        ..options
+    };
+    apply_turn_options(&mut command, agent, &effective_options);
     if let Some(project_path) = project_path {
         command.current_dir(project_path);
     }
@@ -2956,7 +3013,18 @@ pub fn run_agent_session_start_streaming(
             None
         }
     };
-    apply_turn_options(&mut command, agent, &options);
+    let mut effective_model = options.model.map(str::to_string);
+    if agent == crate::domain::AgentType::ClaudeCode
+        && let Some(gateway) = crate::claude_gateway::discover_claude_gateway()
+    {
+        gateway.inject_into_command(&mut command, &mut effective_model);
+    }
+    let effective_model_ref = effective_model.as_deref();
+    let effective_options = TurnOptions {
+        model: effective_model_ref,
+        ..options
+    };
+    apply_turn_options(&mut command, agent, &effective_options);
     command.current_dir(cwd);
     run_agent_stream_process(
         agent,
@@ -3003,18 +3071,19 @@ fn apply_turn_options(
             | crate::domain::AgentType::GrokBuild => {}
         }
     }
-    let Some(model) = model else {
-        return;
-    };
     match agent {
         crate::domain::AgentType::ClaudeCode => {
-            command.args(["--model", model]);
+            if let Some(model) = model {
+                command.args(["--model", model]);
+            }
             if let Some(mode) = permission_mode {
                 command.args(["--permission-mode", mode]);
             }
         }
         crate::domain::AgentType::Codex => {
-            command.args(["-m", model]);
+            if let Some(model) = model {
+                command.args(["-m", model]);
+            }
             if let Some(mode) = permission_mode {
                 let sandbox = match mode {
                     "read-only" | "plan" => "read-only",
@@ -3025,7 +3094,9 @@ fn apply_turn_options(
             }
         }
         crate::domain::AgentType::ZCode => {
-            command.args(["--model", model]);
+            if let Some(model) = model {
+                command.args(["--model", model]);
+            }
         }
         crate::domain::AgentType::Antigravity | crate::domain::AgentType::GrokBuild => {}
     }

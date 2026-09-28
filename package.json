@@ -1,7 +1,7 @@
 {
   "name": "agent-pulse",
   "private": true,
-  "version": "2.4.47",
+  "version": "2.4.48",
   "workspaces": [
     "packages/*",
     "services/*",

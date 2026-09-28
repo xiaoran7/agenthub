@@ -79,6 +79,7 @@ pub struct MultiProviderTransport {
     claude_cancels: HashMap<String, Arc<AtomicBool>>,
     claude_buffered_events: Arc<Mutex<VecDeque<Value>>>,
     claude_cached_cwds: HashMap<String, PathBuf>,
+    claude_cached_models: HashMap<String, String>,
     antigravity_binary: PathBuf,
     antigravity_active_turns: HashMap<String, String>,
     antigravity_cancels: HashMap<String, Arc<AtomicBool>>,
@@ -104,6 +105,7 @@ impl MultiProviderTransport {
             claude_cancels: HashMap::new(),
             claude_buffered_events: Arc::new(Mutex::new(VecDeque::new())),
             claude_cached_cwds: HashMap::new(),
+            claude_cached_models: HashMap::new(),
             antigravity_binary: crate::collectors::discover_antigravity_binary(),
             antigravity_active_turns: HashMap::new(),
             antigravity_cancels: HashMap::new(),
@@ -190,6 +192,14 @@ impl NativeTransport for MultiProviderTransport {
                 let session_id = format!("claude_{}", uuid::Uuid::new_v4());
                 self.claude_cached_cwds
                     .insert(session_id.clone(), PathBuf::from(&cwd));
+                if let Some(m) = params["model"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    self.claude_cached_models
+                        .insert(session_id.clone(), m.to_string());
+                }
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -246,6 +256,14 @@ impl NativeTransport for MultiProviderTransport {
             }
             "thread/resume" if is_claude => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
+                if let Some(m) = params["model"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    self.claude_cached_models
+                        .insert(session_id.to_string(), m.to_string());
+                }
                 let cwd = self
                     .claude_cached_cwds
                     .get(session_id)
@@ -296,6 +314,12 @@ impl NativeTransport for MultiProviderTransport {
                 }
 
                 let cwd = self.claude_cached_cwds.get(&session_id).cloned();
+                let model = params["model"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| self.claude_cached_models.get(&session_id).cloned());
                 let binary = self.claude_binary.clone();
                 // Claude Code takes reasoning effort as a per-turn CLI flag.
                 let effort = params["effort"]
@@ -366,6 +390,7 @@ impl NativeTransport for MultiProviderTransport {
                         &raw_id,
                         &text,
                         crate::collectors::TurnOptions {
+                            model: model.as_deref(),
                             reasoning_effort: effort.as_deref(),
                             ..Default::default()
                         },
