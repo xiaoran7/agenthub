@@ -31,6 +31,10 @@ const MAX_CONFIG_VALUE_CHARS: usize = 96;
 /// Upper bound on a single `--version` probe. Discovery runs on the daemon
 /// startup path, so a wedged binary must cost one short timeout, not a hang.
 const BINARY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Transcript lines scanned per session while reading discovery metadata. Must
+/// stay well under a live session's length: the scan is what tells an abandoned
+/// session (no assistant reply yet) apart from a real one.
+const TRANSCRIPT_METADATA_SCAN_LINES: usize = 512;
 
 #[derive(Debug, Error)]
 pub enum CollectorError {
@@ -218,6 +222,11 @@ pub struct ClaudeTranscriptEntry {
     pub title: Option<String>,
     pub started_at_ms: Option<i64>,
     pub last_activity_at_ms: Option<i64>,
+    /// False when the transcript holds no assistant output at all. A session
+    /// the user abandoned before the first reply still persists a transcript and
+    /// a `custom-title.json`, so it otherwise looks identical to a real one in
+    /// the sidebar while Claude Code's own `/resume` list hides it.
+    pub has_output: bool,
 }
 
 /// Enumerates Claude Code's documented local transcript store without invoking
@@ -269,7 +278,9 @@ pub fn collect_claude_transcripts_from(
             {
                 continue;
             }
-            if let Some(entry) = read_claude_transcript_metadata(&path, &program)? {
+            if let Some(entry) = read_claude_transcript_metadata(&path, &program)?
+                && entry.has_output
+            {
                 entries.push(entry);
             }
         }
@@ -565,6 +576,46 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// True when a transcript record is real assistant output rather than a prompt,
+/// a tool result, or provider bookkeeping. Used only to decide whether a
+/// session is worth listing; the record body is never retained.
+fn is_assistant_output(value: &Value) -> bool {
+    let record_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let role = value
+        .pointer("/message/role")
+        .or_else(|| value.get("role"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !record_type.is_empty() && record_type != "assistant" {
+        return false;
+    }
+    if record_type != "assistant" && role != "assistant" {
+        return false;
+    }
+    // Sidechains (subagent transcripts) are not output the user ever saw.
+    if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    value
+        .pointer("/message/content")
+        .or_else(|| value.get("content"))
+        .and_then(|content| match content {
+            Value::String(text) => Some(!text.trim().is_empty()),
+            Value::Array(blocks) => Some(blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("text")
+                    && block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+            })),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn read_claude_transcript_metadata(
     path: &Path,
     program: &str,
@@ -587,10 +638,14 @@ fn read_claude_transcript_metadata(
     let mut cwd = None;
     let mut title = None;
     let mut started_at_ms: Option<i64> = None;
+    let mut has_output = false;
 
     // Metadata is repeated on transcript entries. Bound the scan so a damaged
     // or adversarial transcript cannot make background collection unbounded.
-    for _ in 0..64 {
+    // The scan cannot stop at the first complete metadata set: `has_output` is
+    // only knowable from the whole file, and a live session appends its first
+    // assistant reply long after the title was already known.
+    for _ in 0..TRANSCRIPT_METADATA_SCAN_LINES {
         let line = match read_bounded_line(&mut reader) {
             BoundedLine::Line(line) => line,
             BoundedLine::Eof => break,
@@ -602,7 +657,13 @@ fn read_claude_transcript_metadata(
                 });
             }
         };
-        let Ok(metadata) = serde_json::from_str::<ClaudeTranscriptMetadata>(&line) else {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if !has_output && is_assistant_output(&value) {
+            has_output = true;
+        }
+        let Ok(metadata) = serde_json::from_value::<ClaudeTranscriptMetadata>(value) else {
             continue;
         };
         session_id = session_id.or(metadata.session_id);
@@ -626,7 +687,15 @@ fn read_claude_transcript_metadata(
                 (current, None) => current,
             };
         }
-        if session_id.is_some() && cwd.is_some() && started_at_ms.is_some() && title.is_some() {
+        // A real session is settled as soon as it has produced output and its
+        // metadata is complete, so the common case still stops after a handful
+        // of lines. Only sessions that never answered are read to the cap.
+        if has_output
+            && session_id.is_some()
+            && cwd.is_some()
+            && started_at_ms.is_some()
+            && title.is_some()
+        {
             break;
         }
     }
@@ -644,6 +713,7 @@ fn read_claude_transcript_metadata(
         title,
         started_at_ms,
         last_activity_at_ms,
+        has_output,
     }))
 }
 
@@ -956,7 +1026,9 @@ pub fn collect_claude_sessions_for_remote()
         project_candidates.truncate(30);
 
         for (_, path) in project_candidates {
-            if let Some(entry) = read_claude_transcript_metadata(&path, &program)? {
+            if let Some(entry) = read_claude_transcript_metadata(&path, &program)?
+                && entry.has_output
+            {
                 entries.push((
                     entry.session_id,
                     entry.cwd,
@@ -4053,7 +4125,10 @@ mod tests {
                 "{\"type\":\"user\",\"sessionId\":\"session-123\",",
                 "\"cwd\":\"/work/private-project\",",
                 "\"timestamp\":\"2026-08-14T01:02:03Z\",",
-                "\"message\":{\"content\":\"TOP_SECRET_TRANSCRIPT_CONTENT\"}}\n"
+                "\"message\":{\"content\":\"TOP_SECRET_TRANSCRIPT_CONTENT\"}}\n",
+                "{\"type\":\"assistant\",\"sessionId\":\"session-123\",",
+                "\"message\":{\"role\":\"assistant\",\"content\":",
+                "[{\"type\":\"text\",\"text\":\"SECOND_SECRET_REPLY\"}]}}\n"
             ),
         )
         .unwrap();
@@ -4067,7 +4142,92 @@ mod tests {
         assert_eq!(entry["state"], "persisted");
         assert_eq!(entry["startedAt"], 1_786_669_323_000_i64);
         assert!(!payload.contains("TOP_SECRET_TRANSCRIPT_CONTENT"));
+        assert!(!payload.contains("SECOND_SECRET_REPLY"));
         assert!(!payload.contains("message"));
+    }
+
+    #[test]
+    fn claude_transcript_collector_hides_sessions_with_no_assistant_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("projects").join("encoded-project");
+        fs::create_dir_all(&project).unwrap();
+        // A session the user abandoned before the first reply. It still has a
+        // prompt, a custom title and a full transcript on disk - only the
+        // absence of assistant output marks it as empty.
+        fs::write(
+            project.join("abandoned.jsonl"),
+            concat!(
+                "{\"type\":\"queue-operation\",\"sessionId\":\"abandoned\"}\n",
+                "{\"type\":\"user\",\"sessionId\":\"abandoned\",",
+                "\"cwd\":\"/work/project\",\"timestamp\":\"2026-08-14T01:02:03Z\",",
+                "\"message\":{\"content\":\"现在的项目甚至没有git？\"}}\n",
+                "{\"type\":\"user\",\"sessionId\":\"abandoned\",",
+                "\"message\":{\"content\":[{\"type\":\"text\",",
+                "\"text\":\"[Request interrupted by user]\"}]}}\n",
+                "{\"type\":\"custom-title\",\"sessionId\":\"abandoned\",",
+                "\"customTitle\":\"项目缺少Git配置\"}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            project.join("real.jsonl"),
+            concat!(
+                "{\"type\":\"user\",\"sessionId\":\"real\",\"cwd\":\"/work/project\",",
+                "\"timestamp\":\"2026-08-14T02:00:00Z\",",
+                "\"message\":{\"content\":\"同样的首问\"}}\n",
+                "{\"type\":\"assistant\",\"sessionId\":\"real\",",
+                "\"message\":{\"role\":\"assistant\",\"content\":",
+                "[{\"type\":\"text\",\"text\":\"有 git\"}]}}\n"
+            ),
+        )
+        .unwrap();
+
+        let payload = collect_claude_transcripts_from(directory.path(), false).unwrap();
+        let entries: Value = serde_json::from_str(&payload).unwrap();
+        let sessions: Vec<&str> = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["sessionId"].as_str())
+            .collect();
+
+        assert_eq!(sessions, ["real"]);
+    }
+
+    #[test]
+    fn claude_output_detection_accepts_shapes_and_rejects_lookalikes() {
+        let output = |value: Value| is_assistant_output(&value);
+
+        // Text array form and plain string form both count as output.
+        assert!(output(serde_json::json!({
+            "type":"assistant","message":{"role":"assistant",
+            "content":[{"type":"text","text":"hi"}]}
+        })));
+        assert!(output(serde_json::json!({
+            "type":"assistant","message":{"role":"assistant","content":"hi"}
+        })));
+        // Assistant turns that are pure tool calls produced no visible reply.
+        assert!(!output(serde_json::json!({
+            "type":"assistant","message":{"role":"assistant",
+            "content":[{"type":"tool_use","name":"Bash"}]}
+        })));
+        assert!(!output(serde_json::json!({
+            "type":"assistant","message":{"role":"assistant",
+            "content":[{"type":"text","text":"   "}]}
+        })));
+        // A subagent transcript is not output the user ever saw.
+        assert!(!output(serde_json::json!({
+            "type":"assistant","isSidechain":true,
+            "message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}
+        })));
+        // Prompts and tool results are not assistant output.
+        assert!(!output(serde_json::json!({
+            "type":"user","message":{"role":"user","content":"hi"}
+        })));
+        assert!(!output(serde_json::json!({
+            "type":"user","message":{"role":"user",
+            "content":[{"type":"tool_result","content":"hi"}]}
+        })));
     }
 
     #[test]

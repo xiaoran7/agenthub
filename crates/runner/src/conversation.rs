@@ -612,6 +612,43 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
         return Vec::new();
     }
 
+    // Claude Code writes its auto-compact summary as a `user` record flagged
+    // `isCompactSummary` + `isVisibleInTranscriptOnly`. The flag means "this
+    // exists for the transcript, not for the reader" - the official client
+    // never renders it. Showing it would dump the entire condensed history of
+    // the session into the conversation as if the user had typed it.
+    if value.get("isCompactSummary").and_then(Value::as_bool) == Some(true)
+        || value
+            .get("isVisibleInTranscriptOnly")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        return Vec::new();
+    }
+
+    // A compaction boundary carries only the savings, not the summary text.
+    // Surface it as one status row so the user still sees what happened.
+    if event_type == "system"
+        && value.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+    {
+        let saved = value
+            .pointer("/compactMetadata/cumulativeDroppedTokens")
+            .and_then(Value::as_u64);
+        return vec![conversation_item(
+            "system",
+            "status",
+            "上下文压缩",
+            &match saved {
+                Some(tokens) => format!(
+                    "已自动压缩上下文，节省约 {} tokens",
+                    format_token_count(tokens)
+                ),
+                None => "已自动压缩上下文".to_owned(),
+            },
+            "completed",
+        )];
+    }
+
     if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
         return Vec::new();
     }
@@ -985,6 +1022,18 @@ fn compact_json(value: &Value) -> String {
         .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap_or_default())
 }
 
+/// Renders a token count the way the official client does: thousands
+/// separated, with a `k` suffix past a million so the status row stays short.
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{}k", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
 fn status_label(status: &str) -> &'static str {
     match status.to_ascii_lowercase().as_str() {
         "completed" | "complete" | "success" | "succeeded" => "completed",
@@ -1212,6 +1261,55 @@ mod tests {
             local_conversation_message(&antigravity),
             Some(("user", "<USER_REQUEST>修复乱码</USER_REQUEST>".into()))
         );
+    }
+
+    #[test]
+    fn compact_summary_never_reaches_the_conversation() {
+        // Exactly what Claude Code writes when it auto-compacts: a `user`
+        // record holding the condensed history of everything said so far.
+        let summary = json!({
+            "type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,
+            "turnOrigin":"sdk","message":{"role":"user","content":
+            "This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. Primary Request and Intent:\n   - SECRET_CONDENSED_HISTORY"}
+        });
+        let boundary = json!({
+            "type":"system","subtype":"compact_boundary","level":"info",
+            "content":"Conversation compacted",
+            "compactMetadata":{"trigger":"auto","preTokens":177701,"postTokens":14111,
+                "cumulativeDroppedTokens":163590,"durationMs":104470}
+        });
+
+        assert!(normalize_local_conversation_items(&summary).is_empty());
+
+        // The boundary itself is a status row, not leaked content.
+        let items = normalize_local_conversation_items(&boundary);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["kind"], "status");
+        assert_eq!(items[0]["role"], "system");
+        assert_eq!(items[0]["label"], "上下文压缩");
+        assert!(items[0]["content"].as_str().unwrap().contains("163k"));
+        assert!(
+            !items[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("SECRET_CONDENSED_HISTORY")
+        );
+
+        // A boundary without a reported token count still renders.
+        let bare = json!({"type":"system","subtype":"compact_boundary","content":"Conversation compacted"});
+        assert_eq!(normalize_local_conversation_items(&bare).len(), 1);
+
+        // An ordinary user turn is unaffected by the filter.
+        let prompt = json!({"type":"user","message":{"content":"你好"}});
+        assert_eq!(normalize_local_conversation_items(&prompt).len(), 1);
+    }
+
+    #[test]
+    fn token_counts_format_like_the_official_client() {
+        assert_eq!(format_token_count(999), "999");
+        assert_eq!(format_token_count(1_000), "1k");
+        assert_eq!(format_token_count(163_590), "163k");
+        assert_eq!(format_token_count(1_500_000), "1.5M");
     }
 
     #[test]

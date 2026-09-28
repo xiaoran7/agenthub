@@ -16,7 +16,7 @@ export interface RemoteCommand {
         sandbox?: "read-only" | "workspace-write" | "danger-full-access";
         approval_policy?: "untrusted" | "on-request" | "never";
       }
-    | { action: "send_prompt"; text: string }
+    | { action: "send_prompt"; text: string; effort?: string }
     | { action: "resolve_approval"; approval_id: string; approved: boolean }
     | {
         action: "answer_question";
@@ -116,8 +116,11 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         member(command.approval_policy, ["untrusted", "on-request", "never"]);
       break;
     case "send_prompt":
-      only(command, ["action", "text"]);
+      only(command, ["action", "text", "effort"]);
       text(command.text, 512 * 1024);
+      // Per-turn reasoning effort. Desktop already sends it; the Host accepts it
+      // for every provider and providers without the concept ignore it.
+      if (command.effort !== undefined) text(command.effort, 64);
       break;
     case "resolve_approval":
       only(command, ["action", "approval_id", "approved"]);

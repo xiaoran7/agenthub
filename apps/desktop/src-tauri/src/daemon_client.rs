@@ -19,6 +19,16 @@ use std::{
 const DAEMON_EVENT_HEALTH_WINDOW: Duration = Duration::from_secs(35);
 const DAEMON_EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Windows creation flags for launching a console child without a window:
+/// CREATE_NO_WINDOW (0x0800_0000) | DETACHED_PROCESS (0x0000_0008) |
+/// CREATE_NEW_PROCESS_GROUP (0x0000_0200). Any console executable we spawn -
+/// the daemon itself, `taskkill` on shutdown - needs these, or Windows shows a
+/// black box while the GUI app has no console of its own.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const DETACHED_PROCESS_GROUP: u32 = 0x0000_0008 | 0x0000_0200;
+
 // Only fixed codes leave the process boundary; never retain stderr, paths or credentials.
 pub fn safe_daemon_code(error: &str) -> &'static str {
     match error {
@@ -138,6 +148,23 @@ impl Drop for DesktopJob {
 #[cfg(windows)]
 static DAEMON_JOB: Mutex<Option<DesktopJob>> = Mutex::new(None);
 
+/// Kills a leftover process tree on the way out.
+///
+/// `taskkill.exe` is a console program: nulling its stdio does not stop Windows
+/// from allocating a console window for it, which flashed a black box every
+/// time the app quit. CREATE_NO_WINDOW is the same flag the daemon spawn path
+/// already uses, and it must be applied to every console child we launch.
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 pub fn terminate_daemon() {
     #[cfg(windows)]
     if let Ok(mut job_slot) = DAEMON_JOB.lock()
@@ -152,13 +179,7 @@ pub fn terminate_daemon() {
         let _ = child.kill();
         let _ = child.wait();
         #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        kill_process_tree(pid);
     }
     if let Ok(mut starting_slot) = STARTING_CHILD.lock()
         && let Some(mut child) = starting_slot.take()
@@ -167,13 +188,7 @@ pub fn terminate_daemon() {
         let _ = child.kill();
         let _ = child.wait();
         #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        kill_process_tree(pid);
     }
 }
 
@@ -948,7 +963,7 @@ fn spawn_daemon(data_dir: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000 | 0x0000_0008 | 0x0000_0200);
+        command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS_GROUP);
     }
     // Bind daemon lifecycle to Desktop: assign to DesktopJob so Windows terminates it on exit.
     let mut child = command

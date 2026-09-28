@@ -75,6 +75,15 @@ export interface RemoteCommandRecord {
     result?: { turn?: { id: string } };
   } | null;
 }
+/** Response of `GET /v3/remote/sessions/:runner/:hub`. */
+export interface RemoteSessionDetail {
+  /** Null once the runner is gone; command history still answers. */
+  binding: RemoteBinding | null;
+  /** Highest event cursor visible to the owner, for cheap change detection. */
+  cursor: number;
+  commands: RemoteCommandRecord[];
+}
+
 export interface ConversationItem {
   id: string;
   kind: "user" | "assistant" | "tool";

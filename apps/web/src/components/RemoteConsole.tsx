@@ -17,6 +17,7 @@ import {
   type RemoteSession,
   type RemoteEvent,
   type RemoteCommandRecord,
+  type RemoteSessionDetail,
   type ConversationItem,
   type DiscoveryCandidate,
 } from "../lib/remote";
@@ -38,6 +39,14 @@ import "./remote.css";
 import "./remote-desktop.css";
 
 const empty: RemoteSnapshot = { cursor: 0, runners: [], sessions: [] };
+
+/**
+ * Session-detail refresh interval. The detail route already returns the event
+ * cursor, so this only needs to be fast enough to feel live while typing; a
+ * 200 ms tick made every open console fire 10 requests per second, doubled by
+ * the event fetch, against a Gateway that is already polling its runners.
+ */
+const SESSION_POLL_MS = 1000;
 
 /** Human label for a session's execution state, shared by the tree and header. */
 const states: Record<string, string> = {
@@ -644,33 +653,42 @@ export function RemoteConsole({
     const [runnerId, hub] = selected.split("/");
     if (!runnerId || !hub) return;
     let stopped = false;
+    let inFlight = false;
     let cursor = 0;
     let accumulated: RemoteEvent[] = [];
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
       try {
-        const query = new URLSearchParams({
-          runner: runnerId,
-          hub,
-          after: String(cursor),
-        });
-        const [batch, detail] = await Promise.all([
-          request<{ events: RemoteEvent[] }>(`/events?${query}`),
-          request<{ commands: RemoteCommandRecord[] }>(
-            `/sessions/${encodeURIComponent(runnerId)}/${encodeURIComponent(hub)}`,
-          ),
-        ]);
+        // One request, not two. The session detail route already carries the
+        // binding, the event cursor and the command history, so the event fetch
+        // below only runs when the cursor has actually moved.
+        const detail = await request<RemoteSessionDetail>(
+          `/sessions/${encodeURIComponent(runnerId)}/${encodeURIComponent(hub)}`,
+        );
         if (stopped) return;
-        if (batch.events.length) {
-          cursor = batch.events[batch.events.length - 1]!.cursor;
+        if (detail.cursor > cursor) {
+          const batch = await request<{ events: RemoteEvent[] }>(
+            `/events?runner=${encodeURIComponent(runnerId)}&hub=${encodeURIComponent(hub)}&after=${cursor}`,
+          );
+          if (stopped) return;
+          cursor = batch.events.length
+            ? batch.events[batch.events.length - 1]!.cursor
+            : detail.cursor;
           accumulated = [...accumulated, ...batch.events];
           setEvents([...accumulated]);
         }
+        // `session` is derived from the 1.5 s snapshot poll, which is where
+        // `control_connected` is refreshed; the copy on `detail` would be a
+        // second source of truth for the same field.
         setCommands(detail.commands);
       } catch (err) {
         if (!stopped) setError(remoteError(err));
+      } finally {
+        inFlight = false;
+        if (!stopped) timer = setTimeout(() => void poll(), SESSION_POLL_MS);
       }
-      if (!stopped) timer = setTimeout(() => void poll(), 200);
     };
     void poll();
     return () => {

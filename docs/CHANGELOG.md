@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.4.50] - 2026-09-28
+
+投产前的一轮代码审查、性能优化与三处真实会话缺陷修复。
+
+### 缺陷修复
+
+- **空会话不再出现在列表中**：`collectors/mod.rs` 原先对 `~/.claude/projects/**/*.jsonl` 无条件收录，一个用户在首条回复发出前就中断的会话同样会留下完整 transcript 与 `custom-title.json`，因此在侧栏里与真实会话完全无法区分——两个同名会话即由此而来（官方 `/resume` 会隐藏它，本项目此前不会）。现由 `read_claude_transcript_metadata` 顺带判定 `has_output`：扫描记录中是否存在**非空 assistant 文本**（纯工具调用、空文本、`isSidechain` 子代理轨迹均不算），`collect_claude_transcripts_from` 与 `collect_claude_sessions_for_remote` 只收录 `has_output` 的会话。为使该判定覆盖整个文件（而标题在首条记录即可确定），元数据扫描上限由 64 行提至 `TRANSCRIPT_METADATA_SCAN_LINES`（512 行）。本机 95 份 transcript 中 5 份为空会话，均已被正确隐藏。扫描上限提高的同时保留 `has_output && 元数据齐全` 的早退，真实会话仍只读几行；
+- **压缩摘要不再泄漏到对话**：`conversation.rs` 的 `normalize_local_conversation_items` 只过滤 `isMeta`，未处理 Claude Code 写自动压缩摘要时使用的两个标记——`isCompactSummary: true` 与 `isVisibleInTranscriptOnly: true`（后者语义即「只存在于 transcript，不要展示给读者」）。该摘要以 `user` 记录形式落盘、承载整个会话的浓缩历史，此前被当作用户发言完整渲染。现二者一并过滤；同时把此前漏网的 `compact_boundary` 记录（`type: system` / `subtype: compact_boundary`）转为**一条状态行**「已自动压缩上下文，节省约 N tokens」，token 数取自 `compactMetadata.cumulativeDroppedTokens`，既不暴露摘要正文又保留可见性；
+- **退出时不再闪现黑框**：`daemon_client.rs::terminate_daemon` 关闭时以 `taskkill /F /T` 清理残留进程树，但只重定向了 stdio，**未设 `CREATE_NO_WINDOW`**。`taskkill.exe` 是控制台程序，GUI 进程无自有控制台，Windows 每次退出都会为其分配一个控制台窗口。启动 daemon 的路径早已设置该标志，退出路径遗漏。现两处统一收敛到 `kill_process_tree`，并将裸标志字面量提取为具名常量 `CREATE_NO_WINDOW` / `DETACHED_PROCESS_GROUP`（与启动路径共用）。
+
+### 长驻进程状态修复
+
+- **修复命令回执账本写满后永久拒绝全部新命令**：`crates/runner/src/remote_host.rs` 的 `NativeSessionHost` 原先在内存回执达到 10,000 条时对**之后每一条**命令返回 `command_ledger_full`，且永不回收。由于 daemon 是长驻进程，这等于「跑满 10,000 条命令后该 Runner 彻底不可用」。现改为按插入顺序淘汰最旧条目（`MAX_COMMAND_LEDGER_ENTRIES` / `receipt_order`）。这不削弱幂等性：重放判定的事实来源始终是持久化的 `remote_journal`（`BeginCommand::Existing`），内存窗口只负责 Host 存活期内的重复去重；被淘汰的 id 重发时由日志账本应答而非重新执行。**契约不变**：无新错误码，无协议字段变化；
+- **修复已应答请求去重集合无界增长**：`answered_requests` 记录用户已应答过的 approval/question id，用于抑制 Provider 重发同一请求，但原先只增不删。现按插入顺序保留最近 `MAX_ANSWERED_REQUESTS`（10,000）条（`mark_answered`）。窗口足够长以覆盖 Provider 的重发窗口，超出后同一 id 会被重新提出——这与 Provider 侧自身的 `serverRequest/resolved` 生命周期一致，不会把已结束的请求复活为「永远无法点击」的死条目；
+
+### 性能
+
+- **新增 `send_prompt.effort` 契约字段**：`packages/contracts/src/remote.ts` 的 `send_prompt` 命令此前用 `only(command, [...])` 严格拒绝未知字段，而桌面端已按每回合推理强度发送 `effort`，导致非 Codex Provider 的远程发消息被契约层拒绝。现接受 `effort`（≤64 字符）并对所有 Provider 放行，无该概念的 Provider 忽略之。补齐对应契约测试；
+- **CLI 版本探测并行化**：`agent_binary::rank_candidates` 原先串行探测每个候选，daemon 启动最坏耗时为 `候选数 × 5s`。现每候选一线程并发探测，最坏耗时降至单次探测超时。结果与顺序无关，行为不变；
+- **Web 会话详情轮询去重并降频**：`RemoteConsole.tsx` 原先以 200ms 频率**同时**请求 `/sessions/:runner/:hub` 与 `/events`，即每秒 20 次请求。现合并为单次详情请求，仅当 `cursor` 真正前进时才拉取事件，周期放宽至 1000ms（与快照轮询同量级）——满负载下降为原来的 1/20；
+- **会话上下文缓存改为 `Arc` 共享**：`local_session_contexts` 每次调用都深拷贝最多 5,000 条 `LocalSessionContext`（每条含十余个 `String`/`Option<String>`），而 `list_agent_models` 只读取其中的 `model` 字段。现缓存内部存 `Arc<HashMap<..>>`，读路径只做引用计数递增；
+
+### 清理
+
+- `is_unreadable_session_failure` 的 `program` 参数此前被 `let _ = program;` 显式丢弃，注释却声称「要求输出包含程序名」——一个与实现不符、会误导后续维护者的断言。现删除该空操作并把注释改为陈述真实契约：`output` 必须来自失败的二进制自身的 stdout（调用方从不传入其他进程的 stderr）。
+
+**验证**：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 全部通过；`cargo test --workspace` 232 项通过；`npm.cmd test`（contracts 15、api 59、desktop 88、根 61）、`npm.cmd run typecheck`、`npm.cmd run format:check` 全数通过。新增回归测试覆盖两处淘汰逻辑、空会话隐藏与输出形态判定、压缩摘要过滤、token 计数格式化；压缩摘要一项另对真实 transcript 验证过（摘要零泄漏、恰好渲染一条「节省约 163k tokens」状态行）。
+
 ## [2.4.49] - 2026-09-28
 
 彻底修复会话回合状态机判定与误报「这个会话已有一个回合正在运行」导致无法继续交互的根本故障：

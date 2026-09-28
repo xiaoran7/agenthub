@@ -370,3 +370,32 @@ test("device registration requires proof of private key possession", () => {
       error instanceof ContractError && error.code === "invalid_signature",
   );
 });
+
+test("remote send_prompt accepts a bounded per-turn reasoning effort", () => {
+  const command = {
+    client_cmd_id: "command-one",
+    hub_session_id: "hub-one",
+    host_generation: "generation-one",
+    command: { action: "send_prompt", text: "hello", effort: "high" },
+  };
+  assert.deepEqual(parseRemoteCommand(command), command);
+  // Omitting effort keeps the thread's own setting.
+  assert.deepEqual(
+    parseRemoteCommand({
+      ...command,
+      command: { action: "send_prompt", text: "hello" },
+    }),
+    { ...command, command: { action: "send_prompt", text: "hello" } },
+  );
+  for (const unsafe of [
+    { ...command, command: { ...command.command, effort: 5 } },
+    { ...command, command: { ...command.command, effort: "" } },
+    { ...command, command: { ...command.command, effort: "x".repeat(65) } },
+  ]) {
+    assert.throws(
+      () => parseRemoteCommand(unsafe),
+      (error: unknown) =>
+        error instanceof ContractError && error.code === "invalid_field",
+    );
+  }
+});

@@ -881,3 +881,105 @@ fn unknown_slash_does_not_fall_through_to_prompt() {
     );
     assert_eq!(fake.0.lock().unwrap().calls.len(), 1);
 }
+
+#[test]
+fn a_full_receipt_ledger_evicts_oldest_entries_instead_of_rejecting_new_commands() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+
+    // Push the ledger past its bound with commands the Host answers itself, so
+    // a long-lived daemon never reaches a state where it rejects every new
+    // command with `command_ledger_full`.
+    let generation: String = host.generation().into();
+    let archive = |id: &str| RemoteCommand {
+        client_cmd_id: id.into(),
+        hub_session_id: "hub".into(),
+        host_generation: Some(generation.clone()),
+        command: RemoteAction::SetArchived { archived: true },
+    };
+    for index in 0..(MAX_COMMAND_LEDGER_ENTRIES + 8) {
+        fake.expect("thread/archive", json!({"ok": true}));
+        let receipt = host.handle_command(archive(&format!("cmd-{index}")));
+        assert_ne!(
+            receipt.code.as_deref(),
+            Some("command_ledger_full"),
+            "command {index} was rejected by a full ledger"
+        );
+        assert_eq!(receipt.status, "accepted");
+    }
+
+    // The oldest id is gone from the in-memory window, so its repeat is no
+    // longer short-circuited here. `remote_journal` is what keeps that from
+    // re-executing in production; this asserts only that eviction happened.
+    fake.expect("thread/archive", json!({"ok": true}));
+    host.handle_command(archive("cmd-0"));
+
+    // A repeat inside the window is still deduplicated without re-executing.
+    fake.expect("thread/archive", json!({"ok": true}));
+    let first = host.handle_command(archive("cmd-3"));
+    assert_eq!(first.status, "accepted");
+    let calls_before = fake.0.lock().unwrap().calls.len();
+    let repeat = host.handle_command(archive("cmd-3"));
+    assert_eq!(repeat, first);
+    assert_eq!(fake.0.lock().unwrap().calls.len(), calls_before);
+}
+
+fn question(id: usize, prompt: &str) -> Value {
+    json!({
+        "id": id,
+        "method": "item/askUserQuestion",
+        "params": {"threadId":"native-real","turnId":"turn-1","prompt":prompt}
+    })
+}
+
+#[test]
+fn answered_request_suppression_is_bounded_and_still_deduplicates_within_the_window() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-1");
+    let generation: String = host.generation().into();
+    let answer = |id: &str, question_id: &str| RemoteCommand {
+        client_cmd_id: id.into(),
+        hub_session_id: "hub".into(),
+        host_generation: Some(generation.clone()),
+        command: RemoteAction::AnswerQuestion {
+            question_id: question_id.into(),
+            answer: "yes".into(),
+        },
+    };
+
+    // Answer more requests than the suppression window holds, so the oldest ids
+    // are evicted instead of the set growing for the life of the daemon.
+    for index in 0..(MAX_ANSWERED_REQUESTS + 4) {
+        fake.event(question(1000 + index, &format!("q-{index}")));
+        let question_id = host.poll().unwrap()[0].question_id.clone().unwrap();
+        assert_eq!(
+            host.handle_command(answer(&format!("answer-{index}"), &question_id))
+                .status,
+            "accepted"
+        );
+    }
+
+    // A re-delivery of a request answered inside the window is still
+    // suppressed, so the operator is not asked the same question twice.
+    fake.event(question(50_000, "recent"));
+    let question_id = host.poll().unwrap()[0].question_id.clone().unwrap();
+    assert_eq!(
+        host.handle_command(answer("answer-recent", &question_id))
+            .status,
+        "accepted"
+    );
+    fake.event(question(50_000, "recent"));
+    assert!(
+        host.poll().unwrap()[0].question_id.is_none(),
+        "a re-delivered answered request raised a second question"
+    );
+
+    // The id from the very first request fell out of the window, so it is
+    // offered again rather than silently dropped.
+    fake.event(question(1000, "q-0"));
+    assert!(
+        host.poll().unwrap()[0].question_id.is_some(),
+        "an evicted request id was still suppressed"
+    );
+}

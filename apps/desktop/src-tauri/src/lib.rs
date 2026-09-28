@@ -338,7 +338,10 @@ struct RealtimeHandle {
 #[derive(Default)]
 struct SessionContextCache {
     refreshed_at: Option<Instant>,
-    entries: HashMap<String, LocalSessionContext>,
+    /// Shared so the read path — `list_agent_models` runs on every model-picker
+    /// open — hands out a refcount bump instead of copying up to
+    /// `LOCAL_SESSION_LIMIT` contexts with a dozen owned strings each.
+    entries: Arc<HashMap<String, LocalSessionContext>>,
 }
 
 impl RealtimeHandle {
@@ -2845,15 +2848,22 @@ fn merge_dashboard_sessions(
     sessions.into_values().collect()
 }
 
-fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionContext> {
+/// Returns the cached session contexts, refreshing them if the TTL has passed.
+///
+/// The `Arc` is what keeps this cheap: `list_agent_models` runs on every
+/// model-picker open and only reads `model` out of the map, so cloning up to
+/// `LOCAL_SESSION_LIMIT` contexts with a dozen owned strings each per call was
+/// pure overhead. Callers read through the handle; the refresh path is the only
+/// place that builds a new map.
+fn local_session_contexts(state: &DesktopState) -> Arc<HashMap<String, LocalSessionContext>> {
     let Ok(mut cache) = state.session_contexts.lock() else {
-        return HashMap::new();
+        return Arc::new(HashMap::new());
     };
     if cache
         .refreshed_at
         .is_some_and(|updated| updated.elapsed() < SESSION_CONTEXT_CACHE_TTL)
     {
-        return cache.entries.clone();
+        return Arc::clone(&cache.entries);
     }
 
     let claude = collect_claude_session_contexts(LOCAL_SESSION_LIMIT as usize);
@@ -2941,9 +2951,9 @@ fn local_session_contexts(state: &DesktopState) -> HashMap<String, LocalSessionC
                 .map(|(key, context)| (key.clone(), context.clone())),
         ),
     }
-    cache.entries = next.clone();
+    cache.entries = Arc::new(next);
     cache.refreshed_at = Some(Instant::now());
-    next
+    Arc::clone(&cache.entries)
 }
 
 fn insert_session_contexts(

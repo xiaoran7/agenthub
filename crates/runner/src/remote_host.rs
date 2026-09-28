@@ -18,6 +18,22 @@ use sha2::{Digest, Sha256};
 use crate::collectors::{CodexAppServer, ZCodeAppServer};
 use crate::domain::AgentType;
 
+/// In-memory replay window for command receipts.
+///
+/// The daemon's durable ledger (`remote_journal::RemoteJournal`) is the
+/// authority for "has this command already run", so this bound only needs to
+/// cover repeats seen while the Host is alive. Oldest entries are evicted
+/// first; a command whose id is gone from here is answered from the journal
+/// rather than re-executed.
+pub const MAX_COMMAND_LEDGER_ENTRIES: usize = 10_000;
+
+/// In-memory replay window for answered approval/question request ids.
+///
+/// Bounds re-delivery suppression so the set cannot grow for the life of a
+/// long-lived daemon. Comfortably above the number of requests a single
+/// provider re-delivers after a response.
+pub const MAX_ANSWERED_REQUESTS: usize = 10_000;
+
 /// Protocol errors are safe codes; provider payloads belong to the content stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeError {
@@ -1521,8 +1537,19 @@ pub struct NativeSessionHost<T: NativeTransport> {
     native_to_hub: HashMap<String, String>,
     approvals: HashMap<String, PendingApproval>,
     questions: HashMap<String, PendingQuestion>,
+    /// Requests this Host already answered, keyed by their derived id. Some
+    /// providers re-deliver a request the client already responded to; replaying
+    /// it would raise a second approval the operator has to dismiss.
     answered_requests: HashSet<String>,
+    /// Insertion order of `answered_requests`, for the same bounded-lifetime
+    /// reason as `receipt_order`. Without it a long-lived daemon would keep every
+    /// id it ever answered for as long as it ran.
+    answered_order: VecDeque<String>,
     receipts: HashMap<String, (RemoteCommand, CommandReceipt)>,
+    /// Insertion order of `receipts` keys. Lets the ledger drop its oldest
+    /// entries instead of growing until `command_ledger_full` permanently
+    /// rejects every new command on a long-lived daemon.
+    receipt_order: VecDeque<String>,
     pending_historical_events: VecDeque<HostEvent>,
     alive: bool,
 }
@@ -1553,7 +1580,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             approvals: HashMap::new(),
             questions: HashMap::new(),
             answered_requests: HashSet::new(),
+            answered_order: VecDeque::new(),
             receipts: HashMap::new(),
+            receipt_order: VecDeque::new(),
             pending_historical_events: VecDeque::new(),
             alive: true,
         })
@@ -1728,8 +1757,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             };
         }
         // Do not evict IDs and accidentally execute them again. R2 adds a durable ledger.
-        if self.receipts.len() >= 10_000 {
-            return rejected("command_ledger_full");
+        if self.receipts.len() >= MAX_COMMAND_LEDGER_ENTRIES {
+            // The daemon answers every command id the Gateway still holds in
+            // `remote_inbound_commands`, so it stays replay-safe after a
+            // restart. This in-memory copy only deduplicates repeats inside one
+            // Host lifetime; without eviction it would reach the cap and then
+            // reject every later command for the life of the process.
+            self.evict_oldest_receipts(self.receipts.len() + 1 - MAX_COMMAND_LEDGER_ENTRIES);
         }
         let result = if self.alive {
             self.execute(&command)
@@ -1764,7 +1798,36 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         };
         self.receipts
             .insert(command.client_cmd_id.clone(), (command, receipt.clone()));
+        self.receipt_order.push_back(receipt.client_cmd_id.clone());
         receipt
+    }
+
+    /// Records a request id as answered and evicts the oldest once the
+    /// suppression window is full. The window only has to outlive a provider's
+    /// re-delivery of a request the client has already seen, so bounding it by
+    /// count rather than by age is enough to stop a long-lived daemon from
+    /// retaining every id it ever answered.
+    fn mark_answered(&mut self, id: &str) {
+        if self.answered_requests.insert(id.to_string()) {
+            self.answered_order.push_back(id.to_string());
+        }
+        while self.answered_requests.len() > MAX_ANSWERED_REQUESTS {
+            let Some(oldest) = self.answered_order.pop_front() else {
+                break;
+            };
+            self.answered_requests.remove(&oldest);
+        }
+    }
+
+    /// Drops the `count` oldest ledger entries. Callers only reach this once the
+    /// ledger is full, so it is expected to run on a long-lived daemon.
+    fn evict_oldest_receipts(&mut self, count: usize) {
+        for _ in 0..count {
+            let Some(oldest) = self.receipt_order.pop_front() else {
+                break;
+            };
+            self.receipts.remove(&oldest);
+        }
     }
 
     fn execute(&mut self, command: &RemoteCommand) -> Result<Value, NativeError> {
@@ -2082,7 +2145,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 self.transport
                     .respond(approval.request_id.clone(), json!({"decision": decision}))?;
                 self.approvals.remove(approval_id);
-                self.answered_requests.insert(approval_id.clone());
+                self.mark_answered(&approval_id.clone());
                 // Native notifications, not the act of sending a response, update execution state.
                 Ok(json!({"approval_id": approval_id, "response_sent": true}))
             }
@@ -2110,7 +2173,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     }),
                 )?;
                 self.questions.remove(question_id);
-                self.answered_requests.insert(question_id.clone());
+                self.mark_answered(&question_id.clone());
                 Ok(json!({"question_id": question_id, "response_sent": true}))
             }
             RemoteAction::SetArchived { archived } => {

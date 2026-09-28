@@ -185,9 +185,12 @@ pub fn probe_version(binary: &Path, timeout: Duration) -> Option<AgentCliVersion
 
 /// Probes every candidate, drops duplicates, and orders them best-first.
 ///
-/// Probing is parallel in the sense that matters here: each probe is its own
-/// short-lived process with a hard timeout, and an unresponsive binary costs
-/// only its own timeout rather than stalling discovery.
+/// Probes run concurrently, one short-lived thread per candidate. Discovery
+/// runs on the daemon startup path and a machine that has several versions of
+/// an agent installed can hold a dozen candidates; probing them one at a time
+/// made startup cost `candidates × timeout` in the worst case, where a probe
+/// only ever has to outlive the slowest single binary. The result is
+/// order-independent, so the concurrency does not change what is returned.
 pub fn rank_candidates(
     mut candidates: Vec<BinaryCandidate>,
     timeout: Duration,
@@ -207,11 +210,34 @@ pub fn rank_candidates(
         .into_iter()
         .map(|(path, origin)| BinaryCandidate::new(path, None, origin))
         .collect();
-    for candidate in &mut unique {
-        candidate.version = probe_version(&candidate.path, timeout);
+    let probed: Vec<Option<AgentCliVersion>> = probe_all(
+        unique.iter().map(|candidate| candidate.path.clone()),
+        timeout,
+    );
+    for (candidate, version) in unique.iter_mut().zip(probed) {
+        candidate.version = version;
     }
     unique.sort_by_key(|candidate| std::cmp::Reverse(candidate.rank()));
     unique
+}
+
+/// Probes each path in its own thread and returns the versions in the same
+/// order. Threads, not async: a probe is a blocking spawn/wait/kill loop, and
+/// there is at most a dozen of them.
+fn probe_all(
+    paths: impl IntoIterator<Item = PathBuf>,
+    timeout: Duration,
+) -> Vec<Option<AgentCliVersion>> {
+    thread::scope(|scope| {
+        let handles: Vec<_> = paths
+            .into_iter()
+            .map(|path| scope.spawn(move || probe_version(&path, timeout)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap_or(None))
+            .collect()
+    })
 }
 
 /// Windows and Unix spell the same file differently once canonicalized;
@@ -469,15 +495,10 @@ impl BinaryAffinity {
 /// The match is deliberately narrow. A generic non-zero exit, a timeout, or a
 /// cancelled turn must not trigger a fallback: replaying a turn that may have
 /// partially executed is exactly the duplicate side effect the remote command
-/// contract forbids.
-pub fn is_unreadable_session_failure(program: &str, output: &str) -> bool {
-    if !output.contains("No conversation found with session ID") {
-        return false;
-    }
-    // Guard against matching an unrelated provider's phrasing by requiring the
-    // program name in the same buffer; the caller supplies the CLI's own text.
-    let _ = program;
-    true
+/// contract forbids. `output` must be the failing binary's own stdout — the
+/// caller drains another process's stderr and never passes it here.
+pub fn is_unreadable_session_failure(_program: &str, output: &str) -> bool {
+    output.contains("No conversation found with session ID")
 }
 
 #[cfg(test)]
