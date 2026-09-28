@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.4.51] - 2026-09-28
+
+收尾 2.4.50 审查中留下的两项 P2，去除「长时间运行后必然劣化」的两处放大点。
+
+### 性能
+
+- **会话命令历史改为按会话列走索引**：`services/api/src/remote-store.ts` 的 `commandHistory` 原先执行 `SELECT ... WHERE runner=? ORDER BY seq` 取回该 Runner 的**全部**命令行，再在 JS 里从 `body` 解析出 `hub_session_id` 过滤。`/v3/remote/sessions/:runner/:hub` 是控制台的高频轮询路由，因此单次历史查询的成本随 Runner 累计命令总数线性增长。命令里唯一稳定不变的归属字段就是 hub id，故在写入时投影为独立列 `hub`，查询变为一次索引区间扫描（`remote_command_session(runner,hub,seq)`）。读路径仍逐行对照 `body` 校验投影值，而不是信任它，因此即使某行不一致，返回结果与此前完全一致。**向后兼容**：`CREATE TABLE IF NOT EXISTS` 不会改动已存在的表，故构造函数中的 `migrateCommandHub` 对 `PRAGMA table_info` 探测缺失的 `hub` 列，`ALTER TABLE ADD COLUMN` 后从 `body` 回填，再建索引——旧库升级后首轮轮询即走索引，且历史行一条不丢。新增测试以真实的旧版表结构建库，验证升级后各会话历史仍精确；
+- **审批与中断命令不再阻塞异步运行时**：`cancel_session_turn` 与 `resolve_session_approval` 此前是 `#[tauri::command] fn`（同步），内部两次 daemon 往返各可阻塞至本地查询超时的 25 秒。Tauri 2 为同步命令单独派发线程，不占用 async 运行时，但审批恰恰是使用者正在等待 Agent 的时刻。现改为 `async fn` + `spawn_blocking`，与 `send_session_message` / `set_session_archived` 等既有做法一致；daemon 客户端在离开运行时之前解析完毕（其 liveness 探测本身是快速路径），只有真正的往返进入阻塞线程。参数校验仍在异步侧同步完成，错误文案与语义不变。
+
+**验证**：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过；`cargo test --workspace` 232 项通过（3 项因缺 `AGENTHUB_TEST_CODEX_BINARY` 忽略）；`npm.cmd test`（contracts 15、api 60、desktop 88、根 61）、`npm.cmd run typecheck`、`npm.cmd run format:check` 全数通过。
+
 ## [2.4.50] - 2026-09-28
 
 投产前的一轮代码审查、性能优化与三处真实会话缺陷修复。

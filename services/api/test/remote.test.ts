@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -822,5 +823,66 @@ test("an accepted command retry is acknowledged while Runner is offline, without
     assert.equal(next.json().error, "runner_offline");
   } finally {
     await app.close();
+  }
+});
+
+test("command history filters by the projected session id and upgrades old databases", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agenthub-hub-"));
+  const path = join(dir, "remote.sqlite");
+  const scoped = (hub: string, n: number): RemoteCommand => ({
+    ...command,
+    client_cmd_id: `cmd-${hub}-${n}`,
+    hub_session_id: hub,
+  });
+  try {
+    // A database with the pre-upgrade shape: no `hub` column, no index on it.
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`CREATE TABLE remote_runners (runner TEXT PRIMARY KEY, owner TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0, command_seq INTEGER NOT NULL DEFAULT 0, command_ack INTEGER NOT NULL DEFAULT 0, hello TEXT);
+      CREATE TABLE remote_commands (runner TEXT NOT NULL, cmd_id TEXT NOT NULL, seq INTEGER NOT NULL, body TEXT NOT NULL, receipt TEXT, PRIMARY KEY(runner,cmd_id), UNIQUE(runner,seq));`);
+    const insert = legacy.prepare(
+      "INSERT INTO remote_commands(runner,cmd_id,seq,body) VALUES (?,?,?,?)",
+    );
+    for (const [n, item] of [
+      scoped("hub-one", 1),
+      scoped("hub-two", 2),
+      scoped("hub-one", 3),
+    ].entries())
+      insert.run(runner, item.client_cmd_id, n + 1, JSON.stringify(item));
+    legacy
+      .prepare(
+        "INSERT INTO remote_runners(runner,owner,command_seq) VALUES (?,?,?)",
+      )
+      .run(runner, "owner", 3);
+    legacy.close();
+
+    // Opening it migrates the rows in place: history stays exact per session.
+    const store = new RemoteContentStore(path);
+    try {
+      assert.deepEqual(
+        store
+          .commandHistory("owner", runner, "hub-one")
+          .map((row) => row.command.client_cmd_id),
+        ["cmd-hub-one-1", "cmd-hub-one-3"],
+      );
+      assert.deepEqual(
+        store
+          .commandHistory("owner", runner, "hub-two")
+          .map((row) => row.command.client_cmd_id),
+        ["cmd-hub-two-2"],
+      );
+      assert.equal(
+        store.commandHistory("owner", runner, "hub-missing").length,
+        0,
+      );
+
+      // Newly submitted commands project the same column and are filtered by it.
+      store.submit("owner", runner, scoped("hub-two", 4));
+      assert.equal(store.commandHistory("owner", runner, "hub-two").length, 2);
+      assert.equal(store.commandHistory("owner", runner, "hub-one").length, 2);
+    } finally {
+      store.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

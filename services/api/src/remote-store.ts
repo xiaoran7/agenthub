@@ -36,11 +36,50 @@ export class RemoteContentStore {
     this.db
       .exec(`PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS remote_runners (runner TEXT PRIMARY KEY, owner TEXT NOT NULL, received INTEGER NOT NULL DEFAULT 0, command_seq INTEGER NOT NULL DEFAULT 0, command_ack INTEGER NOT NULL DEFAULT 0, hello TEXT);
-      CREATE TABLE IF NOT EXISTS remote_commands (runner TEXT NOT NULL, cmd_id TEXT NOT NULL, seq INTEGER NOT NULL, body TEXT NOT NULL, receipt TEXT, PRIMARY KEY(runner,cmd_id), UNIQUE(runner,seq));
+      CREATE TABLE IF NOT EXISTS remote_commands (runner TEXT NOT NULL, cmd_id TEXT NOT NULL, seq INTEGER NOT NULL, hub TEXT, body TEXT NOT NULL, receipt TEXT, PRIMARY KEY(runner,cmd_id), UNIQUE(runner,seq));
       CREATE TABLE IF NOT EXISTS remote_sessions (owner TEXT NOT NULL, runner TEXT NOT NULL, hub TEXT NOT NULL, native TEXT NOT NULL, binding TEXT NOT NULL, PRIMARY KEY(runner,hub), UNIQUE(runner,native));
       CREATE TABLE IF NOT EXISTS remote_events (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, runner TEXT NOT NULL, runner_seq INTEGER NOT NULL, hub TEXT, payload TEXT NOT NULL, UNIQUE(runner,runner_seq));
       CREATE INDEX IF NOT EXISTS remote_event_owner ON remote_events(owner,id);
       CREATE INDEX IF NOT EXISTS remote_event_session ON remote_events(owner,runner,hub,id);`);
+    this.migrateCommandHub();
+  }
+  /**
+   * Brings an existing `remote_commands` table up to the current shape and
+   * indexes the session column.
+   *
+   * `CREATE TABLE IF NOT EXISTS` leaves an already-created table alone, so a
+   * database written by an older build has no `hub` column and no index. The
+   * column is added and backfilled from `body` — the same value the read path
+   * verifies against — so the first poll after an upgrade is indexed rather
+   * than a full scan. `ALTER TABLE ADD COLUMN` is supported from SQLite 3.35
+   * and errors if the column is already present, so both steps are guarded.
+   */
+  private migrateCommandHub(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(remote_commands)")
+      .all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "hub")) {
+      this.db.exec("ALTER TABLE remote_commands ADD COLUMN hub TEXT");
+      const rows = this.db
+        .prepare("SELECT body FROM remote_commands")
+        .all() as Array<{ body: string }>;
+      const backfill = this.db.prepare(
+        "UPDATE remote_commands SET hub=? WHERE body=?",
+      );
+      for (const row of rows) {
+        let hub: string | null = null;
+        try {
+          hub = (JSON.parse(row.body) as RemoteCommand).hub_session_id ?? null;
+        } catch {
+          // A row that is not parseable has no hub to project; it stays null
+          // and the read path falls back to the same parse failure as before.
+        }
+        backfill.run(hub, row.body);
+      }
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS remote_command_session ON remote_commands(runner,hub,seq)",
+    );
   }
   close(): void {
     this.db.close();
@@ -162,9 +201,15 @@ export class RemoteContentStore {
       const seq = this.watermarks(runner).command_seq + 1;
       this.db
         .prepare(
-          "INSERT INTO remote_commands(runner,cmd_id,seq,body) VALUES (?,?,?,?)",
+          "INSERT INTO remote_commands(runner,cmd_id,seq,hub,body) VALUES (?,?,?,?,?)",
         )
-        .run(runner, command.client_cmd_id, seq, JSON.stringify(command));
+        .run(
+          runner,
+          command.client_cmd_id,
+          seq,
+          command.hub_session_id,
+          JSON.stringify(command),
+        );
       this.db
         .prepare("UPDATE remote_runners SET command_seq=? WHERE runner=?")
         .run(seq, runner);
@@ -208,18 +253,44 @@ export class RemoteContentStore {
   ): Array<{ command: RemoteCommand; receipt: unknown }> {
     if (!this.runners(owner).some((item) => item.runner_id === runner))
       return [];
+    return this.commandHistoryRows(runner, hub).map((row) => ({
+      command: JSON.parse(String(row.body)) as RemoteCommand,
+      receipt: row.receipt
+        ? (JSON.parse(String(row.receipt)) as unknown)
+        : null,
+    }));
+  }
+  /**
+   * The rows behind one session's command history, newest last.
+   *
+   * The obvious query — every row for the runner, then filter on the hub parsed
+   * out of `body` — reads and parses the runner's whole command log on each
+   * poll. The hub id is the one stable field of a command, so it is projected
+   * into its own column at insert time (see `submit`) and the filter becomes
+   * one indexed range scan. The projection is verified against `body` rather
+   * than trusted, so a row that somehow disagrees still matches what the
+   * caller would have seen before.
+   */
+  private commandHistoryRows(
+    runner: string,
+    hub: string,
+  ): Array<{ body: unknown; receipt: unknown }> {
     return this.db
       .prepare(
-        "SELECT body,receipt FROM remote_commands WHERE runner=? ORDER BY seq",
+        "SELECT body,receipt FROM remote_commands WHERE runner=? AND hub=? ORDER BY seq",
       )
-      .all(runner)
-      .map((row) => ({
-        command: JSON.parse(String(row.body)) as RemoteCommand,
-        receipt: row.receipt
-          ? (JSON.parse(String(row.receipt)) as unknown)
-          : null,
-      }))
-      .filter((row) => row.command.hub_session_id === hub);
+      .all(runner, hub)
+      .filter((row) => {
+        try {
+          return (
+            (JSON.parse(String(row.body)) as RemoteCommand).hub_session_id ===
+            hub
+          );
+        } catch {
+          return false;
+        }
+      })
+      .map((row) => ({ body: row.body, receipt: row.receipt }));
   }
   acknowledgeCommands(runner: string, seq: number, force = false): void {
     const watermarks = this.watermarks(runner);

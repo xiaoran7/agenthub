@@ -1343,7 +1343,7 @@ fn find_session_cwd(agent_type: AgentType, session_id: &str) -> Option<PathBuf> 
 }
 
 #[tauri::command]
-fn cancel_session_turn(
+async fn cancel_session_turn(
     input: SessionTurnRef,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
@@ -1354,8 +1354,21 @@ fn cancel_session_turn(
     {
         return Err("该 Provider 尚未接入远程控制".to_owned());
     }
+    // Resolve the client before moving off the runtime: `get_daemon_client`
+    // probes liveness, and every daemon call below blocks for up to the 25 s
+    // local query timeout. Running the rest on a blocking thread keeps a wedged
+    // daemon from stalling the async runtime the rest of the window shares.
     let client = daemon_client::get_daemon_client(&state)
         .ok_or_else(|| "受控 Agent NativeSessionHost 未在运行".to_owned())?;
+    tauri::async_runtime::spawn_blocking(move || cancel_session_turn_inner(input, client))
+        .await
+        .map_err(|_| DesktopError::AgentFailed.to_string())?
+}
+
+fn cancel_session_turn_inner(
+    input: SessionTurnRef,
+    client: daemon_client::DaemonClient,
+) -> Result<Value, String> {
     let sessions = client
         .query_sessions()
         .map_err(|e| format!("无法查询会话注册表: {e}"))?;
@@ -1391,7 +1404,7 @@ fn cancel_session_turn(
 }
 
 #[tauri::command]
-fn resolve_session_approval(
+async fn resolve_session_approval(
     input: SessionApprovalInput,
     state: State<'_, DesktopState>,
 ) -> Result<Value, String> {
@@ -1404,8 +1417,20 @@ fn resolve_session_approval(
         return Err(DesktopError::InvalidAction.to_string());
     }
     validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
+    // Approvals are the one interaction where blocking the async runtime hurts
+    // most: the operator is waiting on the agent, and the daemon round trip can
+    // take the full 25 s local query timeout.
     let client =
         daemon_client::get_daemon_client(&state).ok_or_else(|| "agenthubd 未在运行".to_owned())?;
+    tauri::async_runtime::spawn_blocking(move || resolve_session_approval_inner(input, client))
+        .await
+        .map_err(|_| DesktopError::AgentFailed.to_string())?
+}
+
+fn resolve_session_approval_inner(
+    input: SessionApprovalInput,
+    client: daemon_client::DaemonClient,
+) -> Result<Value, String> {
     let claude_id = format!("claude_{}", input.agent_session_id);
     let binding = client
         .query_sessions()
