@@ -32,6 +32,7 @@ import {
   Search,
   HardDrive,
   Folder,
+  RotateCcw,
   ArrowRight,
   LogOut,
   ExternalLink,
@@ -48,6 +49,7 @@ import { SelectDropdown } from "./SelectDropdown";
 interface DesktopSettingsModalProps {
   preferences: DesktopPreferences;
   snapshot: Snapshot;
+  initialSection?: SettingsSection;
   onClose: () => void;
   onSaved: (preferences: DesktopPreferences) => void;
   onLogout?: () => void;
@@ -61,13 +63,14 @@ type SettingsSection =
 export function DesktopSettingsModal({
   preferences,
   snapshot,
+  initialSection = "general",
   onClose,
   onSaved,
   onLogout,
   onOpenLocalHost,
   onPluginsChanged,
 }: DesktopSettingsModalProps) {
-  const [section, setSection] = useState<SettingsSection>("general");
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [searchQuery, setSearchQuery] = useState("");
   const [refreshSeconds, setRefreshSeconds] = useState(
     preferences.refresh_interval_seconds || 4,
@@ -160,6 +163,26 @@ export function DesktopSettingsModal({
       }
       return nextState;
     });
+  };
+
+  const pickBinaryFile = async (
+    current: string,
+    onSelect: (val: string) => void,
+  ) => {
+    try {
+      if (!("__TAURI_INTERNALS__" in window)) return;
+      const picked = await invoke<string[] | null>("pick_files", {
+        startDir:
+          current && (current.includes("\\") || current.includes("/"))
+            ? current
+            : null,
+      });
+      if (picked && picked.length > 0 && picked[0]) {
+        onSelect(picked[0]);
+      }
+    } catch {
+      // ignore
+    }
   };
 
   const navItems: Array<{
@@ -399,19 +422,6 @@ export function DesktopSettingsModal({
                             <p className="plugin-summary-text">
                               {plugin.description}
                             </p>
-
-                            <div className="plugin-footer-meta">
-                              <div className="plugin-tags-list">
-                                {plugin.tags.map((tag) => (
-                                  <span key={tag} className="plugin-tag-chip">
-                                    {tag}
-                                  </span>
-                                ))}
-                              </div>
-                              <span className="plugin-model-hint">
-                                默认模型: <code>{plugin.defaultModel}</code>
-                              </span>
-                            </div>
                           </div>
                         );
                       })}
@@ -424,11 +434,29 @@ export function DesktopSettingsModal({
               {section === "import" && (
                 <div className="settings-section-block">
                   <div className="settings-card-group">
-                    <h4 className="card-group-title">本机 Agent CLI 路径</h4>
+                    <h4 className="card-group-title">
+                      本机 Agent 运行时与 CLI
+                    </h4>
+                    <p className="settings-group-desc">
+                      配置本地各 Agent Provider
+                      的启动命令与路径。由守护进程托管的运行时自动探测环境，无需手动配置。
+                    </p>
                     <div className="settings-card">
-                      <div className="settings-input-row">
-                        <label>
-                          <span>Claude Code CLI</span>
+                      {/* Claude Code */}
+                      <div className="settings-row-item agent-path-row">
+                        <div className="row-text">
+                          <div className="agent-title-row">
+                            <strong>Claude Code CLI</strong>
+                            <span className="status-badge-chip">
+                              命令行工具
+                            </span>
+                          </div>
+                          <p>
+                            Anthropic 官方终端 Agent。支持 PATH
+                            命令名或本地绝对路径。
+                          </p>
+                        </div>
+                        <div className="agent-path-input-group">
                           <input
                             type="text"
                             value={claudeBinary}
@@ -436,39 +464,99 @@ export function DesktopSettingsModal({
                             placeholder="claude"
                             required
                           />
-                        </label>
+                          {claudeBinary !== "claude" && (
+                            <button
+                              type="button"
+                              className="outline-button sm"
+                              onClick={() => setClaudeBinary("claude")}
+                              title="重置为默认命令 'claude'"
+                            >
+                              <RotateCcw size={12} />
+                              <span>重置</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="outline-button sm"
+                            onClick={() =>
+                              pickBinaryFile(claudeBinary, setClaudeBinary)
+                            }
+                            title="浏览选择本地可执行文件"
+                          >
+                            <Folder size={12} />
+                            <span>浏览</span>
+                          </button>
+                        </div>
                       </div>
+
                       <div className="settings-divider" />
-                      <div className="settings-input-row">
-                        <label>
-                          <span>OpenAI Codex CLI</span>
-                          <input
-                            type="text"
-                            value={codexBinary}
-                            disabled
-                            title="请在“本机与 Remote”中配置；agenthubd 运行期间不可更换"
-                            placeholder="codex"
-                            required
-                          />
-                        </label>
+
+                      {/* OpenAI Codex */}
+                      <div className="settings-row-item agent-path-row">
+                        <div className="row-text">
+                          <div className="agent-title-row">
+                            <strong>OpenAI Codex</strong>
+                            <span className="status-badge-chip active">
+                              守护进程托管
+                            </span>
+                          </div>
+                          <p>
+                            由 agenthubd
+                            统一托管运行与自动发现，无需配置外部可执行路径。
+                          </p>
+                        </div>
+                        {onOpenLocalHost && (
+                          <button
+                            type="button"
+                            className="outline-button sm"
+                            onClick={() => {
+                              onClose();
+                              onOpenLocalHost();
+                            }}
+                          >
+                            管理连接
+                          </button>
+                        )}
                       </div>
+
                       <div className="settings-divider" />
-                      <div className="settings-input-row">
-                        <label>
-                          <span>ZCode Agent CLI</span>
-                          <input
-                            type="text"
-                            value="zcode.cjs app-server (内置驱动)"
-                            disabled
-                            title="由 AgentHub 自动探测本地 ZCode 环境并托管"
-                            placeholder="zcode"
-                          />
-                        </label>
+
+                      {/* ZCode Agent */}
+                      <div className="settings-row-item agent-path-row">
+                        <div className="row-text">
+                          <div className="agent-title-row">
+                            <strong>ZCode Agent</strong>
+                            <span className="status-badge-chip active">
+                              内置驱动
+                            </span>
+                          </div>
+                          <p>
+                            基于 ACP 协议内置驱动，由 AgentHub
+                            自动探测本地环境与工作区。
+                          </p>
+                        </div>
+                        <span className="status-badge-chip active">
+                          自动就绪
+                        </span>
                       </div>
+
                       <div className="settings-divider" />
-                      <div className="settings-input-row">
-                        <label>
-                          <span>xAI Grok Build CLI</span>
+
+                      {/* xAI Grok Build */}
+                      <div className="settings-row-item agent-path-row">
+                        <div className="row-text">
+                          <div className="agent-title-row">
+                            <strong>xAI Grok Build CLI</strong>
+                            <span className="status-badge-chip">
+                              命令行工具
+                            </span>
+                          </div>
+                          <p>
+                            xAI 全栈极速开发 Agent。支持 PATH
+                            命令名或本地绝对路径。
+                          </p>
+                        </div>
+                        <div className="agent-path-input-group">
                           <input
                             type="text"
                             value={grokBinary}
@@ -476,7 +564,29 @@ export function DesktopSettingsModal({
                             placeholder="grok"
                             required
                           />
-                        </label>
+                          {grokBinary !== "grok" && (
+                            <button
+                              type="button"
+                              className="outline-button sm"
+                              onClick={() => setGrokBinary("grok")}
+                              title="重置为默认命令 'grok'"
+                            >
+                              <RotateCcw size={12} />
+                              <span>重置</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="outline-button sm"
+                            onClick={() =>
+                              pickBinaryFile(grokBinary, setGrokBinary)
+                            }
+                            title="浏览选择本地可执行文件"
+                          >
+                            <Folder size={12} />
+                            <span>浏览</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -540,13 +650,23 @@ export function DesktopSettingsModal({
                     <div className="settings-card">
                       <div className="settings-row-item">
                         <div className="row-text">
-                          <strong>服务器端点</strong>
-                          <p className="monospace-text">
-                            {snapshot.server_url}
+                          <strong>云端连接状态</strong>
+                          <p>
+                            {snapshot.account.offline
+                              ? "当前处于纯本地工作区模式，未接入远程网关"
+                              : snapshot.realtime_connected
+                                ? "已建立加密长连接通道，支持多端实时双工协同与流式中继"
+                                : "正在与远程服务保持同步轮询"}
                           </p>
                         </div>
-                        <span className="status-badge-chip active">
-                          {snapshot.realtime_connected ? "实时连接" : "轮询中"}
+                        <span
+                          className={`status-badge-chip ${snapshot.realtime_connected ? "active" : ""}`}
+                        >
+                          {snapshot.account.offline
+                            ? "纯本地"
+                            : snapshot.realtime_connected
+                              ? "实时连接"
+                              : "轮询中"}
                         </span>
                       </div>
                       {onOpenLocalHost && (

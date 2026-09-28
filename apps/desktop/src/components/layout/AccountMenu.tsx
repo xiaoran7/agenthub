@@ -1,12 +1,6 @@
 import { LogOut, Settings } from "lucide-react";
 import type { Snapshot } from "../../types";
 
-export function planLabel(plan: string): string {
-  if (plan === "pro") return "Pro";
-  if (plan === "team") return "Team";
-  return "Free";
-}
-
 export function AccountMenu({
   snapshot,
   busy,
@@ -34,7 +28,9 @@ export function AccountMenu({
           <small>
             {snapshot.account.offline
               ? "本地工作区 · 未连接 Gateway"
-              : `${planLabel(snapshot.account.subscription.plan)} · ${snapshot.realtime_connected ? "实时连接" : "轮询连接"}`}
+              : snapshot.realtime_connected
+                ? "实时连接"
+                : "在线连接"}
           </small>
         </div>
         <button type="button" onClick={onOpenSettings}>

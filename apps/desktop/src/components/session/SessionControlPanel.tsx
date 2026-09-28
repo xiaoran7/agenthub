@@ -24,6 +24,7 @@ import { AUTH_FIX_HINT, isAuthFailure } from "../../authErrors";
 import { effortOptionsFor, resolveEffort } from "../../effortOptions";
 import { cachedConversation, loadConversation } from "../../conversationCache";
 import {
+  agentLabel,
   hasActiveTurn,
   rememberTitleOverride,
   sessionDisplayTitle,
@@ -456,7 +457,7 @@ export function SessionControlPanel({
     }
   };
 
-  const cancelTurn = async () => {
+  const cancelTurn = useCallback(async () => {
     if (!busy || cancelling) return;
     setCancelling(true);
     try {
@@ -468,7 +469,18 @@ export function SessionControlPanel({
       setError(errorMessage(nextError));
       setCancelling(false);
     }
-  };
+  }, [busy, cancelling, session.agent_session_id, session.agent_type]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && busy && !cancelling) {
+        e.preventDefault();
+        void cancelTurn();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [busy, cancelling, cancelTurn]);
 
   const resolveApproval = async (approved: boolean) => {
     if (!pendingApproval || approvalBusy) return;
@@ -517,9 +529,16 @@ export function SessionControlPanel({
             </span>
           </div>
           <div className="panel-heading-actions">
-            <span className={"status-pill " + status.className}>
+            <span
+              className={`status-pill ${status.className} ${busy ? "active-running-pulse" : ""}`}
+              title={busy ? "任务正在执行中" : status.label}
+            >
               <i />
-              {status.label}
+              {busy
+                ? agentActivity
+                  ? `执行中 · ${agentActivity}`
+                  : "正在执行中…"
+                : status.label}
             </span>
             <button
               className={`icon-button ${refreshingMessages ? "rotating" : ""}`}
@@ -594,9 +613,40 @@ export function SessionControlPanel({
               );
             })
           )}
-          {busy && agentActivity !== undefined && (
-            <div className="agent-thinking">
-              <RefreshCw className="spin" /> {agentActivity}
+          {busy && (
+            <div
+              className="agent-thinking-card"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="thinking-icon-box">
+                <RefreshCw className="spin" size={15} />
+              </div>
+              <div className="thinking-content">
+                <div className="thinking-primary-line">
+                  <span className="thinking-agent-name">
+                    {session.agent_type === "claude_code"
+                      ? "Claude Code"
+                      : session.agent_type === "codex"
+                        ? "ChatGPT"
+                        : agentLabel(session.agent_type)}
+                  </span>
+                  <span className="thinking-status-text">正在执行任务…</span>
+                </div>
+                <div className="thinking-detail-line">
+                  {agentActivity || "正在深入分析上下文并执行操作，请稍候…"}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="thinking-cancel-btn"
+                disabled={cancelling}
+                onClick={() => void cancelTurn()}
+                title="停止当前任务 (Esc)"
+              >
+                <Square size={11} />
+                <span>{cancelling ? "正在中断…" : "停止"}</span>
+              </button>
             </div>
           )}
         </section>
@@ -707,6 +757,32 @@ export function SessionControlPanel({
                   ))}
                 </div>
               )}
+              {busy && (
+                <div className="composer-running-alert" role="status">
+                  <div className="running-alert-info">
+                    <span className="running-pulse-indicator" />
+                    <span className="running-alert-title">
+                      {agentLabel(session.agent_type)} 正在执行任务中
+                    </span>
+                    <span className="running-alert-activity">
+                      {agentActivity
+                        ? `· ${agentActivity}`
+                        : "· 处理中，请勿发送新消息以免打断"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="running-alert-stop-btn"
+                    disabled={cancelling}
+                    onClick={() => void cancelTurn()}
+                    title="中断当前任务 (Esc)"
+                  >
+                    <Square size={11} />
+                    <span>{cancelling ? "中断中…" : "中断任务"}</span>
+                    <kbd>Esc</kbd>
+                  </button>
+                </div>
+              )}
               <form
                 className="session-composer modern-composer"
                 onSubmit={sendMessage}
@@ -715,13 +791,22 @@ export function SessionControlPanel({
                   ref={textareaRef}
                   aria-label="发送给 Agent"
                   maxLength={16_000}
-                  placeholder="继续这个会话… (Enter 发送，Shift+Enter 换行)"
+                  placeholder={
+                    busy
+                      ? "Agent 正在执行任务中，输入已被暂时锁定 (可点击上方“中断任务”或按 Esc 停止)…"
+                      : "继续这个会话… (Enter 发送，Shift+Enter 换行)"
+                  }
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      void sendMessage(e);
+                      if (!busy) {
+                        void sendMessage(e);
+                      }
+                    } else if (e.key === "Escape" && busy) {
+                      e.preventDefault();
+                      void cancelTurn();
                     }
                   }}
                   disabled={busy}

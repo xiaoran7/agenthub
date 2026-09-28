@@ -131,6 +131,7 @@ import { applyAppearance, readAppearance } from "./appearance";
 import { isPluginEnabled, readPluginState } from "./plugins";
 import { DesktopHeader } from "./components/layout/DesktopHeader";
 import { SessionEmptyState } from "./components/session/SessionEmptyState";
+import { NewSessionStage } from "./components/session/NewSessionStage";
 import { ConversationLoadState } from "./components/session/ConversationLoadState";
 import { ContextCapacityRing } from "./components/session/ContextCapacityPopover";
 import { ComposerPlusMenu } from "./components/session/ComposerPlusMenu";
@@ -141,7 +142,7 @@ import {
 import { DesktopSessionFolderTree } from "./components/sidebar/DesktopSessionFolderTree";
 
 import { AuthScreen } from "./components/auth/AuthScreen";
-import { AccountMenu, planLabel } from "./components/layout/AccountMenu";
+import { AccountMenu } from "./components/layout/AccountMenu";
 import {
   SessionTimelineView,
   formatTimelineTimestamp,
@@ -245,6 +246,11 @@ function Dashboard({
   const [error, setError] = useState<string>();
   const [accountOpen, setAccountOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<
+    "general" | "plugins" | "import" | "connections" | "account"
+  >("general");
+  const [newSessionProvider, setNewSessionProvider] =
+    useState<Session["agent_type"]>("claude_code");
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [agentFilter, setAgentFilter] = useState<AgentFilter>("codex");
@@ -688,8 +694,8 @@ function Dashboard({
   };
 
   const openLaunchModalFor = (provider: Session["agent_type"]) => {
-    setLaunchModalProvider(provider);
-    setLaunchModalOpen(true);
+    setNewSessionProvider(provider);
+    setSelectedSessionKey(undefined);
   };
 
   const toggleProviderCollapse = (provider: string) => {
@@ -753,6 +759,22 @@ function Dashboard({
           nextSession && setSelectedSessionKey(sessionKey(nextSession))
         }
         canNavigateForward={nextSession !== undefined}
+        onNewSession={() => {
+          setSelectedSessionKey(undefined);
+          if (isManagedProvider(agentFilter)) {
+            setNewSessionProvider(agentFilter);
+          }
+        }}
+        onOpenSettings={() => {
+          setSettingsInitialSection("general");
+          setSettingsOpen(true);
+        }}
+        onOpenLocalHost={onOpenLocalHost}
+        onOpenPlugins={() => {
+          setSettingsInitialSection("plugins");
+          setSettingsOpen(true);
+        }}
+        onReload={() => void refresh()}
         title={
           selectedSession
             ? selectedSession.payload.project.display_name || "AgentHub"
@@ -760,6 +782,11 @@ function Dashboard({
         }
         subtitle={
           selectedSession ? sessionDisplayTitle(selectedSession) : undefined
+        }
+        isRunning={
+          selectedSession
+            ? hasActiveTurn(selectedSession.payload.state.activity_status)
+            : false
         }
       />
       <main
@@ -787,10 +814,9 @@ function Dashboard({
                 className="top-icon-btn new-task-btn"
                 onClick={() => {
                   setSelectedSessionKey(undefined);
-                  setLaunchModalProvider(
-                    isManagedProvider(agentFilter) ? agentFilter : "codex",
-                  );
-                  setLaunchModalOpen(true);
+                  if (isManagedProvider(agentFilter)) {
+                    setNewSessionProvider(agentFilter);
+                  }
                 }}
                 title="新建任务"
                 aria-label="新建任务"
@@ -953,23 +979,23 @@ function Dashboard({
               onClose={() => setSelectedSessionKey(undefined)}
             />
           ) : (
-            <SessionEmptyState
-              onNewSession={() => {
-                setSelectedSessionKey(undefined);
-                setLaunchModalProvider(
-                  isManagedProvider(agentFilter) ? agentFilter : "codex",
+            <NewSessionStage
+              initialProvider={newSessionProvider}
+              onLaunched={async (agentSessionId, agentType) => {
+                await refresh();
+                setSelectedSessionKey(
+                  snapshot.device.device_id +
+                    ":" +
+                    agentType +
+                    ":" +
+                    agentSessionId,
                 );
-                setLaunchModalOpen(true);
               }}
               onOpenHostControl={onOpenLocalHost ?? (() => {})}
               hostPhase={hostPhase}
               workspaceCount={snapshot.local.sources.length}
               sessionCount={snapshot.sessions.length}
               displayName={displayName}
-              activeProviderLabel={
-                agentFilter === "all" ? "Agent" : agentLabel(agentFilter)
-              }
-              activeProviderType={agentFilter === "all" ? "codex" : agentFilter}
             />
           )}
 
@@ -981,6 +1007,7 @@ function Dashboard({
               onClose={() => setAccountOpen(false)}
               onOpenSettings={() => {
                 setAccountOpen(false);
+                setSettingsInitialSection("general");
                 setSettingsOpen(true);
               }}
               onLogout={() => void signOut()}
@@ -990,6 +1017,7 @@ function Dashboard({
             <DesktopSettingsModal
               preferences={snapshot.preferences}
               snapshot={snapshot}
+              initialSection={settingsInitialSection}
               onClose={() => setSettingsOpen(false)}
               onSaved={(preferences) =>
                 setSnapshot((current) => ({ ...current, preferences }))

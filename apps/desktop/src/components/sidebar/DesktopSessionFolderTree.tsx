@@ -6,9 +6,11 @@ import {
   FolderOpen,
   Monitor,
   Plus,
+  RefreshCw,
 } from "lucide-react";
 import type { Session, AgentType } from "../../types";
 import {
+  hasActiveTurn,
   relativeTime,
   statusView,
   isAttentionSession,
@@ -376,16 +378,17 @@ export function DesktopSessionFolderTree({
                                                 .activity_status,
                                               session.payload.state.presence,
                                             );
-                                            const isWorking =
+                                            const isWorking = hasActiveTurn(
                                               session.payload.state
-                                                .activity_status === "WORKING";
+                                                .activity_status,
+                                            );
                                             const attention =
                                               isAttentionSession(session);
 
                                             return (
                                               <div
                                                 key={item.key}
-                                                className={`tree-session-item ${isSelected ? "selected" : ""} ${attention ? "needs-attention" : ""}`}
+                                                className={`tree-session-item ${isSelected ? "selected" : ""} ${attention ? "needs-attention" : ""} ${isWorking ? "is-running" : ""}`}
                                                 data-provider={
                                                   session.agent_type
                                                 }
@@ -414,7 +417,11 @@ export function DesktopSessionFolderTree({
                                               >
                                                 <span
                                                   className={`session-status-dot ${statusInfo.className} ${isWorking ? "pulse" : ""}`}
-                                                  title={statusInfo.label}
+                                                  title={
+                                                    isWorking
+                                                      ? "任务执行中…"
+                                                      : statusInfo.label
+                                                  }
                                                 />
                                                 <span
                                                   className="tree-session-title"
@@ -425,11 +432,24 @@ export function DesktopSessionFolderTree({
                                                 >
                                                   {item.title}
                                                 </span>
-                                                <span className="tree-session-time">
-                                                  {relativeTime(
-                                                    item.activityTime,
-                                                  )}
-                                                </span>
+                                                {isWorking ? (
+                                                  <span
+                                                    className="tree-session-running-tag"
+                                                    title="任务执行中"
+                                                  >
+                                                    <RefreshCw
+                                                      size={10}
+                                                      className="spin"
+                                                    />
+                                                    <span>执行中</span>
+                                                  </span>
+                                                ) : (
+                                                  <span className="tree-session-time">
+                                                    {relativeTime(
+                                                      item.activityTime,
+                                                    )}
+                                                  </span>
+                                                )}
                                               </div>
                                             );
                                           },
