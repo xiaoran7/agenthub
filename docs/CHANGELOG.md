@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.4.49] - 2026-09-28
+
+彻底修复会话回合状态机判定与误报「这个会话已有一个回合正在运行」导致无法继续交互的根本故障：
+
+- **修正 `turn_state` 与 `execution_state` 状态对象解析**：支持字符串格式（`"inProgress"`、`"completed"`、`"failed"`）与 JSON 状态对象（`{ "type": "inProgress" }`、`{ "type": "completed" }`、`{ "type": "failed" }`），消除 `turn/start` 与 `turn/started` 返回对象时被意外解析为 `ExecutionState::Unknown` 的缺陷；
+- **解除失败/终止/断开连接会话的发消息阻塞**：在 `apps/desktop/src-tauri/src/lib.rs` 与 `crates/runner/src/remote_host.rs` 中，重构会话忙碌判定条件。由原先过于激进的 `!matches!(execution_state, Idle | Completed)` 改为精准检测真实正在运行的回合（`binding.control_connected && binding.current_turn_id.is_some() && matches!(execution_state, Running | AwaitingPermission | AwaitingInput)`）。彻底解决此前会话在前次出错（`Error`）、被用户中断（`Terminated`）或从离线状态重连（`Unknown`）后被永久误判为忙碌并返回「这个会话已有一个回合正在运行」的死锁问题；
+- **Provider 活跃回合与取消标记主动清理**：在 `MultiProviderTransport::drain` 消费 `turn/completed` 及 `turn/interrupt` 时，彻底清理 `claude_active_turns`、`antigravity_active_turns`、`grok_active_turns` 及其对应的取消标志，防止后台活跃集合泄漏；
+- **CLI 执行线程异常捕获（Panic Safe Guard）**：为 Claude Code、Antigravity 和 Grok 的流式执行线程增加 `std::panic::catch_unwind` 保护，确保无论子进程遇到何种崩溃或异常，均能可靠发射 `turn/completed`（附带 `interrupted` 或 `failed` 状态）以解除前端等待；
+- **中断与审批操作的会话标识双向兼容**：在 `cancel_session_turn` 与 `resolve_session_approval` 中全面支持 `claude_{id}` 与 `{id}` 双向匹配，避免会话前缀差异导致的中断失败；
+- **全平台版本递增与锁文件同步**：版本升级至 2.4.49，Android versionCode 升至 60，全平台清单与锁文件同步更新。
+
 ## [2.4.48] - 2026-09-28
 
 原生自动探测第三方网关与路由模型映射，支持 CC Switch 开启路由时无缝接管 Claude Code 会话：

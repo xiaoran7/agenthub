@@ -1044,12 +1044,14 @@ fn send_codex_message_with_client(
         .cloned();
 
     if let Some(binding) = &existing_binding
-        && (binding.current_turn_id.is_some()
-            || !matches!(
-                binding.execution_state,
-                agent_pulse_runner::remote_host::ExecutionState::Idle
-                    | agent_pulse_runner::remote_host::ExecutionState::Completed
-            ))
+        && binding.control_connected
+        && binding.current_turn_id.is_some()
+        && matches!(
+            binding.execution_state,
+            agent_pulse_runner::remote_host::ExecutionState::Running
+                | agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission
+                | agent_pulse_runner::remote_host::ExecutionState::AwaitingInput
+        )
     {
         return Err(DesktopError::AgentBusy);
     }
@@ -1354,9 +1356,18 @@ fn cancel_session_turn(
     let sessions = client
         .query_sessions()
         .map_err(|e| format!("无法查询会话注册表: {e}"))?;
+    let provider_session_id = match input.agent_type {
+        AgentType::ClaudeCode if !input.agent_session_id.starts_with("claude_") => {
+            format!("claude_{}", input.agent_session_id)
+        }
+        _ => input.agent_session_id.clone(),
+    };
     let binding = sessions
         .iter()
-        .find(|s| s.provider_session_id == input.agent_session_id)
+        .find(|s| {
+            s.provider_session_id == provider_session_id
+                || s.provider_session_id == input.agent_session_id
+        })
         .ok_or_else(|| format!("未找到绑定的会话 {}", input.agent_session_id))?;
     let generation = client
         .query_generation()
@@ -1392,11 +1403,15 @@ fn resolve_session_approval(
     validate_session_id(&input.agent_session_id).map_err(|error| error.to_string())?;
     let client =
         daemon_client::get_daemon_client(&state).ok_or_else(|| "agenthubd 未在运行".to_owned())?;
+    let claude_id = format!("claude_{}", input.agent_session_id);
     let binding = client
         .query_sessions()
         .map_err(|error| format!("无法查询会话注册表: {error}"))?
         .into_iter()
-        .find(|binding| binding.provider_session_id == input.agent_session_id)
+        .find(|binding| {
+            binding.provider_session_id == input.agent_session_id
+                || binding.provider_session_id == claude_id
+        })
         .ok_or_else(|| "未找到可控的会话".to_owned())?;
     let receipt = client
         .execute(agent_pulse_runner::remote_host::RemoteCommand {

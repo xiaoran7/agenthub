@@ -383,24 +383,28 @@ impl NativeTransport for MultiProviderTransport {
                         }
                     };
 
-                    let outcome = crate::collectors::run_agent_session_turn_streaming(
-                        crate::domain::AgentType::ClaudeCode,
-                        binary,
-                        cwd.as_deref(),
-                        &raw_id,
-                        &text,
-                        crate::collectors::TurnOptions {
-                            model: model.as_deref(),
-                            reasoning_effort: effort.as_deref(),
-                            ..Default::default()
-                        },
-                        Duration::from_secs(600),
-                        &cancel,
-                        on_update,
-                    );
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::collectors::run_agent_session_turn_streaming(
+                            crate::domain::AgentType::ClaudeCode,
+                            binary,
+                            cwd.as_deref(),
+                            &raw_id,
+                            &text,
+                            crate::collectors::TurnOptions {
+                                model: model.as_deref(),
+                                reasoning_effort: effort.as_deref(),
+                                ..Default::default()
+                            },
+                            Duration::from_secs(600),
+                            &cancel,
+                            on_update,
+                        )
+                    }));
 
                     if let Ok(mut q) = events_queue.lock() {
-                        let status_type = if outcome.is_ok() {
+                        let status_type = if cancel.load(Ordering::Relaxed) {
+                            "interrupted"
+                        } else if matches!(outcome, Ok(Ok(_))) {
                             "completed"
                         } else {
                             "failed"
@@ -430,6 +434,7 @@ impl NativeTransport for MultiProviderTransport {
                 if let Some(cancel) = self.claude_cancels.get(session_id) {
                     cancel.store(true, Ordering::SeqCst);
                 }
+                self.claude_active_turns.remove(session_id);
                 Ok(json!({"ok": true}))
             }
             "thread/archive" | "thread/unarchive" if is_claude => Ok(json!({"ok": true})),
@@ -564,20 +569,24 @@ impl NativeTransport for MultiProviderTransport {
                         }
                     };
 
-                    let outcome = crate::collectors::run_agent_session_turn_streaming(
-                        crate::domain::AgentType::Antigravity,
-                        binary,
-                        cwd.as_deref(),
-                        &raw_id,
-                        &text,
-                        crate::collectors::TurnOptions::default(),
-                        Duration::from_secs(600),
-                        &cancel,
-                        on_update,
-                    );
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::collectors::run_agent_session_turn_streaming(
+                            crate::domain::AgentType::Antigravity,
+                            binary,
+                            cwd.as_deref(),
+                            &raw_id,
+                            &text,
+                            crate::collectors::TurnOptions::default(),
+                            Duration::from_secs(600),
+                            &cancel,
+                            on_update,
+                        )
+                    }));
 
                     if let Ok(mut q) = events_queue.lock() {
-                        let status_type = if outcome.is_ok() {
+                        let status_type = if cancel.load(Ordering::Relaxed) {
+                            "interrupted"
+                        } else if matches!(outcome, Ok(Ok(_))) {
                             "completed"
                         } else {
                             "failed"
@@ -607,6 +616,7 @@ impl NativeTransport for MultiProviderTransport {
                 if let Some(cancel) = self.antigravity_cancels.get(session_id) {
                     cancel.store(true, Ordering::SeqCst);
                 }
+                self.antigravity_active_turns.remove(session_id);
                 Ok(json!({"ok": true}))
             }
             "thread/archive" | "thread/unarchive" if is_antigravity => Ok(json!({"ok": true})),
@@ -739,20 +749,24 @@ impl NativeTransport for MultiProviderTransport {
                         }
                     };
 
-                    let outcome = crate::collectors::run_agent_session_turn_streaming(
-                        crate::domain::AgentType::GrokBuild,
-                        binary,
-                        cwd.as_deref(),
-                        &raw_id,
-                        &text,
-                        crate::collectors::TurnOptions::default(),
-                        Duration::from_secs(600),
-                        &cancel,
-                        on_update,
-                    );
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::collectors::run_agent_session_turn_streaming(
+                            crate::domain::AgentType::GrokBuild,
+                            binary,
+                            cwd.as_deref(),
+                            &raw_id,
+                            &text,
+                            crate::collectors::TurnOptions::default(),
+                            Duration::from_secs(600),
+                            &cancel,
+                            on_update,
+                        )
+                    }));
 
                     if let Ok(mut q) = events_queue.lock() {
-                        let status_type = if outcome.is_ok() {
+                        let status_type = if cancel.load(Ordering::Relaxed) {
+                            "interrupted"
+                        } else if matches!(outcome, Ok(Ok(_))) {
                             "completed"
                         } else {
                             "failed"
@@ -782,6 +796,7 @@ impl NativeTransport for MultiProviderTransport {
                 if let Some(cancel) = self.grok_cancels.get(session_id) {
                     cancel.store(true, Ordering::SeqCst);
                 }
+                self.grok_active_turns.remove(session_id);
                 Ok(json!({"ok": true}))
             }
             "thread/archive" | "thread/unarchive" if is_grok => Ok(json!({"ok": true})),
@@ -1042,18 +1057,36 @@ impl NativeTransport for MultiProviderTransport {
 
         if let Ok(mut claude_events) = self.claude_buffered_events.lock() {
             while let Some(evt) = claude_events.pop_front() {
+                if evt.get("method").and_then(Value::as_str) == Some("turn/completed")
+                    && let Some(sid) = evt["params"]["threadId"].as_str()
+                {
+                    self.claude_active_turns.remove(sid);
+                    self.claude_cancels.remove(sid);
+                }
                 messages.push(evt);
             }
         }
 
         if let Ok(mut antigravity_events) = self.antigravity_buffered_events.lock() {
             while let Some(evt) = antigravity_events.pop_front() {
+                if evt.get("method").and_then(Value::as_str) == Some("turn/completed")
+                    && let Some(sid) = evt["params"]["threadId"].as_str()
+                {
+                    self.antigravity_active_turns.remove(sid);
+                    self.antigravity_cancels.remove(sid);
+                }
                 messages.push(evt);
             }
         }
 
         if let Ok(mut grok_events) = self.grok_buffered_events.lock() {
             while let Some(evt) = grok_events.pop_front() {
+                if evt.get("method").and_then(Value::as_str) == Some("turn/completed")
+                    && let Some(sid) = evt["params"]["threadId"].as_str()
+                {
+                    self.grok_active_turns.remove(sid);
+                    self.grok_cancels.remove(sid);
+                }
                 messages.push(evt);
             }
         }
@@ -1989,12 +2022,17 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     return Err(NativeError::rejected("slash_not_supported"));
                 }
                 if session.current_turn_id.is_some()
-                    || !matches!(
+                    && matches!(
                         session.execution_state,
-                        ExecutionState::Idle | ExecutionState::Completed
+                        ExecutionState::Running
+                            | ExecutionState::AwaitingPermission
+                            | ExecutionState::AwaitingInput
                     )
                 {
                     return Err(NativeError::rejected("session_busy_or_unknown"));
+                }
+                if let Some(binding) = self.sessions.get_mut(hub_id) {
+                    binding.current_turn_id = None;
                 }
                 let mut turn_params = json!({"threadId": session.provider_session_id,
                     "input": [{"type": "text", "text": text, "text_elements": []}]});
@@ -2077,9 +2115,11 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             }
             RemoteAction::SetArchived { archived } => {
                 if session.current_turn_id.is_some()
-                    || !matches!(
+                    && matches!(
                         session.execution_state,
-                        ExecutionState::Idle | ExecutionState::Completed
+                        ExecutionState::Running
+                            | ExecutionState::AwaitingPermission
+                            | ExecutionState::AwaitingInput
                     )
                 {
                     return Err(NativeError::rejected("session_busy_or_unknown"));
@@ -2163,7 +2203,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 }
                 // Delayed events for an older turn must not end a newer turn.
                 "turn/completed"
-                    if params["turn"]["id"].as_str() == binding.current_turn_id.as_deref() =>
+                    if params["turn"]["id"].as_str() == binding.current_turn_id.as_deref()
+                        || binding.current_turn_id.is_none() =>
                 {
                     binding.execution_state = turn_state(&params["turn"]["status"]);
                     binding.current_turn_id = None;
@@ -2356,11 +2397,15 @@ impl<T: NativeTransport> NativeSessionHost<T> {
 }
 
 fn execution_state(status: &Value) -> ExecutionState {
-    match status["type"].as_str() {
+    let type_str = status["type"].as_str().or_else(|| status.as_str());
+    match type_str {
         Some("idle") => ExecutionState::Idle,
-        Some("systemError") => ExecutionState::Error,
-        Some("active") => {
-            let flags = status["activeFlags"].as_array();
+        Some("systemError" | "error" | "failed") => ExecutionState::Error,
+        Some("completed") => ExecutionState::Completed,
+        Some("active" | "running" | "inProgress") => {
+            let flags = status["activeFlags"]
+                .as_array()
+                .or_else(|| status["flags"].as_array());
             if flags.is_some_and(|flags| flags.contains(&json!("waitingOnApproval"))) {
                 ExecutionState::AwaitingPermission
             } else if flags.is_some_and(|flags| flags.contains(&json!("waitingOnUserInput"))) {
@@ -2374,9 +2419,11 @@ fn execution_state(status: &Value) -> ExecutionState {
 }
 
 fn turn_state(status: &Value) -> ExecutionState {
-    match status.as_str() {
-        Some("inProgress") => ExecutionState::Running,
-        Some("completed" | "interrupted") => ExecutionState::Idle,
+    let status_str = status.as_str().or_else(|| status["type"].as_str());
+    match status_str {
+        Some("inProgress" | "running") => ExecutionState::Running,
+        Some("completed") => ExecutionState::Completed,
+        Some("interrupted") => ExecutionState::Idle,
         Some("failed") => ExecutionState::Error,
         _ => ExecutionState::Unknown,
     }

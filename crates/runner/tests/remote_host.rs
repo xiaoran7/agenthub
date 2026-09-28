@@ -197,6 +197,85 @@ fn two_turns_share_native_id_and_only_native_completion_releases_busy_state() {
 }
 
 #[test]
+fn failed_turn_does_not_block_subsequent_turns_and_object_status_transitions_running() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+
+    // 1. Start a turn with object status { "type": "inProgress" } (as MultiProviderTransport returns)
+    fake.expect(
+        "turn/start",
+        json!({"turn": {"id": "turn-obj", "status": {"type": "inProgress"}}}),
+    );
+    let cmd = control(
+        &host,
+        "turn-obj",
+        RemoteAction::SendPrompt {
+            text: "hello object status".into(),
+            effort: None,
+        },
+    );
+    assert_eq!(host.handle_command(cmd).status, "accepted");
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::Running);
+    assert_eq!(
+        host.sessions()[0].current_turn_id.as_deref(),
+        Some("turn-obj")
+    );
+
+    // 2. Complete turn with "failed" status
+    fake.event(json!({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "native-real",
+            "turn": {
+                "id": "turn-obj",
+                "status": "failed"
+            }
+        }
+    }));
+    host.poll().unwrap();
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::Error);
+    assert_eq!(host.sessions()[0].current_turn_id, None);
+
+    // 3. Ensure a second turn can be started immediately despite previous Error state
+    fake.expect(
+        "turn/start",
+        json!({"turn": {"id": "turn-retry", "status": {"type": "inProgress"}}}),
+    );
+    let retry_cmd = control(
+        &host,
+        "turn-retry",
+        RemoteAction::SendPrompt {
+            text: "retry after failure".into(),
+            effort: None,
+        },
+    );
+    assert_eq!(host.handle_command(retry_cmd).status, "accepted");
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::Running);
+    assert_eq!(
+        host.sessions()[0].current_turn_id.as_deref(),
+        Some("turn-retry")
+    );
+
+    // 4. Complete with object status { "type": "completed" }
+    fake.event(json!({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "native-real",
+            "turn": {
+                "id": "turn-retry",
+                "status": {"type": "completed"}
+            }
+        }
+    }));
+    host.poll().unwrap();
+    assert_eq!(
+        host.sessions()[0].execution_state,
+        ExecutionState::Completed
+    );
+    assert_eq!(host.sessions()[0].current_turn_id, None);
+}
+
+#[test]
 fn archive_uses_the_bound_native_session_and_rejects_busy_sessions() {
     let (dir, fake, mut host) = setup();
     bind(&dir, &fake, &mut host);
