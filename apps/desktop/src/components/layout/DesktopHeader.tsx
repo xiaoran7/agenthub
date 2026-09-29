@@ -5,13 +5,8 @@ import {
   ArrowLeft,
   ArrowRight,
   ChevronRight,
-  Minus,
-  Square,
-  Copy,
-  X,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useWindowControls, WindowCaptionControls } from "./WindowControls";
 
 interface DesktopHeaderProps {
   onToggleSidebar?: () => void;
@@ -62,43 +57,16 @@ export function DesktopHeader({
   subtitle,
   isRunning = false,
 }: DesktopHeaderProps) {
-  const [isMaximized, setIsMaximized] = useState(false);
+  const {
+    isMaximized,
+    handleMinimize,
+    handleToggleMaximize,
+    handleClose,
+    handleStartDrag,
+  } = useWindowControls();
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let resizeTimer: number | undefined;
-    try {
-      const appWindow = getCurrentWindow();
-      appWindow
-        .isMaximized()
-        .then(setIsMaximized)
-        .catch(() => {});
-      appWindow
-        .onResized(() => {
-          if (resizeTimer !== undefined) return;
-          resizeTimer = window.setTimeout(() => {
-            resizeTimer = undefined;
-            appWindow
-              .isMaximized()
-              .then(setIsMaximized)
-              .catch(() => {});
-          }, 150);
-        })
-        .then((fn) => {
-          unlisten = fn;
-        })
-        .catch(() => {});
-    } catch {
-      // Running outside Tauri (web/test mode)
-    }
-    return () => {
-      if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
-      if (unlisten) unlisten();
-    };
-  }, []);
 
   // Close hamburger menu on outside click or Escape key
   useEffect(() => {
@@ -122,58 +90,6 @@ export function DesktopHeader({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [menuOpen]);
-
-  const handleMinimize = async (e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    try {
-      await invoke("desktop_window_minimize");
-    } catch {
-      try {
-        await getCurrentWindow().minimize();
-      } catch {
-        // ignore outside tauri
-      }
-    }
-  };
-
-  const handleToggleMaximize = async (e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    try {
-      await invoke("desktop_window_toggle_maximize");
-      setIsMaximized((prev) => !prev);
-    } catch {
-      try {
-        await getCurrentWindow().toggleMaximize();
-        const next = await getCurrentWindow().isMaximized();
-        setIsMaximized(next);
-      } catch {
-        // ignore outside tauri
-      }
-    }
-  };
-
-  const handleClose = async (e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    try {
-      await invoke("desktop_window_close");
-    } catch {
-      try {
-        await getCurrentWindow().close();
-      } catch {
-        // ignore outside tauri
-      }
-    }
-  };
-
-  const handleStartDrag = (e: React.MouseEvent) => {
-    if (e.button === 0) {
-      try {
-        getCurrentWindow().startDragging();
-      } catch {
-        // ignore outside tauri
-      }
-    }
-  };
 
   const menuSections: MenuCategory[] = [
     {
@@ -451,38 +367,12 @@ export function DesktopHeader({
 
       {/* Right section: Native window caption controls */}
       <div className="header-right-zone">
-        <div className="window-caption-controls">
-          <button
-            type="button"
-            className="window-control-btn minimize"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={handleMinimize}
-            title="最小化"
-            aria-label="最小化"
-          >
-            <Minus size={13} />
-          </button>
-          <button
-            type="button"
-            className="window-control-btn maximize"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={handleToggleMaximize}
-            title={isMaximized ? "向下还原" : "最大化"}
-            aria-label={isMaximized ? "向下还原" : "最大化"}
-          >
-            {isMaximized ? <Copy size={11} /> : <Square size={11} />}
-          </button>
-          <button
-            type="button"
-            className="window-control-btn close"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={handleClose}
-            title="关闭"
-            aria-label="关闭"
-          >
-            <X size={14} />
-          </button>
-        </div>
+        <WindowCaptionControls
+          isMaximized={isMaximized}
+          onMinimize={handleMinimize}
+          onToggleMaximize={handleToggleMaximize}
+          onClose={handleClose}
+        />
       </div>
     </header>
   );

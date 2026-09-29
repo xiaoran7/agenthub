@@ -789,7 +789,7 @@ pub(crate) fn try_connect_remote(data_dir: &Path) {
         return;
     };
     let (_, profile_path) = host_database_path(data_dir, identity.device_id());
-    let profile = fs::read(&profile_path)
+    let mut profile = fs::read(&profile_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<DaemonProfile>(&bytes).ok())
         .unwrap_or_else(|| {
@@ -809,6 +809,15 @@ pub(crate) fn try_connect_remote(data_dir: &Path) {
             }
             default_p
         });
+    if profile.workspace_paths.is_empty()
+        && let Ok(cwd) = std::env::current_dir().and_then(|p| dunce::canonicalize(&p))
+        && cwd.is_dir()
+    {
+        profile.workspace_paths.push(cwd);
+        if let Ok(bytes) = serde_json::to_vec(&profile) {
+            let _ = fs::write(&profile_path, bytes);
+        }
+    }
     if !profile.remote_enabled {
         return;
     }
@@ -818,6 +827,9 @@ pub(crate) fn try_connect_remote(data_dir: &Path) {
     let _ = ensure_daemon_ready(&client, || {
         start_daemon_for_data(data_dir, None).map_err(|e| e.to_string())
     });
+    for ws in &profile.workspace_paths {
+        let _ = client.authorize_workspace(ws.clone());
+    }
     let _ = client.set_remote_enabled(Some(ws_url));
 }
 
@@ -1295,6 +1307,46 @@ pub(crate) async fn stop_remote_host(state: State<'_, DesktopState>) -> Result<(
     })
     .await
     .map_err(|_| "无法关闭 Remote".to_owned())?
+}
+
+#[tauri::command]
+pub(crate) async fn save_host_workspaces(
+    workspaces: Vec<String>,
+    state: State<'_, DesktopState>,
+) -> Result<Value, String> {
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let identity = load_or_create_identity(&data_dir).map_err(|e| e.to_string())?;
+        let (_, profile_path) = host_database_path(&data_dir, identity.device_id());
+        let config = read_config(&data_dir).ok();
+        let mut profile = fs::read(&profile_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<DaemonProfile>(&bytes).ok())
+            .unwrap_or(DaemonProfile {
+                workspace_paths: Vec::new(),
+                codex_binary: config
+                    .as_ref()
+                    .map(|c| c.codex_binary.clone())
+                    .unwrap_or_else(default_codex_binary),
+                remote_enabled: true,
+            });
+        let paths: Vec<PathBuf> = workspaces.into_iter().map(PathBuf::from).collect();
+        let normalized = normalize_workspaces(paths);
+        profile.workspace_paths = normalized;
+        let client = DaemonClient {
+            endpoint: daemon_ipc::default_endpoint(identity.device_id()),
+        };
+        if let DaemonProbe::Ready(_) = probe_daemon(&client) {
+            for ws in &profile.workspace_paths {
+                let _ = client.authorize_workspace(ws.clone());
+            }
+        }
+        let encoded = serde_json::to_vec(&profile).map_err(|_| "无法保存工作区设置".to_owned())?;
+        fs::write(&profile_path, encoded).map_err(|_| "无法保存工作区设置".to_owned())?;
+        remote_host_status_inner(&data_dir)
+    })
+    .await
+    .map_err(|_| "保存工作区失败".to_owned())?
 }
 
 #[cfg(test)]

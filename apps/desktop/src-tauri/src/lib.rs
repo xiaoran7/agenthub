@@ -14,7 +14,9 @@ use std::{
 
 mod daemon_client;
 pub use daemon_client::safe_daemon_code;
-use daemon_client::{DaemonClient, remote_host_status, start_remote_host, stop_remote_host};
+use daemon_client::{
+    DaemonClient, remote_host_status, save_host_workspaces, start_remote_host, stop_remote_host,
+};
 
 use agent_pulse_runner::{
     adapters::{
@@ -497,6 +499,30 @@ fn builtin_model_catalog(
     }
 }
 
+fn read_codex_configured_model() -> Option<String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    let codex_dir = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    let config_path = codex_dir.join("config.toml");
+    let content = fs::read_to_string(config_path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("model") {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let val = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn model_family(value: &str) -> String {
     let lower = value.trim().to_ascii_lowercase();
     lower
@@ -520,13 +546,14 @@ fn model_label(value: &str) -> String {
             return (*label).to_owned();
         }
     }
+    let is_gpt = value.trim().to_ascii_lowercase().starts_with("gpt-");
     let mut parts: Vec<String> = value
         .split('-')
         .filter(|part| !part.is_empty())
         .map(|part| part.to_owned())
         .collect();
     for part in &mut parts {
-        if part.len() == 1 {
+        if part.len() == 1 || part.eq_ignore_ascii_case("gpt") {
             part.make_ascii_uppercase();
         } else if part
             .chars()
@@ -538,7 +565,11 @@ fn model_label(value: &str) -> String {
             *part = format!("{first}{}", chars.as_str());
         }
     }
-    parts.join(" ")
+    if is_gpt {
+        parts.join("-")
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopError> {
@@ -572,27 +603,79 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
         let mut models: Vec<Value> = Vec::new();
         let mut seen_families: HashSet<String> = HashSet::new();
 
-        if agent == AgentType::Codex
-            && let Some(client) = daemon_client::get_daemon_client(state)
-            && let Ok(val) = client.query_models()
-            && let Some(arr) = val.get("data").and_then(Value::as_array)
-            && !arr.is_empty()
-        {
-            // For Codex, prioritize live models returned directly from the authoritative Host
-            for item in arr {
-                let id = item.get("id").and_then(Value::as_str).unwrap_or("");
-                if !id.is_empty() && !seen_families.contains(&model_family(id)) {
-                    seen_families.insert(model_family(id));
-                    let label = item
-                        .get("displayName")
-                        .or_else(|| item.get("name"))
-                        .and_then(Value::as_str)
-                        .unwrap_or(id);
+        if agent == AgentType::Codex {
+            // 1. If user explicitly configured a model in local ~/.codex/config.toml,
+            // dynamically prioritize it as the top choice.
+            if let Some(configured) = read_codex_configured_model() {
+                seen_families.insert(model_family(&configured));
+                let count = dynamic
+                    .iter()
+                    .find(|(k, _)| k == &configured)
+                    .map(|(_, c)| *c)
+                    .unwrap_or(0);
+                let desc = if count > 0 {
+                    format!("Codex 当前配置 · 实测 {count} 个会话")
+                } else {
+                    "Codex 当前配置模型".to_string()
+                };
+                models.push(json!({
+                    "value": configured,
+                    "label": model_label(&configured),
+                    "desc": desc,
+                    "source": "config"
+                }));
+            }
+
+            // 2. Query official real-time models from native host
+            if let Some(client) = daemon_client::get_daemon_client(state)
+                && let Ok(val) = client.query_models()
+                && let Some(arr) = val.get("data").and_then(Value::as_array)
+                && !arr.is_empty()
+            {
+                for item in arr {
+                    let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                    if !id.is_empty() && !seen_families.contains(&model_family(id)) {
+                        seen_families.insert(model_family(id));
+                        let label = item
+                            .get("displayName")
+                            .or_else(|| item.get("name"))
+                            .and_then(Value::as_str)
+                            .unwrap_or(id);
+                        models.push(json!({
+                            "value": id,
+                            "label": label,
+                            "desc": "Codex 官方实时模型",
+                            "source": "native_host"
+                        }));
+                    }
+                }
+            }
+
+            // 3. Dynamically append models measured in local session transcripts
+            for (value, count) in &dynamic {
+                if seen_families.contains(&model_family(value)) {
+                    continue;
+                }
+                seen_families.insert(model_family(value));
+                models.push(json!({
+                    "value": value,
+                    "label": model_label(value),
+                    "desc": format!("本机 Agent 实测（{count} 个会话）"),
+                    "source": "agent"
+                }));
+            }
+
+            // 4. Safety net fallback only if absolutely no models found
+            if models.is_empty() {
+                for (value, label, desc) in builtin_model_catalog(agent) {
+                    if seen_families.contains(&model_family(value)) {
+                        continue;
+                    }
                     models.push(json!({
-                        "value": id,
+                        "value": value,
                         "label": label,
-                        "desc": "Codex 官方实时模型",
-                        "source": "native_host"
+                        "desc": desc,
+                        "source": "builtin"
                     }));
                 }
             }
@@ -1585,6 +1668,34 @@ fn finish_login(
     let identity = load_or_create_identity(&state.data_dir)?;
     ensure_device_bound(server_url, cookie, &identity)?;
     start_engine(state, server_url, &identity)?;
+
+    // Automatically enable Remote host and seed workspace on login
+    let (_, profile_path) =
+        daemon_client::host_database_path(&state.data_dir, identity.device_id());
+    let mut ws = Vec::new();
+    if let Ok(cwd) = std::env::current_dir().and_then(|p| dunce::canonicalize(&p))
+        && cwd.is_dir()
+    {
+        ws.push(cwd);
+    }
+    let mut profile = fs::read(&profile_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<daemon_client::DaemonProfile>(&bytes).ok())
+        .unwrap_or(daemon_client::DaemonProfile {
+            workspace_paths: ws.clone(),
+            codex_binary: default_codex_binary(),
+            remote_enabled: true,
+        });
+    profile.remote_enabled = true;
+    if profile.workspace_paths.is_empty() && !ws.is_empty() {
+        profile.workspace_paths = ws;
+    }
+    profile.workspace_paths = daemon_client::normalize_workspaces(profile.workspace_paths);
+    if let Ok(bytes) = serde_json::to_vec(&profile) {
+        let _ = fs::write(&profile_path, bytes);
+    }
+    daemon_client::ensure_daemon_started(state.data_dir.clone());
+
     let mut snapshot = dashboard_snapshot(server_url, cookie, &identity, state)?;
     snapshot["account"] = account;
     Ok(snapshot)
@@ -3682,6 +3793,7 @@ pub fn run() {
             remote_host_status,
             start_remote_host,
             stop_remote_host,
+            save_host_workspaces,
             send_session_message,
             launch_new_session,
             cancel_session_turn,
@@ -3733,6 +3845,32 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_label_formats_gpt_and_other_models_dynamically() {
+        assert_eq!(model_label("gpt-6-astra"), "GPT-6-Astra");
+        assert_eq!(model_label("gpt-5.6-terra"), "GPT-5.6-Terra");
+        assert_eq!(model_label("custom-fast-agent"), "Custom Fast Agent");
+        assert_eq!(model_label("claude-sonnet-4-5"), "Claude Sonnet 4.5");
+    }
+
+    #[test]
+    fn read_codex_configured_model_extracts_from_toml_dynamically() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "model = \"gpt-6-astra\"\nother = 123\n").unwrap();
+
+        let old_codex_home = std::env::var_os("CODEX_HOME");
+        unsafe {
+            std::env::set_var("CODEX_HOME", temp.path());
+        }
+        let parsed = read_codex_configured_model();
+        match old_codex_home {
+            Some(v) => unsafe { std::env::set_var("CODEX_HOME", v) },
+            None => unsafe { std::env::remove_var("CODEX_HOME") },
+        }
+        assert_eq!(parsed.as_deref(), Some("gpt-6-astra"));
+    }
 
     fn codex_host_event(kind: &str, raw: Value) -> agent_pulse_runner::remote_host::HostEvent {
         agent_pulse_runner::remote_host::HostEvent {

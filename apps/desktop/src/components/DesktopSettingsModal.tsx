@@ -32,11 +32,13 @@ import {
   Search,
   HardDrive,
   Folder,
+  FolderPlus,
   RotateCcw,
   ArrowRight,
   LogOut,
   ExternalLink,
 } from "lucide-react";
+import { normalizeWorkspacePaths } from "./NativeHostDialog";
 import type { DesktopPreferences, Session, Snapshot } from "../types";
 import {
   AGENT_PLUGIN_MARKETPLACE,
@@ -59,6 +61,18 @@ interface DesktopSettingsModalProps {
 
 type SettingsSection =
   "general" | "plugins" | "import" | "connections" | "account";
+
+interface HostProfile {
+  workspace_paths: string[];
+  codex_binary: string;
+  remote_enabled?: boolean;
+}
+
+interface HostStatus {
+  phase:
+    "loading" | "starting" | "stopped" | "local" | "connecting" | "connected";
+  profile: HostProfile;
+}
 
 export function DesktopSettingsModal({
   preferences,
@@ -104,6 +118,91 @@ export function DesktopSettingsModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  const [hostStatus, setHostStatus] = useState<HostStatus | null>(null);
+  const [hostBusy, setHostBusy] = useState(false);
+  const [hostError, setHostError] = useState<string | null>(null);
+
+  const fetchHostStatus = async () => {
+    try {
+      const status = await invoke<HostStatus>("remote_host_status");
+      setHostStatus(status);
+      setHostError(null);
+    } catch (err) {
+      setHostError(String(err));
+    }
+  };
+
+  useEffect(() => {
+    if (section === "connections") {
+      void fetchHostStatus();
+      const timer = setInterval(() => {
+        void fetchHostStatus();
+      }, 2500);
+      return () => clearInterval(timer);
+    }
+  }, [section]);
+
+  const handleToggleRemote = async (enable: boolean) => {
+    setHostBusy(true);
+    setHostError(null);
+    try {
+      if (enable) {
+        const profile = hostStatus?.profile ?? {
+          workspace_paths: [],
+          codex_binary: "codex",
+          remote_enabled: true,
+        };
+        await invoke("start_remote_host", { input: profile });
+      } else {
+        await invoke("stop_remote_host");
+      }
+      await fetchHostStatus();
+    } catch (err) {
+      setHostError(String(err));
+    } finally {
+      setHostBusy(false);
+    }
+  };
+
+  const handleAddWorkspace = async () => {
+    setHostBusy(true);
+    setHostError(null);
+    try {
+      const path = await invoke<string | null>("pick_folder", {
+        startDir: hostStatus?.profile.workspace_paths.at(-1) ?? null,
+      });
+      if (path) {
+        const currentPaths = hostStatus?.profile.workspace_paths ?? [];
+        const newPaths = normalizeWorkspacePaths([...currentPaths, path]);
+        const updated = await invoke<HostStatus>("save_host_workspaces", {
+          workspaces: newPaths,
+        });
+        setHostStatus(updated);
+      }
+    } catch (err) {
+      setHostError(String(err));
+    } finally {
+      setHostBusy(false);
+    }
+  };
+
+  const handleRemoveWorkspace = async (targetPath: string) => {
+    setHostBusy(true);
+    setHostError(null);
+    try {
+      const currentPaths = hostStatus?.profile.workspace_paths ?? [];
+      const newPaths = currentPaths.filter((p) => p !== targetPath);
+      const updated = await invoke<HostStatus>("save_host_workspaces", {
+        workspaces: newPaths,
+      });
+      setHostStatus(updated);
+    } catch (err) {
+      setHostError(String(err));
+    } finally {
+      setHostBusy(false);
+    }
+  };
 
   const save = async (event?: FormEvent) => {
     if (event) event.preventDefault();
@@ -505,18 +604,13 @@ export function DesktopSettingsModal({
                             统一托管运行与自动发现，无需配置外部可执行路径。
                           </p>
                         </div>
-                        {onOpenLocalHost && (
-                          <button
-                            type="button"
-                            className="outline-button sm"
-                            onClick={() => {
-                              onClose();
-                              onOpenLocalHost();
-                            }}
-                          >
-                            管理连接
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="outline-button sm"
+                          onClick={() => setSection("connections")}
+                        >
+                          管理连接
+                        </button>
                       </div>
 
                       <div className="settings-divider" />
@@ -645,55 +739,284 @@ export function DesktopSettingsModal({
               {/* SECTION: CONNECTIONS */}
               {section === "connections" && (
                 <div className="settings-section-block">
+                  {hostError && (
+                    <div
+                      className="settings-error-banner"
+                      style={{ marginBottom: "12px" }}
+                    >
+                      {hostError}
+                    </div>
+                  )}
+
+                  {/* Card Group 1: 远程连接与网关控制 */}
                   <div className="settings-card-group">
-                    <h4 className="card-group-title">远程连接</h4>
+                    <h4 className="card-group-title">
+                      远程连接与协同 (Remote Gateway)
+                    </h4>
                     <div className="settings-card">
                       <div className="settings-row-item">
                         <div className="row-text">
-                          <strong>云端连接状态</strong>
+                          <strong>启用远程中继连接 (Remote)</strong>
                           <p>
+                            开启后，本机会话可通过 Web
+                            端（claude.ai/code、AgentHub
+                            Web）或手机端远程实时查看与控制，支持双工指令流式交互。
+                          </p>
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "10px",
+                          }}
+                        >
+                          <span
+                            className={`status-badge-chip ${
+                              hostStatus?.phase === "connected" ? "active" : ""
+                            }`}
+                          >
+                            {hostStatus?.phase === "connected"
+                              ? "Remote 已连接"
+                              : hostStatus?.phase === "connecting"
+                                ? "连接中..."
+                                : hostStatus?.phase === "local"
+                                  ? "本机就绪 · Remote 已关闭"
+                                  : hostStatus?.phase === "starting"
+                                    ? "启动中..."
+                                    : hostStatus?.phase === "stopped"
+                                      ? "已停止"
+                                      : "检测中"}
+                          </span>
+                          <label className="ios-toggle">
+                            <input
+                              type="checkbox"
+                              checked={
+                                hostStatus?.phase === "connected" ||
+                                hostStatus?.phase === "connecting" ||
+                                Boolean(hostStatus?.profile.remote_enabled)
+                              }
+                              disabled={
+                                hostBusy ||
+                                hostStatus?.phase === "starting" ||
+                                hostStatus?.phase === "loading"
+                              }
+                              onChange={(e) =>
+                                void handleToggleRemote(e.target.checked)
+                              }
+                            />
+                            <span className="toggle-slider" />
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="settings-divider" />
+
+                      <div className="settings-row-item">
+                        <div className="row-text">
+                          <strong>Gateway 服务地址</strong>
+                          <p
+                            style={{
+                              fontFamily: "monospace",
+                              fontSize: "11px",
+                            }}
+                          >
                             {snapshot.account.offline
-                              ? "当前处于纯本地工作区模式，未接入远程网关"
-                              : snapshot.realtime_connected
-                                ? "已建立加密长连接通道，支持多端实时双工协同与流式中继"
-                                : "正在与远程服务保持同步轮询"}
+                              ? "纯本地工作区（未接入远程网关）"
+                              : snapshot.server_url || "未连接"}
                           </p>
                         </div>
                         <span
-                          className={`status-badge-chip ${snapshot.realtime_connected ? "active" : ""}`}
+                          className={`status-badge-chip ${
+                            snapshot.realtime_connected ? "active" : ""
+                          }`}
                         >
                           {snapshot.account.offline
                             ? "纯本地"
                             : snapshot.realtime_connected
-                              ? "实时连接"
-                              : "轮询中"}
+                              ? "实时双工通道"
+                              : "轮询同步"}
                         </span>
                       </div>
-                      {onOpenLocalHost && (
-                        <>
-                          <div className="settings-divider" />
-                          <div className="settings-row-item">
-                            <div className="row-text">
-                              <strong>本机会话守护 (agenthubd)</strong>
-                              <p>
-                                统一管理本机全
-                                Provider（ChatGPT、Claude、ZCode、Antigravity、Grok）Session
-                                与授权工作目录，并按需开启多端 Remote。
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              className="outline-button"
-                              onClick={() => {
-                                onClose();
-                                onOpenLocalHost();
+                    </div>
+                  </div>
+
+                  {/* Card Group 2: 授权工作区文件夹 */}
+                  <div className="settings-card-group">
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      <h4 className="card-group-title">
+                        允许 Remote 访问的工作区目录
+                      </h4>
+                      <button
+                        type="button"
+                        className="outline-button sm"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "5px",
+                        }}
+                        onClick={() => void handleAddWorkspace()}
+                        disabled={hostBusy}
+                      >
+                        <FolderPlus size={13} />
+                        <span>添加目录</span>
+                      </button>
+                    </div>
+
+                    <div className="settings-card">
+                      <p
+                        style={{
+                          margin: "0 0 12px 0",
+                          fontSize: "11.5px",
+                          color: "var(--text-muted)",
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        为保障本机文件安全与隐私，远程端或手机端仅能访问以下已明确授权的工作区目录。默认已为您自动关联当前项目目录。
+                      </p>
+
+                      {!hostStatus?.profile.workspace_paths ||
+                      hostStatus.profile.workspace_paths.length === 0 ? (
+                        <div
+                          style={{
+                            padding: "16px",
+                            textAlign: "center",
+                            color: "var(--text-muted)",
+                            fontSize: "12px",
+                            background: "var(--bg-subtle)",
+                            borderRadius: "8px",
+                          }}
+                        >
+                          暂无已授权的工作区文件夹。点击右上角“添加目录”选择项目文件夹。
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "8px",
+                          }}
+                        >
+                          {hostStatus.profile.workspace_paths.map((wsPath) => (
+                            <div
+                              key={wsPath}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                padding: "8px 12px",
+                                background: "var(--bg-subtle)",
+                                borderRadius: "6px",
+                                border: "1px solid var(--border-subtle)",
+                                fontSize: "12px",
                               }}
                             >
-                              管理本机连接
-                            </button>
-                          </div>
-                        </>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                  flex: 1,
+                                  minWidth: 0,
+                                }}
+                              >
+                                <Folder
+                                  size={14}
+                                  style={{
+                                    color: "var(--text-link)",
+                                    flexShrink: 0,
+                                  }}
+                                />
+                                <span
+                                  style={{
+                                    fontFamily: "monospace",
+                                    color: "var(--text-primary)",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                  title={wsPath}
+                                >
+                                  {wsPath}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "var(--text-muted)",
+                                  cursor: "pointer",
+                                  padding: "4px",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  marginLeft: "8px",
+                                  flexShrink: 0,
+                                }}
+                                title={`移除 ${wsPath}`}
+                                onClick={() =>
+                                  void handleRemoveWorkspace(wsPath)
+                                }
+                                disabled={hostBusy}
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
                       )}
+                    </div>
+                  </div>
+
+                  {/* Card Group 3: 本机会话守护 (agenthubd) */}
+                  <div className="settings-card-group">
+                    <h4 className="card-group-title">
+                      本机会话守护 (agenthubd)
+                    </h4>
+                    <div className="settings-card">
+                      <div className="settings-row-item">
+                        <div className="row-text">
+                          <strong>守护进程状态</strong>
+                          <p>
+                            agenthubd 独立驻留于本机后台，统一管理全
+                            Provider（ChatGPT、Claude、ZCode、Antigravity、Grok）会话状态中继、断点续连与多端事件调度。
+                          </p>
+                        </div>
+                        <span className="status-badge-chip active">
+                          {hostStatus?.phase !== "stopped" &&
+                          hostStatus?.phase !== "loading"
+                            ? "守护中 (活跃)"
+                            : "未激活"}
+                        </span>
+                      </div>
+
+                      <div className="settings-divider" />
+
+                      <div className="settings-row-item">
+                        <div className="row-text">
+                          <strong>设备识别码 (Device ID)</strong>
+                          <p
+                            style={{
+                              fontFamily: "monospace",
+                              fontSize: "11px",
+                            }}
+                          >
+                            {snapshot.device.device_id}
+                          </p>
+                        </div>
+                        <span className="status-badge-chip">
+                          Ed25519 签名防护
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>

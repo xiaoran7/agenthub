@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.4.54] - 2026-09-29
+
+无边框窗口交互优化、Codex 动态模型发现与 Remote 工作区管理全面重构。
+
+### 桌面端体验与窗口控制
+
+- **无边框窗口拖拽与 Caption 控件重构**：
+  - 新增 `WindowControls.tsx` 集中管理窗口拖拽区域（`data-tauri-drag-region` 与 `startDragging` 事件）和标准化标题栏控件（最小化、最大化/还原、关闭）；
+  - 修复登录界面（`AuthScreen.tsx`）与加载过渡界面（`LoadingScreen`）无边框状态下无法通过鼠标拖动窗口的问题，全面补齐单测覆盖（`WindowControls.test.tsx`）；
+  - 重构 `DesktopHeader.tsx`，复用统一窗口 Caption 控件，消除跨组件重复代码与 IPC 调用的不一致性。
+
+### Codex 模型动态聚合（拒绝硬编码）
+
+- **动态配置与实时探测融合**：
+  - 新增动态配置文件解析（`read_codex_configured_model`），在应用启动与列出模型时实时读取用户的 `~/.codex/config.toml` 配置（如 `model = "gpt-6-astra"`）；
+  - 彻底杜绝在代码中硬编码任何具体模型名，通过动态家族归类（`model_family`）和动态标签格式化（`model_label` 将 `gpt-*` 自动投影为 `GPT-*`），优先展示用户主动配置的模型，并无缝合并本地 Codex RPC 探测结果与已有会话转录数据中的历史模型。
+
+### Remote 自动化与工作区授权重构
+
+- **登录自动连接 Remote 与工作区自适应**：
+  - 优化登录流程（`finish_login`），登录成功后自动将 Remote 状态置为开启并自动授权当前所在工作目录，自动启动 `agenthubd` 守护进程并连接至远程网关，免除用户反复手动确认与重复弹窗；
+  - 后端新增 `save_host_workspaces` IPC 命令，支持运行时动态增删授权工作区目录并向活跃守护进程热同步。
+- **彻底移除突兀的 `NativeHostDialog` 全屏弹窗**：
+  - 移除原先突兀的独立对话框 `NativeHostDialog`，将主界面左下角移动端/Remote 状态按钮、顶部菜单栏中的“管理本机会话守护”以及新会话引导界面的入口统一平滑导航至设置面板中的「远程连接与 Host」标签页；
+  - **设置面板「远程连接与 Host」深度重构**：
+    - 集成 iOS 风格滑动开关，支持随时一键启停远程网关连接，直观显示网关地址与实时双工通道状态；
+    - 提供直观的工作区文件夹授权列表，支持通过系统文件夹选择器一键添加授权目录，并配备安全防护说明；
+    - 展示底层 `agenthubd` 守护进程状态与 Ed25519 签名设备绑定标识。
+
+**验证**：`cargo test -p agent-pulse-desktop`（37 个用例全部通过）、`cargo clippy`（0 警告）、`cargo fmt`、`npm.cmd test`（16 个测试套件，91 个测试全部通过）、`npm.cmd run typecheck`、`npm.cmd run format:check` 全数通过。
+
 ## [2.4.53] - 2026-09-29
 
 移动端 UI 现代化与去 Demo 化全面重构，多底色对比度排查与无障碍修复。

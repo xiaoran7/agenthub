@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, Sparkles } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
+import { SimpleTitleBar, useWindowControls } from "../layout/WindowControls";
 import type {
   Snapshot,
   TgDeviceCodeResponse,
@@ -74,6 +75,7 @@ export function AuthScreen({
   initialError?: string;
   onAuthenticated: (snapshot: Snapshot) => void;
 }) {
+  const { handleStartDrag, handleToggleMaximize } = useWindowControls();
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -165,156 +167,186 @@ export function AuthScreen({
   };
 
   return (
-    <main className="auth-shell">
-      <div className="auth-card">
-        <header className="auth-header">
-          <Brand size={36} />
-          <h2>{mode === "login" ? "登录 AgentHub" : "注册新账号"}</h2>
-          <p>
-            {mode === "login"
-              ? "登录后选择工作目录，连接并接续你的原生 Agent 会话"
-              : "创建账号以同步管理多个开发设备"}
-          </p>
-        </header>
-
-        {deviceFlow && polling ? (
-          <div className="tg-device-card">
-            <p className="tg-device-instructions">
-              请在浏览器打开以下页面并确认授权：
-            </p>
-            <a
-              href={
-                deviceFlow.verification_uri_complete ||
-                deviceFlow.verification_uri
+    <div className="auth-page-container">
+      <SimpleTitleBar />
+      <main
+        className="auth-shell"
+        data-tauri-drag-region
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) {
+            handleStartDrag(e);
+          }
+        }}
+        onDoubleClick={(e) => {
+          if (e.target === e.currentTarget) {
+            handleToggleMaximize(e);
+          }
+        }}
+      >
+        <div className="auth-card">
+          <header
+            className="auth-header"
+            data-tauri-drag-region
+            onMouseDown={(e) => {
+              const target = e.target as HTMLElement;
+              if (
+                target.tagName !== "INPUT" &&
+                target.tagName !== "BUTTON" &&
+                target.tagName !== "A"
+              ) {
+                handleStartDrag(e);
               }
-              target="_blank"
-              rel="noreferrer"
-              className="tg-verify-link"
-            >
-              {deviceFlow.verification_uri}
-            </a>
-            <div className="tg-user-code-box">
-              <span>验证码</span>
-              <strong>{deviceFlow.user_code}</strong>
+            }}
+            onDoubleClick={handleToggleMaximize}
+          >
+            <Brand size={36} />
+            <h2>{mode === "login" ? "登录 AgentHub" : "注册新账号"}</h2>
+            <p>
+              {mode === "login"
+                ? "登录后选择工作目录，连接并接续你的原生 Agent 会话"
+                : "创建账号以同步管理多个开发设备"}
+            </p>
+          </header>
+
+          {deviceFlow && polling ? (
+            <div className="tg-device-card">
+              <p className="tg-device-instructions">
+                请在浏览器打开以下页面并确认授权：
+              </p>
+              <a
+                href={
+                  deviceFlow.verification_uri_complete ||
+                  deviceFlow.verification_uri
+                }
+                target="_blank"
+                rel="noreferrer"
+                className="tg-verify-link"
+              >
+                {deviceFlow.verification_uri}
+              </a>
+              <div className="tg-user-code-box">
+                <span>验证码</span>
+                <strong>{deviceFlow.user_code}</strong>
+              </div>
+              <div className="loading-line">
+                <i />
+              </div>
+              <p className="tg-waiting-text">正在等待浏览器确认…</p>
+              <button
+                type="button"
+                className="outline-button"
+                onClick={() => {
+                  setPolling(false);
+                  setDeviceFlow(undefined);
+                }}
+              >
+                返回账号密码登录
+              </button>
             </div>
-            <div className="loading-line">
-              <i />
-            </div>
-            <p className="tg-waiting-text">正在等待浏览器确认…</p>
-            <button
-              type="button"
-              className="outline-button"
-              onClick={() => {
-                setPolling(false);
-                setDeviceFlow(undefined);
-              }}
-            >
-              返回账号密码登录
-            </button>
-          </div>
-        ) : (
-          <form onSubmit={submit} className="auth-form">
-            <label>
-              <span>邮箱</span>
-              <input
-                type="email"
-                placeholder="developer@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoFocus
-              />
-            </label>
-            <label>
-              <span>密码</span>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </label>
-            {mode === "register" && (
+          ) : (
+            <form onSubmit={submit} className="auth-form">
               <label>
-                <span>显示名称（可选）</span>
+                <span>邮箱</span>
                 <input
-                  type="text"
-                  placeholder="Tang Tang"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
+                  type="email"
+                  placeholder="developer@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoFocus
                 />
               </label>
-            )}
-
-            <button
-              type="button"
-              className="advanced-toggle"
-              onClick={() => setShowAdvanced((v) => !v)}
-            >
-              {showAdvanced ? "收起高级设置" : "高级设置（自定义服务器）"}
-            </button>
-
-            {showAdvanced && (
-              <label className="advanced-field">
-                <span>服务器地址</span>
+              <label>
+                <span>密码</span>
                 <input
-                  type="url"
-                  placeholder="https://platform.tannerlab.xyz"
-                  value={serverUrl}
-                  onChange={(e) => setServerUrl(e.target.value)}
+                  type="password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
                 />
               </label>
-            )}
-
-            {error && <p className="form-error">{error}</p>}
-
-            <button
-              type="submit"
-              className="primary-button submit-btn"
-              disabled={busy}
-            >
-              {busy ? (
-                <>
-                  <RefreshCw className="spin" size={16} /> 正在连接...
-                </>
-              ) : mode === "login" ? (
-                "登录并连接"
-              ) : (
-                "创建账号"
+              {mode === "register" && (
+                <label>
+                  <span>显示名称（可选）</span>
+                  <input
+                    type="text"
+                    placeholder="Tang Tang"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                  />
+                </label>
               )}
-            </button>
 
-            <button
-              type="button"
-              className="outline-button tg-oauth-btn"
-              onClick={startTgDeviceAuth}
-              disabled={busy}
-            >
-              <Sparkles size={16} />
-              通过 TG-Auth 快捷登录
-            </button>
+              <button
+                type="button"
+                className="advanced-toggle"
+                onClick={() => setShowAdvanced((v) => !v)}
+              >
+                {showAdvanced ? "收起高级设置" : "高级设置（自定义服务器）"}
+              </button>
 
-            <footer className="auth-footer">
-              {mode === "login" ? (
-                <span>
-                  还没有账号？
-                  <button type="button" onClick={() => setMode("register")}>
-                    立即注册
-                  </button>
-                </span>
-              ) : (
-                <span>
-                  已有账号？
-                  <button type="button" onClick={() => setMode("login")}>
-                    直接登录
-                  </button>
-                </span>
+              {showAdvanced && (
+                <label className="advanced-field">
+                  <span>服务器地址</span>
+                  <input
+                    type="url"
+                    placeholder="https://platform.tannerlab.xyz"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.target.value)}
+                  />
+                </label>
               )}
-            </footer>
-          </form>
-        )}
-      </div>
-    </main>
+
+              {error && <p className="form-error">{error}</p>}
+
+              <button
+                type="submit"
+                className="primary-button submit-btn"
+                disabled={busy}
+              >
+                {busy ? (
+                  <>
+                    <RefreshCw className="spin" size={16} /> 正在连接...
+                  </>
+                ) : mode === "login" ? (
+                  "登录并连接"
+                ) : (
+                  "创建账号"
+                )}
+              </button>
+
+              <button
+                type="button"
+                className="outline-button tg-oauth-btn"
+                onClick={startTgDeviceAuth}
+                disabled={busy}
+              >
+                <Sparkles size={16} />
+                通过 TG-Auth 快捷登录
+              </button>
+
+              <footer className="auth-footer">
+                {mode === "login" ? (
+                  <span>
+                    还没有账号？
+                    <button type="button" onClick={() => setMode("register")}>
+                      立即注册
+                    </button>
+                  </span>
+                ) : (
+                  <span>
+                    已有账号？
+                    <button type="button" onClick={() => setMode("login")}>
+                      直接登录
+                    </button>
+                  </span>
+                )}
+              </footer>
+            </form>
+          )}
+        </div>
+      </main>
+    </div>
   );
 }

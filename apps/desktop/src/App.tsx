@@ -1,5 +1,4 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { NativeHostDialog } from "./components/NativeHostDialog";
 import {
   LaunchSessionModal,
   PERMISSION_OPTIONS,
@@ -130,6 +129,10 @@ import { DesktopSettingsModal } from "./components/DesktopSettingsModal";
 import { applyAppearance, readAppearance } from "./appearance";
 import { isPluginEnabled, readPluginState } from "./plugins";
 import { DesktopHeader } from "./components/layout/DesktopHeader";
+import {
+  SimpleTitleBar,
+  useWindowControls,
+} from "./components/layout/WindowControls";
 import { SessionEmptyState } from "./components/session/SessionEmptyState";
 import { NewSessionStage } from "./components/session/NewSessionStage";
 import { ConversationLoadState } from "./components/session/ConversationLoadState";
@@ -169,7 +172,6 @@ export function App() {
   );
   const [restoring, setRestoring] = useState(!demo);
   const [error, setError] = useState<string>();
-  const [localHost, setLocalHost] = useState(false);
 
   const restore = useCallback(async () => {
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -207,38 +209,49 @@ export function App() {
     );
   }
   return (
-    <>
-      <Dashboard
-        initialSnapshot={snapshot}
-        onLogout={() => setSnapshot(undefined)}
-        onOpenLocalHost={!demo ? () => setLocalHost(true) : undefined}
-      />
-      {localHost && <NativeHostDialog onClose={() => setLocalHost(false)} />}
-    </>
+    <Dashboard
+      initialSnapshot={snapshot}
+      onLogout={() => setSnapshot(undefined)}
+    />
   );
 }
 
 function LoadingScreen() {
+  const { handleStartDrag, handleToggleMaximize } = useWindowControls();
   return (
-    <main className="loading-screen">
-      <PulseMark />
-      <strong>正在建立本地索引</strong>
-      <span>读取会话元数据，不读取对话正文</span>
-      <div className="loading-line">
-        <i />
-      </div>
-    </main>
+    <div className="auth-page-container">
+      <SimpleTitleBar />
+      <main
+        className="loading-screen"
+        data-tauri-drag-region
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) {
+            handleStartDrag(e);
+          }
+        }}
+        onDoubleClick={(e) => {
+          if (e.target === e.currentTarget) {
+            handleToggleMaximize(e);
+          }
+        }}
+      >
+        <PulseMark />
+        <strong>正在建立本地索引</strong>
+        <span>读取会话元数据，不读取对话正文</span>
+        <div className="loading-line">
+          <i />
+        </div>
+      </main>
+    </div>
   );
 }
 
 function Dashboard({
   initialSnapshot,
   onLogout,
-  onOpenLocalHost,
 }: {
   initialSnapshot: Snapshot;
   onLogout: () => void;
-  onOpenLocalHost?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [actionBusy, setActionBusy] = useState(false);
@@ -249,6 +262,11 @@ function Dashboard({
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     "general" | "plugins" | "import" | "connections" | "account"
   >("general");
+
+  const openConnectionsSettings = useCallback(() => {
+    setSettingsInitialSection("connections");
+    setSettingsOpen(true);
+  }, []);
   const [newSessionProvider, setNewSessionProvider] =
     useState<Session["agent_type"]>("claude_code");
   const [query, setQuery] = useState("");
@@ -769,7 +787,7 @@ function Dashboard({
           setSettingsInitialSection("general");
           setSettingsOpen(true);
         }}
-        onOpenLocalHost={onOpenLocalHost}
+        onOpenLocalHost={openConnectionsSettings}
         onOpenPlugins={() => {
           setSettingsInitialSection("plugins");
           setSettingsOpen(true);
@@ -929,7 +947,7 @@ function Dashboard({
                 <button
                   type="button"
                   className="sidebar-footer-action-btn"
-                  onClick={onOpenLocalHost ?? (() => {})}
+                  onClick={openConnectionsSettings}
                   title={
                     snapshot.realtime_connected
                       ? `远程已连接 (实时在线)${isMobileConnected ? " · 移动端已协同" : " · 点击管理工作目录与远程连接"}`
@@ -991,7 +1009,7 @@ function Dashboard({
                     agentSessionId,
                 );
               }}
-              onOpenHostControl={onOpenLocalHost ?? (() => {})}
+              onOpenHostControl={openConnectionsSettings}
               hostPhase={hostPhase}
               workspaceCount={snapshot.local.sources.length}
               sessionCount={snapshot.sessions.length}
@@ -1023,7 +1041,7 @@ function Dashboard({
                 setSnapshot((current) => ({ ...current, preferences }))
               }
               onLogout={() => void signOut()}
-              onOpenLocalHost={onOpenLocalHost}
+              onOpenLocalHost={openConnectionsSettings}
               onPluginsChanged={reloadPlugins}
             />
           )}
