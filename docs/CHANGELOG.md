@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.4.53] - 2026-09-29
+
+移动端 UI 现代化与去 Demo 化全面重构，多底色对比度排查与无障碍修复。
+
+### 移动端 UI 现代化与重构（对标 Claude 移动端）
+
+- **色彩体系与视觉规范升级**：
+  - 彻底移除移动端糖果粉、大圆角线框等玩具化/Demo 感设计，全面迁移至 Claude / Anthropic 暖中性色体系；
+  - 浅色模式采用温和米白背景（`#FAF9F5`）、白色卡片面（`#FFFFFF`）、发丝边框（`#E5E3DC`）与陶土砖红品牌色（`#C2410C`）；深色模式采用深炭灰底色（`#1F1E1D`）、工作台卡片表面（`#262523`）与暖琥珀强调色（`#D97706`）；
+- **纯原生矢量绘图系统**：
+  - 废弃纯文本 ASCII/Unicode 占位字符（`↗`、`□`、`✓`、`▣`、`○`、`⚡`、`💭`、`▲`、`▼` 等），重构为 Jetpack Compose `Canvas` 原生矢量渲染（`NavIconRemote`、`NavIconSessions`、`NavIconWaiting`、`NavIconDevices`、`NavIconSettings`、`SendArrowUpIcon`、`ChevronDownIcon`）；
+- **工作台与交互架构优化**：
+  - **顶部与底栏**：顶部状态栏采用精致呼吸微点（`LiveStatusPulse`）与连接状态；半透明高质感底栏（`alpha = 0.96f`）搭配椭圆激活胶囊与未读通知徽标；
+  - **概览面板**：重构 4 格粗糙指标为高密度水平滚动概览胶囊（`WorkspaceSummaryStrip`），新增单会话聚光卡片（`ActiveSpotlightCard`）；
+  - **远程控制台**：工具调用采用紧凑单行状态条；思考过程折叠胶囊支持矢量箭头平滑展开/收起；代码块适配 Claude 深色终端卡片并具备复制微反馈；底部输入栏重构为 Claude 风格的悬浮输入胶囊与圆形向上发送按钮；
+  - **Web 移动端底栏**：同步升级 `MobileDock.tsx`，将文本占位符替换为系统的原生 SVG 矢量图标。
+
+### 主题对比度与无障碍修复
+
+- **全底色对比度合规审计**：对 Desktop 的 `light`、`dark`、`amber` 三套主题底色进行全面审计，引入并验证 `--brand-accent-text` 语义化对比度代币（深色模式比值高达 8.24:1，浅色/琥珀模式达 5.77:1，严格符合 WCAG AA 4.5:1 规范）；
+- **弹窗与输入框修复**：修复重命名会话弹窗在深色底色下边框缺失与输入字体过淡的问题，统一采用标准主题变量。
+
+**验证**：`./gradlew compileDebugKotlin`、`./gradlew test`、`npm test`（contracts 15、api 60、desktop 88、web 61）、`npm run typecheck`、`npm run format:check` 全数通过。
+
 ## [2.4.52] - 2026-09-28
 
 桌面端交互现代化与进行中会话状态反馈体验全面升级。

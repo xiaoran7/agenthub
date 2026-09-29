@@ -2,17 +2,21 @@ package com.agentplatform.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -114,7 +118,7 @@ fun buildInlineMarkdown(text: String, isDark: Boolean): AnnotatedString {
 }
 
 /**
- * Obsidian 风格代码块
+ * Claude / Anthropic 风格代码块
  */
 @Composable
 fun CodeBlockSurface(
@@ -135,16 +139,16 @@ fun CodeBlockSurface(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFF16181D),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2B2D35))
+            .padding(vertical = 5.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF181716),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF383632))
     ) {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF1D2027))
+                    .background(Color(0xFF201F1D))
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -152,12 +156,13 @@ fun CodeBlockSurface(
                 Text(
                     text = language.ifBlank { "code" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF9CA3AF)
+                    color = Color(0xFFA8A69E)
                 )
                 Text(
-                    text = if (copied) "已复制 ✓" else "复制",
+                    text = if (copied) "已复制" else "复制",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (copied) SuccessGreen else Color(0xFF60A5FA),
+                    color = if (copied) StatusGreenBright else Color(0xFFD6D4CC),
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .clickable {
@@ -173,7 +178,7 @@ fun CodeBlockSurface(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.5.sp,
                     lineHeight = 18.sp,
-                    color = Color(0xFFE5E7EB)
+                    color = Color(0xFFF5F4EF)
                 ),
                 modifier = Modifier.padding(12.dp)
             )
@@ -196,12 +201,12 @@ fun ThinkingAccordion(
         modifier = modifier
             .fillMaxWidth()
             .animateContentSize()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 3.dp),
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
     ) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -210,18 +215,32 @@ fun ThinkingAccordion(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("💭", fontSize = 12.sp)
+                    Box(
+                        Modifier
+                            .size(6.dp)
+                            .background(
+                                if (isGenerating) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                CircleShape
+                            )
+                    )
                     Text(
-                        text = if (isGenerating) "正在思考中…" else "思考过程 (${thought.length} 字符)",
+                        text = if (isGenerating) "思考中…" else "思考过程 (${thought.length} 字)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = if (expanded) "收起" else "展开",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    ChevronDownIcon(expanded = expanded, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text(
-                    text = if (expanded) "收起 ▲" else "展开 ▼",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
             }
             AnimatedVisibility(visible = expanded) {
                 Text(
@@ -234,6 +253,47 @@ fun ThinkingAccordion(
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ChevronDownIcon(expanded: Boolean, tint: Color) {
+    Canvas(modifier = Modifier.size(10.dp)) {
+        val stroke = 1.4.dp.toPx()
+        val midY = size.height * 0.5f
+        if (expanded) {
+            // Chevron up
+            drawLine(
+                color = tint,
+                start = Offset(size.width * 0.15f, midY + size.height * 0.2f),
+                end = Offset(size.width * 0.5f, midY - size.height * 0.2f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = tint,
+                start = Offset(size.width * 0.5f, midY - size.height * 0.2f),
+                end = Offset(size.width * 0.85f, midY + size.height * 0.2f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
+        } else {
+            // Chevron down
+            drawLine(
+                color = tint,
+                start = Offset(size.width * 0.15f, midY - size.height * 0.2f),
+                end = Offset(size.width * 0.5f, midY + size.height * 0.2f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = tint,
+                start = Offset(size.width * 0.5f, midY + size.height * 0.2f),
+                end = Offset(size.width * 0.85f, midY - size.height * 0.2f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
         }
     }
 }

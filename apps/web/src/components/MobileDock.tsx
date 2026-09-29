@@ -1,4 +1,5 @@
 import type { SessionTab } from "../lib/classify";
+import { Icon, type IconName } from "./Icon";
 
 interface MobileDockProps {
   selected: SessionTab;
@@ -11,12 +12,12 @@ interface MobileDockProps {
 
 const ITEMS: ReadonlyArray<{
   tab: SessionTab;
-  icon: string;
+  icon: IconName;
   label: string;
 }> = [
-  { tab: "all", icon: "⌂", label: "全部" },
-  { tab: "live", icon: "◉", label: "活动" },
-  { tab: "waiting", icon: "!", label: "待处理" },
+  { tab: "all", icon: "overview", label: "全部" },
+  { tab: "live", icon: "activity", label: "活动" },
+  { tab: "waiting", icon: "warning", label: "待处理" },
 ];
 
 export function MobileDock({
@@ -43,7 +44,7 @@ export function MobileDock({
           onClick={() => onSelect(item.tab)}
         >
           <span className="mobile-dock-icon" aria-hidden="true">
-            {item.icon}
+            <Icon name={item.icon} size={18} />
             {item.tab === "waiting" && counts.waiting > 0 && (
               <span className="mobile-dock-badge">
                 {counts.waiting > 99 ? "99+" : counts.waiting}
@@ -60,13 +61,13 @@ export function MobileDock({
         onClick={onOpenFilters}
       >
         <span className="mobile-dock-icon" aria-hidden="true">
-          ◫
+          <Icon name="devices" size={18} />
         </span>
         设备
       </button>
       <button type="button" onClick={onOpenSettings}>
         <span className="mobile-dock-icon" aria-hidden="true">
-          ⚙
+          <Icon name="settings" size={18} />
         </span>
         设置
       </button>

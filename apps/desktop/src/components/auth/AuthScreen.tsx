@@ -292,7 +292,7 @@ export function AuthScreen({
               disabled={busy}
             >
               <Sparkles size={16} />
-              通过 Telegram / 浏览器快捷登录
+              通过 TG-Auth 快捷登录
             </button>
 
             <footer className="auth-footer">

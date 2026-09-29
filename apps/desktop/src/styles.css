@@ -326,7 +326,7 @@ input:focus-visible {
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 18px;
-  background: #151512;
+  background: var(--surface);
 }
 .mode-switch button {
   border: 0;
@@ -346,28 +346,31 @@ input:focus-visible {
   gap: 8px;
 }
 .auth-form label > span {
-  color: #d8d5ce;
+  color: var(--text-secondary, #383530);
   font-size: 13px;
+  font-weight: 550;
 }
 .auth-form input {
   width: 100%;
-  height: 52px;
+  height: 48px;
   padding: 0 16px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  border: 1px solid var(--border-contrast, var(--line));
+  border-radius: 12px;
   outline: 0;
-  color: var(--text);
-  background: #171714;
+  color: var(--text-primary, var(--text));
+  background: var(--bg-surface, #ffffff);
+  font-size: 14px;
   transition:
     border-color 0.16s,
     box-shadow 0.16s;
 }
 .auth-form input:focus {
-  border-color: var(--signal);
-  box-shadow: 0 0 0 4px var(--signal-soft);
+  border-color: var(--brand-accent, var(--signal));
+  box-shadow: 0 0 0 3px rgba(194, 65, 12, 0.15);
 }
 .auth-form input::placeholder {
-  color: #6e6b65;
+  color: var(--text-muted, var(--muted));
+  opacity: 0.7;
 }
 .password-field {
   position: relative;
@@ -392,16 +395,17 @@ input:focus-visible {
   width: 18px;
 }
 .primary-button {
-  min-height: 54px;
+  min-height: 48px;
   border: 0;
-  border-radius: 18px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 9px;
-  color: #26101a;
-  background: var(--signal);
-  font-weight: 750;
+  color: #ffffff;
+  background: var(--brand-accent, var(--signal));
+  font-weight: 600;
+  font-size: 14px;
   cursor: pointer;
   transition:
     transform 0.16s,
@@ -453,7 +457,7 @@ input:focus-visible {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: #141411;
+  background: var(--surface);
 }
 .sidebar nav {
   width: 100%;
@@ -833,7 +837,7 @@ input:focus-visible {
   align-items: center;
   gap: 8px;
   color: var(--dim);
-  background: #161613;
+  background: var(--surface);
 }
 .session-search svg {
   width: 16px;
@@ -856,7 +860,7 @@ input:focus-visible {
   border: 1px solid var(--line-soft);
   border-radius: 12px;
   color: var(--dim);
-  background: #121210;
+  background: var(--surface);
 }
 .device-filter svg {
   width: 14px;
@@ -883,7 +887,7 @@ input:focus-visible {
   border: 1px solid var(--line);
   border-radius: 15px;
   display: flex;
-  background: #161613;
+  background: var(--surface);
 }
 .agent-filter button,
 .archive-filter button {
@@ -905,7 +909,7 @@ input:focus-visible {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 22px;
-  background: #151512;
+  background: var(--surface);
 }
 .session-table-head,
 .session-row {
@@ -928,7 +932,7 @@ input:focus-visible {
   align-items: center;
   gap: 8px;
   color: var(--dim);
-  background: #121210;
+  background: var(--surface-raised);
 }
 .session-group-label svg {
   width: 13px;
@@ -1792,7 +1796,7 @@ input:focus-visible {
   border-radius: 18px;
   outline: 0;
   color: var(--text);
-  background: #11110f;
+  background: var(--surface);
   font:
     12px/1.55 "Segoe UI Variable Text",
     sans-serif;
@@ -1909,7 +1913,7 @@ input:focus-visible {
   border-radius: 14px;
   outline: 0;
   color: var(--text);
-  background: #11110f;
+  background: var(--surface);
   font:
     11px "Cascadia Mono",
     Consolas,
@@ -1927,7 +1931,7 @@ input:focus-visible {
   grid-template-columns: 1fr 52px;
   align-items: center;
   gap: 12px;
-  background: #11110f;
+  background: var(--surface);
 }
 .range-field input {
   accent-color: var(--signal);
@@ -2173,8 +2177,8 @@ input:focus-visible {
   grid-template-columns: 280px 1fr;
   width: 100%;
   height: 100%;
-  background: #141413;
-  color: #f5f2ec;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   overflow: hidden;
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
@@ -2186,8 +2190,8 @@ input:focus-visible {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #191816;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-subtle);
   overflow: hidden;
   user-select: none;
 }

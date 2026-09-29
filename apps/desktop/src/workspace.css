@@ -1895,12 +1895,17 @@
 .launch-form-field textarea {
   width: 100%;
   padding: 10px 12px;
-  color: var(--text-muted);
+  color: var(--text-primary);
   background: var(--bg-surface);
-  border: 1px solid var(--desk-line);
+  border: 1px solid var(--border-contrast, var(--desk-line));
   border-radius: 10px;
   outline: 0;
   font-size: 12px;
+}
+
+.launch-form-field input::placeholder,
+.launch-form-field textarea::placeholder {
+  color: var(--text-muted);
 }
 
 .launch-form-field textarea {

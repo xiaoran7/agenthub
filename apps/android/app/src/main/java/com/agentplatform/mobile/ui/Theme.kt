@@ -11,47 +11,91 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-val Paper = Color(0xFFFBFAF7)
-val Surface = Color(0xFFFFFFFF)
-val Ink = Color(0xFF111111)
-val Muted = Color(0xFF777570)
-val Line = Color(0xFFE2DFD9)
-val PinkSignal = Color(0xFFEF7FA7)
-val SoftPink = Color(0xFFFFEDF3)
-val WorkingBlue = Color(0xFF3974E8)
-val WaitingAmber = Color(0xFFCB7600)
-val SuccessGreen = Color(0xFF25845A)
-val DangerRed = Color(0xFFB64040)
+// =========================================================================
+// Claude/Anthropic Design System Palette (Warm Neutrals & Refined Accents)
+// =========================================================================
+
+// Light theme warm cream/terracotta tokens
+val LightBgPrimary = Color(0xFFFAF9F5)
+val LightBgSurface = Color(0xFFFFFFFF)
+val LightBgSurfaceVariant = Color(0xFFF0EEE6)
+val LightTextPrimary = Color(0xFF1F1E1B)
+val LightTextSecondary = Color(0xFF383530)
+val LightTextMuted = Color(0xFF6B6860)
+val LightBorderSubtle = Color(0xFFE5E3DC)
+val LightBorderContrast = Color(0xFFD0CDC3)
+val LightBrandAccent = Color(0xFFC2410C)
+
+// Dark theme charcoal/amber tokens
+val DarkBgPrimary = Color(0xFF1F1E1D)
+val DarkBgSurface = Color(0xFF262523)
+val DarkBgSurfaceVariant = Color(0xFF181716)
+val DarkTextPrimary = Color(0xFFF5F4EF)
+val DarkTextSecondary = Color(0xFFD6D4CC)
+val DarkTextMuted = Color(0xFFA8A69E)
+val DarkBorderSubtle = Color(0xFF3D3B37)
+val DarkBorderContrast = Color(0xFF605C55)
+val DarkBrandAccent = Color(0xFFD97706)
+
+// Semantic status colors across themes
+val StatusBlue = Color(0xFF2563EB)
+val StatusAmber = Color(0xFFD97706)
+val StatusGreen = Color(0xFF17683D)
+val StatusGreenBright = Color(0xFF10B981)
+val StatusRed = Color(0xFFB42318)
+val StatusRedBright = Color(0xFFEF4444)
+
+// Legacy color aliases for backwards compatibility
+val Paper = LightBgPrimary
+val Surface = LightBgSurface
+val Ink = LightTextPrimary
+val Muted = LightTextMuted
+val Line = LightBorderSubtle
+val PinkSignal = LightBrandAccent
+val SoftPink = Color(0xFFFFF7ED)
+val WorkingBlue = StatusBlue
+val WaitingAmber = StatusAmber
+val SuccessGreen = StatusGreen
+val DangerRed = StatusRed
 
 private val LightColors =
     lightColorScheme(
-        primary = Ink,
-        onPrimary = Surface,
-        secondary = PinkSignal,
-        onSecondary = Ink,
-        background = Paper,
-        onBackground = Ink,
-        surface = Surface,
-        onSurface = Ink,
-        surfaceVariant = Color(0xFFF4F2EE),
-        onSurfaceVariant = Muted,
-        outline = Line,
-        error = DangerRed,
+        primary = LightBrandAccent,
+        onPrimary = Color.White,
+        primaryContainer = Color(0xFFFFEDE5),
+        onPrimaryContainer = Color(0xFF7C2D12),
+        secondary = LightTextSecondary,
+        onSecondary = Color.White,
+        background = LightBgPrimary,
+        onBackground = LightTextPrimary,
+        surface = LightBgSurface,
+        onSurface = LightTextPrimary,
+        surfaceVariant = LightBgSurfaceVariant,
+        onSurfaceVariant = LightTextMuted,
+        outline = LightBorderSubtle,
+        outlineVariant = LightBorderContrast,
+        error = StatusRed,
+        onError = Color.White,
     )
 
 private val DarkColors =
     darkColorScheme(
-        primary = Color(0xFFF7F5F0),
-        onPrimary = Color(0xFF151515),
-        secondary = PinkSignal,
-        background = Color(0xFF11110F),
-        onBackground = Color(0xFFF5F2EC),
-        surface = Color(0xFF1B1B18),
-        onSurface = Color(0xFFF5F2EC),
-        surfaceVariant = Color(0xFF25241F),
-        onSurfaceVariant = Color(0xFFB9B5AD),
-        outline = Color(0xFF3A3933),
-        error = Color(0xFFFF8D8D),
+        primary = DarkBrandAccent,
+        onPrimary = Color(0xFF151514),
+        primaryContainer = Color(0xFF452405),
+        onPrimaryContainer = Color(0xFFFFDDBA),
+        secondary = DarkTextSecondary,
+        onSecondary = Color(0xFF151514),
+        background = DarkBgPrimary,
+        onBackground = DarkTextPrimary,
+        surface = DarkBgSurface,
+        onSurface = DarkTextPrimary,
+        surfaceVariant = DarkBgSurfaceVariant,
+        onSurfaceVariant = DarkTextMuted,
+        outline = DarkBorderSubtle,
+        outlineVariant = DarkBorderContrast,
+        error = StatusRedBright,
+        onError = Color.White,
     )
 
 private val Typography =
@@ -59,69 +103,91 @@ private val Typography =
         displayLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Black,
-                fontSize = 44.sp,
-                lineHeight = 49.sp,
-                letterSpacing = (-1.8).sp,
+                fontWeight = FontWeight.Bold,
+                fontSize = 32.sp,
+                lineHeight = 38.sp,
+                letterSpacing = (-0.8).sp,
             ),
         headlineLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Black,
-                fontSize = 34.sp,
-                lineHeight = 39.sp,
-                letterSpacing = (-1.2).sp,
+                fontWeight = FontWeight.Bold,
+                fontSize = 24.sp,
+                lineHeight = 30.sp,
+                letterSpacing = (-0.5).sp,
             ),
         headlineMedium =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 25.sp,
-                lineHeight = 31.sp,
-                letterSpacing = (-0.6).sp,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 20.sp,
+                lineHeight = 26.sp,
+                letterSpacing = (-0.3).sp,
             ),
         titleLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
-                fontSize = 20.sp,
-                lineHeight = 26.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 17.sp,
+                lineHeight = 23.sp,
+                letterSpacing = (-0.2).sp,
             ),
         titleMedium =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                lineHeight = 22.sp,
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+                lineHeight = 21.sp,
+            ),
+        titleSmall =
+            TextStyle(
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
             ),
         bodyLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Normal,
-                fontSize = 16.sp,
-                lineHeight = 24.sp,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
             ),
         bodyMedium =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Normal,
-                fontSize = 14.sp,
-                lineHeight = 21.sp,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            ),
+        bodySmall =
+            TextStyle(
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.Normal,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
             ),
         labelLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                lineHeight = 17.sp,
+            ),
+        labelMedium =
+            TextStyle(
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
             ),
         labelSmall =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
-                letterSpacing = 1.5.sp,
+                fontWeight = FontWeight.Medium,
+                fontSize = 10.5.sp,
+                lineHeight = 14.sp,
+                letterSpacing = 0.5.sp,
             ),
     )
 

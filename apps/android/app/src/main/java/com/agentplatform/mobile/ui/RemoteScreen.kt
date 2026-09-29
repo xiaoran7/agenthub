@@ -2,6 +2,7 @@ package com.agentplatform.mobile.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,9 +18,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agentplatform.mobile.data.AgentGateway
@@ -38,13 +41,15 @@ import org.json.JSONObject
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 private fun encoded(value: String): String = URLEncoder.encode(value, "UTF-8")
 private fun workspaceLabel(workspaceId: String): String =
-    if (workspaceId.startsWith("ws-")) workspaceId.removePrefix("ws-").replace(Regex("-[0-9a-f]{16}$"), "") else workspaceId.substringAfterLast('/').substringAfterLast('\\')
+    if (workspaceId.startsWith("ws-")) workspaceId.removePrefix("ws-").replace(Regex("-[0-9a-f]{16}$"), "")
+    else workspaceId.substringAfterLast('/').substringAfterLast('\\')
+
 private fun remoteMessage(error: Exception): String = when ((error as? GatewayException)?.code) {
-    "runner_offline" -> "电脑已离线，恢复连接后可继续。"
-    "session_control_lost", "host_generation_mismatch" -> "会话连接已失效，请恢复会话后重试。"
-    "approval_not_pending" -> "审批已处理或过期。"
-    "session_busy_or_unknown" -> "会话仍在执行，或状态尚未确认。"
-    else -> if ((error as? GatewayException)?.status == 401) "请在设置中重新登录。" else "暂时无法连接远程服务，请检查设置和电脑连接。"
+    "runner_offline" -> "电脑 Runner 处于离线状态，连接恢复后可继续。"
+    "session_control_lost", "host_generation_mismatch" -> "会话控制已断开，请重新接入。"
+    "approval_not_pending" -> "该审批请求已处理或已过期。"
+    "session_busy_or_unknown" -> "Agent 正在执行任务中，请稍候。"
+    else -> if ((error as? GatewayException)?.status == 401) "认证失效，请在设置中重新配置令牌。" else "暂时无法连接远程服务，请检查网络和电脑连接。"
 }
 
 data class UiMessage(
@@ -86,6 +91,7 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
             delay(1500)
         }
     }
+
     LaunchedEffect(gateway, selected) {
         events = emptyList()
         commands = emptyList()
@@ -109,6 +115,7 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
             delay(500)
         }
     }
+
     val sessions = snapshot.optJSONArray("sessions")?.objects().orEmpty()
     val session = sessions.find { it.optString("runner_id") == selected?.first && it.getJSONObject("binding").optString("hub_session_id") == selected?.second }
     val binding = session?.optJSONObject("binding")
@@ -122,8 +129,11 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
         val key = "$runner:${if (action.optString("mode") == "create") "new" else hub}:$action"
         scope.launch {
             try {
-                val command = attempts.getOrPut(key) { JSONObject().put("client_cmd_id", UUID.randomUUID().toString()).put("hub_session_id", hub)
-                    .put("host_generation", generation ?: JSONObject.NULL).put("command", action)
+                val command = attempts.getOrPut(key) {
+                    JSONObject().put("client_cmd_id", UUID.randomUUID().toString())
+                        .put("hub_session_id", hub)
+                        .put("host_generation", generation ?: JSONObject.NULL)
+                        .put("command", action)
                 }
                 withContext(Dispatchers.IO) { gateway.remoteRequest("/runners/${encoded(runner)}/commands", command) }
                 attempts.remove(key)
@@ -137,57 +147,79 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
             } finally { busy = false }
         }
     }
+
     fun control(action: JSONObject) {
         selected?.let { submit(it.first, it.second, action, binding?.optString("host_generation")) }
     }
 
     BackHandler(selected != null) { selected = null }
 
-    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // 顶部控制条
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Top Header
         Row(
-            Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 if (selected != null) {
                     TextButton(
                         onClick = { selected = null },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                     ) {
-                        Text("← 会话列表", style = MaterialTheme.typography.labelLarge)
+                        Text("← 返回列表", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                     }
                 } else {
                     Text(
-                        "远程工作台",
+                        "远程控制台",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
                     )
                 }
             }
-            Button(
-                onClick = { create = true },
-                enabled = !busy,
-                shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = !busy) { create = true },
             ) {
-                Text("＋ 新建", fontSize = 13.sp)
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "+ 新建",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
             }
         }
 
         if (error.isNotEmpty()) {
             Surface(
                 shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                modifier = Modifier.fillMaxWidth()
+                color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f),
+                border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    error,
+                    text = error,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(10.dp)
+                    modifier = Modifier.padding(10.dp),
                 )
             }
         }
@@ -212,20 +244,20 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
             if (sessions.isEmpty() && candidates.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(
-                        "连接电脑 Runner 后，可在此实时接管或创建任务。",
+                        "在电脑上运行 Runner 后，即可在此实时交互并接管任务。",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             } else {
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (sessions.isNotEmpty()) {
                         item {
                             Text(
-                                "已接入活跃会话",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
+                                "活跃会话",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold,
                             )
                         }
                         items(sessions) { item ->
@@ -236,40 +268,41 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                             val provName = if (pId.startsWith("sess_")) "ZCode" else if (pId.startsWith("claude_")) "Claude" else "Codex"
 
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 color = MaterialTheme.colorScheme.surface,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { selected = item.getString("runner_id") to b.getString("hub_session_id") }
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { selected = item.getString("runner_id") to b.getString("hub_session_id") },
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(14.dp),
+                                    modifier = Modifier.padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             workspaceLabel(b.getString("workspace_path")),
                                             style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.SemiBold,
                                         )
-                                        Spacer(Modifier.height(4.dp))
+                                        Spacer(Modifier.height(2.dp))
                                         Text(
                                             "$provName · ${pId.take(12)}",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
                                     }
                                     Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = if (isOnline && isControlConnected) SuccessGreen.copy(alpha = 0.15f) else Color.Gray.copy(alpha = 0.15f)
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (isOnline && isControlConnected) StatusGreenBright.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant,
                                     ) {
                                         Text(
                                             if (isOnline) (if (isControlConnected) "已连接" else "未连接") else "离线",
-                                            color = if (isOnline && isControlConnected) SuccessGreen else Color.Gray,
+                                            color = if (isOnline && isControlConnected) StatusGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                                             style = MaterialTheme.typography.labelSmall,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                                         )
                                     }
                                 }
@@ -279,25 +312,26 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
 
                     if (candidates.isNotEmpty()) {
                         item {
-                            Spacer(Modifier.height(6.dp))
+                            Spacer(Modifier.height(4.dp))
                             Text(
-                                "本机历史会话（一键接管）",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.secondary,
-                                fontWeight = FontWeight.SemiBold
+                                "可接管历史会话",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold,
                             )
                         }
                         items(candidates) { (runnerId, generation, cand) ->
                             val provId = cand.optString("provider_session_id")
                             val ws = cand.optString("workspace_path")
-                            val title = cand.optString("title").ifBlank { "Codex · ${provId.take(12)}" }
+                            val title = cand.optString("title").ifBlank { "会话 · ${provId.take(10)}" }
 
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable(enabled = !busy) {
                                         val hubId = UUID.randomUUID().toString()
                                         submit(
@@ -310,34 +344,35 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                                                 .put("provider_session_id", provId)
                                                 .put("sandbox", "read-only")
                                                 .put("approval_policy", "untrusted"),
-                                            generation = generation
+                                            generation = generation,
                                         )
-                                    }
+                                    },
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(14.dp),
+                                    modifier = Modifier.padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             workspaceLabel(ws),
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
                                         Text(
                                             title,
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.Medium,
-                                            maxLines = 1
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
                                         )
                                     }
                                     Text(
-                                        "接管 ↗",
+                                        "接管 →",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(start = 8.dp)
+                                        modifier = Modifier.padding(start = 8.dp),
                                     )
                                 }
                             }
@@ -346,31 +381,31 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                 }
             }
         } else {
-            // 对话详情区
+            // Live Session Detail & Conversation Feed
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Box(
                         Modifier
-                            .size(8.dp)
+                            .size(7.dp)
                             .clip(CircleShape)
-                            .background(if (connected) SuccessGreen else WaitingAmber)
+                            .background(if (connected) StatusGreenBright else StatusAmber),
                     )
                     Text(
                         if (connected) "已连接 · ${binding?.optString("execution_state") ?: "就绪"}" else "恢复连接中…",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (connected && !idle && !busy) {
                     TextButton(
                         onClick = { control(JSONObject().put("action", "interrupt")) },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     ) {
-                        Text("停止任务", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                        Text("终止任务", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -386,22 +421,23 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(conversation, key = { it.id }) { msg ->
                     when (msg.role) {
                         MessageRole.USER -> {
                             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
                                 Surface(
-                                    shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
-                                    color = if (isDark) Color(0xFF2A2B30) else Color(0xFFE5E7EB),
-                                    modifier = Modifier.widthIn(max = 300.dp)
+                                    shape = RoundedCornerShape(14.dp, 14.dp, 3.dp, 14.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                                    modifier = Modifier.widthIn(max = 290.dp),
                                 ) {
                                     Text(
                                         text = msg.text,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = if (isDark) Color(0xFFF3F4F6) else Color(0xFF111827),
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     )
                                 }
                             }
@@ -409,7 +445,6 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                         MessageRole.ASSISTANT -> {
                             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                                 Column(Modifier.fillMaxWidth()) {
-                                    // 思考过程抽屉
                                     if (msg.text.contains("<think>") && msg.text.contains("</think>")) {
                                         val start = msg.text.indexOf("<think>") + 7
                                         val end = msg.text.indexOf("</think>")
@@ -425,20 +460,21 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                         }
                         MessageRole.TOOL -> {
                             Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    Text("⚡", fontSize = 12.sp)
+                                    Box(Modifier.size(5.dp).background(StatusBlue, CircleShape))
                                     Text(
-                                        msg.toolTitle ?: "工具执行完成",
+                                        msg.toolTitle ?: "执行完成",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                             }
@@ -448,39 +484,41 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                 }
             }
 
-            // 审批卡片区
+            // Approvals Block
             val approvals = remoteApprovals(events, selected?.second.orEmpty())
             if (approvals.isNotEmpty()) {
                 approvals.forEach { (id, approval) ->
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = WaitingAmber.copy(alpha = 0.12f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, WaitingAmber.copy(alpha = 0.5f)),
-                        modifier = Modifier.fillMaxWidth()
+                        shape = RoundedCornerShape(10.dp),
+                        color = StatusAmber.copy(alpha = 0.08f),
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, StatusAmber.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("⚠️", fontSize = 14.sp)
-                                Text("操作审批请求", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = WaitingAmber)
+                                Box(Modifier.size(7.dp).background(StatusAmber, CircleShape))
+                                Text("等待权限确认", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = StatusAmber)
                             }
                             Text(
                                 approval.optString("message").ifBlank { "Agent 请求执行受保护的操作，请确认是否允许。" },
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.bodySmall,
                             )
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(
                                     onClick = { control(JSONObject().put("action", "resolve_approval").put("approval_id", id).put("approved", false)) },
                                     enabled = connected && !busy && approval.optBoolean("can_decline", true),
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
                                 ) {
                                     Text("拒绝")
                                 }
                                 Button(
                                     onClick = { control(JSONObject().put("action", "resolve_approval").put("approval_id", id).put("approved", true)) },
                                     enabled = connected && !busy && approval.optBoolean("can_approve", true),
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
                                 ) {
-                                    Text("允许")
+                                    Text("批准执行")
                                 }
                             }
                         }
@@ -494,22 +532,24 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                     onClick = {
                         control(JSONObject().put("action", "connect").put("mode", "resume").put("workspace_path", binding.getString("workspace_path")).put("provider_session_id", binding.getString("provider_session_id")))
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
                     Text("恢复原生会话")
                 }
             }
 
-            // 底部输入区 (对标 ChatGPT 药丸输入条)
+            // Modern Mobile Composer Pill (Claude Mobile Style)
             Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = if (isDark) Color(0xFF1E2025) else Color(0xFFF3F4F6),
-                border = androidx.compose.foundation.BorderStroke(1.dp, if (isDark) Color(0xFF32353C) else Color(0xFFE5E7EB)),
-                modifier = Modifier.fillMaxWidth()
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)),
+                modifier = Modifier.fillMaxWidth(),
+                shadowElevation = 1.dp,
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextField(
                         value = draft,
@@ -517,9 +557,9 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                         modifier = Modifier.weight(1f),
                         placeholder = {
                             Text(
-                                if (connected) (if (idle) "继续这段工作…" else "Agent 正在执行中…") else "等待电脑连接…",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                if (connected) (if (idle) "输入指令以继续此任务…" else "Agent 正在执行中…") else "等待电脑连接…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         },
                         colors = TextFieldDefaults.colors(
@@ -528,10 +568,10 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                             disabledContainerColor = Color.Transparent,
                             focusedIndicatorColor = Color.Transparent,
                             unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor = Color.Transparent
+                            disabledIndicatorColor = Color.Transparent,
                         ),
                         enabled = idle && !busy,
-                        maxLines = 4
+                        maxLines = 4,
                     )
                     IconButton(
                         onClick = {
@@ -541,11 +581,17 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                         },
                         enabled = idle && !busy && draft.isNotBlank(),
                         modifier = Modifier
-                            .size(34.dp)
+                            .size(30.dp)
                             .clip(CircleShape)
-                            .background(if (idle && !busy && draft.isNotBlank()) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.3f))
+                            .background(
+                                if (idle && !busy && draft.isNotBlank()) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                            ),
                     ) {
-                        Text("↑", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        SendArrowUpIcon(
+                            tint = if (idle && !busy && draft.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
                     }
                 }
             }
@@ -555,7 +601,7 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
     if (create) {
         AlertDialog(
             onDismissRequest = { create = false },
-            title = { Text("选择电脑与工作目录") },
+            title = { Text("选择工作目录与电脑") },
             text = {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     snapshot.optJSONArray("runners")?.objects().orEmpty().filter { it.optBoolean("online") }.forEach { runner ->
@@ -580,14 +626,14 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
                                                 .put("workspace_path", path)
                                                 .put("sandbox", "read-only")
                                                 .put("approval_policy", "untrusted"),
-                                            generation
+                                            generation,
                                         )
-                                    }
+                                    },
                             ) {
                                 Text(
                                     "${runner.getString("runner_id").takeLast(8)} · $path",
                                     style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(10.dp)
+                                    modifier = Modifier.padding(10.dp),
                                 )
                             }
                         }
@@ -596,7 +642,38 @@ fun RemoteScreen(config: AppConfig, modifier: Modifier = Modifier) {
             },
             confirmButton = {
                 TextButton(onClick = { create = false }) { Text("取消") }
-            }
+            },
+        )
+    }
+}
+
+@Composable
+private fun SendArrowUpIcon(tint: Color) {
+    Canvas(modifier = Modifier.size(12.dp)) {
+        val stroke = 1.6.dp.toPx()
+        val cx = size.width * 0.5f
+        // Vertical stem
+        drawLine(
+            color = tint,
+            start = Offset(cx, size.height * 0.85f),
+            end = Offset(cx, size.height * 0.15f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        // Arrow head
+        drawLine(
+            color = tint,
+            start = Offset(size.width * 0.20f, size.height * 0.45f),
+            end = Offset(cx, size.height * 0.15f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = tint,
+            start = Offset(size.width * 0.80f, size.height * 0.45f),
+            end = Offset(cx, size.height * 0.15f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
         )
     }
 }
@@ -612,8 +689,8 @@ fun RenderMarkdownContent(content: String, isDark: Boolean) {
                 Text(
                     text = buildInlineMarkdown(seg.text, isDark),
                     style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                    color = if (isDark) Color(0xFFF3F4F6) else Color(0xFF111827),
-                    modifier = Modifier.padding(vertical = 2.dp)
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(vertical = 2.dp),
                 )
             }
         }
@@ -670,7 +747,7 @@ private fun parseStructuredConversation(events: List<JSONObject>, commands: List
                             result[id] = UiMessage(id = id, role = MessageRole.ASSISTANT, text = item.optString("text"), isStreaming = false)
                         }
                         "commandExecution" -> {
-                            result[id] = UiMessage(id = id, role = MessageRole.TOOL, text = "", toolTitle = "已执行命令: ${item.optString("command").take(24)}…")
+                            result[id] = UiMessage(id = id, role = MessageRole.TOOL, text = "", toolTitle = "执行命令: ${item.optString("command").take(24)}…")
                         }
                     }
                 }

@@ -67,7 +67,7 @@ export function Brand({ size = 26 }: { size?: number }) {
             fontWeight: 800,
             fontSize: "15px",
             letterSpacing: "0.02em",
-            color: "#f8fafc",
+            color: "var(--text-heading, var(--text-primary))",
           }}
         >
           Agent{" "}
@@ -84,7 +84,7 @@ export function Brand({ size = 26 }: { size?: number }) {
         <span
           style={{
             fontSize: "10px",
-            color: "#94a3b8",
+            color: "var(--text-muted)",
             letterSpacing: "0.06em",
           }}
         >

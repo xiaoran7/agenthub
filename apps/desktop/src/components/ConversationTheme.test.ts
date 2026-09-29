@@ -53,6 +53,7 @@ describe("conversation and home theme contract", () => {
         ["status-success", "status-success-background"],
         ["status-danger", "status-danger-background"],
         ["status-info", "status-info-background"],
+        ["brand-accent-text", "brand-accent"],
       ]) {
         const a = luminance(tokens[`--${fg}`]);
         const b = luminance(tokens[`--${bg}`]);
