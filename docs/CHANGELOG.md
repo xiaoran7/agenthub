@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.4.57] - 2026-10-01
+
+修复新建 Claude 会话执行卡死与空白态、根治 turn/completed 产物丢失、重构排版去除多重冗余提示、实现模型动态拉取与官方真实模型目录整合。
+
+### 核心运行时与执行流修复
+
+- **彻底修复新建会话执行卡死与响应丢失**：
+  - 根因定位：在 `crates/runner/src/remote_host.rs` 中，`turn/completed` 事件组装时未将子进程的最终文本响应 `res.response` 赋值至 `params.turn.output`；且 `parse_agent_turn_update` 仅处理了 `stream_event`，忽略了直接通过 `assistant` 消息块输出的情况。这导致桌面端接收到完成事件时 `output` 字段为 `null`，被判定为空输出触发 `AgentFailed`，UI 失去初始响应并陷入死锁；
+  - 修复事件装配：在 `crates/runner/src/remote_host.rs` 中针对 ClaudeCode、Antigravity 和 GrokBuild，在执行成功时将 `res.response` 严谨填充进 `completed_params["turn"]["output"]`；并在 `parse_agent_turn_update` 中增强对 `assistant` 消息块文本的提取；
+  - 增强 `final_agent_message`：在 Claude CLI 的输出流中，增加对 `assistant` 消息内容块和 `stream_event` 增量字符流的多级后备回退解析，绝不因缺少特定格式的外层包装丢失输出；
+  - 乐观预填初始会话：在 `NewSessionStage.tsx` 和 `LaunchSessionModal.tsx` 中，新建会话执行成功后第一时间调用 `seedConversation` 预填初始用户提示词与 Agent 响应，确保进入会话面板时绝不出现“暂无历史消息”的空白态；并在数据刷新轮询中增加守卫，在 `busy` 状态且磁盘未完成落盘写入时绝不以空数组覆盖已有消息。
+
+### 排版与视觉层精简（Aozora UI 纯净规范）
+
+- **彻底消除执行中三项重复提示**：
+  - 去除输入框上方重复多余的绿色状态栏 `.composer-running-alert`，彻底消除与聊天流内部 `.agent-thinking-card`、顶部状态药丸的“三重重复显示”；
+  - 在会话处于 `busy` 执行中时，彻底隐藏“暂无可见的历史消息 / 重新加载”空状态引导块，由对话流中精致的 `.agent-thinking-card` 单一主导呈现，排版清爽通透。
+
+### 模型选择动态拉取与真实模型目录整合
+
+- **美化网关动态发现模型展示**：
+  - 修复网关动态发现模型时拼接内部路由标签导致的混淆字符串问题（将类似 `claude-fable-5 (gemini-3.8-flash-high)` 拆解为优雅规范的用户可见名称 `Claude Fable 5`，并将网关路由目标后置到描述字段中清晰呈现）；
+  - 在网关发现模型的基础上，保留并整合官方全套 Claude 真实模型（`Claude 3.7 Sonnet`、`Claude Sonnet 4.5`、`Claude 3.5 Sonnet`、`Claude Opus 4.1`、`Claude Haiku 4.5`）与本地会话实测模型，彻底去除前端与后端遗留的伪模型硬编码；
+  - 同步修正 `agentModels.ts`、`presentation.ts` 与 Rust 本地内建模型目录，确保下拉列表真实、现代且层次分明。
+
+**验证**：Rust Workspace 全部通过（25 个集成测试 + 141 个单元测试 + 37 个桌面测试，0 失败）、前端打包构建（`tsc -b && vite build`）通过 0 错误。
+
 ## [2.4.56] - 2026-10-01
 
 新建会话跳过磁盘探测零延迟启动、ACP 工具全量特化渲染（提问交互闭环、Web 搜索/抓取卡片、超长输出折叠与 60 FPS 性能提升）、品牌图标现代化（通透白底与中央立方体几何放大重绘）。

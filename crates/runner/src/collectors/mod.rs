@@ -3387,16 +3387,29 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
                         .map(|text| AgentTurnUpdate::AssistantDelta(text.to_owned()));
                 }
             }
-            let has_tool = value.get("type").and_then(Value::as_str) == Some("assistant")
-                && value
-                    .pointer("/message/content")
-                    .and_then(Value::as_array)
-                    .is_some_and(|content| {
-                        content.iter().any(|block| {
-                            block.get("type").and_then(Value::as_str) == Some("tool_use")
-                        })
+            if value.get("type").and_then(Value::as_str) == Some("assistant") {
+                if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
+                    let has_tool = blocks.iter().any(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("tool_use")
                     });
-            has_tool.then_some(AgentTurnUpdate::Activity("Claude 正在调用工具"))
+                    if has_tool {
+                        return Some(AgentTurnUpdate::Activity("Claude 正在调用工具"));
+                    }
+                    let mut text_acc = String::new();
+                    for block in blocks {
+                        if block.get("type").and_then(Value::as_str) == Some("text") {
+                            if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                text_acc.push_str(t);
+                            }
+                        }
+                    }
+                    let trimmed = text_acc.trim();
+                    if !trimmed.is_empty() {
+                        return Some(AgentTurnUpdate::AssistantMessage(trimmed.to_owned()));
+                    }
+                }
+            }
+            None
         }
         crate::domain::AgentType::Codex => {
             let event_type = value.get("type").and_then(Value::as_str)?;
@@ -3495,18 +3508,56 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
 
 fn final_agent_message(agent: crate::domain::AgentType, output: &str) -> Option<String> {
     match agent {
-        crate::domain::AgentType::ClaudeCode => output.lines().rev().find_map(|line| {
-            let value = serde_json::from_str::<Value>(line).ok()?;
-            if value.get("type").and_then(Value::as_str) != Some("result") {
-                return None;
+        crate::domain::AgentType::ClaudeCode => {
+            for line in output.lines().rev() {
+                if let Ok(value) = serde_json::from_str::<Value>(line) {
+                    if value.get("type").and_then(Value::as_str) == Some("result") {
+                        if let Some(res) = value.get("result").and_then(Value::as_str) {
+                            let trimmed = res.trim();
+                            if !trimmed.is_empty() {
+                                return Some(trimmed.to_owned());
+                            }
+                        }
+                    }
+                }
             }
-            value
-                .get("result")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|message| !message.is_empty())
-                .map(str::to_owned)
-        }),
+            for line in output.lines().rev() {
+                if let Ok(value) = serde_json::from_str::<Value>(line) {
+                    if value.get("type").and_then(Value::as_str) == Some("assistant") {
+                        if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
+                            let mut text_acc = String::new();
+                            for block in blocks {
+                                if block.get("type").and_then(Value::as_str) == Some("text") {
+                                    if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                        text_acc.push_str(t);
+                                    }
+                                }
+                            }
+                            let trimmed = text_acc.trim();
+                            if !trimmed.is_empty() {
+                                return Some(trimmed.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+            let mut deltas = String::new();
+            for line in output.lines() {
+                if let Ok(value) = serde_json::from_str::<Value>(line) {
+                    if value.get("type").and_then(Value::as_str) == Some("stream_event") {
+                        if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
+                            deltas.push_str(delta);
+                        }
+                    }
+                }
+            }
+            let trimmed = deltas.trim();
+            if !trimmed.is_empty() {
+                Some(trimmed.to_owned())
+            } else {
+                None
+            }
+        }
         crate::domain::AgentType::Codex => output.lines().rev().find_map(|line| {
             let value = serde_json::from_str::<Value>(line).ok()?;
             if value.get("type").and_then(Value::as_str) != Some("item.completed")

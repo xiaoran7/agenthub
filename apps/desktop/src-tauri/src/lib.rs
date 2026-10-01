@@ -470,9 +470,11 @@ fn builtin_model_catalog(
 ) -> &'static [(&'static str, &'static str, &'static str)] {
     match agent {
         AgentType::ClaudeCode => &[
-            ("claude-opus-4-1", "Claude Opus 4.1", "深度复杂工程与规划"),
+            ("claude-3-7-sonnet", "Claude 3.7 Sonnet", "最强混合推理与自主开发"),
             ("claude-sonnet-4-5", "Claude Sonnet 4.5", "日常开发主力"),
-            ("claude-haiku-4-5", "Claude Haiku 4.5", "快速轻量响应"),
+            ("claude-3-5-sonnet", "Claude 3.5 Sonnet", "经典编程与工具调用"),
+            ("claude-opus-4-1", "Claude Opus 4.1", "深度复杂工程与规划"),
+            ("claude-haiku-4-5", "Claude Haiku 4.5", "极速轻量低延迟响应"),
         ],
         AgentType::Codex => &[
             ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", "最强代码推理"),
@@ -489,12 +491,12 @@ fn builtin_model_catalog(
         ],
         AgentType::ZCode => &[
             (
-                "gemini-3.8-flash-high",
-                "Gemini 3.8 Flash High",
-                "主力快速多模态编码",
+                "zcode-fast",
+                "ZCode Fast",
+                "极速代码生成与工具调用",
             ),
-            ("gemini-3.8-pro", "Gemini 3.8 Pro", "复杂架构与深度工程"),
-            ("claude-sonnet-4-5", "Claude Sonnet 4.5", "代码综合能力"),
+            ("zcode-pro", "ZCode Pro", "超长上下文与深度工程推理"),
+            ("claude-sonnet-4-5", "Claude Sonnet 4.5", "多语言工程能力"),
         ],
     }
 }
@@ -679,44 +681,60 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                     }));
                 }
             }
-        } else if agent == AgentType::ClaudeCode
-            && let Some(gateway) = agent_pulse_runner::claude_gateway::discover_claude_gateway()
-            && !gateway.models.is_empty()
-        {
-            for m in &gateway.models {
-                if !m.name.is_empty() && !seen_families.contains(&model_family(&m.name)) {
-                    seen_families.insert(model_family(&m.name));
-                    let label = m
-                        .label
-                        .as_deref()
-                        .filter(|l| !l.trim().is_empty())
-                        .map(|l| format!("{} ({})", m.name, l))
-                        .unwrap_or_else(|| model_label(&m.name).to_string());
+        } else if agent == AgentType::ClaudeCode {
+            let mut seen_ids: HashSet<String> = HashSet::new();
+
+            // 1. Gateway configured models (if active)
+            if let Some(gateway) = agent_pulse_runner::claude_gateway::discover_claude_gateway()
+                && !gateway.models.is_empty()
+            {
+                for m in &gateway.models {
+                    if !m.name.is_empty() && seen_ids.insert(m.name.clone()) {
+                        let label = model_label(&m.name);
+                        let desc = if let Some(target) = m
+                            .label
+                            .as_deref()
+                            .filter(|l| !l.trim().is_empty())
+                        {
+                            format!("网关动态路由（至 {}）", target)
+                        } else {
+                            format!("网关动态路由（{}）", gateway.source)
+                        };
+                        models.push(json!({
+                            "value": m.name,
+                            "label": label,
+                            "desc": desc,
+                            "source": "gateway"
+                        }));
+                    }
+                }
+            }
+
+            // 2. Models measured in local transcripts
+            for (value, count) in &dynamic {
+                if seen_ids.insert(value.clone()) {
                     models.push(json!({
-                        "value": m.name,
-                        "label": label,
-                        "desc": format!("网关路由模型（{}）", gateway.source),
-                        "source": "gateway"
+                        "value": value,
+                        "label": model_label(value),
+                        "desc": format!("本机 Agent 实测（{count} 个会话）"),
+                        "source": "agent"
                     }));
                 }
             }
-            for (value, count) in &dynamic {
-                let resolved = gateway
-                    .resolve_model(Some(value))
-                    .unwrap_or_else(|| value.clone());
-                if seen_families.contains(&model_family(&resolved)) {
-                    continue;
+
+            // 3. Always include official Claude catalog models
+            for (value, label, desc) in builtin_model_catalog(agent) {
+                if seen_ids.insert((*value).to_string()) {
+                    models.push(json!({
+                        "value": value,
+                        "label": label,
+                        "desc": desc,
+                        "source": "builtin"
+                    }));
                 }
-                seen_families.insert(model_family(&resolved));
-                models.push(json!({
-                    "value": value,
-                    "label": model_label(value),
-                    "desc": format!("本机 Agent 实测（{count} 个会话）"),
-                    "source": "agent"
-                }));
             }
         } else {
-            // For other agents or when Host is not available, populate from local transcripts
+            // For other agents, populate from local transcripts then builtins
             for (value, count) in &dynamic {
                 seen_families.insert(model_family(value));
                 models.push(json!({

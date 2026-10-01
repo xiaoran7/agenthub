@@ -247,9 +247,14 @@ export function SessionControlPanel({
         true,
       );
       if (request !== conversationRequest.current) return;
-      setMessages((current) =>
-        current.length > 0 && sameConversation(current, next) ? current : next,
-      );
+      setMessages((current) => {
+        if (next.length === 0 && busy && current.length > 0) {
+          return current;
+        }
+        return current.length > 0 && sameConversation(current, next)
+          ? current
+          : next;
+      });
       const firstUser = next.find(
         (message) =>
           message.role === "user" &&
@@ -590,12 +595,14 @@ export function SessionControlPanel({
 
         <section className="conversation-pane" ref={paneRef} aria-live="polite">
           {messages.length === 0 ? (
-            <ConversationLoadState
-              loading={refreshingMessages}
-              error={conversationError}
-              managed={isManagedProvider(session.agent_type)}
-              onRetry={() => void reloadMessages()}
-            />
+            busy ? null : (
+              <ConversationLoadState
+                loading={refreshingMessages}
+                error={conversationError}
+                managed={isManagedProvider(session.agent_type)}
+                onRetry={() => void reloadMessages()}
+              />
+            )
           ) : (
             groupConversationMessages(messages).map((group, groupIdx) => {
               if (group.type === "tool_group") {
@@ -769,32 +776,6 @@ export function SessionControlPanel({
                   ))}
                 </div>
               )}
-              {busy && (
-                <div className="composer-running-alert" role="status">
-                  <div className="running-alert-info">
-                    <span className="running-pulse-indicator" />
-                    <span className="running-alert-title">
-                      {agentLabel(session.agent_type)} 正在执行任务中
-                    </span>
-                    <span className="running-alert-activity">
-                      {agentActivity
-                        ? `· ${agentActivity}`
-                        : "· 处理中，请勿发送新消息以免打断"}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="running-alert-stop-btn"
-                    disabled={cancelling}
-                    onClick={() => void cancelTurn()}
-                    title="中断当前任务 (Esc)"
-                  >
-                    <Square size={11} />
-                    <span>{cancelling ? "中断中…" : "中断任务"}</span>
-                    <kbd>Esc</kbd>
-                  </button>
-                </div>
-              )}
               <form
                 className="session-composer modern-composer"
                 onSubmit={sendMessage}
@@ -805,7 +786,7 @@ export function SessionControlPanel({
                   maxLength={16_000}
                   placeholder={
                     busy
-                      ? "Agent 正在执行任务中，输入已被暂时锁定 (可点击上方“中断任务”或按 Esc 停止)…"
+                      ? "Agent 正在执行任务中，输入已被暂时锁定 (可点击上方“停止”或按 Esc 中断)…"
                       : "继续这个会话… (Enter 发送，Shift+Enter 换行)"
                   }
                   value={prompt}

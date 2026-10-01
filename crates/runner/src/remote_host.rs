@@ -434,11 +434,12 @@ impl NativeTransport for MultiProviderTransport {
                                 "status": status_type
                             }
                         });
-                        if let Ok(Ok(ref res)) = outcome
-                            && let Some(ref real_id) = res.session_id
-                        {
-                            completed_params["realSessionId"] =
-                                json!(format!("claude_{}", real_id));
+                        if let Ok(Ok(ref res)) = outcome {
+                            completed_params["turn"]["output"] = json!(&res.response);
+                            if let Some(ref real_id) = res.session_id {
+                                completed_params["realSessionId"] =
+                                    json!(format!("claude_{}", real_id));
+                            }
                         }
                         q.push_back(json!({
                             "method": "turn/completed",
@@ -616,15 +617,19 @@ impl NativeTransport for MultiProviderTransport {
                         } else {
                             "failed"
                         };
+                        let mut completed_params = json!({
+                            "threadId": session_id_clone,
+                            "turn": {
+                                "id": turn_id_clone,
+                                "status": status_type
+                            }
+                        });
+                        if let Ok(Ok(ref res)) = outcome {
+                            completed_params["turn"]["output"] = json!(&res.response);
+                        }
                         q.push_back(json!({
                             "method": "turn/completed",
-                            "params": {
-                                "threadId": session_id_clone,
-                                "turn": {
-                                    "id": turn_id_clone,
-                                    "status": status_type
-                                }
-                            }
+                            "params": completed_params
                         }));
                     }
                 });
@@ -796,15 +801,19 @@ impl NativeTransport for MultiProviderTransport {
                         } else {
                             "failed"
                         };
+                        let mut completed_params = json!({
+                            "threadId": session_id_clone,
+                            "turn": {
+                                "id": turn_id_clone,
+                                "status": status_type
+                            }
+                        });
+                        if let Ok(Ok(ref res)) = outcome {
+                            completed_params["turn"]["output"] = json!(&res.response);
+                        }
                         q.push_back(json!({
                             "method": "turn/completed",
-                            "params": {
-                                "threadId": session_id_clone,
-                                "turn": {
-                                    "id": turn_id_clone,
-                                    "status": status_type
-                                }
-                            }
+                            "params": completed_params
                         }));
                     }
                 });

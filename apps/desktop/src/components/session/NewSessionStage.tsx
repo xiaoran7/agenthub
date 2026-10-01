@@ -18,7 +18,9 @@ import React, {
 import { useAgentModels } from "../../agentModels";
 import { PROVIDER_LIST, agentLabel } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
-import type { Session, SessionTurnEvent } from "../../types";
+import type { ConversationMessage } from "../../turn-stream";
+import { normalizeAgentType, type Session, type SessionTurnEvent } from "../../types";
+import { seedConversation } from "../../conversationCache";
 import { errorMessage } from "../auth/AuthScreen";
 import { SelectDropdown } from "../SelectDropdown";
 import {
@@ -123,6 +125,7 @@ export function NewSessionStage({
       const result = await invoke<{
         agent_session_id: string;
         agent_type: string;
+        response?: string;
       }>("launch_new_session", {
         input: {
           agent_type: agentType,
@@ -134,6 +137,17 @@ export function NewSessionStage({
         onEvent,
       });
       rememberRecentCwd(cwd.trim());
+      const normType = normalizeAgentType(agentType);
+      const initialMessages: ConversationMessage[] = [
+        { role: "user", content: prompt.trim() },
+      ];
+      if (result.response && result.response.trim()) {
+        initialMessages.push({
+          role: "assistant",
+          content: result.response.trim(),
+        });
+      }
+      seedConversation(`${normType}:${result.agent_session_id}`, initialMessages);
       onLaunched(result.agent_session_id, agentType);
     } catch (err) {
       setError(errorMessage(err));
