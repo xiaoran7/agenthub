@@ -2,7 +2,22 @@
 
 ## [2.4.57] - 2026-10-01
 
-修复新建 Claude 会话执行卡死与空白态、根治 turn/completed 产物丢失、重构排版去除多重冗余提示、实现模型动态拉取与官方真实模型目录整合。
+深度代码审查与系统级缺陷根治：全面修复新建会话瞬态路由与状态映射缺陷、根治成功回合静默退出误报失败、修复多 Provider 绑定识别偏差、实现模型动态拉取与官方真实模型目录整合。
+
+### 系统级代码审查与缺陷根治
+
+- **异步会话拉起瞬态路由闭环（根治卡在新建页假死现象）**：
+  - 根因定位：前端发起新建会话成功后，异步调用 `refresh()` 时本地 outbox/磁盘扫描存在数百毫秒落盘延迟，`snapshot.sessions` 尚未包含新建的会话对象；此时 `sessions.find(...)` 返回 `undefined`，导致主舞台判断 `selectedSession !== undefined` 失败，瞬间回退重渲染 `NewSessionStage`，用户误以为拉起无响应或卡死；
+  - 修复方案：在 `App.tsx` 的 `handleSessionLaunched` 中引入乐观会话实体，在获得会话 ID 的瞬间立即写入 `cachedSessions` 激活路由；当后台 `refresh()` 采集到权威数据后平滑无缝合并覆盖，彻底杜绝回退闪烁与假死；
+- **状态机与会话生命周期完整映射（修复“未知”状态）**：
+  - 根因定位：`presentation.ts` 中的 `statusView` 仅显式处理了 `WORKING`、`WAITING_PERMISSION`、`WAITING_INPUT`、`IDLE` 和 `FAILED`，缺少对 `COMPLETED` 与 `STOPPED` 的分支；在 `presence` 为 `LIVE` 的活跃会话中，任务正常完成或终止时状态被错误降级显示为“未知”；
+  - 修复方案：在 `statusView` 中增加 `COMPLETED`（显示为“已完成”，样式 `completed`）和 `STOPPED`（显示为“已停止”，样式 `stopped`），并在 `modern.css` 中补齐对应状态点与状态药丸的优雅降噪配色；
+- **Native Host 宿主绑定多 Provider 映射修复**：
+  - 根因定位：在 `apps/desktop/src-tauri/src/lib.rs` 的 `merge_dashboard_sessions` 中，遍历 `host_bindings` 时仅通过前缀检查了 `sess_` (ZCode) 与 `claude_` (Claude)，未匹配 `antigravity_` 与 `grok_`，导致后两者被一律粗暴兜底为 `codex`，破坏会话归属和类型契约；
+  - 修复方案：严密补齐 `is_antigravity` 与 `is_grok` 判定，严格映射至各自正确的 `AgentType` 与对应上下文键值；
+- **成功回合静默退出容错增强**：
+  - 根因定位：当 CLI 工具执行纯代码补丁或只读工具调用后以代码 0 正常退出，但输出流中未生成任何独立的 conversational 文本块时，`final_agent_message` 早期直接返回 `None` 触发 `missing_final_message` 协议错误，导致原本成功的执行被误报为 `AgentFailed`；
+  - 修复方案：在 `crates/runner/src/collectors/mod.rs` 与 `src-tauri/src/lib.rs` 中，进程成功退出且转录完成时，若无多余对话文本则自动回退并优雅填充“（任务执行完成）”，绝不产生误判报错；
 
 ### 核心运行时与执行流修复
 

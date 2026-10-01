@@ -36,6 +36,7 @@ interface NewSessionStageProps {
   onLaunched: (
     agentSessionId: string,
     agentType: Session["agent_type"],
+    cwd?: string,
   ) => void;
   onOpenHostControl: () => void;
   hostPhase?:
@@ -148,7 +149,7 @@ export function NewSessionStage({
         });
       }
       seedConversation(`${normType}:${result.agent_session_id}`, initialMessages);
-      onLaunched(result.agent_session_id, agentType);
+      onLaunched(result.agent_session_id, agentType, cwd.trim());
     } catch (err) {
       setError(errorMessage(err));
       setLaunching(false);

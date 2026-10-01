@@ -1106,8 +1106,11 @@ fn launch_codex_session_with_client(
 
     drop(sub);
 
-    if !turn_completed || final_response.is_empty() {
+    if !turn_completed {
         return Err(DesktopError::AgentFailed);
+    }
+    if final_response.trim().is_empty() {
+        final_response = "（任务执行完成）".to_string();
     }
 
     Ok(json!({
@@ -1337,8 +1340,11 @@ fn send_codex_message_with_client(
 
     drop(sub);
 
-    if !turn_completed || final_response.is_empty() {
+    if !turn_completed {
         return Err(DesktopError::AgentFailed);
+    }
+    if final_response.trim().is_empty() {
+        final_response = "（任务执行完成）".to_string();
     }
 
     Ok(json!({
@@ -2882,14 +2888,20 @@ fn merge_dashboard_sessions(
             }),
         );
     }
-    // Overwrite or populate authoritative managed sessions (Codex / ZCode / Claude Code) from running NativeSessionHost registry
+    // Overwrite or populate authoritative managed sessions (Codex / ZCode / Claude Code / Antigravity / Grok) from running NativeSessionHost registry
     for binding in host_bindings {
         let is_zcode = binding.provider_session_id.starts_with("sess_");
         let is_claude = binding.provider_session_id.starts_with("claude_");
+        let is_antigravity = binding.provider_session_id.starts_with("antigravity_");
+        let is_grok = binding.provider_session_id.starts_with("grok_");
         let agent_type_str = if is_zcode {
             "zcode"
         } else if is_claude {
             "claude_code"
+        } else if is_antigravity {
+            "antigravity"
+        } else if is_grok {
+            "grok_build"
         } else {
             "codex"
         };
@@ -2897,6 +2909,10 @@ fn merge_dashboard_sessions(
             AgentType::ZCode
         } else if is_claude {
             AgentType::ClaudeCode
+        } else if is_antigravity {
+            AgentType::Antigravity
+        } else if is_grok {
+            AgentType::GrokBuild
         } else {
             AgentType::Codex
         };

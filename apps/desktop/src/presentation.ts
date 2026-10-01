@@ -33,6 +33,8 @@ export function statusView(
     return { label: "等待输入", className: "waiting" };
   if (status === "IDLE") return { label: "空闲", className: "idle" };
   if (status === "FAILED") return { label: "失败", className: "failed" };
+  if (status === "COMPLETED") return { label: "已完成", className: "completed" };
+  if (status === "STOPPED") return { label: "已停止", className: "stopped" };
   if (presence === "PERSISTED")
     return { label: "历史会话", className: "history" };
   return { label: "未知", className: "history" };

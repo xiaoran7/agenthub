@@ -716,6 +716,49 @@ function Dashboard({
     setSelectedSessionKey(undefined);
   };
 
+  const handleSessionLaunched = useCallback(
+    (
+      agentSessionId: string,
+      agentType: Session["agent_type"],
+      cwd?: string,
+    ) => {
+      const normType = normalizeAgentType(agentType);
+      const targetKey = `${snapshot.device.device_id}:${normType}:${agentSessionId}`;
+      const projectName = cwd
+        ? cwd.split(/[/\\]/).filter(Boolean).pop() || "workspace"
+        : "workspace";
+
+      const optimisticSession: Session = {
+        event_id: `optimistic:${agentSessionId}`,
+        device_id: snapshot.device.device_id,
+        agent_type: normType,
+        agent_session_id: agentSessionId,
+        observed_at: new Date().toISOString(),
+        payload: {
+          project: {
+            display_name: projectName,
+            fingerprint: "local",
+          },
+          state: {
+            activity_status: "IDLE",
+            presence: "LIVE",
+          },
+          last_activity_at: new Date().toISOString(),
+        },
+        sync_state: "local",
+        archived: false,
+      };
+
+      setCachedSessions((prev) => [
+        optimisticSession,
+        ...prev.filter((s) => sessionKey(s) !== targetKey),
+      ]);
+      setSelectedSessionKey(targetKey);
+      void refresh();
+    },
+    [snapshot.device.device_id, refresh],
+  );
+
   const toggleProviderCollapse = (provider: string) => {
     setCollapsedProviders((curr) => ({
       ...curr,
@@ -989,16 +1032,7 @@ function Dashboard({
           ) : (
             <NewSessionStage
               initialProvider={newSessionProvider}
-              onLaunched={async (agentSessionId, agentType) => {
-                await refresh();
-                setSelectedSessionKey(
-                  snapshot.device.device_id +
-                    ":" +
-                    agentType +
-                    ":" +
-                    agentSessionId,
-                );
-              }}
+              onLaunched={handleSessionLaunched}
               onOpenHostControl={openConnectionsSettings}
               hostPhase={hostPhase}
               workspaceCount={snapshot.local.sources.length}
@@ -1039,16 +1073,7 @@ function Dashboard({
             open={launchModalOpen}
             initialAgentType={launchModalProvider}
             onClose={() => setLaunchModalOpen(false)}
-            onLaunched={async (agentSessionId, agentType) => {
-              await refresh();
-              setSelectedSessionKey(
-                snapshot.device.device_id +
-                  ":" +
-                  agentType +
-                  ":" +
-                  agentSessionId,
-              );
-            }}
+            onLaunched={handleSessionLaunched}
           />
 
           {/* Right-click Context Menu on Sessions (Point 11) */}

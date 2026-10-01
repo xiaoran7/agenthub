@@ -91,6 +91,7 @@ export function LaunchSessionModal({
   onLaunched: (
     agentSessionId: string,
     agentType: Session["agent_type"],
+    cwd?: string,
   ) => void;
 }) {
   const [agentType, setAgentType] =
@@ -170,7 +171,7 @@ export function LaunchSessionModal({
         });
       }
       seedConversation(`${normType}:${result.agent_session_id}`, initialMessages);
-      onLaunched(result.agent_session_id, agentType);
+      onLaunched(result.agent_session_id, agentType, cwd.trim());
       onClose();
     } catch (err) {
       setError(errorMessage(err));

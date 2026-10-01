@@ -3292,11 +3292,9 @@ fn run_agent_stream_process(
         program: program.clone(),
         source,
     })?;
-    let response = final_agent_message(agent, &output).ok_or_else(|| CollectorError::Protocol {
-        program,
-        code: "missing_final_message".to_owned(),
-        message: "missing final agent message".to_owned(),
-    })?;
+    let response = final_agent_message(agent, &output).unwrap_or_else(|| {
+        "（任务执行完成）".to_owned()
+    });
     let session_id = extract_session_id_from_output(agent, &output);
     Ok(AgentStreamOutcome {
         response,

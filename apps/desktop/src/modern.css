@@ -573,7 +573,9 @@ body,
   background: var(--status-warning-background);
 }
 
-.claude-stage .status-pill.idle {
+.claude-stage .status-pill.idle,
+.claude-stage .status-pill.completed,
+.claude-stage .status-pill.stopped {
   color: var(--text-muted);
   background: var(--bg-hover);
 }
@@ -4140,7 +4142,9 @@ svg.rotating {
   background: #ef4444;
 }
 
-.session-status-dot.idle {
+.session-status-dot.idle,
+.session-status-dot.completed,
+.session-status-dot.stopped {
   background: var(--text-muted);
   opacity: 0.55;
 }
