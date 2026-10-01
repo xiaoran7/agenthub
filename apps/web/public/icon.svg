@@ -1,45 +1,58 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
     <radialGradient id="hubBg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#141a29"/>
-      <stop offset="100%" stop-color="#080b11"/>
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f8fafc"/>
     </radialGradient>
     <radialGradient id="centerOrb" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="35%" stop-color="#70f3ff"/>
-      <stop offset="75%" stop-color="#00d8f6"/>
-      <stop offset="100%" stop-color="#00a8cc"/>
+      <stop offset="45%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
     </radialGradient>
   </defs>
 
-  <!-- Dark Squircle Background -->
-  <rect width="512" height="512" rx="112" fill="url(#hubBg)"/>
+  <!-- Crisp White Squircle Background -->
+  <rect width="504" height="504" x="4" y="4" rx="116" fill="url(#hubBg)" stroke="#e2e8f0" stroke-width="2.5"/>
 
-  <!-- Radial spokes from center to vertices -->
-  <g stroke="#00e5ff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="256" y1="256" x2="256" y2="136" />
-    <line x1="256" y1="256" x2="360" y2="196" />
-    <line x1="256" y1="256" x2="360" y2="316" />
-    <line x1="256" y1="256" x2="256" y2="376" />
-    <line x1="256" y1="256" x2="152" y2="316" />
-    <line x1="256" y1="256" x2="152" y2="196" />
+  <!-- Subtle Central Ambient Glow -->
+  <circle cx="256" cy="256" r="80" fill="#0ea5e9" opacity="0.18" />
+  <circle cx="256" cy="256" r="45" fill="#38bdf8" opacity="0.25" />
+
+  <!-- Radial spokes from center to vertices (Enlarged Cube R=162) -->
+  <g stroke="#0284c7" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="256" y1="256" x2="256" y2="94" />
+    <line x1="256" y1="256" x2="396" y2="175" />
+    <line x1="256" y1="256" x2="396" y2="337" />
+    <line x1="256" y1="256" x2="256" y2="418" />
+    <line x1="256" y1="256" x2="116" y2="337" />
+    <line x1="256" y1="256" x2="116" y2="175" />
 
     <!-- Hexagon perimeter -->
-    <polygon points="256,136 360,196 360,316 256,376 152,316 152,196" fill="none"/>
+    <polygon points="256,94 396,175 396,337 256,418 116,337 116,175" fill="none"/>
   </g>
 
   <!-- Outer Vertex Ring Nodes -->
-  <g stroke="#00e5ff" stroke-width="7" fill="#0b0f19">
-    <circle cx="256" cy="136" r="15"/>
-    <circle cx="360" cy="196" r="15"/>
-    <circle cx="360" cy="316" r="15"/>
-    <circle cx="256" cy="376" r="15"/>
-    <circle cx="152" cy="316" r="15"/>
-    <circle cx="152" cy="196" r="15"/>
+  <g stroke="#0284c7" stroke-width="7" fill="#ffffff">
+    <circle cx="256" cy="94" r="18"/>
+    <circle cx="396" cy="175" r="18"/>
+    <circle cx="396" cy="337" r="18"/>
+    <circle cx="256" cy="418" r="18"/>
+    <circle cx="116" cy="337" r="18"/>
+    <circle cx="116" cy="175" r="18"/>
+  </g>
+
+  <!-- Node Inner Accents -->
+  <g fill="#0ea5e9">
+    <circle cx="256" cy="94" r="4"/>
+    <circle cx="396" cy="175" r="4"/>
+    <circle cx="396" cy="337" r="4"/>
+    <circle cx="256" cy="418" r="4"/>
+    <circle cx="116" cy="337" r="4"/>
+    <circle cx="116" cy="175" r="4"/>
   </g>
 
   <!-- Glowing Central Core Orb -->
-  <circle cx="256" cy="256" r="46" fill="#00e5ff" opacity="0.32" />
-  <circle cx="256" cy="256" r="28" fill="#00f5ff" opacity="0.65" />
-  <circle cx="256" cy="256" r="19" fill="url(#centerOrb)" />
+  <circle cx="256" cy="256" r="34" fill="#0ea5e9" opacity="0.45" />
+  <circle cx="256" cy="256" r="22" fill="url(#centerOrb)" />
+  <circle cx="256" cy="256" r="8" fill="#ffffff" />
 </svg>
