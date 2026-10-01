@@ -404,6 +404,9 @@ pub fn claude_candidates() -> CandidateSet {
         // risk falling back away from what the user asked for.
         return set;
     }
+    if let Some(execpath) = non_empty_env_path("CLAUDE_CODE_EXECPATH") {
+        set.push(execpath, CandidateOrigin::ManagedInstall);
+    }
     for binary in managed_claude_binaries() {
         set.push(binary.path, binary.origin);
     }

@@ -169,20 +169,20 @@ export const PROVIDER_LIST: ReadonlyArray<{
   managed: boolean;
 }> = [
   {
-    type: "codex",
-    label: "ChatGPT (Codex)",
-    shortLabel: "ChatGPT",
-    defaultModel: "gpt-5.5-codex",
-    desc: "OpenAI 官方代码助手 (Managed)",
-    managed: true,
-  },
-  {
     type: "claude_code",
     label: "Claude Code",
     shortLabel: "Claude",
     defaultModel: "claude-3-7-sonnet",
     desc: "Anthropic 官方开发助手 (Managed)",
     managed: true,
+  },
+  {
+    type: "codex",
+    label: "ChatGPT (Codex)",
+    shortLabel: "ChatGPT",
+    defaultModel: "gpt-5.5-codex",
+    desc: "OpenAI 官方代码助手 (Plugin)",
+    managed: false,
   },
   {
     type: "zcode",

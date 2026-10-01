@@ -79,7 +79,7 @@ export async function pickFolderDialog(
 
 export function LaunchSessionModal({
   open,
-  initialAgentType = "codex",
+  initialAgentType = "claude_code",
   onClose,
   onLaunched,
 }: {

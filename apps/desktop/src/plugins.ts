@@ -18,6 +18,22 @@ export interface AgentPlugin {
 
 export const AGENT_PLUGIN_MARKETPLACE: AgentPlugin[] = [
   {
+    id: "codex",
+    name: "OpenAI Codex Remote",
+    shortLabel: "ChatGPT (Codex)",
+    category: "官方核心",
+    author: "OpenAI Ecosystem",
+    version: "1.0.0-remote",
+    iconName: "openai",
+    summary: "基于 Codex CLI 的 OpenAI 官方代码助手连接与接管驱动。",
+    description:
+      "面向 OpenAI Codex 打造的原生 Remote 运行时与会话接管驱动。支持本地多工作区发现、多模型智能调度、实时流式响应与急停中断。",
+    defaultModel: "gpt-5.5-codex",
+    builtin: false,
+    status: "available",
+    tags: ["OpenAI", "Codex", "ChatGPT", "代码助手"],
+  },
+  {
     id: "zcode",
     name: "ZCode Agent Remote",
     shortLabel: "ZCode",
@@ -107,8 +123,8 @@ export function savePluginState(state: PluginState): void {
 }
 
 export function isPluginEnabled(pluginId: Session["agent_type"]): boolean {
-  // 初始核心受控 Provider 永久启用（仅 Claude Code 与 Codex）
-  if (pluginId === "codex" || pluginId === "claude_code") {
+  // 核心受控 Provider 永久启用（默认专注于 Claude Code，Codex 与其他均通过插件管理）
+  if (pluginId === "claude_code") {
     return true;
   }
   const state = readPluginState();

@@ -977,7 +977,7 @@ fn launch_codex_session_with_client(
         )));
     }
     let binding_val = receipt.result.ok_or(DesktopError::AgentFailed)?;
-    let provider_session_id = binding_val["binding"]["provider_session_id"]
+    let mut provider_session_id = binding_val["binding"]["provider_session_id"]
         .as_str()
         .ok_or(DesktopError::AgentFailed)?
         .to_owned();
@@ -1071,6 +1071,9 @@ fn launch_codex_session_with_client(
                                     text: final_response.clone(),
                                 });
                             }
+                            if let Some(real_id) = event.raw["params"]["realSessionId"].as_str() {
+                                provider_session_id = real_id.to_string();
+                            }
                             turn_completed = true;
                             break;
                         }
@@ -1111,7 +1114,7 @@ fn send_codex_message_with_client(
         return Err(DesktopError::InvalidAction);
     }
 
-    let provider_session_id = match input.agent_type {
+    let mut provider_session_id = match input.agent_type {
         AgentType::ClaudeCode if !input.agent_session_id.starts_with("claude_") => {
             format!("claude_{}", input.agent_session_id)
         }
@@ -1298,6 +1301,9 @@ fn send_codex_message_with_client(
                                 let _ = on_event.send(SessionTurnEvent::AssistantMessage {
                                     text: final_response.clone(),
                                 });
+                            }
+                            if let Some(real_id) = event.raw["params"]["realSessionId"].as_str() {
+                                provider_session_id = real_id.to_string();
                             }
                             turn_completed = true;
                             break;

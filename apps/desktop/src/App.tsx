@@ -271,7 +271,7 @@ function Dashboard({
     useState<Session["agent_type"]>("claude_code");
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [agentFilter, setAgentFilter] = useState<AgentFilter>("codex");
+  const [agentFilter, setAgentFilter] = useState<AgentFilter>("claude_code");
   const [deviceFilter, setDeviceFilter] = useState<DeviceFilter>("all");
   const [selectedSessionKey, setSelectedSessionKey] = useState<string>();
   const [alertDismissed, setAlertDismissed] = useState(false);
@@ -816,16 +816,6 @@ function Dashboard({
           aria-label="侧边栏导航"
         >
           <div className="sidebar-top-bar">
-            <button
-              type="button"
-              className="sidebar-brand"
-              onClick={() => setSelectedSessionKey(undefined)}
-              aria-label="返回 AgentHub 首页"
-            >
-              <span>
-                <strong>AgentHub</strong>
-              </span>
-            </button>
             <div className="top-nav-right">
               <button
                 type="button"

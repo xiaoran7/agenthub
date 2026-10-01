@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import {
   buildDesktopSessionTree,
   getDeviceDisplayName,
   isAutomatedTestWorkspace,
 } from "./session-tree";
+import { savePluginState } from "../plugins";
 import type { Session } from "../types";
 
 function createMockSession(overrides: Partial<Session> = {}): Session {
@@ -23,6 +24,24 @@ function createMockSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe("Desktop Session Tree", () => {
+  beforeEach(() => {
+    let storage: Record<string, string> = {};
+    (globalThis as unknown as { window: { localStorage: Storage } }).window = {
+      localStorage: {
+        getItem: (k: string) => storage[k] ?? null,
+        setItem: (k: string, v: string) => {
+          storage[k] = v;
+        },
+        removeItem: (k: string) => {
+          delete storage[k];
+        },
+        clear: () => {
+          storage = {};
+        },
+      } as unknown as Storage,
+    };
+    savePluginState({ enabledPluginIds: ["codex"] });
+  });
   it("formats device names correctly", () => {
     expect(getDeviceDisplayName("dev-1", "dev-1", "XIAORAN")).toBe(
       "本机电脑 (XIAORAN)",

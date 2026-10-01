@@ -29,7 +29,13 @@ describe("Agent Plugins System", () => {
     };
   });
 
-  it("contains ZCode in the plugin marketplace", () => {
+  it("contains Codex and ZCode in the plugin marketplace", () => {
+    const codexPlugin = AGENT_PLUGIN_MARKETPLACE.find((p) => p.id === "codex");
+    expect(codexPlugin).toBeDefined();
+    expect(codexPlugin?.name).toContain("Codex");
+    expect(codexPlugin?.category).toBe("官方核心");
+    expect(codexPlugin?.builtin).toBe(false);
+
     const zcodePlugin = AGENT_PLUGIN_MARKETPLACE.find((p) => p.id === "zcode");
     expect(zcodePlugin).toBeDefined();
     expect(zcodePlugin?.name).toContain("ZCode");
@@ -37,17 +43,18 @@ describe("Agent Plugins System", () => {
     expect(zcodePlugin?.builtin).toBe(false);
   });
 
-  it("enables only Codex and Claude Code by default", () => {
-    expect(isPluginEnabled("codex")).toBe(true);
+  it("enables only Claude Code by default (focusing on Claude)", () => {
     expect(isPluginEnabled("claude_code")).toBe(true);
-    // ZCode, Antigravity, Grok require user to enable in marketplace
+    // Codex, ZCode, Antigravity, Grok require user to enable in marketplace
+    expect(isPluginEnabled("codex")).toBe(false);
     expect(isPluginEnabled("zcode")).toBe(false);
     expect(isPluginEnabled("antigravity")).toBe(false);
     expect(isPluginEnabled("grok_build")).toBe(false);
   });
 
-  it("activates ZCode when enabled in plugin state", () => {
-    savePluginState({ enabledPluginIds: ["zcode"] });
+  it("activates Codex and ZCode when enabled in plugin state", () => {
+    savePluginState({ enabledPluginIds: ["codex", "zcode"] });
+    expect(isPluginEnabled("codex")).toBe(true);
     expect(isPluginEnabled("zcode")).toBe(true);
     expect(readPluginState().enabledPluginIds).toContain("zcode");
   });

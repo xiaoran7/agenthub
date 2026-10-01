@@ -157,6 +157,12 @@ export function NewSessionStage({
     [],
   );
 
+  useEffect(() => {
+    if (!availableProviders.some((p) => p.type === agentType)) {
+      setAgentType(availableProviders[0]?.type ?? "claude_code");
+    }
+  }, [agentType, availableProviders]);
+
   return (
     <div className="claude-new-chat-container">
       <div className="claude-new-chat-content">

@@ -2929,15 +2929,30 @@ fn run_agent_session_turn_streaming_once(
     let mut command = Command::new(binary);
     let prompt_file = match agent {
         crate::domain::AgentType::ClaudeCode => {
-            command.args([
-                "--resume",
-                session_id,
-                "-p",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--include-partial-messages",
-            ]);
+            let session_exists = !session_id.is_empty()
+                && find_claude_session_info(session_id)
+                    .ok()
+                    .flatten()
+                    .is_some();
+            if session_exists {
+                command.args([
+                    "--resume",
+                    session_id,
+                    "-p",
+                    "--output-format",
+                    "stream-json",
+                    "--verbose",
+                    "--include-partial-messages",
+                ]);
+            } else {
+                command.args([
+                    "-p",
+                    "--output-format",
+                    "stream-json",
+                    "--verbose",
+                    "--include-partial-messages",
+                ]);
+            }
             None
         }
         crate::domain::AgentType::Codex => {

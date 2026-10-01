@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.4.55] - 2026-10-01
+
+聚焦 Claude 核心体验、Codex 插件化改造、侧边栏精简与新建 Claude 会话异常彻底修复。
+
+### 核心运行时与新建 Claude 会话修复
+
+- **消除新建 Claude 会话异常与自愈判断**：
+  - 排查修复了新建 Claude 会话时因误带未初始化的随机 UUID 参数执行 `--resume`，导致官方 Claude CLI 报 `No conversation found with session ID` 进而触发 `Agent 执行失败` 的根本缺陷；
+  - 在 `crates/runner/src/collectors/mod.rs` 与 `remote_host.rs` 中增加历史会话自愈判断：若本地未发现对应 transcript，则以新会话模式启动（不加 `--resume` 参数），并在首回合响应流（`init` / `result` 事件）中捕获并无缝提取官方生成的真实会话 ID；
+  - 在 `apps/desktop/src-tauri/src/lib.rs` 中同步接收并绑定真实的 `realSessionId`，确保新会话跳转与后续继续回合完全连贯；
+  - `agent_binary.rs` 补充识别 `CLAUDE_CODE_EXECPATH` 环境变量，确保宿主环境与 managed 安装版本优先且准确命中。
+
+### 桌面端界面清理与插件体系聚焦
+
+- **精简侧边栏顶部**：
+  - 响应视觉减负要求，移除左侧栏顶部原有的 "AgentHub" 品牌文本按钮，保留新建任务、搜索与刷新等核心操作按钮并优化靠右对齐布局；
+- **专注于 Claude Code 且 Codex 移入插件**：
+  - 默认聚焦于 Claude Code，将 Codex 移入插件商城（`AGENT_PLUGIN_MARKETPLACE`），由用户在插件中心自主获取并管理；
+  - `isPluginEnabled` 仅默认常驻 Claude Code，未启用 Codex 插件时系统自动隐藏 Codex 会话与选项，启动台（`NewSessionStage`）及侧边栏默认完全聚焦于 Claude；启用插件后自动挂载 Codex。
+
+**验证**：`cargo test --workspace` 全部通过、`npm.cmd test`（16 个套件 91 个测试全部通过）、`npm.cmd run typecheck` 0 错误。
+
 ## [2.4.54] - 2026-09-29
 
 无边框窗口交互优化、Codex 动态模型发现与 Remote 工作区管理全面重构。

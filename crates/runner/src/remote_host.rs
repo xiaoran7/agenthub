@@ -425,15 +425,22 @@ impl NativeTransport for MultiProviderTransport {
                         } else {
                             "failed"
                         };
+                        let mut completed_params = json!({
+                            "threadId": session_id_clone,
+                            "turn": {
+                                "id": turn_id_clone,
+                                "status": status_type
+                            }
+                        });
+                        if let Ok(Ok(ref res)) = outcome
+                            && let Some(ref real_id) = res.session_id
+                        {
+                            completed_params["realSessionId"] =
+                                json!(format!("claude_{}", real_id));
+                        }
                         q.push_back(json!({
                             "method": "turn/completed",
-                            "params": {
-                                "threadId": session_id_clone,
-                                "turn": {
-                                    "id": turn_id_clone,
-                                    "status": status_type
-                                }
-                            }
+                            "params": completed_params
                         }));
                     }
                 });
