@@ -141,6 +141,16 @@ export function SessionControlPanel({
     }, 10);
   };
 
+  const handleAnswerQuestion = useCallback(
+    (_question: string, option: string) => {
+      setPrompt(option);
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    },
+    [],
+  );
+
   const [attachments, setAttachments] = useState<
     Array<{ name: string; path: string }>
   >([]);
@@ -593,6 +603,7 @@ export function SessionControlPanel({
                   <ToolCallGroupBlock
                     key={`tool-group-${group.startIndex}-${groupIdx}`}
                     messages={group.messages}
+                    onAnswerQuestion={handleAnswerQuestion}
                   />
                 );
               }
@@ -602,6 +613,7 @@ export function SessionControlPanel({
                 <ConversationItem
                   message={message}
                   index={index}
+                  onAnswerQuestion={handleAnswerQuestion}
                   key={
                     message.role +
                     "-" +

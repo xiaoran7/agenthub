@@ -303,6 +303,7 @@ impl NativeTransport for MultiProviderTransport {
             "turn/start" if is_claude => {
                 let session_id = params["threadId"].as_str().unwrap_or("").to_string();
                 let raw_id = session_id.trim_start_matches("claude_").to_string();
+                let session_exists = params.get("sessionExists").and_then(Value::as_bool);
                 let text = params["input"]
                     .as_array()
                     .and_then(|arr| arr.iter().find_map(|item| item["text"].as_str()))
@@ -409,6 +410,7 @@ impl NativeTransport for MultiProviderTransport {
                             crate::collectors::TurnOptions {
                                 model: model.as_deref(),
                                 reasoning_effort: effort.as_deref(),
+                                session_exists,
                                 ..Default::default()
                             },
                             Duration::from_secs(600),
@@ -1542,6 +1544,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
     discovered_workspaces: HashMap<String, PathBuf>,
     sessions: HashMap<String, SessionBinding>,
     native_to_hub: HashMap<String, String>,
+    newly_created: HashSet<String>,
     approvals: HashMap<String, PendingApproval>,
     questions: HashMap<String, PendingQuestion>,
     /// Requests this Host already answered, keyed by their derived id. Some
@@ -1584,6 +1587,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             discovered_workspaces: HashMap::new(),
             sessions: HashMap::new(),
             native_to_hub: HashMap::new(),
+            newly_created: HashSet::new(),
             approvals: HashMap::new(),
             questions: HashMap::new(),
             answered_requests: HashSet::new(),
@@ -1984,6 +1988,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             };
             self.native_to_hub.insert(id.clone(), hub_id.clone());
             self.sessions.insert(hub_id.clone(), binding.clone());
+            if *mode == ConnectMode::Create {
+                self.newly_created.insert(hub_id.clone());
+            }
             if !self.workspaces.contains(&cwd) {
                 self.workspaces.push(cwd);
             }
@@ -2104,8 +2111,12 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 if let Some(binding) = self.sessions.get_mut(hub_id) {
                     binding.current_turn_id = None;
                 }
+                let is_newly_created = self.newly_created.remove(hub_id);
                 let mut turn_params = json!({"threadId": session.provider_session_id,
                     "input": [{"type": "text", "text": text, "text_elements": []}]});
+                if is_newly_created {
+                    turn_params["sessionExists"] = json!(false);
+                }
                 // Reasoning effort is a per-turn override on Codex; omitting it
                 // keeps whatever the thread was started with.
                 if let Some(effort) = effort

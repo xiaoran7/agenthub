@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.4.56] - 2026-10-01
+
+新建会话跳过磁盘探测零延迟启动、ACP 工具全量特化渲染（提问交互闭环、Web 搜索/抓取卡片、超长输出折叠与 60 FPS 性能提升）。
+
+### 核心运行时优化
+
+- **新建会话显式去 resume 且零磁盘 I/O**：
+  - 彻底去除显式新建会话（`ConnectMode::Create`）时对磁盘 `~/.claude/projects/` 转录文件的遍历扫描，彻底杜绝历史 I/O 延迟；
+  - `NativeSessionHost` 显式维护 `newly_created` 集合，仅在首回合调度中显式传递 `sessionExists: false`；
+  - `TurnOptions` 扩展 `session_exists: Option<bool>`，当 `session_exists == Some(false)` 时直接以 `-p` 原生启动且不传 `--resume`，后续回合自动平滑衔接已建立的会话。
+
+### ACP 工具全量渲染与交互闭环
+
+- **交互式提问（`askUserQuestion`）点击闭环**：
+  - 将只读的选项列表重构成交互式按钮卡片，支持悬浮（Hover）、按压（Active）、已选标记与“点击选择”操作指引；
+  - 接入 `onAnswerQuestion` 交互闭环，用户点击卡片选项即可自动将决策内容填入输入框并聚焦，无需繁琐手打。
+- **`WebSearch` 与 `WebFetch` 专属富媒体卡片**：
+  - 扩展 `ToolCategory` 增加 `web_search` 与 `web_fetch` 专属类型分类；
+  - 实现 `parseWebSearchData` 与 `parseWebFetchData`，渲染带有专用图标（`Search`、`Globe`）、搜索气泡、域名徽章（Domain Pill）、外部链接（`ExternalLink`）与结构化搜索结果条目的专属卡片。
+- **超长终端/工具日志折叠与 60 FPS 性能优化**：
+  - 新增 `TruncatedOutputBlock` 渐进式折叠组件，当参数或执行结果超过 80 行时自动折叠，附带“展开全部 (共 N 行)”与“收起”操作按钮，彻底杜绝超长日志卡死主进程；
+  - `ToolCallBlock` 采用 `React.memo` 封装，并对所有工具解析与 Diff 计算采用 `useMemo` 细粒度缓存，避免长文本流式更新下的无谓重复渲染。
+
+**验证**：Rust Workspace 全部通过（25 个集成测试 + 141 个单元测试，0 失败）、`cargo clippy` 0 警告、前端 16 个套件 94 个单测全量通过、TypeScript 类型检查 0 错误。
+
 ## [2.4.55] - 2026-10-01
 
 聚焦 Claude 核心体验、Codex 插件化改造、侧边栏精简与新建 Claude 会话异常彻底修复。

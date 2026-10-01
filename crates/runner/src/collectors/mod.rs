@@ -135,6 +135,7 @@ pub struct TurnOptions<'a> {
     pub model: Option<&'a str>,
     pub permission_mode: Option<&'a str>,
     pub reasoning_effort: Option<&'a str>,
+    pub session_exists: Option<bool>,
 }
 
 /// Outcome of a streamed agent process: final message plus the session id the
@@ -2929,11 +2930,16 @@ fn run_agent_session_turn_streaming_once(
     let mut command = Command::new(binary);
     let prompt_file = match agent {
         crate::domain::AgentType::ClaudeCode => {
-            let session_exists = !session_id.is_empty()
-                && find_claude_session_info(session_id)
-                    .ok()
-                    .flatten()
-                    .is_some();
+            let session_exists = match options.session_exists {
+                Some(exists) => exists,
+                None => {
+                    !session_id.is_empty()
+                        && find_claude_session_info(session_id)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                }
+            };
             if session_exists {
                 command.args([
                     "--resume",
@@ -3008,7 +3014,7 @@ fn run_agent_session_turn_streaming_once(
     };
     let mut effective_model = options.model.map(str::to_string);
     if agent == crate::domain::AgentType::ClaudeCode {
-        if effective_model.is_none() {
+        if effective_model.is_none() && options.session_exists != Some(false) {
             effective_model = find_claude_session_model(session_id);
         }
         if let Some(gateway) = crate::claude_gateway::discover_claude_gateway() {
@@ -4575,5 +4581,20 @@ mod tests {
             ),
             vec!["--model", "claude-opus-5", "--permission-mode", "plan"]
         );
+    }
+
+    #[test]
+    fn turn_options_support_explicit_session_exists_override() {
+        let opt_new = TurnOptions {
+            session_exists: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(opt_new.session_exists, Some(false));
+
+        let opt_resume = TurnOptions {
+            session_exists: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(opt_resume.session_exists, Some(true));
     }
 }

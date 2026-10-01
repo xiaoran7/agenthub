@@ -154,6 +154,66 @@ describe("tool call block rendering", () => {
     expect(html).toContain("Quick fix");
     expect(html).toContain("已选择");
   });
+
+  it("renders WebSearch card with query and links", () => {
+    const html = renderToStaticMarkup(
+      <ToolCallBlock
+        message={{
+          role: "assistant",
+          kind: "tool",
+          label: "WebSearch: rust async",
+          status: "completed",
+          content: `${JSON.stringify({
+            query: "rust async",
+          })}\n\n〔结果〕\n1. [Async Book](https://rust-lang.github.io/async-book)\n2. [Tokio](https://tokio.rs)`,
+        }}
+      />,
+    );
+    expect(html).toContain("tool-cat-web_search");
+    expect(html).toContain("tool-websearch-card");
+    expect(html).toContain("rust async");
+    expect(html).toContain("Async Book");
+    expect(html).toContain("https://rust-lang.github.io/async-book");
+    expect(html).toContain("Tokio");
+  });
+
+  it("renders WebFetch card with domain pill and external link", () => {
+    const html = renderToStaticMarkup(
+      <ToolCallBlock
+        message={{
+          role: "assistant",
+          kind: "tool",
+          label: "WebFetch: https://docs.rs/tokio",
+          status: "completed",
+          content: `${JSON.stringify({
+            url: "https://docs.rs/tokio",
+          })}\n\n〔结果〕\nTokio is an asynchronous runtime for the Rust programming language.`,
+        }}
+      />,
+    );
+    expect(html).toContain("tool-cat-web_fetch");
+    expect(html).toContain("tool-webfetch-card");
+    expect(html).toContain("docs.rs");
+    expect(html).toContain("https://docs.rs/tokio");
+  });
+
+  it("truncates tool output exceeding 80 lines and displays collapse button", () => {
+    const longLines = Array.from({ length: 120 }, (_, i) => `Line ${i + 1}`).join("\n");
+    const html = renderToStaticMarkup(
+      <ToolCallBlock
+        message={{
+          role: "assistant",
+          kind: "tool",
+          label: "Bash: cat long_file.txt",
+          status: "completed",
+          content: `cat long_file.txt\n\n〔结果〕\n${longLines}`,
+        }}
+      />,
+    );
+    expect(html).toContain("tool-output-wrapper");
+    expect(html).toContain("tool-line-collapse-btn");
+    expect(html).toContain("展开全部 (共 120 行)");
+  });
 });
 
 describe("markdown code rendering", () => {

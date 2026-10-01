@@ -16,12 +16,30 @@ import {
   FileText,
   Search,
   HelpCircle,
+  Globe,
+  ExternalLink,
 } from "lucide-react";
 import type { ConversationMessage } from "../turn-stream";
 
-interface ConversationRendererProps {
+export type OnAnswerQuestionHandler = (
+  question: string,
+  option: string,
+) => void;
+
+export interface ConversationRendererProps {
   message: ConversationMessage;
   index: number;
+  onAnswerQuestion?: OnAnswerQuestionHandler;
+}
+
+export interface ToolCallGroupBlockProps {
+  messages: ConversationMessage[];
+  onAnswerQuestion?: OnAnswerQuestionHandler;
+}
+
+export interface ToolCallBlockProps {
+  message: ConversationMessage;
+  onAnswerQuestion?: OnAnswerQuestionHandler;
 }
 
 const RESULT_SEPARATOR = "〔结果〕";
@@ -111,9 +129,8 @@ export function groupConversationMessages(
  */
 export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
   messages,
-}: {
-  messages: ConversationMessage[];
-}) {
+  onAnswerQuestion,
+}: ToolCallGroupBlockProps) {
   const [open, setOpen] = useState(false);
   const count = messages.length;
   const hasFailed = messages.some((m) => m.status === "failed");
@@ -186,7 +203,11 @@ export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
       {open && (
         <div className="tool-call-group-body">
           {messages.map((item, idx) => (
-            <ToolCallBlock key={idx} message={item} />
+            <ToolCallBlock
+              key={idx}
+              message={item}
+              onAnswerQuestion={onAnswerQuestion}
+            />
           ))}
         </div>
       )}
@@ -196,6 +217,7 @@ export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
 
 export const ConversationItem = memo(function ConversationItem({
   message,
+  onAnswerQuestion,
 }: ConversationRendererProps) {
   if (
     message.content === "" &&
@@ -216,7 +238,12 @@ export const ConversationItem = memo(function ConversationItem({
     message.kind === "command" ||
     message.kind === "status"
   ) {
-    return <ToolCallBlock message={message} />;
+    return (
+      <ToolCallBlock
+        message={message}
+        onAnswerQuestion={onAnswerQuestion}
+      />
+    );
   }
 
   // 3. User Message -> Rounded Dark Bubble
@@ -341,11 +368,33 @@ export function splitToolContent(content: string): {
 }
 
 export type ToolCategory =
-  "terminal" | "file_read" | "file_edit" | "interactive" | "system";
+  | "terminal"
+  | "file_read"
+  | "file_edit"
+  | "interactive"
+  | "web_search"
+  | "web_fetch"
+  | "system";
 
 export function classifyTool(label?: string, kind?: string): ToolCategory {
   if (kind === "command") return "terminal";
   const norm = (label || "").toLowerCase();
+  if (
+    norm.startsWith("websearch") ||
+    norm.startsWith("web_search") ||
+    norm.includes("websearch") ||
+    norm.includes("web_search")
+  ) {
+    return "web_search";
+  }
+  if (
+    norm.startsWith("webfetch") ||
+    norm.startsWith("web_fetch") ||
+    norm.includes("webfetch") ||
+    norm.includes("web_fetch")
+  ) {
+    return "web_fetch";
+  }
   if (
     norm.startsWith("bash") ||
     norm.includes("shell") ||
@@ -468,6 +517,115 @@ export function parseQuestionData(content: string): QuestionItem[] | null {
   return null;
 }
 
+export interface WebSearchResultItem {
+  title: string;
+  url?: string;
+  snippet?: string;
+}
+
+export interface WebSearchData {
+  query: string;
+  results: WebSearchResultItem[];
+}
+
+export function parseWebSearchData(
+  args: string,
+  result: string,
+): WebSearchData | null {
+  let query = "";
+  try {
+    const parsed = JSON.parse(args.trim());
+    if (typeof parsed.query === "string") query = parsed.query;
+  } catch {
+    query = args.trim();
+  }
+  if (!query) return null;
+
+  const results: WebSearchResultItem[] = [];
+  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = linkRegex.exec(result)) !== null) {
+    results.push({
+      title: match[1],
+      url: match[2],
+    });
+  }
+
+  return { query, results };
+}
+
+export interface WebFetchData {
+  url: string;
+  domain: string;
+  prompt?: string;
+  content: string;
+}
+
+export function parseWebFetchData(
+  args: string,
+  result: string,
+): WebFetchData | null {
+  let url = "";
+  let prompt: string | undefined;
+  try {
+    const parsed = JSON.parse(args.trim());
+    if (typeof parsed.url === "string") url = parsed.url;
+    if (typeof parsed.prompt === "string") prompt = parsed.prompt;
+  } catch {
+    url = args.trim();
+  }
+  if (!url) return null;
+
+  let domain = "";
+  try {
+    domain = new URL(url).hostname;
+  } catch {
+    domain = url.replace(/^https?:\/\//, "").split("/")[0];
+  }
+
+  return { url, domain, prompt, content: result };
+}
+
+export function TruncatedOutputBlock({
+  content,
+  maxLines = 80,
+  renderContent,
+}: {
+  content: string;
+  maxLines?: number;
+  renderContent: (text: string) => React.ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = useMemo(() => content.split("\n"), [content]);
+  const isLong = lines.length > maxLines;
+
+  const displayContent = useMemo(() => {
+    if (!isLong || expanded) return content;
+    return lines.slice(0, maxLines).join("\n");
+  }, [content, lines, isLong, expanded, maxLines]);
+
+  return (
+    <div
+      className={`tool-output-wrapper ${isLong && !expanded ? "collapsed" : ""}`}
+    >
+      {renderContent(displayContent)}
+      {isLong && (
+        <button
+          type="button"
+          className="tool-line-collapse-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setExpanded((prev) => !prev);
+          }}
+        >
+          {expanded ? "收起" : `展开全部 (共 ${lines.length} 行)`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function extractToolPrimaryValue(label?: string, args?: string): string {
   if (label && label.includes(": ")) {
     return label.slice(label.indexOf(": ") + 2).trim();
@@ -492,21 +650,42 @@ export function extractToolPrimaryValue(label?: string, args?: string): string {
   return label || "";
 }
 
-export function ToolCallBlock({ message }: { message: ConversationMessage }) {
+export const ToolCallBlock = memo(function ToolCallBlock({
+  message,
+  onAnswerQuestion,
+}: ToolCallBlockProps) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const failed = message.status === "failed";
   const running = message.status === "running";
   const isCommand = message.kind === "command";
   const isStatus = message.kind === "status";
-  const { args, result } = splitToolContent(message.content);
+
+  const { args, result } = useMemo(
+    () => splitToolContent(message.content),
+    [message.content],
+  );
   const effectiveStatus = running ? "running" : failed ? "failed" : "completed";
 
-  const category = classifyTool(message.label, message.kind);
-  const diffStats = parseDiffStats(args);
-  const questionItems = parseQuestionData(args);
+  const category = useMemo(
+    () => classifyTool(message.label, message.kind),
+    [message.label, message.kind],
+  );
+  const diffStats = useMemo(() => parseDiffStats(args), [args]);
+  const questionItems = useMemo(() => parseQuestionData(args), [args]);
+  const webSearchData = useMemo(
+    () => (category === "web_search" ? parseWebSearchData(args, result) : null),
+    [category, args, result],
+  );
+  const webFetchData = useMemo(
+    () => (category === "web_fetch" ? parseWebFetchData(args, result) : null),
+    [category, args, result],
+  );
   const hasDiff = diffStats.additions > 0 || diffStats.deletions > 0;
-  const primaryValue = extractToolPrimaryValue(message.label, args);
+  const primaryValue = useMemo(
+    () => extractToolPrimaryValue(message.label, args),
+    [message.label, args],
+  );
 
   const handleCopyPrimary = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -538,6 +717,10 @@ export function ToolCallBlock({ message }: { message: ConversationMessage }) {
         return (
           <HelpCircle size={12} className="tool-category-icon interactive" />
         );
+      case "web_search":
+        return <Search size={12} className="tool-category-icon web_search" />;
+      case "web_fetch":
+        return <Globe size={12} className="tool-category-icon web_fetch" />;
       default:
         return isStatus ? (
           <Activity size={12} className="tool-category-icon status" />
@@ -623,14 +806,33 @@ export function ToolCallBlock({ message }: { message: ConversationMessage }) {
                     {q.options.map((opt, optIdx) => {
                       const isSelected = result.includes(opt.label);
                       return (
-                        <div
+                        <button
                           key={optIdx}
-                          className={`tool-option-item ${isSelected ? "selected" : ""}`}
+                          type="button"
+                          className={`tool-option-item ${isSelected ? "selected" : ""} ${onAnswerQuestion ? "clickable" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            if (onAnswerQuestion) {
+                              onAnswerQuestion(q.question, opt.label);
+                            }
+                          }}
+                          disabled={!onAnswerQuestion}
+                          title={
+                            onAnswerQuestion
+                              ? `点击选择: ${opt.label}`
+                              : undefined
+                          }
                         >
                           <div className="tool-option-label">
                             <span>{opt.label}</span>
                             {isSelected && (
                               <span className="tool-option-badge">已选择</span>
+                            )}
+                            {!isSelected && onAnswerQuestion && (
+                              <span className="tool-option-action-hint">
+                                点击选择
+                              </span>
                             )}
                           </div>
                           {opt.description && (
@@ -638,13 +840,70 @@ export function ToolCallBlock({ message }: { message: ConversationMessage }) {
                               {opt.description}
                             </div>
                           )}
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
                 )}
               </div>
             ))}
+          </div>
+        ) : webSearchData ? (
+          <div className="tool-websearch-card">
+            <div className="tool-web-header">
+              <div className="tool-web-title-box">
+                <Search size={13} className="tool-category-icon web_search" />
+                <span className="tool-question-tag">网页搜索</span>
+                <span className="tool-web-query-pill" title={webSearchData.query}>
+                  {webSearchData.query}
+                </span>
+              </div>
+            </div>
+            {webSearchData.results.length > 0 && (
+              <div className="tool-web-results-list">
+                {webSearchData.results.map((res, rIdx) => (
+                  <div key={rIdx} className="tool-web-result-item">
+                    {res.url ? (
+                      <a
+                        href={res.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="tool-web-result-link"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span>{res.title}</span>
+                        <ExternalLink size={10} />
+                      </a>
+                    ) : (
+                      <span>{res.title}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : webFetchData ? (
+          <div className="tool-webfetch-card">
+            <div className="tool-web-header">
+              <div className="tool-web-title-box">
+                <Globe size={13} className="tool-category-icon web_fetch" />
+                <span className="tool-question-tag">网页抓取</span>
+                {webFetchData.domain && (
+                  <span className="tool-domain-pill">{webFetchData.domain}</span>
+                )}
+              </div>
+            </div>
+            <a
+              href={webFetchData.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="tool-web-external-link"
+              onClick={(e) => e.stopPropagation()}
+              title={webFetchData.url}
+            >
+              <span>{webFetchData.url}</span>
+              <ExternalLink size={11} />
+            </a>
           </div>
         ) : diffStats.oldText || diffStats.newText ? (
           <div className="tool-diff-viewer">
@@ -662,14 +921,29 @@ export function ToolCallBlock({ message }: { message: ConversationMessage }) {
             )}
           </div>
         ) : (
-          args.trim() && <pre className="tool-content-pre">{args}</pre>
+          args.trim() && (
+            <TruncatedOutputBlock
+              content={args}
+              maxLines={80}
+              renderContent={(text) => (
+                <pre className="tool-content-pre">{text}</pre>
+              )}
+            />
+          )
         )}
-        {result.trim() && !questionItems && (
-          <div className="tool-result-markdown">
-            <span className="tool-result-caption">执行结果</span>
-            <MarkdownSection content={result} />
-          </div>
-        )}
+        {result.trim() &&
+          !questionItems &&
+          !webSearchData &&
+          !webFetchData && (
+            <div className="tool-result-markdown">
+              <span className="tool-result-caption">执行结果</span>
+              <TruncatedOutputBlock
+                content={result}
+                maxLines={80}
+                renderContent={(text) => <MarkdownSection content={text} />}
+              />
+            </div>
+          )}
         {result.trim() && questionItems && !result.startsWith("{") && (
           <div className="tool-result-markdown">
             <span className="tool-result-caption">决策反馈</span>
@@ -679,7 +953,7 @@ export function ToolCallBlock({ message }: { message: ConversationMessage }) {
       </div>
     </details>
   );
-}
+});
 
 const REMARK_PLUGINS = [remarkGfm];
 

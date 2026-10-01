@@ -983,3 +983,60 @@ fn answered_request_suppression_is_bounded_and_still_deduplicates_within_the_win
         "an evicted request id was still suppressed"
     );
 }
+
+#[test]
+fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequent_turns_do_not() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+
+    // Turn 1: should include "sessionExists": false because it was created fresh
+    fake.expect(
+        "turn/start",
+        json!({"turn": {"id": "turn-1", "status": "inProgress"}}),
+    );
+    let cmd1 = control(
+        &host,
+        "turn-1",
+        RemoteAction::SendPrompt {
+            text: "hello 1".into(),
+            effort: None,
+        },
+    );
+    assert_eq!(host.handle_command(cmd1).status, "accepted");
+    {
+        let calls = &fake.0.lock().unwrap().calls;
+        let turn_start_1 = calls.iter().find(|(m, _)| m == "turn/start").unwrap();
+        assert_eq!(turn_start_1.1["sessionExists"], json!(false));
+    }
+
+    // Complete turn 1
+    fake.event(json!({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "native-real",
+            "turn": { "id": "turn-1", "status": "completed" }
+        }
+    }));
+    let _ = host.poll();
+
+    // Turn 2: should NOT include "sessionExists" flag (it is now an existing session)
+    fake.expect(
+        "turn/start",
+        json!({"turn": {"id": "turn-2", "status": "inProgress"}}),
+    );
+    let cmd2 = control(
+        &host,
+        "turn-2",
+        RemoteAction::SendPrompt {
+            text: "hello 2".into(),
+            effort: None,
+        },
+    );
+    assert_eq!(host.handle_command(cmd2).status, "accepted");
+    {
+        let calls = &fake.0.lock().unwrap().calls;
+        let turn_starts: Vec<_> = calls.iter().filter(|(m, _)| m == "turn/start").collect();
+        assert_eq!(turn_starts.len(), 2);
+        assert!(turn_starts[1].1.get("sessionExists").is_none());
+    }
+}
