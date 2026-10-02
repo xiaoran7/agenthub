@@ -17,6 +17,7 @@ fn command() -> RemoteCommand {
         command: RemoteAction::SendPrompt {
             text: "continue".into(),
             effort: None,
+            model: None,
         },
     }
 }

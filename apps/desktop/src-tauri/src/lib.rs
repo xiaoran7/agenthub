@@ -951,6 +951,12 @@ fn launch_codex_session_with_client(
         .filter(|path| path.is_dir())
         .ok_or(DesktopError::InvalidAction)?;
     let cwd = dunce::canonicalize(&cwd).map_err(|_| DesktopError::InvalidAction)?;
+    let model_override = input
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned);
 
     let (sub, rx, _initial_snapshot) = client
         .subscribe(256)
@@ -970,7 +976,7 @@ fn launch_codex_session_with_client(
                 &cwd.to_string_lossy(),
             )),
             provider_session_id: None,
-            model: input.model.filter(|m| !m.trim().is_empty()),
+            model: model_override.clone(),
             sandbox: match input.permission_mode.as_deref() {
                 Some("danger-full-access" | "danger" | "bypass") => {
                     agent_pulse_runner::remote_host::CodexSandbox::DangerFullAccess
@@ -1017,6 +1023,7 @@ fn launch_codex_session_with_client(
         command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
             text: prompt.to_owned(),
             effort: input.reasoning_effort,
+            model: model_override,
         },
     };
 
@@ -1142,6 +1149,12 @@ fn send_codex_message_with_client(
     if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS * 4 {
         return Err(DesktopError::InvalidAction);
     }
+    let model_override = input
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned);
 
     let mut provider_session_id = match input.agent_type {
         AgentType::ClaudeCode if !input.agent_session_id.starts_with("claude_") => {
@@ -1203,7 +1216,7 @@ fn send_codex_message_with_client(
                     &cwd.to_string_lossy(),
                 )),
                 provider_session_id: Some(provider_session_id.clone()),
-                model: input.model.filter(|m| !m.trim().is_empty()),
+                model: model_override.clone(),
                 sandbox: match input.permission_mode.as_deref() {
                     Some("danger-full-access" | "danger" | "bypass") => {
                         agent_pulse_runner::remote_host::CodexSandbox::DangerFullAccess
@@ -1251,6 +1264,7 @@ fn send_codex_message_with_client(
         command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
             text: prompt,
             effort: input.reasoning_effort,
+            model: model_override,
         },
     };
 

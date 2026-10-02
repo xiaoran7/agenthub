@@ -337,6 +337,10 @@ impl NativeTransport for MultiProviderTransport {
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned)
                     .or_else(|| self.claude_cached_models.get(&session_id).cloned());
+                if let Some(m) = &model {
+                    self.claude_cached_models
+                        .insert(session_id.clone(), m.clone());
+                }
                 let binary = self.claude_binary.clone();
                 // Claude Code takes reasoning effort as a per-turn CLI flag.
                 let effort = params["effort"]
@@ -1401,6 +1405,9 @@ pub enum RemoteAction {
         /// Per-turn reasoning effort. Providers that do not accept one ignore it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
+        /// Per-turn model override.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     ResolveApproval {
         approval_id: String,
@@ -2100,7 +2107,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             return Err(NativeError::rejected("session_control_lost"));
         }
         match &command.command {
-            RemoteAction::SendPrompt { text, effort } => {
+            RemoteAction::SendPrompt { text, effort, model } => {
                 if text.trim().is_empty() || text.len() > 512 * 1024 {
                     return Err(NativeError::rejected("invalid_prompt"));
                 }
@@ -2134,6 +2141,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     .filter(|value| !value.is_empty())
                 {
                     turn_params["effort"] = json!(effort);
+                }
+                if let Some(model) = model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    turn_params["model"] = json!(model);
                 }
                 let result = self.transport.request("turn/start", turn_params)?;
                 let turn_id = result["turn"]["id"]

@@ -9,6 +9,7 @@ fn command() -> RemoteCommand {
         command: RemoteAction::SendPrompt {
             text: "do not repeat this action".into(),
             effort: None,
+            model: None,
         },
     }
 }
