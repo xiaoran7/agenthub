@@ -104,6 +104,7 @@ export function SessionControlPanel({
         `${normalizeAgentType(session.agent_type)}:${session.agent_session_id}`,
       ) ?? [],
   );
+  const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(() =>
     hasActiveTurn(session.payload.state.activity_status),
   );
@@ -184,11 +185,17 @@ export function SessionControlPanel({
       ? (runtime?.permission_mode ?? runtime?.approval_policy)
       : runtime?.permission_mode;
   const sessionOptions = turnOptions[cacheKey] ?? {};
+  const resolvedRuntimeModel = session.payload.runtime?.model?.trim();
+  const defaultModel =
+    resolvedRuntimeModel &&
+    models.some((option) => option.value === resolvedRuntimeModel)
+      ? resolvedRuntimeModel
+      : (models[0]?.value ?? resolvedRuntimeModel ?? "");
   const currentModel =
     sessionOptions.model &&
     models.some((option) => option.value === sessionOptions.model)
       ? sessionOptions.model
-      : (models[0]?.value ?? "");
+      : defaultModel;
   const currentPermission =
     sessionOptions.permission &&
     permissionOptions.some(
@@ -210,11 +217,13 @@ export function SessionControlPanel({
   }, [session.payload.pending_approval]);
 
   useEffect(() => {
-    setBusy(hasActiveTurn(session.payload.state.activity_status));
-    if (!hasActiveTurn(session.payload.state.activity_status)) {
-      setCancelling(false);
+    if (!sending) {
+      setBusy(hasActiveTurn(session.payload.state.activity_status));
+      if (!hasActiveTurn(session.payload.state.activity_status)) {
+        setCancelling(false);
+      }
     }
-  }, [session.payload.state.activity_status]);
+  }, [session.payload.state.activity_status, sending]);
 
   const updateTurnOptions = (patch: TurnOptionsState) => {
     setTurnOptions((current) => {
@@ -374,13 +383,13 @@ export function SessionControlPanel({
 
     // Safety pre-flight check: ensure the underlying session isn't running another turn
     if (hasActiveTurn(session.payload.state.activity_status)) {
-      setBusy(true);
       setError("该会话正在执行上一轮任务，请等待执行完成或取消后再提交。");
       return;
     }
 
     const nextPrompt = prompt.trim();
     setPrompt("");
+    setSending(true);
     setBusy(true);
     setError(undefined);
     setPendingApproval(undefined);
@@ -463,6 +472,7 @@ export function SessionControlPanel({
           : current,
       );
     } finally {
+      setSending(false);
       setBusy(false);
       setCancelling(false);
       setAgentActivity(undefined);

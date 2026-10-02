@@ -437,7 +437,11 @@ export function sessionDisplayTitle(session: Session): string {
   // Never fall back to project name, because in the folder tree all sessions are
   // already nested under the workspace folder! Falling back to project name causes
   // dozens of sessions inside the same workspace to have identical titles.
-  const shortId = session.agent_session_id.slice(0, 8);
+  const rawId = session.agent_session_id.replace(
+    /^(claude|antigravity|grok|sess)_/,
+    "",
+  );
+  const shortId = rawId.slice(0, 8);
   return `会话 #${shortId}`;
 }
 

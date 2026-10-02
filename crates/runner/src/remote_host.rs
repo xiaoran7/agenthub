@@ -444,6 +444,10 @@ impl NativeTransport for MultiProviderTransport {
                                 completed_params["realSessionId"] =
                                     json!(format!("claude_{}", real_id));
                             }
+                        } else if let Ok(Err(ref err)) = outcome {
+                            completed_params["turn"]["error"] = json!(err.to_string());
+                        } else if outcome.is_err() {
+                            completed_params["turn"]["error"] = json!("进程执行异常中断");
                         }
                         q.push_back(json!({
                             "method": "turn/completed",
@@ -630,6 +634,10 @@ impl NativeTransport for MultiProviderTransport {
                         });
                         if let Ok(Ok(ref res)) = outcome {
                             completed_params["turn"]["output"] = json!(&res.response);
+                        } else if let Ok(Err(ref err)) = outcome {
+                            completed_params["turn"]["error"] = json!(err.to_string());
+                        } else if outcome.is_err() {
+                            completed_params["turn"]["error"] = json!("进程执行异常中断");
                         }
                         q.push_back(json!({
                             "method": "turn/completed",
@@ -814,6 +822,10 @@ impl NativeTransport for MultiProviderTransport {
                         });
                         if let Ok(Ok(ref res)) = outcome {
                             completed_params["turn"]["output"] = json!(&res.response);
+                        } else if let Ok(Err(ref err)) = outcome {
+                            completed_params["turn"]["error"] = json!(err.to_string());
+                        } else if outcome.is_err() {
+                            completed_params["turn"]["error"] = json!("进程执行异常中断");
                         }
                         q.push_back(json!({
                             "method": "turn/completed",

@@ -10,6 +10,10 @@
 - **根治已有会话继续对话模型参数丢失与 429 报错**：
   - 根因定位：在会话聊天面板中切换模型下拉框后发送消息，`RemoteAction::SendPrompt` 协议缺少 `model` 字段传递，导致后端忽略输入框所选模型，直接退避读取该会话历史转储记录里的旧模型（`claude-fable-5`），重新命中上游耗尽的 Gemini Flash 429 配额错误；
   - 在 `RemoteAction::SendPrompt` 协议中新增 `model` 字段支持，并在 `MultiProviderTransport` 的 `turn/start` 调度中动态缓存与应用单次会话模型覆盖，确保前端在已有会话中切换到 `Claude Opus 5 (Alpha)` 后，CLI 严格使用用户选择的可用模型执行；
+  - 会话面板模型继承：在 `SessionControlPanel` 中，优先继承并展示会话已有元数据中记录的 `runtime.model`，避免新进入会话被错误回退重置；
+  - 侧边栏会话标题规整：在 `presentation.ts` 中解析会话短标题时自动剥离 `claude_` / `antigravity_` / `grok_` 等 Agent 内部前缀，标题由形如 `会话 #claude_a` 规整为美观标准的 8 位 Hash 标识（如 `会话 #a11779f2`）；
+  - 发送锁死与状态机解耦：引入 `sending` 状态切分，杜绝面板前置校验早退将输入锁死的异常分支，避免后台轮询过早释放状态；
+  - 错误详情全链路透传：在 `remote_host.rs` 与 `lib.rs` 的 `turn/completed` 事件中透传底层 CLI 的真实报错信息，彻底告别空洞模糊的“Agent 执行失败”。
 - **根治新建会话 429 重试风暴与假死无响应**：
   - 根因定位：第三方网关（CC Switch / Claude-3p）配置中，`claude-fable-5` 映射的上游模型（Gemini 3.8 Flash）遭遇配额耗尽（`429 RESOURCE_EXHAUSTED`）。Claude Code CLI 默认触发指数退避 10 次重试循环，每次重试等待 25~30 秒，导致子进程被阻塞长达 5~10 分钟；同时 `parse_agent_turn_update` 未解析 `system.api_retry` 事件，前端聊天面板仅显示通用静态提示“正在思考与执行...”，输入框锁死，给用户造成“根本无法新建对话”的完全卡死体验；
   - 智能路由与模型优先级：在 `crates/runner/src/claude_gateway.rs` 和 `apps/desktop/src-tauri/src/lib.rs` 中重构网关模型解析与排序，将实测配额充足、秒级响应的旗舰模型 `Claude Opus 5 (Alpha)` 设为默认首选（实测 2.1 秒极速完成响应）；

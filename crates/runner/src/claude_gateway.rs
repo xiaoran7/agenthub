@@ -73,8 +73,18 @@ impl ClaudeGatewayProfile {
         }
 
         let Some(req) = requested else {
-            // No model requested: default to the gateway's primary configured model.
-            return self.models.first().map(|m| m.name.clone());
+            // No model requested: default to the gateway's flagship configured model (opus > sonnet > first).
+            return self
+                .models
+                .iter()
+                .find(|m| m.name.to_ascii_lowercase().contains("opus"))
+                .or_else(|| {
+                    self.models
+                        .iter()
+                        .find(|m| m.name.to_ascii_lowercase().contains("sonnet"))
+                })
+                .or_else(|| self.models.first())
+                .map(|m| m.name.clone());
         };
 
         // 1. Exact name match (case-insensitive)
@@ -122,8 +132,17 @@ impl ClaudeGatewayProfile {
         }
 
         // 5. Fallback: if the requested model doesn't exist in the gateway's whitelist,
-        // use the gateway's first configured model to avoid router 400/502 errors.
-        self.models.first().map(|m| m.name.clone())
+        // use the gateway's flagship model (opus > sonnet > first) to avoid router 400/502/429 errors.
+        self.models
+            .iter()
+            .find(|m| m.name.to_ascii_lowercase().contains("opus"))
+            .or_else(|| {
+                self.models
+                    .iter()
+                    .find(|m| m.name.to_ascii_lowercase().contains("sonnet"))
+            })
+            .or_else(|| self.models.first())
+            .map(|m| m.name.clone())
     }
 
     /// Injects the discovered gateway environment variables and resolved model into a child command.
@@ -492,13 +511,13 @@ mod tests {
             Some("claude-opus-5".into())
         );
 
-        // 5. Default fallback on empty/none
-        assert_eq!(profile.resolve_model(None), Some("claude-fable-5".into()));
+        // 5. Default fallback on empty/none prioritizes flagship opus
+        assert_eq!(profile.resolve_model(None), Some("claude-opus-5".into()));
 
-        // 6. Unknown model fallback to primary
+        // 6. Unknown model fallback to flagship opus
         assert_eq!(
             profile.resolve_model(Some("unrecognized-custom-model")),
-            Some("claude-fable-5".into())
+            Some("claude-opus-5".into())
         );
     }
 

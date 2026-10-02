@@ -741,6 +741,22 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                     }));
                 }
             }
+
+            // 4. Sort Claude Code models: Opus > Sonnet > Fable > Haiku > others
+            models.sort_by_key(|m| {
+                let val = m["value"].as_str().unwrap_or("").to_ascii_lowercase();
+                if val.contains("opus") {
+                    0
+                } else if val.contains("sonnet") {
+                    1
+                } else if val.contains("fable") {
+                    2
+                } else if val.contains("haiku") {
+                    3
+                } else {
+                    4
+                }
+            });
         } else {
             // For other agents, populate from local transcripts then builtins
             for (value, count) in &dynamic {
@@ -1093,6 +1109,9 @@ fn launch_codex_session_with_client(
                                 return Err(DesktopError::AgentCancelled);
                             }
                             if status != "completed" {
+                                if let Some(err_msg) = event.raw["params"]["turn"]["error"].as_str() {
+                                    return Err(DesktopError::Detailed(err_msg.to_string()));
+                                }
                                 return Err(DesktopError::AgentFailed);
                             }
                             let had_streamed_response = !assistant.text.trim().is_empty();
@@ -1334,6 +1353,9 @@ fn send_codex_message_with_client(
                                 return Err(DesktopError::AgentCancelled);
                             }
                             if status != "completed" {
+                                if let Some(err_msg) = event.raw["params"]["turn"]["error"].as_str() {
+                                    return Err(DesktopError::Detailed(err_msg.to_string()));
+                                }
                                 return Err(DesktopError::AgentFailed);
                             }
                             let had_streamed_response = !assistant.text.trim().is_empty();
