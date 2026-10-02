@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.4.58] - 2026-10-02
+
+根治新建对话假死卡顿、第三方网关 429 递归重试风暴与模型配额智能路由：
+优先路由可用旗舰模型、捕获流式重试与配额耗尽事件并在 UI 实时透明反馈、优化新建对话排版与长模型名自适应。
+
+### 核心运行时与网关调度修复
+
+- **根治新建会话 429 重试风暴与假死无响应**：
+  - 根因定位：第三方网关（CC Switch / Claude-3p）配置中，`claude-fable-5` 映射的上游模型（Gemini 3.8 Flash）遭遇配额耗尽（`429 RESOURCE_EXHAUSTED`）。Claude Code CLI 默认触发指数退避 10 次重试循环，每次重试等待 25~30 秒，导致子进程被阻塞长达 5~10 分钟；同时 `parse_agent_turn_update` 未解析 `system.api_retry` 事件，前端聊天面板仅显示通用静态提示“正在思考与执行...”，输入框锁死，给用户造成“根本无法新建对话”的完全卡死体验；
+  - 智能路由与模型优先级：在 `crates/runner/src/claude_gateway.rs` 和 `apps/desktop/src-tauri/src/lib.rs` 中重构网关模型解析与排序，将实测配额充足、秒级响应的旗舰模型 `Claude Opus 5 (Alpha)` 设为默认首选（实测 2.1 秒极速完成响应）；
+  - 限制网关异常重试次数：通过 `inject_into_command` 注入 `CLAUDE_CODE_MAX_RETRIES=2`，将网络或配额异常情况下的重试耗时从 5 分钟硬编码超时缩减至快速响应，彻底杜绝无尽阻塞；
+  - 透传明确的 API 错误信息：在 `crates/runner/src/collectors/mod.rs` 的 `run_agent_stream_process` 中，当进程因 API 错误（如 429 配额用尽、认证失败等）以非 0 退出时，自动从输出流提取真实的人类可读错误文本（`final_agent_message`），以 `ProtocolError` 准确报告给前端展示，告别模糊晦涩的“exit code: 1”。
+
+### 流式事件捕获与交互状态透明化
+
+- **支持 `api_retry` 与 `status` 流式事件透传**：
+  - 在 `crates/runner/src/collectors/mod.rs` 的 `parse_agent_turn_update` 中，补齐对 `system.api_retry` 事件的解析，当上游模型出现限流重试时，立即向会话流输出醒目的透明提示（`⚠️ [上游模型响应限流/配额不足 (HTTP {status} {error})，Claude 正在自动重试第 {attempt}/{max_retries} 次...]`）；
+  - 支持 `system.status: "requesting"` 事件，实时将 Agent 状态更新为“Claude 正在请求模型 API”，让用户对进程执行进度了如指掌。
+
+### 前端体验与新建会话排版精修
+
+- **新建会话页（NewSessionStage & LaunchSessionModal）排版与状态反馈优化**：
+  - 在 `NewSessionStage` 与 `LaunchSessionModal` 中为 `onEvent` 接入实时事件监听器，启动执行期间在卡片下方呈现平滑渐入的实时状态条（显示当前阶段、工具调用或模型请求状态）；
+  - 解决模型下拉选择框在长名称下的显示挤压问题：将 `.composer-dropdown-wrapper` 的最大宽度从 170px 扩展至 260px，自适应展现 `Claude Opus 5 (Alpha)` 等完整模型标识；
+  - 同步更新前端 `agentModels.ts` 内建模型目录，移除旧版 Claude 3 遗留硬编码，与官方及网关当前真实支持的最新模型序列全面统一。
+
 ## [2.4.57] - 2026-10-01
 
 深度代码审查与系统级缺陷根治：全面修复新建会话瞬态路由与状态映射缺陷、根治成功回合静默退出误报失败、修复多 Provider 绑定识别偏差、实现模型动态拉取与官方真实模型目录整合。

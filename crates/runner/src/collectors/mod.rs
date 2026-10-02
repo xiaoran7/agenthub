@@ -3272,10 +3272,18 @@ fn run_agent_stream_process(
         // retrying against a different binary; replaying a turn that may have
         // partially executed is exactly the duplicate side effect the remote
         // command contract forbids.
-        if let Ok(output) = String::from_utf8(stdout)
-            && crate::agent_binary::is_unreadable_session_failure(&program, &output)
-        {
-            return Err(CollectorError::SessionUnreadable { program });
+        if let Ok(output) = String::from_utf8(stdout) {
+            if crate::agent_binary::is_unreadable_session_failure(&program, &output) {
+                return Err(CollectorError::SessionUnreadable { program });
+            }
+            // Propagate explicit API errors (e.g. rate limit / quota exhaustion) to user
+            if let Some(err_msg) = final_agent_message(agent, &output) {
+                return Err(CollectorError::Protocol {
+                    program,
+                    code: "agent_api_error".to_string(),
+                    message: err_msg,
+                });
+            }
         }
         return Err(CollectorError::Exit {
             program,
@@ -3373,6 +3381,25 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
     let value = serde_json::from_str::<Value>(line).ok()?;
     match agent {
         crate::domain::AgentType::ClaudeCode => {
+            if value.get("type").and_then(Value::as_str) == Some("system") {
+                let subtype = value.get("subtype").and_then(Value::as_str);
+                if subtype == Some("api_retry") {
+                    let attempt = value.get("attempt").and_then(Value::as_u64).unwrap_or(1);
+                    let max_retries = value.get("max_retries").and_then(Value::as_u64).unwrap_or(10);
+                    let status = value.get("error_status").and_then(Value::as_u64).unwrap_or(429);
+                    let error = value.get("error").and_then(Value::as_str).unwrap_or("rate_limit");
+                    return Some(AgentTurnUpdate::AssistantDelta(format!(
+                        "\n⚠️ [上游模型响应限流/配额不足 (HTTP {status} {error})，Claude 正在自动重试第 {attempt}/{max_retries} 次...]\n"
+                    )));
+                }
+                if subtype == Some("status") {
+                    if let Some(status) = value.get("status").and_then(Value::as_str) {
+                        if status == "requesting" {
+                            return Some(AgentTurnUpdate::Activity("Claude 正在请求模型 API"));
+                        }
+                    }
+                }
+            }
             if value.get("type").and_then(Value::as_str) == Some("stream_event") {
                 let event = value.get("event")?;
                 if event.get("type").and_then(Value::as_str) == Some("content_block_delta")

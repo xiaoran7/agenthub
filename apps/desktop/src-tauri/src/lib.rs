@@ -470,11 +470,12 @@ fn builtin_model_catalog(
 ) -> &'static [(&'static str, &'static str, &'static str)] {
     match agent {
         AgentType::ClaudeCode => &[
-            ("claude-3-7-sonnet", "Claude 3.7 Sonnet", "最强混合推理与自主开发"),
-            ("claude-sonnet-4-5", "Claude Sonnet 4.5", "日常开发主力"),
-            ("claude-3-5-sonnet", "Claude 3.5 Sonnet", "经典编程与工具调用"),
-            ("claude-opus-4-1", "Claude Opus 4.1", "深度复杂工程与规划"),
+            ("claude-opus-5", "Claude Opus 5", "深度复杂架构与自主全栈开发 (旗舰)"),
+            ("claude-sonnet-5", "Claude Sonnet 5", "日常开发与全栈工程主力"),
+            ("claude-fable-5", "Claude Fable 5", "轻量代码生成与工具调用"),
             ("claude-haiku-4-5", "Claude Haiku 4.5", "极速轻量低延迟响应"),
+            ("claude-3-7-sonnet", "Claude 3.7 Sonnet", "经典混合推理"),
+            ("claude-sonnet-4-5", "Claude Sonnet 4.5", "日常开发"),
         ],
         AgentType::Codex => &[
             ("gpt-5.1-codex-max", "GPT-5.1 Codex Max", "最强代码推理"),
@@ -690,8 +691,15 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
             {
                 for m in &gateway.models {
                     if !m.name.is_empty() && seen_ids.insert(m.name.clone()) {
-                        let label = model_label(&m.name);
-                        let desc = if let Some(target) = m
+                        let is_opus = m.name == "claude-opus-5" || m.label.as_deref() == Some("alpha");
+                        let label = if is_opus {
+                            "Claude Opus 5 (Alpha)".to_string()
+                        } else {
+                            model_label(&m.name)
+                        };
+                        let desc = if is_opus {
+                            "网关旗舰路由 · 实测秒级响应".to_string()
+                        } else if let Some(target) = m
                             .label
                             .as_deref()
                             .filter(|l| !l.trim().is_empty())

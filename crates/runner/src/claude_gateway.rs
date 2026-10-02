@@ -135,6 +135,10 @@ impl ClaudeGatewayProfile {
             command.env("ANTHROPIC_AUTH_TOKEN", &self.auth_token);
             command.env("CLAUDE_CODE_HOST_AUTH_ENV_VAR", "ANTHROPIC_AUTH_TOKEN");
         }
+        // Bound retries on third-party gateways to prevent 10-retry 5-minute freeze on 429
+        if env::var_os("CLAUDE_CODE_MAX_RETRIES").is_none() {
+            command.env("CLAUDE_CODE_MAX_RETRIES", "2");
+        }
         if let Some(resolved) = self.resolve_model(model_override.as_deref()) {
             *model_override = Some(resolved);
         }
@@ -416,6 +420,22 @@ fn parse_models_from_config(cfg: &Value) -> Vec<ClaudeGatewayModel> {
             }
         }
     }
+    // Prioritize flagship/stable models: claude-opus-5 (Alpha), claude-sonnet-5, claude-fable-5, etc.
+    models.sort_by_key(|m| {
+        let name_lower = m.name.to_ascii_lowercase();
+        let label_lower = m.label.as_deref().unwrap_or("").to_ascii_lowercase();
+        if name_lower.contains("opus") || label_lower.contains("alpha") {
+            0
+        } else if name_lower.contains("sonnet") {
+            1
+        } else if name_lower.contains("fable") {
+            2
+        } else if name_lower.contains("haiku") {
+            3
+        } else {
+            4
+        }
+    });
     models
 }
 

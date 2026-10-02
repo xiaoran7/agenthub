@@ -102,6 +102,7 @@ export function LaunchSessionModal({
   const [cwd, setCwd] = useState(() => loadRecentCwds()[0] || "");
   const [prompt, setPrompt] = useState("");
   const [launching, setLaunching] = useState(false);
+  const [launchStatus, setLaunchStatus] = useState<string>();
   const [error, setError] = useState<string>();
   const recentCwds = useMemo(() => loadRecentCwds(), [open]);
 
@@ -142,9 +143,23 @@ export function LaunchSessionModal({
       return;
     }
     setLaunching(true);
+    setLaunchStatus("正在连接本机 Agent 服务并启动进程…");
     setError(undefined);
     try {
       const onEvent = new Channel<SessionTurnEvent>();
+      onEvent.onmessage = (event) => {
+        if (event.type === "activity") {
+          setLaunchStatus(event.label);
+        } else if (event.type === "assistant_delta") {
+          if (event.text.includes("⚠️") || event.text.includes("重试")) {
+            setLaunchStatus(event.text.trim());
+          } else {
+            setLaunchStatus("正在接收响应…");
+          }
+        } else if (event.type === "assistant_message") {
+          setLaunchStatus("响应完成，正在准备会话…");
+        }
+      };
       const result = await invoke<{
         agent_session_id: string;
         agent_type: string;
@@ -316,6 +331,12 @@ export function LaunchSessionModal({
               autoFocus
             />
           </label>
+          {launching && (
+            <div className="composer-launch-status-bar" style={{ margin: "4px 0" }}>
+              <RefreshCw className="spin" size={13} />
+              <span>{launchStatus || "Claude Code 正在初始化并启动会话…"}</span>
+            </div>
+          )}
           {error && <p className="form-error">{error}</p>}
           <footer className="launch-modal-actions">
             <button
