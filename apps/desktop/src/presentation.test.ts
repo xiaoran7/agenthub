@@ -186,6 +186,33 @@ describe("desktop presentation", () => {
     expect(sessionDisplayTitle(session)).toBe("重命名后的会话名称");
   });
 
+  it("resolves stripped prefixes for claude sessions between daemon and disk formats", () => {
+    // Daemon assigns "claude_77813f44-uuid" while transcript uses "77813f44-uuid"
+    rememberTitleOverride("claude_code:77813f44-0000-0000-0000-000000000000", "阅读全局skill并重构");
+
+    const sessionWithPrefix = {
+      device_id: "local",
+      agent_type: "claude_code",
+      agent_session_id: "claude_77813f44-0000-0000-0000-000000000000",
+      payload: {
+        project: { display_name: "ClaudeSpace" },
+      },
+    } as unknown as Session;
+
+    expect(sessionDisplayTitle(sessionWithPrefix)).toBe("阅读全局skill并重构");
+
+    const sessionBareUuid = {
+      device_id: "local",
+      agent_type: "claude_code",
+      agent_session_id: "77813f44-0000-0000-0000-000000000000",
+      payload: {
+        project: { display_name: "ClaudeSpace" },
+      },
+    } as unknown as Session;
+
+    expect(sessionDisplayTitle(sessionBareUuid)).toBe("阅读全局skill并重构");
+  });
+
   it("formats detailed timestamp and generates comprehensive tooltip", () => {
     expect(formatDetailedTime("2026-03-05T08:30:15.000Z")).toContain(
       "2026-03-05",

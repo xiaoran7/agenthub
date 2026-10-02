@@ -82,7 +82,12 @@ export interface Session {
   observed_at: string;
   payload: {
     project: { display_name: string; fingerprint: string };
-    state: { activity_status: ActivityStatus; presence: string };
+    state: {
+      activity_status: ActivityStatus;
+      presence: string;
+      raw_status?: string;
+      raw_status_detail?: Record<string, string>;
+    };
     last_activity_at?: string;
     runtime?: SessionRuntimeContext | null;
     pending_approval?: PendingApproval | null;

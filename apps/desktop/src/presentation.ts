@@ -355,12 +355,29 @@ export function rememberTitleOverride(sessionKey: string, title: string) {
   if (clean.length < 2) return;
   const overrides = loadTitleOverrides();
   overrides[sessionKey] = clean;
-  // Also index by provider:sessionId and sessionId for robust lookup across device ID changes
+  // Also index by provider:sessionId, sessionId, and stripped raw UUID for robust lookup across device ID changes & prefix variations
   const parts = sessionKey.split(":");
   if (parts.length >= 3) {
-    const providerAndId = `${parts[1]}:${parts[2]}`;
-    overrides[providerAndId] = clean;
-    overrides[parts[2]] = clean;
+    const provider = parts[1];
+    const rawId = parts[2];
+    const strippedId = rawId.replace(/^(claude|antigravity|grok|sess)_/, "");
+    overrides[`${provider}:${rawId}`] = clean;
+    overrides[`${provider}:${strippedId}`] = clean;
+    overrides[rawId] = clean;
+    overrides[strippedId] = clean;
+  } else if (parts.length === 2) {
+    const provider = parts[0];
+    const rawId = parts[1];
+    const strippedId = rawId.replace(/^(claude|antigravity|grok|sess)_/, "");
+    overrides[`${provider}:${rawId}`] = clean;
+    overrides[`${provider}:${strippedId}`] = clean;
+    overrides[rawId] = clean;
+    overrides[strippedId] = clean;
+  } else {
+    const rawId = sessionKey;
+    const strippedId = rawId.replace(/^(claude|antigravity|grok|sess)_/, "");
+    overrides[rawId] = clean;
+    overrides[strippedId] = clean;
   }
   memoryOverrides = { ...overrides };
   if (typeof window !== "undefined") {
@@ -412,15 +429,24 @@ export function sessionTooltip(session: Session, displayTitle: string): string {
 
 export function sessionDisplayTitle(session: Session): string {
   const agentType = normalizeAgentType(session.agent_type);
+  const rawId = session.agent_session_id.replace(
+    /^(claude|antigravity|grok|sess)_/,
+    "",
+  );
   const key = `${session.device_id}:${agentType}:${session.agent_session_id}`;
   const overrides = loadTitleOverrides();
   const override =
     overrides[key] ||
+    overrides[`${session.device_id}:${agentType}:${rawId}`] ||
     overrides[`${agentType}:${session.agent_session_id}`] ||
-    overrides[session.agent_session_id];
+    overrides[`${agentType}:${rawId}`] ||
+    overrides[session.agent_session_id] ||
+    overrides[rawId];
   if (override) return override;
 
-  const explicit = session.payload.runtime?.title?.trim();
+  const explicit =
+    session.payload.runtime?.title?.trim() ||
+    session.payload.state?.raw_status_detail?.title?.trim();
   const project = session.payload.project.display_name?.trim();
 
   // If explicit title exists, use it as long as it's not a generic placeholder
@@ -437,10 +463,6 @@ export function sessionDisplayTitle(session: Session): string {
   // Never fall back to project name, because in the folder tree all sessions are
   // already nested under the workspace folder! Falling back to project name causes
   // dozens of sessions inside the same workspace to have identical titles.
-  const rawId = session.agent_session_id.replace(
-    /^(claude|antigravity|grok|sess)_/,
-    "",
-  );
   const shortId = rawId.slice(0, 8);
   return `会话 #${shortId}`;
 }

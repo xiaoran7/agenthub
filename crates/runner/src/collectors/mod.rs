@@ -509,6 +509,11 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 }
             }
         }
+        Some("queue-operation") if context.title.is_none() => {
+            if let Some(content) = value.get("content").and_then(Value::as_str) {
+                context.title = local_prompt_title(content);
+            }
+        }
         Some("user") if context.title.is_none() => {
             let prompt_text = value
                 .pointer("/message/content")

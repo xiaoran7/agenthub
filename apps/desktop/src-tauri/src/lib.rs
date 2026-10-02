@@ -2892,16 +2892,50 @@ fn merge_dashboard_sessions(
                         && item.agent_session_id
                             == session["agent_session_id"].as_str().unwrap_or_default()
                 }));
+                if session["payload"]["runtime"].is_null()
+                    || session["payload"]["runtime"]["title"].is_null()
+                {
+                    if let (Some(agent_type_str), Some(sess_id)) = (
+                        session["agent_type"].as_str(),
+                        session["agent_session_id"].as_str(),
+                    ) {
+                        let at = match agent_type_str {
+                            "claude_code" => AgentType::ClaudeCode,
+                            "codex" => AgentType::Codex,
+                            "antigravity" => AgentType::Antigravity,
+                            "grok_build" => AgentType::GrokBuild,
+                            "zcode" => AgentType::ZCode,
+                            _ => AgentType::Codex,
+                        };
+                        if let Some(context) = contexts.get(&session_context_key(at, sess_id)) {
+                            session["payload"]["runtime"] = json!(context);
+                        }
+                    }
+                }
                 sessions.insert(key, session);
             }
         }
     }
     for observation in local {
         let key = observation.session_key();
-        let context = contexts.get(&session_context_key(
-            observation.agent_type,
-            &observation.agent_session_id,
-        ));
+        let mut context = contexts
+            .get(&session_context_key(
+                observation.agent_type,
+                &observation.agent_session_id,
+            ))
+            .cloned();
+        if context.as_ref().and_then(|c| c.title.as_ref()).is_none()
+            && let Some(fallback_title) = observation.state.raw_status_detail.get("title")
+        {
+            let mut ctx = context.unwrap_or_else(|| {
+                LocalSessionContext::new(
+                    observation.agent_type,
+                    observation.agent_session_id.clone(),
+                )
+            });
+            ctx.title = Some(fallback_title.clone());
+            context = Some(ctx);
+        }
         let sync_state = if sessions.contains_key(&key) {
             "synced"
         } else {
@@ -2989,6 +3023,16 @@ fn merge_dashboard_sessions(
             existing["payload"]["state"]["activity_status"] = json!(status);
             existing["payload"]["state"]["presence"] = json!(presence);
             existing["payload"]["pending_approval"] = json!(pending_approval);
+            if existing["payload"]["runtime"].is_null()
+                || existing["payload"]["runtime"]["title"].is_null()
+            {
+                if let Some(context) = contexts.get(&session_context_key(
+                    agent_type,
+                    &binding.provider_session_id,
+                )) {
+                    existing["payload"]["runtime"] = json!(context);
+                }
+            }
         } else {
             let context = contexts.get(&session_context_key(
                 agent_type,
@@ -3189,7 +3233,16 @@ fn insert_session_contexts(
 }
 
 fn session_context_key(agent_type: AgentType, session_id: &str) -> String {
-    format!("{}:{session_id}", agent_type_name(agent_type))
+    let clean_id = match agent_type {
+        AgentType::ClaudeCode => session_id.strip_prefix("claude_").unwrap_or(session_id),
+        AgentType::Antigravity => session_id
+            .strip_prefix("antigravity_")
+            .unwrap_or(session_id),
+        AgentType::GrokBuild => session_id.strip_prefix("grok_").unwrap_or(session_id),
+        AgentType::ZCode => session_id.strip_prefix("sess_").unwrap_or(session_id),
+        _ => session_id,
+    };
+    format!("{}:{clean_id}", agent_type_name(agent_type))
 }
 
 fn agent_type_name(agent_type: AgentType) -> &'static str {

@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { Folder, Play, RefreshCw, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAgentModels } from "../../agentModels";
-import { PROVIDER_LIST } from "../../presentation";
+import { PROVIDER_LIST, rememberTitleOverride } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
 import type { ConversationMessage } from "../../turn-stream";
 import { normalizeAgentType, type Session, type SessionTurnEvent } from "../../types";
@@ -176,6 +176,10 @@ export function LaunchSessionModal({
       });
       rememberRecentCwd(cwd.trim());
       const normType = normalizeAgentType(agentType);
+      rememberTitleOverride(
+        `${normType}:${result.agent_session_id}`,
+        prompt.trim(),
+      );
       const initialMessages: ConversationMessage[] = [
         { role: "user", content: prompt.trim() },
       ];

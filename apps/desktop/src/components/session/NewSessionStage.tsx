@@ -16,7 +16,7 @@ import React, {
   type KeyboardEvent,
 } from "react";
 import { useAgentModels } from "../../agentModels";
-import { PROVIDER_LIST, agentLabel } from "../../presentation";
+import { PROVIDER_LIST, agentLabel, rememberTitleOverride } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
 import type { ConversationMessage } from "../../turn-stream";
 import { normalizeAgentType, type Session, type SessionTurnEvent } from "../../types";
@@ -154,6 +154,10 @@ export function NewSessionStage({
       });
       rememberRecentCwd(cwd.trim());
       const normType = normalizeAgentType(agentType);
+      rememberTitleOverride(
+        `${normType}:${result.agent_session_id}`,
+        prompt.trim(),
+      );
       const initialMessages: ConversationMessage[] = [
         { role: "user", content: prompt.trim() },
       ];

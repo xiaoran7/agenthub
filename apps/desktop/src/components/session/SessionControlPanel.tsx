@@ -268,9 +268,9 @@ export function SessionControlPanel({
         (message) =>
           message.role === "user" &&
           message.kind === undefined &&
-          message.content.trim().length >= 4,
+          message.content.trim().length >= 2,
       );
-      if (firstUser && !session.payload.runtime?.title) {
+      if (firstUser) {
         rememberTitleOverride(cacheKey, firstUser.content);
       }
     } catch (err) {
@@ -388,6 +388,9 @@ export function SessionControlPanel({
     }
 
     const nextPrompt = prompt.trim();
+    if (messages.length === 0) {
+      rememberTitleOverride(cacheKey, nextPrompt);
+    }
     setPrompt("");
     setSending(true);
     setBusy(true);
