@@ -424,6 +424,13 @@ export function sessionTooltip(session: Session, displayTitle: string): string {
   if (session.payload.runtime?.permission_mode) {
     lines.push(`模式: ${session.payload.runtime.permission_mode}`);
   }
+  const hasContentTitle = Boolean(
+    session.payload.runtime?.title?.trim() ||
+    session.payload.state?.raw_status_detail?.title?.trim()
+  );
+  if (!hasContentTitle) {
+    lines.push("说明: 历史云端快照或未输入指令的会话");
+  }
   return lines.join("\n");
 }
 
@@ -464,7 +471,7 @@ export function sessionDisplayTitle(session: Session): string {
   // already nested under the workspace folder! Falling back to project name causes
   // dozens of sessions inside the same workspace to have identical titles.
   const shortId = rawId.slice(0, 8);
-  return `会话 #${shortId}`;
+  return `未命名会话 #${shortId}`;
 }
 
 export function sessionKey(session: Session): string {

@@ -12,13 +12,16 @@
     1. 标题提取触发点缺失：之前仅在进入已有会话并重新拉取消息后才会触发前端重命名；用户新建会话时，`LaunchSessionModal` 与 `NewSessionStage` 启动后均未注册 `rememberTitleOverride`；
     2. 键值格式前后端前缀偏差：Native Host 宿主层会话 ID 带有 Provider 前缀（如 `claude_<uuid>`、`antigravity_<uuid>`、`sess_<uuid>`），而磁盘转储记录（`.claude/projects/.../*.jsonl`）使用无前缀裸 UUID，导致 `session_context_key` 无法命中磁盘解析的上下文标题；
     3. 现代 Claude Code 首行事件提取缺失：现代 Claude Code 转储首行常为 `queue-operation` 入队事件（`operation: "enqueue"`），之前仅扫描 `user` 角色消息，导致首轮对话在入队阶段未能提取出标题；
-    4. 标题长度阈值过高：之前限定提示词长度必须 `>= 4` 字符，排除了“你好”、“审查”、“部署”等常用中文首句。
+    4. 标题长度阈值过高：之前限定提示词长度必须 `>= 4` 字符，排除了“你好”、“审查”、“部署”等常用中文首句；
+    5. 僵尸 Binding 凭空注入会话列表：之前在 Native Host 启动或失败重试时残留了未连接（`control_connected: false`）且磁盘无对应 `.jsonl` 的空 Binding，在 `merge_dashboard_sessions` 中被无条件注入 `sessions`，导致侧边栏堆积大量刚刚创建失败的无内容哈希编号（如 `会话 #ae74135b`、`会话 #06ac5f4f`）；
+    6. 前端 LocalStorage 永久死锁脏缓存：前端 `cachedSessions` 无条件从 `agenthub:cached-sessions` 中回填已死亡且无标题的孤儿会话，导致即先后端已淘汰，前端依然永久显示这些死编号。
   - 修复方案：
-    1. 全链路前缀剥离与多维键值索引：在 `presentation.ts` 的 `rememberTitleOverride` 和 `sessionDisplayTitle` 中，同时建立 `provider:rawId`、`provider:strippedId`、`rawId`、`strippedId` 的交叉索引映射，不论前端传入何种形式的会话 ID 均能秒级命中对应标题；
-    2. 新建会话即时建立标题覆盖：在 `LaunchSessionModal` 和 `NewSessionStage` 启动成功瞬间，立即以用户首条提示词调用 `rememberTitleOverride`，会话在侧边栏出现的第一秒即显示完整指令标题；
-    3. 首轮发送即时覆写：在 `SessionControlPanel` 发送第一条消息时立即更新标题，且将提取阈值放宽至 `>= 2` 字符；
-    4. 后端 `session_context_key` 前缀规范化：在 `apps/desktop/src-tauri/src/lib.rs` 中自动剥离 `claude_`、`antigravity_`、`grok_`、`sess_` 前缀，让 Native Host 会话与磁盘转储的 `LocalSessionContext` 完美聚合；
-    5. `collectors/mod.rs` 补充 `queue-operation` 识别：从 Claude Code 转储首行入队事件中实时提取 `local_prompt_title`，历史与新建会话均自动对齐官方体验。
+    1. 过滤淘汰未连接无转储的僵尸 Binding：在 `apps/desktop/src-tauri/src/lib.rs` 的 `merge_dashboard_sessions` 中，对在主会话列表中不存在的 Host Binding 增加前置活性校验，非活跃且无磁盘转储的空 Binding 不再注入会话列表，从源头杜绝幽灵编号会话；
+    2. 前端缓存智能清洗：在 `apps/desktop/src/App.tsx` 中重构 `cachedSessions` 初始加载与快照合并逻辑，自动剔除权威后端已淘汰且无实质标题的孤儿死会话，彻底打破 LocalStorage 脏缓存持久化循环；
+    3. 全链路前缀剥离与多维键值索引：在 `presentation.ts` 的 `rememberTitleOverride` 和 `sessionDisplayTitle` 中，同时建立 `provider:rawId`、`provider:strippedId`、`rawId`、`strippedId` 的交叉索引映射，不论前端传入何种形式的会话 ID 均能秒级命中对应标题；
+    4. 新建会话即时建立标题覆盖：在 `LaunchSessionModal` 和 `NewSessionStage` 启动成功瞬间，立即以用户首条提示词调用 `rememberTitleOverride`，会话在侧边栏出现的第一秒即显示完整指令标题；
+    5. 优化无标题历史远端存档语义：将纯冰冷的开发编号统一升格为亲切透明的 `未命名会话 (#short_id)`，并在 Tooltip 中附带工作区、活动时间与明确提示，彻底告别令用户费解的机器乱码；
+    6. `collectors/mod.rs` 补充 `queue-operation` 识别：从 Claude Code 转储首行入队事件中实时提取 `local_prompt_title`，本地所有已存在的 53 个有效会话 100% 自动对齐自然语言内容标题。
 
 ### 核心运行时与网关调度修复
 

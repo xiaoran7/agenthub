@@ -391,6 +391,18 @@ function Dashboard({
       const parsed = JSON.parse(stored) as Session[];
       return parsed
         .filter((s) => !s.agent_session_id.startsWith("sess_subagent"))
+        .filter((s) => {
+          const hasTitle = Boolean(
+            s.payload?.runtime?.title?.trim() ||
+            s.payload?.state?.raw_status_detail?.title?.trim()
+          );
+          const isLive = s.payload?.state?.presence === "LIVE";
+          const isZombieFailed = !hasTitle && !isLive && (
+            s.payload?.state?.activity_status === "UNKNOWN" ||
+            s.payload?.state?.activity_status === "FAILED"
+          );
+          return !isZombieFailed;
+        })
         .map((s) => ({
           ...s,
           agent_type: normalizeAgentType(s.agent_type),
@@ -404,10 +416,27 @@ function Dashboard({
     if (snapshot.sessions.length > 0) {
       setCachedSessions((prev) => {
         const map = new Map<string, Session>();
+        const snapshotKeys = new Set(
+          snapshot.sessions.map((s) =>
+            sessionKey({ ...s, agent_type: normalizeAgentType(s.agent_type) })
+          )
+        );
         for (const s of prev) {
           if (s.agent_session_id.startsWith("sess_subagent")) continue;
           const norm = { ...s, agent_type: normalizeAgentType(s.agent_type) };
-          map.set(sessionKey(norm), norm);
+          const key = sessionKey(norm);
+          const inSnapshot = snapshotKeys.has(key);
+          const hasTitle = Boolean(
+            s.payload?.runtime?.title?.trim() ||
+            s.payload?.state?.raw_status_detail?.title?.trim()
+          );
+          const isLive = s.payload?.state?.presence === "LIVE";
+          // If a session is no longer reported by authoritative backend snapshot and has no title,
+          // purge it so failed/empty launch zombies don't linger forever in localStorage.
+          if (!inSnapshot && !hasTitle && !isLive) {
+            continue;
+          }
+          map.set(key, norm);
         }
         for (const s of snapshot.sessions) {
           if (s.agent_session_id.startsWith("sess_subagent")) continue;

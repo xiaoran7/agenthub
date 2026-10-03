@@ -3038,6 +3038,18 @@ fn merge_dashboard_sessions(
                 agent_type,
                 &binding.provider_session_id,
             ));
+            let is_active = binding.control_connected
+                || matches!(
+                    binding.execution_state,
+                    agent_pulse_runner::remote_host::ExecutionState::Running
+                        | agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission
+                        | agent_pulse_runner::remote_host::ExecutionState::AwaitingInput
+                );
+            // If the binding is not connected/running and has no transcript context on disk,
+            // it is a failed launch residue or empty zombie binding; do not fabricate a session entry.
+            if !is_active && context.is_none() {
+                continue;
+            }
             let project_name = binding
                 .workspace_path
                 .file_name()

@@ -1818,6 +1818,7 @@ mod tests {
             command: agent_pulse_runner::remote_host::RemoteAction::SendPrompt {
                 text: "hello".into(),
                 effort: None,
+                model: None,
             },
         };
         let receipt = CommandReceipt {

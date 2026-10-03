@@ -143,7 +143,7 @@ describe("desktop presentation", () => {
       },
     } as unknown as Session;
 
-    expect(sessionDisplayTitle(untitledSession)).toBe("会话 #019d1469");
+    expect(sessionDisplayTitle(untitledSession)).toBe("未命名会话 #019d1469");
 
     const noTitleSession = {
       device_id: "dev-1",
@@ -154,7 +154,7 @@ describe("desktop presentation", () => {
       },
     } as unknown as Session;
 
-    expect(sessionDisplayTitle(noTitleSession)).toBe("会话 #019d1469");
+    expect(sessionDisplayTitle(noTitleSession)).toBe("未命名会话 #019d1469");
   });
 
   it("prioritizes explicit valid runtime titles", () => {
