@@ -605,6 +605,12 @@ fn is_assistant_output(value: &Value) -> bool {
     if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
         return false;
     }
+    // Synthetic error messages or placeholder records are not real assistant output.
+    if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+        || value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
+    {
+        return false;
+    }
     value
         .pointer("/message/content")
         .or_else(|| value.get("content"))

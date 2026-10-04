@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.4.64] - 2026-10-04
+
+根治历史转录合成 429 报错误渲染为助手对话气泡、消除连续用户重试输入被吞缺陷、完善历史系统错误警示条样式：
+在 Rust 转录解析层过滤 `isApiErrorMessage` 与 `<synthetic>` 占位记录，将其重定向至带明确时间线标记的系统异常状态条，杜绝误导用户以为当前服务故障；修复转录流中对连续相同提示词的不合理去重覆盖；在前端对话渲染层增加显式的红色警告条（Error Banner）规范。
+
+### 转录解析隔离、用户输入保真与系统异常渲染增强
+
+- **转录层隔离合成 API 错误与占位消息（`crates/runner/src/conversation.rs`、`collectors/mod.rs`）**：
+  - 根因定位：
+    1. 当 Claude Code 上游配额触发瞬时 429、网络故障或中断时，CLI 会向 `.jsonl` 历史文件追加写入带有 `isApiErrorMessage: true`, `error: "rate_limit"`, `model: "<synthetic>"` 的合成错误消息以及 `No response requested.` 占位行；
+    2. 原转录解析器 `normalize_local_conversation_items` 将其按普通 `role: "assistant"` 消息解析并插入会话流；
+    3. 导致用户在重新进入或刷新该会话时，历史上的 429 日志以普通 AI 回复气泡的形式常驻在聊天界面，造成“当前系统依然 429 报错无法使用”的误解。
+  - 修复方案：
+    1. 在 `crates/runner/src/conversation.rs` 中拦截 `isApiErrorMessage: true` 与 `model == "<synthetic>"` 记录：
+       - 过滤内部交互的 `No response requested.` 无意义占位符；
+       - 将真实的合成错误转为 `role: "system"`, `kind: "status"`, `status: "failed"` 的独立系统异常记录（明确标明“历史请求异常”）；
+    2. 在 `crates/runner/src/collectors/mod.rs` 的 `is_assistant_output` 中同样过滤掉该类合成记录，防止无有效回复的失败会话被误判为已生成可用回复。
+
+- **消除前端转录流对连续相同用户输入的不合理覆盖（`apps/desktop/src/turn-stream.ts`）**：
+  - 根因定位：
+    原 `deduplicateMessages` 针对连续的两条用户消息进行了内容完全一致比对并直接覆盖（`deduped[deduped.length - 1] = msg`），导致用户在前一条未得到即时反馈后重试发送相同词（如“你好”）时，界面上前一条气泡被吞掉，引发“前一条消息不回复也无反馈”的错觉。
+  - 修复方案：
+    保留真实的用户输入历史，取消对非空用户对话词的粗暴去重与吞并，确保每一次用户按键提交都具备确定的时间线记录。
+
+- **前端对话渲染层增加显式系统异常警告条（`apps/desktop/src/components/ConversationRenderer.tsx` & `modern.css`）**：
+  - 为 `status: "failed"`、系统错误及历史异常记录渲染专门的警示框（System Error Banner，带警示图标与独立分类标签），彻底与正常的流式 Assistant 回答气泡从视觉上隔离开来。
+
 ## [2.4.63] - 2026-10-04
 
 根治长会话上下文压缩/深度思考期间静默无反馈、输入框防连击抢跑碰撞与乐观消息冒泡幽灵缺陷、发布 Windows v2.4.63 正式安装包：

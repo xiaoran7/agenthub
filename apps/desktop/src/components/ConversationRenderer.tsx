@@ -227,12 +227,36 @@ export const ConversationItem = memo(function ConversationItem({
     return null;
   }
 
-  // 1. Dedicated thinking process item
+  // 1. Explicit Error Banner for failed / synthetic error messages
+  if (
+    message.status === "failed" ||
+    message.role === "system" ||
+    message.content.startsWith("历史请求异常:") ||
+    message.content.startsWith("API Error:")
+  ) {
+    return (
+      <div className="message-row error-banner-row">
+        <div className="system-error-banner" role="alert">
+          <span className="system-error-banner-icon">
+            <AlertCircle size={15} />
+          </span>
+          <div className="system-error-banner-text">
+            <span className="system-error-banner-tag">
+              {message.label || "历史异常"}
+            </span>
+            {message.content}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Dedicated thinking process item
   if (message.kind === "thinking") {
     return <ThinkingBlock content={message.content} defaultOpen={false} />;
   }
 
-  // 2. Dedicated tool call / command / status item (collapsed one-liner)
+  // 3. Dedicated tool call / command / status item (collapsed one-liner)
   if (
     message.kind === "tool" ||
     message.kind === "command" ||
@@ -246,7 +270,7 @@ export const ConversationItem = memo(function ConversationItem({
     );
   }
 
-  // 3. User Message -> Rounded Dark Bubble
+  // 4. User Message -> Rounded Dark Bubble
   if (message.role === "user") {
     const cleanContent = cleanClientUserContent(message.content);
     if (!cleanContent) return null;
@@ -264,7 +288,7 @@ export const ConversationItem = memo(function ConversationItem({
     );
   }
 
-  // 4. Assistant / System Message -> Natural Fluid Markdown
+  // 5. Assistant Message -> Natural Fluid Markdown
   return (
     <div className="message-row assistant-row">
       <div className="assistant-flow-content">

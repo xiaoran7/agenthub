@@ -880,6 +880,45 @@ body,
   margin-bottom: 22px;
 }
 
+.message-row.error-banner-row {
+  margin-bottom: 16px;
+}
+
+.system-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #fca5a5;
+}
+
+.system-error-banner-icon {
+  flex-shrink: 0;
+  color: #ef4444;
+  display: inline-flex;
+}
+
+.system-error-banner-text {
+  flex: 1;
+  word-break: break-word;
+}
+
+.system-error-banner-tag {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  margin-right: 6px;
+}
+
 .assistant-flow-content {
   color: var(--text-primary);
 }

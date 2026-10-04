@@ -257,4 +257,23 @@ describe("markdown code rendering", () => {
     expect(html).toContain("<td><strong>bold</strong></td>");
     expect(html).toContain("<td><code>inline</code></td>");
   });
+
+  it("renders failed or status error messages as explicit warning banners", () => {
+    const html = renderToStaticMarkup(
+      <ConversationItem
+        message={{
+          role: "system",
+          kind: "status",
+          status: "failed",
+          label: "API 异常记录",
+          content: "历史请求异常: API Error: Request rejected (429)",
+        }}
+        index={0}
+      />,
+    );
+    expect(html).toContain("system-error-banner");
+    expect(html).toContain("system-error-banner-tag");
+    expect(html).toContain("API 异常记录");
+    expect(html).toContain("历史请求异常: API Error: Request rejected (429)");
+  });
 });

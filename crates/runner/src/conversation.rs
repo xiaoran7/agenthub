@@ -652,6 +652,33 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
     if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
         return Vec::new();
     }
+
+    // Claude Code writes synthetic rate-limit or API error messages into the transcript
+    // (e.g. `isApiErrorMessage: true`, `error: "rate_limit"`, `apiErrorStatus: 429`).
+    // Never surface them as normal assistant dialogue bubbles to avoid confusing users.
+    if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+        || value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
+    {
+        let raw_content = value
+            .pointer("/message/content")
+            .or_else(|| value.get("content"));
+        let error_text = raw_content
+            .map(extract_local_text)
+            .unwrap_or_default();
+        if error_text.contains("No response requested") {
+            return Vec::new();
+        }
+        if !error_text.trim().is_empty() {
+            return vec![conversation_item(
+                "system",
+                "status",
+                "API 异常记录",
+                &format!("历史请求异常: {}", error_text.trim()),
+                "failed",
+            )];
+        }
+        return Vec::new();
+    }
     let content = value
         .pointer("/message/content")
         .or_else(|| payload.get("content"))
@@ -1478,6 +1505,42 @@ mod tests {
 
         let matched = find_provider_transcript(&home.path().join(".codex"), session_id, 0);
         assert_eq!(matched, Some(file2));
+    }
+
+    #[test]
+    fn synthetic_error_and_placeholder_messages_are_not_rendered_as_assistant_bubbles() {
+        let api_error = json!({
+            "type": "assistant",
+            "error": "rate_limit",
+            "isApiErrorMessage": true,
+            "apiErrorStatus": 429,
+            "message": {
+                "model": "<synthetic>",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "API Error: Request rejected (429) · Resource has been exhausted."}]
+            }
+        });
+
+        let placeholder = json!({
+            "type": "assistant",
+            "isApiErrorMessage": false,
+            "message": {
+                "model": "<synthetic>",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "No response requested."}]
+            }
+        });
+
+        let err_items = normalize_local_conversation_items(&api_error);
+        assert_eq!(err_items.len(), 1);
+        assert_eq!(err_items[0]["role"], "system");
+        assert_eq!(err_items[0]["kind"], "status");
+        assert_eq!(err_items[0]["status"], "failed");
+        assert_eq!(err_items[0]["label"], "API 异常记录");
+        assert!(err_items[0]["content"].as_str().unwrap().contains("429"));
+
+        let placeholder_items = normalize_local_conversation_items(&placeholder);
+        assert!(placeholder_items.is_empty());
     }
 
     #[test]

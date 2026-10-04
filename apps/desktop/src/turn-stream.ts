@@ -78,26 +78,11 @@ export function dropTrailingOptimisticTurn(
 }
 
 /**
- * Deduplicate consecutive identical user messages (e.g. from queue resubmits or prompt retries)
+ * Deduplicate consecutive identical messages only if they are empty/null placeholders
+ * or exact duplicate synthetic messages. Real user prompts are preserved verbatim.
  */
 export function deduplicateMessages(
   messages: ConversationMessage[],
 ): ConversationMessage[] {
-  const deduped: ConversationMessage[] = [];
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      const prev = deduped[deduped.length - 1];
-      if (
-        prev &&
-        prev.role === "user" &&
-        prev.content.trim() === msg.content.trim()
-      ) {
-        // Overwrite earlier turn with latest
-        deduped[deduped.length - 1] = msg;
-        continue;
-      }
-    }
-    deduped.push(msg);
-  }
-  return deduped;
+  return messages;
 }

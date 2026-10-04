@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendAssistantDelta,
+  deduplicateMessages,
   dropTrailingEmptyAssistant,
   dropTrailingOptimisticTurn,
   replaceAssistantMessage,
@@ -84,5 +85,13 @@ describe("turn stream state", () => {
       content: "turn 2 final",
     });
     expect(result).toHaveLength(4);
+  });
+
+  it("preserves consecutive user inputs without dropping retried messages", () => {
+    const list: ConversationMessage[] = [
+      { role: "user", content: "你好" },
+      { role: "user", content: "你好" },
+    ];
+    expect(deduplicateMessages(list)).toEqual(list);
   });
 });
