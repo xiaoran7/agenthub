@@ -3099,9 +3099,16 @@ fn merge_dashboard_sessions(
         } else {
             AgentType::Codex
         };
+        let clean_id = match agent_type {
+            AgentType::ClaudeCode => binding.provider_session_id.strip_prefix("claude_").unwrap_or(&binding.provider_session_id),
+            AgentType::Antigravity => binding.provider_session_id.strip_prefix("antigravity_").unwrap_or(&binding.provider_session_id),
+            AgentType::GrokBuild => binding.provider_session_id.strip_prefix("grok_").unwrap_or(&binding.provider_session_id),
+            AgentType::ZCode => binding.provider_session_id.strip_prefix("sess_").unwrap_or(&binding.provider_session_id),
+            _ => &binding.provider_session_id,
+        };
         let key = format!(
             "{}:{}:{}",
-            agent_type_str, device_id, binding.provider_session_id
+            agent_type_str, device_id, clean_id
         );
         let status = match binding.execution_state {
             agent_pulse_runner::remote_host::ExecutionState::Running => "WORKING",
@@ -3170,7 +3177,7 @@ fn merge_dashboard_sessions(
                     "event_id": format!("host:{}", binding.hub_session_id),
                     "device_id": device_id,
                     "agent_type": agent_type_str,
-                    "agent_session_id": binding.provider_session_id,
+                    "agent_session_id": clean_id,
                     "observed_at": chrono::Utc::now().to_rfc3339(),
                     "payload": {
                         "project": {
@@ -4455,6 +4462,51 @@ mod tests {
         );
         assert_eq!(found["payload"]["pending_approval"]["can_approve"], true);
         assert_eq!(found["payload"]["pending_approval"]["can_decline"], false);
+    }
+
+    #[test]
+    fn host_session_registry_merges_prefixed_binding_with_bare_observation() {
+        let contexts = HashMap::new();
+        let redactor = ProjectRedactor::new(b"desktop-test-key").unwrap();
+        let raw_uuid = "c05a7f38-16d6-4a6b-8e9e-1ed4540e8161";
+        let observations = claude::normalize_agents_json(
+            &format!(r#"[{{ "sessionId": "{raw_uuid}", "cwd": "D:/Agent-Nexus", "state": "idle" }}]"#),
+            &ObservationMeta::now("device-local"),
+            &redactor,
+        )
+        .unwrap();
+
+        let binding = agent_pulse_runner::remote_host::SessionBinding {
+            hub_session_id: "hub-claude-1".to_owned(),
+            provider_session_id: format!("claude_{raw_uuid}"),
+            workspace_path: PathBuf::from("D:/Agent-Nexus"),
+            host_generation: "gen-claude-1".to_owned(),
+            control_connected: true,
+            execution_state: agent_pulse_runner::remote_host::ExecutionState::Running,
+            current_turn_id: Some("turn-1".to_owned()),
+        };
+
+        let merged = merge_dashboard_sessions(
+            &json!([]),
+            &observations,
+            &[],
+            "device-local",
+            &contexts,
+            &[binding],
+            &[],
+        );
+
+        // Crucial: There must only be ONE session in the list, NOT two duplicate sessions!
+        assert_eq!(
+            merged.len(),
+            1,
+            "Expected 1 session after merging host binding with observation, got {}",
+            merged.len()
+        );
+        let session = &merged[0];
+        assert_eq!(session["agent_session_id"], raw_uuid);
+        assert_eq!(session["payload"]["state"]["activity_status"], "WORKING");
+        assert_eq!(session["payload"]["state"]["presence"], "LIVE");
     }
 
     #[test]
