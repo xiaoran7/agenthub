@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.4.62] - 2026-10-04
+
+根治侧边栏幽灵执行中会话分身、上游 429 配额耗尽回合死锁与输入框锁死缺陷：
+实现同工作区会话状态吸收合并与 realSessionId 动态更新、上游 429 错误回合正常收敛与状态清理、增强前端自愈机制（解除锁定并重试），彻底杜绝“这个会话已有一个回合正在运行”死锁。
+
+### 侧边栏多源聚合、回合生命周期与输入框死锁根治
+
+- **根治侧边栏同名会话幽灵“执行中”分身问题**：
+  - 根因定位：
+    1. 在新建会话启动时，前端生成临时 UUID（如 `claude_<uuid>`）建立宿主绑定（SessionBinding）；
+    2. 当底层 CLI 生成真实转储文件后，真实会话 ID（如 `c05a7f38-...`）作为磁盘观测条目进入会话聚合器；
+    3. 此时内存中的临时 HostBinding 与磁盘生成的真实 Observation 无法通过 ID 精准关联，导致同一工作区下出现两个同名条目（一个卡在“执行中”旋转状态，另一个为已落盘的真实记录）；
+  - 修复方案：
+    1. 在 `apps/desktop/src-tauri/src/lib.rs` 的 `merge_dashboard_sessions` 中引入工作区级智能吸收（Workspace-level Absorption）：当宿主绑定 ID 为临时未落盘会话时，优先将其活跃状态（`activity_status`、`presence`、`pending_approval`）动态吸收至同一工作区内对应的现有会话条目中，禁止额外凭空插入孤儿条目；
+    2. 在 `crates/runner/src/remote_host.rs` 的 `turn/completed` 事件处理中，检测上游返回的 `realSessionId`；一旦提取到真实转储 ID，立即动态更新 `binding.provider_session_id` 并重建 `native_to_hub` 映射，使常驻宿主与磁盘观测保持唯一性。
+
+- **解决上游 429 配额耗尽导致的回合未正常收敛与状态悬挂**：
+  - 根因定位：
+    1. 当上游网关或模型返回 429（如 `API Error: Request rejected (429) · Resource has been exhausted (e.g. check quota)`）时，CLI 进程以非零状态码退出；
+    2. 原先 `run_agent_stream_process` 遇到非零退出码且非特殊状态时，直接返回 `CollectorError::Protocol`；
+    3. 该异常中断了正常的 `turn/completed` 事件派发链路，导致宿主绑定的 `current_turn_id` 永远无法置空，会话永远卡在 `Running` 状态。
+  - 修复方案：
+    1. 在 `crates/runner/src/collectors/mod.rs` 中增强对 CLI 进程输出的捕获：当检测到上游明确的 API 错误信息（429 配额耗尽等）时，将其正常打包为 `AgentStreamOutcome` 返回并附带提取到的 `session_id`；
+    2. 确保宿主收到完整的 `turn/completed` 响应并输出错误提示，同时释放 `current_turn_id`，恢复 `execution_state` 为 `Idle`。
+
+- **根治“这个会话已有一个回合正在运行”死锁并提供前端一键自愈**：
+  - 根因定位：
+    1. 桌面端 `cancel_session_turn` 指令原先若匹配不到对应的宿主 Binding 便直接报错，且在多重会话 ID 格式（带前缀/无前缀）下可能找不到目标；
+    2. 前端输入框检测到错误后由于状态未重置，输入框被永久禁用，用户无法继续发送新消息或重新重试。
+  - 修复方案：
+    1. 在 `apps/desktop/src-tauri/src/lib.rs` 中重构 `cancel_session_turn`：主动清理内存中的 `active_turns` 记录，并对会话 ID 进行双向归一化匹配；即使底层进程已死亡，也确保释放回合锁并向前端返回成功；
+    2. 在 `crates/runner/src/remote_host.rs` 的 `RemoteAction::Interrupt` 中增强容错：即使 `session.current_turn_id` 丢失，也强制重置状态为 `Idle` 并清理残留的审批与提问；
+    3. 在 `apps/desktop/src/components/session/SessionControlPanel.tsx` 中优化错误提示横幅：新增“解除锁定并重试”自愈操作按钮，用户点击即可一键重置回合状态、取消残留锁死并重新激活输入框。
+
 ## [2.4.61] - 2026-10-04
 
 根治宿主与磁盘观测前缀失配导致同名会话重复分身缺陷、发布 Windows v2.4.61 正式安装包：

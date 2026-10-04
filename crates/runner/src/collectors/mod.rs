@@ -3281,12 +3281,14 @@ fn run_agent_stream_process(
             if crate::agent_binary::is_unreadable_session_failure(&program, &output) {
                 return Err(CollectorError::SessionUnreadable { program });
             }
-            // Propagate explicit API errors (e.g. rate limit / quota exhaustion) to user
+            // Propagate explicit API errors (e.g. rate limit / quota exhaustion / auth failures)
+            // as a completed turn response so the turn ends cleanly, realSessionId is preserved,
+            // and neither the daemon binding nor the desktop UI is left in a wedged running state.
             if let Some(err_msg) = final_agent_message(agent, &output) {
-                return Err(CollectorError::Protocol {
-                    program,
-                    code: "agent_api_error".to_string(),
-                    message: err_msg,
+                let session_id = extract_session_id_from_output(agent, &output);
+                return Ok(AgentStreamOutcome {
+                    response: err_msg,
+                    session_id,
                 });
             }
         }

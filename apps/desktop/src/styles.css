@@ -1782,6 +1782,42 @@ input:focus-visible {
   color: #ffaaa4;
   font-size: 11px;
 }
+.panel-error-row {
+  margin: 0 24px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 8px;
+}
+.panel-error-text {
+  color: #ff8b82;
+  font-size: 11.5px;
+  line-height: 1.4;
+  flex: 1;
+}
+.panel-error-reset-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(239, 68, 68, 0.85);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.panel-error-reset-btn:hover {
+  background: #ef4444;
+  transform: translateY(-1px);
+}
+.panel-error-reset-btn:active {
+  transform: translateY(0);
+}
 .session-composer {
   position: relative;
   margin: 0 24px 14px;

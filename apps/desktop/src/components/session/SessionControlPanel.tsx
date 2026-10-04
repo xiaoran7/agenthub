@@ -751,9 +751,31 @@ export function SessionControlPanel({
           </p>
         )}
         {error !== undefined && (
-          <p className="panel-error" role="alert">
-            {error}
-          </p>
+          <div className="panel-error-row" role="alert">
+            <span className="panel-error-text">{error}</span>
+            <button
+              type="button"
+              className="panel-error-reset-btn"
+              onClick={async () => {
+                try {
+                  await cancelSessionTurn({
+                    agent_type: session.agent_type,
+                    agent_session_id: session.agent_session_id,
+                  });
+                } catch {
+                  // ignore
+                }
+                setError(undefined);
+                setBusy(false);
+                setSending(false);
+                setCancelling(false);
+                void reloadMessages();
+              }}
+              title="强制重置并清除当前会话死锁，恢复输入框"
+            >
+              解除锁定并重试
+            </button>
+          </div>
         )}
 
         <div className="composer-container">

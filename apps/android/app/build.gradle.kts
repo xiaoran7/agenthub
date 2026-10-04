@@ -12,8 +12,8 @@ android {
         applicationId = "com.agentplatform.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 72
-        versionName = "2.4.61"
+        versionCode = 73
+        versionName = "2.4.62"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -2250,13 +2250,26 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 )
             }
             RemoteAction::Interrupt => {
-                let turn_id = session
-                    .current_turn_id
-                    .ok_or_else(|| NativeError::rejected("no_active_turn"))?;
-                self.transport.request(
-                    "turn/interrupt",
-                    json!({"threadId": session.provider_session_id, "turnId": turn_id}),
-                )
+                if let Some(ref turn_id) = session.current_turn_id {
+                    self.transport.request(
+                        "turn/interrupt",
+                        json!({"threadId": session.provider_session_id, "turnId": turn_id}),
+                    )
+                } else {
+                    let _ = self.transport.request(
+                        "turn/interrupt",
+                        json!({"threadId": session.provider_session_id}),
+                    );
+                    if let Some(binding) = self.sessions.get_mut(hub_id) {
+                        binding.current_turn_id = None;
+                        binding.execution_state = ExecutionState::Idle;
+                    }
+                    self.approvals
+                        .retain(|_, approval| approval.hub_session_id != *hub_id);
+                    self.questions
+                        .retain(|_, q| q.hub_session_id != *hub_id);
+                    Ok(json!({"ok": true, "interrupted": true}))
+                }
             }
             RemoteAction::Connect { .. } => unreachable!(),
         }
@@ -2318,16 +2331,25 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     binding.execution_state = turn_state(&params["turn"]["status"]);
                 }
                 // Delayed events for an older turn must not end a newer turn.
-                "turn/completed"
+                "turn/completed" => {
                     if params["turn"]["id"].as_str() == binding.current_turn_id.as_deref()
-                        || binding.current_turn_id.is_none() =>
-                {
-                    binding.execution_state = turn_state(&params["turn"]["status"]);
-                    binding.current_turn_id = None;
-                    self.approvals
-                        .retain(|_, approval| approval.hub_session_id != binding.hub_session_id);
-                    self.questions
-                        .retain(|_, q| q.hub_session_id != binding.hub_session_id);
+                        || binding.current_turn_id.is_none()
+                    {
+                        binding.execution_state = turn_state(&params["turn"]["status"]);
+                        binding.current_turn_id = None;
+                        self.approvals
+                            .retain(|_, approval| approval.hub_session_id != binding.hub_session_id);
+                        self.questions
+                            .retain(|_, q| q.hub_session_id != binding.hub_session_id);
+                    }
+                    if let Some(real_id) = params.get("realSessionId").and_then(Value::as_str) {
+                        let real_id = real_id.trim();
+                        if !real_id.is_empty() && binding.provider_session_id != real_id {
+                            self.native_to_hub.remove(&binding.provider_session_id);
+                            binding.provider_session_id = real_id.to_string();
+                            self.native_to_hub.insert(real_id.to_string(), binding.hub_session_id.clone());
+                        }
+                    }
                 }
                 "serverRequest/resolved" => {
                     if let Some(id) = self.approvals.iter().find_map(|(id, approval)| {

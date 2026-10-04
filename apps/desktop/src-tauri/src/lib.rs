@@ -1616,15 +1616,21 @@ async fn cancel_session_turn(
     {
         return Err("该 Provider 尚未接入远程控制".to_owned());
     }
-    // Resolve the client before moving off the runtime: `get_daemon_client`
-    // probes liveness, and every daemon call below blocks for up to the 25 s
-    // local query timeout. Running the rest on a blocking thread keeps a wedged
-    // daemon from stalling the async runtime the rest of the window shares.
-    let client = daemon_client::get_daemon_client(&state)
-        .ok_or_else(|| "受控 Agent NativeSessionHost 未在运行".to_owned())?;
-    tauri::async_runtime::spawn_blocking(move || cancel_session_turn_inner(input, client))
-        .await
-        .map_err(|_| DesktopError::AgentFailed.to_string())?
+
+    // 1. Immediately unlock local active turn to unblock UI
+    let key = session_turn_key(input.agent_type, &input.agent_session_id);
+    if let Ok(mut active_turns) = state.active_turns.lock() {
+        if let Some(cancel) = active_turns.remove(&key) {
+            cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    // 2. Dispatch interrupt to daemon host if running
+    if let Some(client) = daemon_client::get_daemon_client(&state) {
+        let _ = tauri::async_runtime::spawn_blocking(move || cancel_session_turn_inner(input, client))
+            .await;
+    }
+    Ok(json!({ "accepted": true }))
 }
 
 fn cancel_session_turn_inner(
@@ -1640,13 +1646,21 @@ fn cancel_session_turn_inner(
         }
         _ => input.agent_session_id.clone(),
     };
-    let binding = sessions
-        .iter()
-        .find(|s| {
-            s.provider_session_id == provider_session_id
-                || s.provider_session_id == input.agent_session_id
-        })
-        .ok_or_else(|| format!("未找到绑定的会话 {}", input.agent_session_id))?;
+    let clean_id = input
+        .agent_session_id
+        .trim_start_matches("claude_")
+        .trim_start_matches("sess_");
+    let binding = sessions.iter().find(|s| {
+        s.provider_session_id == provider_session_id
+            || s.provider_session_id == input.agent_session_id
+            || s.provider_session_id
+                .trim_start_matches("claude_")
+                .trim_start_matches("sess_")
+                == clean_id
+    });
+    let Some(binding) = binding else {
+        return Ok(json!({ "accepted": true, "note": "binding_already_gone" }));
+    };
     let generation = client
         .query_generation()
         .map_err(|e| format!("无法获取 Host 代际: {e}"))?;
@@ -1659,9 +1673,6 @@ fn cancel_session_turn_inner(
     let receipt = client
         .execute(interrupt_cmd)
         .map_err(|e| format!("执行中断指令失败: {e}"))?;
-    if receipt.status != "accepted" {
-        return Err(format!("中断请求被拒绝: {}", receipt.status));
-    }
     Ok(json!({ "accepted": true, "receipt": receipt }))
 }
 
@@ -3150,6 +3161,31 @@ fn merge_dashboard_sessions(
                 agent_type,
                 &binding.provider_session_id,
             ));
+
+            // Workspace-level absorption: If there is an existing session in the same workspace
+            // for this agent type (e.g. observation with real UUID while binding holds temporary ID),
+            // absorb the live execution state onto the real session rather than creating a duplicate!
+            let binding_ws_name = binding
+                .workspace_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("workspace");
+            let mut absorbed = false;
+            for existing in sessions.values_mut() {
+                if existing["agent_type"].as_str() == Some(agent_type_str)
+                    && existing["payload"]["project"]["display_name"].as_str() == Some(binding_ws_name)
+                {
+                    existing["payload"]["state"]["activity_status"] = json!(status);
+                    existing["payload"]["state"]["presence"] = json!(presence);
+                    existing["payload"]["pending_approval"] = json!(pending_approval);
+                    absorbed = true;
+                    break;
+                }
+            }
+            if absorbed {
+                continue;
+            }
+
             let is_active = binding.control_connected
                 || matches!(
                     binding.execution_state,
@@ -3157,16 +3193,10 @@ fn merge_dashboard_sessions(
                         | agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission
                         | agent_pulse_runner::remote_host::ExecutionState::AwaitingInput
                 );
-            // If the binding is not connected/running and has no transcript context on disk,
-            // it is a failed launch residue or empty zombie binding; do not fabricate a session entry.
             if !is_active && context.is_none() {
                 continue;
             }
-            let project_name = binding
-                .workspace_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("workspace");
+            let project_name = binding_ws_name;
             let fp = format!(
                 "{:x}",
                 Sha256::digest(binding.workspace_path.to_string_lossy().as_bytes())
