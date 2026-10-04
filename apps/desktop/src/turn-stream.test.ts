@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendAssistantDelta,
   dropTrailingEmptyAssistant,
+  dropTrailingOptimisticTurn,
   replaceAssistantMessage,
   type ConversationMessage,
 } from "./turn-stream";
@@ -36,6 +37,21 @@ describe("turn stream state", () => {
     expect(
       dropTrailingEmptyAssistant(appendAssistantDelta(seeded, "partial")),
     ).toHaveLength(2);
+  });
+
+  it("rolls back both empty assistant and rejected optimistic user turn", () => {
+    const optimisticTurn: ConversationMessage[] = [
+      { role: "user", content: "turn 1" },
+      { role: "assistant", content: "reply 1" },
+      { role: "user", content: "turn 2 (rejected)" },
+      { role: "assistant", content: "" },
+    ];
+    expect(
+      dropTrailingOptimisticTurn(optimisticTurn, "turn 2 (rejected)"),
+    ).toEqual([
+      { role: "user", content: "turn 1" },
+      { role: "assistant", content: "reply 1" },
+    ]);
   });
 
   it("never appends deltas past user prompt into previous assistant turn", () => {

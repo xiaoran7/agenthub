@@ -3406,17 +3406,27 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
                         }
                     }
                 }
+                if subtype == Some("init") {
+                    return Some(AgentTurnUpdate::Activity("Claude 正在初始化上下文..."));
+                }
+                if subtype == Some("compact_boundary") {
+                    return Some(AgentTurnUpdate::Activity("Claude 正在压缩整理历史上下文..."));
+                }
             }
             if value.get("type").and_then(Value::as_str) == Some("stream_event") {
                 let event = value.get("event")?;
-                if event.get("type").and_then(Value::as_str) == Some("content_block_delta")
-                    && event.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta")
-                {
-                    return event
-                        .pointer("/delta/text")
-                        .and_then(Value::as_str)
-                        .filter(|text| !text.is_empty())
-                        .map(|text| AgentTurnUpdate::AssistantDelta(text.to_owned()));
+                if event.get("type").and_then(Value::as_str) == Some("content_block_delta") {
+                    let delta_type = event.pointer("/delta/type").and_then(Value::as_str);
+                    if delta_type == Some("text_delta") {
+                        return event
+                            .pointer("/delta/text")
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.is_empty())
+                            .map(|text| AgentTurnUpdate::AssistantDelta(text.to_owned()));
+                    }
+                    if delta_type == Some("thinking_delta") {
+                        return Some(AgentTurnUpdate::Activity("Claude 正在深度思考..."));
+                    }
                 }
             }
             if value.get("type").and_then(Value::as_str) == Some("assistant") {
@@ -4023,9 +4033,11 @@ mod tests {
     }
 
     #[test]
-    fn claude_stream_events_emit_text_without_thinking_or_tool_input() {
+    fn claude_stream_events_emit_text_and_thinking_activity() {
         let text = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}"#;
         let thinking = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private"}}}"#;
+        let init = r#"{"type":"system","subtype":"init"}"#;
+        let compact = r#"{"type":"system","subtype":"compact_boundary"}"#;
 
         assert_eq!(
             parse_agent_turn_update(crate::domain::AgentType::ClaudeCode, text),
@@ -4033,7 +4045,15 @@ mod tests {
         );
         assert_eq!(
             parse_agent_turn_update(crate::domain::AgentType::ClaudeCode, thinking),
-            None
+            Some(AgentTurnUpdate::Activity("Claude 正在深度思考..."))
+        );
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::ClaudeCode, init),
+            Some(AgentTurnUpdate::Activity("Claude 正在初始化上下文..."))
+        );
+        assert_eq!(
+            parse_agent_turn_update(crate::domain::AgentType::ClaudeCode, compact),
+            Some(AgentTurnUpdate::Activity("Claude 正在压缩整理历史上下文..."))
         );
     }
 

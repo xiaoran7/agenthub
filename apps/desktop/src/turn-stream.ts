@@ -58,6 +58,25 @@ export function dropTrailingEmptyAssistant(
     : current;
 }
 
+export function dropTrailingOptimisticTurn(
+  current: ConversationMessage[],
+  expectedPrompt?: string,
+): ConversationMessage[] {
+  let list = current;
+  const last = list.at(-1);
+  if (last?.role === "assistant" && last.content === "") {
+    list = list.slice(0, -1);
+  }
+  const pendingUser = list.at(-1);
+  if (
+    pendingUser?.role === "user" &&
+    (expectedPrompt === undefined || pendingUser.content === expectedPrompt)
+  ) {
+    return list.slice(0, -1);
+  }
+  return list;
+}
+
 /**
  * Deduplicate consecutive identical user messages (e.g. from queue resubmits or prompt retries)
  */

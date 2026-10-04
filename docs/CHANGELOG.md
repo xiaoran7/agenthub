@@ -1,5 +1,43 @@
 # Changelog
 
+## [2.4.63] - 2026-10-04
+
+根治长会话上下文压缩/深度思考期间静默无反馈、输入框防连击抢跑碰撞与乐观消息冒泡幽灵缺陷、发布 Windows v2.4.63 正式安装包：
+补全 Claude Code 深度思考与上下文压缩状态流式遥测、实现发送期间输入框全生命周期同步锁定、遭遇回合碰撞或网络异常时自动回滚未入库用户消息气泡并恢复用户输入草稿。
+
+### 流式反馈遥测、输入框防重与乐观消息状态回滚
+
+- **补全长会话历史上下文压缩与深度思考流式活动遥测**：
+  - 根因定位：
+    1. 在上下文累积较大（如转储多达数千行事件）的长会话中，Claude Code CLI 在重新加载上下文时会自动执行上下文压缩（Auto-compaction），耗时常达 30~60 秒以上；且在开启思考模式时，首先输出大量 `thinking_delta` 流式事件；
+    2. 原先 `crates/runner/src/collectors/mod.rs` 中的 `parse_agent_turn_update` 仅解析了 `delta.type == "text_delta"`，完全忽略了 `thinking_delta`、`subtype: "init"` 及 `subtype: "compact_boundary"`；
+    3. 导致在长达 1 分多钟的处理过程中，底层未向前端抛出任何流式活动事件，前端长时间毫无界面反馈，引发用户误以为卡死或丢包而重复发送。
+  - 修复方案：
+    1. 在 `crates/runner/src/collectors/mod.rs` 中扩展 Claude Code 的流式事件解析：
+       - `stream_event` 中的 `thinking_delta` 映射为 `AgentTurnUpdate::Activity("Claude 正在深度思考...")`；
+       - `system` 事件的 `init` 映射为 `AgentTurnUpdate::Activity("Claude 正在初始化上下文...")`；
+       - `system` 事件的 `compact_boundary` 映射为 `AgentTurnUpdate::Activity("Claude 正在压缩整理历史上下文...")`；
+    2. 确保在整个长会话恢复与思考过程中，桌面端顶部状态条持续展示当前真实的流式阶段，彻底告别静默黑屏。
+
+- **实现输入框发送全周期同步加锁与防重提交**：
+  - 根因定位：
+    1. 前端 `sendMessage` 与文本框快捷键虽然检查了 `busy`，但 `setSending(true)` 和 `setBusy(true)` 为 React 异步状态更新；
+    2. 在快速重复敲击回车或并发触发时，第二次提交能够绕过尚未重新渲染的 `busy` 校验；
+    3. 此时第二次请求穿透到 Tauri 后端并命中 `active_turns` 互斥锁，触发“这个会话已有一个回合正在运行”报错。
+  - 修复方案：
+    1. 引入同步瞬时锁 `sendingRef = useRef(false)`，在 `sendMessage` 入口处同时对 `sendingRef.current`、`sending` 和 `busy` 进行前置短路拦截；
+    2. 文本框的 `disabled` 属性与 `onKeyDown` 发送拦截统一绑定 `busy || sending`；
+    3. 发送按钮在 `busy || sending` 状态下统一展示停止按钮或禁用态，阻断一切在途并发连击。
+
+- **根治请求被拒绝时的重复消息气泡幽灵与输入草稿丢失**：
+  - 根因定位：
+    1. 前端 `sendMessage` 采用乐观更新（Optimistic Update），在请求发出前立即向界面追加了用户消息与空的 Assistant 气泡；
+    2. 当遭遇并发拒绝（`AgentBusy`）或网络错误进入 `catch` 块时，原代码仅执行了 `dropTrailingEmptyAssistant`，只移除了空的助手气泡，却遗留了未经底层接受的用户气泡；
+    3. 导致聊天窗口中连续出现两个相同的用户消息气泡；且由于输入框在发送时已被提前清空，用户精心输入的文本未能自动恢复。
+  - 修复方案：
+    1. 在 `apps/desktop/src/turn-stream.ts` 中实现 `dropTrailingOptimisticTurn`：当发送被拦截或失败时，同时精准撤销未成功的乐观 Assistant 与对应 User 消息气泡；
+    2. 在 `catch` 异常分支中自动将未被执行的 `nextPrompt` 恢复至输入框（`prompt`），确保用户在网络抖动或回合繁忙时零输入损耗。
+
 ## [2.4.62] - 2026-10-04
 
 根治侧边栏幽灵执行中会话分身、上游 429 配额耗尽回合死锁与输入框锁死缺陷、发布 Windows v2.4.62 正式安装包：

@@ -39,6 +39,7 @@ import {
 import {
   appendAssistantDelta,
   dropTrailingEmptyAssistant,
+  dropTrailingOptimisticTurn,
   replaceAssistantMessage,
   type ConversationMessage,
 } from "../../turn-stream";
@@ -105,6 +106,7 @@ export function SessionControlPanel({
       ) ?? [],
   );
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [busy, setBusy] = useState(() =>
     hasActiveTurn(session.payload.state.activity_status),
   );
@@ -379,7 +381,7 @@ export function SessionControlPanel({
 
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy || prompt.trim() === "") return;
+    if (sendingRef.current || sending || busy || prompt.trim() === "") return;
 
     // Safety pre-flight check: ensure the underlying session isn't running another turn
     if (hasActiveTurn(session.payload.state.activity_status)) {
@@ -391,6 +393,7 @@ export function SessionControlPanel({
     if (messages.length === 0) {
       rememberTitleOverride(cacheKey, nextPrompt);
     }
+    sendingRef.current = true;
     setPrompt("");
     setSending(true);
     setBusy(true);
@@ -464,7 +467,10 @@ export function SessionControlPanel({
         deltaFrame.current = undefined;
       }
       pendingDelta.current = "";
-      setMessages((current) => dropTrailingEmptyAssistant(current));
+      // Roll back both the empty assistant and the unaccepted optimistic user message
+      setMessages((current) => dropTrailingOptimisticTurn(current, nextPrompt));
+      // Restore user prompt so their input isn't lost on collision/network failure
+      setPrompt((prev) => (prev.trim() === "" ? nextPrompt : prev));
       setError(
         authFailureRef.current ? AUTH_FIX_HINT : errorMessage(nextError),
       );
@@ -475,6 +481,7 @@ export function SessionControlPanel({
           : current,
       );
     } finally {
+      sendingRef.current = false;
       setSending(false);
       setBusy(false);
       setCancelling(false);
@@ -765,6 +772,7 @@ export function SessionControlPanel({
                 } catch {
                   // ignore
                 }
+                sendingRef.current = false;
                 setError(undefined);
                 setBusy(false);
                 setSending(false);
@@ -820,7 +828,7 @@ export function SessionControlPanel({
                   aria-label="发送给 Agent"
                   maxLength={16_000}
                   placeholder={
-                    busy
+                    busy || sending
                       ? "Agent 正在执行任务中，输入已被暂时锁定 (可点击上方“停止”或按 Esc 中断)…"
                       : "继续这个会话… (Enter 发送，Shift+Enter 换行)"
                   }
@@ -829,7 +837,7 @@ export function SessionControlPanel({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      if (!busy) {
+                      if (!busy && !sending && !sendingRef.current) {
                         void sendMessage(e);
                       }
                     } else if (e.key === "Escape" && busy) {
@@ -837,7 +845,7 @@ export function SessionControlPanel({
                       void cancelTurn();
                     }
                   }}
-                  disabled={busy}
+                  disabled={busy || sending}
                 />
                 <div className="composer-toolbar">
                   <div className="composer-plus-wrapper">
@@ -899,7 +907,7 @@ export function SessionControlPanel({
                     messages={messages}
                     modelName={currentModel}
                   />
-                  {busy ? (
+                  {busy || sending ? (
                     <button
                       className="composer-send turn-cancel-btn"
                       type="button"
@@ -915,7 +923,7 @@ export function SessionControlPanel({
                       className="composer-send"
                       type="submit"
                       aria-label="发送"
-                      disabled={busy || prompt.trim() === ""}
+                      disabled={busy || sending || prompt.trim() === ""}
                     >
                       <ArrowUp size={15} />
                     </button>
