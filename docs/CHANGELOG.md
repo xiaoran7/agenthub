@@ -1,9 +1,9 @@
 # Changelog
 
-## [2.4.60] - 2026-10-04
+## [2.4.61] - 2026-10-04
 
-CC Switch 与第三方网关动态模型实时感知与下拉菜单即时刷新、根治会话条目重复分身：
-直读 CC Switch 活跃数据库路由与上游 `/v1/models` 实时模型、根治静态缓存阻断刷新、模型下拉展开与窗口切回自适应同步、净化网关路由展示，彻底解决宿主会话绑定键与磁盘扫描前缀不一致导致侧边栏双重会话缺陷。
+根治宿主与磁盘观测前缀失配导致同名会话重复分身缺陷、发布 Windows v2.4.61 正式安装包：
+规范化 NativeSessionHost 会话内部前缀（`claude_` / `antigravity_` / `grok_` / `sess_`），使常驻宿主状态精准覆盖合并至磁盘扫描条目，消除侧边栏幽灵双重会话。
 
 ### 会话侧边栏与多源聚合缺陷根治
 
@@ -17,6 +17,11 @@ CC Switch 与第三方网关动态模型实时感知与下拉菜单即时刷新�
     1. 在 `apps/desktop/src-tauri/src/lib.rs` 的 `merge_dashboard_sessions` 中，对 `binding.provider_session_id` 执行前缀规范化（剥离 `claude_`、`antigravity_`、`grok_`、`sess_` 等前缀），生成统一的 `clean_id`；
     2. 键值与 `sessions.insert` 均统一采用规范化后的无前缀裸 ID，使宿主常驻状态能够精确合并到既有的磁盘观测对象中，从源头根治侧边栏会话重复问题；
     3. 新增单元测试 `host_session_registry_merges_prefixed_binding_with_bare_observation`，验证带前缀 Binding 与无前缀 Observation 能够严格合并为 1 个会话。
+
+## [2.4.60] - 2026-10-04
+
+CC Switch 与第三方网关动态模型实时感知与下拉菜单即时刷新：
+直读 CC Switch 活跃数据库路由与上游 `/v1/models` 实时模型、根治静态缓存阻断刷新、模型下拉展开与窗口切回自适应同步、净化网关路由展示。
 
 ### CC Switch 与第三方网关动态模型实时同步
 
