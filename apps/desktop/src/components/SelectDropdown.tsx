@@ -12,6 +12,7 @@ interface SelectDropdownProps<T extends string = string> {
   value: T;
   options: SelectOption<T>[];
   onChange: (value: T) => void;
+  onOpen?: () => void;
   placeholder?: string;
   disabled?: boolean;
   className?: string;
@@ -25,6 +26,7 @@ export function SelectDropdown<T extends string = string>({
   value,
   options,
   onChange,
+  onOpen,
   placeholder = "请选择...",
   disabled = false,
   className = "",
@@ -108,7 +110,20 @@ export function SelectDropdown<T extends string = string>({
       <button
         type="button"
         className="select-trigger"
-        onClick={() => !disabled && setOpen((prev) => !prev)}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((prev) => {
+            const next = !prev;
+            if (next && onOpen) {
+              try {
+                onOpen();
+              } catch {
+                // ignore
+              }
+            }
+            return next;
+          });
+        }}
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}

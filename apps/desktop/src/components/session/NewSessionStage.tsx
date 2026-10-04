@@ -15,7 +15,7 @@ import React, {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { useAgentModels } from "../../agentModels";
+import { fetchAgentModels, useAgentModels } from "../../agentModels";
 import { PROVIDER_LIST, agentLabel, rememberTitleOverride } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
 import type { ConversationMessage } from "../../turn-stream";
@@ -257,6 +257,7 @@ export function NewSessionStage({
                       desc: opt.desc,
                     }))}
                     onChange={(val) => setModel(val)}
+                    onOpen={() => void fetchAgentModels(true)}
                     size="sm"
                     className="ghost"
                     ariaLabel="选择模型"

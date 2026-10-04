@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Folder, Play, RefreshCw, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useAgentModels } from "../../agentModels";
+import { fetchAgentModels, useAgentModels } from "../../agentModels";
 import { PROVIDER_LIST, rememberTitleOverride } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
 import type { ConversationMessage } from "../../turn-stream";
@@ -267,6 +267,7 @@ export function LaunchSessionModal({
                   desc: option.desc,
                 }))}
                 onChange={(val) => setModel(val)}
+                onOpen={() => void fetchAgentModels(true)}
                 disabled={models.length <= 1}
                 size="md"
                 ariaLabel="选择模型"

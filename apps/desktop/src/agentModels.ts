@@ -126,7 +126,7 @@ export const BUILTIN_MODELS: AgentModelMap = {
   ],
 };
 
-const MODELS_TTL_MS = 60_000;
+const MODELS_TTL_MS = 5_000;
 const hasTauri = () => "__TAURI_INTERNALS__" in window;
 
 let modelsCache: { at: number; data: AgentModelMap } | null = null;
@@ -142,10 +142,13 @@ export async function fetchAgentModels(force = false): Promise<AgentModelMap> {
   if (!force && modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) {
     return modelsCache.data;
   }
-  if (modelsInflight) return modelsInflight;
+  if (force) {
+    modelsCache = null;
+  }
+  if (!force && modelsInflight) return modelsInflight;
   modelsInflight = invoke<
     Array<{ agent_type: string; models: AgentModelOption[] }>
-  >("list_agent_models")
+  >("list_agent_models", { force })
     .then((groups) => {
       const next: AgentModelMap = { ...BUILTIN_MODELS };
       for (const group of groups) {

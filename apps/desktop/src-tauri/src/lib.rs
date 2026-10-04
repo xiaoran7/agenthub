@@ -461,7 +461,13 @@ async fn load_session_conversation(
 }
 
 #[tauri::command]
-async fn list_agent_models(state: State<'_, DesktopState>) -> Result<Vec<Value>, String> {
+async fn list_agent_models(
+    force: Option<bool>,
+    state: State<'_, DesktopState>,
+) -> Result<Vec<Value>, String> {
+    if force.unwrap_or(false) {
+        agent_pulse_runner::claude_gateway::invalidate_claude_gateway_cache();
+    }
     list_agent_models_inner(&state).map_err(|error| error.to_string())
 }
 
@@ -524,6 +530,78 @@ fn read_codex_configured_model() -> Option<String> {
         }
     }
     None
+}
+
+fn read_codex_cc_switch_models() -> Option<Vec<(String, String)>> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    let db_path = home.join(".cc-switch").join("cc-switch.db");
+    if !db_path.is_file() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT settings_config, meta \
+             FROM providers \
+             WHERE is_current = 1 AND app_type = 'codex' \
+             LIMIT 1",
+        )
+        .ok()?;
+    let mut rows = stmt.query([]).ok()?;
+    let row = rows.next().ok()??;
+    let settings_str: String = row.get(0).unwrap_or_default();
+    let meta_str: String = row.get(1).unwrap_or_default();
+    let settings: Value = serde_json::from_str(&settings_str).unwrap_or(Value::Null);
+    let meta: Value = serde_json::from_str(&meta_str).unwrap_or(Value::Null);
+
+    let mut models = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(cfg) = settings.get("config").and_then(Value::as_str) {
+        for line in cfg.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("model") {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    let val = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+                    if !val.is_empty() && seen.insert(val.to_string()) {
+                        models.push((val.to_string(), model_label(val)));
+                    }
+                }
+            }
+        }
+    }
+    let catalog = settings
+        .get("modelCatalog")
+        .or_else(|| meta.get("modelCatalog"));
+    if let Some(arr) = catalog.and_then(|c| c.get("models")).and_then(Value::as_array) {
+        for item in arr {
+            if let Some(m_name) = item
+                .get("model")
+                .or_else(|| item.get("name"))
+                .and_then(Value::as_str)
+            {
+                if !m_name.is_empty() && seen.insert(m_name.to_string()) {
+                    let display = item
+                        .get("displayName")
+                        .and_then(Value::as_str)
+                        .unwrap_or(m_name);
+                    models.push((m_name.to_string(), display.to_string()));
+                }
+            }
+        }
+    }
+    if models.is_empty() {
+        None
+    } else {
+        Some(models)
+    }
 }
 
 fn model_family(value: &str) -> String {
@@ -629,6 +707,20 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                 }));
             }
 
+            // Also check CC Switch active provider for Codex
+            if let Some(cc_codex_models) = read_codex_cc_switch_models() {
+                for (val, lbl) in cc_codex_models {
+                    if seen_families.insert(model_family(&val)) {
+                        models.push(json!({
+                            "value": val,
+                            "label": lbl,
+                            "desc": "CC Switch 当前配置模型",
+                            "source": "gateway"
+                        }));
+                    }
+                }
+            }
+
             // 2. Query official real-time models from native host
             if let Some(client) = daemon_client::get_daemon_client(state)
                 && let Ok(val) = client.query_models()
@@ -685,28 +777,31 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
         } else if agent == AgentType::ClaudeCode {
             let mut seen_ids: HashSet<String> = HashSet::new();
 
-            // 1. Gateway configured models (if active)
+            // 1. Gateway configured and live upstream models (if active)
             if let Some(gateway) = agent_pulse_runner::claude_gateway::discover_claude_gateway()
                 && !gateway.models.is_empty()
             {
                 for m in &gateway.models {
                     if !m.name.is_empty() && seen_ids.insert(m.name.clone()) {
-                        let is_opus = m.name == "claude-opus-5" || m.label.as_deref() == Some("alpha");
-                        let label = if is_opus {
-                            "Claude Opus 5 (Alpha)".to_string()
+                        let has_route = m
+                            .label
+                            .as_deref()
+                            .is_some_and(|l| !l.trim().is_empty() && !l.eq_ignore_ascii_case(&m.name));
+                        let label = if has_route {
+                            model_label(&m.name)
+                        } else if let Some(lbl) = m.label.as_deref().filter(|l| !l.trim().is_empty()) {
+                            lbl.to_string()
                         } else {
                             model_label(&m.name)
                         };
-                        let desc = if is_opus {
-                            "网关旗舰路由 · 实测秒级响应".to_string()
-                        } else if let Some(target) = m
+                        let desc = if let Some(target) = m
                             .label
                             .as_deref()
-                            .filter(|l| !l.trim().is_empty())
+                            .filter(|l| !l.trim().is_empty() && !l.eq_ignore_ascii_case(&m.name))
                         {
-                            format!("网关动态路由（至 {}）", target)
+                            format!("网关路由 → {target}")
                         } else {
-                            format!("网关动态路由（{}）", gateway.source)
+                            format!("网关实时模型（{}）", gateway.source)
                         };
                         models.push(json!({
                             "value": m.name,
@@ -730,22 +825,27 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                 }
             }
 
-            // 3. Always include official Claude catalog models
-            for (value, label, desc) in builtin_model_catalog(agent) {
-                if seen_ids.insert((*value).to_string()) {
-                    models.push(json!({
-                        "value": value,
-                        "label": label,
-                        "desc": desc,
-                        "source": "builtin"
-                    }));
+            // 3. Fallback to builtin official models only if no models discovered
+            if models.is_empty() {
+                for (value, label, desc) in builtin_model_catalog(agent) {
+                    if seen_ids.insert((*value).to_string()) {
+                        models.push(json!({
+                            "value": value,
+                            "label": label,
+                            "desc": desc,
+                            "source": "builtin"
+                        }));
+                    }
                 }
             }
 
-            // 4. Sort Claude Code models: Opus > Sonnet > Fable > Haiku > others
+            // 4. Sort models: Configured routes first, then live models grouped by family
             models.sort_by_key(|m| {
                 let val = m["value"].as_str().unwrap_or("").to_ascii_lowercase();
-                if val.contains("opus") {
+                let desc = m["desc"].as_str().unwrap_or("").to_ascii_lowercase();
+                let is_route = desc.contains("网关路由");
+                let tier = if is_route { 0 } else { 1 };
+                let family = if val.contains("opus") {
                     0
                 } else if val.contains("sonnet") {
                     1
@@ -753,9 +853,14 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
                     2
                 } else if val.contains("haiku") {
                     3
-                } else {
+                } else if val.contains("gemini") {
                     4
-                }
+                } else if val.contains("gpt") {
+                    5
+                } else {
+                    6
+                };
+                (tier, family)
             });
         } else {
             // For other agents, populate from local transcripts then builtins

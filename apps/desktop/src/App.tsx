@@ -342,6 +342,16 @@ function Dashboard({
     };
   }, []);
 
+  // Dynamically refresh models on initial load and window focus
+  useEffect(() => {
+    void fetchAgentModels();
+    const handleFocus = () => {
+      void fetchAgentModels(true);
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, []);
+
   // Context Menu & Toast state (Point 11)
   const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(
     null,

@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.4.60] - 2026-10-04
+
+CC Switch 与第三方网关动态模型实时感知与下拉菜单即时刷新：
+直读 CC Switch 活跃数据库路由与上游 `/v1/models` 实时模型、根治静态缓存阻断刷新、模型下拉展开与窗口切回自适应同步、净化网关路由展示。
+
+### CC Switch 与第三方网关动态模型实时同步
+
+- **彻底打通 CC Switch 活跃数据库与上游网关实时模型探针**：
+  - 根因定位：为什么在 CC Switch 或网关中修改了模型配置与路由后，AgentHub 依然显示旧模型列表，且没有动态刷新？
+    1. 静态配置库快照隔离：Runner 的 `discover_claude_gateway()` 在发现本地代理凭证时，只读取了历史静态磁盘快照 `configLibrary/*.json`，而 CC Switch 用户的日常修改直接写入 SQLite 数据库 `~/.cc-switch/cc-switch.db`，导致修改后 AgentHub 无法感知；
+    2. 上游真实模型接口未被探针感知：网关配置了真实的 Base URL（如 `https://cpa.tannerlab.cn/v1`），该端点的 `/v1/models` 提供了完整的上游实时可用模型（如 `claude-opus-5-5-high`、`claude-opus-4-6-thinking`、`claude-sonnet-4-6`、`gemini-3.8-flash-high` 等），但后端此前从未对上游 `/v1/models` 进行过探针同步；
+    3. 前端长 TTL 缓存与缺乏触发刷新机制：前端 `agentModels.ts` 默认将模型列表缓存 60 秒，且下拉框展开（`SelectDropdown`）时完全不会触发重拉刷新，导致即使用户在 CC Switch 中调整了模型，切回桌面客户端后依然看到旧缓存；
+    4. 官方内置全量模型污染网关列表：后端在网关路由模型后无条件追加了 `builtin_model_catalog` 中的 `Claude 3.7 Sonnet` 与 `Claude Sonnet 4.5`，导致用户在使用自建/中转网关时，下拉框中混杂着上游并不支持的旧版模型；
+    5. 硬编码标签误导：之前在 `lib.rs` 中硬编码了 `Claude Opus 5 (Alpha)` 与 `实测秒级响应` 等静态文案，掩盖了真实的网关路由目标。
+  - 修复方案：
+    1. 直读 CC Switch SQLite 动态配置：Runner 新增 `discover_cc_switch_active_provider()`，直接只读打开 `~/.cc-switch/cc-switch.db`，精确提取当前活跃 Provider（`is_current = 1`）的真实路由（`claudeDesktopModelRoutes`）与配置模型；
+    2. 上游网关 `/v1/models` 实时探针与智能去重合并：新增 `fetch_live_upstream_models()` 与安全过滤（过滤 image/audio/tts/asr 等非语言模型），将网关配置路由（如 `Claude Opus 5 -> claude-opus-5-5-high`）与上游新增模型无缝融合；
+    3. 下拉菜单打开即时触发强制刷新：`SelectDropdown` 增加 `onOpen` 钩子，并在会话聊天面板 `SessionControlPanel`、新建会话舞台 `NewSessionStage` 与启动会话弹窗 `LaunchSessionModal` 中绑定强制刷新，用户点击模型下拉框的瞬间秒级获取最新模型列表；
+    4. 窗口聚焦自适应刷新：在 `App.tsx` 监听窗口 `focus` 事件，当用户在 CC Switch 修改完切回 AgentHub 窗口时，立即自动静默同步最新模型；
+    5. 网关激活态过滤内置噪音模型：激活网关路由时，不再硬编码注入无关内置模型；清晰标注路由目标（如 `网关路由 → claude-opus-5-5-high` 与 `网关实时模型`）；
+    6. Codex 同步支持 CC Switch 活跃配置：Codex 模型列表同步查询 `cc-switch.db` 中的当前 Provider 配置，实现多 Agent 全面动态化。
+
 ## [2.4.59] - 2026-10-04
 
 全面对齐 Claude.ai 官方会话智能命名体验与幽灵编号会话治理：

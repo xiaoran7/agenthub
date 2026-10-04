@@ -19,7 +19,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { useAgentModels } from "../../agentModels";
+import { fetchAgentModels, useAgentModels } from "../../agentModels";
 import { AUTH_FIX_HINT, isAuthFailure } from "../../authErrors";
 import { effortOptionsFor, resolveEffort } from "../../effortOptions";
 import { cachedConversation, loadConversation } from "../../conversationCache";
@@ -843,6 +843,7 @@ export function SessionControlPanel({
                       desc: option.desc,
                     }))}
                     onChange={(val) => updateTurnOptions({ model: val })}
+                    onOpen={() => void fetchAgentModels(true)}
                     size="sm"
                     ariaLabel="会话模型"
                   />
