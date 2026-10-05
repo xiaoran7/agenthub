@@ -22,8 +22,14 @@
 - **云端 Session 漫游事件投射扩充（`crates/runner/src/remote_journal.rs` & `remote-store.ts`）**：
   - 放宽远端网关事件校验与投射限制：在 `item/completed` 中允许保留 `commandExecution` 的具体命令（`command`）、执行输出（`output`）、状态（`status`）与退出码（`exitCode`）；
   - 新增对 `thinking` 思考块的结构化透传支持与空文本容错兜底，避免字段缺失导致 WebSocket 异常关闭。
-- **全平台版本号同步（`apps/android/app/build.gradle.kts` 等）**：
-  - 同步递增 Android `versionCode = 78`，`versionName = "2.4.67"`，严格对齐全平台版本。
+- **全平台版本号同步与正式安装包归档（`Deliverables/AgentHub/`）**：
+  - 同步递增全平台版本至 v2.4.67（Android `versionCode = 78`，`versionName = "2.4.67"`，Tauri/Desktop 与 Cargo 统一同步至 `2.4.67`）；
+  - 成功编译并归档 Windows x64 NSIS 安装包、Windows x64 MSI 安装包以及 Android Debug APK 至 `Deliverables/AgentHub/`；
+  - 依据工程规范删除旧版本 v2.4.65 历史产物，并生成全新 `AgentHub-v2.4.67-SHA256.txt` 校验和；
+  - 交付物 SHA256：
+    - Android APK: `a4ae6d8d9b776213a81bdeef9174f08e8c03c2acc86c29a3b8c5e401133734a4`
+    - Windows NSIS Setup: `5b4c4edd15afc8f7a501d7713b5bd09953bf1970d1b41627842e325052997683`
+    - Windows MSI: `f954d1453746aef63f5a444dd25a91abf236438837dbf195a3f8d9351377d1a1`
 - **极简 Docker Compose 自建部署模板（`deploy/docker-compose.selfhost.yml` & `docker.env.selfhost.example`）**：
   - 提供开箱即用的轻量双容器自建模板，挂载单一本地目录即可在 VPS 宿主机秒级拉起，零外部运维心智负担。
 
