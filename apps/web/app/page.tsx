@@ -10,6 +10,36 @@ import {
 } from "../src/lib/account";
 import { loadConfig, type PanelConfig } from "../src/lib/config";
 
+function defaultSelfHostAccount(): AccountView {
+  return {
+    user: {
+      user_id: "selfhost-owner",
+      email: "owner@self-hosted.local",
+      display_name: "Self-Host Owner",
+      status: "active",
+      email_verified_at: new Date(0).toISOString(),
+      created_at: new Date(0).toISOString(),
+    },
+    workspace: {
+      workspace_owner_id: "selfhost-owner",
+      name: "Default Workspace",
+      role: "owner",
+      current: true,
+    },
+    entitlements: {
+      max_devices: 999,
+      max_concurrent_tasks: 999,
+      history_days: 3650,
+      remote_tasks: true,
+      team_members: 1,
+    },
+    subscription: {
+      plan: "pro",
+      status: "active",
+    },
+  };
+}
+
 export default function PanelPage() {
   const [account, setAccount] = useState<AccountView | null | undefined>(
     undefined,
@@ -18,42 +48,29 @@ export default function PanelPage() {
 
   useEffect(() => {
     setConfig(loadConfig(window.localStorage));
-    if (
-      typeof window !== "undefined" &&
-      window.localStorage.getItem("agenthub_selfhost_direct") === "true"
-    ) {
-      setAccount({
-        user: {
-          user_id: "selfhost-owner",
-          email: "owner@self-hosted.local",
-          display_name: "Self-Host Owner",
-          status: "active",
-          email_verified_at: new Date(0).toISOString(),
-          created_at: new Date(0).toISOString(),
-        },
-        workspace: {
-          workspace_owner_id: "selfhost-owner",
-          name: "Default Workspace",
-          role: "owner",
-          current: true,
-        },
-        entitlements: {
-          max_devices: 999,
-          max_concurrent_tasks: 999,
-          history_days: 3650,
-          remote_tasks: true,
-          team_members: 1,
-        },
-        subscription: {
-          plan: "pro",
-          status: "active",
-        },
-      });
-      return;
-    }
     void currentAccount()
-      .then((next) => setAccount(next ?? null))
-      .catch(() => setAccount(null));
+      .then((next) => {
+        if (next !== undefined) {
+          setAccount(next);
+        } else if (
+          typeof window !== "undefined" &&
+          window.localStorage.getItem("agenthub_selfhost_direct") === "true"
+        ) {
+          setAccount(defaultSelfHostAccount());
+        } else {
+          setAccount(null);
+        }
+      })
+      .catch(() => {
+        if (
+          typeof window !== "undefined" &&
+          window.localStorage.getItem("agenthub_selfhost_direct") === "true"
+        ) {
+          setAccount(defaultSelfHostAccount());
+        } else {
+          setAccount(null);
+        }
+      });
   }, []);
 
   const handleRequireLogin = useCallback(() => {

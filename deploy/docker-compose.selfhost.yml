@@ -15,7 +15,8 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3001
-      AGENTHUB_REMOTE_DATABASE: /app/data/agenthub.db
+      AGENTHUB_GATEWAY_DATABASE: /app/data/gateway.db
+      AGENTHUB_REMOTE_DATABASE: /app/data/remote.db
       GATEWAY_ACCESS_TOKEN: ${GATEWAY_ACCESS_TOKEN:-agenthub-secret-token}
       AGENT_PLATFORM_OWNER_ID: ${AGENT_PLATFORM_OWNER_ID:-admin}
 

@@ -23,13 +23,17 @@ import { RemoteContentStore } from "./remote-store.js";
 const port = parsePort(process.env.PORT);
 const host = process.env.HOST ?? "127.0.0.1";
 const databaseUrl = process.env.AGENT_PLATFORM_DATABASE_URL;
-const sqliteDbPath =
-  process.env.AGENTHUB_REMOTE_DATABASE ?? "./data/agenthub.db";
+const remoteDbPath = process.env.AGENTHUB_REMOTE_DATABASE ?? "./data/remote.db";
+const gatewayDbPath =
+  process.env.AGENTHUB_GATEWAY_DATABASE ??
+  (process.env.AGENTHUB_REMOTE_DATABASE
+    ? process.env.AGENTHUB_REMOTE_DATABASE.replace(/\.db$/, "-gateway.db")
+    : "./data/gateway.db");
 
 let store: GatewayStore;
 let accounts: AccountStore;
 if (databaseUrl === undefined) {
-  store = new SqliteGatewayStore(sqliteDbPath);
+  store = new SqliteGatewayStore(gatewayDbPath);
   accounts = new InMemoryAccountStore();
 } else {
   const postgresStore = await PostgresGatewayStore.connect(databaseUrl);
@@ -150,7 +154,6 @@ if (vapidKeys !== undefined) {
     sender: new WebPushSender(vapidKeys),
   };
 }
-const remoteDbPath = process.env.AGENTHUB_REMOTE_DATABASE ?? sqliteDbPath;
 options.remoteContent = new RemoteContentStore(remoteDbPath);
 const app = createGatewayApp(options);
 

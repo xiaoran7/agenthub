@@ -12,14 +12,18 @@
     原先无 PostgreSQL 启动时网关默认退化为 `InMemoryGatewayStore`，导致单机重启后所有注册设备与配对凭据直接丢失，Runner 无法自动重连。
   - 改造方案：
     1. 新增 `SqliteGatewayStore`，基于 Node 22 原生 `node:sqlite`（`DatabaseSync`）持久化 `registered_devices`、`binding_codes` 与 `push_subscriptions`；
-    2. 默认自建数据库路径设为 `./data/agenthub.db`，无需外部 PostgreSQL 依赖即可实现设备与会话长期安全落盘；
-    3. 支持静态令牌鉴权（`GATEWAY_SECRET_TOKEN` / `GATEWAY_ACCESS_TOKEN`），自动关联默认所有者账号。
+    2. 将设备元数据库（`gateway.db`）与会话内容库（`remote.db`）分拆为独立文件，避免 `RemoteContentStore` 的排他锁（`EXCLUSIVE`）阻塞网关设备注册与心跳写入；
+    3. 在数据库初始化时增加父目录递归创建容错，防止冷启动由于目录不存在崩溃；
+    4. 支持静态令牌鉴权（`GATEWAY_SECRET_TOKEN` / `GATEWAY_ACCESS_TOKEN`），自动关联默认所有者账号。
 - **Web 端免密自建直连与单租户适配（`apps/web/app/page.tsx` & `AccountGate.tsx`）**：
   - 修复 Bearer Token 模式下请求 `/v1/auth/me` 抛 401 强制跳转登录界面的缺陷，自动返回最高权限（Pro、无设备限制）的自建虚拟账户视图；
-  - 在 `AccountGate` 增加显式的“自建服务端直连进入”操作，支持持久化自建直连状态，跳过繁琐的邮箱注册与 SaaS 订阅引导。
+  - 优化 Web 认证逻辑，优先探测服务端真实所有者身份，失败时平滑降级至自建直连账号，彻底解决 Owner ID 静态硬编码错位问题；
+  - 在 `AccountGate` 增加显式的“自建服务端直连进入”快捷入口。
 - **云端 Session 漫游事件投射扩充（`crates/runner/src/remote_journal.rs` & `remote-store.ts`）**：
   - 放宽远端网关事件校验与投射限制：在 `item/completed` 中允许保留 `commandExecution` 的具体命令（`command`）、执行输出（`output`）、状态（`status`）与退出码（`exitCode`）；
-  - 新增对 `thinking` 思考块的结构化透传支持，为云端全量浏览 Agent 推理过程奠定数据基础。
+  - 新增对 `thinking` 思考块的结构化透传支持与空文本容错兜底，避免字段缺失导致 WebSocket 异常关闭。
+- **全平台版本号同步（`apps/android/app/build.gradle.kts` 等）**：
+  - 同步递增 Android `versionCode = 78`，`versionName = "2.4.67"`，严格对齐全平台版本。
 - **极简 Docker Compose 自建部署模板（`deploy/docker-compose.selfhost.yml` & `docker.env.selfhost.example`）**：
   - 提供开箱即用的轻量双容器自建模板，挂载单一本地目录即可在 VPS 宿主机秒级拉起，零外部运维心智负担。
 

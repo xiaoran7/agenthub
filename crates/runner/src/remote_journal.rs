@@ -704,11 +704,17 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
                     Some(json!({"params":{"item": cmd_item}}))
                 }
                 "thinking" => {
-                    let mut thinking_item = json!({"id": id, "type": "thinking"});
-                    if let Some(text) = item.get("text").and_then(Value::as_str) {
-                        thinking_item["text"] = json!(text);
-                    }
-                    Some(json!({"params":{"item": thinking_item}}))
+                    let text = item
+                        .get("text")
+                        .or_else(|| item.get("thought"))
+                        .or_else(|| item.get("thinking"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    Some(json!({"params":{"item": {
+                        "id": id,
+                        "type": "thinking",
+                        "text": text
+                    }}}))
                 }
                 _ => None,
             }

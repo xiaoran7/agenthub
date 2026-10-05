@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -32,6 +34,10 @@ const BINDING_INSERT_PARAMETER_LIMIT = 32_000;
 export class RemoteContentStore {
   private db: DatabaseSync;
   constructor(path: string) {
+    const dir = dirname(path);
+    if (dir && dir !== "." && dir !== "") {
+      mkdirSync(dir, { recursive: true });
+    }
     this.db = new DatabaseSync(path);
     this.db
       .exec(`PRAGMA locking_mode=EXCLUSIVE; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
@@ -824,7 +830,7 @@ function validateRemoteEventRaw(
             ),
         )) ||
       (typed.type === "thinking" &&
-        (typeof typed.text !== "string" ||
+        ((typed.text !== undefined && typeof typed.text !== "string") ||
           itemKeys.some((key) => !["id", "type", "text"].includes(key)))) ||
       (typed.type === "userMessage" &&
         itemKeys.some(

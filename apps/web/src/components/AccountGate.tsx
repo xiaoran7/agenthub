@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 
 import {
   accountErrorMessage,
+  currentAccount,
   getTgOAuthAuthorizeUrl,
   loginAccount,
   registerAccount,
@@ -25,35 +26,47 @@ export function AccountGate({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
 
+  const fallbackSelfHostAccount = (): AccountView => ({
+    user: {
+      user_id: "selfhost-owner",
+      email: "owner@self-hosted.local",
+      display_name: "Self-Host Owner",
+      status: "active",
+      email_verified_at: new Date(0).toISOString(),
+      created_at: new Date(0).toISOString(),
+    },
+    workspace: {
+      workspace_owner_id: "selfhost-owner",
+      name: "Default Workspace",
+      role: "owner",
+      current: true,
+    },
+    entitlements: {
+      max_devices: 999,
+      max_concurrent_tasks: 999,
+      history_days: 3650,
+      remote_tasks: true,
+      team_members: 1,
+    },
+    subscription: {
+      plan: "pro",
+      status: "active",
+    },
+  });
+
   const enterSelfHost = () => {
     localStorage.setItem("agenthub_selfhost_direct", "true");
-    onAuthenticated({
-      user: {
-        user_id: "selfhost-owner",
-        email: "owner@self-hosted.local",
-        display_name: "Self-Host Owner",
-        status: "active",
-        email_verified_at: new Date(0).toISOString(),
-        created_at: new Date(0).toISOString(),
-      },
-      workspace: {
-        workspace_owner_id: "selfhost-owner",
-        name: "Default Workspace",
-        role: "owner",
-        current: true,
-      },
-      entitlements: {
-        max_devices: 999,
-        max_concurrent_tasks: 999,
-        history_days: 3650,
-        remote_tasks: true,
-        team_members: 1,
-      },
-      subscription: {
-        plan: "pro",
-        status: "active",
-      },
-    });
+    void currentAccount()
+      .then((account) => {
+        if (account) {
+          onAuthenticated(account);
+        } else {
+          onAuthenticated(fallbackSelfHostAccount());
+        }
+      })
+      .catch(() => {
+        onAuthenticated(fallbackSelfHostAccount());
+      });
   };
 
   const loginWithTgOAuth = async () => {

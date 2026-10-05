@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
   ActivityStatus,
@@ -31,6 +33,10 @@ export class SqliteGatewayStore implements GatewayStore {
   private now: () => Date;
 
   constructor(path: string, options: { now?: () => Date } = {}) {
+    const dir = dirname(path);
+    if (dir && dir !== "." && dir !== "") {
+      mkdirSync(dir, { recursive: true });
+    }
     this.db = new DatabaseSync(path);
     this.now = options.now ?? (() => new Date());
     this.initTables();
