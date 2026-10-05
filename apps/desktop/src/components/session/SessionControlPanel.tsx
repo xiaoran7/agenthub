@@ -54,6 +54,7 @@ import {
   ConversationItem,
   groupConversationMessages,
   ToolCallGroupBlock,
+  TurnProcessBlock,
 } from "../ConversationRenderer";
 import { ComposerPlusMenu } from "./ComposerPlusMenu";
 import { ContextCapacityRing } from "./ContextCapacityPopover";
@@ -625,6 +626,15 @@ export function SessionControlPanel({
             )
           ) : (
             groupConversationMessages(messages).map((group, groupIdx) => {
+              if (group.type === "turn_process") {
+                return (
+                  <TurnProcessBlock
+                    key={`turn-process-${group.startIndex}-${groupIdx}`}
+                    steps={group.steps}
+                    onAnswerQuestion={handleAnswerQuestion}
+                  />
+                );
+              }
               if (group.type === "tool_group") {
                 return (
                   <ToolCallGroupBlock

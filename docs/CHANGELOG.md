@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.4.66] - 2026-10-05
+
+实现对话轮次中间思考与工具执行过程统一折叠收敛（Turn Process Grouping）、突出展示最终结论：
+重构对话消息轮次分组逻辑，将产生最终结论前发生的中间自言自语（Interim Assistant Monologue）、工具调用（Tools/Commands/Status）与思考过程统一收拢进可折叠的“执行与分析过程 (`TurnProcessBlock`)”卡片中，默认收起并支持状态追踪与下钻展开；使对话主视区聚焦于提问与最终交付结论，彻底解决“说两句话就调用工具”造成的排版碎片化与冗余信息过载问题。
+
+### 对话轮次中间思考与工具执行折叠收拢优化
+
+- **轮次过程收敛与最终结论突出（`apps/desktop/src/components/ConversationRenderer.tsx` & `SessionControlPanel.tsx`）**：
+  - 根因定位：
+    原先分组逻辑在遇到任意助手普通文本消息时即中断工具批次并作为常规流直接展开渲染，导致单个回合中交替出现的单句自言自语（如“我来查看一下这个配置”）和工具调用被切成多段零碎卡片，大量干扰用户阅读最终结论。
+  - 优化方案：
+    1. 引入轮次边界分组模型：在每一轮用户提问与后续应答之间，定位最后一个操作性记录；
+    2. 将操作点之前发生的所有中间自言自语、工具调用与思考步骤整体打包为 `TurnProcessBlock`；
+    3. 操作点之后的助手文本作为最终结论（Final Conclusion），直接在主视区展开呈现；
+    4. `TurnProcessBlock` 默认紧凑折叠，头部显示执行中/异常/已完成状态及步骤摘要，支持点击展开并内嵌轻量过程分析样式与分页工具卡片。
+- **青空 UI 视觉样式与过程步骤适配（`apps/desktop/src/modern.css`）**：
+  - 新增 `.turn-process-card`, `.turn-process-header`, `.turn-process-badge`, `.process-monologue-step` 样式体系，保持蓝白浅灰、细腻微边框与 60 FPS 滚动流畅无卡顿标准。
+
 ## [2.4.65] - 2026-10-05
 
 实现连续工具调用分段折叠展开（Tool Call Group 分页）与回缩机制、发布 Windows 与 Android v2.4.65 安装包：

@@ -19,8 +19,13 @@ import {
   HelpCircle,
   Globe,
   ExternalLink,
+  Layers,
+  MessageSquare,
+  RefreshCw,
 } from "lucide-react";
 import type { ConversationMessage } from "../turn-stream";
+
+const REMARK_PLUGINS = [remarkGfm];
 
 export type OnAnswerQuestionHandler = (
   question: string,
@@ -35,6 +40,12 @@ export interface ConversationRendererProps {
 
 export interface ToolCallGroupBlockProps {
   messages: ConversationMessage[];
+  onAnswerQuestion?: OnAnswerQuestionHandler;
+}
+
+export interface TurnProcessBlockProps {
+  steps: ConversationMessage[];
+  startIndex?: number;
   onAnswerQuestion?: OnAnswerQuestionHandler;
 }
 
@@ -73,60 +84,362 @@ export function cleanClientUserContent(raw: string): string {
 }
 
 /**
- * Group consecutive tool / status / command messages together so that long tool
- * call runs (e.g. 5+ commands or tools) collapse neatly into a single compact block.
+ * Group messages by turn: tuck away intermediate monologue, tool calls, and thinking
+ * into a collapsed TurnProcessBlock so that the final conclusion is cleanly presented.
  */
 export type RenderMessageGroup =
   | { type: "single"; message: ConversationMessage; index: number }
-  | { type: "tool_group"; messages: ConversationMessage[]; startIndex: number };
+  | { type: "tool_group"; messages: ConversationMessage[]; startIndex: number }
+  | { type: "turn_process"; steps: ConversationMessage[]; startIndex: number };
 
 export function groupConversationMessages(
   messages: ConversationMessage[],
 ): RenderMessageGroup[] {
   const groups: RenderMessageGroup[] = [];
-  let currentToolBatch: ConversationMessage[] = [];
-  let batchStartIndex = 0;
+  if (messages.length === 0) return groups;
 
-  const flushToolBatch = () => {
-    if (currentToolBatch.length === 0) return;
-    if (currentToolBatch.length === 1) {
-      groups.push({
-        type: "single",
-        message: currentToolBatch[0],
-        index: batchStartIndex,
-      });
-    } else {
-      groups.push({
-        type: "tool_group",
-        messages: [...currentToolBatch],
-        startIndex: batchStartIndex,
-      });
-    }
-    currentToolBatch = [];
-  };
+  // Split messages into conversation turns. Each `user` message starts a new turn.
+  interface Turn {
+    userItem?: { message: ConversationMessage; index: number };
+    tail: Array<{ message: ConversationMessage; index: number }>;
+  }
+
+  const turns: Turn[] = [];
+  let currentTurn: Turn = { tail: [] };
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    const isToolLike =
-      msg.kind === "tool" || msg.kind === "command" || msg.kind === "status";
-
-    if (isToolLike) {
-      if (currentToolBatch.length === 0) {
-        batchStartIndex = i;
+    if (msg.role === "user") {
+      if (currentTurn.userItem || currentTurn.tail.length > 0) {
+        turns.push(currentTurn);
       }
-      currentToolBatch.push(msg);
+      currentTurn = {
+        userItem: { message: msg, index: i },
+        tail: [],
+      };
     } else {
-      flushToolBatch();
-      groups.push({ type: "single", message: msg, index: i });
+      currentTurn.tail.push({ message: msg, index: i });
     }
   }
-  flushToolBatch();
+  if (currentTurn.userItem || currentTurn.tail.length > 0) {
+    turns.push(currentTurn);
+  }
+
+  for (const turn of turns) {
+    if (turn.userItem) {
+      groups.push({
+        type: "single",
+        message: turn.userItem.message,
+        index: turn.userItem.index,
+      });
+    }
+
+    const tail = turn.tail;
+    if (tail.length === 0) continue;
+
+    // Check if there are tool executions, commands, statuses or thinking in this turn
+    let lastActionIndex = -1;
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const m = tail[i].message;
+      // System error banners (API 429 or synthetic failures) shouldn't count as internal actions
+      const isSystemError =
+        m.role === "system" &&
+        (m.status === "failed" ||
+          m.content.startsWith("历史请求异常:") ||
+          m.content.startsWith("API Error:"));
+      if (isSystemError) continue;
+
+      if (
+        m.kind === "tool" ||
+        m.kind === "command" ||
+        m.kind === "status" ||
+        m.kind === "thinking"
+      ) {
+        lastActionIndex = i;
+        break;
+      }
+    }
+
+    if (lastActionIndex === -1) {
+      // Pure conversation without tools or thinking
+      for (const item of tail) {
+        groups.push({
+          type: "single",
+          message: item.message,
+          index: item.index,
+        });
+      }
+    } else {
+      // Intermediate execution steps: from 0 up to lastActionIndex
+      const intermediateSteps = tail.slice(0, lastActionIndex + 1);
+      const conclusionItems = tail.slice(lastActionIndex + 1);
+
+      // Check if intermediate steps have interim assistant monologue text
+      const hasInterimAssistantText = intermediateSteps.some(
+        (s) =>
+          s.message.role === "assistant" &&
+          (s.message.kind === "message" || !s.message.kind),
+      );
+
+      if (intermediateSteps.length > 1 || hasInterimAssistantText) {
+        groups.push({
+          type: "turn_process",
+          steps: intermediateSteps.map((s) => s.message),
+          startIndex: intermediateSteps[0].index,
+        });
+      } else {
+        // Exactly 1 tool or action without assistant chatter
+        groups.push({
+          type: "single",
+          message: intermediateSteps[0].message,
+          index: intermediateSteps[0].index,
+        });
+      }
+
+      // Conclusion items (the final assistant conclusion or final status/error)
+      for (const item of conclusionItems) {
+        groups.push({
+          type: "single",
+          message: item.message,
+          index: item.index,
+        });
+      }
+    }
+  }
 
   return groups;
 }
 
 export const INITIAL_TOOL_VISIBLE_COUNT = 6;
 export const TOOL_EXPAND_STEP = 12;
+
+/**
+ * Collapsed Turn Process Block for intermediate thinking, monologue, and tool runs.
+ * Tucks away intermediate chatter and tools so the final conclusion is cleanly presented.
+ */
+export const TurnProcessBlock = memo(function TurnProcessBlock({
+  steps,
+  onAnswerQuestion,
+}: TurnProcessBlockProps) {
+  const [open, setOpen] = useState(false);
+
+  const toolCount = useMemo(
+    () =>
+      steps.filter(
+        (m) =>
+          m.kind === "tool" || m.kind === "command" || m.kind === "status",
+      ).length,
+    [steps],
+  );
+
+  const thoughtCount = useMemo(
+    () =>
+      steps.filter(
+        (m) =>
+          m.kind === "thinking" ||
+          (m.role === "assistant" && (m.kind === "message" || !m.kind)),
+      ).length,
+    [steps],
+  );
+
+  const hasRunning = useMemo(
+    () => steps.some((m) => m.status === "running"),
+    [steps],
+  );
+
+  const hasFailed = useMemo(
+    () => steps.some((m) => m.status === "failed"),
+    [steps],
+  );
+
+  const previewSummary = useMemo(() => {
+    if (toolCount > 0 && thoughtCount > 0) {
+      return `含 ${toolCount} 项工具操作及 ${thoughtCount} 步过程分析`;
+    }
+    if (toolCount > 0) {
+      return `含 ${toolCount} 项工具操作`;
+    }
+    if (thoughtCount > 0) {
+      return `含 ${thoughtCount} 步过程分析`;
+    }
+    return `含 ${steps.length} 步操作`;
+  }, [toolCount, thoughtCount, steps.length]);
+
+  const groupedSubSteps = useMemo(() => {
+    const result: Array<
+      | { type: "monologue"; message: ConversationMessage; key: string }
+      | { type: "thinking"; message: ConversationMessage; key: string }
+      | { type: "tool_single"; message: ConversationMessage; key: string }
+      | { type: "tool_group"; messages: ConversationMessage[]; key: string }
+      | { type: "other"; message: ConversationMessage; key: string }
+    > = [];
+
+    let toolBatch: ConversationMessage[] = [];
+    let batchKey = "";
+
+    const flushTools = () => {
+      if (toolBatch.length === 0) return;
+      if (toolBatch.length === 1) {
+        result.push({
+          type: "tool_single",
+          message: toolBatch[0],
+          key: batchKey,
+        });
+      } else {
+        result.push({
+          type: "tool_group",
+          messages: [...toolBatch],
+          key: batchKey,
+        });
+      }
+      toolBatch = [];
+    };
+
+    steps.forEach((step, idx) => {
+      const isTool =
+        step.kind === "tool" ||
+        step.kind === "command" ||
+        step.kind === "status";
+      if (isTool) {
+        if (toolBatch.length === 0) {
+          batchKey = `sub-tool-${idx}`;
+        }
+        toolBatch.push(step);
+      } else {
+        flushTools();
+        if (step.kind === "thinking") {
+          result.push({
+            type: "thinking",
+            message: step,
+            key: `sub-think-${idx}`,
+          });
+        } else if (step.role === "assistant") {
+          result.push({
+            type: "monologue",
+            message: step,
+            key: `sub-mono-${idx}`,
+          });
+        } else {
+          result.push({
+            type: "other",
+            message: step,
+            key: `sub-other-${idx}`,
+          });
+        }
+      }
+    });
+    flushTools();
+    return result;
+  }, [steps]);
+
+  return (
+    <div
+      className={`turn-process-card ${open ? "open" : "collapsed"}`}
+      data-testid="turn-process-card"
+    >
+      <div
+        className="turn-process-header"
+        onClick={() => setOpen((prev) => !prev)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label="切换执行与分析过程展开状态"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((prev) => !prev);
+          }
+        }}
+      >
+        <span className="turn-process-icon">
+          <Activity size={14} />
+        </span>
+        <div className="turn-process-title-group">
+          <span className="turn-process-title">执行与分析过程</span>
+          <span className="turn-process-preview">{previewSummary}</span>
+        </div>
+
+        {hasRunning ? (
+          <span className="turn-process-badge running">
+            <RefreshCw className="spin" size={11} />
+            <span>执行中</span>
+          </span>
+        ) : hasFailed ? (
+          <span className="turn-process-badge failed">
+            <AlertCircle size={11} />
+            <span>异常</span>
+          </span>
+        ) : (
+          <span className="turn-process-badge completed">
+            <CheckCircle2 size={11} />
+            <span>已完成</span>
+          </span>
+        )}
+
+        <span className={`turn-process-arrow ${open ? "open" : ""}`}>
+          <ChevronRight size={14} />
+        </span>
+      </div>
+
+      {open && (
+        <div className="turn-process-body">
+          {groupedSubSteps.map((item) => {
+            if (item.type === "monologue") {
+              return (
+                <div className="process-monologue-step" key={item.key}>
+                  <div className="process-monologue-header">
+                    <MessageSquare size={12} />
+                    <span>过程分析</span>
+                  </div>
+                  <div className="process-monologue-content">
+                    <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>
+                      {item.message.content}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              );
+            }
+            if (item.type === "thinking") {
+              return (
+                <ThinkingBlock
+                  key={item.key}
+                  content={item.message.content}
+                  defaultOpen={false}
+                />
+              );
+            }
+            if (item.type === "tool_single") {
+              return (
+                <ToolCallBlock
+                  key={item.key}
+                  message={item.message}
+                  onAnswerQuestion={onAnswerQuestion}
+                />
+              );
+            }
+            if (item.type === "tool_group") {
+              return (
+                <ToolCallGroupBlock
+                  key={item.key}
+                  messages={item.messages}
+                  onAnswerQuestion={onAnswerQuestion}
+                />
+              );
+            }
+            return (
+              <ConversationItem
+                key={item.key}
+                message={item.message}
+                index={0}
+                onAnswerQuestion={onAnswerQuestion}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
 
 /**
  * Collapsed Tool Call Group for 2+ consecutive tool executions
@@ -1036,8 +1349,6 @@ export const ToolCallBlock = memo(function ToolCallBlock({
     </details>
   );
 });
-
-const REMARK_PLUGINS = [remarkGfm];
 
 const MarkdownSection = memo(function MarkdownSection({
   content,

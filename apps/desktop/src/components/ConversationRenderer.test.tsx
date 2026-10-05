@@ -8,6 +8,8 @@ import {
   parseQuestionData,
   ToolCallBlock,
   ToolCallGroupBlock,
+  TurnProcessBlock,
+  groupConversationMessages,
   INITIAL_TOOL_VISIBLE_COUNT,
   TOOL_EXPAND_STEP,
 } from "./ConversationRenderer";
@@ -302,5 +304,157 @@ describe("markdown code rendering", () => {
     expect(html).toContain("已执行 30 个工具与操作");
     // Initially closed, body shouldn't be rendered
     expect(html).not.toContain("tool-group-pagination-footer");
+  });
+
+  it("groups interim monologue and tools into turn_process and leaves final conclusion as single", () => {
+    const messages = [
+      {
+        role: "user" as const,
+        content: "帮我检查配置和构建脚本",
+      },
+      {
+        role: "assistant" as const,
+        kind: "message" as const,
+        content: "我来查看一下这个配置",
+      },
+      {
+        role: "assistant" as const,
+        kind: "tool" as const,
+        label: "Read: config.json",
+        status: "completed" as const,
+        content: '{"file_path": "config.json"}\n\n〔结果〕\n{"ok": true}',
+      },
+      {
+        role: "assistant" as const,
+        kind: "message" as const,
+        content: "接下来检查这个构建脚本",
+      },
+      {
+        role: "assistant" as const,
+        kind: "command" as const,
+        label: "Bash: npm run build",
+        status: "completed" as const,
+        content: '{"command": "npm run build"}\n\n〔结果〕\nBuild succeeded',
+      },
+      {
+        role: "assistant" as const,
+        kind: "message" as const,
+        content: "最后找到原因并修复了，结论如下：构建顺利通过。",
+      },
+    ];
+
+    const groups = groupConversationMessages(messages);
+    expect(groups).toHaveLength(3);
+
+    // Group 0: User message
+    expect(groups[0].type).toBe("single");
+    if (groups[0].type === "single") {
+      expect(groups[0].message.content).toBe("帮我检查配置和构建脚本");
+    }
+
+    // Group 1: Intermediate execution & analysis process
+    expect(groups[1].type).toBe("turn_process");
+    if (groups[1].type === "turn_process") {
+      expect(groups[1].steps).toHaveLength(4);
+      expect(groups[1].steps[0].content).toBe("我来查看一下这个配置");
+      expect(groups[1].steps[1].label).toBe("Read: config.json");
+      expect(groups[1].steps[2].content).toBe("接下来检查这个构建脚本");
+      expect(groups[1].steps[3].label).toBe("Bash: npm run build");
+    }
+
+    // Group 2: Final Conclusion message
+    expect(groups[2].type).toBe("single");
+    if (groups[2].type === "single") {
+      expect(groups[2].message.content).toBe(
+        "最后找到原因并修复了，结论如下：构建顺利通过。",
+      );
+    }
+  });
+
+  it("keeps direct QA dialogue as single messages without turn_process", () => {
+    const messages = [
+      {
+        role: "user" as const,
+        content: "你好，请问你是谁？",
+      },
+      {
+        role: "assistant" as const,
+        kind: "message" as const,
+        content: "你好！我是全干工程师助手。",
+      },
+    ];
+
+    const groups = groupConversationMessages(messages);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].type).toBe("single");
+    expect(groups[1].type).toBe("single");
+  });
+
+  it("handles in-progress turn where agent is currently running tools", () => {
+    const messages = [
+      {
+        role: "user" as const,
+        content: "开始执行测试",
+      },
+      {
+        role: "assistant" as const,
+        kind: "message" as const,
+        content: "正在准备测试环境...",
+      },
+      {
+        role: "assistant" as const,
+        kind: "tool" as const,
+        label: "Bash: cargo test",
+        status: "running" as const,
+        content: '{"command": "cargo test"}',
+      },
+    ];
+
+    const groups = groupConversationMessages(messages);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].type).toBe("single");
+    expect(groups[1].type).toBe("turn_process");
+    if (groups[1].type === "turn_process") {
+      expect(groups[1].steps).toHaveLength(2);
+      expect(groups[1].steps[1].status).toBe("running");
+    }
+  });
+
+  it("renders TurnProcessBlock in collapsed state with activity summary", () => {
+    const steps = [
+      {
+        role: "assistant" as const,
+        kind: "message" as const,
+        content: "我来查看一下这个配置",
+      },
+      {
+        role: "assistant" as const,
+        kind: "tool" as const,
+        label: "Read: config.json",
+        status: "completed" as const,
+        content: '{"file_path": "config.json"}',
+      },
+      {
+        role: "assistant" as const,
+        kind: "message" as const,
+        content: "接下来检查这个构建脚本",
+      },
+      {
+        role: "assistant" as const,
+        kind: "command" as const,
+        label: "Bash: npm run build",
+        status: "completed" as const,
+        content: '{"command": "npm run build"}',
+      },
+    ];
+
+    const html = renderToStaticMarkup(<TurnProcessBlock steps={steps} />);
+    expect(html).toContain("turn-process-card");
+    expect(html).toContain("collapsed");
+    expect(html).toContain("执行与分析过程");
+    expect(html).toContain("含 2 项工具操作及 2 步过程分析");
+    expect(html).toContain("已完成");
+    // Body is collapsed, sub steps should not be rendered
+    expect(html).not.toContain("process-monologue-step");
   });
 });
