@@ -817,12 +817,20 @@ function validateRemoteEventRaw(
         (typeof typed.text !== "string" ||
           itemKeys.some((key) => !["id", "type", "text"].includes(key)))) ||
       (typed.type === "commandExecution" &&
-        itemKeys.some((key) => !["id", "type"].includes(key))) ||
+        itemKeys.some(
+          (key) =>
+            !["id", "type", "command", "output", "status", "exitCode"].includes(
+              key,
+            ),
+        )) ||
+      (typed.type === "thinking" &&
+        (typeof typed.text !== "string" ||
+          itemKeys.some((key) => !["id", "type", "text"].includes(key)))) ||
       (typed.type === "userMessage" &&
         itemKeys.some(
           (key) => !["id", "type", "text", "content"].includes(key),
         )) ||
-      !["agentMessage", "commandExecution", "userMessage"].includes(
+      !["agentMessage", "commandExecution", "userMessage", "thinking"].includes(
         typed.type as string,
       )
     )

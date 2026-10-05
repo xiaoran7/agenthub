@@ -15,4 +15,4 @@ COPY services/api services/api
 
 ENV NODE_ENV=production
 
-CMD ["sh", "-lc", "npm run migrate --workspace @agent-pulse/api && npm start --workspace @agent-pulse/api"]
+CMD ["sh", "-lc", "if [ -n \"$AGENT_PLATFORM_DATABASE_URL\" ]; then npm run migrate --workspace @agent-pulse/api; fi && npm start --workspace @agent-pulse/api"]

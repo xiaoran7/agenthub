@@ -687,9 +687,29 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
                 "agentMessage" => Some(json!({"params":{"item":{
                     "id":id,"type":"agentMessage","text":item.get("text").and_then(Value::as_str).unwrap_or_default()
                 }}})),
-                "commandExecution" => Some(json!({"params":{"item":{
-                    "id":id,"type":"commandExecution"
-                }}})),
+                "commandExecution" => {
+                    let mut cmd_item = json!({"id": id, "type": "commandExecution"});
+                    if let Some(cmd) = item.get("command") {
+                        cmd_item["command"] = cmd.clone();
+                    }
+                    if let Some(output) = item.get("output") {
+                        cmd_item["output"] = output.clone();
+                    }
+                    if let Some(status) = item.get("status") {
+                        cmd_item["status"] = status.clone();
+                    }
+                    if let Some(exit_code) = item.get("exitCode") {
+                        cmd_item["exitCode"] = exit_code.clone();
+                    }
+                    Some(json!({"params":{"item": cmd_item}}))
+                }
+                "thinking" => {
+                    let mut thinking_item = json!({"id": id, "type": "thinking"});
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        thinking_item["text"] = json!(text);
+                    }
+                    Some(json!({"params":{"item": thinking_item}}))
+                }
                 _ => None,
             }
         }

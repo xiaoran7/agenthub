@@ -188,7 +188,10 @@ describe("desktop presentation", () => {
 
   it("resolves stripped prefixes for claude sessions between daemon and disk formats", () => {
     // Daemon assigns "claude_77813f44-uuid" while transcript uses "77813f44-uuid"
-    rememberTitleOverride("claude_code:77813f44-0000-0000-0000-000000000000", "阅读全局skill并重构");
+    rememberTitleOverride(
+      "claude_code:77813f44-0000-0000-0000-000000000000",
+      "阅读全局skill并重构",
+    );
 
     const sessionWithPrefix = {
       device_id: "local",

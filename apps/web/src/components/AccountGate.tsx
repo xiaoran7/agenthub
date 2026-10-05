@@ -25,6 +25,37 @@ export function AccountGate({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
 
+  const enterSelfHost = () => {
+    localStorage.setItem("agenthub_selfhost_direct", "true");
+    onAuthenticated({
+      user: {
+        user_id: "selfhost-owner",
+        email: "owner@self-hosted.local",
+        display_name: "Self-Host Owner",
+        status: "active",
+        email_verified_at: new Date(0).toISOString(),
+        created_at: new Date(0).toISOString(),
+      },
+      workspace: {
+        workspace_owner_id: "selfhost-owner",
+        name: "Default Workspace",
+        role: "owner",
+        current: true,
+      },
+      entitlements: {
+        max_devices: 999,
+        max_concurrent_tasks: 999,
+        history_days: 3650,
+        remote_tasks: true,
+        team_members: 1,
+      },
+      subscription: {
+        plan: "pro",
+        status: "active",
+      },
+    });
+  };
+
   const loginWithTgOAuth = async () => {
     setBusy(true);
     setError(undefined);
@@ -157,14 +188,15 @@ export function AccountGate({
               <button
                 type="button"
                 className="account-oauth-submit"
+                style={{ background: "#2563eb", borderColor: "#1d4ed8" }}
                 disabled={busy}
-                onClick={loginWithTgOAuth}
+                onClick={enterSelfHost}
               >
-                <span className="oauth-icon">◆</span>
-                <span>使用 TannerLab / Tg-oauth 统一登录</span>
+                <span className="oauth-icon">⚡</span>
+                <span>自建服务端直连进入</span>
               </button>
               <div className="account-divider">
-                <span>或使用邮箱密码</span>
+                <span>或使用账号密码</span>
               </div>
             </div>
           )}

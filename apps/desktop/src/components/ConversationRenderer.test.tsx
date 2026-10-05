@@ -203,7 +203,10 @@ describe("tool call block rendering", () => {
   });
 
   it("truncates tool output exceeding 80 lines and displays collapse button", () => {
-    const longLines = Array.from({ length: 120 }, (_, i) => `Line ${i + 1}`).join("\n");
+    const longLines = Array.from(
+      { length: 120 },
+      (_, i) => `Line ${i + 1}`,
+    ).join("\n");
     const html = renderToStaticMarkup(
       <ToolCallBlock
         message={{

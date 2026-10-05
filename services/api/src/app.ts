@@ -529,29 +529,66 @@ export function createGatewayApp(
   });
 
   app.get("/v1/auth/me", async (request, reply) => {
-    const accounts = requireAccounts(options.accounts);
+    const accounts = options.accounts;
     const identity = await requireAccountIdentity(
       accounts,
       authenticator,
       request,
       now(),
     );
-    const account = await accounts.accountView(identity.actor_user_id);
+    let account = accounts
+      ? await accounts.accountView(identity.actor_user_id)
+      : undefined;
+    if (account === undefined && identity.role === "owner") {
+      account = {
+        user: {
+          user_id: identity.actor_user_id,
+          email: "owner@self-hosted.local",
+          display_name: "Self-Host Owner",
+          status: "active",
+          email_verified_at: new Date(0).toISOString(),
+          created_at: new Date(0).toISOString(),
+        },
+        entitlements: {
+          max_devices: 999,
+          max_concurrent_tasks: 999,
+          history_days: 3650,
+          remote_tasks: true,
+          team_members: 1,
+        },
+        subscription: {
+          plan: "pro",
+          status: "active",
+        },
+      };
+    }
     if (account === undefined) throw new AuthenticationError();
-    const workspaceAccount = await accounts.accountView(
-      identity.workspace_owner_id,
-    );
-    if (workspaceAccount === undefined) throw new AuthenticationError();
-    const workspaces = await accounts.listWorkspaces(
-      identity.actor_user_id,
-      identity.workspace_owner_id,
-    );
+    const workspaceAccount = accounts
+      ? await accounts.accountView(identity.workspace_owner_id)
+      : undefined;
+    const workspaces = accounts
+      ? await accounts.listWorkspaces(
+          identity.actor_user_id,
+          identity.workspace_owner_id,
+        )
+      : [
+          {
+            workspace_id: `ws-${identity.workspace_owner_id}`,
+            name: "Default Workspace",
+            role: "owner" as const,
+            owner_id: identity.workspace_owner_id,
+            current: true,
+          },
+        ];
     return reply.send({
       ...account,
       workspaces,
-      workspace: workspaces.find((workspace) => workspace.current),
-      workspace_subscription: workspaceAccount.subscription,
-      workspace_entitlements: workspaceAccount.entitlements,
+      workspace:
+        workspaces.find((workspace) => workspace.current) ?? workspaces[0],
+      workspace_subscription:
+        workspaceAccount?.subscription ?? account.subscription,
+      workspace_entitlements:
+        workspaceAccount?.entitlements ?? account.entitlements,
     });
   });
 
@@ -1758,13 +1795,15 @@ async function requireSessionIdentity(
 }
 
 async function requireAccountIdentity(
-  accounts: AccountStore,
+  accounts: AccountStore | undefined,
   authenticator: OwnerAuthenticator,
   request: Parameters<typeof currentSessionIdentity>[1],
   at: Date,
 ) {
-  const sessionIdentity = await currentSessionIdentity(accounts, request, at);
-  if (sessionIdentity !== undefined) return sessionIdentity;
+  if (accounts !== undefined) {
+    const sessionIdentity = await currentSessionIdentity(accounts, request, at);
+    if (sessionIdentity !== undefined) return sessionIdentity;
+  }
   const ownerId = await authenticator.authenticate(request);
   return {
     actor_user_id: ownerId,

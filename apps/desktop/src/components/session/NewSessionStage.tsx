@@ -16,10 +16,18 @@ import React, {
   type KeyboardEvent,
 } from "react";
 import { fetchAgentModels, useAgentModels } from "../../agentModels";
-import { PROVIDER_LIST, agentLabel, rememberTitleOverride } from "../../presentation";
+import {
+  PROVIDER_LIST,
+  agentLabel,
+  rememberTitleOverride,
+} from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
 import type { ConversationMessage } from "../../turn-stream";
-import { normalizeAgentType, type Session, type SessionTurnEvent } from "../../types";
+import {
+  normalizeAgentType,
+  type Session,
+  type SessionTurnEvent,
+} from "../../types";
 import { seedConversation } from "../../conversationCache";
 import { errorMessage } from "../auth/AuthScreen";
 import { SelectDropdown } from "../SelectDropdown";
@@ -167,7 +175,10 @@ export function NewSessionStage({
           content: result.response.trim(),
         });
       }
-      seedConversation(`${normType}:${result.agent_session_id}`, initialMessages);
+      seedConversation(
+        `${normType}:${result.agent_session_id}`,
+        initialMessages,
+      );
       onLaunched(result.agent_session_id, agentType, cwd.trim());
     } catch (err) {
       setError(errorMessage(err));

@@ -5,7 +5,11 @@ import { fetchAgentModels, useAgentModels } from "../../agentModels";
 import { PROVIDER_LIST, rememberTitleOverride } from "../../presentation";
 import { isPluginEnabled } from "../../plugins";
 import type { ConversationMessage } from "../../turn-stream";
-import { normalizeAgentType, type Session, type SessionTurnEvent } from "../../types";
+import {
+  normalizeAgentType,
+  type Session,
+  type SessionTurnEvent,
+} from "../../types";
 import { seedConversation } from "../../conversationCache";
 import { errorMessage } from "../auth/AuthScreen";
 import { SelectDropdown } from "../SelectDropdown";
@@ -189,7 +193,10 @@ export function LaunchSessionModal({
           content: result.response.trim(),
         });
       }
-      seedConversation(`${normType}:${result.agent_session_id}`, initialMessages);
+      seedConversation(
+        `${normType}:${result.agent_session_id}`,
+        initialMessages,
+      );
       onLaunched(result.agent_session_id, agentType, cwd.trim());
       onClose();
     } catch (err) {
@@ -337,7 +344,10 @@ export function LaunchSessionModal({
             />
           </label>
           {launching && (
-            <div className="composer-launch-status-bar" style={{ margin: "4px 0" }}>
+            <div
+              className="composer-launch-status-bar"
+              style={{ margin: "4px 0" }}
+            >
               <RefreshCw className="spin" size={13} />
               <span>{launchStatus || "Claude Code 正在初始化并启动会话…"}</span>
             </div>

@@ -1,0 +1,38 @@
+name: agenthub-selfhost
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    container_name: agenthub-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./data:/app/data
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      AGENTHUB_REMOTE_DATABASE: /app/data/agenthub.db
+      GATEWAY_ACCESS_TOKEN: ${GATEWAY_ACCESS_TOKEN:-agenthub-secret-token}
+      AGENT_PLATFORM_OWNER_ID: ${AGENT_PLATFORM_OWNER_ID:-admin}
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    container_name: agenthub-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      GATEWAY_ORIGIN: http://api:3001
+      GATEWAY_ACCESS_TOKEN: ${GATEWAY_ACCESS_TOKEN:-agenthub-secret-token}
+    depends_on:
+      api:
+        condition: service_started

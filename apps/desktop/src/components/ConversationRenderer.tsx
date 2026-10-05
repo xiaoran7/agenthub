@@ -226,8 +226,7 @@ export const TurnProcessBlock = memo(function TurnProcessBlock({
   const toolCount = useMemo(
     () =>
       steps.filter(
-        (m) =>
-          m.kind === "tool" || m.kind === "command" || m.kind === "status",
+        (m) => m.kind === "tool" || m.kind === "command" || m.kind === "status",
       ).length,
     [steps],
   );
@@ -485,7 +484,9 @@ export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
 
   const handleExpandMore = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setVisibleLimit((prev) => Math.min(messages.length, prev + TOOL_EXPAND_STEP));
+    setVisibleLimit((prev) =>
+      Math.min(messages.length, prev + TOOL_EXPAND_STEP),
+    );
   };
 
   const handleCollapseExtra = (e: React.MouseEvent) => {
@@ -634,10 +635,7 @@ export const ConversationItem = memo(function ConversationItem({
     message.kind === "status"
   ) {
     return (
-      <ToolCallBlock
-        message={message}
-        onAnswerQuestion={onAnswerQuestion}
-      />
+      <ToolCallBlock message={message} onAnswerQuestion={onAnswerQuestion} />
     );
   }
 
@@ -1249,7 +1247,10 @@ export const ToolCallBlock = memo(function ToolCallBlock({
               <div className="tool-web-title-box">
                 <Search size={13} className="tool-category-icon web_search" />
                 <span className="tool-question-tag">网页搜索</span>
-                <span className="tool-web-query-pill" title={webSearchData.query}>
+                <span
+                  className="tool-web-query-pill"
+                  title={webSearchData.query}
+                >
                   {webSearchData.query}
                 </span>
               </div>
@@ -1284,7 +1285,9 @@ export const ToolCallBlock = memo(function ToolCallBlock({
                 <Globe size={13} className="tool-category-icon web_fetch" />
                 <span className="tool-question-tag">网页抓取</span>
                 {webFetchData.domain && (
-                  <span className="tool-domain-pill">{webFetchData.domain}</span>
+                  <span className="tool-domain-pill">
+                    {webFetchData.domain}
+                  </span>
                 )}
               </div>
             </div>
@@ -1326,19 +1329,16 @@ export const ToolCallBlock = memo(function ToolCallBlock({
             />
           )
         )}
-        {result.trim() &&
-          !questionItems &&
-          !webSearchData &&
-          !webFetchData && (
-            <div className="tool-result-markdown">
-              <span className="tool-result-caption">执行结果</span>
-              <TruncatedOutputBlock
-                content={result}
-                maxLines={80}
-                renderContent={(text) => <MarkdownSection content={text} />}
-              />
-            </div>
-          )}
+        {result.trim() && !questionItems && !webSearchData && !webFetchData && (
+          <div className="tool-result-markdown">
+            <span className="tool-result-caption">执行结果</span>
+            <TruncatedOutputBlock
+              content={result}
+              maxLines={80}
+              renderContent={(text) => <MarkdownSection content={text} />}
+            />
+          </div>
+        )}
         {result.trim() && questionItems && !result.startsWith("{") && (
           <div className="tool-result-markdown">
             <span className="tool-result-caption">决策反馈</span>

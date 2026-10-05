@@ -16,17 +16,20 @@ import { ChangeBroker, PostgresChangeBroker } from "./events.js";
 import { PostgresGatewayStore } from "./postgres-store.js";
 import { WebPushSender, vapidKeysFromEnv } from "./push.js";
 import { StripeBillingProvider } from "./stripe-billing.js";
-import { InMemoryGatewayStore } from "./store.js";
+import { InMemoryGatewayStore, type GatewayStore } from "./store.js";
+import { SqliteGatewayStore } from "./sqlite-store.js";
 import { RemoteContentStore } from "./remote-store.js";
 
 const port = parsePort(process.env.PORT);
 const host = process.env.HOST ?? "127.0.0.1";
 const databaseUrl = process.env.AGENT_PLATFORM_DATABASE_URL;
+const sqliteDbPath =
+  process.env.AGENTHUB_REMOTE_DATABASE ?? "./data/agenthub.db";
 
-let store: InMemoryGatewayStore | PostgresGatewayStore;
+let store: GatewayStore;
 let accounts: AccountStore;
 if (databaseUrl === undefined) {
-  store = new InMemoryGatewayStore();
+  store = new SqliteGatewayStore(sqliteDbPath);
   accounts = new InMemoryAccountStore();
 } else {
   const postgresStore = await PostgresGatewayStore.connect(databaseUrl);
@@ -147,11 +150,8 @@ if (vapidKeys !== undefined) {
     sender: new WebPushSender(vapidKeys),
   };
 }
-if (process.env.AGENTHUB_REMOTE_DATABASE) {
-  options.remoteContent = new RemoteContentStore(
-    process.env.AGENTHUB_REMOTE_DATABASE,
-  );
-}
+const remoteDbPath = process.env.AGENTHUB_REMOTE_DATABASE ?? sqliteDbPath;
+options.remoteContent = new RemoteContentStore(remoteDbPath);
 const app = createGatewayApp(options);
 
 await app.listen({ port, host });
@@ -182,8 +182,11 @@ function ownerAuthenticator(
   | BearerTokenAuthenticator
   | DevelopmentIdentityAuthenticator
   | SessionAuthenticator {
-  const ownerId = process.env.AGENT_PLATFORM_OWNER_ID;
-  const accessToken = process.env.AGENT_PLATFORM_ACCESS_TOKEN;
+  const ownerId = process.env.AGENT_PLATFORM_OWNER_ID ?? "default-owner";
+  const accessToken =
+    process.env.AGENT_PLATFORM_ACCESS_TOKEN ??
+    process.env.GATEWAY_SECRET_TOKEN ??
+    process.env.GATEWAY_ACCESS_TOKEN;
   const allowDevelopmentAuth =
     process.env.AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH === "true";
   if (allowDevelopmentAuth && !isLoopbackHost(host)) {
@@ -196,15 +199,12 @@ function ownerAuthenticator(
       ? new DevelopmentIdentityAuthenticator()
       : new SessionAuthenticator(accounts);
   }
-  if (ownerId === undefined) {
-    throw new Error(
-      "AGENT_PLATFORM_OWNER_ID is required when AGENT_PLATFORM_ACCESS_TOKEN is set",
-    );
-  }
   const authenticator = new BearerTokenAuthenticator(ownerId, accessToken);
   // Child processes must not inherit a credential the API no longer needs in
   // plaintext; the authenticator retains only the digest.
   delete process.env.AGENT_PLATFORM_ACCESS_TOKEN;
+  delete process.env.GATEWAY_SECRET_TOKEN;
+  delete process.env.GATEWAY_ACCESS_TOKEN;
   return authenticator;
 }
 

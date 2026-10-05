@@ -33,7 +33,8 @@ export function statusView(
     return { label: "等待输入", className: "waiting" };
   if (status === "IDLE") return { label: "空闲", className: "idle" };
   if (status === "FAILED") return { label: "失败", className: "failed" };
-  if (status === "COMPLETED") return { label: "已完成", className: "completed" };
+  if (status === "COMPLETED")
+    return { label: "已完成", className: "completed" };
   if (status === "STOPPED") return { label: "已停止", className: "stopped" };
   if (presence === "PERSISTED")
     return { label: "历史会话", className: "history" };
@@ -426,7 +427,7 @@ export function sessionTooltip(session: Session, displayTitle: string): string {
   }
   const hasContentTitle = Boolean(
     session.payload.runtime?.title?.trim() ||
-    session.payload.state?.raw_status_detail?.title?.trim()
+    session.payload.state?.raw_status_detail?.title?.trim(),
   );
   if (!hasContentTitle) {
     lines.push("说明: 历史云端快照或未输入指令的会话");
