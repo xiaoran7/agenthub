@@ -1,12 +1,5 @@
 import type { PanelConfig } from "./config";
-import type {
-  AuthRecord,
-  DeviceRecord,
-  SessionRecord,
-  SessionRef,
-} from "./types";
-
-export const DEFAULT_TIMELINE_LIMIT = 100;
+import type { DeviceRecord, SessionRef } from "./types";
 
 export class ApiError extends Error {
   /** HTTP status; 0 means the request never reached the gateway. */
@@ -42,10 +35,6 @@ export function sessionsUrl(base: string, agentType?: AgentType): string {
       ? ""
       : `?${new URLSearchParams({ agent_type: agentType }).toString()}`;
   return `${base}/v1/sessions${query}`;
-}
-
-export function deviceAuthUrl(base: string): string {
-  return `${base}/v1/device-auth`;
 }
 
 export function streamUrl(base: string): string {
@@ -241,60 +230,4 @@ export async function revokeDevice(
   if (!response.ok) {
     throw new ApiError(response.status, await errorCode(response));
   }
-}
-
-export async function fetchSessions(
-  config: PanelConfig,
-  agentType?: AgentType,
-): Promise<SessionRecord[]> {
-  const body = await fetchJson<{ sessions: SessionRecord[] }>(
-    sessionsUrl(config.gatewayBase, agentType),
-    config.userId,
-  );
-  return body.sessions;
-}
-
-export async function fetchDeviceAuth(
-  config: PanelConfig,
-): Promise<AuthRecord[]> {
-  const body = await fetchJson<{ snapshots: AuthRecord[] }>(
-    deviceAuthUrl(config.gatewayBase),
-    config.userId,
-  );
-  return body.snapshots;
-}
-
-export async function fetchSessionEvents(
-  config: PanelConfig,
-  ref: SessionRef,
-  limit: number = DEFAULT_TIMELINE_LIMIT,
-): Promise<SessionRecord[]> {
-  const body = await fetchJson<{ events: SessionRecord[] }>(
-    sessionEventsUrl(config.gatewayBase, ref, limit),
-    config.userId,
-  );
-  return body.events;
-}
-
-async function sendJsonResponse<T>(
-  url: string,
-  userId: string,
-  method: "POST" | "DELETE",
-  body: unknown,
-): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method,
-      headers: { "x-user-id": userId, "content-type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    });
-  } catch {
-    throw new ApiError(0, "network_error");
-  }
-  if (!response.ok) {
-    throw new ApiError(response.status, await errorCode(response));
-  }
-  return (await response.json()) as T;
 }

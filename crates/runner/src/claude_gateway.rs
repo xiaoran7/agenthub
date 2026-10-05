@@ -192,11 +192,7 @@ pub fn cc_switch_db_path() -> Option<PathBuf> {
         .or_else(|| env::var_os("HOME"))
         .map(PathBuf::from)?;
     let p = home.join(".cc-switch").join("cc-switch.db");
-    if p.is_file() {
-        Some(p)
-    } else {
-        None
-    }
+    if p.is_file() { Some(p) } else { None }
 }
 
 /// Discovers the currently active provider and configured model routes from `cc-switch.db`.
@@ -241,7 +237,10 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
         .map(str::to_string);
 
     let upstream_auth_token = env_obj
-        .and_then(|e| e.get("ANTHROPIC_AUTH_TOKEN").or_else(|| e.get("ANTHROPIC_API_KEY")))
+        .and_then(|e| {
+            e.get("ANTHROPIC_AUTH_TOKEN")
+                .or_else(|| e.get("ANTHROPIC_API_KEY"))
+        })
         .or_else(|| settings.get("auth_token"))
         .or_else(|| settings.get("apiKey"))
         .or_else(|| settings.get("auth").and_then(|a| a.get("OPENAI_API_KEY")))
@@ -254,7 +253,10 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
     let mut seen_names = std::collections::HashSet::new();
 
     // 1. Configured routes in meta.claudeDesktopModelRoutes
-    if let Some(routes) = meta.get("claudeDesktopModelRoutes").and_then(Value::as_object) {
+    if let Some(routes) = meta
+        .get("claudeDesktopModelRoutes")
+        .and_then(Value::as_object)
+    {
         for (route_name, route_val) in routes {
             if route_name.is_empty() || !seen_names.insert(route_name.to_ascii_lowercase()) {
                 continue;
@@ -282,24 +284,26 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
     let catalog = meta
         .get("modelCatalog")
         .or_else(|| settings.get("modelCatalog"));
-    if let Some(arr) = catalog.and_then(|c| c.get("models")).and_then(Value::as_array) {
+    if let Some(arr) = catalog
+        .and_then(|c| c.get("models"))
+        .and_then(Value::as_array)
+    {
         for item in arr {
             if let Some(m_name) = item
                 .get("model")
                 .or_else(|| item.get("name"))
                 .and_then(Value::as_str)
+                .filter(|m| !m.is_empty() && seen_names.insert(m.to_ascii_lowercase()))
             {
-                if !m_name.is_empty() && seen_names.insert(m_name.to_ascii_lowercase()) {
-                    let display_name = item
-                        .get("displayName")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    models.push(ClaudeGatewayModel {
-                        name: m_name.to_string(),
-                        label: display_name,
-                        supports_1m: false,
-                    });
-                }
+                let display_name = item
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                models.push(ClaudeGatewayModel {
+                    name: m_name.to_string(),
+                    label: display_name,
+                    supports_1m: false,
+                });
             }
         }
     }
@@ -410,9 +414,8 @@ pub fn fetch_live_upstream_models(base_url: &str, token: &str) -> Vec<ClaudeGate
                 .or_else(|| item.get("display_name"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let supports_1m = id_lower.contains("1m")
-                || id_lower.contains("high")
-                || id_lower.contains("gemini");
+            let supports_1m =
+                id_lower.contains("1m") || id_lower.contains("high") || id_lower.contains("gemini");
             fetched.push(ClaudeGatewayModel {
                 name: id.to_string(),
                 label,
@@ -429,10 +432,8 @@ pub fn fetch_live_upstream_models(base_url: &str, token: &str) -> Vec<ClaudeGate
 }
 
 fn merge_gateway_models(target: &mut Vec<ClaudeGatewayModel>, incoming: Vec<ClaudeGatewayModel>) {
-    let mut seen: std::collections::HashSet<String> = target
-        .iter()
-        .map(|m| m.name.to_ascii_lowercase())
-        .collect();
+    let mut seen: std::collections::HashSet<String> =
+        target.iter().map(|m| m.name.to_ascii_lowercase()).collect();
     for m in target.iter() {
         if let Some(lbl) = &m.label {
             seen.insert(lbl.to_ascii_lowercase());

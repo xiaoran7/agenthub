@@ -17,7 +17,7 @@ export type AgentModelMap = Record<string, AgentModelOption[]>;
  * transcripts. The live list comes from `list_agent_models`, which aggregates
  * the models each installed CLI actually reported in local sessions.
  */
-export const BUILTIN_MODELS: AgentModelMap = {
+const BUILTIN_MODELS: AgentModelMap = {
   claude_code: [
     {
       value: "claude-opus-5",
@@ -171,10 +171,7 @@ export async function fetchAgentModels(force = false): Promise<AgentModelMap> {
   return modelsInflight;
 }
 
-export function modelsFor(
-  map: AgentModelMap,
-  agentType: Session["agent_type"],
-) {
+function modelsFor(map: AgentModelMap, agentType: Session["agent_type"]) {
   const list = map[agentType];
   return list && list.length > 0 ? list : (BUILTIN_MODELS[agentType] ?? []);
 }
@@ -214,6 +211,6 @@ export function useAgentModels(agentType: Session["agent_type"]) {
   return models;
 }
 
-export function invalidateAgentModels() {
+function invalidateAgentModels() {
   modelsCache = null;
 }

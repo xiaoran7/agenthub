@@ -1,9 +1,26 @@
 # Changelog
 
-## [2.4.67] - 2026-10-05
+## [2.4.67] - 2026-10-06
 
-实现开源个人服务端轻量化自建（Self-Hosted Lean Mode）与云端 Session 漫游基础改造：
-针对开源自部署场景剥除外部数据库强依赖，引入基于 Node 原生 SQLite 的单文件设备与会话状态持久化存储（`SqliteGatewayStore`）；打通 Token 免密直连模式（`GATEWAY_ACCESS_TOKEN` / `GATEWAY_SECRET_TOKEN`），并在 Web 认证层（`AccountGate`）提供一键直连通道；对标 Claude 桌面端云端 Session 漫游机制，放宽远端事件投射白名单，支持工具执行详情（Command、Output、Status、ExitCode）与思考块（Thinking）的完整镜像持久化；配套交付单机一键 Docker Compose 部署模板。
+全面清理死代码与废弃视图组件，完成全端前端交互与按钮可用性审查：
+彻底移除 Web 端收敛到 Remote 控制台后遗留的 17 个旧版工作台组件、无用动画库依赖（`gsap` / `@gsap/react`）与死代码辅助函数；收敛桌面端未引用导出与内部工具方法；修复 Rust Runner 与 Desktop 宿主代码中的 Clippy 折叠条件警告，达到 Clippy 零报错；全面核验桌面端与 Web 控制台所有按钮交互、菜单与输入行为，杜绝占位与无效 UI。
+
+### 死代码清理与前端可用性核验
+
+- **Web 端废弃工作台组件与死依赖彻底移除（`apps/web`）**：
+  - 彻底删除已收敛废弃的 17 个旧版工作台页面和组件：`PlatformShell.tsx`, `PlatformViews.tsx`, `SessionDetail.tsx`, `SessionInspector.tsx`, `SessionList.tsx`, `SessionInspector.tsx`, `DeviceConnectDialog.tsx`, `DeviceStrip.tsx`, `MobileDock.tsx`, `MobileFilters.tsx`, `MotionMetric.tsx`, `PanelStates.tsx`, `StatusBadge.tsx`, `Icon.tsx`, `platform-view.ts`, `preview-data.ts`, `media-query.ts`, `use-panel-motion.ts`；
+  - 移除 `package.json` 中为旧版动效引入的未引用依赖 `@gsap/react` 与 `gsap`；
+  - 清理 `src/lib/api.ts`, `classify.ts`, `config.ts`, `format.ts`, `dialog-focus.ts`, `types.ts` 中残留的未调用旧 API（如 `fetchSessions`, `fetchDeviceAuth`, `fetchSessionEvents`, `useModalDialog`, 废弃标签字典 `ACTIVITY_LABELS` 等）。
+- **Desktop 桌面端死代码与导出收敛（`apps/desktop`）**：
+  - 收敛 `agentModels.ts`, `presentation.ts`, `ConversationRenderer.tsx`, `SessionControlPanel.tsx`, `conversationCache.ts`, `demoData.ts`, `AuthScreen.tsx` 中未被外部使用的内部导出；
+  - 移除临时测试目录 `_tmp_test`。
+- **Rust Runner 与 Desktop 宿主 Clippy 警告清零（`crates/runner`, `apps/desktop/src-tauri`）**：
+  - 修复 `claude_gateway.rs`, `collectors/mod.rs` 以及桌面端 `src-tauri/src/lib.rs` 中 16 处嵌套条件（`collapsible_if`）；
+  - 统一通过 `cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check`，保障代码洁净度。
+- **全端 UI 交互与按钮可用性全面核查（Desktop & Web）**：
+  - 逐一确认桌面端标题栏下拉菜单（文件/编辑/查看/跳转/帮助）、侧边栏树形折叠、会话创建、右键上下文操作（置顶/重命名/复制 ID/复制路径/新建任务）、输入区附件选取与移除、快捷标记、中断与发送；
+  - 逐一确认 Web 端控制台抽屉开关、多设备/多 Agent 树状筛选、新建与恢复会话、审批项（拒绝/允许）、提问项（选项与自定义输入）、打断与发送、设置弹窗所有操作。
+
 
 ### 服务端自建轻量化与云端 Session 漫游支持
 

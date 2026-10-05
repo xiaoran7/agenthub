@@ -57,7 +57,7 @@ export interface ToolCallBlockProps {
 const RESULT_SEPARATOR = "〔结果〕";
 
 /** Clean up user messages by stripping injected system prompts, environment tags, and agent instructions. */
-export function cleanClientUserContent(raw: string): string {
+function cleanClientUserContent(raw: string): string {
   if (!raw) return "";
   let text = raw
     .replace(/<recommended_plugins>[\s\S]*?<\/recommended_plugins>/gi, "")
@@ -748,7 +748,7 @@ function ThinkingBlock({
 }
 
 /** Splits `args 〔结果〕 output` payloads produced by the desktop normalizer. */
-export function splitToolContent(content: string): {
+function splitToolContent(content: string): {
   args: string;
   result: string;
 } {
@@ -921,7 +921,7 @@ export interface WebSearchData {
   results: WebSearchResultItem[];
 }
 
-export function parseWebSearchData(
+function parseWebSearchData(
   args: string,
   result: string,
 ): WebSearchData | null {
@@ -954,10 +954,7 @@ export interface WebFetchData {
   content: string;
 }
 
-export function parseWebFetchData(
-  args: string,
-  result: string,
-): WebFetchData | null {
+function parseWebFetchData(args: string, result: string): WebFetchData | null {
   let url = "";
   let prompt: string | undefined;
   try {
@@ -979,7 +976,7 @@ export function parseWebFetchData(
   return { url, domain, prompt, content: result };
 }
 
-export function TruncatedOutputBlock({
+function TruncatedOutputBlock({
   content,
   maxLines = 80,
   renderContent,

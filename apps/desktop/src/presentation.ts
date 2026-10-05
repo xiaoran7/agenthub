@@ -65,7 +65,7 @@ export function permissionFieldLabel(type: Session["agent_type"]): string {
   return "审批策略";
 }
 
-export const PROVIDER_MODELS: Record<
+const PROVIDER_MODELS: Record<
   Session["agent_type"],
   Array<{ value: string; label: string; desc: string }>
 > = {
@@ -148,7 +148,7 @@ export const PROVIDER_MODELS: Record<
   ],
 };
 
-export function getProviderModels(type: Session["agent_type"]) {
+function getProviderModels(type: Session["agent_type"]) {
   return PROVIDER_MODELS[type] ?? [];
 }
 
@@ -326,7 +326,7 @@ function loadTitleOverrides(): Record<string, string> {
 }
 
 /** Clean up title candidates from user messages, stripping system / environment prompt leakage. */
-export function cleanUserPromptForTitle(raw: string): string {
+function cleanUserPromptForTitle(raw: string): string {
   let text = raw
     .replace(/<recommended_plugins>[\s\S]*?<\/recommended_plugins>/gi, "")
     .replace(/<environment_context>[\s\S]*?<\/environment_context>/gi, "")
@@ -485,16 +485,14 @@ export function sessionKey(session: Session): string {
   );
 }
 
-export function formatTokenCount(tokens: number | undefined): string {
+function formatTokenCount(tokens: number | undefined): string {
   if (tokens === undefined) return "未提供";
   if (tokens < 1_000) return tokens + " tokens";
   if (tokens < 1_000_000) return (tokens / 1_000).toFixed(1) + "K tokens";
   return (tokens / 1_000_000).toFixed(2) + "M tokens";
 }
 
-export function formatContextUsage(
-  runtime: Session["payload"]["runtime"],
-): string {
+function formatContextUsage(runtime: Session["payload"]["runtime"]): string {
   const used = runtime?.context_used_tokens;
   const window = runtime?.context_window_tokens;
   if (used !== undefined && window !== undefined && window > 0) {

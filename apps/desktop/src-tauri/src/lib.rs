@@ -476,8 +476,16 @@ fn builtin_model_catalog(
 ) -> &'static [(&'static str, &'static str, &'static str)] {
     match agent {
         AgentType::ClaudeCode => &[
-            ("claude-opus-5", "Claude Opus 5", "深度复杂架构与自主全栈开发 (旗舰)"),
-            ("claude-sonnet-5", "Claude Sonnet 5", "日常开发与全栈工程主力"),
+            (
+                "claude-opus-5",
+                "Claude Opus 5",
+                "深度复杂架构与自主全栈开发 (旗舰)",
+            ),
+            (
+                "claude-sonnet-5",
+                "Claude Sonnet 5",
+                "日常开发与全栈工程主力",
+            ),
             ("claude-fable-5", "Claude Fable 5", "轻量代码生成与工具调用"),
             ("claude-haiku-4-5", "Claude Haiku 4.5", "极速轻量低延迟响应"),
             ("claude-3-7-sonnet", "Claude 3.7 Sonnet", "经典混合推理"),
@@ -497,11 +505,7 @@ fn builtin_model_catalog(
             ("grok-code-fast-1", "Grok Code Fast", "低延迟快速任务"),
         ],
         AgentType::ZCode => &[
-            (
-                "zcode-fast",
-                "ZCode Fast",
-                "极速代码生成与工具调用",
-            ),
+            ("zcode-fast", "ZCode Fast", "极速代码生成与工具调用"),
             ("zcode-pro", "ZCode Pro", "超长上下文与深度工程推理"),
             ("claude-sonnet-4-5", "Claude Sonnet 4.5", "多语言工程能力"),
         ],
@@ -580,20 +584,22 @@ fn read_codex_cc_switch_models() -> Option<Vec<(String, String)>> {
     let catalog = settings
         .get("modelCatalog")
         .or_else(|| meta.get("modelCatalog"));
-    if let Some(arr) = catalog.and_then(|c| c.get("models")).and_then(Value::as_array) {
+    if let Some(arr) = catalog
+        .and_then(|c| c.get("models"))
+        .and_then(Value::as_array)
+    {
         for item in arr {
             if let Some(m_name) = item
                 .get("model")
                 .or_else(|| item.get("name"))
                 .and_then(Value::as_str)
+                .filter(|m| !m.is_empty() && seen.insert(m.to_string()))
             {
-                if !m_name.is_empty() && seen.insert(m_name.to_string()) {
-                    let display = item
-                        .get("displayName")
-                        .and_then(Value::as_str)
-                        .unwrap_or(m_name);
-                    models.push((m_name.to_string(), display.to_string()));
-                }
+                let display = item
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .unwrap_or(m_name);
+                models.push((m_name.to_string(), display.to_string()));
             }
         }
     }
@@ -783,26 +789,26 @@ fn list_agent_models_inner(state: &DesktopState) -> Result<Vec<Value>, DesktopEr
             {
                 for m in &gateway.models {
                     if !m.name.is_empty() && seen_ids.insert(m.name.clone()) {
-                        let has_route = m
-                            .label
-                            .as_deref()
-                            .is_some_and(|l| !l.trim().is_empty() && !l.eq_ignore_ascii_case(&m.name));
+                        let has_route = m.label.as_deref().is_some_and(|l| {
+                            !l.trim().is_empty() && !l.eq_ignore_ascii_case(&m.name)
+                        });
                         let label = if has_route {
                             model_label(&m.name)
-                        } else if let Some(lbl) = m.label.as_deref().filter(|l| !l.trim().is_empty()) {
+                        } else if let Some(lbl) =
+                            m.label.as_deref().filter(|l| !l.trim().is_empty())
+                        {
                             lbl.to_string()
                         } else {
                             model_label(&m.name)
                         };
-                        let desc = if let Some(target) = m
-                            .label
-                            .as_deref()
-                            .filter(|l| !l.trim().is_empty() && !l.eq_ignore_ascii_case(&m.name))
-                        {
-                            format!("网关路由 → {target}")
-                        } else {
-                            format!("网关实时模型（{}）", gateway.source)
-                        };
+                        let desc =
+                            if let Some(target) = m.label.as_deref().filter(|l| {
+                                !l.trim().is_empty() && !l.eq_ignore_ascii_case(&m.name)
+                            }) {
+                                format!("网关路由 → {target}")
+                            } else {
+                                format!("网关实时模型（{}）", gateway.source)
+                            };
                         models.push(json!({
                             "value": m.name,
                             "label": label,
@@ -1214,7 +1220,8 @@ fn launch_codex_session_with_client(
                                 return Err(DesktopError::AgentCancelled);
                             }
                             if status != "completed" {
-                                if let Some(err_msg) = event.raw["params"]["turn"]["error"].as_str() {
+                                if let Some(err_msg) = event.raw["params"]["turn"]["error"].as_str()
+                                {
                                     return Err(DesktopError::Detailed(err_msg.to_string()));
                                 }
                                 return Err(DesktopError::AgentFailed);
@@ -1458,7 +1465,8 @@ fn send_codex_message_with_client(
                                 return Err(DesktopError::AgentCancelled);
                             }
                             if status != "completed" {
-                                if let Some(err_msg) = event.raw["params"]["turn"]["error"].as_str() {
+                                if let Some(err_msg) = event.raw["params"]["turn"]["error"].as_str()
+                                {
                                     return Err(DesktopError::Detailed(err_msg.to_string()));
                                 }
                                 return Err(DesktopError::AgentFailed);
@@ -1619,16 +1627,20 @@ async fn cancel_session_turn(
 
     // 1. Immediately unlock local active turn to unblock UI
     let key = session_turn_key(input.agent_type, &input.agent_session_id);
-    if let Ok(mut active_turns) = state.active_turns.lock() {
-        if let Some(cancel) = active_turns.remove(&key) {
-            cancel.store(true, Ordering::SeqCst);
-        }
+    if let Some(cancel) = state
+        .active_turns
+        .lock()
+        .ok()
+        .and_then(|mut turns| turns.remove(&key))
+    {
+        cancel.store(true, Ordering::SeqCst);
     }
 
     // 2. Dispatch interrupt to daemon host if running
     if let Some(client) = daemon_client::get_daemon_client(&state) {
-        let _ = tauri::async_runtime::spawn_blocking(move || cancel_session_turn_inner(input, client))
-            .await;
+        let _ =
+            tauri::async_runtime::spawn_blocking(move || cancel_session_turn_inner(input, client))
+                .await;
     }
     Ok(json!({ "accepted": true }))
 }
@@ -3008,13 +3020,12 @@ fn merge_dashboard_sessions(
                         && item.agent_session_id
                             == session["agent_session_id"].as_str().unwrap_or_default()
                 }));
-                if session["payload"]["runtime"].is_null()
-                    || session["payload"]["runtime"]["title"].is_null()
-                {
-                    if let (Some(agent_type_str), Some(sess_id)) = (
-                        session["agent_type"].as_str(),
-                        session["agent_session_id"].as_str(),
-                    ) {
+                let needs_runtime = session["payload"]["runtime"].is_null()
+                    || session["payload"]["runtime"]["title"].is_null();
+                if needs_runtime {
+                    let agent_type_str = session["agent_type"].as_str().unwrap_or_default();
+                    let sess_id = session["agent_session_id"].as_str().unwrap_or_default();
+                    if !agent_type_str.is_empty() && !sess_id.is_empty() {
                         let at = match agent_type_str {
                             "claude_code" => AgentType::ClaudeCode,
                             "codex" => AgentType::Codex,
@@ -3111,16 +3122,25 @@ fn merge_dashboard_sessions(
             AgentType::Codex
         };
         let clean_id = match agent_type {
-            AgentType::ClaudeCode => binding.provider_session_id.strip_prefix("claude_").unwrap_or(&binding.provider_session_id),
-            AgentType::Antigravity => binding.provider_session_id.strip_prefix("antigravity_").unwrap_or(&binding.provider_session_id),
-            AgentType::GrokBuild => binding.provider_session_id.strip_prefix("grok_").unwrap_or(&binding.provider_session_id),
-            AgentType::ZCode => binding.provider_session_id.strip_prefix("sess_").unwrap_or(&binding.provider_session_id),
+            AgentType::ClaudeCode => binding
+                .provider_session_id
+                .strip_prefix("claude_")
+                .unwrap_or(&binding.provider_session_id),
+            AgentType::Antigravity => binding
+                .provider_session_id
+                .strip_prefix("antigravity_")
+                .unwrap_or(&binding.provider_session_id),
+            AgentType::GrokBuild => binding
+                .provider_session_id
+                .strip_prefix("grok_")
+                .unwrap_or(&binding.provider_session_id),
+            AgentType::ZCode => binding
+                .provider_session_id
+                .strip_prefix("sess_")
+                .unwrap_or(&binding.provider_session_id),
             _ => &binding.provider_session_id,
         };
-        let key = format!(
-            "{}:{}:{}",
-            agent_type_str, device_id, clean_id
-        );
+        let key = format!("{}:{}:{}", agent_type_str, device_id, clean_id);
         let status = match binding.execution_state {
             agent_pulse_runner::remote_host::ExecutionState::Running => "WORKING",
             agent_pulse_runner::remote_host::ExecutionState::AwaitingPermission => {
@@ -3146,15 +3166,16 @@ fn merge_dashboard_sessions(
             existing["payload"]["state"]["activity_status"] = json!(status);
             existing["payload"]["state"]["presence"] = json!(presence);
             existing["payload"]["pending_approval"] = json!(pending_approval);
-            if existing["payload"]["runtime"].is_null()
-                || existing["payload"]["runtime"]["title"].is_null()
-            {
-                if let Some(context) = contexts.get(&session_context_key(
+            let needs_runtime = existing["payload"]["runtime"].is_null()
+                || existing["payload"]["runtime"]["title"].is_null();
+            if let Some(context) = contexts
+                .get(&session_context_key(
                     agent_type,
                     &binding.provider_session_id,
-                )) {
-                    existing["payload"]["runtime"] = json!(context);
-                }
+                ))
+                .filter(|_| needs_runtime)
+            {
+                existing["payload"]["runtime"] = json!(context);
             }
         } else {
             let context = contexts.get(&session_context_key(
@@ -3173,7 +3194,8 @@ fn merge_dashboard_sessions(
             let mut absorbed = false;
             for existing in sessions.values_mut() {
                 if existing["agent_type"].as_str() == Some(agent_type_str)
-                    && existing["payload"]["project"]["display_name"].as_str() == Some(binding_ws_name)
+                    && existing["payload"]["project"]["display_name"].as_str()
+                        == Some(binding_ws_name)
                 {
                     existing["payload"]["state"]["activity_status"] = json!(status);
                     existing["payload"]["state"]["presence"] = json!(presence);
@@ -4500,7 +4522,9 @@ mod tests {
         let redactor = ProjectRedactor::new(b"desktop-test-key").unwrap();
         let raw_uuid = "c05a7f38-16d6-4a6b-8e9e-1ed4540e8161";
         let observations = claude::normalize_agents_json(
-            &format!(r#"[{{ "sessionId": "{raw_uuid}", "cwd": "D:/Agent-Nexus", "state": "idle" }}]"#),
+            &format!(
+                r#"[{{ "sessionId": "{raw_uuid}", "cwd": "D:/Agent-Nexus", "state": "idle" }}]"#
+            ),
             &ObservationMeta::now("device-local"),
             &redactor,
         )

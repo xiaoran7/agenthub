@@ -10,7 +10,7 @@ import type {
 
 export type AuthMode = "login" | "register";
 
-export function Brand({ size = 26 }: { size?: number }) {
+function Brand({ size = 26 }: { size?: number }) {
   return (
     <svg
       width={size}

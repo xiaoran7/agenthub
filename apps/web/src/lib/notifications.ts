@@ -39,7 +39,7 @@ export function parseNotificationPresentedAt(
  * Push requires a secure context. `localhost` counts as one, so development
  * over plain HTTP still works, but a LAN IP over HTTP does not.
  */
-export function isPushCapable(): boolean {
+function isPushCapable(): boolean {
   return (
     typeof window !== "undefined" &&
     window.isSecureContext &&

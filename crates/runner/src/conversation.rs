@@ -662,9 +662,7 @@ fn normalize_local_conversation_items(value: &Value) -> Vec<Value> {
         let raw_content = value
             .pointer("/message/content")
             .or_else(|| value.get("content"));
-        let error_text = raw_content
-            .map(extract_local_text)
-            .unwrap_or_default();
+        let error_text = raw_content.map(extract_local_text).unwrap_or_default();
         if error_text.contains("No response requested") {
             return Vec::new();
         }

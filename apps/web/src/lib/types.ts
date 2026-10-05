@@ -57,18 +57,6 @@ export interface SessionRef {
   agent_session_id: string;
 }
 
-export function sessionRef(session: SessionRecord): SessionRef {
-  return {
-    device_id: session.device_id,
-    agent_type: session.agent_type,
-    agent_session_id: session.agent_session_id,
-  };
-}
-
-export function sessionKey(ref: SessionRef): string {
-  return `${ref.device_id}:${ref.agent_type}:${ref.agent_session_id}`;
-}
-
 // Key completeness is enforced by the contract type: a new agent type fails to
 // compile here rather than silently failing validation at runtime.
 const AGENT_TYPES: Record<AgentType, true> = {

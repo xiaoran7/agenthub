@@ -3313,9 +3313,8 @@ fn run_agent_stream_process(
         program: program.clone(),
         source,
     })?;
-    let response = final_agent_message(agent, &output).unwrap_or_else(|| {
-        "（任务执行完成）".to_owned()
-    });
+    let response =
+        final_agent_message(agent, &output).unwrap_or_else(|| "（任务执行完成）".to_owned());
     let session_id = extract_session_id_from_output(agent, &output);
     Ok(AgentStreamOutcome {
         response,
@@ -3398,25 +3397,34 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
                 let subtype = value.get("subtype").and_then(Value::as_str);
                 if subtype == Some("api_retry") {
                     let attempt = value.get("attempt").and_then(Value::as_u64).unwrap_or(1);
-                    let max_retries = value.get("max_retries").and_then(Value::as_u64).unwrap_or(10);
-                    let status = value.get("error_status").and_then(Value::as_u64).unwrap_or(429);
-                    let error = value.get("error").and_then(Value::as_str).unwrap_or("rate_limit");
+                    let max_retries = value
+                        .get("max_retries")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(10);
+                    let status = value
+                        .get("error_status")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(429);
+                    let error = value
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("rate_limit");
                     return Some(AgentTurnUpdate::AssistantDelta(format!(
                         "\n⚠️ [上游模型响应限流/配额不足 (HTTP {status} {error})，Claude 正在自动重试第 {attempt}/{max_retries} 次...]\n"
                     )));
                 }
-                if subtype == Some("status") {
-                    if let Some(status) = value.get("status").and_then(Value::as_str) {
-                        if status == "requesting" {
-                            return Some(AgentTurnUpdate::Activity("Claude 正在请求模型 API"));
-                        }
-                    }
+                if subtype == Some("status")
+                    && value.get("status").and_then(Value::as_str) == Some("requesting")
+                {
+                    return Some(AgentTurnUpdate::Activity("Claude 正在请求模型 API"));
                 }
                 if subtype == Some("init") {
                     return Some(AgentTurnUpdate::Activity("Claude 正在初始化上下文..."));
                 }
                 if subtype == Some("compact_boundary") {
-                    return Some(AgentTurnUpdate::Activity("Claude 正在压缩整理历史上下文..."));
+                    return Some(AgentTurnUpdate::Activity(
+                        "Claude 正在压缩整理历史上下文...",
+                    ));
                 }
             }
             if value.get("type").and_then(Value::as_str) == Some("stream_event") {
@@ -3435,26 +3443,28 @@ fn parse_agent_turn_update(agent: crate::domain::AgentType, line: &str) -> Optio
                     }
                 }
             }
-            if value.get("type").and_then(Value::as_str) == Some("assistant") {
-                if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
-                    let has_tool = blocks.iter().any(|block| {
-                        block.get("type").and_then(Value::as_str) == Some("tool_use")
-                    });
-                    if has_tool {
-                        return Some(AgentTurnUpdate::Activity("Claude 正在调用工具"));
+            let assistant_blocks = value
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|t| *t == "assistant")
+                .and_then(|_| value.pointer("/message/content"))
+                .and_then(Value::as_array);
+            if let Some(blocks) = assistant_blocks {
+                let has_tool = blocks
+                    .iter()
+                    .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"));
+                if has_tool {
+                    return Some(AgentTurnUpdate::Activity("Claude 正在调用工具"));
+                }
+                let mut text_acc = String::new();
+                for block in blocks {
+                    if block.get("type").and_then(Value::as_str) == Some("text") {
+                        text_acc.push_str(block.get("text").and_then(Value::as_str).unwrap_or(""));
                     }
-                    let mut text_acc = String::new();
-                    for block in blocks {
-                        if block.get("type").and_then(Value::as_str) == Some("text") {
-                            if let Some(t) = block.get("text").and_then(Value::as_str) {
-                                text_acc.push_str(t);
-                            }
-                        }
-                    }
-                    let trimmed = text_acc.trim();
-                    if !trimmed.is_empty() {
-                        return Some(AgentTurnUpdate::AssistantMessage(trimmed.to_owned()));
-                    }
+                }
+                let trimmed = text_acc.trim();
+                if !trimmed.is_empty() {
+                    return Some(AgentTurnUpdate::AssistantMessage(trimmed.to_owned()));
                 }
             }
             None
@@ -3558,45 +3568,52 @@ fn final_agent_message(agent: crate::domain::AgentType, output: &str) -> Option<
     match agent {
         crate::domain::AgentType::ClaudeCode => {
             for line in output.lines().rev() {
-                if let Ok(value) = serde_json::from_str::<Value>(line) {
-                    if value.get("type").and_then(Value::as_str) == Some("result") {
-                        if let Some(res) = value.get("result").and_then(Value::as_str) {
-                            let trimmed = res.trim();
-                            if !trimmed.is_empty() {
-                                return Some(trimmed.to_owned());
-                            }
-                        }
-                    }
+                let Ok(value) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if value.get("type").and_then(Value::as_str) != Some("result") {
+                    continue;
+                }
+                if let Some(res) = value
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    return Some(res.to_owned());
                 }
             }
             for line in output.lines().rev() {
-                if let Ok(value) = serde_json::from_str::<Value>(line) {
-                    if value.get("type").and_then(Value::as_str) == Some("assistant") {
-                        if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
-                            let mut text_acc = String::new();
-                            for block in blocks {
-                                if block.get("type").and_then(Value::as_str) == Some("text") {
-                                    if let Some(t) = block.get("text").and_then(Value::as_str) {
-                                        text_acc.push_str(t);
-                                    }
-                                }
-                            }
-                            let trimmed = text_acc.trim();
-                            if !trimmed.is_empty() {
-                                return Some(trimmed.to_owned());
-                            }
+                let Ok(value) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if value.get("type").and_then(Value::as_str) != Some("assistant") {
+                    continue;
+                }
+                if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
+                    let mut text_acc = String::new();
+                    for block in blocks {
+                        if block.get("type").and_then(Value::as_str) == Some("text") {
+                            text_acc
+                                .push_str(block.get("text").and_then(Value::as_str).unwrap_or(""));
                         }
+                    }
+                    let trimmed = text_acc.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_owned());
                     }
                 }
             }
             let mut deltas = String::new();
             for line in output.lines() {
-                if let Ok(value) = serde_json::from_str::<Value>(line) {
-                    if value.get("type").and_then(Value::as_str) == Some("stream_event") {
-                        if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
-                            deltas.push_str(delta);
-                        }
-                    }
+                let Ok(value) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if value.get("type").and_then(Value::as_str) != Some("stream_event") {
+                    continue;
+                }
+                if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
+                    deltas.push_str(delta);
                 }
             }
             let trimmed = deltas.trim();
@@ -4059,7 +4076,9 @@ mod tests {
         );
         assert_eq!(
             parse_agent_turn_update(crate::domain::AgentType::ClaudeCode, compact),
-            Some(AgentTurnUpdate::Activity("Claude 正在压缩整理历史上下文..."))
+            Some(AgentTurnUpdate::Activity(
+                "Claude 正在压缩整理历史上下文..."
+            ))
         );
     }
 

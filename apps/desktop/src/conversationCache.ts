@@ -10,7 +10,6 @@ interface CacheEntry {
 const CACHE_LIMIT = 60;
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<ConversationMessage[]>>();
-const listeners = new Set<(key: string, entry: CacheEntry) => void>();
 
 const hasTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -23,8 +22,6 @@ function store(key: string, messages: ConversationMessage[]) {
     if (oldest === undefined) break;
     cache.delete(oldest);
   }
-  const entry = cache.get(key);
-  if (entry) listeners.forEach((listener) => listener(key, entry));
 }
 
 export function cachedConversation(
@@ -36,15 +33,6 @@ export function cachedConversation(
 /** Test/demo hook: pre-seed a transcript without touching the backend. */
 export function seedConversation(key: string, messages: ConversationMessage[]) {
   store(key, messages);
-}
-
-export function subscribeConversation(
-  listener: (key: string, entry: CacheEntry) => void,
-) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
 }
 
 /** Deduplicated fetch of a session transcript; results feed the shared cache. */

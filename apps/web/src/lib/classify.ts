@@ -15,14 +15,6 @@ export const SESSION_TABS = [
 
 export type SessionTab = (typeof SESSION_TABS)[number];
 
-export const TAB_LABELS: Record<SessionTab, string> = {
-  all: "全部",
-  live: "活动",
-  waiting: "等待处理",
-  finished: "最近完成",
-  historical: "历史",
-};
-
 export function matchesTab(session: SessionRecord, tab: SessionTab): boolean {
   const { presence, activity_status: activity } = session.payload.state;
   switch (tab) {

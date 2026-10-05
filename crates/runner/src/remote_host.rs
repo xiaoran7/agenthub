@@ -2119,7 +2119,11 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             return Err(NativeError::rejected("session_control_lost"));
         }
         match &command.command {
-            RemoteAction::SendPrompt { text, effort, model } => {
+            RemoteAction::SendPrompt {
+                text,
+                effort,
+                model,
+            } => {
                 if text.trim().is_empty() || text.len() > 512 * 1024 {
                     return Err(NativeError::rejected("invalid_prompt"));
                 }
@@ -2266,8 +2270,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     }
                     self.approvals
                         .retain(|_, approval| approval.hub_session_id != *hub_id);
-                    self.questions
-                        .retain(|_, q| q.hub_session_id != *hub_id);
+                    self.questions.retain(|_, q| q.hub_session_id != *hub_id);
                     Ok(json!({"ok": true, "interrupted": true}))
                 }
             }
@@ -2337,8 +2340,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     {
                         binding.execution_state = turn_state(&params["turn"]["status"]);
                         binding.current_turn_id = None;
-                        self.approvals
-                            .retain(|_, approval| approval.hub_session_id != binding.hub_session_id);
+                        self.approvals.retain(|_, approval| {
+                            approval.hub_session_id != binding.hub_session_id
+                        });
                         self.questions
                             .retain(|_, q| q.hub_session_id != binding.hub_session_id);
                     }
@@ -2347,7 +2351,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         if !real_id.is_empty() && binding.provider_session_id != real_id {
                             self.native_to_hub.remove(&binding.provider_session_id);
                             binding.provider_session_id = real_id.to_string();
-                            self.native_to_hub.insert(real_id.to_string(), binding.hub_session_id.clone());
+                            self.native_to_hub
+                                .insert(real_id.to_string(), binding.hub_session_id.clone());
                         }
                     }
                 }

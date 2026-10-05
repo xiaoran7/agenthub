@@ -67,7 +67,7 @@ export interface TurnOptionsState {
   effort?: string;
 }
 
-export function sameConversation(
+function sameConversation(
   a: ConversationMessage[],
   b: ConversationMessage[],
 ): boolean {

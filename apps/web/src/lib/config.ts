@@ -11,7 +11,7 @@ export const DEFAULT_CONFIG: PanelConfig = {
 };
 
 export const CONFIG_STORAGE_KEY = "agent-pulse.panel-config.v1";
-export const LEGACY_CONFIG_STORAGE_KEY = "agent-platform.panel-config.v1";
+const LEGACY_CONFIG_STORAGE_KEY = "agent-platform.panel-config.v1";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 

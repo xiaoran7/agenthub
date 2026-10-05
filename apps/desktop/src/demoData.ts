@@ -1,6 +1,6 @@
 import type { ActivityStatus, Session, Snapshot } from "./types";
 
-export function demoSession(
+function demoSession(
   agent: Session["agent_type"],
   project: string,
   activity: ActivityStatus,
