@@ -7,6 +7,9 @@ import {
   extractToolPrimaryValue,
   parseQuestionData,
   ToolCallBlock,
+  ToolCallGroupBlock,
+  INITIAL_TOOL_VISIBLE_COUNT,
+  TOOL_EXPAND_STEP,
 } from "./ConversationRenderer";
 
 const render = (content: string) =>
@@ -275,5 +278,29 @@ describe("markdown code rendering", () => {
     expect(html).toContain("system-error-banner-tag");
     expect(html).toContain("API 异常记录");
     expect(html).toContain("历史请求异常: API Error: Request rejected (429)");
+  });
+
+  it("exports sensible initial and step counts for tool group pagination", () => {
+    expect(INITIAL_TOOL_VISIBLE_COUNT).toBe(6);
+    expect(TOOL_EXPAND_STEP).toBe(12);
+  });
+
+  it("renders a tool call group with collapsed state by default and shows total count", () => {
+    const dummyMessages = Array.from({ length: 30 }, (_, i) => ({
+      role: "assistant" as const,
+      kind: "tool" as const,
+      label: `Bash: command-${i + 1}`,
+      status: "completed" as const,
+      content: `{"command": "echo ${i + 1}"}`,
+    }));
+
+    const html = renderToStaticMarkup(
+      <ToolCallGroupBlock messages={dummyMessages} />,
+    );
+
+    expect(html).toContain("tool-call-group-container");
+    expect(html).toContain("已执行 30 个工具与操作");
+    // Initially closed, body shouldn't be rendered
+    expect(html).not.toContain("tool-group-pagination-footer");
   });
 });

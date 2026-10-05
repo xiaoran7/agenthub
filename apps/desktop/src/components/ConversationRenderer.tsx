@@ -12,6 +12,7 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   FileCode,
   FileText,
   Search,
@@ -124,14 +125,20 @@ export function groupConversationMessages(
   return groups;
 }
 
+export const INITIAL_TOOL_VISIBLE_COUNT = 6;
+export const TOOL_EXPAND_STEP = 12;
+
 /**
  * Collapsed Tool Call Group for 2+ consecutive tool executions
+ * Supports incremental expansion so large sets (e.g. 30 or 100 tools)
+ * do not cause massive scroll jumping.
  */
 export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
   messages,
   onAnswerQuestion,
 }: ToolCallGroupBlockProps) {
   const [open, setOpen] = useState(false);
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_TOOL_VISIBLE_COUNT);
   const count = messages.length;
   const hasFailed = messages.some((m) => m.status === "failed");
   const hasRunning = messages.some((m) => m.status === "running");
@@ -154,6 +161,24 @@ export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
     }
     return names.join(" · ");
   }, [messages, count]);
+
+  const visibleMessages = useMemo(() => {
+    return messages.slice(0, visibleLimit);
+  }, [messages, visibleLimit]);
+
+  const hasMore = messages.length > visibleLimit;
+  const remainingCount = messages.length - visibleLimit;
+  const nextStepCount = Math.min(remainingCount, TOOL_EXPAND_STEP);
+
+  const handleExpandMore = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setVisibleLimit((prev) => Math.min(messages.length, prev + TOOL_EXPAND_STEP));
+  };
+
+  const handleCollapseExtra = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setVisibleLimit(INITIAL_TOOL_VISIBLE_COUNT);
+  };
 
   return (
     <div className={`tool-call-group-container ${open ? "open" : ""}`}>
@@ -202,13 +227,46 @@ export const ToolCallGroupBlock = memo(function ToolCallGroupBlock({
 
       {open && (
         <div className="tool-call-group-body">
-          {messages.map((item, idx) => (
+          {visibleMessages.map((item, idx) => (
             <ToolCallBlock
               key={idx}
               message={item}
               onAnswerQuestion={onAnswerQuestion}
             />
           ))}
+
+          {/* 分段展开 / 展开更多 与 收起超额栏 */}
+          {(hasMore || visibleLimit > INITIAL_TOOL_VISIBLE_COUNT) && (
+            <div className="tool-group-pagination-footer">
+              {hasMore && (
+                <button
+                  type="button"
+                  className="tool-group-expand-btn"
+                  onClick={handleExpandMore}
+                  title={`展开更多工具 (${visibleLimit}/${messages.length})`}
+                >
+                  <span className="expand-text">展开更多操作</span>
+                  <span className="expand-badge">+{nextStepCount}</span>
+                  <span className="expand-remain-hint">
+                    (剩余 {remainingCount} 项)
+                  </span>
+                  <ChevronDown size={12} />
+                </button>
+              )}
+
+              {visibleLimit > INITIAL_TOOL_VISIBLE_COUNT && (
+                <button
+                  type="button"
+                  className="tool-group-collapse-btn"
+                  onClick={handleCollapseExtra}
+                  title="收起多余项，恢复首屏视图"
+                >
+                  <ChevronUp size={12} />
+                  <span>收起至前 {INITIAL_TOOL_VISIBLE_COUNT} 项</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
