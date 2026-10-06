@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.4.68] - 2026-10-07
+
+将 Claude Code 驱动方式从“单次命令拉起（--resume）”升级为“本地长驻双向进程控制”：
+实现 `ClaudeProcessSession`，通过持久持有 stdin/stdout 流式管道，让单个 Claude Code 子进程连续承载多轮交互与双向控制信道（`control_request` / `control_response`），消除了每轮重新冷启动的性能开销，打通细粒度实时审批并保留完备回退能力。
+
+### 核心特性与架构升级
+
+- **Claude Code 本地长驻双向进程会话（`crates/runner/src/collectors/claude_app_server.rs`）**：
+  - 新增 `ClaudeProcessSession`，利用 `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` 维持持久化长效子进程；
+  - 保持 stdin 双向管道常驻打开，支持 JSONL 编码的用户 prompt 与控制信令持续交互，消除每轮子进程冷启动与环境重新探测耗时；
+  - 后台读取线程统一基于 `read_bounded_line` 安全上限读取 stdout，捕获 `system/init` 首行握手与真实 `session_id`；
+  - 绑定 Win32 Job Object（`ChildJob`），保障 daemon 退出或异常崩溃时级联终止进程树，杜绝孤儿进程泄漏。
+- **统一控制面 MultiProviderTransport 深度集成（`crates/runner/src/remote_host.rs`）**：
+  - 在 `MultiProviderTransport` 中引入长驻会话池（`claude_sessions`），实现 `turn/start` 优先长驻流式调度；
+  - 完善 `drain()` 协议层事件流转译：实时抽取 `stream_event` 文本增量、`tool_use` 工具调用状态、`control_request` 双向控制审批与 `result` 轮次结束信令；
+  - 实现 `respond()` 的 Claude 控制响应通道（`claude_req_`），支持将前端审批决策即时写回 stdin；
+  - 保留向后兼容性与优雅降级机制：长驻拉起失败时自动退回经典流式线程执行。
+- **工程质量与编译验收**：
+  - 修复所有 Clippy 警告（零警告通过 `-D warnings`）；
+  - 全量格式化检查（`cargo fmt --all --check`）通过；
+  - 全量单元与集成测试（239 项测试）100% 验证通过。
+
 ## [2.4.67] - 2026-10-06
 
 全面清理死代码与废弃视图组件，完成全端前端交互与按钮可用性审查：

@@ -3896,6 +3896,9 @@ pub use codex_app_server::*;
 pub mod zcode_app_server;
 pub use zcode_app_server::*;
 
+pub mod claude_app_server;
+pub use claude_app_server::*;
+
 #[derive(Debug, Clone)]
 pub struct CollectorBinaries {
     pub claude: PathBuf,
