@@ -16,3 +16,9 @@ pulse.bundle
 _scratch/
 .env
 deploy/docker.env
+
+# AOCI agent host integration (machine-bound; do not commit)
+.mcp.json
+.mcp.json.backup.*
+.claude/settings.json
+.claude/settings.json.backup.*
