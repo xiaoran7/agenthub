@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.68] - 2026-10-08
+
+### 项目名称与清单对齐
+
+- **根目录清单重命名**：将根目录 `package.json` 与 `package-lock.json` 中的项目名称从 "agent-pulse" 修正回 "agenthub"，与仓库路径、产品定位和 AOCI 认知体系严格对齐；
+- **部署编排统一**：同步将 `deploy/docker-compose.production.yml` 的顶层工程名称更新为 "agenthub"。
+
 ## [2.4.68] - 2026-10-07
 
 将 Claude Code 驱动方式从“单次命令拉起（--resume）”升级为“本地长驻双向进程控制”：

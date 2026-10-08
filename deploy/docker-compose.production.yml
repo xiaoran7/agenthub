@@ -1,4 +1,4 @@
-name: agent-pulse
+name: agenthub
 
 services:
   api:
