@@ -657,6 +657,40 @@ fn projected_remote_event(event: &crate::remote_host::HostEvent) -> Result<Value
     Ok(json!({"type":"event","event":projected}))
 }
 
+/// One-line summary of a `codexErrorInfo` kind object, e.g.
+/// `{"usageLimitReached":{"httpStatusCode":429}}`.
+///
+/// Only the small scalars that say what to do about the failure are kept, so an
+/// internal detail object cannot ride along with them. Anything unrecognised is
+/// forwarded as-is rather than guessed at.
+fn codex_error_summary(detail: &Value) -> Value {
+    const KEEP: [&str; 4] = ["httpStatusCode", "retryAfterSeconds", "code", "message"];
+    let Some(object) = detail.as_object() else {
+        return detail.clone();
+    };
+    let mut summary = serde_json::Map::new();
+    for key in KEEP {
+        if let Some(value) = object.get(key)
+            && (value.is_string() || value.is_number() || value.is_boolean())
+        {
+            let bounded = value
+                .as_str()
+                .map(|text| {
+                    text.chars()
+                        .take(MAX_ERROR_MESSAGE_CHARS)
+                        .collect::<String>()
+                })
+                .map(Value::String)
+                .unwrap_or_else(|| value.clone());
+            summary.insert(key.into(), bounded);
+        }
+    }
+    if summary.is_empty() {
+        return detail.clone();
+    }
+    Value::Object(summary)
+}
+
 fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
     let params = event.raw.get("params")?;
     match event.kind.as_str() {
@@ -690,10 +724,30 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
                     .collect::<String>();
                 projected_error.insert("message".into(), json!(bounded));
             }
-            for key in ["codexErrorInfo", "type"] {
-                if let Some(value) = error.get(key).and_then(Value::as_str) {
-                    projected_error.insert(key.into(), json!(value));
+            // `codexErrorInfo` is an object keyed by kind (`{"usageLimitReached":{...}}`),
+            // not a string, so it is projected as its kind plus whatever the kind
+            // object can say in one line. An unknown shape keeps its own shape
+            // rather than being guessed at.
+            if let Some(info) = error.get("codexErrorInfo") {
+                match info {
+                    Value::Object(kinds) => {
+                        let mut projected_info = serde_json::Map::new();
+                        for (kind, detail) in kinds {
+                            projected_info.insert(kind.clone(), json!(codex_error_summary(detail)));
+                        }
+                        if !projected_info.is_empty() {
+                            projected_error
+                                .insert("codexErrorInfo".into(), Value::Object(projected_info));
+                        }
+                    }
+                    Value::String(text) => {
+                        projected_error.insert("codexErrorInfo".into(), json!(text));
+                    }
+                    _ => {}
                 }
+            }
+            if let Some(value) = error.get("type").and_then(Value::as_str) {
+                projected_error.insert("type".into(), json!(value));
             }
             // An error object with nothing a human can act on is not a cause;
             // dropping it keeps the console from rendering an empty banner.
@@ -712,6 +766,7 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
             }
             Some(json!({"params": Value::Object(projected_params)}))
         }
+
         "item/completed" => {
             let item = params.get("item")?;
             let id = item.get("id").and_then(Value::as_str)?;
@@ -901,7 +956,7 @@ fn error_events_project_the_cause_without_raw_provider_fields() {
             "willRetry":false,
             "error":{
                 "message":"The 'gpt-6-luna' model is not supported; check C:\\Users\\alice\\codex\\config.toml",
-                "codexErrorInfo":"other",
+                "codexErrorInfo":{"usageLimitReached":{"httpStatusCode":429,"internalStack":"do-not-send"}},
                 "additionalDetails":{"internalStack":"do-not-send"}
             }
         }}),
@@ -920,7 +975,12 @@ fn error_events_project_the_cause_without_raw_provider_fields() {
     assert_eq!(params["willRetry"], json!(false));
     let message = params["error"]["message"].as_str().unwrap();
     assert!(message.contains("gpt-6-luna"));
-    assert_eq!(params["error"]["codexErrorInfo"], json!("other"));
+    // `codexErrorInfo` is an object keyed by kind, not a string: the kind survives
+    // along with the one scalar that says what to do, and nothing else.
+    assert_eq!(
+        params["error"]["codexErrorInfo"],
+        json!({"usageLimitReached":{"httpStatusCode":429}})
+    );
     // Absolute paths in the provider text are rewritten, never forwarded raw.
     assert!(!message.contains("alice"));
     assert!(!message.contains("config.toml"));

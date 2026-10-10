@@ -13,6 +13,10 @@
   - `RemoteConsole.tsx` 新增红色失败横幅（区别于既有琥珀色提示），展示失败轮次与供应商真实原因，支持关闭且关闭态在会话切换或新失败到达前不会复现；
   - `remote.css` 新增 `.remote-notice-error` 独立色系，长文本 `overflow-wrap: anywhere` 防止撑破布局。
 - **回归测试**：Rust 侧新增 4 例（`remote_journal` 2 例 + `privacy` 2 例），Web 侧新增 5 例；`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`、`npm.cmd test`（68 通过）、`npm.cmd run typecheck`、`npm.cmd run format:check` 全部通过。
+- **代码审查后修正（同版本补齐）**：
+  - **修复 `redact_paths_inside_text()` 的越界 panic**：`push_token` 分别统计首尾标点，遇到仅由分隔符组成的 token（如孤立引号 `"`、`""`）时首尾区间重叠，`rest.len() - trailing` 减法下溢 panic。这类 token 会出现在解析类报错文案里，属真实可触发路径。改为对两个区间做钳制，并补充回归用例；
+  - **修正 `codexErrorInfo` 的投影形状**：该字段在真实协议里是**以 kind 为键的对象**（`{"usageLimitReached":{"httpStatusCode":429,...}}`），不是字符串，原实现用 `as_str()` 读取导致它被静默丢弃。改为按 kind 投影对象，只保留 `httpStatusCode`/`retryAfterSeconds`/`code`/`message` 四种标量与 2048 字符上限，其余内部字段不跨机器边界；原测试用字符串假形状编写所以一直通过，已改为真实形状；
+  - **统一 `latestTurnFailure()` 的会话隔离规则**：`turn/completed` 原先按 `hub_session_id` 过滤，`turn/started` 却无条件清除，规则不一致。两者改为同一判定，避免他会话的轮次事件清掉本会话的失败横幅。
 
 ## [2.4.71] - 2026-10-10
 

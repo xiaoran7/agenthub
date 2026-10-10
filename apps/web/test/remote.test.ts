@@ -318,6 +318,37 @@ test("a new turn clears an earlier failure and a completed turn clears it too", 
   assert.equal(latestTurnFailure([failed, completed], "hub-one"), null);
 });
 
+test("another session's turn must not clear this session's failure", () => {
+  const failed = errorEvent("model unavailable");
+  for (const kind of ["turn/started", "turn/completed"]) {
+    const otherSession: RemoteEvent = {
+      ...event(kind, { turn: { id: "turn-other" } }),
+      payload: {
+        type: "event",
+        event: {
+          kind,
+          raw: { params: { turn: { id: "turn-other" } } },
+          binding: {
+            hub_session_id: "hub-other",
+            provider_session_id: "native-one",
+            workspace_path: "ws-app-0123456789abcdef",
+            host_generation: "generation-one",
+            control_connected: true,
+            execution_state: "idle",
+            current_turn_id: null,
+          },
+        },
+      },
+    };
+    const failure = latestTurnFailure([failed, otherSession], "hub-one");
+    assert.equal(
+      failure?.message,
+      "model unavailable",
+      `${kind} for another session is not this session's outcome`,
+    );
+  }
+});
+
 test("an error the runner could not describe yields no invented cause", () => {
   for (const params of [
     {},

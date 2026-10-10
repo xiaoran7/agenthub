@@ -120,25 +120,23 @@ export function latestTurnFailure(
   for (const envelope of events) {
     const native = envelope.payload.event;
     if (!native) continue;
-    // A new turn supersedes an earlier failure; a completed turn clears it.
+    // A new turn supersedes an earlier failure; a completed turn clears it. Both
+    // are scoped the same way: the console's stream is already filtered to one
+    // session, but an event that names a different one must not clear this
+    // session's banner.
+    const belongsToSession =
+      native.binding?.hub_session_id === undefined ||
+      native.binding.hub_session_id === hubSessionId;
+    if (!belongsToSession) continue;
     if (native.kind === "turn/started") {
       failure = null;
       continue;
     }
-    if (
-      native.kind === "turn/completed" &&
-      (native.binding?.hub_session_id ?? hubSessionId) === hubSessionId
-    ) {
+    if (native.kind === "turn/completed") {
       failure = null;
       continue;
     }
     if (native.kind !== "error") continue;
-    if (
-      native.binding?.hub_session_id !== undefined &&
-      native.binding.hub_session_id !== hubSessionId
-    ) {
-      continue;
-    }
     const params = native.raw?.params;
     const error = params?.error as Record<string, unknown> | undefined;
     const message = error?.message;

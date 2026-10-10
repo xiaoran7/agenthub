@@ -247,6 +247,11 @@ fn push_token(out: &mut String, token: &mut String) {
             )
         })
         .count();
+    // A token that is nothing but delimiters counts itself as both leading and
+    // trailing (a lone `"`, or `""`), so the two runs can overlap. Clamping keeps
+    // the split in bounds; such a token is not a path and is emitted verbatim.
+    let leading = leading.min(token.len());
+    let trailing = trailing.min(token.len() - leading);
     let (prefix, rest) = token.split_at(leading);
     let (body, suffix) = rest.split_at(rest.len() - trailing);
     if is_absolute_filesystem_path(body) {
@@ -355,6 +360,16 @@ mod tests {
         assert_eq!(
             redact_paths_inside_text("copy /home/alice/a to /home/alice/b"),
             "copy [local_path_redacted] to [local_path_redacted]"
+        );
+        // A token made only of delimiters counts as both a leading and a trailing
+        // run, so the two overlap; it must not take the redaction down with it.
+        assert_eq!(
+            redact_paths_inside_text(r#"unexpected token " at C:\Users\alice\config"#),
+            r#"unexpected token " at [local_path_redacted]"#
+        );
+        assert_eq!(
+            redact_paths_inside_text(r#"see "" near C:\Users\alice\config"#),
+            r#"see "" near [local_path_redacted]"#
         );
     }
 
