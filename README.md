@@ -2,37 +2,46 @@
 
 AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**。
 
-它不实现自己的 Agent 推理循环，而是调用 Codex、Claude Code 等官方 Runtime。会话由本机 `agenthubd` 经官方协议托管；离开电脑后，从 Web 或 Android 看到同一 Session 的实时过程，继续对话、处理审批或急停。读取历史只有一个目的：判断并执行“继续”。
+它不实现自己的 Agent 推理循环，而是调用 Codex、Claude Code 等官方 Runtime。会话由本机 `agenthubd`（Runner）经官方协议托管；在任意设备通过自部署的 **Gateway + Web** 看到同一 Session 的实时过程，继续对话、处理审批或急停。读取历史只有一个目的：判断并执行“继续”。
+
+> **路线调整（2026-10）**：当前聚焦 **Gateway + Web** 自部署主线。Web 端同时承担桌面浏览器与移动设备（响应式 PWA）的远程全功能控制；Desktop（Tauri）与原生 Android 暂时冻结，延后至下一阶段。
 
 ## 产品结构
 
 ```text
-Desktop ──本地 IPC──► agenthubd ──官方协议──► Codex / Claude Code Runtime
-                         │
-                         └──主动出站──► Gateway ◄── Web / Android
+本机 agenthubd (Runner) ──官方协议──► Codex / Claude Code Runtime
+      │
+      └──主动出站 (WebSocket/TLS)──► Gateway ◄── Web (PC / 手机浏览器)
+                                      ┆
+                                   [挂起/延后: Desktop / Android]
 ```
 
-- **Desktop**：本机宿主客户端。选择授权工作区、创建或恢复官方 Session、查看实时过程、处理审批；同时控制 Gateway 暴露开关。它不是通用本地工作台，也不做会话归档浏览。
-- **agenthubd**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等和远程连接；当前由 Desktop 以隐藏进程模式自动启动，也可通过 `agent-pulse-runner daemon` 启动。尚未提供 OS 服务安装包。
-- **Web**：无需安装的远程完整客户端，用于跨设备查看、续聊、审批和中断。
-- **Android**：移动控制端，强调进度、通知、审批和紧急干预。
-- **Gateway**：只做身份、路由、持久化和回放，不运行 Agent，也不是 Session 真相源。
+- **agenthubd (Runner)**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等，并主动向 Gateway 建立出站连接；可由 `agent-pulse-runner daemon` 启动。
+- **Gateway**：自部署控制中枢。负责设备与用户身份、命令账本、状态路由、事件持久化与重放，不运行 Agent，也不是 Session 真相源。
+- **Web**：核心远程控制端（自部署单页应用，支持桌面与移动端响应式）。用于跨设备查看实时执行、续聊、处理权限审批与紧急中断。
+- **Desktop / Android（暂时冻结）**：已暂停主动迭代，代码保留在工程中，核心精力全部收敛至 Gateway + Web 闭环。
 
-Desktop、Web、Android 是同一产品的三种客户端，不是三套会话系统。官方协议不支持第三方 attach 正在运行的 CLI 进程，因此“远程继续”要求 Session 由 `agenthubd` 托管：**create / resume** 是托管的正式能力；**discover** 只产生恢复候选的只读元数据，不等于取得控制权，三种语义不能互相冒充。
+官方协议不支持第三方 attach 正在运行的 CLI 进程，因此“远程继续”要求 Session 由 `agenthubd` 托管：**create / resume** 是托管的正式能力；**discover** 只产生恢复候选的只读元数据，不等于取得控制权，三种语义不能互相冒充。
 
 ## 当前能力
 
 当前实现、目标架构和未完成差距只在 [文档索引](docs/README.md#当前实现与目标差距) 维护；本入口不复制阶段状态。验收记录只能证明其明确列出的环境，不能由 UI、模拟测试或旧版本数字推定。
 
-## 开发
+## 开发与运行 (Gateway + Web 主线)
 
 ```powershell
+# 依赖安装
 npm.cmd ci
-npm.cmd run tauri --workspace @agent-pulse/desktop -- dev
-npm.cmd run dev --workspace @agent-pulse/web
-```
 
-Web 默认访问 `http://127.0.0.1:3001` 的 Gateway；桌面可用 `AGENT_PULSE_SERVER_URL` 覆盖。Android 需要 JDK 17+、SDK 36，可用 `adb reverse tcp:3001 tcp:3001` 连接本机 Gateway。
+# 启动 Gateway (默认监听 http://127.0.0.1:3001)
+npm.cmd run dev --workspace @agent-pulse/server
+
+# 启动 Web 前端 (默认连接 Gateway)
+npm.cmd run dev --workspace @agent-pulse/web
+
+# 启动本机 Runner daemon
+cargo run -p agent-pulse-runner -- daemon
+```
 
 完整验证命令：
 

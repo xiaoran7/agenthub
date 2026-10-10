@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.69] - 2026-10-10
+
+### 战略路线收敛：主攻 Gateway + Web，冻结 Desktop 与 Android
+
+- **战略收敛与边界清晰化**：
+  - 将开发重心全面收缩至 **Gateway + Web** 自部署核心链路，降低全栈维护负担，集中突破 Web 控制面板（包含桌面与手机浏览器响应式/PWA）对官方 Runtime 的远程会话管理、流式过程输出、权限审批与急停中断；
+  - 暂时冻结 Desktop（Tauri 桌面端）与 Android 原生端，暂停主动迭代并保留已有代码资产，移动端体验由 Web 响应式架构统一承接；
+- **全项目文档与规范同步**：
+  - 更新根目录 [README.md](../README.md)，调整产品拓扑图，明确标记各端状态并精简运行指令为 Gateway + Web 主线；
+  - 更新 [AGENTS.md](../AGENTS.md)，调整项目边界与实施验证纪律；
+  - 同步更新 [docs/README.md](README.md)、[docs/PRD.md](PRD.md) 与 [docs/ARCHITECTURE.md](ARCHITECTURE.md) 中关于三端职责、当前事实与目标差距的表述。
+
 ## [2.4.68] - 2026-10-08
 
 ### 项目名称与清单对齐

@@ -11,7 +11,7 @@
 
 ## 项目边界
 
-AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**。Desktop、Web、Android 必须消费同一套 Session 模型；`agenthubd` 是本机会话控制面，Gateway 只中继和回放。读取会话历史只服务于“判断并执行继续”，不做工作台、归档或浏览功能。
+AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**。`agenthubd` 是本机会话控制面，Gateway 负责路由、中继与持久化。当前**聚焦 Gateway + Web 自部署主线**，Web 端承担 PC 浏览器与移动端全功能控制；Desktop（Tauri）与原生 Android 暂时冻结。读取会话历史只服务于“判断并执行继续”，不做工作台、归档或浏览功能。
 
 
 ## 产品边界
@@ -35,12 +35,13 @@ AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**�
 
 ## 实施与验证
 
-- 当前二进制仍名为 `agent-pulse-runner`；`agenthubd` 是已落地的进程职责。Desktop 与 Remote 必须持续共用同一 Host；独立改名和 OS 服务安装属于后续里程碑。
-- 新链路优先完成 Codex 常驻 Host → Desktop 本地 IPC → Gateway Remote；再按官方能力接入 Claude Code，其他 Provider 先保持发现/只读。
+- 当前战略聚焦 **Gateway + Web**：优先跑通 `agenthubd` (Runner) 经 WebSocket 上行直连自部署 Gateway，由 Web 端（PC/手机响应式）实现会话管理、流式过程、权限审批与急停；Desktop（Tauri）与原生 Android 暂时冻结。
+- 当前二进制仍名为 `agent-pulse-runner`；`agenthubd` 是已落地的进程职责。独立改名和 OS 服务安装属于后续里程碑。
+- 新链路优先完成 Codex / Claude Code 官方 Runtime 经 agenthubd → Gateway Remote → Web 的完整闭环，其他 Provider 先保持发现/只读。
 - Rust 变更运行 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`；TS 变更运行 `npm.cmd test`、`npm.cmd run typecheck`、`npm.cmd run format:check`。
-- 真实 CLI、桌面安装、Android 模拟器/真机、Gateway 重启和生产部署分别记录证据，不能互相替代。
+- 真实 CLI、Web 浏览器端控制、Gateway 重启和生产部署分别记录证据，不能互相替代。
 - 行为、接口与架构决策写入 `docs/CHANGELOG.md`。文档批次可独立提交，不要求运行无关构建。
-- **强制版本递增铁律**：凡进行代码修复并触发打包或生产部署，必须递增版本号（Patch/Minor）。打包时严格同步全平台：Android（自增 `versionCode` 与 `versionName`）、Node/Tauri、Cargo 与 UI 契约版本，绝对禁止使用相同版本号二次打包。
+- **强制版本递增铁律**：凡进行代码修复并触发打包或生产部署，必须递增版本号（Patch/Minor）。打包时严格同步版本，绝对禁止使用相同版本号二次发版。
 
 长期偏好见 [MEMORY.md](MEMORY.md)。
 

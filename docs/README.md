@@ -18,13 +18,16 @@
 
 ## 当前实现与目标差距
 
+> **当前战略重点（2026-10）**：集中精力打穿 **Gateway + Web** 自部署链路；Desktop（Tauri）与原生 Android 暂时冻结。
+
 | 范围          | 当前事实                                                                 | 下一步                                      |
 | ------------- | ------------------------------------------------------------------------ | ------------------------------------------- |
+| Gateway       | v3 单实例 SQLite 内容库、设备签名、命令账本、回放                       | 强化直连出站通道管理、命令路由与稳定性      |
+| Web (主力端)  | v3 Remote：Session 列表、Workspace 选择、创建/恢复/续聊、审批与中断；移动端响应式支持 | 完善全功能 Web 控制面板与手机端 PWA 交互体验 |
 | Codex Host    | 进程外 daemon + 常驻 app-server；创建、恢复、多轮、审批、中断可用       | 强化状态对齐和版本兼容                      |
-| Desktop       | 本机宿主客户端，经当前用户 IPC 使用 daemon；Remote 只是 Gateway 暴露开关；transcript 读取已收敛到 daemon 单点，仅托管能力 Provider 提供会话预览 | OS 服务安装、升级、诊断与独立停止控制       |
-| Gateway       | v3 单实例 SQLite 内容库、设备签名、命令账本、回放                       | 统一连接管理；需要横向扩展时迁移 PostgreSQL |
-| Web / Android | v3 Remote：Session 列表、Runner/Workspace 选择、Codex 创建/恢复/续聊、事件与命令收据、审批和中断；前台轮询、无原生推送和无离线命令队列 | 共用 capability report、通知与后台/离线同步体验 |
-| Claude Code   | 源码已包含 Claude 流式续聊分支及取消/事件队列；不等于长时协议与审批已完成验收             | 核验实际 CLI 版本、审批、取消和重连语义           |
+| Claude Code   | 源码已包含 Claude 流式续聊分支及取消/事件队列；已升级双向会话驱动        | 核验真实 CLI 协议、审批、取消与多轮继续     |
+| Desktop       | 本机宿主客户端（Tauri），经当前用户 IPC 使用 daemon                      | **暂时冻结**：暂停新功能开发，保留代码资产 |
+| Android       | 原生移动端应用（Kotlin）                                                 | **暂时冻结**：由 Web 响应式与 PWA 承接     |
 | 其他 Provider | 发现仅作恢复候选；不声称可写 attach                                      | 仅在 Provider 提供可靠所有权/订阅机制后开放 |
 
 `agent-pulse-runner` 是当前可执行文件名，`agenthubd` 是已经落地的进程职责；Desktop 通过隐藏 `--agenthubd` 模式启动同一实现。当前没有独立命名的 daemon 二进制或 OS 服务安装包。旧 v1 元数据同步仍保留，但不得承载新的会话正文或被当成 Remote 完成证据。

@@ -1,34 +1,35 @@
 # AgentHub 系统架构
 
-更新：2026-09-12。
+更新：2026-10-10（方向收敛：以 Gateway + Web 为自部署主线，暂时冻结 Desktop 与 Android 端）。
 
 ## 1. 架构结论
 
-AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。Desktop 是本地宿主客户端，Web 与 Android 是远程客户端；Gateway 只是出站通道上的控制中继和持久化层。读取会话历史只服务于“判断并执行继续”：transcript 解析是 daemon 的单点职责，对暂不能远程控制的 Provider 只展示有界元数据。
+AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。当前战略收敛至 **Gateway + Web**：Web 是唯一的全功能远程控制端（适配桌面与移动浏览器/PWA）；Gateway 是出站通道上的控制中继与持久化中枢。Desktop（Tauri）与原生 Android 暂时冻结。读取会话历史只服务于“判断并执行继续”。
 
 ```text
 ┌──────────────────────────── 开发机 ────────────────────────────┐
 │                                                                │
-│ Desktop ── local IPC ──► agenthubd ── Provider Adapter ──► Runtime
-│                              │                         Codex app-server
-│                              │                         Claude Code …
-│                              │
+│                        agenthubd (Runner) ── Provider Adapter ──► Runtime
+│                              │                                Codex
+│                              │                                Claude Code …
 │                              ├─ Session Registry / Ownership
 │                              ├─ Command Ledger / Event Log
 │                              ├─ Workspace Authorization
 │                              └─ Discovery (read-only)
 └──────────────────────────────┬─────────────────────────────────┘
-                               │ outbound TLS, optional
+                               │ outbound TLS / WebSocket
                                ▼
                          ┌── Gateway ──┐
                          │ auth/route  │
                          │ store/replay│
-                         └────┬───┬────┘
-                              │   │
-                             Web Android
+                         └──────┬──────┘
+                                │
+                               Web (PC / Mobile PWA)
+                                ┆
+                         [挂起: Desktop / Android]
 ```
 
-本地操作不绕 Gateway。远端控制不创建第二个 Runtime。网络、客户端和执行状态相互独立。
+远端控制不创建第二个 Runtime。网络、客户端和执行状态相互独立。
 
 ## 2. 组件职责
 
