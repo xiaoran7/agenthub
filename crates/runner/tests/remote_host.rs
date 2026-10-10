@@ -539,6 +539,28 @@ fn acp_question_and_approval_metadata_flow() {
         ))
     );
     assert!(host.pending_questions().is_empty());
+
+    // 3. Verify tool approval with custom tool name and implicit/omitted turnId
+    fake.event(json!({
+        "id": 103,
+        "method": "item/commandExecution/requestApproval",
+        "params": {
+            "threadId": "native-real",
+            "toolName": "WebFetch",
+            "command": "https://api.github.com",
+            "reason": "Fetch release notes",
+            "availableDecisions": ["accept", "decline"]
+        }
+    }));
+    let events2 = host.poll().unwrap();
+    assert_eq!(events2.len(), 1);
+    let app2 = events2[0].approval.as_ref().expect("approval snapshot");
+    assert_eq!(app2.tool_name.as_deref(), Some("WebFetch"));
+    assert_eq!(
+        app2.command_preview.as_deref(),
+        Some("https://api.github.com")
+    );
+    assert_eq!(app2.turn_id, "turn-1");
 }
 
 #[test]

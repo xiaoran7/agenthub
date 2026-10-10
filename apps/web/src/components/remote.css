@@ -1151,6 +1151,19 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   justify-content: space-between;
   margin-bottom: 8px;
 }
+.remote-approval-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-approval-tool-badge {
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e5e7eb;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-family: ui-monospace, Consolas, monospace;
+}
 .remote-approval h3 {
   font-size: 14.5px;
   font-weight: 600;
@@ -1185,12 +1198,41 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   margin-bottom: 10px;
   line-height: 1.4;
 }
+.remote-approval-box-wrapper {
+  margin: 10px 0;
+}
+.remote-approval-box-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.remote-approval-box-label {
+  font-size: 11.5px;
+  color: #9ca3af;
+  font-weight: 500;
+}
+.remote-approval-copy-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #d1d5db;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.remote-approval-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
 .remote-approval-command-box {
   background: #15161a;
   border: 1px solid #383b45;
   border-radius: 8px;
   padding: 10px 12px;
-  margin: 10px 0;
+  margin: 4px 0 0;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12.5px;
   color: #86efac;
@@ -1199,7 +1241,8 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   max-height: 160px;
   overflow-y: auto;
 }
-.remote-approval > div {
+.remote-approval > div,
+.remote-approval-actions {
   display: flex;
   gap: 12px;
   margin-top: 16px;
@@ -1216,10 +1259,21 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
 }
 .remote-question-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 14.5px;
   font-weight: 600;
   margin-bottom: 6px;
   color: #60a5fa;
+}
+.remote-question-type-badge {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.4);
 }
 .remote-question-prompt {
   font-size: 13.5px;
@@ -1238,7 +1292,7 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   border: 1px solid rgba(255, 255, 255, 0.15);
   color: #f3f4f6;
   padding: 8px 14px;
-  border-radius: 20px;
+  border-radius: 12px;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -1246,16 +1300,72 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   flex-direction: column;
   align-items: flex-start;
   text-align: left;
+  max-width: 100%;
 }
 .remote-option-btn:hover:not(:disabled) {
   background: rgba(59, 130, 246, 0.25);
   border-color: rgba(59, 130, 246, 0.6);
   transform: translateY(-1px);
 }
+.remote-option-btn.selected {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: rgba(59, 130, 246, 0.6);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.4);
+}
+.remote-option-top-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.remote-option-check {
+  font-size: 11px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: transparent;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.remote-option-check.checked {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
 .remote-option-desc {
   font-size: 11px;
   color: #9ca3af;
   margin-top: 2px;
+}
+.remote-option-preview {
+  margin: 6px 0 2px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+  width: 100%;
+}
+.remote-question-multi-actions {
+  margin: 8px 0 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.remote-question-submit-btn {
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border-radius: 8px;
 }
 .remote-question-input-row {
   display: flex;
@@ -1418,6 +1528,30 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.remote-effort-selector {
+  display: inline-flex;
+  align-items: center;
+}
+.remote-effort-select {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #9ca3af;
+  font-size: 11.5px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+}
+.remote-effort-select:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: #e5e7eb;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.remote-effort-select:focus {
+  border-color: #60a5fa;
+  color: #f3f4f6;
 }
 .remote-interrupt-btn {
   display: inline-flex !important;

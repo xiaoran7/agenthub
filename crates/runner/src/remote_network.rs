@@ -829,18 +829,53 @@ fn reject_remote_epoch(
     );
 }
 
+fn is_loopback_or_private_host(host: Option<&str>) -> bool {
+    let Some(host_str) = host else {
+        return false;
+    };
+    if matches!(host_str, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
+        return true;
+    }
+    if !host_str.contains('.') && !host_str.starts_with('[') {
+        return true;
+    }
+    if let Ok(ip) = host_str.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                let octets = v4.octets();
+                octets[0] == 127
+                    || octets[0] == 10
+                    || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                    || (octets[0] == 192 && octets[1] == 168)
+                    || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+            }
+            std::net::IpAddr::V6(v6) => v6.is_loopback(),
+        }
+    } else {
+        false
+    }
+}
+
 fn validate_server(server: &str) -> Result<String> {
-    let url = url::Url::parse(server)?;
+    let mut normalized = server.trim().to_string();
+    if let Some(stripped) = normalized.strip_prefix("http://") {
+        normalized = format!("ws://{stripped}");
+    } else if let Some(stripped) = normalized.strip_prefix("https://") {
+        normalized = format!("wss://{stripped}");
+    }
+    let mut url = url::Url::parse(&normalized)?;
     if !matches!(url.scheme(), "ws" | "wss")
-        || url.username() != ""
+        || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
     {
         bail!("invalid_remote_url");
     }
-    if url.scheme() == "ws" && !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
-    {
+    if url.path() == "/" || url.path().is_empty() {
+        url.set_path("/v3/remote/ws");
+    }
+    if url.scheme() == "ws" && !is_loopback_or_private_host(url.host_str()) {
         bail!("remote_tls_required");
     }
     if url.path() != "/v3/remote/ws" {
@@ -1205,6 +1240,10 @@ mod tests {
     #[test]
     fn transport_requires_tls_except_loopback_and_rejects_url_credentials() {
         assert!(validate_server("ws://127.0.0.1:3001/v3/remote/ws").is_ok());
+        assert!(validate_server("http://127.0.0.1:3001").is_ok());
+        assert!(validate_server("https://example.com").is_ok());
+        assert!(validate_server("ws://api:3001/v3/remote/ws").is_ok());
+        assert!(validate_server("ws://100.107.77.33:3001/v3/remote/ws").is_ok());
         assert!(validate_server("wss://example.com/v3/remote/ws").is_ok());
         for url in [
             "ws://example.com/v3/remote/ws",

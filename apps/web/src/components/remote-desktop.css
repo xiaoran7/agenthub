@@ -497,6 +497,23 @@
   color: var(--remote-green);
 }
 
+.remote-approval-tool-badge {
+  background: var(--remote-surface);
+  color: var(--remote-muted);
+}
+
+.remote-approval-copy-btn {
+  background: var(--remote-surface);
+  border-color: var(--remote-line);
+  color: var(--remote-secondary);
+}
+
+.remote-approval-copy-btn:hover {
+  background: var(--remote-surface);
+  border-color: var(--remote-line-strong);
+  color: var(--remote-ink);
+}
+
 .remote-question {
   background: #27313a;
   border-color: #47617c;
@@ -512,6 +529,28 @@
   background: var(--remote-surface);
   border-color: var(--remote-line);
   color: var(--remote-ink);
+}
+
+.remote-option-btn.selected {
+  background: rgba(71, 97, 124, 0.35);
+  border-color: var(--remote-blue);
+}
+
+.remote-option-preview {
+  background: var(--remote-sidebar);
+  border-color: var(--remote-line);
+  color: var(--remote-secondary);
+}
+
+.remote-effort-select {
+  background: var(--remote-surface);
+  border-color: var(--remote-line);
+  color: var(--remote-muted);
+}
+
+.remote-effort-select:hover:not(:disabled) {
+  color: var(--remote-ink);
+  border-color: var(--remote-line-strong);
 }
 
 .remote-option-desc {

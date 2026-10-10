@@ -1,6 +1,13 @@
 const DEFAULT_GATEWAY_ORIGIN = "http://127.0.0.1:3001";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
+function isLoopbackOrContainerHost(hostname: string): boolean {
+  return (
+    LOOPBACK_HOSTS.has(hostname) ||
+    (!hostname.includes(".") && !hostname.startsWith("["))
+  );
+}
+
 export function gatewayOrigin(
   input: string | undefined = process.env.GATEWAY_ORIGIN,
 ): string {
@@ -13,7 +20,7 @@ export function gatewayOrigin(
   }
   if (
     (url.protocol !== "https:" &&
-      !(url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname))) ||
+      !(url.protocol === "http:" && isLoopbackOrContainerHost(url.hostname))) ||
     url.username !== "" ||
     url.password !== "" ||
     url.search !== "" ||

@@ -17,7 +17,7 @@ services:
       PORT: 3001
       AGENTHUB_GATEWAY_DATABASE: /app/data/gateway.db
       AGENTHUB_REMOTE_DATABASE: /app/data/remote.db
-      GATEWAY_ACCESS_TOKEN: ${GATEWAY_ACCESS_TOKEN:-agenthub-secret-token}
+      GATEWAY_ACCESS_TOKEN: ${GATEWAY_ACCESS_TOKEN:-agenthub-secret-token-32bytes-auth-key!}
       AGENT_PLATFORM_OWNER_ID: ${AGENT_PLATFORM_OWNER_ID:-admin}
 
   web:
@@ -33,7 +33,7 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: 3000
       GATEWAY_ORIGIN: http://api:3001
-      GATEWAY_ACCESS_TOKEN: ${GATEWAY_ACCESS_TOKEN:-agenthub-secret-token}
+      GATEWAY_ACCESS_TOKEN: ${GATEWAY_ACCESS_TOKEN:-agenthub-secret-token-32bytes-auth-key!}
     depends_on:
       api:
         condition: service_started

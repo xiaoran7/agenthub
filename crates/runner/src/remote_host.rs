@@ -1133,16 +1133,23 @@ impl NativeTransport for MultiProviderTransport {
             && id_str.starts_with("claude_req_")
         {
             let actual_id = id_str.trim_start_matches("claude_req_");
-            let decision = result
-                .get("decision")
-                .and_then(Value::as_str)
-                .unwrap_or("accept");
+            let response_payload =
+                if let Some(decision) = result.get("decision").and_then(Value::as_str) {
+                    let behavior = if decision == "accept" {
+                        "allow"
+                    } else {
+                        "deny"
+                    };
+                    json!({
+                        "decision": decision,
+                        "behavior": behavior
+                    })
+                } else {
+                    result
+                };
             for session in self.claude_sessions.values_mut() {
-                let _ = session.send_control_response(
-                    actual_id,
-                    "success",
-                    json!({ "decision": decision }),
-                );
+                let _ =
+                    session.send_control_response(actual_id, "success", response_payload.clone());
             }
             return Ok(());
         }
@@ -1273,16 +1280,114 @@ impl NativeTransport for MultiProviderTransport {
                                         .get("subtype")
                                         .and_then(Value::as_str)
                                         .unwrap_or("unknown");
-                                    messages.push(json!({
-                                        "id": format!("claude_req_{}", req_id),
-                                        "method": "item/commandExecution/requestApproval",
-                                        "params": {
-                                            "threadId": session_id,
-                                            "requestId": req_id,
-                                            "subtype": subtype,
-                                            "details": req
+                                    let active_turn_id = self
+                                        .claude_active_turns
+                                        .get(session_id)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    let tool_name = req.get("tool_name").and_then(Value::as_str);
+                                    let is_question = subtype == "ask_user_question"
+                                        || tool_name == Some("AskUserQuestion");
+
+                                    if is_question {
+                                        let input = &req["input"];
+                                        let questions =
+                                            input.get("questions").and_then(Value::as_array);
+                                        let first_q = questions.and_then(|q| q.first());
+                                        let prompt = first_q
+                                            .and_then(|q| q.get("question").and_then(Value::as_str))
+                                            .or_else(|| {
+                                                input.get("question").and_then(Value::as_str)
+                                            })
+                                            .or_else(|| input.get("prompt").and_then(Value::as_str))
+                                            .unwrap_or("Agent 提出了一个问题");
+                                        let header = first_q
+                                            .and_then(|q| q.get("header").and_then(Value::as_str));
+                                        let multi_select = first_q.and_then(|q| {
+                                            q.get("multiSelect").and_then(Value::as_bool)
+                                        });
+                                        let options = first_q
+                                            .and_then(|q| q.get("options").and_then(Value::as_array))
+                                            .map(|opts| {
+                                                opts.iter()
+                                                    .filter_map(|opt| {
+                                                        opt.get("label")
+                                                            .and_then(Value::as_str)
+                                                            .map(|lbl| {
+                                                                json!({
+                                                                    "label": lbl,
+                                                                    "description": opt.get("description").and_then(Value::as_str),
+                                                                    "preview": opt.get("preview").and_then(Value::as_str)
+                                                                })
+                                                            })
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                            });
+                                        messages.push(json!({
+                                            "id": format!("claude_req_{}", req_id),
+                                            "method": "client/askQuestion",
+                                            "params": {
+                                                "threadId": session_id,
+                                                "turnId": active_turn_id,
+                                                "requestId": req_id,
+                                                "prompt": prompt,
+                                                "header": header,
+                                                "options": options,
+                                                "multiSelect": multi_select
+                                            }
+                                        }));
+                                    } else {
+                                        let tool_name_str = tool_name.unwrap_or("Bash");
+                                        let is_file = matches!(
+                                            tool_name_str,
+                                            "Edit" | "Write" | "NotebookEdit" | "fileChange"
+                                        );
+                                        let input = &req["input"];
+                                        let file_path = input
+                                            .get("file_path")
+                                            .or_else(|| input.get("path"))
+                                            .or_else(|| input.get("notebook_path"))
+                                            .and_then(Value::as_str);
+                                        let command = input
+                                            .get("command")
+                                            .or_else(|| input.get("cmd"))
+                                            .and_then(Value::as_str);
+                                        let reason = req
+                                            .get("description")
+                                            .or_else(|| req.get("reason"))
+                                            .and_then(Value::as_str);
+
+                                        if is_file {
+                                            messages.push(json!({
+                                                "id": format!("claude_req_{}", req_id),
+                                                "method": "item/fileChange/requestApproval",
+                                                "params": {
+                                                    "threadId": session_id,
+                                                    "turnId": active_turn_id,
+                                                    "requestId": req_id,
+                                                    "toolName": tool_name_str,
+                                                    "filePath": file_path,
+                                                    "reason": reason,
+                                                    "availableDecisions": ["accept", "decline"]
+                                                }
+                                            }));
+                                        } else {
+                                            let cmd_preview = command.unwrap_or(tool_name_str);
+                                            messages.push(json!({
+                                                "id": format!("claude_req_{}", req_id),
+                                                "method": "item/commandExecution/requestApproval",
+                                                "params": {
+                                                    "threadId": session_id,
+                                                    "turnId": active_turn_id,
+                                                    "requestId": req_id,
+                                                    "toolName": tool_name_str,
+                                                    "command": cmd_preview,
+                                                    "reason": reason,
+                                                    "availableDecisions": ["accept", "decline"]
+                                                }
+                                            }));
                                         }
-                                    }));
+                                    }
                                 }
                             }
                             "result" => {
@@ -2577,8 +2682,14 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 }
                 _ if raw.get("id").is_some() && raw.get("method").is_some() => {
                     let request_id = raw["id"].clone();
-                    let turn_id = params["turnId"].as_str().unwrap_or("");
-                    if binding.current_turn_id.as_deref() == Some(turn_id) {
+                    let turn_id = params["turnId"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .or(binding.current_turn_id.as_deref())
+                        .unwrap_or("");
+                    if binding.current_turn_id.as_deref() == Some(turn_id)
+                        || binding.current_turn_id.is_none()
+                    {
                         let mut digest = Sha256::new();
                         digest.update(b"agenthub.approval.v1\0");
                         digest.update(self.generation.as_bytes());
@@ -2653,13 +2764,16 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                 };
                                 let available_decisions =
                                     params["availableDecisions"].as_array().cloned();
-                                let tool_name = if is_command_approval {
-                                    Some("Bash".to_string())
-                                } else if is_file_approval {
-                                    Some("FileChange".to_string())
-                                } else {
-                                    None
-                                };
+                                let tool_name =
+                                    params["toolName"].as_str().map(str::to_owned).or_else(|| {
+                                        if is_command_approval {
+                                            Some("Bash".to_string())
+                                        } else if is_file_approval {
+                                            Some("FileChange".to_string())
+                                        } else {
+                                            None
+                                        }
+                                    });
                                 let command_preview = params["command"].as_str().map(str::to_owned);
                                 let path = params["filePath"].as_str().map(str::to_owned);
                                 let description = params["reason"].as_str().map(str::to_owned);

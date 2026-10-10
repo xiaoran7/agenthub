@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.70] - 2026-10-10
+
+### Gateway 自部署通信与 Web 端操作审批体验打磨
+
+- **Gateway 自部署与容器网络互通打通**：
+  - **Docker 容器间同源反代放行（`apps/web/src/server/gateway-proxy.ts`）**：增强 `isLoopbackOrContainerHost` 判定，放行 Docker Compose 中不含句点的单标签服务名（如 `http://api:3001` 或 `http://agenthub-api:3001`），彻底打通 Web 与 API 容器间同源反向代理，并增加自动化回归测试；
+  - **自部署密钥契约合规（`deploy/docker-compose.selfhost.yml` 与 `deploy/docker.env.selfhost.example`）**：将默认与示例 `GATEWAY_ACCESS_TOKEN` 从过短的 21 字节更新为合规的 32+ 字节安全密钥，杜绝容器启动阶段的 panic 崩溃；
+  - **Runner 出站网络自适应与私网放行（`crates/runner/src/remote_network.rs`）**：URL 自动补全 WebSocket scheme（`http://` -> `ws://`，`https://` -> `wss://`）及默认路径 `/v3/remote/ws`；引入 `is_loopback_or_private_host`，在公网强制 TLS 阻断凭据泄露的前提下，对回环、容器主机名、RFC 1918 私网与 Tailscale CGNAT（`100.64.0.0/10`）放行明文传输，畅通自部署局域网与 Tailnet 直连。
+- **Runner 双向控制面 Claude Code 与 Codex 审批/问答管道打通**：
+  - **活跃轮次双向绑定（`crates/runner/src/remote_host.rs`）**：在 `MultiProviderTransport::drain()` 中修复控制请求与活跃轮次（`active_turn_id`）关联缺失问题，确保所有审批请求正确绑定至对应轮次；
+  - **控制请求语义精准映射**：将 Claude Code `can_use_tool` 的文件编辑操作（`Edit`/`Write`/`NotebookEdit`）映射为 `item/fileChange/requestApproval`，命令执行映射为 `item/commandExecution/requestApproval`；将 `AskUserQuestion` 映射为 `client/askQuestion` 并完整保留 prompt、header、可多选标记与选项 preview 代码块；
+  - **双向响应协议闭环**：在 `MultiProviderTransport::respond()` 中打通 `decision`（"accept" / "decline"）到 Claude Code `behavior`（"allow" / "deny"）的双向回写，支持单选与多选文本问答答复即时写入底层子进程 stdin。
+- **Web 端审批与交互操作体验全面升级（`apps/web/src/components/RemoteConsole.tsx` 与样式表）**：
+  - **审批状态与操作防重反馈**：引入 `submittingApprovalId`，点击“允许此次操作”或“拒绝”时即时展示“处理中…”状态并禁用重入，杜绝重复网络请求；
+  - **待执行命令与路径一键复制**：在审批卡片中为待执行命令及修改路径提供轻量化一键复制按钮，附带“✓ 已复制”实时视觉反馈；
+  - **交互式问答（AskUserQuestion）多选与代码预览支持**：完美支持 `multi_select: true` 题目，提供复选框选中高亮与“确认已选项目 (N)”批量提交动作；支持选项代码/布局 preview 的等宽代码块预览；
+  - **每轮思考推理深度控制**：在输入框工具栏新增推理深度选择器（`effort`: 默认 / 低 / 中 / 高 / 最大），直通 Claude Code 与 Codex 执行管道；
+  - **急停中断视觉反馈**：中断按钮增加在途处理状态（`submittingInterrupt`，展示“正在停止…”并禁用连击）。
+
 ## [2.4.69] - 2026-10-10
 
 ### 战略路线收敛：主攻 Gateway + Web，冻结 Desktop 与 Android

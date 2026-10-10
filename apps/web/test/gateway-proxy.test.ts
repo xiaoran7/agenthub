@@ -19,6 +19,11 @@ test("same-origin route exposes every supported mutation method", () => {
 
 test("gateway origin rejects credential leaks and insecure remote transport", () => {
   assert.equal(gatewayOrigin(undefined), "http://127.0.0.1:3001");
+  assert.equal(gatewayOrigin("http://api:3001"), "http://api:3001");
+  assert.equal(
+    gatewayOrigin("http://agenthub-api:3001"),
+    "http://agenthub-api:3001",
+  );
   assert.equal(
     gatewayOrigin("https://gateway.example.com/"),
     "https://gateway.example.com",

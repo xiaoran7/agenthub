@@ -243,7 +243,12 @@ interface QuestionItem {
   question: string;
   header?: string | undefined;
   options?:
-    Array<{ label: string; description?: string | undefined }> | undefined;
+    | Array<{
+        label: string;
+        description?: string | undefined;
+        preview?: string | undefined;
+      }>
+    | undefined;
   multiSelect?: boolean | undefined;
 }
 
@@ -355,6 +360,11 @@ function RemoteToolCard({ item }: { item: ConversationItem }) {
                               <div className="remote-option-desc">
                                 {opt.description}
                               </div>
+                            )}
+                            {opt.preview && (
+                              <pre className="remote-option-preview">
+                                {opt.preview}
+                              </pre>
                             )}
                           </div>
                         );
@@ -479,6 +489,20 @@ export function RemoteConsole({
   const [questionAnswers, setQuestionAnswers] = useState<
     Record<string, string>
   >({});
+  const [submittingApprovalId, setSubmittingApprovalId] = useState<
+    string | null
+  >(null);
+  const [copiedApprovalId, setCopiedApprovalId] = useState<string | null>(null);
+  const [submittingQuestionId, setSubmittingQuestionId] = useState<
+    string | null
+  >(null);
+  const [selectedOptions, setSelectedOptions] = useState<
+    Record<string, string[]>
+  >({});
+  const [effort, setEffort] = useState<
+    "default" | "low" | "medium" | "high" | "max"
+  >("default");
+  const [submittingInterrupt, setSubmittingInterrupt] = useState(false);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notificationPresentedAt, setNotificationPresentedAt] = useState<
@@ -758,9 +782,26 @@ export function RemoteConsole({
     .find((item) =>
       ["rejected", "indeterminate"].includes(item.receipt?.status ?? ""),
     );
+  const handleCopyText = (id: string, textToCopy: string) => {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(textToCopy);
+      setCopiedApprovalId(id);
+      setTimeout(() => {
+        setCopiedApprovalId((current) => (current === id ? null : current));
+      }, 2000);
+    }
+  };
+
   const submit = async (action: RemoteCommand["command"], target = session) => {
     if (!target) return;
     setBusy(true);
+    if (action.action === "resolve_approval") {
+      setSubmittingApprovalId(action.approval_id);
+    } else if (action.action === "answer_question") {
+      setSubmittingQuestionId(action.question_id);
+    } else if (action.action === "interrupt") {
+      setSubmittingInterrupt(true);
+    }
     setError("");
     const attemptKey = JSON.stringify([
       target.runner_id,
@@ -793,6 +834,9 @@ export function RemoteConsole({
       setError(remoteError(err));
     } finally {
       setBusy(false);
+      setSubmittingApprovalId(null);
+      setSubmittingQuestionId(null);
+      setSubmittingInterrupt(false);
     }
   };
   const launch = async () => {
@@ -1655,120 +1699,290 @@ export function RemoteConsole({
                   会话已建立，可以发送第一条消息。
                 </p>
               )}
-              {approvals.map((approval) => (
-                <section className="remote-approval" key={approval.approval_id}>
-                  <div className="remote-approval-header">
-                    <h3>需要你的确认</h3>
-                    {approval.risk_level && (
-                      <span
-                        className={`remote-approval-badge ${approval.risk_level}`}
-                      >
-                        {approval.risk_level === "high"
-                          ? "高风险"
-                          : approval.risk_level === "medium"
-                            ? "中风险"
-                            : "低风险"}
-                      </span>
-                    )}
-                  </div>
-                  <div className="remote-approval-desc">
-                    <strong>
-                      {
-                        getProviderInfo(
-                          session?.binding.provider_session_id ?? "",
-                        ).name
-                      }
-                    </strong>{" "}
-                    请求执行【{approval.tool_name ?? "系统工具"}】
-                    {approval.description && `：${approval.description}`}
-                  </div>
-                  {approval.command_preview && (
-                    <div className="remote-approval-command-box">
-                      {approval.command_preview}
-                    </div>
-                  )}
-                  {approval.path && !approval.command_preview && (
-                    <div className="remote-approval-command-box">
-                      {approval.path}
-                    </div>
-                  )}
-                  <div>
-                    <button
-                      disabled={!connected || busy || !approval.can_decline}
-                      onClick={() =>
-                        void submit({
-                          action: "resolve_approval",
-                          approval_id: approval.approval_id,
-                          approved: false,
-                        })
-                      }
-                    >
-                      拒绝
-                    </button>
-                    <button
-                      className="remote-primary"
-                      disabled={!connected || busy || !approval.can_approve}
-                      onClick={() =>
-                        void submit({
-                          action: "resolve_approval",
-                          approval_id: approval.approval_id,
-                          approved: true,
-                        })
-                      }
-                    >
-                      允许此次操作
-                    </button>
-                  </div>
-                </section>
-              ))}
-              {questions.map((q) => (
-                <section className="remote-question" key={q.question_id}>
-                  <div className="remote-question-header">
-                    {q.header ?? "Agent 向你提问"}
-                  </div>
-                  <div className="remote-question-prompt">{q.prompt}</div>
-                  {q.options && q.options.length > 0 && (
-                    <div className="remote-question-options">
-                      {q.options.map((opt, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          className="remote-option-btn"
-                          disabled={!connected || busy}
-                          onClick={() =>
-                            void submit({
-                              action: "answer_question",
-                              question_id: q.question_id,
-                              answer: opt.label,
-                            })
-                          }
+              {approvals.map((approval) => {
+                const isSubmitting =
+                  submittingApprovalId === approval.approval_id;
+                const isCopied = copiedApprovalId === approval.approval_id;
+                return (
+                  <section
+                    className="remote-approval"
+                    key={approval.approval_id}
+                  >
+                    <div className="remote-approval-header">
+                      <div className="remote-approval-title-wrap">
+                        <h3>需要你的确认</h3>
+                        <span className="remote-approval-tool-badge">
+                          {approval.tool_name ?? "系统工具"}
+                        </span>
+                      </div>
+                      {approval.risk_level && (
+                        <span
+                          className={`remote-approval-badge ${approval.risk_level}`}
                         >
-                          <strong>{opt.label}</strong>
-                          {opt.description && (
-                            <span className="remote-option-desc">
-                              {opt.description}
-                            </span>
-                          )}
-                        </button>
-                      ))}
+                          {approval.risk_level === "high"
+                            ? "高风险"
+                            : approval.risk_level === "medium"
+                              ? "中风险"
+                              : "低风险"}
+                        </span>
+                      )}
                     </div>
-                  )}
-                  <div className="remote-question-input-row">
-                    <input
-                      type="text"
-                      className="remote-question-input"
-                      placeholder="自定义回答..."
-                      disabled={!connected || busy}
-                      value={questionAnswers[q.question_id] ?? ""}
-                      onChange={(e) =>
-                        setQuestionAnswers((prev) => ({
-                          ...prev,
-                          [q.question_id]: e.target.value,
-                        }))
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
+                    <div className="remote-approval-desc">
+                      <strong>
+                        {
+                          getProviderInfo(
+                            session?.binding.provider_session_id ?? "",
+                          ).name
+                        }
+                      </strong>{" "}
+                      请求执行【{approval.tool_name ?? "系统工具"}】
+                      {approval.description && `：${approval.description}`}
+                    </div>
+                    {approval.command_preview && (
+                      <div className="remote-approval-box-wrapper">
+                        <div className="remote-approval-box-bar">
+                          <span className="remote-approval-box-label">
+                            待执行命令
+                          </span>
+                          <button
+                            type="button"
+                            className="remote-approval-copy-btn"
+                            onClick={() =>
+                              handleCopyText(
+                                approval.approval_id,
+                                approval.command_preview!,
+                              )
+                            }
+                            title="复制命令"
+                          >
+                            {isCopied ? "✓ 已复制" : "复制命令"}
+                          </button>
+                        </div>
+                        <div className="remote-approval-command-box">
+                          {approval.command_preview}
+                        </div>
+                      </div>
+                    )}
+                    {approval.path && !approval.command_preview && (
+                      <div className="remote-approval-box-wrapper">
+                        <div className="remote-approval-box-bar">
+                          <span className="remote-approval-box-label">
+                            涉及路径
+                          </span>
+                          <button
+                            type="button"
+                            className="remote-approval-copy-btn"
+                            onClick={() =>
+                              handleCopyText(
+                                approval.approval_id,
+                                approval.path!,
+                              )
+                            }
+                            title="复制路径"
+                          >
+                            {isCopied ? "✓ 已复制" : "复制路径"}
+                          </button>
+                        </div>
+                        <div className="remote-approval-command-box">
+                          {approval.path}
+                        </div>
+                      </div>
+                    )}
+                    <div className="remote-approval-actions">
+                      <button
+                        type="button"
+                        disabled={
+                          !connected ||
+                          busy ||
+                          !approval.can_decline ||
+                          isSubmitting
+                        }
+                        onClick={() =>
+                          void submit({
+                            action: "resolve_approval",
+                            approval_id: approval.approval_id,
+                            approved: false,
+                          })
+                        }
+                      >
+                        {isSubmitting ? "处理中…" : "拒绝"}
+                      </button>
+                      <button
+                        type="button"
+                        className="remote-primary"
+                        disabled={
+                          !connected ||
+                          busy ||
+                          !approval.can_approve ||
+                          isSubmitting
+                        }
+                        onClick={() =>
+                          void submit({
+                            action: "resolve_approval",
+                            approval_id: approval.approval_id,
+                            approved: true,
+                          })
+                        }
+                      >
+                        {isSubmitting ? "处理中…" : "允许此次操作"}
+                      </button>
+                    </div>
+                  </section>
+                );
+              })}
+              {questions.map((q) => {
+                const isSubmitting = submittingQuestionId === q.question_id;
+                const isMulti = Boolean(q.multi_select);
+                const currentSelections = selectedOptions[q.question_id] ?? [];
+                return (
+                  <section className="remote-question" key={q.question_id}>
+                    <div className="remote-question-header">
+                      <span>{q.header ?? "Agent 向你提问"}</span>
+                      {isMulti && (
+                        <span className="remote-question-type-badge">
+                          可多选
+                        </span>
+                      )}
+                    </div>
+                    <div className="remote-question-prompt">{q.prompt}</div>
+                    {q.options && q.options.length > 0 && (
+                      <div className="remote-question-options">
+                        {q.options.map((opt, idx) => {
+                          const isOptionSelected = currentSelections.includes(
+                            opt.label,
+                          );
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              className={`remote-option-btn ${
+                                isOptionSelected ? "selected" : ""
+                              }`}
+                              disabled={!connected || busy || isSubmitting}
+                              onClick={() => {
+                                if (isMulti) {
+                                  setSelectedOptions((prev) => {
+                                    const list = prev[q.question_id] ?? [];
+                                    const nextList = list.includes(opt.label)
+                                      ? list.filter(
+                                          (item) => item !== opt.label,
+                                        )
+                                      : [...list, opt.label];
+                                    return {
+                                      ...prev,
+                                      [q.question_id]: nextList,
+                                    };
+                                  });
+                                } else {
+                                  void submit({
+                                    action: "answer_question",
+                                    question_id: q.question_id,
+                                    answer: opt.label,
+                                  });
+                                }
+                              }}
+                            >
+                              <div className="remote-option-top-row">
+                                {isMulti && (
+                                  <span
+                                    className={`remote-option-check ${
+                                      isOptionSelected ? "checked" : ""
+                                    }`}
+                                    aria-hidden="true"
+                                  >
+                                    {isOptionSelected ? "✓" : ""}
+                                  </span>
+                                )}
+                                <strong>{opt.label}</strong>
+                              </div>
+                              {opt.description && (
+                                <span className="remote-option-desc">
+                                  {opt.description}
+                                </span>
+                              )}
+                              {opt.preview && (
+                                <pre className="remote-option-preview">
+                                  {opt.preview}
+                                </pre>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {isMulti && (
+                      <div className="remote-question-multi-actions">
+                        <button
+                          type="button"
+                          className="remote-primary remote-question-submit-btn"
+                          disabled={
+                            !connected ||
+                            busy ||
+                            isSubmitting ||
+                            currentSelections.length === 0
+                          }
+                          onClick={() => {
+                            if (currentSelections.length > 0) {
+                              void submit({
+                                action: "answer_question",
+                                question_id: q.question_id,
+                                answer: currentSelections,
+                              });
+                              setSelectedOptions((prev) => {
+                                const next = { ...prev };
+                                delete next[q.question_id];
+                                return next;
+                              });
+                            }
+                          }}
+                        >
+                          {isSubmitting
+                            ? "提交中…"
+                            : `确认已选项目 (${currentSelections.length})`}
+                        </button>
+                      </div>
+                    )}
+                    <div className="remote-question-input-row">
+                      <input
+                        type="text"
+                        className="remote-question-input"
+                        placeholder="或者输入自定义回答..."
+                        disabled={!connected || busy || isSubmitting}
+                        value={questionAnswers[q.question_id] ?? ""}
+                        onChange={(e) =>
+                          setQuestionAnswers((prev) => ({
+                            ...prev,
+                            [q.question_id]: e.target.value,
+                          }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const ans = questionAnswers[q.question_id]?.trim();
+                            if (ans) {
+                              void submit({
+                                action: "answer_question",
+                                question_id: q.question_id,
+                                answer: ans,
+                              });
+                              setQuestionAnswers((prev) => ({
+                                ...prev,
+                                [q.question_id]: "",
+                              }));
+                            }
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="remote-primary"
+                        disabled={
+                          !connected ||
+                          busy ||
+                          isSubmitting ||
+                          !questionAnswers[q.question_id]?.trim()
+                        }
+                        onClick={() => {
                           const ans = questionAnswers[q.question_id]?.trim();
                           if (ans) {
                             void submit({
@@ -1781,44 +1995,25 @@ export function RemoteConsole({
                               [q.question_id]: "",
                             }));
                           }
-                        }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="remote-primary"
-                      disabled={
-                        !connected ||
-                        busy ||
-                        !questionAnswers[q.question_id]?.trim()
-                      }
-                      onClick={() => {
-                        const ans = questionAnswers[q.question_id]?.trim();
-                        if (ans) {
-                          void submit({
-                            action: "answer_question",
-                            question_id: q.question_id,
-                            answer: ans,
-                          });
-                          setQuestionAnswers((prev) => ({
-                            ...prev,
-                            [q.question_id]: "",
-                          }));
-                        }
-                      }}
-                    >
-                      提交回答
-                    </button>
-                  </div>
-                </section>
-              ))}
+                        }}
+                      >
+                        {isSubmitting ? "提交中…" : "提交回答"}
+                      </button>
+                    </div>
+                  </section>
+                );
+              })}
             </div>
             <form
               className="remote-composer-card"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (canSend && text.trim()) {
-                  void submit({ action: "send_prompt", text });
+                  void submit({
+                    action: "send_prompt",
+                    text,
+                    ...(effort !== "default" ? { effort } : {}),
+                  });
                   if (textareaRef.current)
                     textareaRef.current.style.height = "auto";
                 }
@@ -1838,7 +2033,11 @@ export function RemoteConsole({
                     if (!isMobile && event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       if (canSend && text.trim()) {
-                        void submit({ action: "send_prompt", text });
+                        void submit({
+                          action: "send_prompt",
+                          text,
+                          ...(effort !== "default" ? { effort } : {}),
+                        });
                         if (textareaRef.current)
                           textareaRef.current.style.height = "auto";
                       }
@@ -1890,13 +2089,33 @@ export function RemoteConsole({
                   </span>
                 </div>
                 <div className="remote-composer-actions">
+                  <div
+                    className="remote-effort-selector"
+                    title="设置本轮思考推理深度 (Claude Code / Codex)"
+                  >
+                    <select
+                      value={effort}
+                      onChange={(e) =>
+                        setEffort(e.target.value as typeof effort)
+                      }
+                      className="remote-effort-select"
+                      disabled={!connected || busy}
+                      aria-label="推理思考深度"
+                    >
+                      <option value="default">默认思考</option>
+                      <option value="low">低推理 (快速)</option>
+                      <option value="medium">中推理 (标准)</option>
+                      <option value="high">高推理 (深度)</option>
+                      <option value="max">超高推理 (最大)</option>
+                    </select>
+                  </div>
                   <RemoteContextCapacity events={events} />
                   {session?.binding.current_turn_id && (
                     <button
                       type="button"
                       className="remote-interrupt-btn"
                       title="停止任务"
-                      disabled={!connected || busy}
+                      disabled={!connected || busy || submittingInterrupt}
                       onClick={() => void submit({ action: "interrupt" })}
                     >
                       <svg
@@ -1907,7 +2126,7 @@ export function RemoteConsole({
                       >
                         <rect x="4" y="4" width="16" height="16" rx="2" />
                       </svg>
-                      <span>停止</span>
+                      <span>{submittingInterrupt ? "正在停止…" : "停止"}</span>
                     </button>
                   )}
                   <button
