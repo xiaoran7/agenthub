@@ -137,23 +137,21 @@ export function getDeviceLabel(
     device_name?: unknown;
   } | null,
 ): string {
-  if (runnerId.startsWith("dev_780f")) return "泉州工作机 (quanzhou-pc)";
-  if (runnerId.startsWith("dev_c7e3")) return "主工作机 (local-pc)";
-  if (
-    hello !== null &&
-    hello !== undefined &&
-    typeof hello.hostname === "string" &&
-    hello.hostname !== ""
-  ) {
-    return hello.hostname;
-  }
   if (
     hello !== null &&
     hello !== undefined &&
     typeof hello.device_name === "string" &&
-    hello.device_name !== ""
+    hello.device_name.trim() !== ""
   ) {
-    return hello.device_name;
+    return hello.device_name.trim();
+  }
+  if (
+    hello !== null &&
+    hello !== undefined &&
+    typeof hello.hostname === "string" &&
+    hello.hostname.trim() !== ""
+  ) {
+    return hello.hostname.trim();
   }
   return `电脑 · ${runnerId.slice(-6)}`;
 }

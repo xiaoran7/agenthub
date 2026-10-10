@@ -867,6 +867,17 @@
   }
 }
 
+.remote-scroll-bottom-btn {
+  background: var(--remote-surface);
+  border-color: var(--remote-line);
+  color: var(--remote-ink);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+.remote-scroll-bottom-btn:hover {
+  background: var(--remote-surface-strong, var(--remote-surface));
+  border-color: var(--remote-line-strong);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .remote-console *,
   .remote-console *::before,

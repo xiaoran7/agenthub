@@ -226,9 +226,12 @@ test("workspace labels read as folder names and keep the full path as a hint", (
 
 test("device labels fall back from hostname to a short id", () => {
   assert.equal(
-    getDeviceLabel("dev_c7e3abcd", { hostname: "ignored" }),
-    "主工作机 (local-pc)",
-    "a known local machine keeps its stable label",
+    getDeviceLabel("dev_zzz", {
+      device_name: "工作机 (work-pc)",
+      hostname: "work-pc",
+    }),
+    "工作机 (work-pc)",
+    "device_name takes precedence over hostname",
   );
   assert.equal(
     getDeviceLabel("dev_zzz", { hostname: "studio-mac" }),

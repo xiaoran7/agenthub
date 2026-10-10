@@ -186,14 +186,33 @@ export function latestContextUsage(
 export async function remoteRequest<T>(
   path: string,
   body?: unknown,
+  timeoutMs = 12000,
 ): Promise<T> {
-  const response = await fetch(`/v3/remote${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    cache: "no-store",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json", "x-user-id": "local-user" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error("request_timeout"));
+  }, timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(`/v3/remote${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        "content-type": "application/json",
+        "x-user-id": "local-user",
+      },
+      signal: controller.signal,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("request_timeout");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const value = (await response.json()) as T & { error?: string };
   if (!response.ok) {
     const error = new Error(
@@ -211,6 +230,8 @@ export async function remoteRequest<T>(
 }
 export function remoteError(error: unknown): string {
   const messages: Record<string, string> = {
+    gateway_unreachable: "网关服务暂时无法连接，正在自动重连。",
+    request_timeout: "网络请求响应超时，正在自动重试。",
     remote_not_enabled:
       "远程连接尚未启用。请先配置 Gateway 内容存储并连接 Runner。",
     runner_offline: "这台电脑已离线，连接恢复后可继续。",

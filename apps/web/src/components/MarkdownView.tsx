@@ -109,6 +109,42 @@ function Caret() {
   return <span className="remote-typing-cursor" aria-hidden="true" />;
 }
 
+const MARKDOWN_COMPONENTS: React.ComponentProps<
+  typeof ReactMarkdown
+>["components"] = {
+  pre({ children }) {
+    // The <pre> is what identifies a fenced code block; the language
+    // rides on the inner <code> as a `language-*` class.
+    const child = React.Children.toArray(children)[0];
+    if (!React.isValidElement<React.ComponentProps<"code">>(child)) {
+      return <pre>{children}</pre>;
+    }
+    const language =
+      /(?:^|\s)language-(\S+)/.exec(child.props.className ?? "")?.[1] ?? "text";
+    const value = String(child.props.children ?? "").replace(/\n$/, "");
+    return <CodeBlock language={language} value={value} />;
+  },
+  a({ children, href }) {
+    return (
+      <a
+        className="remote-md-link"
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {children}
+      </a>
+    );
+  },
+  table({ children }) {
+    return (
+      <div className="remote-md-table-wrapper">
+        <table className="remote-md-table">{children}</table>
+      </div>
+    );
+  },
+};
+
 /**
  * Markdown rendering for Agent output.
  *
@@ -155,33 +191,7 @@ export function MarkdownView({
     >
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
-        components={{
-          pre({ children }) {
-            // The <pre> is what identifies a fenced code block; the language
-            // rides on the inner <code> as a `language-*` class.
-            const child = React.Children.toArray(children)[0];
-            if (!React.isValidElement<React.ComponentProps<"code">>(child)) {
-              return <pre>{children}</pre>;
-            }
-            const language =
-              /(?:^|\s)language-(\S+)/.exec(child.props.className ?? "")?.[1] ??
-              "text";
-            const value = String(child.props.children ?? "").replace(/\n$/, "");
-            return <CodeBlock language={language} value={value} />;
-          },
-          a({ children, href }) {
-            return (
-              <a
-                className="remote-md-link"
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {children}
-              </a>
-            );
-          },
-        }}
+        components={MARKDOWN_COMPONENTS}
       >
         {content}
       </ReactMarkdown>

@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.4.71] - 2026-10-10
+
+### Web 网页端用户前端体验与流式渲染全面优化
+
+- **60 FPS 渲染性能与动效 GPU 合成层改造（`apps/web/src/components/remote.css`）**：
+  - **运行中工具卡片 Shimmer 重构**：将 `.remote-tool.running .remote-tool-summary::after` 从引起 CPU 重绘的 `background-position` 改为基于独立 GPU 合成层的位移 `will-change: transform; transform: translate3d(-100%, 0, 0)`，彻底消除流式增量期间的重绘掉帧；
+  - **CSS 过渡属性收敛**：高频交互按钮从 `transition: all` 收敛至显式安全属性（`background-color, border-color, color, opacity`），杜绝触发几何重排；
+  - **移动端视口防缩放与触控适配**：在 `<= 700px` 视口下将所有输入框最小字号强制设置为 `16px`，彻底解决 iOS Safari 获得焦点时强制放大视口（Auto-zoom）的问题；小屏下审批按钮改为垂直排列，触控热区升至 `>= 44px`；
+  - **无障碍减弱动效保护**：在 `@media (prefers-reduced-motion: reduce)` 中彻底停用 `remote-pulse` 与 `remote-tool-shimmer` 无限循环动画；
+  - **Windows 纵向滚动条抖动修复**：将 `.remote-console` 的 `width: 100vw` 修正为 `width: 100%; max-width: 100%`，消除滚动条出现时 15px 的横向抖动。
+- **React 流式渲染性能与 Markdown 组件级提升**：
+  - **Markdown 映射组件提升至模块级（`apps/web/src/components/MarkdownView.tsx`）**：将 `react-markdown` 的 `components` 映射提升为单例常量 `MARKDOWN_COMPONENTS`，避免每次增量 token 重新实例化组件对象与重构 AST；
+  - **GFM 表格横向包裹层**：实现 GFM `table` 自定义渲染，注入 `.remote-md-table-wrapper` 溢出滑动层与边框隔行样式，防止宽表格撑破排版；
+  - **历史卡片记忆化（`React.memo`）**：为 `RemoteToolCard`、`RemoteToolGroup` 及 `RemoteContextCapacity` 增加 `memo` 包裹，跳过流式输出期间对已完成历史卡片的无效协调。
+- **时间轴滚底状态机（Follow-bottom）与精细化交互状态（`apps/web/src/components/RemoteConsole.tsx`）**：
+  - **滚底跟随状态机**：监听时间轴滚动距离，用户上滑翻阅历史内容时（距离底部 >80px）自动断开跟随，流式 token 增长不再强行回滚视口；
+  - **悬浮“回到最新”按钮**：在脱离底部时展示带顺滑过渡的 `.remote-scroll-bottom-btn` 浮标，点击后平滑滚底并重新激活跟随模式；
+  - **审批动作级状态细分**：将审批处理状态从单值 ID 细化为 `{ id, action: "approve" | "decline" }`，点击“拒绝”时仅“拒绝”按钮展示“处理中…”，允许按钮保持原样禁用，消除视觉歧义；
+  - **会话切换状态自动清理**：切换会话时自动清理未提交的选项勾选、输入草稿与审批状态；
+  - **防重复连接守卫**：侧边栏点击当前已选中的活跃会话时，不再重复触发全量 resume 连接；
+  - **侧边栏宽度持久化与拖拽内存泄漏清理**：修复拖拽结束时读取闭包旧宽度的问题，在组件卸载时彻底移除全局 window 监听。
+- **网络韧性、自部署兼容性与后台待办感知**：
+  - **安全 UUID 降级生成器（`apps/web/src/lib/uuid.ts`）**：实现 `safeRandomUUID()`，在局域网 HTTP 等非安全上下文（`crypto.randomUUID` 为空）中自动降级至安全随机字节或 RFC 4122 v4 散列，替换全部 5 处原始调用；
+  - **网络传输故障与设备在线状态解耦**：网关 502 或轮询超时网络波动时保留 `snapshot.runners` 与 `snapshot.sessions` 真实状态，不在前端强行将设备篡改为“电脑离线”；
+  - **Fetch 请求超时保护（`apps/web/src/lib/remote.ts`）**：在 `remoteRequest` 中引入 12 秒 `AbortController` 超时保护，防止挂死连接阻塞轮询队列；
+  - **后台待审批会话角标感知**：从各 Runner 的 `hello.pending_approvals` 聚合计算后台待办数量，在侧边栏对应会话标题右侧渲染显著的琥珀色待办角标（`.remote-tree-badge-pending`）；
+  - **设备名称标准化展示（`apps/web/src/lib/session-tree.ts`）**：清理硬编码开发机 ID，统一按照 `device_name` > `hostname` > `电脑 · {id}` 层级解析；
+  - **Service Worker 系统通知联动**：监听 `select-session` 消息，点击系统通知时自动选中并聚焦对应会话。
+
 ## [2.4.70] - 2026-10-10
 
 ### Gateway 自部署通信与 Web 端操作审批体验打磨

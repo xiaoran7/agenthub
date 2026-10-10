@@ -1,6 +1,7 @@
 .remote-console {
   height: 100dvh;
-  width: 100vw;
+  width: 100%;
+  max-width: 100%;
   display: flex;
   flex-direction: row;
   background: #141518;
@@ -29,7 +30,11 @@
   background: #25272d;
   padding: 8px 13px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
 }
 .remote-console button:hover:not(:disabled) {
   background: #2c2f37;
@@ -64,9 +69,7 @@
   flex-shrink: 0;
   height: 100%;
   box-sizing: border-box;
-  transition:
-    width 0.18s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.15s ease;
+  transition: opacity 0.15s ease;
 }
 .remote-sidebar.collapsed {
   width: 0 !important;
@@ -936,7 +939,8 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 .remote-tool.running .remote-tool-summary::after {
   content: "";
   position: absolute;
-  inset: auto 0 0 0;
+  inset: auto auto 0 0;
+  width: 45%;
   height: 1.5px;
   background: linear-gradient(
     90deg,
@@ -944,16 +948,16 @@ details[open] > .remote-tool-summary > .remote-disclosure {
     var(--remote-blue, #93c5fd),
     transparent
   );
-  background-size: 42% 100%;
-  background-repeat: no-repeat;
+  will-change: transform;
+  transform: translate3d(-100%, 0, 0);
   animation: remote-tool-shimmer 1.4s ease-in-out infinite;
 }
 @keyframes remote-tool-shimmer {
   0% {
-    background-position: -45% 0;
+    transform: translate3d(-100%, 0, 0);
   }
   100% {
-    background-position: 145% 0;
+    transform: translate3d(240%, 0, 0);
   }
 }
 .remote-tool-content {
@@ -2148,8 +2152,8 @@ details[open] > .remote-tool-summary > .remote-disclosure {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
+    width: 44px;
+    height: 44px;
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -2191,24 +2195,157 @@ details[open] > .remote-tool-summary > .remote-disclosure {
     max-width: 100%;
   }
 
+  .remote-approval,
+  .remote-question {
+    padding: 14px 14px;
+    border-radius: 12px;
+  }
+
+  .remote-approval > div,
+  .remote-approval-actions {
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .remote-approval-actions button {
+    width: 100%;
+    min-height: 44px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .remote-question-options {
+    flex-direction: column;
+  }
+
+  .remote-option-btn {
+    width: 100%;
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  .remote-question-input-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .remote-question-input-row button {
+    min-height: 44px;
+  }
+
   /* The hairline above the composer spans the phone, not the measure. */
   .remote-composer-card::before {
-    width: 100vw;
+    width: 100%;
   }
 
   .remote-composer-input-wrapper textarea {
-    font-size: 14px;
+    font-size: 16px !important;
+  }
+
+  .remote-question-input,
+  .remote-launch select,
+  .remote-launch input {
+    font-size: 16px !important;
+  }
+
+  .remote-send-btn {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .remote-interrupt-btn {
+    min-height: 36px !important;
+    padding: 6px 14px !important;
+  }
+
+  .remote-effort-select {
+    min-height: 36px;
+    font-size: 13px;
   }
 
   .remote-composer-toolbar {
     margin-top: 4px;
   }
+
+  .remote-scroll-bottom-btn {
+    bottom: 76px;
+    right: 16px;
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+}
+
+.remote-scroll-bottom-btn {
+  position: absolute;
+  bottom: 84px;
+  right: 24px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(30, 32, 38, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #f1f2f4;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    transform 0.15s ease,
+    background-color 0.15s ease;
+}
+.remote-scroll-bottom-btn:hover {
+  background: rgba(45, 48, 58, 0.98);
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.remote-scroll-bottom-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.remote-tree-badge-pending {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: auto;
+  flex-shrink: 0;
+  animation: remote-pulse 2s infinite ease-in-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .remote-timeline,
-  .remote-tool,
-  .remote-tool * {
-    scroll-behavior: auto;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .remote-tool.running .remote-tool-summary::after {
+    display: none !important;
+  }
+  .remote-status-pill.running .remote-pill-dot {
+    animation: none !important;
+    opacity: 1 !important;
+  }
+  .remote-tree-badge-pending {
+    animation: none !important;
   }
 }

@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { RemoteCommand } from "@agent-pulse/contracts/remote";
 import type { AccountView } from "../lib/account";
+import { safeRandomUUID } from "../lib/uuid";
 import {
   conversationItems,
   groupConversationItems,
@@ -267,7 +268,11 @@ function parseQuestionData(content?: string): QuestionItem[] | null {
   return null;
 }
 
-function RemoteToolCard({ item }: { item: ConversationItem }) {
+const RemoteToolCard = memo(function RemoteToolCard({
+  item,
+}: {
+  item: ConversationItem;
+}) {
   const status = item.status ?? "completed";
   const kind = toolKind(item);
   const diffStats = parseDiffStats(item.command);
@@ -409,9 +414,13 @@ function RemoteToolCard({ item }: { item: ConversationItem }) {
       )}
     </details>
   );
-}
+});
 
-function RemoteToolGroup({ items }: { items: ConversationItem[] }) {
+const RemoteToolGroup = memo(function RemoteToolGroup({
+  items,
+}: {
+  items: ConversationItem[];
+}) {
   const status = items.some((item) => item.status === "failed")
     ? "failed"
     : items.some((item) => item.status === "running")
@@ -461,7 +470,7 @@ function RemoteToolGroup({ items }: { items: ConversationItem[] }) {
       </div>
     </details>
   );
-}
+});
 
 export function RemoteConsole({
   request = remoteRequest,
@@ -481,6 +490,8 @@ export function RemoteConsole({
   config?: PanelConfig | undefined;
 }) {
   const [snapshot, setSnapshot] = useState(empty);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
   const [selected, setSelected] = useState("");
   const [events, setEvents] = useState<RemoteEvent[]>([]);
   const [commands, setCommands] = useState<RemoteCommandRecord[]>([]);
@@ -489,9 +500,10 @@ export function RemoteConsole({
   const [questionAnswers, setQuestionAnswers] = useState<
     Record<string, string>
   >({});
-  const [submittingApprovalId, setSubmittingApprovalId] = useState<
-    string | null
-  >(null);
+  const [submittingApproval, setSubmittingApproval] = useState<{
+    id: string;
+    action: "approve" | "decline";
+  } | null>(null);
   const [copiedApprovalId, setCopiedApprovalId] = useState<string | null>(null);
   const [submittingQuestionId, setSubmittingQuestionId] = useState<
     string | null
@@ -508,6 +520,7 @@ export function RemoteConsole({
   const [notificationPresentedAt, setNotificationPresentedAt] = useState<
     number | undefined
   >(undefined);
+  const [followBottom, setFollowBottom] = useState(true);
   // Keep an uncertain POST's identity when the user retries the same operation.
   const attempts = useRef(new Map<string, RemoteCommand>());
   const autoResumedRef = useRef<Set<string>>(new Set());
@@ -520,6 +533,25 @@ export function RemoteConsole({
     const onMessage = (event: MessageEvent) => {
       const presentedAt = parseNotificationPresentedAt(event.data);
       if (presentedAt !== undefined) setNotificationPresentedAt(presentedAt);
+      if (
+        event.data &&
+        typeof event.data === "object" &&
+        event.data.type === "select-session"
+      ) {
+        const targetSession = event.data.session;
+        if (typeof targetSession === "string") {
+          setSelected(targetSession);
+        } else if (targetSession && typeof targetSession === "object") {
+          const found = snapshotRef.current.sessions.find(
+            (s) =>
+              s.runner_id === targetSession.device_id &&
+              s.binding.provider_session_id === targetSession.agent_session_id,
+          );
+          if (found) {
+            setSelected(`${found.runner_id}/${found.binding.hub_session_id}`);
+          }
+        }
+      }
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     return () =>
@@ -556,7 +588,17 @@ export function RemoteConsole({
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+  const currentSidebarWidthRef = useRef(sidebarWidth);
+  currentSidebarWidthRef.current = sidebarWidth;
   const isResizingRef = useRef(false);
+  const cleanResizerListenersRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      isResizingRef.current = false;
+      cleanResizerListenersRef.current?.();
+    };
+  }, []);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => {
@@ -570,23 +612,30 @@ export function RemoteConsole({
     e.preventDefault();
     isResizingRef.current = true;
     const startX = e.clientX;
-    const startWidth = sidebarWidth;
+    const startWidth = currentSidebarWidthRef.current;
+    let latestWidth = startWidth;
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       if (!isResizingRef.current) return;
       const delta = moveEvent.clientX - startX;
-      const nextWidth = Math.min(Math.max(startWidth + delta, 180), 520);
-      setSidebarWidth(nextWidth);
+      latestWidth = Math.min(Math.max(startWidth + delta, 180), 520);
+      setSidebarWidth(latestWidth);
     };
 
     const onMouseUp = () => {
       isResizingRef.current = false;
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      cleanResizerListenersRef.current = null;
       localStorage.setItem(
         "agenthub_remote_sidebar_width",
-        String(sidebarWidth),
+        String(latestWidth),
       );
+    };
+
+    cleanResizerListenersRef.current = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
     };
 
     window.addEventListener("mousemove", onMouseMove);
@@ -638,17 +687,6 @@ export function RemoteConsole({
         }
       } catch (err) {
         if (!stopped) {
-          setSnapshot((previous) => ({
-            ...previous,
-            runners: previous.runners.map((item) => ({
-              ...item,
-              online: false,
-            })),
-            sessions: previous.sessions.map((item) => ({
-              ...item,
-              online: false,
-            })),
-          }));
           setError(remoteError(err));
           setLoading(false);
           if (err instanceof Error && err.message === "authentication_required")
@@ -673,6 +711,11 @@ export function RemoteConsole({
     setEvents([]);
     setCommands([]);
     setText("");
+    setQuestionAnswers({});
+    setSelectedOptions({});
+    setSubmittingApproval(null);
+    setSubmittingQuestionId(null);
+    setFollowBottom(true);
     if (!selected) return;
     const [runnerId, hub] = selected.split("/");
     if (!runnerId || !hub) return;
@@ -742,11 +785,29 @@ export function RemoteConsole({
     for (const [key, command] of attempts.current)
       if (confirmed.has(command.client_cmd_id)) attempts.current.delete(key);
   }, [commands]);
+
+  const handleTimelineScroll = () => {
+    const pane = timeline.current;
+    if (!pane) return;
+    const distanceFromBottom =
+      pane.scrollHeight - pane.scrollTop - pane.clientHeight;
+    setFollowBottom(distanceFromBottom < 80);
+  };
+
+  const scrollToBottom = () => {
+    const pane = timeline.current;
+    if (pane) {
+      pane.scrollTo({ top: pane.scrollHeight, behavior: "smooth" });
+    }
+    setFollowBottom(true);
+  };
+
   useEffect(() => {
     const pane = timeline.current;
-    if (pane && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 300)
+    if (pane && followBottom) {
       pane.scrollTop = pane.scrollHeight;
-  }, [items]);
+    }
+  }, [items, followBottom]);
 
   // 核心特性：选定会话时全量自动开始恢复接入，无需手动点击恢复
   useEffect(() => {
@@ -796,7 +857,10 @@ export function RemoteConsole({
     if (!target) return;
     setBusy(true);
     if (action.action === "resolve_approval") {
-      setSubmittingApprovalId(action.approval_id);
+      setSubmittingApproval({
+        id: action.approval_id,
+        action: action.approved ? "approve" : "decline",
+      });
     } else if (action.action === "answer_question") {
       setSubmittingQuestionId(action.question_id);
     } else if (action.action === "interrupt") {
@@ -811,7 +875,7 @@ export function RemoteConsole({
     const command =
       attempts.current.get(attemptKey) ??
       ({
-        client_cmd_id: crypto.randomUUID(),
+        client_cmd_id: safeRandomUUID(),
         hub_session_id: target.binding.hub_session_id,
         host_generation: target.binding.host_generation,
         command: action,
@@ -834,7 +898,7 @@ export function RemoteConsole({
       setError(remoteError(err));
     } finally {
       setBusy(false);
-      setSubmittingApprovalId(null);
+      setSubmittingApproval(null);
       setSubmittingQuestionId(null);
       setSubmittingInterrupt(false);
     }
@@ -859,8 +923,8 @@ export function RemoteConsole({
     const command =
       attempts.current.get(attemptKey) ??
       ({
-        client_cmd_id: crypto.randomUUID(),
-        hub_session_id: crypto.randomUUID(),
+        client_cmd_id: safeRandomUUID(),
+        hub_session_id: safeRandomUUID(),
         host_generation: generation,
         command: {
           action: "connect",
@@ -912,8 +976,8 @@ export function RemoteConsole({
     const command =
       attempts.current.get(attemptKey) ??
       ({
-        client_cmd_id: crypto.randomUUID(),
-        hub_session_id: crypto.randomUUID(),
+        client_cmd_id: safeRandomUUID(),
+        hub_session_id: safeRandomUUID(),
         host_generation: generation,
         command: {
           action: "connect",
@@ -1017,6 +1081,19 @@ export function RemoteConsole({
         seen.set(agent.provider, agent.label);
     return seen;
   }, [deviceGroups]);
+
+  const pendingApprovalsBySessionKey = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of snapshot.runners) {
+      if (r.hello?.pending_approvals) {
+        for (const pa of r.hello.pending_approvals) {
+          const k = `${r.runner_id}/${pa.hub_session_id}`;
+          counts.set(k, (counts.get(k) ?? 0) + 1);
+        }
+      }
+    }
+    return counts;
+  }, [snapshot.runners]);
 
   /**
    * The folder path to the selected session, so the user can always see where
@@ -1343,6 +1420,10 @@ export function RemoteConsole({
                                                 );
                                               const isSelected =
                                                 item.sessionKey === selected;
+                                              const pendingCount =
+                                                pendingApprovalsBySessionKey.get(
+                                                  item.sessionKey,
+                                                ) ?? 0;
                                               return (
                                                 <button
                                                   className={`remote-session ${isSelected ? "selected" : ""}`}
@@ -1353,6 +1434,13 @@ export function RemoteConsole({
                                                       undefined
                                                     )
                                                       return;
+                                                    if (isSelected) {
+                                                      if (isMobile)
+                                                        setMobileDrawerOpen(
+                                                          false,
+                                                        );
+                                                      return;
+                                                    }
                                                     setSelected(
                                                       item.sessionKey,
                                                     );
@@ -1386,6 +1474,18 @@ export function RemoteConsole({
                                                 >
                                                   <span className="remote-session-title">
                                                     {item.title}
+                                                    {pendingCount > 0 && (
+                                                      <span
+                                                        className="remote-tree-badge-pending"
+                                                        title={`有 ${pendingCount} 项待确认审批`}
+                                                        aria-label={`有 ${pendingCount} 项待确认审批`}
+                                                      >
+                                                        !
+                                                        {pendingCount > 1
+                                                          ? ` ${pendingCount}`
+                                                          : ""}
+                                                      </span>
+                                                    )}
                                                   </span>
                                                   <span className="remote-session-meta">
                                                     <span
@@ -1637,6 +1737,7 @@ export function RemoteConsole({
             <div
               className="remote-timeline"
               ref={timeline}
+              onScroll={handleTimelineScroll}
               aria-label="会话内容"
             >
               {itemGroups.map((group) => {
@@ -1700,8 +1801,12 @@ export function RemoteConsole({
                 </p>
               )}
               {approvals.map((approval) => {
-                const isSubmitting =
-                  submittingApprovalId === approval.approval_id;
+                const isSubmittingThis =
+                  submittingApproval?.id === approval.approval_id;
+                const isApproving =
+                  isSubmittingThis && submittingApproval?.action === "approve";
+                const isDeclining =
+                  isSubmittingThis && submittingApproval?.action === "decline";
                 const isCopied = copiedApprovalId === approval.approval_id;
                 return (
                   <section
@@ -1795,7 +1900,7 @@ export function RemoteConsole({
                           !connected ||
                           busy ||
                           !approval.can_decline ||
-                          isSubmitting
+                          isSubmittingThis
                         }
                         onClick={() =>
                           void submit({
@@ -1805,7 +1910,7 @@ export function RemoteConsole({
                           })
                         }
                       >
-                        {isSubmitting ? "处理中…" : "拒绝"}
+                        {isDeclining ? "处理中…" : "拒绝"}
                       </button>
                       <button
                         type="button"
@@ -1814,7 +1919,7 @@ export function RemoteConsole({
                           !connected ||
                           busy ||
                           !approval.can_approve ||
-                          isSubmitting
+                          isSubmittingThis
                         }
                         onClick={() =>
                           void submit({
@@ -1824,7 +1929,7 @@ export function RemoteConsole({
                           })
                         }
                       >
-                        {isSubmitting ? "处理中…" : "允许此次操作"}
+                        {isApproving ? "处理中…" : "允许此次操作"}
                       </button>
                     </div>
                   </section>
@@ -2004,6 +2109,28 @@ export function RemoteConsole({
                 );
               })}
             </div>
+            {!followBottom && items.length > 0 && (
+              <button
+                type="button"
+                className="remote-scroll-bottom-btn"
+                onClick={scrollToBottom}
+                aria-label="回到最新消息"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+                <span>回到最新</span>
+              </button>
+            )}
             <form
               className="remote-composer-card"
               onSubmit={(event) => {

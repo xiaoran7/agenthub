@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { latestContextUsage, type RemoteEvent } from "../lib/remote";
 
-export function RemoteContextCapacity({ events }: { events: RemoteEvent[] }) {
+export const RemoteContextCapacity = memo(function RemoteContextCapacity({
+  events,
+}: {
+  events: RemoteEvent[];
+}) {
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
   const usage = useMemo(() => latestContextUsage(events), [events]);
@@ -102,4 +106,4 @@ export function RemoteContextCapacity({ events }: { events: RemoteEvent[] }) {
       )}
     </div>
   );
-}
+});
