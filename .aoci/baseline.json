@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-06T15:15:55Z",
-  "updated_at": "2026-10-06T15:15:55Z",
+  "updated_at": "2026-10-10T13:45:28Z",
   "files": {
     ".dockerignore": {
       "role": "index",
@@ -1340,9 +1340,9 @@
     },
     "apps/web/test/gateway-proxy.test.ts": {
       "role": "observe",
-      "sha256": "3b2cff7e95352dfaa095d601d86e272d8f884e0734108b31a48f7557b5a962df",
-      "size": 4639,
-      "normalized_sha256": "3b2cff7e95352dfaa095d601d86e272d8f884e0734108b31a48f7557b5a962df"
+      "sha256": "d53ad1c82cb79d4fcf81c8bb6b66c4c72af0bef0f6d9b1f3d379f1980f45a959",
+      "size": 4808,
+      "normalized_sha256": "d53ad1c82cb79d4fcf81c8bb6b66c4c72af0bef0f6d9b1f3d379f1980f45a959"
     },
     "apps/web/test/notifications.test.ts": {
       "role": "observe",
@@ -1358,9 +1358,9 @@
     },
     "apps/web/test/remote.test.ts": {
       "role": "observe",
-      "sha256": "12bf17d8293e3de32faedcba4efad5292eca8e6d097f339a0f089c9e0083c601",
-      "size": 7189,
-      "normalized_sha256": "12bf17d8293e3de32faedcba4efad5292eca8e6d097f339a0f089c9e0083c601"
+      "sha256": "1e97963178397c444b4ae25e9392b2033a0c09bdd0dbbff33ab409ec3f2aa118",
+      "size": 9715,
+      "normalized_sha256": "1e97963178397c444b4ae25e9392b2033a0c09bdd0dbbff33ab409ec3f2aa118"
     },
     "apps/web/test/session-navigation.test.ts": {
       "role": "observe",
@@ -1370,15 +1370,21 @@
     },
     "apps/web/test/session-tree.test.ts": {
       "role": "observe",
-      "sha256": "bf01eac627a80b99242612af79e1f48e221df1d49f424a2e265159da38002818",
-      "size": 8381,
-      "normalized_sha256": "bf01eac627a80b99242612af79e1f48e221df1d49f424a2e265159da38002818"
+      "sha256": "7538792ec938e8557244e0c9eae8d2b0023bb651ec2012a73700cde6b98dc854",
+      "size": 8423,
+      "normalized_sha256": "7538792ec938e8557244e0c9eae8d2b0023bb651ec2012a73700cde6b98dc854"
     },
     "apps/web/test/stream.test.ts": {
       "role": "observe",
       "sha256": "23eba2adb12460d260db2a1f8d095e6c98637482cf701536f375edbf4ac35075",
       "size": 1671,
       "normalized_sha256": "23eba2adb12460d260db2a1f8d095e6c98637482cf701536f375edbf4ac35075"
+    },
+    "apps/web/test/uuid.test.ts": {
+      "role": "observe",
+      "sha256": "534188b909ea36283eab3a5c9667fa7148c09669ee703daa9de989880173ab15",
+      "size": 561,
+      "normalized_sha256": "534188b909ea36283eab3a5c9667fa7148c09669ee703daa9de989880173ab15"
     },
     "apps/web/tsconfig.json": {
       "role": "index",
@@ -1628,9 +1634,9 @@
     },
     "crates/runner/tests/remote_host.rs": {
       "role": "observe",
-      "sha256": "43b6bf5a719187d0929f1b9c8add13f2295a221fadbe28c7ea052570ce889348",
-      "size": 36413,
-      "normalized_sha256": "43b6bf5a719187d0929f1b9c8add13f2295a221fadbe28c7ea052570ce889348"
+      "sha256": "c80b97e81bf4d56eeff78e68ae67198571e0ed26728ce47adfd60be61e833a9e",
+      "size": 37211,
+      "normalized_sha256": "c80b97e81bf4d56eeff78e68ae67198571e0ed26728ce47adfd60be61e833a9e"
     },
     "crates/runner/tests/remote_journal.rs": {
       "role": "observe",
