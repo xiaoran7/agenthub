@@ -96,6 +96,62 @@ export interface ConversationItem {
   turnId?: string | undefined;
 }
 
+/** A turn that failed, with the reason the Runner was allowed to forward. */
+export interface TurnFailure {
+  turnId: string | null;
+  message: string;
+  /** True while the provider says it is still retrying the same turn. */
+  retrying: boolean;
+}
+
+/**
+ * Reads the cause of a failed turn out of the event stream.
+ *
+ * The Runner projects only an allowlisted subset of a provider error, so this
+ * returns `null` rather than guessing when the projection carries no usable
+ * text. `willRetry` is honoured: a transient error the provider is retrying is
+ * not shown as the turn's final outcome.
+ */
+export function latestTurnFailure(
+  events: RemoteEvent[],
+  hubSessionId: string,
+): TurnFailure | null {
+  let failure: TurnFailure | null = null;
+  for (const envelope of events) {
+    const native = envelope.payload.event;
+    if (!native) continue;
+    // A new turn supersedes an earlier failure; a completed turn clears it.
+    if (native.kind === "turn/started") {
+      failure = null;
+      continue;
+    }
+    if (
+      native.kind === "turn/completed" &&
+      (native.binding?.hub_session_id ?? hubSessionId) === hubSessionId
+    ) {
+      failure = null;
+      continue;
+    }
+    if (native.kind !== "error") continue;
+    if (
+      native.binding?.hub_session_id !== undefined &&
+      native.binding.hub_session_id !== hubSessionId
+    ) {
+      continue;
+    }
+    const params = native.raw?.params;
+    const error = params?.error as Record<string, unknown> | undefined;
+    const message = error?.message;
+    if (typeof message !== "string" || message.trim() === "") continue;
+    failure = {
+      turnId: typeof params?.turnId === "string" ? params.turnId : null,
+      message: message.trim(),
+      retrying: params?.willRetry === true,
+    };
+  }
+  return failure;
+}
+
 const REDACTED_PATH = "[local_path_redacted]";
 
 export function readableRemoteText(value: string): string {

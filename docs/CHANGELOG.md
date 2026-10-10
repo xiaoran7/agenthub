@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.4.72] - 2026-10-10
+
+### 远端控制台失败原因可见性闭环（Gateway 自部署真实全流程回归）
+
+在走完一遍真实的自部署全流程（Gateway 起服务 → 注册账号 → 绑定码 → Ed25519 设备绑定 → Runner `remote_connected` → 通过 Web 同源代理下发 `connect`/`create` 建立真实 Codex 会话 → `send_prompt`）时发现：当一轮执行失败，远端控制台只能显示一句没有原因的"执行出错"，用户必须回到本机翻日志才知道发生了什么。根因是 Runner 的投影白名单把 `error` 事件整条丢弃。
+
+- **Runner 投影白名单放开失败原因（`crates/runner/src/remote_journal.rs`）**：在 `projected_event_raw()` 中新增 `error` 分支，只投影已获白名单的 `error.message`、`error.codexErrorInfo`、`error.type` 与 `turnId`、`willRetry`，并新增 `MAX_ERROR_MESSAGE_CHARS = 2048` 上限，避免栈级长文随每次重连推给所有订阅客户端；`willRetry: true` 表示供应商仍在重试，不作为该轮最终结果；无法解析出任何可读字段的 error 对象直接丢弃，不编造原因。
+- **自由文本内嵌路径局部脱敏（`crates/runner/src/privacy.rs`）**：新增 `redact_paths_inside_text()`，按空白切词并把其中属于绝对路径的整词改写为 `[local_path_redacted]`，保留句子其余部分。共享的 `sanitize_workspace_paths_in_json()` 维持原有整串替换契约不变，工具命令、stderr、output 与路径键的既有行为不受影响。
+- **Web 端失败原因读取与渲染**：
+  - 新增 `latestTurnFailure()`（`apps/web/src/lib/remote.ts`）：从事件流中找出最近一次未恢复的失败，跨会话严格隔离，`turn/started` 与本会话 `turn/completed` 会清除上一轮失败，只认 Runner 允许转发的摘要文字，不凭空生成原因；
+  - `RemoteConsole.tsx` 新增红色失败横幅（区别于既有琥珀色提示），展示失败轮次与供应商真实原因，支持关闭且关闭态在会话切换或新失败到达前不会复现；
+  - `remote.css` 新增 `.remote-notice-error` 独立色系，长文本 `overflow-wrap: anywhere` 防止撑破布局。
+- **回归测试**：Rust 侧新增 4 例（`remote_journal` 2 例 + `privacy` 2 例），Web 侧新增 5 例；`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`、`npm.cmd test`（68 通过）、`npm.cmd run typecheck`、`npm.cmd run format:check` 全部通过。
+
 ## [2.4.71] - 2026-10-10
 
 ### Web 网页端用户前端体验与流式渲染全面优化

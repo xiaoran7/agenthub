@@ -674,6 +674,32 @@
   align-items: center;
   gap: 12px;
 }
+/* A failed turn is the one notice that must not be mistaken for progress, so it
+   carries its own red family instead of the shared amber. */
+.remote-notice-error {
+  border-color: #6b3230;
+  background: #2a1a19;
+  color: #f3d4d2;
+  align-items: flex-start;
+}
+.remote-notice-error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.remote-notice-error-body strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffb4ae;
+}
+.remote-notice-error-body span {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #e8c9c6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .remote-notice-spinner {
   width: 14px;
   height: 14px;

@@ -12,6 +12,9 @@ use std::{path::Path, time::Duration};
 
 const DEFAULT_MAX_LOCAL_EVENTS: i64 = 10_000;
 const MAX_CONFIGURED_LOCAL_EVENTS: i64 = 100_000;
+/// Bound on a projected provider error message. A stack-trace-sized payload would
+/// otherwise travel to every subscribed client on every reconnect.
+const MAX_ERROR_MESSAGE_CHARS: usize = 2_048;
 
 type Result<T> = std::result::Result<T, JournalError>;
 
@@ -670,6 +673,45 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
             let delta = params.get("delta").and_then(Value::as_str)?;
             Some(json!({"params":{"itemId":item_id,"delta":delta}}))
         }
+        // A turn that died must say why. Without this the remote console shows
+        // "执行出错" with no cause, and the only way to learn the real reason is
+        // to walk back to the machine. Only the already allowlisted, bounded
+        // fields are projected; the message is then scrubbed token by token so
+        // an absolute path inside the prose does not take the whole explanation
+        // down with it.
+        "error" => {
+            let error = params.get("error")?;
+            let mut projected_error = serde_json::Map::new();
+            if let Some(message) = error.get("message").and_then(Value::as_str) {
+                let scrubbed = crate::privacy::redact_paths_inside_text(message);
+                let bounded = scrubbed
+                    .chars()
+                    .take(MAX_ERROR_MESSAGE_CHARS)
+                    .collect::<String>();
+                projected_error.insert("message".into(), json!(bounded));
+            }
+            for key in ["codexErrorInfo", "type"] {
+                if let Some(value) = error.get(key).and_then(Value::as_str) {
+                    projected_error.insert(key.into(), json!(value));
+                }
+            }
+            // An error object with nothing a human can act on is not a cause;
+            // dropping it keeps the console from rendering an empty banner.
+            if projected_error.is_empty() {
+                return None;
+            }
+            let mut projected_params = serde_json::Map::new();
+            projected_params.insert("error".into(), Value::Object(projected_error));
+            if let Some(turn_id) = params.get("turnId").and_then(Value::as_str) {
+                projected_params.insert("turnId".into(), json!(turn_id));
+            }
+            // `willRetry: true` means the provider is still working on it, so the
+            // console must not present this as the turn's final outcome.
+            if let Some(will_retry) = params.get("willRetry").and_then(Value::as_bool) {
+                projected_params.insert("willRetry".into(), json!(will_retry));
+            }
+            Some(json!({"params": Value::Object(projected_params)}))
+        }
         "item/completed" => {
             let item = params.get("item")?;
             let id = item.get("id").and_then(Value::as_str)?;
@@ -842,6 +884,85 @@ fn history_snapshot_projects_normalized_items_without_raw_paths() {
     let encoded = projected.to_string();
     assert!(!encoded.contains("alice"));
     assert!(!encoded.contains("do-not-send"));
+}
+
+#[cfg(test)]
+#[test]
+fn error_events_project_the_cause_without_raw_provider_fields() {
+    let event = crate::remote_host::HostEvent {
+        event_id: "error-one".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("native-one".into()),
+        kind: "error".into(),
+        raw: json!({"method":"error","params":{
+            "threadId":"native-one",
+            "turnId":"turn-one",
+            "willRetry":false,
+            "error":{
+                "message":"The 'gpt-6-luna' model is not supported; check C:\\Users\\alice\\codex\\config.toml",
+                "codexErrorInfo":"other",
+                "additionalDetails":{"internalStack":"do-not-send"}
+            }
+        }}),
+        binding: None,
+        approval_id: None,
+        approval: None,
+        question_id: None,
+        question: None,
+    };
+
+    let projected = projected_remote_event(&event).unwrap();
+
+    // The console can now explain the failure instead of showing a bare state.
+    let params = &projected["event"]["raw"]["params"];
+    assert_eq!(params["turnId"], json!("turn-one"));
+    assert_eq!(params["willRetry"], json!(false));
+    let message = params["error"]["message"].as_str().unwrap();
+    assert!(message.contains("gpt-6-luna"));
+    assert_eq!(params["error"]["codexErrorInfo"], json!("other"));
+    // Absolute paths in the provider text are rewritten, never forwarded raw.
+    assert!(!message.contains("alice"));
+    assert!(!message.contains("config.toml"));
+    // Fields outside the allowlist stay on the machine.
+    let encoded = projected.to_string();
+    assert!(!encoded.contains("do-not-send"));
+    assert!(!encoded.contains("internalStack"));
+    assert!(!encoded.contains("additionalDetails"));
+    // The local copy keeps the original for the operator's own diagnostics.
+    assert_eq!(
+        event.raw["params"]["error"]["additionalDetails"]["internalStack"],
+        json!("do-not-send")
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn error_events_without_a_known_shape_are_dropped_rather_than_guessed() {
+    for kind in [
+        json!({"method":"error"}),                       // no params
+        json!({"method":"error","params":{}}),           // no error object
+        json!({"method":"error","params":{"error":{}}}), // no message
+    ] {
+        let event = crate::remote_host::HostEvent {
+            event_id: "error-one".into(),
+            host_generation: "generation-one".into(),
+            hub_session_id: Some("hub-one".into()),
+            provider_session_id: Some("native-one".into()),
+            kind: "error".into(),
+            raw: kind,
+            binding: None,
+            approval_id: None,
+            approval: None,
+            question_id: None,
+            question: None,
+        };
+        let projected = projected_remote_event(&event).unwrap();
+        assert!(
+            projected["event"].get("raw").is_none(),
+            "an unrecognised error must not invent a cause"
+        );
+    }
 }
 
 pub struct DurableHost<T: NativeTransport> {

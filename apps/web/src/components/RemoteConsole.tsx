@@ -7,6 +7,7 @@ import {
   conversationItems,
   groupConversationItems,
   isRedactedPathOnly,
+  latestTurnFailure,
   pendingApprovals,
   pendingQuestions,
   readableRemoteText,
@@ -521,6 +522,9 @@ export function RemoteConsole({
     number | undefined
   >(undefined);
   const [followBottom, setFollowBottom] = useState(true);
+  // A dismissed failure stays dismissed until the session changes or a new
+  // failure arrives, so it cannot reappear on every poll.
+  const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
   // Keep an uncertain POST's identity when the user retries the same operation.
   const attempts = useRef(new Map<string, RemoteCommand>());
   const autoResumedRef = useRef<Set<string>>(new Set());
@@ -716,6 +720,7 @@ export function RemoteConsole({
     setSubmittingApproval(null);
     setSubmittingQuestionId(null);
     setFollowBottom(true);
+    setDismissedFailure(null);
     if (!selected) return;
     const [runnerId, hub] = selected.split("/");
     if (!runnerId || !hub) return;
@@ -774,6 +779,14 @@ export function RemoteConsole({
   );
   const questions = useMemo(
     () => pendingQuestions(events, session?.binding.hub_session_id ?? ""),
+    [events, session?.binding.hub_session_id],
+  );
+  // The Runner only forwards an allowlisted error summary, so a bare
+  // "执行出错" state is all the console used to be able to show. This surfaces
+  // the cause the provider actually reported, including the common
+  // "this model is not available on your account" case.
+  const turnFailure = useMemo(
+    () => latestTurnFailure(events, session?.binding.hub_session_id ?? ""),
     [events, session?.binding.hub_session_id],
   );
   useEffect(() => {
@@ -1696,6 +1709,22 @@ export function RemoteConsole({
             {remoteError(new Error(latestFailure.receipt?.code))}
           </div>
         )}
+        {turnFailure &&
+          !turnFailure.retrying &&
+          turnFailure.message !== dismissedFailure && (
+            <div className="remote-notice remote-notice-error" role="alert">
+              <div className="remote-notice-error-body">
+                <strong>这一轮没有完成</strong>
+                <span>{readableRemoteText(turnFailure.message)}</span>
+              </div>
+              <button
+                aria-label="关闭提示"
+                onClick={() => setDismissedFailure(turnFailure.message)}
+              >
+                ×
+              </button>
+            </div>
+          )}
         {!selected ? (
           <div className="remote-welcome">
             <span className="remote-eyebrow">你的工作，仍在原处</span>

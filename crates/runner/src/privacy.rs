@@ -201,6 +201,64 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
     }
 }
 
+/// Rewrites each absolute path embedded in free text as `[local_path_redacted]`
+/// while leaving the rest of the sentence intact.
+///
+/// Used for provider error prose, where the whole-string replacement would
+/// destroy the explanation the remote console needs: a message such as
+/// "model X unsupported; see C:\...\config" would otherwise arrive with no cause
+/// at all. The path must be a whole whitespace- or delimiter-bounded token, so
+/// ordinary prose and URL-like fragments are never mistaken for one.
+pub fn redact_paths_inside_text(value: &str) -> String {
+    if !contains_absolute_filesystem_path(value) {
+        return value.to_owned();
+    }
+    let mut redacted = String::with_capacity(value.len());
+    let mut token = String::new();
+    for character in value.chars() {
+        if character.is_whitespace() {
+            push_token(&mut redacted, &mut token);
+            redacted.push(character);
+        } else {
+            token.push(character);
+        }
+    }
+    push_token(&mut redacted, &mut token);
+    redacted
+}
+
+/// Emits one delimited token, stripping surrounding punctuation so a path inside
+/// a sentence is still recognised as a path.
+fn push_token(out: &mut String, token: &mut String) {
+    if token.is_empty() {
+        return;
+    }
+    let leading = token
+        .chars()
+        .take_while(|c| matches!(c, '(' | '[' | '"' | '\''))
+        .count();
+    let trailing = token
+        .chars()
+        .rev()
+        .take_while(|c| {
+            matches!(
+                c,
+                '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '"' | '\''
+            )
+        })
+        .count();
+    let (prefix, rest) = token.split_at(leading);
+    let (body, suffix) = rest.split_at(rest.len() - trailing);
+    if is_absolute_filesystem_path(body) {
+        out.push_str(prefix);
+        out.push_str("[local_path_redacted]");
+        out.push_str(suffix);
+    } else {
+        out.push_str(token);
+    }
+    token.clear();
+}
+
 fn contains_absolute_filesystem_path(value: &str) -> bool {
     value
         .split(|character: char| {
@@ -265,6 +323,55 @@ mod tests {
         assert!(ws1.starts_with("ws-my-app-"));
         assert!(!ws1.contains("alice"));
         assert!(!ws1.contains("code"));
+    }
+
+    #[test]
+    fn redact_paths_inside_text_keeps_the_surrounding_explanation() {
+        // The real failure the remote console used to lose entirely: a provider
+        // error whose message names both the cause and a config file on disk.
+        let redacted = redact_paths_inside_text(
+            "The 'gpt-6-luna' model is not supported; check C:\\Users\\alice\\codex\\config.toml",
+        );
+        assert!(redacted.contains("gpt-6-luna"), "the cause must survive");
+        assert!(
+            redacted.contains("is not supported"),
+            "the wording must survive"
+        );
+        assert!(!redacted.contains("alice"));
+        assert!(!redacted.contains("config.toml"));
+        assert!(redacted.contains("[local_path_redacted]"));
+
+        // Trailing sentence punctuation must not defeat the match.
+        assert_eq!(
+            redact_paths_inside_text("failed to read /home/alice/.codex/auth.json."),
+            "failed to read [local_path_redacted]."
+        );
+        // A path in parentheses stays bounded by its own punctuation.
+        assert_eq!(
+            redact_paths_inside_text("see (C:\\Users\\alice\\app) for detail"),
+            "see ([local_path_redacted]) for detail"
+        );
+        // Two paths in one sentence are both rewritten.
+        assert_eq!(
+            redact_paths_inside_text("copy /home/alice/a to /home/alice/b"),
+            "copy [local_path_redacted] to [local_path_redacted]"
+        );
+    }
+
+    #[test]
+    fn redact_paths_inside_text_leaves_clean_text_untouched() {
+        for clean in [
+            "model is not supported",
+            "HTTP 429 too many requests",
+            "rate limit exceeded, retry later",
+            "",
+        ] {
+            assert_eq!(
+                redact_paths_inside_text(clean),
+                clean,
+                "text without an absolute path must not be redacted"
+            );
+        }
     }
 
     #[test]

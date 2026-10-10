@@ -9,6 +9,7 @@ import {
   groupConversationItems,
   isRedactedPathOnly,
   latestContextUsage,
+  latestTurnFailure,
   pendingApprovals,
   readableRemoteText,
   type RemoteEvent,
@@ -271,4 +272,87 @@ test("accepted approval receipts remove the exact opaque control", () => {
 
   assert.equal(pendingApprovals([requested, rejected], "hub-one").length, 1);
   assert.equal(pendingApprovals([requested, receipt], "hub-one").length, 0);
+});
+
+const errorEvent = (
+  message: string,
+  options: { willRetry?: boolean; turnId?: string; hubSessionId?: string } = {},
+): RemoteEvent =>
+  event("error", {
+    turnId: options.turnId ?? "turn-one",
+    willRetry: options.willRetry ?? false,
+    error: { message },
+  });
+
+test("a failed turn reports the cause the runner forwarded", () => {
+  const failure = latestTurnFailure(
+    [
+      errorEvent(
+        "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.",
+      ),
+    ],
+    "hub-one",
+  );
+
+  assert.ok(failure, "the console must be able to explain a failed turn");
+  assert.equal(failure.retrying, false);
+  assert.equal(failure.turnId, "turn-one");
+  assert.match(failure.message, /gpt-6-luna/);
+});
+
+test("a retrying provider error is not the turn's final outcome", () => {
+  const failure = latestTurnFailure(
+    [errorEvent("stream stalled", { willRetry: true })],
+    "hub-one",
+  );
+
+  assert.equal(failure?.retrying, true);
+});
+
+test("a new turn clears an earlier failure and a completed turn clears it too", () => {
+  const failed = errorEvent("model unavailable");
+  const restarted = event("turn/started", { turn: { id: "turn-two" } });
+  assert.equal(latestTurnFailure([failed, restarted], "hub-one"), null);
+
+  const completed = event("turn/completed", { turn: { id: "turn-two" } });
+  assert.equal(latestTurnFailure([failed, completed], "hub-one"), null);
+});
+
+test("an error the runner could not describe yields no invented cause", () => {
+  for (const params of [
+    {},
+    { error: {} },
+    { error: { message: "" } },
+    { error: { message: 42 } },
+  ]) {
+    assert.equal(
+      latestTurnFailure([event("error", params)], "hub-one"),
+      null,
+      `unrecognised error ${JSON.stringify(params)} must not fabricate text`,
+    );
+  }
+});
+
+test("an error belonging to another session is ignored", () => {
+  const otherSession: RemoteEvent = {
+    ...errorEvent("model unavailable"),
+    payload: {
+      type: "event",
+      event: {
+        kind: "error",
+        raw: { params: { error: { message: "model unavailable" } } },
+        binding: {
+          hub_session_id: "hub-other",
+          provider_session_id: "native-one",
+          workspace_path: "ws-app-0123456789abcdef",
+          host_generation: "generation-one",
+          control_connected: true,
+          execution_state: "error",
+          current_turn_id: null,
+        },
+      },
+    },
+  };
+
+  assert.equal(latestTurnFailure([otherSession], "hub-one"), null);
 });
