@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.4.74] - 2026-10-12
+
+### 会话解析与生命周期精准感知优化（吸收 Token-Monitor 实践）
+
+基于开源优秀工具 `token-monitor` 的生产经验与工业级边界处理，对 `agenthubd`（Runner）的本地会话解析与历史发现模块进行了针对性重构与加固：
+
+- **过滤假 Prompt 与工具结果污染（`crates/runner/src/collectors/mod.rs`）**：
+  - 生产数据证实 Claude Code 的 `role="user"` 记录中有超过 85% 实际上是工具返回给模型的结果（`tool_result`）。重构 `apply_claude_context_line`，引入 `extract_claude_prompt_text()` 深度解析内容块；
+  - 遇到包含 `tool_result` 的消息直接判定为非用户 Prompt；过滤 `<command-name>`、`<system-reminder>`、`[Request interrupted]` 等系统注入文本；清洗 `[Image: source: ...]` 路径并规范保留 `[image]` 标记；彻底杜绝把工具报错或日志误当成会话标题与首轮意图的问题；
+  - 严格保持 `collect_claude_transcripts` 的元数据白名单安全红线，绝不向列表广播泄漏未命名的原始 Prompt 正文。
+- **智能模型上下文窗口推导（`crates/runner/src/collectors/mod.rs`）**：
+  - 新增 `claude_context_window()`：当 transcript 未显式记录 `context_window_size` 时，根据模型名称自动推导；
+  - 识别 `[1m]` 扩展标记及 Claude 5 系列（Opus 5、Sonnet 5、Fable 5、Mythos 5）原生 1M 窗口，其余默认 200k，大幅提高 Web 控制台上下文使用百分比的显示精度。
+- **Resume Replay 行级去重（`crates/runner/src/conversation.rs`）**：
+  - Claude Code 恢复历史会话（resume）时会将旧条目按原样追加到文件尾部并保留原始 `uuid`；
+  - 在 `load_session_conversation()` 中引入 `seen_uuids` 集合进行哈希去重，彻底消除重播导致的重复历史气泡与展示翻倍。
+- **验证与测试**：
+  - 新增 `test_claude_prompt_extraction_filters_tool_results_and_synthetics`；
+  - 新增 `test_claude_context_window_inference`；
+  - 新增 `load_session_conversation_deduplicates_resume_replay_by_uuid`；
+  - 完整通过 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check`。
+
 ## [2.4.73] - 2026-10-12
 
 ### AOCI 本地认知纯本地化治理与开源脱敏

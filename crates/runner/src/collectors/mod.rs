@@ -213,7 +213,6 @@ struct ClaudeTranscriptMetadata {
     ai_title: Option<String>,
     custom_title: Option<String>,
     last_prompt: Option<String>,
-    content: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -515,21 +514,8 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
             }
         }
         Some("user") if context.title.is_none() => {
-            let prompt_text = value
-                .pointer("/message/content")
-                .and_then(|c| {
-                    if let Some(text) = c.as_str() {
-                        Some(text)
-                    } else if let Some(arr) = c.as_array() {
-                        arr.iter()
-                            .find_map(|item| item.get("text").and_then(Value::as_str))
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| value.get("prompt").and_then(Value::as_str));
-            if let Some(text) = prompt_text {
-                context.title = local_prompt_title(text);
+            if let Some(prompt) = extract_claude_prompt_text(&value) {
+                context.title = local_prompt_title(&prompt);
             }
         }
         _ => {}
@@ -542,7 +528,126 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
     .into_iter()
     .find_map(|path| value.pointer(path).and_then(Value::as_u64))
     .or(context.context_window_tokens)
+    .or_else(|| context.model.as_deref().map(claude_context_window))
     .or(Some(200_000));
+}
+
+pub(crate) fn claude_context_window(model: &str) -> u64 {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("[1m]") {
+        return 1_000_000;
+    }
+    // Claude 5-series (Opus 5, Sonnet 5, Fable 5, Mythos 5) have native 1M context
+    if lower.starts_with("claude-opus-5")
+        || lower.starts_with("claude-sonnet-5")
+        || lower.starts_with("claude-fable-5")
+        || lower.starts_with("claude-mythos-5")
+        || lower.contains("anthropic.claude-sonnet-5")
+    {
+        return 1_000_000;
+    }
+    200_000
+}
+
+pub(crate) fn is_synthetic_claude_prompt(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return true;
+    }
+    if t.starts_with("[Request interrupted") || t.starts_with("Base directory for this skill:") {
+        return true;
+    }
+    t.starts_with("<command-name")
+        || t.starts_with("</command-name")
+        || t.starts_with("<command-message")
+        || t.starts_with("<command-args")
+        || t.starts_with("<local-command-stdout")
+        || t.starts_with("<local-command-caveat")
+        || t.starts_with("<bash-input")
+        || t.starts_with("<bash-stdout")
+        || t.starts_with("<bash-stderr")
+        || t.starts_with("<system-reminder")
+}
+
+pub(crate) fn clean_claude_prompt_text(text: &str) -> Option<String> {
+    let mut cleaned = String::new();
+    let mut remaining = text;
+    while let Some(start) = remaining.find("[Image: source:") {
+        cleaned.push_str(&remaining[..start]);
+        if let Some(end) = remaining[start..].find(']') {
+            remaining = &remaining[start + end + 1..];
+        } else {
+            remaining = "";
+            break;
+        }
+    }
+    cleaned.push_str(remaining);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+}
+
+pub(crate) fn extract_claude_prompt_text(value: &Value) -> Option<String> {
+    if value.get("isMeta").and_then(Value::as_bool) == Some(true)
+        || value.get("isCompactSummary").and_then(Value::as_bool) == Some(true)
+    {
+        return None;
+    }
+    let content = value
+        .pointer("/message/content")
+        .or_else(|| value.get("content"))?;
+    match content {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if is_synthetic_claude_prompt(trimmed) {
+                None
+            } else {
+                clean_claude_prompt_text(trimmed)
+            }
+        }
+        Value::Array(blocks) => {
+            // In real transcripts, over 85% of role=user lines are tool_result messages.
+            // If any block is a tool_result, this is a tool return to the model, NOT an actual user prompt.
+            if blocks
+                .iter()
+                .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+            {
+                return None;
+            }
+            let mut texts = Vec::new();
+            let mut has_image = false;
+            for block in blocks {
+                let kind = block
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if kind == "image" {
+                    has_image = true;
+                } else if kind == "text"
+                    && let Some(t) = block.get("text").and_then(Value::as_str)
+                {
+                    let trimmed = t.trim();
+                    if !trimmed.is_empty()
+                        && !is_synthetic_claude_prompt(trimmed)
+                        && let Some(cleaned) = clean_claude_prompt_text(trimmed)
+                    {
+                        texts.push(cleaned);
+                    }
+                }
+            }
+            if !texts.is_empty() {
+                Some(texts.join(" "))
+            } else if has_image {
+                Some("[image]".to_owned())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn usage_u64(value: &Value, field: &str) -> u64 {
@@ -686,7 +791,6 @@ fn read_claude_transcript_metadata(
                 .or(metadata.ai_title)
                 .or(metadata.title)
                 .or(metadata.last_prompt)
-                .or(metadata.content)
                 .and_then(|t| metadata_label(&t, MAX_SESSION_TITLE_CHARS));
         }
         if let Some(timestamp) = metadata.timestamp {
@@ -4462,6 +4566,77 @@ mod tests {
             .as_deref(),
             Some("实现重命名功能")
         );
+    }
+
+    #[test]
+    fn test_claude_prompt_extraction_filters_tool_results_and_synthetics() {
+        use serde_json::json;
+
+        // 1. Tool result message in role=user should NEVER be extracted as prompt
+        let tool_result_line = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "cargo test --workspace succeeded"
+                    }
+                ]
+            }
+        });
+        assert_eq!(extract_claude_prompt_text(&tool_result_line), None);
+
+        // 2. Synthetic injected commands should be ignored
+        let synthetic_line = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "<command-name>/doctor</command-name>"
+            }
+        });
+        assert_eq!(extract_claude_prompt_text(&synthetic_line), None);
+
+        // 3. Genuine human prompt should be cleanly extracted
+        let real_prompt_line = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "请帮我重构网络连接池逻辑"
+            }
+        });
+        assert_eq!(
+            extract_claude_prompt_text(&real_prompt_line).as_deref(),
+            Some("请帮我重构网络连接池逻辑")
+        );
+
+        // 4. Image-only prompt gets [image] label
+        let image_line = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": { "type": "base64", "data": "abc" }
+                    }
+                ]
+            }
+        });
+        assert_eq!(
+            extract_claude_prompt_text(&image_line).as_deref(),
+            Some("[image]")
+        );
+    }
+
+    #[test]
+    fn test_claude_context_window_inference() {
+        assert_eq!(claude_context_window("claude-opus-5-20261001"), 1_000_000);
+        assert_eq!(claude_context_window("claude-sonnet-5"), 1_000_000);
+        assert_eq!(claude_context_window("claude-fable-5-1"), 1_000_000);
+        assert_eq!(claude_context_window("custom-model[1m]"), 1_000_000);
+        assert_eq!(claude_context_window("claude-3-7-sonnet"), 200_000);
     }
 
     #[test]

@@ -79,6 +79,7 @@ pub fn load_session_conversation(
     let file_budget = MAX_CONVERSATION_BYTES / paths.len().max(1) as u64;
     let mut records = Vec::new();
     let mut seen = HashMap::<String, usize>::new();
+    let mut seen_uuids = std::collections::HashSet::<String>::new();
     for (source, path) in paths.iter().enumerate() {
         let (values, partial) = read_transcript_windows(path, file_budget);
         omitted |= partial;
@@ -96,6 +97,15 @@ pub fn load_session_conversation(
         }
         for value in values {
             if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            // Claude Code resume replay re-appends prior transcript entries verbatim with the same uuid.
+            if let Some(uuid) = value
+                .get("uuid")
+                .and_then(Value::as_str)
+                .filter(|u| !u.is_empty())
+                && !seen_uuids.insert(uuid.to_owned())
+            {
                 continue;
             }
             let key = serde_json::to_string(&value).unwrap_or_default();
@@ -1567,6 +1577,40 @@ mod tests {
             ok_count > 30,
             "Prefixed session IDs must now resolve successfully!"
         );
+    }
+
+    #[test]
+    fn load_session_conversation_deduplicates_resume_replay_by_uuid() {
+        let home = tempfile::tempdir().unwrap();
+        let claude_dir = home
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("proj-dedup");
+        fs::create_dir_all(&claude_dir).unwrap();
+
+        let lines = [
+            // Original prompt
+            r#"{"uuid":"msg-u1","type":"user","message":{"role":"user","content":"第一次提问"}}"#,
+            // Original reply
+            r#"{"uuid":"msg-a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第一次回复"}]}}"#,
+            // Claude resume replay (same lines appended again with identical uuids)
+            r#"{"uuid":"msg-u1","type":"user","message":{"role":"user","content":"第一次提问"}}"#,
+            r#"{"uuid":"msg-a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第一次回复"}]}}"#,
+            // Second turn
+            r#"{"uuid":"msg-u2","type":"user","message":{"role":"user","content":"第二次提问"}}"#,
+            r#"{"uuid":"msg-a2","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第二次回复"}]}}"#,
+        ];
+
+        fs::write(claude_dir.join("sess-dedup.jsonl"), lines.join("\n")).unwrap();
+
+        let messages = load_session_conversation(home.path(), AgentType::ClaudeCode, "sess-dedup");
+        // Duplicates should be filtered out; exactly 4 unique messages should remain.
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0]["content"], "第一次提问");
+        assert_eq!(messages[1]["content"], "第一次回复");
+        assert_eq!(messages[2]["content"], "第二次提问");
+        assert_eq!(messages[3]["content"], "第二次回复");
     }
 }
 
