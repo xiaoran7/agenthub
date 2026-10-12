@@ -1243,7 +1243,7 @@ mod tests {
         assert!(validate_server("http://127.0.0.1:3001").is_ok());
         assert!(validate_server("https://example.com").is_ok());
         assert!(validate_server("ws://api:3001/v3/remote/ws").is_ok());
-        assert!(validate_server("ws://100.107.77.33:3001/v3/remote/ws").is_ok());
+        assert!(validate_server("ws://100.100.100.100:3001/v3/remote/ws").is_ok());
         assert!(validate_server("wss://example.com/v3/remote/ws").is_ok());
         for url in [
             "ws://example.com/v3/remote/ws",

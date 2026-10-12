@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.73] - 2026-10-12
+
+### AOCI 本地认知纯本地化治理与开源脱敏
+
+按"本地加速、远端零污染"原则收敛 AI 工具链边界。AOCI 认知能力在本机完全不变，但不再向远端仓库泄漏任何本地资产或私有网络拓扑。
+
+- **AOCI 全量资产解除 Git 追踪**：`aoci.txt`、`aoci.meta.txt`、`aoci.code.txt`、`AGENT.md` 与 `.aoci/` 下治理资产（`baseline.json`、`config.json`、`.gitignore`）全部 `git rm --cached` 解除追踪，本地文件完好无损；`.aoci/.gitignore` 改为整体忽略，移除原先会把治理资产重新放行的白名单；
+- **`.gitignore` 补齐 AOCI 与 Agent 垫片忽略块**：新增 `aoci.*`、`.aoci/`、`.mcp.json`、`AGENT.md`、`agent.md`、`*.local.md`、`AGENTS.local.md`、`.claude/worktrees/`、`.claude/settings.local.json`、`.claude/scheduled_tasks.json`；
+- **AGENTS.md 私有合同块剥离**：`<!-- aoci:begin -->` 至 `<!-- aoci:end -->` 区块（AOCI 仓库认知合同）移至本地 `AGENTS.local.md`，公开规则留在 `AGENTS.md` 供外部协作者阅读，并留一行说明指向本地副本；同步移除 `.gitattributes` 中已失效的 `aoci.txt` 行尾规则；
+- **真实 Tailnet IP 脱敏**：`crates/runner/src/remote_network.rs` 的 CGNAT 放行测试原先使用真实 Tailnet 地址 `100.107.77.33`，替换为文档用途的 `100.100.100.100`，测试语义（CGNAT 主机允许明文）不变；
+- **验收证据**：`git ls-files` 已无任何 `aoci.*`、`.aoci/`、`.mcp.json`、`AGENT.md`、`agent.md` 条目；上述 10 项资产全部通过 `git check-ignore` 判定；`aoci verify` 的 `composite_identity` 与 `root_sha256` 与治理前完全一致，PreToolUse Hook 冒烟测试 exit 0 未拦截，证明本地认知加速能力零损失。
+
 ## [2.4.72] - 2026-10-10
 
 ### 远端控制台失败原因可见性闭环（Gateway 自部署真实全流程回归）
