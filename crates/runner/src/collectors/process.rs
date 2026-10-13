@@ -54,6 +54,117 @@ pub(crate) fn finish_line(line: Vec<u8>) -> BoundedLine {
     }
 }
 
+pub(crate) const METADATA_MAX_LINE_BYTES: usize = 64 * 1024;
+pub(crate) const LONG_LINE_HEAD_BYTES: usize = 64 * 1024;
+pub(crate) const LONG_LINE_TAIL_BYTES: usize = 8 * 1024;
+
+pub(crate) enum SplicedLine {
+    Line {
+        text: String,
+        bytes_consumed: u64,
+    },
+    Oversized {
+        head: String,
+        tail: String,
+        bytes_consumed: u64,
+    },
+    Eof,
+    Io(std::io::Error),
+}
+
+/// Reads one newline-terminated JSONL record while capping retained memory.
+/// If the line fits within `METADATA_MAX_LINE_BYTES`, returns the full `Line`.
+/// If the line exceeds `METADATA_MAX_LINE_BYTES` (for example a base64 pasted image
+/// or huge tool output), drains until the newline while retaining only the first
+/// `LONG_LINE_HEAD_BYTES` (64 KiB) and the last `LONG_LINE_TAIL_BYTES` (8 KiB).
+pub(crate) fn read_spliced_line(reader: &mut impl BufRead) -> SplicedLine {
+    let mut line = Vec::new();
+    let mut tail = Vec::new();
+    let mut dropping_long = false;
+    let mut bytes_consumed = 0_u64;
+
+    loop {
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return SplicedLine::Io(error),
+        };
+        if buffer.is_empty() {
+            if bytes_consumed == 0 {
+                return SplicedLine::Eof;
+            }
+            return finish_spliced(line, tail, dropping_long, bytes_consumed);
+        }
+        let (take, found_newline) = match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(position) => (position + 1, true),
+            None => (buffer.len(), false),
+        };
+        let chunk = &buffer[..take];
+        bytes_consumed = bytes_consumed.saturating_add(take as u64);
+
+        if dropping_long {
+            keep_tail_window(&mut tail, chunk);
+        } else if line.len() + take > METADATA_MAX_LINE_BYTES {
+            let head_need = LONG_LINE_HEAD_BYTES.saturating_sub(line.len());
+            if head_need > 0 {
+                line.extend_from_slice(&chunk[..head_need.min(chunk.len())]);
+            }
+            let combined_len = line.len();
+            if combined_len > 0 {
+                let start = combined_len.saturating_sub(LONG_LINE_TAIL_BYTES);
+                tail.extend_from_slice(&line[start..]);
+            }
+            if chunk.len() > head_need {
+                keep_tail_window(&mut tail, &chunk[head_need..]);
+            }
+            dropping_long = true;
+        } else {
+            line.extend_from_slice(chunk);
+        }
+
+        reader.consume(take);
+        if found_newline {
+            return finish_spliced(line, tail, dropping_long, bytes_consumed);
+        }
+    }
+}
+
+fn keep_tail_window(tail: &mut Vec<u8>, incoming: &[u8]) {
+    if incoming.is_empty() {
+        return;
+    }
+    if incoming.len() >= LONG_LINE_TAIL_BYTES {
+        tail.clear();
+        tail.extend_from_slice(&incoming[incoming.len() - LONG_LINE_TAIL_BYTES..]);
+        return;
+    }
+    let total = tail.len() + incoming.len();
+    if total > LONG_LINE_TAIL_BYTES {
+        let drop_count = total - LONG_LINE_TAIL_BYTES;
+        tail.drain(..drop_count);
+    }
+    tail.extend_from_slice(incoming);
+}
+
+fn finish_spliced(
+    line: Vec<u8>,
+    tail: Vec<u8>,
+    dropping_long: bool,
+    bytes_consumed: u64,
+) -> SplicedLine {
+    if !dropping_long {
+        return SplicedLine::Line {
+            text: String::from_utf8_lossy(&line).into_owned(),
+            bytes_consumed,
+        };
+    }
+    SplicedLine::Oversized {
+        head: String::from_utf8_lossy(&line).into_owned(),
+        tail: String::from_utf8_lossy(&tail).into_owned(),
+        bytes_consumed,
+    }
+}
+
 #[cfg(windows)]
 pub(crate) struct ChildJob(windows_sys::Win32::Foundation::HANDLE);
 

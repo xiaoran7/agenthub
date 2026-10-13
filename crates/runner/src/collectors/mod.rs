@@ -178,6 +178,10 @@ pub struct LocalSessionContext {
     pub cache_write_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_ended: Option<bool>,
 }
 
 impl LocalSessionContext {
@@ -199,6 +203,8 @@ impl LocalSessionContext {
             cache_read_tokens: None,
             cache_write_tokens: None,
             reasoning_tokens: None,
+            stop_reason: None,
+            turn_ended: None,
         }
     }
 }
@@ -432,19 +438,30 @@ fn scan_claude_context_region(
 ) -> Result<(), CollectorError> {
     let mut consumed = 0_u64;
     while consumed < byte_limit {
-        let line = match read_bounded_line(reader) {
-            BoundedLine::Line(line) => line,
-            BoundedLine::Eof => break,
-            BoundedLine::TooLarge => continue,
-            BoundedLine::Io(source) => {
+        match read_spliced_line(reader) {
+            SplicedLine::Line {
+                text,
+                bytes_consumed,
+            } => {
+                consumed = consumed.saturating_add(bytes_consumed);
+                apply_claude_context_line(&text, context);
+            }
+            SplicedLine::Oversized {
+                head,
+                tail,
+                bytes_consumed,
+            } => {
+                consumed = consumed.saturating_add(bytes_consumed);
+                apply_oversized_claude_record(&head, &tail, context);
+            }
+            SplicedLine::Eof => break,
+            SplicedLine::Io(source) => {
                 return Err(CollectorError::Io {
                     program: program.to_owned(),
                     source,
                 });
             }
-        };
-        consumed = consumed.saturating_add(line.len() as u64);
-        apply_claude_context_line(&line, context);
+        }
     }
     Ok(())
 }
@@ -493,6 +510,18 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 .and_then(Value::as_str)
                 .and_then(|value| metadata_label(value, MAX_CONFIG_VALUE_CHARS))
                 .or_else(|| context.reasoning_effort.clone());
+
+            // Extract stop_reason to determine turn lifecycle
+            if let Some(reason) = value
+                .pointer("/message/stop_reason")
+                .or_else(|| value.get("stop_reason"))
+                .and_then(Value::as_str)
+                .filter(|r| !r.is_empty())
+            {
+                context.stop_reason = Some(reason.to_owned());
+                context.turn_ended = Some(reason != "tool_use");
+            }
+
             if let Some(usage) = value.pointer("/message/usage") {
                 let input = usage_u64(usage, "input_tokens");
                 let output = usage_u64(usage, "output_tokens");
@@ -513,8 +542,14 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 context.title = local_prompt_title(content);
             }
         }
-        Some("user") if context.title.is_none() => {
-            if let Some(prompt) = extract_claude_prompt_text(&value) {
+        Some("user") => {
+            // A genuine user prompt waiting for a reply marks the turn as active/not ended
+            if extract_claude_prompt_text(&value).is_some() {
+                context.turn_ended = Some(false);
+            }
+            if context.title.is_none()
+                && let Some(prompt) = extract_claude_prompt_text(&value)
+            {
                 context.title = local_prompt_title(&prompt);
             }
         }
@@ -530,6 +565,142 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
     .or(context.context_window_tokens)
     .or_else(|| context.model.as_deref().map(claude_context_window))
     .or(Some(200_000));
+}
+
+/// Bounded extractor for oversized JSONL lines that exceed METADATA_MAX_LINE_BYTES.
+/// Uses head and tail slices to extract model, stop_reason and usage without parsing MBs of JSON.
+pub(crate) fn apply_oversized_claude_record(
+    head: &str,
+    tail: &str,
+    context: &mut LocalSessionContext,
+) {
+    let is_assistant = head.contains(r#""role":"assistant""#)
+        || head.contains(r#""role": "assistant""#)
+        || head.contains(r#""type":"assistant""#)
+        || head.contains(r#""type": "assistant""#)
+        || tail.contains(r#""type":"assistant""#)
+        || tail.contains(r#""type": "assistant""#);
+
+    if is_assistant {
+        // 1. Model extraction (head preferred, tail fallback)
+        if let Some(model) = extract_quoted_json_field(head, "model")
+            .or_else(|| extract_quoted_json_field(tail, "model"))
+            && let Some(label) = metadata_label(&model, MAX_CONFIG_VALUE_CHARS)
+        {
+            context.model = Some(label);
+        }
+
+        // 2. Stop reason extraction (tail preferred as it trails the message)
+        if let Some(reason) = extract_quoted_json_field(tail, "stop_reason")
+            .or_else(|| extract_quoted_json_field(head, "stop_reason"))
+            && !reason.is_empty()
+        {
+            context.turn_ended = Some(reason != "tool_use");
+            context.stop_reason = Some(reason);
+        }
+
+        // 3. Usage tokens extraction from closed usage object in tail
+        if let Some(usage_json) = extract_closed_json_object(tail, "usage")
+            && let Ok(usage) = serde_json::from_str::<Value>(&usage_json)
+        {
+            let input = usage_u64(&usage, "input_tokens");
+            let output = usage_u64(&usage, "output_tokens");
+            let cache_read = usage_u64(&usage, "cache_read_input_tokens");
+            let cache_write = usage_u64(&usage, "cache_creation_input_tokens");
+            let total_input = input.saturating_add(cache_write).saturating_add(cache_read);
+            if total_input > 0 {
+                context.context_used_tokens = Some(total_input);
+                context.input_tokens = Some(total_input);
+                context.output_tokens = Some(output);
+                context.cache_read_tokens = Some(cache_read);
+                context.cache_write_tokens = Some(cache_write);
+            }
+        }
+
+        // Update context window tokens if model was updated
+        if let Some(model) = context.model.as_deref() {
+            context.context_window_tokens = Some(claude_context_window(model));
+        }
+        return;
+    }
+
+    let is_user = head.contains(r#""role":"user""#)
+        || head.contains(r#""role": "user""#)
+        || head.contains(r#""type":"user""#)
+        || head.contains(r#""type": "user""#);
+
+    if is_user {
+        // A user line with tool_result is not a human prompt
+        if head.contains(r#""type":"tool_result""#) || head.contains(r#""type": "tool_result""#) {
+            return;
+        }
+        if head.contains(r#""isMeta":true"#) || tail.contains(r#""isMeta":true"#) {
+            return;
+        }
+        // Genuine user prompt waiting for completion clears turn_ended
+        context.turn_ended = Some(false);
+    }
+}
+
+pub(crate) fn extract_quoted_json_field(text: &str, field: &str) -> Option<String> {
+    let pattern = format!("\"{}\"", field);
+    let mut search_from = 0;
+    let mut last_match = None;
+    while let Some(pos) = text[search_from..].find(&pattern) {
+        let actual_pos = search_from + pos;
+        let rest = &text[actual_pos + pattern.len()..];
+        // Skip whitespace and colon
+        let after_colon = rest.trim_start();
+        if let Some(after_colon) = after_colon.strip_prefix(':') {
+            let value_part = after_colon.trim_start();
+            if let Some(value_part) = value_part.strip_prefix('"')
+                && let Some(end_quote) = value_part.find('"')
+            {
+                last_match = Some(value_part[..end_quote].to_owned());
+            }
+        }
+        search_from = actual_pos + pattern.len();
+    }
+    last_match
+}
+
+pub(crate) fn extract_closed_json_object(text: &str, field: &str) -> Option<String> {
+    let pattern = format!("\"{}\"", field);
+    let pos = text.rfind(&pattern)?;
+    let rest = &text[pos + pattern.len()..];
+    let open_brace = rest.find('{')?;
+    let start_idx = pos + pattern.len() + open_brace;
+
+    let bytes = text.as_bytes();
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for i in start_idx..bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start_idx..=i].to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 pub(crate) fn claude_context_window(model: &str) -> u64 {
@@ -4637,6 +4808,116 @@ mod tests {
         assert_eq!(claude_context_window("claude-fable-5-1"), 1_000_000);
         assert_eq!(claude_context_window("custom-model[1m]"), 1_000_000);
         assert_eq!(claude_context_window("claude-3-7-sonnet"), 200_000);
+    }
+
+    #[test]
+    fn test_claude_stop_reason_and_turn_lifecycle() {
+        let mut context = LocalSessionContext::new(
+            crate::domain::AgentType::ClaudeCode,
+            "session-lifecycle".to_owned(),
+        );
+
+        // 1. Tool use stop_reason -> mid-turn, turn_ended is false
+        let tool_use_line = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "stop_reason": "tool_use",
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 150,
+                    "cache_read_input_tokens": 500,
+                    "cache_creation_input_tokens": 200
+                }
+            }
+        })
+        .to_string();
+        apply_claude_context_line(&tool_use_line, &mut context);
+        assert_eq!(context.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(context.turn_ended, Some(false));
+        assert_eq!(context.context_used_tokens, Some(1700));
+
+        // 2. End turn stop_reason -> completed turn, turn_ended is true
+        let end_turn_line = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 1200,
+                    "output_tokens": 300,
+                    "cache_read_input_tokens": 500,
+                    "cache_creation_input_tokens": 200
+                }
+            }
+        })
+        .to_string();
+        apply_claude_context_line(&end_turn_line, &mut context);
+        assert_eq!(context.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(context.turn_ended, Some(true));
+
+        // 3. New genuine user prompt accepted -> starts next turn, turn_ended resets to false
+        let user_prompt = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "请接着处理"
+            }
+        })
+        .to_string();
+        apply_claude_context_line(&user_prompt, &mut context);
+        assert_eq!(context.turn_ended, Some(false));
+    }
+
+    #[test]
+    fn test_apply_oversized_claude_record_slicing() {
+        let mut context = LocalSessionContext::new(
+            crate::domain::AgentType::ClaudeCode,
+            "session-oversized".to_owned(),
+        );
+
+        // Construct head slice and tail slice representing an oversized 2MB assistant line
+        let head = r#"{"type":"assistant","message":{"role":"assistant","model":"claude-opus-5-20261001","content":[{"type":"text","text":"long content..."#;
+        let tail = r#"...more content"}],"stop_reason":"end_turn","usage":{"input_tokens":5000,"output_tokens":1200,"cache_read_input_tokens":10000,"cache_creation_input_tokens":2000}}}"#;
+
+        apply_oversized_claude_record(head, tail, &mut context);
+
+        assert_eq!(context.model.as_deref(), Some("claude-opus-5-20261001"));
+        assert_eq!(context.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(context.turn_ended, Some(true));
+        assert_eq!(context.context_used_tokens, Some(17000));
+        assert_eq!(context.context_window_tokens, Some(1_000_000));
+    }
+
+    #[test]
+    fn test_scan_claude_context_region_handles_oversized_line() {
+        let mut context = LocalSessionContext::new(
+            crate::domain::AgentType::ClaudeCode,
+            "session-streaming-oversized".to_owned(),
+        );
+
+        // Build a single line exceeding 128 KiB
+        let huge_padding = "x".repeat(150_000);
+        let oversized_line = format!(
+            r#"{{"type":"assistant","sessionId":"sess-over","message":{{"role":"assistant","model":"claude-fable-5-1","content":[{{"type":"text","text":"{huge_padding}"}}],"stop_reason":"end_turn","usage":{{"input_tokens":4000,"output_tokens":800,"cache_read_input_tokens":2000,"cache_creation_input_tokens":1000}}}}}}{}"#,
+            "\n"
+        );
+
+        let mut cursor = std::io::Cursor::new(oversized_line.as_bytes());
+        scan_claude_context_region(
+            &mut cursor,
+            oversized_line.len() as u64 + 1024,
+            &mut context,
+            "test",
+        )
+        .unwrap();
+
+        assert_eq!(context.model.as_deref(), Some("claude-fable-5-1"));
+        assert_eq!(context.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(context.turn_ended, Some(true));
+        assert_eq!(context.context_used_tokens, Some(7000));
+        assert_eq!(context.context_window_tokens, Some(1_000_000));
     }
 
     #[test]

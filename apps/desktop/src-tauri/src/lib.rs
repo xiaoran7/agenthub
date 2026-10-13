@@ -4406,6 +4406,8 @@ mod tests {
             cache_read_tokens: None,
             cache_write_tokens: None,
             reasoning_tokens: None,
+            stop_reason: None,
+            turn_ended: None,
         };
         let contexts = HashMap::from([("claude_code:session-1".to_owned(), context)]);
         let remote = json!([{

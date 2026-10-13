@@ -13,6 +13,14 @@
 - **智能模型上下文窗口推导（`crates/runner/src/collectors/mod.rs`）**：
   - 新增 `claude_context_window()`：当 transcript 未显式记录 `context_window_size` 时，根据模型名称自动推导；
   - 识别 `[1m]` 扩展标记及 Claude 5 系列（Opus 5、Sonnet 5、Fable 5、Mythos 5）原生 1M 窗口，其余默认 200k，大幅提高 Web 控制台上下文使用百分比的显示精度。
+- **超大单行首尾切片流式防爆内存（`crates/runner/src/collectors/process.rs` & `mod.rs`）**：
+  - Claude Code 的 JSONL 单行记录可能包含数兆字节的 Base64 截图或巨型命令输出，直接使用 `read_line` 会在行尾换行符前将整行全部载入内存导致 OOM；
+  - 引入 `read_spliced_line` 与 `keep_tail_window`：单行不超过 64 KiB 时正常返回完整行；超限时以流式缓冲区消费，仅保留行首前 64 KiB（`LONG_LINE_HEAD_BYTES`）以及行尾最后 8 KiB（`LONG_LINE_TAIL_BYTES`）；
+  - 专门实现 `apply_oversized_claude_record()`，利用行首精准提取 `model`，利用行尾闭合对象提取 `usage` token 计数与 `stop_reason`，确保超大行不被丢弃的同时实现零内存膨胀。
+- **Stop Reason 与回合生命周期状态机感知（`crates/runner/src/collectors/mod.rs`）**：
+  - 在 `LocalSessionContext` 中新增 `stop_reason` 与 `turn_ended` 字段；
+  - 精确识别 Assistant 响应的 `stop_reason`：若为 `"tool_use"` 则判定回合未结束（`turn_ended = false`，代表模型正在等待工具执行继续后续动作）；若为其他结束原因（如 `"end_turn"` 等）则判定回合已结束（`turn_ended = true`）；
+  - 遇到新的真实用户 Prompt 时将 `turn_ended` 重置为 `false`，实现本地会话工作状态与等待输入的精准驱动。
 - **Resume Replay 行级去重（`crates/runner/src/conversation.rs`）**：
   - Claude Code 恢复历史会话（resume）时会将旧条目按原样追加到文件尾部并保留原始 `uuid`；
   - 在 `load_session_conversation()` 中引入 `seen_uuids` 集合进行哈希去重，彻底消除重播导致的重复历史气泡与展示翻倍。
