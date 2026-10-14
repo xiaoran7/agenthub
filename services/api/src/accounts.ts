@@ -235,6 +235,7 @@ export interface AccountView {
 }
 
 export interface AccountStore {
+  hasAnyAdmin?(): Promise<boolean>;
   createAccount(input: {
     userId: string;
     email: string;
@@ -434,6 +435,13 @@ export class InMemoryAccountStore implements AccountStore {
     }
   >();
   readonly #auditEvents: AuditEvent[] = [];
+
+  async hasAnyAdmin(): Promise<boolean> {
+    for (const user of this.#users.values()) {
+      if (user.status === "active") return true;
+    }
+    return false;
+  }
 
   async createAccount(input: {
     userId: string;

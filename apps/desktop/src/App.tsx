@@ -105,8 +105,6 @@ import {
   type SessionTimelineEvent,
   type SessionTurnEvent,
   type Snapshot,
-  type TgDeviceCodeResponse,
-  type TgDevicePollResponse,
 } from "./types";
 
 import {

@@ -1,6 +1,33 @@
 # Changelog
 
-## [2.4.75] - 2026-10-14
+## [2.4.76] - 2026-10-14
+
+### 开源自部署架构重构（移除 Telegram OAuth，单管理员首次初始化与 SQLite 持久化）
+
+响应纯开源自部署定位，彻底移除多租户商业化遗留组件（Telegram OAuth / 设备码流 / 多租户团队与账单），实现单管理员开箱即用与安全闭环：
+
+- **服务端账户存储持久化（`services/api/src/sqlite-account-store.ts` & `server.ts`）**：
+  - 彻底淘汰此前在自部署场景下进程重启即丢账户的内存存储（`InMemoryAccountStore`）；
+  - 全新实现基于 Node.js 原生 `node:sqlite`（`DatabaseSync`）的高性能持久化账户库 `SqliteAccountStore`，开启 WAL 模式与同步优化，持久化存储在 `gateway.db` 中；
+  - 完整实现 23 项 `AccountStore` 契约（含 `hasAnyAdmin`、用户凭据、安全 HttpOnly 会话、密码防爆破尝试计数）；
+- **首次启动管理员安装向导与注册锁定（`services/api/src/app.ts`）**：
+  - 新增 `GET /v1/auth/status` 端点：依据存储层 `hasAnyAdmin()` 实时返回 `{ needs_setup: boolean }`；
+  - 新增 `POST /v1/auth/setup` 端点：在服务器无管理员时引导创建全局唯一的首位超级管理员（scrypt 强加密哈希、安全会话分配），完成初始化后自动锁定；
+  - 启用 `singleAdmin` 守护模式：当系统中已存在有效管理员时，后续所有的 `/v1/auth/setup` 或 `/v1/auth/register` 请求均直接拦截并返回 HTTP 409 `admin_already_exists`，杜绝任何未经授权的第三方注册；
+- **彻底清除 Telegram OAuth 与设备码互联**：
+  - 后端删除 `services/api/src/tg-oauth.ts`、相关测试及所有 `/v1/auth/oauth/tg/*` 路由；
+  - 网页端删除 `apps/web/app/auth/callback/tg/page.tsx`、`TgOAuthCallbackClient.tsx` 及 `account.ts` 中相关方法；
+  - 桌面端（Rust）删除 `apps/desktop/src-tauri/src/lib.rs` 中的 `start_tg_browser_oauth`、`start_tg_device_auth` 与 `poll_tg_device_auth`，并从 Tauri 命令派发器中解绑；
+- **前端登录门禁与控制台对齐（`apps/web` & `apps/desktop`）**：
+  - `AccountGate.tsx` 动态响应 `fetchAuthStatus()`：服务器初次启动展示“系统初次安装 · 初始化超级管理员”表单；已初始化后展示“管理员登录”表单；
+  - 移除临时调试与绕过按钮（`agenthub_selfhost_direct`）；
+  - `SettingsPage.tsx` 剥离多租户商业化设置（团队工作区 `team`、账单 `billing`）及 Telegram 绑定标识；
+  - 桌面端登录界面（`AuthScreen.tsx`）更新默认连接地址为 `http://127.0.0.1:3001`，统一单管理员操作用词；
+- **全栈工程质量与测试验证**：
+  - 新增 `services/api/test/admin-setup.test.ts` 端到端单元测试，全量 56 项测试 100% 通过；
+  - Web 与 Desktop 前端通过 `npm run typecheck` 验证；
+  - Tauri 后端通过 `cargo check` 编译检查。
+
 
 ### Web 远端控制台全面 Claude 化（Claude Design System 质感重塑）
 

@@ -46,6 +46,7 @@ function accountApp() {
       store,
       authenticator: new SessionAuthenticator(accounts),
       now: () => TEST_NOW,
+      singleAdmin: false,
     }),
   };
 }
@@ -596,6 +597,7 @@ test("team workspaces enforce roles, invitations, and actor privacy", async () =
     store,
     authenticator: new SessionAuthenticator(accounts),
     now: () => TEST_NOW,
+    singleAdmin: false,
   });
   const register = async (email: string, displayName: string) =>
     app.inject({
@@ -778,6 +780,7 @@ test("audit events are scoped, paginated, and exclude sensitive request data", a
     store: new InMemoryGatewayStore(),
     authenticator: new SessionAuthenticator(accounts),
     now: () => TEST_NOW,
+    singleAdmin: false,
   });
   const password = "correct horse battery staple";
   const register = async (email: string) =>

@@ -351,64 +351,31 @@ export async function switchWorkspace(
   return response.workspaces;
 }
 
-export interface TgOAuthAuthorizeResponse {
-  authorize_url: string;
-  code_verifier: string;
-  state: string;
+export interface AuthStatusResponse {
+  needs_setup: boolean;
 }
 
-export interface TgDeviceCodeResponse {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  verification_uri_complete?: string;
-  expires_in: number;
-  interval: number;
-}
-
-export interface TgDevicePollResponse {
-  status: "pending" | "success";
-  slow_down?: boolean;
-  account?: AccountView;
-}
-
-export async function getTgOAuthAuthorizeUrl(
-  params: { redirect_uri?: string; scope?: string } = {},
-): Promise<TgOAuthAuthorizeResponse> {
-  return accountRequest<TgOAuthAuthorizeResponse>(
-    "/v1/auth/oauth/tg/authorize-url",
-    params,
-  );
-}
-
-export async function completeTgOAuthCallback(input: {
-  code: string;
-  code_verifier: string;
-  redirect_uri?: string;
-}): Promise<AccountView> {
-  return accountRequest<AccountView>("/v1/auth/oauth/tg/callback", input);
-}
-
-export async function startTgDeviceAuth(
-  params: { scope?: string } = {},
-): Promise<TgDeviceCodeResponse> {
-  return accountRequest<TgDeviceCodeResponse>(
-    "/v1/auth/oauth/tg/device/code",
-    params,
-  );
-}
-
-export async function pollTgDeviceAuth(
-  deviceCode: string,
-): Promise<TgDevicePollResponse> {
-  return accountRequest<TgDevicePollResponse>("/v1/auth/oauth/tg/device/poll", {
-    device_code: deviceCode,
+export async function fetchAuthStatus(): Promise<AuthStatusResponse> {
+  const response = await fetch("/v1/auth/status", {
+    cache: "no-store",
+    credentials: "same-origin",
   });
+  if (!response.ok) throw await accountError(response);
+  return (await response.json()) as AuthStatusResponse;
+}
+
+export async function setupAdmin(input: {
+  email: string;
+  password: string;
+  display_name?: string;
+}): Promise<AccountView> {
+  return accountRequest<AccountView>("/v1/auth/setup", input);
 }
 
 export function accountErrorMessage(error: unknown): string {
   if (!(error instanceof AccountApiError)) return "账户服务暂时不可用";
   const messages: Record<string, string> = {
+    admin_already_exists: "系统管理员已被初始化，请直接登录",
     email_already_registered: "这个邮箱已经注册，请直接登录",
     invalid_credentials: "邮箱或密码不正确",
     invalid_email: "请输入有效的邮箱地址",
@@ -425,8 +392,6 @@ export function accountErrorMessage(error: unknown): string {
     login_rate_limited: "登录尝试过多，请稍后再试",
     invalid_session_id: "登录会话标识无效",
     session_not_found: "登录会话不存在或已撤销",
-    invalid_oauth_code: "OAuth 授权码无效或已过期",
-    invalid_code_verifier: "PKCE 校验码无效",
     token_exchange_failed: "OAuth Token 换取失败",
     userinfo_failed: "读取 OAuth 用户资料失败",
     oauth_unsupported: "OAuth 身份认证暂未启用",

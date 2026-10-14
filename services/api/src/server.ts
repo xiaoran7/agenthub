@@ -6,6 +6,7 @@ import {
   SessionAuthenticator,
   type AccountStore,
 } from "./accounts.js";
+import { SqliteAccountStore } from "./sqlite-account-store.js";
 import {
   BearerTokenAuthenticator,
   DevelopmentIdentityAuthenticator,
@@ -34,7 +35,7 @@ let store: GatewayStore;
 let accounts: AccountStore;
 if (databaseUrl === undefined) {
   store = new SqliteGatewayStore(gatewayDbPath);
-  accounts = new InMemoryAccountStore();
+  accounts = new SqliteAccountStore(gatewayDbPath);
 } else {
   const postgresStore = await PostgresGatewayStore.connect(databaseUrl);
   store = postgresStore;

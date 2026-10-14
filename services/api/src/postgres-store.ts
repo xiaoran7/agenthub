@@ -222,6 +222,13 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     }
   }
 
+  async hasAnyAdmin(): Promise<boolean> {
+    const rows = await this.#sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count FROM agent_pulse_users WHERE status = 'active'
+    `;
+    return Number(rows[0]?.count ?? "0") > 0;
+  }
+
   async createAccount(input: {
     userId: string;
     email: string;

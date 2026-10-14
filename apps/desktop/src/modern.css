@@ -4871,28 +4871,6 @@ svg.rotating {
   transform: translateY(-1px);
 }
 
-.auth-form .tg-oauth-btn {
-  height: 44px;
-  border-radius: 10px;
-  border: 1px solid var(--border-contrast);
-  background: var(--bg-card);
-  color: var(--text-primary);
-  font-size: 13.5px;
-  font-weight: 550;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.auth-form .tg-oauth-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border-contrast);
-  color: var(--text-heading);
-}
-
 .advanced-toggle {
   color: var(--brand-accent);
   font-size: 12.5px;
@@ -4926,68 +4904,6 @@ svg.rotating {
 
 .auth-footer button:hover {
   text-decoration: underline;
-}
-
-/* TG Device Flow Waiting Card */
-.tg-device-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  text-align: center;
-  padding: 12px 0;
-}
-
-.tg-device-instructions {
-  font-size: 13.5px;
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.tg-verify-link {
-  display: inline-block;
-  padding: 8px 16px;
-  border-radius: 8px;
-  background: var(--bg-hover);
-  color: var(--text-link);
-  font-size: 13px;
-  word-break: break-all;
-  text-decoration: none;
-}
-
-.tg-verify-link:hover {
-  text-decoration: underline;
-}
-
-.tg-user-code-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 24px;
-  border-radius: 12px;
-  background: var(--bg-code);
-  border: 1px dashed var(--border-contrast);
-}
-
-.tg-user-code-box span {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.tg-user-code-box strong {
-  font-size: 24px;
-  letter-spacing: 2px;
-  color: var(--brand-accent);
-  font-family: monospace;
-}
-
-.tg-waiting-text {
-  font-size: 12.5px;
-  color: var(--text-muted);
-  margin: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
