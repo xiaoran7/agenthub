@@ -1,22 +1,125 @@
 :root {
-  color-scheme: dark;
-  --background: #111118;
-  --sidebar: #15151e;
-  --surface: #1c1c27;
-  --surface-hover: #242432;
-  --surface-raised: #20202b;
-  --border: rgb(255 255 255 / 8%);
-  --border-strong: rgb(255 255 255 / 14%);
-  --primary: #6475f3;
-  --primary-soft: rgb(100 117 243 / 14%);
-  --success: #83d69b;
-  --warning: #e8b967;
-  --danger: #e26e76;
-  --text-primary: #f3f3f6;
-  --text-secondary: #a5a5b2;
-  --text-muted: #70707d;
+  /* Claude Typography Stacks */
+  --font-serif:
+    "Iowan Old Style", "Apple Garamond", "Baskerville", "Georgia", "Songti SC",
+    "Noto Serif SC", "STSong", serif;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", sans-serif;
+  --font-mono:
+    "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Monaco, Consolas,
+    monospace;
+  --mono: var(--font-mono);
+
+  /* Geometry & Rhythm */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
   --radius: 12px;
-  --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+
+  /* Universal Claude Terracotta */
+  --remote-terracotta: #d97757;
+  --remote-terracotta-hover: #c66547;
+  --remote-terracotta-soft: rgba(217, 119, 87, 0.12);
+}
+
+/* Light Theme: Warm Natural Paper (Claude Editorial) */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --remote-bg: #faf8f5;
+  --remote-sidebar: #f3efea;
+  --remote-surface: rgba(255, 255, 255, 0.94);
+  --remote-raised: #ffffff;
+  --remote-hover: #ece6de;
+  --remote-selected: #e3ddd3;
+  --remote-line: #e8e4dd;
+  --remote-line-strong: #d1ccc0;
+  --remote-ink: #1f1e1d;
+  --remote-secondary: #5e5b56;
+  --remote-muted: #8e8a83;
+
+  --remote-blue: #3e79d6;
+  --remote-green: #3b8a5a;
+  --remote-amber: #c67d28;
+  --remote-red: #d9534f;
+
+  /* Legacy Bridge Tokens */
+  --background: var(--remote-bg);
+  --sidebar: var(--remote-sidebar);
+  --surface: var(--remote-surface);
+  --surface-hover: var(--remote-hover);
+  --surface-raised: var(--remote-raised);
+  --border: var(--remote-line);
+  --border-strong: var(--remote-line-strong);
+  --primary: var(--remote-terracotta);
+  --primary-soft: var(--remote-terracotta-soft);
+  --success: var(--remote-green);
+  --warning: var(--remote-amber);
+  --danger: var(--remote-red);
+  --text-primary: var(--remote-ink);
+  --text-secondary: var(--remote-secondary);
+  --text-muted: var(--remote-muted);
+
+  --remote-composer-bg: #ffffff;
+  --remote-composer-border: #e8e4dd;
+  --remote-composer-shadow:
+    0 4px 20px -2px rgba(31, 30, 29, 0.08),
+    0 2px 6px -1px rgba(31, 30, 29, 0.04);
+  --remote-user-msg-bg: #f0ece4;
+  --remote-user-msg-border: #e2ddd3;
+  --remote-code-bg: #f4efeb;
+  --remote-tool-bg: #ffffff;
+  --remote-modal-shadow: 0 20px 60px rgba(31, 30, 29, 0.16);
+}
+
+/* Dark Theme: Warm Charcoal (Claude Obsidian) */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --remote-bg: #1f1e1d;
+  --remote-sidebar: #181716;
+  --remote-surface: #262523;
+  --remote-raised: #2a2826;
+  --remote-hover: #34322f;
+  --remote-selected: #403d38;
+  --remote-line: #3d3b37;
+  --remote-line-strong: #605c55;
+  --remote-ink: #f5f4ef;
+  --remote-secondary: #d6d4cc;
+  --remote-muted: #a8a69e;
+
+  --remote-blue: #85b5f8;
+  --remote-green: #7ed5a0;
+  --remote-amber: #e7b35d;
+  --remote-red: #ffaaa4;
+
+  /* Legacy Bridge Tokens */
+  --background: var(--remote-bg);
+  --sidebar: var(--remote-sidebar);
+  --surface: var(--remote-surface);
+  --surface-hover: var(--remote-hover);
+  --surface-raised: var(--remote-raised);
+  --border: var(--remote-line);
+  --border-strong: var(--remote-line-strong);
+  --primary: var(--remote-terracotta);
+  --primary-soft: var(--remote-terracotta-soft);
+  --success: var(--remote-green);
+  --warning: var(--remote-amber);
+  --danger: var(--remote-red);
+  --text-primary: var(--remote-ink);
+  --text-secondary: var(--remote-secondary);
+  --text-muted: var(--remote-muted);
+
+  --remote-composer-bg: #262523;
+  --remote-composer-border: #3d3b37;
+  --remote-composer-shadow: 0 10px 32px rgba(0, 0, 0, 0.35);
+  --remote-user-msg-bg: #2f2d2a;
+  --remote-user-msg-border: #3d3b37;
+  --remote-code-bg: #2c2822;
+  --remote-tool-bg: #262523;
+  --remote-modal-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
 }
 
 /* Account control-plane entry */

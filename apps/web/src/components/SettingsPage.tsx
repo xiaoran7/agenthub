@@ -48,6 +48,12 @@ import {
   enableNotifications,
   readNotificationState,
 } from "../lib/notifications";
+import {
+  getStoredTheme,
+  setTheme,
+  initThemeListener,
+  type ThemeMode,
+} from "../lib/theme";
 
 interface SettingsPageProps {
   account: AccountView | undefined;
@@ -60,6 +66,7 @@ interface SettingsPageProps {
 }
 
 type SettingsSectionKey =
+  | "appearance"
   | "account"
   | "billing"
   | "team"
@@ -77,6 +84,7 @@ interface SettingsSectionEntry {
 }
 
 const SETTINGS_SECTIONS: readonly SettingsSectionEntry[] = [
+  { key: "appearance", label: "外观主题", icon: "◐", requiresAccount: false },
   { key: "account", label: "账户安全", icon: "◎", requiresAccount: true },
   { key: "billing", label: "订阅方案", icon: "$", requiresAccount: true },
   { key: "team", label: "团队工作区", icon: "◇", requiresAccount: true },
@@ -193,7 +201,10 @@ export function SettingsPage({
   onClose,
 }: SettingsPageProps) {
   const [activeSection, setActiveSection] =
-    useState<SettingsSectionKey>("account");
+    useState<SettingsSectionKey>("appearance");
+  const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() =>
+    getStoredTheme(),
+  );
   const [gatewayBase, setGatewayBase] = useState(config.gatewayBase);
   const [userId, setUserId] = useState(config.userId);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -248,6 +259,12 @@ export function SettingsPage({
   const activeEntry =
     sections.find((section) => section.key === activeSection) ??
     sections.find((section) => section.key === "connection")!;
+
+  useEffect(() => {
+    return initThemeListener((mode) => {
+      setCurrentTheme(mode);
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -726,6 +743,138 @@ export function SettingsPage({
           aria-label="设置内容"
           onSubmit={handleSubmit}
         >
+          {activeEntry.key === "appearance" && (
+            <section
+              className="settings-section"
+              aria-labelledby="appearance-settings"
+            >
+              <div className="settings-section-heading">
+                <span className="settings-section-icon" aria-hidden="true">
+                  ◐
+                </span>
+                <div>
+                  <h3 id="appearance-settings">外观与主题</h3>
+                  <p>采用 Claude Design System 人文配色与优雅排版系统。</p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: "12px",
+                  margin: "18px 0 10px",
+                }}
+              >
+                {(
+                  [
+                    {
+                      mode: "system",
+                      title: "跟随系统",
+                      desc: "自动同步操作系统与浏览器的明暗设置",
+                      badge: "Auto",
+                      border: "var(--remote-line)",
+                    },
+                    {
+                      mode: "light",
+                      title: "温润纸张",
+                      desc: "天然天然柔和米白（Warm Paper），极度舒适的阅读质感",
+                      badge: "Warm Paper",
+                      border: "#E8E4DD",
+                    },
+                    {
+                      mode: "dark",
+                      title: "黑曜石暖炭",
+                      desc: "黑曜石温暖暗色（Obsidian Charcoal），沉浸且不刺眼",
+                      badge: "Obsidian",
+                      border: "#3D3B37",
+                    },
+                  ] as const
+                ).map((item) => {
+                  const isSelected = currentTheme === item.mode;
+                  return (
+                    <button
+                      key={item.mode}
+                      type="button"
+                      onClick={() => {
+                        setTheme(item.mode);
+                        setCurrentTheme(item.mode);
+                      }}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-start",
+                        gap: "6px",
+                        padding: "14px",
+                        textAlign: "left",
+                        background: isSelected
+                          ? "var(--remote-selected)"
+                          : "var(--remote-surface)",
+                        border: isSelected
+                          ? "2px solid var(--remote-terracotta)"
+                          : "1px solid var(--remote-line)",
+                        borderRadius: "var(--radius-md, 10px)",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          width: "100%",
+                        }}
+                      >
+                        <strong
+                          style={{
+                            fontSize: "14px",
+                            color: "var(--remote-ink)",
+                            fontWeight: 650,
+                          }}
+                        >
+                          {item.title}
+                        </strong>
+                        <span
+                          style={{
+                            fontSize: "10px",
+                            fontFamily: "var(--font-mono)",
+                            padding: "2px 6px",
+                            borderRadius: "4px",
+                            background: isSelected
+                              ? "var(--remote-terracotta-soft)"
+                              : "var(--remote-hover)",
+                            color: isSelected
+                              ? "var(--remote-terracotta)"
+                              : "var(--remote-muted)",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {item.badge}
+                        </span>
+                      </div>
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: "12px",
+                          lineHeight: "1.5",
+                          color: "var(--remote-secondary)",
+                        }}
+                      >
+                        {item.desc}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="settings-hint">
+                所有主题均已完成 Anti-FOUC
+                防跳闪优化，切换后即刻生效并持久保存。
+              </p>
+            </section>
+          )}
+
           {activeEntry.key === "account" && account !== undefined && (
             <section
               className="settings-section"

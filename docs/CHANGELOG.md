@@ -1,6 +1,34 @@
 # Changelog
 
-## [2.4.74] - 2026-10-12
+## [2.4.75] - 2026-10-14
+
+### Web 远端控制台全面 Claude 化（Claude Design System 质感重塑）
+
+基于对官方 Claude Desktop 前端架构、排版规范与质感细节的深度逆向与融合，对 AgentHub Web 前端（`apps/web`）进行了全面的 Claude 级视觉与交互体验升级：
+
+- **Claude Design System (CDS) 双主题令牌体系（`apps/web/app/globals.css`）**：
+  - 彻底淘汰旧有 Slate/Indigo 冷色系与写死暗色，抽象出完整的语义化 CSS 变量；
+  - 新增“温润天然纸张”（Warm Paper，`#FAF8F5`）浅色模式与“黑曜石暖炭”（Obsidian Charcoal，`#1F1E1D`）深色模式；
+  - 引入经典 Anthropic 陶土红（Terracotta `#D97757`）作为核心品牌强调色、发送按钮与交互反馈；
+  - 规范卡片抬升（`--remote-surface`、`--remote-raised`）与微细边框（`--remote-line: #E8E4DD / #3D3B37`），确保大留白通透呼吸感。
+- **Anti-FOUC 首帧防白/黑跳闪（`apps/web/src/lib/theme.ts` & `app/layout.tsx`）**：
+  - 封装轻量主题管理核心 `theme.ts`，支持 `localStorage` 持久化与系统 `prefers-color-scheme` 媒体查询双向响应；
+  - 在 App Router 的 `<head>` 同步注入自执行防闪烁内联脚本，在 DOM 初始挂载与 React 水合前准确判定并写入 `data-theme` 与 `style.colorScheme`；
+  - 配置 `viewport.themeColor` 分别适配浅色与深色视口沉浸顶栏。
+- **人文气质多阶字体排版系统（Typography）**：
+  - 衬线体（`--font-serif`：Iowan Old Style / Apple Garamond / Georgia / Songti SC）：赋予品牌 Logo、欢迎大标题与登录面板人文阅读温度；
+  - 无衬线体（`--font-sans`）：优化正文字号、行高（1.72）与微字距，消除阅读疲劳；
+  - 等宽体（`--font-mono`：SFMono / Cascadia Code）：用于时间戳、Token 计量、代码块与终端标签。
+- **核心组件形态与交互 Claude 化重塑**：
+  - **浮动 Composer 底栏**：圆角扩展至 20px，配合柔和边缘与陶土色微光环；发送按钮升级为经典 34px 圆形陶土红纽扣；
+  - **沉浸式消息流**：Assistant 消息无框融入纸面，流式光标升级为陶土色呼吸方块；User 消息呈现不对称圆角优雅气泡（`18px 18px 4px 18px`）；
+  - **欢迎页与建议胶囊**：`.remote-welcome` 升级为人文衬线大标题与 Claude 风格一键派发/设置建议芯片（Suggestion Chips）；
+  - **侧边栏与控制台**：侧栏底部集成快捷主题切换器（☀️ 浅色 / 🌙 深色 / 🖥️ 系统）；上下文容量指示环（`RemoteContextCapacity.tsx`）对齐 CDS 警告/陶土色阶；
+  - **设置中心与登录门禁**：`SettingsPage.tsx` 新增“外观与主题”可视化卡片切换；`AccountGate` 剥离旧粉红主色，对齐陶土红与米灰精致表单。
+- **工程验证与质量闭环**：
+  - 新增 `apps/web/test/theme.test.ts` 单元测试，全量 73 个测试用例 100% 通过；
+  - 顺利完成 `npm run typecheck --workspace @agent-pulse/web` 与 `npm run build --workspace @agent-pulse/web` 优化打包；
+  - 遵循 Aozora UI 与 60 FPS 性能规范，杜绝滚动穿透重绘与层叠滤镜。
 
 ### 会话解析与生命周期精准感知优化（吸收 Token-Monitor 实践）
 

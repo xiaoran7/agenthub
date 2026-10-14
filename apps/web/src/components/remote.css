@@ -4,13 +4,11 @@
   max-width: 100%;
   display: flex;
   flex-direction: row;
-  background: #141518;
-  color: #ecece8;
-  font:
-    14.5px/1.6 system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  background: var(--remote-bg);
+  color: var(--remote-ink);
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  line-height: 1.6;
   overflow: hidden;
   position: relative;
 }
@@ -25,9 +23,9 @@
 }
 .remote-console button,
 .remote-launch button {
-  border: 1px solid #3c3f47;
-  border-radius: 8px;
-  background: #25272d;
+  border: 1px solid var(--remote-line);
+  border-radius: var(--radius-sm, 7px);
+  background: var(--remote-surface);
   padding: 8px 13px;
   cursor: pointer;
   transition:
@@ -37,8 +35,8 @@
     opacity 0.15s ease;
 }
 .remote-console button:hover:not(:disabled) {
-  background: #2c2f37;
-  border-color: #4f535e;
+  background: var(--remote-hover);
+  border-color: var(--remote-line-strong);
 }
 .remote-console button:disabled {
   opacity: 0.45;
@@ -47,23 +45,23 @@
 .remote-console button:focus-visible,
 .remote-console select:focus-visible,
 .remote-console textarea:focus-visible {
-  outline: 2px solid #94a3b8;
+  outline: 2px solid var(--remote-terracotta);
   outline-offset: 2px;
 }
 .remote-console .remote-primary {
-  background: #e2e8f0;
-  color: #0f172a;
+  background: var(--remote-terracotta);
+  color: #ffffff;
   border-color: transparent;
   font-weight: 600;
 }
 .remote-console .remote-primary:hover:not(:disabled) {
-  background: #ffffff;
+  background: var(--remote-terracotta-hover);
 }
 .remote-sidebar {
   display: flex;
   flex-direction: column;
-  background: #101114;
-  border-right: 1px solid #24262b;
+  background: var(--remote-sidebar);
+  border-right: 1px solid var(--remote-line);
   padding: 20px 16px 16px;
   overflow: hidden;
   flex-shrink: 0;
@@ -90,9 +88,9 @@
 .remote-icon-btn {
   background: transparent !important;
   border: none !important;
-  color: #828792 !important;
+  color: var(--remote-muted) !important;
   padding: 6px !important;
-  border-radius: 6px !important;
+  border-radius: var(--radius-sm, 6px) !important;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -100,13 +98,13 @@
   transition: all 0.15s ease;
 }
 .remote-icon-btn:hover {
-  background: #22242a !important;
-  color: #e2e8f0 !important;
+  background: var(--remote-hover) !important;
+  color: var(--remote-ink) !important;
 }
 .remote-icon-btn.expand-btn {
   margin-right: 6px;
-  border: 1px solid #2e313a !important;
-  background: #1a1b20 !important;
+  border: 1px solid var(--remote-line) !important;
+  background: var(--remote-surface) !important;
 }
 .remote-sidebar-resizer {
   width: 6px;
@@ -120,7 +118,7 @@
 }
 .remote-sidebar-resizer:hover,
 .remote-sidebar-resizer:active {
-  background: #474b57;
+  background: var(--remote-line-strong);
 }
 .remote-header-left {
   display: flex;
@@ -128,29 +126,32 @@
   gap: 12px;
 }
 .remote-brand {
+  font-family: var(--font-serif);
   font-size: 19px;
   font-weight: 650;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.025em;
+  color: var(--remote-ink);
 }
 .remote-brand span {
-  font-size: 11px;
-  color: #94a3b8;
-  border: 1px solid #334155;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--remote-muted);
+  border: 1px solid var(--remote-line);
   padding: 2px 6px;
   border-radius: 5px;
   margin-left: 6px;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.04em;
 }
 .remote-nav-label {
   font-size: 12px;
-  color: #787d8a;
+  color: var(--remote-muted);
   margin-top: 8px;
   font-weight: 500;
 }
 .remote-sidebar section h2 {
   font-size: 13px;
   font-weight: 500;
-  color: #babbbd;
+  color: var(--remote-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -162,22 +163,21 @@
   align-items: flex-start;
   width: 100%;
   text-align: left;
-  background: #16171b;
-  border: 1px solid #22242a;
+  background: transparent;
+  border: 1px solid transparent;
   margin: 2px 0;
-  padding: 10px 12px;
+  padding: 8px 10px;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 7px);
   transition: all 0.15s ease;
 }
 .remote-sidebar .remote-session:hover {
-  background: #202228;
-  border-color: #333640;
+  background: var(--remote-hover);
+  border-color: transparent;
 }
 .remote-sidebar .remote-session.selected {
-  background: #242730;
-  border-color: #4b5262;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: var(--remote-selected);
+  border-color: transparent;
 }
 .remote-session-title {
   display: block;
@@ -186,8 +186,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  font-weight: 500;
-  color: #dcdedc;
+  font-weight: 520;
+  color: var(--remote-ink);
 }
 .remote-session-meta {
   display: flex;
@@ -197,15 +197,15 @@
   margin-top: 4px;
 }
 .remote-session small {
-  color: #989da0;
+  color: var(--remote-muted);
   font-size: 11px;
 }
 .remote-session-badge {
   font-size: 10px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: #2a312d;
-  color: #72b28c;
+  background: rgba(59, 138, 90, 0.12);
+  color: var(--remote-green);
 }
 /* The filter row lists every agent that actually exists, so it is a scrolling
    strip rather than a fixed four-up grid — a long name like "Claude Code"
@@ -228,37 +228,37 @@
   padding: 4px 9px !important;
   font-size: 11.5px !important;
   border-radius: 999px !important;
-  border: 1px solid #282a30 !important;
-  background: #17181c !important;
-  color: #8b909a !important;
+  border: 1px solid var(--remote-line) !important;
+  background: var(--remote-surface) !important;
+  color: var(--remote-muted) !important;
   text-align: center;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 .remote-filter-pill:hover {
-  background: #202228 !important;
-  color: #d1d5db !important;
+  background: var(--remote-hover) !important;
+  color: var(--remote-ink) !important;
 }
 .remote-filter-pill.active {
-  background: #252830 !important;
-  color: #38bdf8 !important;
-  border-color: #38bdf8 !important;
+  background: var(--remote-selected) !important;
+  color: var(--remote-terracotta) !important;
+  border-color: var(--remote-terracotta) !important;
   font-weight: 600;
 }
 .remote-session-badge.zcode {
-  background: rgba(14, 165, 233, 0.18);
-  color: #38bdf8;
-  border: 1px solid rgba(14, 165, 233, 0.35);
+  background: rgba(62, 121, 214, 0.14);
+  color: var(--remote-blue);
+  border: 1px solid rgba(62, 121, 214, 0.3);
 }
 .remote-session-badge.claude {
-  background: rgba(234, 88, 12, 0.18);
-  color: #fb923c;
-  border: 1px solid rgba(234, 88, 12, 0.35);
+  background: var(--remote-terracotta-soft);
+  color: var(--remote-terracotta);
+  border: 1px solid rgba(217, 119, 87, 0.3);
 }
 .remote-session-badge.codex {
-  background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(59, 138, 90, 0.14);
+  color: var(--remote-green);
+  border: 1px solid rgba(59, 138, 90, 0.3);
 }
 
 /* ================= 设备 -> Agent -> 会话 树状层级 ================= */
@@ -278,15 +278,15 @@
 }
 
 .remote-device-group {
-  background: #14161a;
-  border: 1px solid #23262d;
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line);
   border-radius: 9px;
   overflow: hidden;
   transition: border-color 0.15s ease;
 }
 
 .remote-device-group:hover {
-  border-color: #2e333d;
+  border-color: var(--remote-line-strong);
 }
 
 /* The device row is the tree root: same folder grammar as every level below
@@ -309,14 +309,14 @@
 }
 
 .remote-device-header:hover {
-  background: #1c1e23 !important;
-  border-color: #2c2f36;
+  background: var(--remote-hover) !important;
+  border-color: var(--remote-line);
 }
 
 .remote-device-title {
   font-size: 12.5px;
   font-weight: 650;
-  color: #f3f4f6;
+  color: var(--remote-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -324,7 +324,7 @@
 
 .remote-tree-empty {
   font-size: 11.5px;
-  color: #6b7280;
+  color: var(--remote-muted);
   padding: 8px 4px;
   margin: 0;
 }
@@ -343,7 +343,7 @@
   flex-shrink: 0;
   font-size: 9px;
   line-height: 1;
-  color: #6b7280;
+  color: var(--remote-muted);
   transition: transform 0.18s ease;
 }
 
@@ -357,8 +357,8 @@
   margin-left: auto;
   padding: 0 5px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #8b909a;
+  background: var(--remote-hover);
+  color: var(--remote-muted);
   font-size: 10px;
   font-weight: 600;
   line-height: 16px;
@@ -373,7 +373,7 @@
   gap: 1px;
   margin-left: 10px;
   padding-left: 6px;
-  border-left: 1px solid #22242a;
+  border-left: 1px solid var(--remote-line);
 }
 
 .remote-node-sessions {
@@ -382,7 +382,7 @@
   gap: 1px;
   margin-left: 10px;
   padding-left: 6px;
-  border-left: 1px solid #22242a;
+  border-left: 1px solid var(--remote-line);
   padding-bottom: 3px;
 }
 
@@ -403,8 +403,8 @@
 }
 
 .remote-node-header:hover {
-  background: #1e2026 !important;
-  border-color: #2c2f36;
+  background: var(--remote-hover) !important;
+  border-color: var(--remote-line);
 }
 
 .remote-agent-group {
@@ -429,31 +429,31 @@
 }
 
 .remote-agent-badge.zcode {
-  color: #7dd3fc;
+  color: var(--remote-blue);
 }
 
 .remote-agent-badge.codex {
-  color: #6ee7b7;
+  color: var(--remote-green);
 }
 
 .remote-agent-badge.claude {
-  color: #fdba74;
+  color: var(--remote-terracotta);
 }
 
 .remote-agent-badge.other {
-  color: #c4b5fd;
+  color: var(--remote-muted);
 }
 
 .remote-workspace-name {
   font-size: 11.5px;
-  color: #b9bcc4;
+  color: var(--remote-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .remote-workspace-icon {
-  color: #6b7280;
+  color: var(--remote-muted);
   flex-shrink: 0;
 }
 
@@ -477,13 +477,13 @@
 }
 
 .remote-sidebar .remote-session:hover {
-  background: #1c1e23;
-  border-color: #2c2f36;
+  background: var(--remote-hover);
+  border-color: transparent;
 }
 
 .remote-sidebar .remote-session.selected {
-  background: var(--remote-selected, #2b2e2c);
-  border-color: var(--remote-line-strong, #424c45);
+  background: var(--remote-selected);
+  border-color: transparent;
 }
 
 .remote-session-title {
@@ -494,11 +494,12 @@
   white-space: nowrap;
   font-size: 12.5px;
   font-weight: 500;
-  color: #d6d4cc;
+  color: var(--remote-secondary);
 }
 
 .remote-sidebar .remote-session.selected .remote-session-title {
-  color: var(--remote-ink, #f5f4ef);
+  color: var(--remote-ink);
+  font-weight: 600;
 }
 
 .remote-session-meta {
@@ -507,7 +508,7 @@
   gap: 5px;
   width: 100%;
   margin-top: 0;
-  color: #8b909a;
+  color: var(--remote-muted);
   font-size: 10.5px;
   line-height: 1.3;
 }
@@ -519,24 +520,24 @@
   height: 5px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: #6b7280;
+  background: var(--remote-muted);
 }
 
 .remote-state-dot.running {
-  background: var(--remote-blue, #93c5fd);
+  background: var(--remote-blue);
   animation: remote-pulse 1.5s ease-in-out infinite;
 }
 
 .remote-state-dot.waiting {
-  background: var(--remote-amber, #e7b35d);
+  background: var(--remote-amber);
 }
 
 .remote-state-dot.idle {
-  background: #6b7280;
+  background: var(--remote-muted);
 }
 
 .remote-sidebar .remote-session.candidate .remote-session-title {
-  color: #9ca0aa;
+  color: var(--remote-muted);
   font-weight: 400;
 }
 
@@ -552,9 +553,9 @@
   gap: 1px;
   margin: 8px 0 4px;
   padding: 4px 6px;
-  border: 1px solid #22242a;
+  border: 1px solid var(--remote-line);
   border-radius: 7px;
-  background: #15161a;
+  background: var(--remote-surface);
   font-size: 11px;
   line-height: 1.5;
   min-height: 26px;
@@ -566,7 +567,7 @@
   border: none !important;
   border-radius: 4px !important;
   background: transparent !important;
-  color: #8b909a !important;
+  color: var(--remote-muted) !important;
   font-size: 11px !important;
   cursor: pointer;
   max-width: 130px;
@@ -578,24 +579,24 @@
 
 .remote-breadcrumb-root:hover,
 .remote-breadcrumb-crumb:hover {
-  background: #23252b !important;
-  color: #d6d4cc !important;
+  background: var(--remote-hover) !important;
+  color: var(--remote-ink) !important;
 }
 
 .remote-breadcrumb-root[data-current="true"],
 .remote-breadcrumb-crumb[data-current="true"] {
-  color: #f5f4ef !important;
+  color: var(--remote-ink) !important;
   font-weight: 600;
 }
 
 .remote-breadcrumb-sep {
-  color: #4b4f58;
+  color: var(--remote-line-strong);
   padding: 0 1px;
 }
 
 .remote-sidebar-footer {
   margin-top: auto;
-  color: #a9abaa;
+  color: var(--remote-muted);
   font-size: 12px;
   display: grid;
   gap: 12px;
@@ -612,19 +613,21 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 24px 36px;
-  border-bottom: 1px solid #303136;
+  padding: 16px 28px;
+  border-bottom: 1px solid var(--remote-line);
   gap: 20px;
 }
 .remote-main h1 {
+  font-family: var(--font-serif);
   font-size: 19px;
-  font-weight: 550;
-  letter-spacing: -0.4px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--remote-ink);
   margin: 0;
 }
 .remote-main header p {
   font-size: 12px;
-  color: #a2a7a3;
+  color: var(--remote-muted);
   margin: 4px 0 0;
 }
 .remote-welcome {
@@ -633,21 +636,26 @@
   padding: 48px;
 }
 .remote-eyebrow {
-  font-size: 12px;
-  color: #a7b6ad;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--remote-terracotta);
+  letter-spacing: 0.05em;
 }
 .remote-welcome h2 {
-  font-size: 32px;
-  line-height: 1.35;
-  font-weight: 500;
-  letter-spacing: -1px;
+  font-family: var(--font-serif);
+  font-size: clamp(28px, 3vw, 38px);
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--remote-ink);
 }
 .remote-welcome p {
-  color: #a6aaa7;
+  color: var(--remote-secondary);
   font-size: 15px;
+  line-height: 1.7;
 }
 .remote-muted {
-  color: #9da19e;
+  color: var(--remote-muted);
   padding: 8px 12px;
   font-size: 13px;
 }
@@ -660,16 +668,16 @@
   gap: 14px;
   margin: 12px 24px 0;
   padding: 12px 16px;
-  border: 1px solid #5a4932;
-  background: #262018;
-  color: #eedcc0;
+  border: 1px solid rgba(198, 125, 40, 0.35);
+  background: rgba(198, 125, 40, 0.08);
+  color: var(--remote-ink);
   font-size: 13px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 8px);
 }
 .remote-notice.restoring {
-  border-color: #5a4932;
-  background: #262018;
-  color: #eedcc0;
+  border-color: rgba(198, 125, 40, 0.35);
+  background: rgba(198, 125, 40, 0.08);
+  color: var(--remote-ink);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -677,9 +685,9 @@
 /* A failed turn is the one notice that must not be mistaken for progress, so it
    carries its own red family instead of the shared amber. */
 .remote-notice-error {
-  border-color: #6b3230;
-  background: #2a1a19;
-  color: #f3d4d2;
+  border-color: rgba(217, 83, 79, 0.35);
+  background: rgba(217, 83, 79, 0.08);
+  color: var(--remote-ink);
   align-items: flex-start;
 }
 .remote-notice-error-body {
@@ -691,20 +699,20 @@
 .remote-notice-error-body strong {
   font-size: 13px;
   font-weight: 600;
-  color: #ffb4ae;
+  color: var(--remote-red);
 }
 .remote-notice-error-body span {
   font-size: 12.5px;
   line-height: 1.55;
-  color: #e8c9c6;
+  color: var(--remote-secondary);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .remote-notice-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  border-top-color: var(--remote-amber, #e7b35d);
+  border: 2px solid rgba(217, 119, 87, 0.2);
+  border-top-color: var(--remote-terracotta);
   border-radius: 50%;
   animation: remote-spin 0.8s linear infinite;
   flex-shrink: 0;
@@ -774,7 +782,7 @@
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--remote-blue, #93c5fd);
+  background: var(--remote-terracotta);
   flex-shrink: 0;
 }
 .remote-message.user {
@@ -782,13 +790,14 @@
   margin-left: auto;
   margin-right: 0;
   padding: 12px 16px;
-  border: 1px solid #363a45;
-  border-radius: 16px 16px 4px 16px;
-  background: #252830;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+  border: 1px solid var(--remote-user-msg-border, var(--remote-line));
+  border-radius: 18px 18px 4px 18px;
+  background: var(--remote-user-msg-bg, var(--remote-raised));
+  color: var(--remote-ink);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
 }
 .remote-message.user .remote-md-content {
-  font-size: 14px;
+  font-size: 14.5px;
   line-height: 1.68;
 }
 .remote-message.assistant {
@@ -810,7 +819,7 @@
   height: 1.05em;
   margin-left: 3px;
   vertical-align: -0.18em;
-  background-color: var(--remote-blue, #93c5fd);
+  background-color: var(--remote-terracotta);
   border-radius: 1px;
   animation: remote-blink 0.9s infinite ease-in-out;
 }
@@ -824,9 +833,9 @@
   }
 }
 .remote-tool {
-  border: 1px solid #282b34;
-  background: #15171c;
-  border-radius: 9px;
+  border: 1px solid var(--remote-line);
+  background: var(--remote-surface);
+  border-radius: var(--radius-md, 10px);
   margin: 0 auto 14px;
   max-width: var(--remote-wide);
   width: 100%;
@@ -837,25 +846,25 @@
     background 0.15s ease;
 }
 .remote-tool:hover {
-  border-color: #383c48;
+  border-color: var(--remote-line-strong);
 }
 .remote-tool-summary {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #191c22;
+  background: var(--remote-surface);
   cursor: pointer;
   user-select: none;
   font-weight: 500;
-  color: #cbd5e1;
+  color: var(--remote-secondary);
   list-style: none;
 }
 .remote-tool-summary::-webkit-details-marker {
   display: none;
 }
 .remote-tool-summary:hover {
-  background: #20242c;
+  background: var(--remote-hover);
 }
 /* One disclosure grammar for both the single card and the group: a chevron
    that rotates, so the row is obviously expandable. */
@@ -866,7 +875,7 @@
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  color: var(--remote-muted, #a8a69e);
+  color: var(--remote-muted);
   transition: transform 0.18s ease;
 }
 details[open] > summary > .remote-disclosure,
@@ -889,38 +898,38 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   height: 22px;
   flex-shrink: 0;
   border-radius: 6px;
-  background: rgb(255 255 255 / 5%);
-  color: var(--remote-muted, #a8a69e);
+  background: var(--remote-hover);
+  color: var(--remote-muted);
 }
 /* Each tool shape carries its own accent so a block of tool rows is scannable
    by colour as well as by glyph. */
 .remote-tool[data-tool="command"] .remote-tool-glyph {
-  color: var(--remote-amber, #e7b35d);
-  background: rgb(231 179 93 / 12%);
+  color: var(--remote-amber);
+  background: rgba(198, 125, 40, 0.12);
 }
 .remote-tool[data-tool="read"] .remote-tool-glyph {
-  color: var(--remote-blue, #93c5fd);
-  background: rgb(147 197 253 / 12%);
+  color: var(--remote-blue);
+  background: rgba(62, 121, 214, 0.12);
 }
 .remote-tool[data-tool="search"] .remote-tool-glyph {
-  color: #a5b4c8;
-  background: rgb(165 180 200 / 12%);
+  color: var(--remote-secondary);
+  background: var(--remote-hover);
 }
 .remote-tool[data-tool="edit"] .remote-tool-glyph {
-  color: var(--remote-green, #7ed5a0);
-  background: rgb(126 213 160 / 12%);
+  color: var(--remote-green);
+  background: rgba(59, 138, 90, 0.12);
 }
 .remote-tool[data-tool="web"] .remote-tool-glyph {
-  color: #c4b5fd;
-  background: rgb(196 181 253 / 12%);
+  color: var(--remote-terracotta);
+  background: var(--remote-terracotta-soft);
 }
 .remote-tool-title {
   font-size: 12.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: ui-monospace, Consolas, monospace;
-  color: #e2e8f0;
+  font-family: var(--font-mono);
+  color: var(--remote-ink);
 }
 .remote-tool-status {
   display: inline-flex;
@@ -1426,10 +1435,10 @@ details[open] > .remote-tool-summary > .remote-disclosure {
      into the composer instead of colliding with its border. */
   margin: 24px auto 20px;
   padding: 12px 16px 10px 18px;
-  border: 1px solid #32353c;
-  border-radius: 18px;
-  background: #1e2025;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--remote-composer-border, var(--remote-line));
+  border-radius: var(--radius-xl, 20px);
+  background: var(--remote-composer-bg, var(--remote-surface));
+  box-shadow: var(--remote-composer-shadow, 0 6px 20px rgba(0, 0, 0, 0.08));
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease,
@@ -1439,12 +1448,7 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   gap: 8px;
 }
 /* A hairline plus a short fade above the composer, so the last message does not
-   sit flush against the input with nothing separating them.
-   Drawn as a pseudo-element rather than sticky positioning: the form is
-   already a flex-shrink:0 sibling in the flex column, and sticky would fight
-   that layout. The band is transparent at its top edge and only reaches full
-   background where it meets the composer, so message text scrolls *under* it
-   and dissolves instead of being cut off by an opaque slab. */
+   sit flush against the input with nothing separating them. */
 .remote-composer-card::before {
   content: "";
   position: absolute;
@@ -1455,20 +1459,20 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   max-width: 100vw;
   height: 24px;
   pointer-events: none;
-  border-top: 1px solid var(--remote-line, #3d3b37);
+  border-top: 1px solid var(--remote-line);
   background: linear-gradient(
     to bottom,
     transparent 0%,
-    color-mix(in srgb, var(--remote-bg, #1f1e1d) 72%, transparent) 78%,
-    var(--remote-bg, #1f1e1d) 100%
+    color-mix(in srgb, var(--remote-bg) 72%, transparent) 78%,
+    var(--remote-bg) 100%
   );
 }
 .remote-composer-card:focus-within {
-  border-color: #565b67;
-  background: #22242a;
+  border-color: var(--remote-terracotta);
+  background: var(--remote-composer-bg, var(--remote-surface));
   box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(255, 255, 255, 0.08);
+    var(--remote-composer-shadow, 0 8px 30px rgba(0, 0, 0, 0.12)),
+    0 0 0 1px var(--remote-terracotta);
 }
 .remote-composer-input-wrapper {
   width: 100%;
@@ -1482,7 +1486,8 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   max-height: 220px;
   padding: 4px 0;
   outline: none;
-  color: #f1f2f4;
+  color: var(--remote-ink);
+  font-family: var(--font-sans);
   font-size: 14.5px;
   line-height: 1.55;
   overflow-y: auto;
@@ -1490,7 +1495,7 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 /* The placeholder and the hint are both tertiary, so they get a different
    weight of grey from the muted tone used for timeline text. */
 .remote-composer-input-wrapper textarea::placeholder {
-  color: #7d7a73;
+  color: var(--remote-muted);
 }
 .remote-composer-toolbar {
   display: flex;
@@ -1514,20 +1519,24 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   font-weight: 500;
 }
 .remote-status-pill.ready {
-  background: rgba(16, 185, 129, 0.14);
-  color: #34d399;
+  background: rgba(59, 138, 90, 0.12);
+  color: var(--remote-green);
+  border: 1px solid rgba(59, 138, 90, 0.25);
 }
 .remote-status-pill.running {
-  background: rgba(59, 130, 246, 0.16);
-  color: #60a5fa;
+  background: rgba(62, 121, 214, 0.12);
+  color: var(--remote-blue);
+  border: 1px solid rgba(62, 121, 214, 0.25);
 }
 .remote-status-pill.connecting {
-  background: rgba(245, 158, 11, 0.16);
-  color: #fbbf24;
+  background: rgba(198, 125, 40, 0.12);
+  color: var(--remote-amber);
+  border: 1px solid rgba(198, 125, 40, 0.25);
 }
 .remote-status-pill.offline {
-  background: rgba(107, 114, 128, 0.18);
-  color: #9ca3af;
+  background: var(--remote-hover);
+  color: var(--remote-muted);
+  border: 1px solid var(--remote-line);
 }
 .remote-pill-dot {
   width: 6px;
@@ -1552,7 +1561,7 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 }
 .remote-composer-hint {
   font-size: 11px;
-  color: #717684;
+  color: var(--remote-muted);
 }
 .remote-composer-actions {
   display: flex;
@@ -1564,9 +1573,9 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   align-items: center;
 }
 .remote-effort-select {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #9ca3af;
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line);
+  color: var(--remote-muted);
   font-size: 11.5px;
   padding: 4px 8px;
   border-radius: 8px;
@@ -1575,21 +1584,21 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   transition: all 0.15s ease;
 }
 .remote-effort-select:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.09);
-  color: #e5e7eb;
-  border-color: rgba(255, 255, 255, 0.25);
+  background: var(--remote-hover);
+  color: var(--remote-ink);
+  border-color: var(--remote-line-strong);
 }
 .remote-effort-select:focus {
-  border-color: #60a5fa;
-  color: #f3f4f6;
+  border-color: var(--remote-terracotta);
+  color: var(--remote-ink);
 }
 .remote-interrupt-btn {
   display: inline-flex !important;
   align-items: center;
   gap: 5px;
-  background: rgba(239, 68, 68, 0.15) !important;
-  color: #f87171 !important;
-  border: 1px solid rgba(239, 68, 68, 0.3) !important;
+  background: rgba(217, 83, 79, 0.12) !important;
+  color: var(--remote-red) !important;
+  border: 1px solid rgba(217, 83, 79, 0.28) !important;
   border-radius: 16px !important;
   padding: 4px 10px !important;
   font-size: 12px !important;
@@ -1598,41 +1607,43 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   transition: all 0.15s ease;
 }
 .remote-interrupt-btn:hover {
-  background: rgba(239, 68, 68, 0.28) !important;
-  border-color: rgba(239, 68, 68, 0.5) !important;
+  background: rgba(217, 83, 79, 0.22) !important;
+  border-color: rgba(217, 83, 79, 0.45) !important;
 }
 .remote-send-btn {
-  width: 32px;
-  height: 32px;
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
   border-radius: 50% !important;
   padding: 0 !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
   border: none !important;
-  background: #f1f2f4 !important;
-  color: #121316 !important;
+  background: var(--remote-terracotta) !important;
+  color: #ffffff !important;
   cursor: pointer;
-  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: all 0.14s ease !important;
+  box-shadow: 0 1px 3px rgba(217, 119, 87, 0.3) !important;
 }
 .remote-send-btn:hover:not(:disabled) {
-  transform: scale(1.08);
-  background: #ffffff !important;
-  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px) !important;
+  background: var(--remote-terracotta-hover) !important;
+  box-shadow: 0 3px 8px rgba(217, 119, 87, 0.38) !important;
 }
 .remote-send-btn:disabled {
-  background: #2d3037 !important;
-  color: #636774 !important;
-  opacity: 0.5 !important;
+  background: var(--remote-hover) !important;
+  color: var(--remote-muted) !important;
+  opacity: 0.6 !important;
   cursor: default;
   transform: none !important;
-  box-shadow: none;
+  box-shadow: none !important;
 }
 .remote-launch {
-  background: #222427;
-  color: #ecece8;
-  border: 1px solid #484c48;
+  background: var(--remote-raised);
+  color: var(--remote-ink);
+  border: 1px solid var(--remote-line-strong);
   border-radius: 14px;
   padding: 26px;
   width: min(520px, calc(100% - 32px));

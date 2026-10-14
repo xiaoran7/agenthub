@@ -61,10 +61,10 @@ export const RemoteContextCapacity = memo(function RemoteContextCapacity({
             fill="none"
             stroke={
               percentage >= 90
-                ? "#ffaaa4"
+                ? "var(--remote-red, #D9534F)"
                 : percentage >= 70
-                  ? "#e7b35d"
-                  : "#93c5fd"
+                  ? "var(--remote-terracotta, #D97757)"
+                  : "var(--remote-terracotta, #D97757)"
             }
             strokeWidth="2.2"
             strokeLinecap="round"

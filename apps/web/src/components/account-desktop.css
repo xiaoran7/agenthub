@@ -4,10 +4,9 @@
   grid-template-columns: minmax(0, 1fr);
   place-items: center;
   min-height: 100dvh;
-  background: #1f1e1d;
-  color: #f5f4ef;
-  font-family:
-    "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  background: var(--remote-bg);
+  color: var(--remote-ink);
+  font-family: var(--font-sans);
 }
 
 .account-panel {
@@ -20,11 +19,11 @@
   width: min(100%, 440px);
   max-width: none;
   margin: 0 auto;
-  padding: 30px;
-  background: #262523;
-  border: 1px solid #3d3b37;
-  border-radius: 18px;
-  box-shadow: 0 18px 52px rgb(0 0 0 / 14%);
+  padding: 32px;
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line);
+  border-radius: var(--radius-xl, 20px);
+  box-shadow: var(--remote-modal-shadow, 0 18px 52px rgba(0, 0, 0, 0.1));
 }
 
 .account-brand {
@@ -32,58 +31,59 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 28px;
-  color: #f5f4ef;
-  font-family: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
-  font-size: 19px;
-  font-weight: 720;
-  letter-spacing: -0.035em;
+  color: var(--remote-ink);
+  font-family: var(--font-serif);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .account-brand svg {
-  color: #ef7fa7;
+  color: var(--remote-terracotta);
   flex: 0 0 auto;
 }
 
 .account-tabs {
   gap: 24px;
   margin-bottom: 27px;
-  border-bottom-color: #3d3b37;
+  border-bottom: 1px solid var(--remote-line);
 }
 
 .account-tabs button {
-  color: #a8a69e;
+  color: var(--remote-muted);
   padding: 9px 0 11px;
+  font-size: 14px;
 }
 
 .account-tabs button:hover,
 .account-tabs button[aria-selected="true"] {
-  color: #f5f4ef;
+  color: var(--remote-ink);
 }
 
 .account-tabs button[aria-selected="true"]::after {
   width: 100%;
-  background: #ef7fa7;
+  background: var(--remote-terracotta);
 }
 
 .account-heading > span {
-  color: #ef7fa7;
-  font-family: "Cascadia Mono", Consolas, monospace;
+  color: var(--remote-terracotta);
+  font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
 }
 
 .account-heading h2 {
   margin: 9px 0 10px;
-  color: #fff;
-  font-family: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  color: var(--remote-ink);
+  font-family: var(--font-serif);
   font-size: 30px;
-  font-weight: 680;
-  letter-spacing: -0.035em;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .account-heading p {
-  color: #a8a69e;
-  font-size: 13px;
+  color: var(--remote-secondary);
+  font-size: 13.5px;
   line-height: 1.6;
 }
 
@@ -94,31 +94,31 @@
 
 .account-oauth-submit {
   min-height: 46px;
-  background: #e8e6e1;
-  border-color: #e8e6e1;
-  border-radius: 9px;
-  color: #151514;
-  font-weight: 620;
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line-strong);
+  border-radius: var(--radius-md, 10px);
+  color: var(--remote-ink);
+  font-weight: 600;
   box-shadow: none;
 }
 
 .account-oauth-submit:hover:not(:disabled) {
-  background: #fff;
-  border-color: #fff;
+  background: var(--remote-hover);
+  border-color: var(--remote-ink);
   transform: none;
 }
 
 .oauth-icon {
-  color: #ac536e;
+  color: var(--remote-terracotta);
 }
 
 .account-divider {
-  color: #a8a69e;
+  color: var(--remote-muted);
 }
 
 .account-divider::before,
 .account-divider::after {
-  border-bottom-color: #3d3b37;
+  border-bottom: 1px solid var(--remote-line);
 }
 
 .account-form {
@@ -126,67 +126,72 @@
 }
 
 .account-form label > span {
-  color: #d6d4cc;
+  color: var(--remote-secondary);
   font-weight: 600;
+  font-size: 13px;
 }
 
 .account-form input {
   min-height: 45px;
-  background: #1f1e1d;
-  border-color: #605c55;
-  border-radius: 8px;
-  color: #f5f4ef;
+  background: var(--remote-raised);
+  border: 1px solid var(--remote-line);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--remote-ink);
 }
 
 .account-form input::placeholder {
-  color: #817e77;
+  color: var(--remote-muted);
 }
 
 .account-form input:focus {
-  border-color: #93c5fd;
-  box-shadow: 0 0 0 2px rgb(147 197 253 / 18%);
+  border-color: var(--remote-terracotta);
+  box-shadow: 0 0 0 2px var(--remote-terracotta-soft);
+  outline: none;
 }
 
 .account-submit {
   min-height: 46px;
   margin-top: 3px;
-  background: #3b3935;
-  border: 1px solid #605c55;
-  border-radius: 9px;
-  color: #f5f4ef;
+  background: var(--remote-terracotta);
+  border: 1px solid var(--remote-terracotta);
+  border-radius: var(--radius-md, 10px);
+  color: #ffffff;
   font-weight: 650;
+  box-shadow: 0 1px 3px rgba(217, 119, 87, 0.25);
 }
 
 .account-submit:hover:not(:disabled) {
-  background: #4b4842;
+  background: var(--remote-terracotta-hover);
+  border-color: var(--remote-terracotta-hover);
 }
 
 .account-text-action {
-  color: #93c5fd;
+  color: var(--remote-terracotta);
   font-weight: 600;
 }
 
 .account-text-action:hover {
-  color: #c6e2ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .account-success {
-  color: #7ed5a0;
+  color: var(--remote-green);
 }
 
 .account-error {
-  background: #452b29;
-  border-left-color: #ffaaa4;
-  color: #ffcbc7;
+  background: rgba(217, 83, 79, 0.12);
+  border-left-color: var(--remote-red);
+  color: var(--remote-red);
 }
 
 .account-policy {
-  color: #a8a69e;
+  color: var(--remote-muted);
 }
 
 .account-entry button:focus-visible,
 .account-entry input:focus-visible {
-  outline: 2px solid #93c5fd;
+  outline: 2px solid var(--remote-terracotta);
   outline-offset: 2px;
 }
 

@@ -39,6 +39,12 @@ import {
 } from "../lib/session-tree";
 import "./remote.css";
 import "./remote-desktop.css";
+import {
+  getStoredTheme,
+  setTheme,
+  initThemeListener,
+  type ThemeMode,
+} from "../lib/theme";
 
 const empty: RemoteSnapshot = { cursor: 0, runners: [], sessions: [] };
 
@@ -583,6 +589,15 @@ export function RemoteConsole({
   });
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() =>
+    getStoredTheme(),
+  );
+
+  useEffect(() => {
+    return initThemeListener((mode) => {
+      setCurrentTheme(mode);
+    });
+  }, []);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -1585,6 +1600,83 @@ export function RemoteConsole({
           <p className="remote-muted">连接电脑后，在工作区中开始会话。</p>
         )}
         <div className="remote-sidebar-footer">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "2px 4px 6px",
+              borderBottom: "1px solid var(--remote-line)",
+              marginBottom: "4px",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "11px",
+                color: "var(--remote-muted)",
+                fontFamily: "var(--font-mono)",
+                letterSpacing: "0.04em",
+              }}
+            >
+              THEME
+            </span>
+            <div style={{ display: "inline-flex", gap: "3px" }}>
+              {(
+                [
+                  {
+                    mode: "light",
+                    label: "浅色",
+                    icon: "☀️",
+                    title: "温润纸张 (Warm Paper)",
+                  },
+                  {
+                    mode: "dark",
+                    label: "深色",
+                    icon: "🌙",
+                    title: "黑曜石暖炭 (Obsidian Charcoal)",
+                  },
+                  {
+                    mode: "system",
+                    label: "系统",
+                    icon: "🖥️",
+                    title: "跟随系统设置",
+                  },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.mode}
+                  type="button"
+                  onClick={() => {
+                    setTheme(t.mode);
+                    setCurrentTheme(t.mode);
+                  }}
+                  title={t.title}
+                  style={{
+                    padding: "2px 6px",
+                    fontSize: "11px",
+                    border: "none",
+                    borderRadius: "5px",
+                    background:
+                      currentTheme === t.mode
+                        ? "var(--remote-selected)"
+                        : "transparent",
+                    color:
+                      currentTheme === t.mode
+                        ? "var(--remote-terracotta)"
+                        : "var(--remote-muted)",
+                    fontWeight: currentTheme === t.mode ? 600 : 400,
+                    cursor: "pointer",
+                    lineHeight: "1.4",
+                  }}
+                >
+                  <span style={{ marginRight: "2px", fontSize: "10px" }}>
+                    {t.icon}
+                  </span>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="remote-runner-status">
             <span
               className={`remote-status-dot ${snapshot.runners.some((item) => item.online) ? "online" : "offline"}`}
@@ -1727,12 +1819,90 @@ export function RemoteConsole({
           )}
         {!selected ? (
           <div className="remote-welcome">
-            <span className="remote-eyebrow">你的工作，仍在原处</span>
+            <span className="remote-eyebrow">YOUR WORK IN FLOW</span>
             <h2>{loading ? "正在连接…" : "打开一个会话，继续刚才的工作。"}</h2>
             <p>
-              消息、工具操作和审批都来自电脑上的原生
-              Agent。关闭此页面后，已连接的任务仍可继续执行。
+              消息、工具执行与权限审批均直接同步自你的原生终端 Agent。
+              即便离开网页，已派发的工作流依然在电脑后台稳步推进。
             </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "10px",
+                marginTop: "24px",
+              }}
+            >
+              {[
+                {
+                  title: "新建会话",
+                  desc: "在指定设备工作区派发新 Agent",
+                  action: () => {
+                    const firstOnline = snapshot.runners.find((r) => r.online);
+                    const fallback = snapshot.runners[0];
+                    if (firstOnline) {
+                      setRunner(firstOnline.runner_id);
+                      dialog.current?.showModal();
+                    } else if (fallback) {
+                      setRunner(fallback.runner_id);
+                      dialog.current?.showModal();
+                    }
+                  },
+                },
+                {
+                  title: "外观设置",
+                  desc: "在温润天然纸张与黑曜石暖炭间切换",
+                  action: () => setSettingsOpen(true),
+                },
+              ].map((chip) => (
+                <button
+                  key={chip.title}
+                  type="button"
+                  onClick={chip.action}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    gap: "4px",
+                    padding: "12px 14px",
+                    textAlign: "left",
+                    background: "var(--remote-surface)",
+                    border: "1px solid var(--remote-line)",
+                    borderRadius: "var(--radius-md, 10px)",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor =
+                      "var(--remote-line-strong)";
+                    e.currentTarget.style.background = "var(--remote-hover)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "var(--remote-line)";
+                    e.currentTarget.style.background = "var(--remote-surface)";
+                  }}
+                >
+                  <strong
+                    style={{
+                      fontSize: "13px",
+                      color: "var(--remote-ink)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {chip.title}
+                  </strong>
+                  <span
+                    style={{
+                      fontSize: "11.5px",
+                      color: "var(--remote-secondary)",
+                      lineHeight: "1.4",
+                    }}
+                  >
+                    {chip.desc}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           <>
