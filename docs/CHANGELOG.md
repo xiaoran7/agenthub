@@ -22,8 +22,8 @@
 - **核心组件形态与交互 Claude 化重塑**：
   - **浮动 Composer 底栏**：圆角扩展至 20px，配合柔和边缘与陶土色微光环；发送按钮升级为经典 34px 圆形陶土红纽扣；
   - **沉浸式消息流**：Assistant 消息无框融入纸面，流式光标升级为陶土色呼吸方块；User 消息呈现不对称圆角优雅气泡（`18px 18px 4px 18px`）；
-  - **欢迎页与建议胶囊**：`.remote-welcome` 升级为人文衬线大标题与 Claude 风格一键派发/设置建议芯片（Suggestion Chips）；
-  - **侧边栏与控制台**：侧栏底部集成快捷主题切换器（☀️ 浅色 / 🌙 深色 / 🖥️ 系统）；上下文容量指示环（`RemoteContextCapacity.tsx`）对齐 CDS 警告/陶土色阶；
+  - **欢迎页与建议胶囊**：`.remote-welcome` 升级为人文衬线大标题与 Claude 风格一键派发/设置建议芯片（Suggestion Chips），抽离为 CSS 规范类 `.remote-welcome-chip` 杜绝 JS 内联 hover 并统一弹窗参数重置；
+  - **侧边栏与控制台**：侧栏底部集成快捷主题切换器（☀️ 浅色 / 🌙 深色 / 🖥️ 系统）；上下文容量指示环（`RemoteContextCapacity.tsx`）对齐 CDS 警告/陶土色阶；修复 `initThemeListener` 事件注销引用一致性以彻底杜绝内存泄漏，初始挂载时立即触发回调同步；
   - **设置中心与登录门禁**：`SettingsPage.tsx` 新增“外观与主题”可视化卡片切换；`AccountGate` 剥离旧粉红主色，对齐陶土红与米灰精致表单。
 - **工程验证与质量闭环**：
   - 新增 `apps/web/test/theme.test.ts` 单元测试，全量 73 个测试用例 100% 通过；

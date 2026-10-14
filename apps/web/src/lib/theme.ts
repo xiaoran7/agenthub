@@ -77,17 +77,13 @@ export function initThemeListener(
   mediaQuery.addEventListener("change", handleMediaChange);
   window.addEventListener(THEME_CHANGE_EVENT, handleCustomEvent);
 
-  // Apply on mount
-  applyTheme(getStoredTheme());
+  // Apply on mount and notify listeners of the resolved initial mode
+  const initialMode = getStoredTheme();
+  applyTheme(initialMode);
+  onChange?.(initialMode);
 
   return () => {
-    mediaQuery.removeEventListener("change", mediaChangeHandler);
+    mediaQuery.removeEventListener("change", handleMediaChange);
     window.removeEventListener(THEME_CHANGE_EVENT, handleCustomEvent);
   };
 }
-
-const mediaChangeHandler = () => {
-  if (getStoredTheme() === "system") {
-    applyTheme("system");
-  }
-};

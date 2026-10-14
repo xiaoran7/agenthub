@@ -1825,28 +1825,24 @@ export function RemoteConsole({
               消息、工具执行与权限审批均直接同步自你的原生终端 Agent。
               即便离开网页，已派发的工作流依然在电脑后台稳步推进。
             </p>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                gap: "10px",
-                marginTop: "24px",
-              }}
-            >
+            <div className="remote-welcome-chips">
               {[
                 {
                   title: "新建会话",
                   desc: "在指定设备工作区派发新 Agent",
                   action: () => {
-                    const firstOnline = snapshot.runners.find((r) => r.online);
-                    const fallback = snapshot.runners[0];
-                    if (firstOnline) {
-                      setRunner(firstOnline.runner_id);
-                      dialog.current?.showModal();
-                    } else if (fallback) {
-                      setRunner(fallback.runner_id);
-                      dialog.current?.showModal();
-                    }
+                    const available = snapshot.runners.find(
+                      (item) => item.online && item.hello?.workspaces?.length,
+                    );
+                    setRunner(
+                      available?.runner_id ??
+                        snapshot.runners[0]?.runner_id ??
+                        "",
+                    );
+                    setWorkspace(available?.hello?.workspaces[0] ?? "");
+                    setNativeId("");
+                    setModel("");
+                    dialog.current?.showModal();
                   },
                 },
                 {
@@ -1858,48 +1854,11 @@ export function RemoteConsole({
                 <button
                   key={chip.title}
                   type="button"
+                  className="remote-welcome-chip"
                   onClick={chip.action}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: "4px",
-                    padding: "12px 14px",
-                    textAlign: "left",
-                    background: "var(--remote-surface)",
-                    border: "1px solid var(--remote-line)",
-                    borderRadius: "var(--radius-md, 10px)",
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor =
-                      "var(--remote-line-strong)";
-                    e.currentTarget.style.background = "var(--remote-hover)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = "var(--remote-line)";
-                    e.currentTarget.style.background = "var(--remote-surface)";
-                  }}
                 >
-                  <strong
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--remote-ink)",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {chip.title}
-                  </strong>
-                  <span
-                    style={{
-                      fontSize: "11.5px",
-                      color: "var(--remote-secondary)",
-                      lineHeight: "1.4",
-                    }}
-                  >
-                    {chip.desc}
-                  </span>
+                  <strong>{chip.title}</strong>
+                  <span>{chip.desc}</span>
                 </button>
               ))}
             </div>
