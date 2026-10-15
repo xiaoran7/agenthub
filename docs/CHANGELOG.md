@@ -86,6 +86,27 @@
   - **问答与选项交互卡片（Prompt Questions）CDS 升级**：
     - 支持单选与多选交互，选项按钮支持 hover 微上浮（`translateY(-0.5px)`）与高亮选中框；
     - 代码/布局预览区域采用 Surface 0 等宽代码卡片格式化呈现。
+- **阶段 4：侧边栏与会话列表架构重构（对齐 CDS 双环导轨与高精度会话卡片）**：
+  - **Surface 0 底层画布与渐隐遮罩**：
+    - 侧边栏背景全面切换至 `--cds-surface-0`（浅色 `#f5f5f3`，深色 `#0b0b0a`），主窗格使用 `--cds-surface-1`，形成优雅自然的色阶对比；
+    - 会话树容器挂载 7 档渐隐非线性 Alpha 遮罩（`.cds-scroll-fade-mask`），滚动到底部和顶部时平滑溶解，无生硬截断感。
+  - **高精度卡片式新建会话按钮（`.remote-sidebar-new-btn`）**：
+    - 采用独立纯白/深炭悬浮卡片外观，自带双环发丝边框与微妙阴影，陶土橙色柔和悬停微光与图标缩放动效；
+    - 右侧带有高辨识度等宽 Badge，提升交互重心。
+  - **实时会话与工作区递归搜索框（`.remote-sidebar-search-box`）**：
+    - 在侧边栏顶端提供即时搜索框，支持一键清空（`×`）；
+    - 建立 4 级树（Device -> Agent Provider -> Workspace -> Session）全链路关键词过滤；
+    - 当搜索词非空时，自动深度展开所有匹配的分支与节点，清除搜索词后无缝恢复原有的手动折叠/展开记忆。
+  - **服务商过滤胶囊跑道（`.remote-filter-pill-row`）**：
+    - 采用 CDS Segmented Track 原型，胶囊滑块激活时呈现温润反差与微阴影，切换流畅自然。
+  - **高保真会话卡片（`.remote-session`）与连续发丝导轨**：
+    - 选中态（Selected）注入 Surface 2 纯白/深炭背景、浮动微阴影与左侧 3px 标志性陶土边框（`border-left: 3px solid var(--cds-clay)`）；
+    - 悬停快捷操作：鼠标移入时淡入会话 ID 复制按钮（`.remote-session-action-btn`），带 1.5 秒绿色对勾复制成功反馈；
+    - 会话状态点：运行中呈现高频平滑脉冲波（`running`），待审批呈现陶土色警示灯（`waiting`），普通状态呈现中性低饱和灰度；
+    - 层级嵌套间引入连续 1px 发丝引导导轨（`.remote-node-children`、`.remote-node-sessions`），阅读四级目录层级清晰分明。
+  - **底部 CDS 外观分段控制器与精致账户卡片**：
+    - 主题切换升级为 CDS 标准 Segmented Control（浅色/深色/系统跟随模式一键直达），消除原生下拉单选的割裂感；
+    - 升级底部账户卡片（`.remote-account-card`），配备圆形首字母头像、单行截断安全展示、设置抽屉呼出与退出登录按钮。
 
 ## [2.4.76] - 2026-10-14
 

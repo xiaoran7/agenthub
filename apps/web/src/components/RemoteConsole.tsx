@@ -1199,6 +1199,69 @@ export function RemoteConsole({
     [snapshot.sessions, snapshot.runners, providerFilter, discovered],
   );
 
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
+
+  const handleCopySessionId = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(id);
+      setCopiedSessionId(id);
+      setTimeout(() => {
+        setCopiedSessionId((cur) => (cur === id ? null : cur));
+      }, 1500);
+    }
+  };
+
+  const filteredDeviceGroups = useMemo(() => {
+    const q = sessionSearchQuery.trim().toLowerCase();
+    if (!q) return deviceGroups;
+
+    return deviceGroups
+      .map((dev) => {
+        const matchesDev = dev.label.toLowerCase().includes(q);
+        const filteredAgents = dev.workspaces
+          .map((agent) => {
+            const matchesAgent = agent.label.toLowerCase().includes(q);
+            const filteredWorkspaces = agent.workspaces
+              .map((ws) => {
+                const matchesWs = ws.label.toLowerCase().includes(q);
+                const filteredItems = ws.items.filter((item) => {
+                  if (matchesDev || matchesAgent || matchesWs) return true;
+                  return item.title.toLowerCase().includes(q);
+                });
+                if (filteredItems.length === 0 && !matchesWs) return null;
+                return {
+                  ...ws,
+                  items: filteredItems,
+                };
+              })
+              .filter((ws): ws is NonNullable<typeof ws> => ws !== null);
+
+            if (filteredWorkspaces.length === 0 && !matchesAgent) return null;
+            return {
+              ...agent,
+              totalCount: filteredWorkspaces.reduce(
+                (sum, w) => sum + w.items.length,
+                0,
+              ),
+              workspaces: filteredWorkspaces,
+            };
+          })
+          .filter(
+            (agent): agent is NonNullable<typeof agent> => agent !== null,
+          );
+
+        if (filteredAgents.length === 0 && !matchesDev) return null;
+        return {
+          ...dev,
+          totalCount: filteredAgents.reduce((sum, a) => sum + a.totalCount, 0),
+          workspaces: filteredAgents,
+        };
+      })
+      .filter((dev): dev is NonNullable<typeof dev> => dev !== null);
+  }, [deviceGroups, sessionSearchQuery]);
+
   /** Agent folders that actually exist, for the filter row. */
   const availableProviders = useMemo(() => {
     const seen = new Map<ProviderKind, string>();
@@ -1329,7 +1392,7 @@ export function RemoteConsole({
           </button>
         </div>
         <button
-          className="remote-primary"
+          className="remote-sidebar-new-btn"
           onClick={() => {
             const available = snapshot.runners.find(
               (item) => item.online && item.hello?.workspaces.length,
@@ -1341,8 +1404,56 @@ export function RemoteConsole({
             dialog.current?.showModal();
           }}
         >
-          ＋ 新建会话
+          <span className="remote-sidebar-new-btn-icon" aria-hidden="true">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </span>
+          <span>新建会话</span>
+          <span className="remote-sidebar-new-btn-badge">New</span>
         </button>
+
+        <div className="remote-sidebar-search-box">
+          <svg
+            className="remote-search-icon"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="text"
+            className="remote-sidebar-search-input"
+            placeholder="搜索会话或工作区..."
+            value={sessionSearchQuery}
+            onChange={(e) => setSessionSearchQuery(e.target.value)}
+          />
+          {sessionSearchQuery && (
+            <button
+              type="button"
+              className="remote-search-clear"
+              title="清空搜索"
+              onClick={() => setSessionSearchQuery("")}
+            >
+              ×
+            </button>
+          )}
+        </div>
+
         <nav className="remote-breadcrumb" aria-label="会话位置">
           <button
             type="button"
@@ -1409,9 +1520,10 @@ export function RemoteConsole({
           ))}
         </div>
         <div className="remote-nav-label">设备 / Agent / 工作区</div>
-        <div className="remote-session-tree">
-          {deviceGroups.map((dev) => {
-            const isDevCollapsed = collapsedDevices[dev.runnerId] === true;
+        <div className="remote-session-tree cds-scroll-fade-mask">
+          {filteredDeviceGroups.map((dev) => {
+            const isDevCollapsed =
+              !sessionSearchQuery && collapsedDevices[dev.runnerId] === true;
             return (
               <section className="remote-device-group" key={dev.runnerId}>
                 <button
@@ -1447,6 +1559,7 @@ export function RemoteConsole({
                       dev.workspaces.map((agentGroup) => {
                         const agentKey = `${dev.runnerId}/${agentGroup.provider}`;
                         const isAgentCollapsed =
+                          !sessionSearchQuery &&
                           collapsedAgents[agentKey] === true;
                         return (
                           <div className="remote-agent-group" key={agentKey}>
@@ -1483,6 +1596,7 @@ export function RemoteConsole({
                                 {agentGroup.workspaces.map((workspaceGroup) => {
                                   const workspaceKey = `${agentKey}/${workspaceGroup.id}`;
                                   const isWorkspaceCollapsed =
+                                    !sessionSearchQuery &&
                                     collapsedWorkspaces[workspaceKey] === true;
                                   return (
                                     <div
@@ -1598,21 +1712,66 @@ export function RemoteConsole({
                                                     }
                                                   }}
                                                 >
-                                                  <span className="remote-session-title">
-                                                    {item.title}
-                                                    {pendingCount > 0 && (
+                                                  <div className="remote-session-top-line">
+                                                    <span className="remote-session-title">
+                                                      {item.title}
+                                                    </span>
+                                                    <div className="remote-session-actions-hover">
+                                                      {pendingCount > 0 && (
+                                                        <span
+                                                          className="remote-tree-badge-pending"
+                                                          title={`有 ${pendingCount} 项待确认审批`}
+                                                          aria-label={`有 ${pendingCount} 项待确认审批`}
+                                                        >
+                                                          !
+                                                          {pendingCount > 1
+                                                            ? ` ${pendingCount}`
+                                                            : ""}
+                                                        </span>
+                                                      )}
                                                       <span
-                                                        className="remote-tree-badge-pending"
-                                                        title={`有 ${pendingCount} 项待确认审批`}
-                                                        aria-label={`有 ${pendingCount} 项待确认审批`}
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        className={`remote-session-action-btn ${copiedSessionId === item.sessionKey ? "copied" : ""}`}
+                                                        title={
+                                                          copiedSessionId ===
+                                                          item.sessionKey
+                                                            ? "已复制会话ID"
+                                                            : "复制会话ID"
+                                                        }
+                                                        onClick={(e) =>
+                                                          handleCopySessionId(
+                                                            item.sessionKey,
+                                                            e,
+                                                          )
+                                                        }
                                                       >
-                                                        !
-                                                        {pendingCount > 1
-                                                          ? ` ${pendingCount}`
-                                                          : ""}
+                                                        {copiedSessionId ===
+                                                        item.sessionKey ? (
+                                                          "✓"
+                                                        ) : (
+                                                          <svg
+                                                            width="11"
+                                                            height="11"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            strokeWidth="2"
+                                                          >
+                                                            <rect
+                                                              x="9"
+                                                              y="9"
+                                                              width="13"
+                                                              height="13"
+                                                              rx="2"
+                                                              ry="2"
+                                                            />
+                                                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                                          </svg>
+                                                        )}
                                                       </span>
-                                                    )}
-                                                  </span>
+                                                    </div>
+                                                  </div>
                                                   <span className="remote-session-meta">
                                                     <span
                                                       className={`remote-state-dot ${
@@ -1631,10 +1790,12 @@ export function RemoteConsole({
                                                       }`}
                                                       aria-hidden="true"
                                                     />
-                                                    {states[
-                                                      item.session
-                                                        .execution_state
-                                                    ] ?? "状态待确认"}
+                                                    <span className="remote-state-text">
+                                                      {states[
+                                                        item.session
+                                                          .execution_state
+                                                      ] ?? "状态待确认"}
+                                                    </span>
                                                   </span>
                                                 </button>
                                               );
@@ -1665,14 +1826,19 @@ export function RemoteConsole({
                                                   );
                                                 }}
                                               >
-                                                <span className="remote-session-title">
-                                                  {item.title}
-                                                </span>
+                                                <div className="remote-session-top-line">
+                                                  <span className="remote-session-title">
+                                                    {item.title}
+                                                  </span>
+                                                </div>
                                                 <span className="remote-session-meta">
-                                                  {item.candidate.resumable ===
-                                                  false
-                                                    ? "仅发现"
-                                                    : "点击恢复"}
+                                                  <span className="remote-state-dot idle" />
+                                                  <span className="remote-state-text">
+                                                    {item.candidate
+                                                      .resumable === false
+                                                      ? "仅发现"
+                                                      : "点击恢复"}
+                                                  </span>
                                                 </span>
                                               </button>
                                             );
@@ -1694,31 +1860,21 @@ export function RemoteConsole({
             );
           })}
         </div>
-        {!deviceGroups.length && (
-          <p className="remote-muted">连接电脑后，在工作区中开始会话。</p>
+        {!filteredDeviceGroups.length && (
+          <p className="remote-muted">
+            {sessionSearchQuery
+              ? `未找到包含 "${sessionSearchQuery}" 的会话`
+              : "连接电脑后，在工作区中开始会话。"}
+          </p>
         )}
         <div className="remote-sidebar-footer">
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "2px 4px 6px",
-              borderBottom: "1px solid var(--remote-line)",
-              marginBottom: "4px",
-            }}
-          >
-            <span
-              style={{
-                fontSize: "11px",
-                color: "var(--remote-muted)",
-                fontFamily: "var(--font-mono)",
-                letterSpacing: "0.04em",
-              }}
+          <div className="remote-theme-segmented-wrap">
+            <span className="remote-theme-label">THEME</span>
+            <div
+              className="remote-theme-segmented"
+              role="radiogroup"
+              aria-label="外观主题切换"
             >
-              THEME
-            </span>
-            <div style={{ display: "inline-flex", gap: "3px" }}>
               {(
                 [
                   {
@@ -1744,33 +1900,15 @@ export function RemoteConsole({
                 <button
                   key={t.mode}
                   type="button"
+                  className={`remote-theme-segment-btn ${currentTheme === t.mode ? "active" : ""}`}
                   onClick={() => {
                     setTheme(t.mode);
                     setCurrentTheme(t.mode);
                   }}
                   title={t.title}
-                  style={{
-                    padding: "2px 6px",
-                    fontSize: "11px",
-                    border: "none",
-                    borderRadius: "5px",
-                    background:
-                      currentTheme === t.mode
-                        ? "var(--remote-selected)"
-                        : "transparent",
-                    color:
-                      currentTheme === t.mode
-                        ? "var(--remote-terracotta)"
-                        : "var(--remote-muted)",
-                    fontWeight: currentTheme === t.mode ? 600 : 400,
-                    cursor: "pointer",
-                    lineHeight: "1.4",
-                  }}
                 >
-                  <span style={{ marginRight: "2px", fontSize: "10px" }}>
-                    {t.icon}
-                  </span>
-                  {t.label}
+                  <span className="remote-theme-icon">{t.icon}</span>
+                  <span>{t.label}</span>
                 </button>
               ))}
             </div>
@@ -1784,27 +1922,37 @@ export function RemoteConsole({
             </span>
           </div>
           {account?.user && (
-            <div className="remote-account-bar">
+            <div className="remote-account-card">
+              <div className="remote-account-avatar" aria-hidden="true">
+                {(
+                  account.user.display_name?.[0] ||
+                  account.user.email?.[0] ||
+                  "U"
+                ).toUpperCase()}
+              </div>
               <span className="remote-account-name" title={account.user.email}>
                 {account.user.display_name || account.user.email}
               </span>
-              <button
-                className="remote-logout-btn"
-                onClick={() => setSettingsOpen(true)}
-                type="button"
-                title="设置"
-              >
-                设置
-              </button>
-              {onLogout && (
+              <div className="remote-account-actions">
                 <button
-                  className="remote-logout-btn"
-                  onClick={onLogout}
+                  className="remote-account-btn"
+                  onClick={() => setSettingsOpen(true)}
                   type="button"
+                  title="设置"
                 >
-                  退出
+                  设置
                 </button>
-              )}
+                {onLogout && (
+                  <button
+                    className="remote-account-btn logout"
+                    onClick={onLogout}
+                    type="button"
+                    title="退出登录"
+                  >
+                    退出
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
