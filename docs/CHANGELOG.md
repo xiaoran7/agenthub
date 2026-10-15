@@ -23,7 +23,12 @@
   - 移除临时调试与绕过按钮（`agenthub_selfhost_direct`）；
   - `SettingsPage.tsx` 剥离多租户商业化设置（团队工作区 `team`、账单 `billing`）及 Telegram 绑定标识，彻底清除废弃的团队与账单状态、副作用与操作回调；
   - `account.ts` 清理废弃的团队成员/邀请类型与 Stripe 支付客户端接口；
-  - 桌面端登录界面（`AuthScreen.tsx`）更新默认连接地址为 `http://127.0.0.1:3001`，统一单管理员操作用词；
+  - 桌面端登录界面（`AuthScreen.tsx`）更新默认连接地址为 `https://platform.tannerlab.xyz`，统一单管理员操作用词；
+- **产物构建与发布归档**：
+  - 发布桌面安装包 `AgentHub-v2.4.76-windows-x64-setup.exe` 与 `AgentHub-v2.4.76-x64.msi`；
+  - 发布独立原生运行时监听包 `AgentHub-Runner-v2.4.76-windows-x64.zip`（含 `agenthub-runner.exe` 与一键连接脚本 `Connect-AgentHub.cmd`）；
+  - 产物归档至 `Deliverables/AgentHub/` 并生成 `AgentHub-v2.4.76-SHA256.txt` 校验和清单；
+  - 清除服务器历史测试数据与旧账号，重置系统安装态，验证 `GET /v1/auth/status` 准确返回 `{"needs_setup":true}`。
 - **全栈工程质量与测试验证**：
   - 新增 `services/api/test/admin-setup.test.ts` 端到端单元测试，全量 56 项测试 100% 通过；
   - Web 与 Desktop 前端通过 `npm run typecheck` 验证；

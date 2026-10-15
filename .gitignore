@@ -16,6 +16,8 @@ pulse.bundle
 _scratch/
 .env
 deploy/docker.env
+*.exe
+*.msi
 
 # ==============================================================================
 # AI Tooling & Local Cognition (纯本地辅助，严禁提交远端)

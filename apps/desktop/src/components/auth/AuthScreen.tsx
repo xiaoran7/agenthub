@@ -76,7 +76,7 @@ export function AuthScreen({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [serverUrl, setServerUrl] = useState("http://127.0.0.1:3001");
+  const [serverUrl, setServerUrl] = useState("https://platform.tannerlab.xyz");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(initialError);
@@ -195,7 +195,7 @@ export function AuthScreen({
                 <span>服务器地址</span>
                 <input
                   type="url"
-                  placeholder="http://127.0.0.1:3001"
+                  placeholder="https://platform.tannerlab.xyz"
                   value={serverUrl}
                   onChange={(e) => setServerUrl(e.target.value)}
                 />
