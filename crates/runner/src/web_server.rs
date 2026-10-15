@@ -168,7 +168,7 @@ fn handle_connection(
 
     // CORS preflight
     if method == "OPTIONS" {
-        send_response(&mut stream, 204, "No Content", "text/plain", b"", true)?;
+        send_response(&mut stream, 204, "No Content", "text/plain", b"", true, None)?;
         return Ok(());
     }
 
@@ -182,6 +182,7 @@ fn handle_connection(
             "image/x-icon",
             FAVICON_ICO,
             false,
+            Some("public, max-age=86400"),
         )?;
         return Ok(());
     }
@@ -194,6 +195,7 @@ fn handle_connection(
             "image/svg+xml",
             ICON_SVG.as_bytes(),
             false,
+            Some("public, max-age=86400"),
         )?;
         return Ok(());
     }
@@ -212,6 +214,7 @@ fn handle_connection(
         "text/html; charset=utf-8",
         INDEX_HTML.as_bytes(),
         false,
+        Some("no-cache"),
     )?;
 
     Ok(())
@@ -611,7 +614,15 @@ fn send_json_response<T: Serialize>(
     data: &T,
 ) -> anyhow::Result<()> {
     let body = serde_json::to_vec(data)?;
-    send_response(stream, status, "OK", "application/json", &body, false)
+    send_response(
+        stream,
+        status,
+        "OK",
+        "application/json",
+        &body,
+        false,
+        Some("no-cache, no-store, must-revalidate"),
+    )
 }
 
 fn send_response(
@@ -621,6 +632,7 @@ fn send_response(
     content_type: &str,
     body: &[u8],
     is_options: bool,
+    cache_control: Option<&str>,
 ) -> anyhow::Result<()> {
     let mut header = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n",
@@ -629,6 +641,9 @@ fn send_response(
         content_type,
         body.len()
     );
+    if let Some(cc) = cache_control {
+        header.push_str(&format!("Cache-Control: {}\r\n", cc));
+    }
     if is_options {
         header.push_str("Access-Control-Max-Age: 86400\r\n");
     }

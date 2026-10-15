@@ -157,12 +157,18 @@
       border: 1px solid rgba(16, 185, 129, 0.2);
     }
 
-    .status-pulse-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--cds-green);
-      position: relative;
+    .status-badge.offline {
+      background: rgba(239, 68, 68, 0.12);
+      color: #ef4444;
+      border-color: rgba(239, 68, 68, 0.25);
+    }
+
+    .status-badge.offline .status-pulse-dot {
+      background: #ef4444;
+    }
+
+    .status-badge.offline .status-pulse-dot::after {
+      background: #ef4444;
     }
 
     .status-pulse-dot::after {
@@ -834,6 +840,13 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
   <script>
     let dashboardData = null;
+    let lastRenderState = {
+      agentsJson: '',
+      workspacesJson: '',
+      modelsJson: '',
+      gatewayJson: ''
+    };
+    let consecutiveFailures = 0;
 
     // Load persisted theme preference
     (function initTheme() {
@@ -854,15 +867,63 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     async function refreshDashboard() {
       try {
         const resp = await fetch('/api/dashboard');
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          handleFetchFailure();
+          return;
+        }
+        consecutiveFailures = 0;
+        updateConnectionStatus(true);
+
         dashboardData = await resp.json();
         renderStats(dashboardData.stats, dashboardData.gateway);
-        renderAgents(dashboardData.agents);
-        renderWorkspaces(dashboardData.workspaces);
-        renderModels(dashboardData.models);
-        renderGateway(dashboardData.gateway);
+
+        // 仅在数据发生实际变更时才执行大面积 DOM 树重绘，防止 DOM 颠簸与掉帧
+        const agentsStr = JSON.stringify(dashboardData.agents || []);
+        if (agentsStr !== lastRenderState.agentsJson) {
+          renderAgents(dashboardData.agents);
+          lastRenderState.agentsJson = agentsStr;
+        }
+
+        const wsStr = JSON.stringify(dashboardData.workspaces || []);
+        if (wsStr !== lastRenderState.workspacesJson) {
+          renderWorkspaces(dashboardData.workspaces);
+          lastRenderState.workspacesJson = wsStr;
+        }
+
+        const modelsStr = JSON.stringify(dashboardData.models || []);
+        if (modelsStr !== lastRenderState.modelsJson) {
+          renderModels(dashboardData.models);
+          lastRenderState.modelsJson = modelsStr;
+        }
+
+        const gatewayStr = JSON.stringify(dashboardData.gateway || {});
+        if (gatewayStr !== lastRenderState.gatewayJson) {
+          renderGateway(dashboardData.gateway);
+          lastRenderState.gatewayJson = gatewayStr;
+        }
       } catch (e) {
-        console.warn('Dashboard fetch failed:', e);
+        handleFetchFailure();
+      }
+    }
+
+    function handleFetchFailure() {
+      consecutiveFailures++;
+      if (consecutiveFailures >= 2) {
+        updateConnectionStatus(false);
+      }
+    }
+
+    function updateConnectionStatus(online) {
+      const badge = document.getElementById('runnerStatusBadge');
+      const text = document.getElementById('runnerStatusText');
+      if (!badge || !text) return;
+
+      if (online) {
+        badge.classList.remove('offline');
+        text.textContent = '运行中 · 托盘就绪 · 端口 4200';
+      } else {
+        badge.classList.add('offline');
+        text.textContent = '连接中断 · 正在自动重连...';
       }
     }
 
