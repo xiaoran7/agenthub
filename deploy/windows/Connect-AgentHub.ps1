@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$PlatformUrl = "https://platform.tannerlab.xyz",
+    [string]$ServerUrl = "",
     [string]$BindingCode = ""
 )
 
@@ -17,20 +17,20 @@ function Invoke-Runner([string[]]$Arguments) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($PlatformUrl)) {
-    $PlatformUrl = Read-Host "平台地址（直接回车使用 https://platform.tannerlab.xyz）"
-    if ([string]::IsNullOrWhiteSpace($PlatformUrl)) {
-        $PlatformUrl = "https://platform.tannerlab.xyz"
-    }
+if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+    $ServerUrl = Read-Host "请输入自部署 AgentHub 服务器地址（例如 http://localhost:3000 或 http://你的服务器IP:3000）"
 }
 
-$PlatformUrl = $PlatformUrl.Trim().TrimEnd("/")
-$parsedUrl = $null
-if (-not [Uri]::TryCreate($PlatformUrl, [UriKind]::Absolute, [ref]$parsedUrl)) {
-    throw "平台地址不是有效的 URL。"
+$ServerUrl = $ServerUrl.Trim().TrimEnd("/")
+if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+    throw "服务器地址不能为空。"
 }
-if ($parsedUrl.Scheme -ne "https" -and $parsedUrl.Host -notin @("localhost", "127.0.0.1", "[::1]")) {
-    throw "远程平台必须使用 HTTPS。"
+$parsedUrl = $null
+if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$parsedUrl)) {
+    throw "服务器地址不是有效的 URL。"
+}
+if ($parsedUrl.Scheme -ne "https" -and $parsedUrl.Scheme -ne "http") {
+    throw "服务器地址必须使用 http 或 https 协议。"
 }
 
 $script:RunnerPath = Join-Path $PSScriptRoot "agenthub-runner.exe"
@@ -44,7 +44,7 @@ if (-not (Test-Path -LiteralPath $script:RunnerPath -PathType Leaf)) {
 $stateDirectory = Join-Path $env:LOCALAPPDATA "AgentHub"
 $identityPath = Join-Path $stateDirectory "runner-identity.json"
 $databasePath = Join-Path $stateDirectory "runner.db"
-$connectionMarkerPath = Join-Path $stateDirectory "connected-platform.txt"
+$connectionMarkerPath = Join-Path $stateDirectory "connected-server.txt"
 New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
 
 Write-Step "准备设备身份"
@@ -54,35 +54,35 @@ if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
     $identityCreated = $true
 }
 
-$connectedPlatform = if (Test-Path -LiteralPath $connectionMarkerPath -PathType Leaf) {
+$connectedServer = if (Test-Path -LiteralPath $connectionMarkerPath -PathType Leaf) {
     (Get-Content -Raw -LiteralPath $connectionMarkerPath).Trim()
 } else {
     ""
 }
 
-if ($identityCreated -or $connectedPlatform -ne $PlatformUrl) {
+if ($identityCreated -or $connectedServer -ne $ServerUrl) {
     if ([string]::IsNullOrWhiteSpace($BindingCode)) {
-        $BindingCode = Read-Host "请粘贴平台中的一次性连接码（10 分钟内有效）"
+        $BindingCode = Read-Host "请粘贴控制台中的一次性设备连接码（10 分钟内有效）"
     }
     if ([string]::IsNullOrWhiteSpace($BindingCode)) {
         throw "连接码不能为空。"
     }
 
-    Write-Step "连接到平台"
+    Write-Step "连接到服务器"
     Invoke-Runner @(
         "device", "bind",
         "--identity", $identityPath,
-        "--server", $PlatformUrl,
+        "--server", $ServerUrl,
         "--binding-code", $BindingCode.Trim()
     )
-    Set-Content -LiteralPath $connectionMarkerPath -Value $PlatformUrl -Encoding utf8
+    Set-Content -LiteralPath $connectionMarkerPath -Value $ServerUrl -Encoding utf8
 }
 
-Write-Host "`n设备已连接：$PlatformUrl" -ForegroundColor Green
+Write-Host "`n设备已连接：$ServerUrl" -ForegroundColor Green
 Write-Host "Runner 正在运行。请保持此窗口开启；按 Ctrl+C 可停止。" -ForegroundColor Yellow
 Invoke-Runner @(
     "--identity", $identityPath,
     "run", "all",
     "--db", $databasePath,
-    "--sync-server", $PlatformUrl
+    "--sync-server", $ServerUrl
 )

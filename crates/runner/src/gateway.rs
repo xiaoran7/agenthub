@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use ureq::tls::{Certificate, RootCerts, TlsConfig};
-use url::{Host, Url};
+use url::Url;
 
 use crate::{
     auth::AuthSyncBatch,
@@ -309,23 +309,14 @@ fn validate_base_url(value: &str) -> Result<String, GatewayError> {
     {
         return Err(GatewayError::InvalidUrl);
     }
-    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback(&url)) {
-        return Err(GatewayError::InsecureUrl);
+    if url.scheme() != "https" && url.scheme() != "http" {
+        return Err(GatewayError::InvalidUrl);
     }
     if url.host().is_none() {
         return Err(GatewayError::InvalidUrl);
     }
 
     Ok(url.as_str().trim_end_matches('/').to_owned())
-}
-
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
 }
 
 fn classify_transport_error(error: ureq::Error) -> GatewayError {
@@ -365,10 +356,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_https_and_loopback_http() {
+    fn accepts_https_and_http() {
         assert_eq!(
             validate_base_url("https://gateway.example/v1/tenant").unwrap(),
             "https://gateway.example/v1/tenant"
+        );
+        assert_eq!(
+            validate_base_url("http://192.168.1.100:3000/").unwrap(),
+            "http://192.168.1.100:3000"
         );
         assert_eq!(
             validate_base_url("http://127.0.0.1:3000/").unwrap(),
@@ -381,13 +376,13 @@ mod tests {
     #[test]
     fn rejects_insecure_remote_and_ambiguous_urls() {
         for value in [
-            "http://gateway.example",
-            "http://foo.localhost:3000",
-            "http://localhost.:3000",
+            "ftp://gateway.example",
+            "ws://gateway.example",
+            "file:///etc/passwd",
         ] {
             assert!(matches!(
                 validate_base_url(value),
-                Err(GatewayError::InsecureUrl)
+                Err(GatewayError::InvalidUrl)
             ));
         }
         for value in [

@@ -104,7 +104,7 @@ export const demoSnapshot: Snapshot = {
   ],
   sync_running: true,
   realtime_connected: true,
-  server_url: "https://platform.tannerlab.xyz",
+  server_url: "http://localhost:3000",
   local: {
     pending_events: 2,
     session_count: 307,

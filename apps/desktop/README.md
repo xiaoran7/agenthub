@@ -34,13 +34,14 @@ npm.cmd run dev --workspace @agent-pulse/desktop
 npm.cmd run tauri --workspace @agent-pulse/desktop -- build
 ```
 
-默认服务地址为 `https://platform.tannerlab.xyz`。本地开发可设置：
+支持连接任意自部署的 AgentHub 服务（支持 `http://` 与 `https://`）。启动客户端后输入你的服务器地址与管理员凭据即可连接登录。
+本地开发或测试也可通过环境变量指定默认地址：
 
 ```powershell
-$env:AGENT_PULSE_SERVER_URL = 'http://127.0.0.1:3001'
+$env:AGENT_PULSE_SERVER_URL = 'http://127.0.0.1:3000'
 ```
 
-非回环地址必须 HTTPS。Windows 会读取系统代理；`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY` 仍优先于系统设置。
+Windows 会读取系统代理；`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY` 仍优先于系统设置。
 
 ## 当前安全边界
 

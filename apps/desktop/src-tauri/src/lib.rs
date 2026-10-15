@@ -48,9 +48,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State, ipc::Channel};
 use thiserror::Error;
-use url::{Host, Url};
+use url::Url;
 
-const DEFAULT_SERVER_URL: &str = "https://platform.tannerlab.xyz";
 const KEYRING_SERVICE: &str = "AgentHub Desktop";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const LOCAL_SESSION_LIMIT: u32 = 1_000;
@@ -64,7 +63,7 @@ const SESSION_CONTEXT_CACHE_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
 enum DesktopError {
-    #[error("服务器地址无效")]
+    #[error("服务器地址无效，请输入以 http:// 或 https:// 开头的有效地址")]
     InvalidServer,
     #[error("无法连接 AgentHub 服务器")]
     Unreachable,
@@ -1906,9 +1905,11 @@ fn finish_login(
 fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, DesktopError> {
     let configured_server = input
         .server_url
-        .or_else(|| std::env::var("AGENT_PULSE_SERVER_URL").ok());
-    let server_url =
-        normalize_server_url(configured_server.as_deref().unwrap_or(DEFAULT_SERVER_URL))?;
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("AGENT_PULSE_SERVER_URL").ok())
+        .or_else(|| read_config(&state.data_dir).ok().map(|c| c.server_url));
+    let server_raw = configured_server.ok_or(DesktopError::InvalidServer)?;
+    let server_url = normalize_server_url(&server_raw)?;
     let path = match input.mode {
         AuthMode::Login => "/v1/auth/login",
         AuthMode::Register => "/v1/auth/register",
@@ -2145,8 +2146,8 @@ fn offline_dashboard_snapshot(
     identity: &DeviceIdentity,
     state: &DesktopState,
 ) -> Result<Value, DesktopError> {
-    let desktop_config = read_config(&state.data_dir).unwrap_or(DesktopConfig {
-        server_url: DEFAULT_SERVER_URL.to_owned(),
+    let desktop_config = read_config(&state.data_dir).unwrap_or_else(|_| DesktopConfig {
+        server_url: std::env::var("AGENT_PULSE_SERVER_URL").unwrap_or_default(),
         refresh_interval_seconds: default_refresh_interval_seconds(),
         claude_binary: default_claude_binary(),
         codex_binary: default_codex_binary(),
@@ -3575,17 +3576,11 @@ fn map_http_error(error: ureq::Error) -> DesktopError {
 
 fn normalize_server_url(value: &str) -> Result<String, DesktopError> {
     let url = Url::parse(value).map_err(|_| DesktopError::InvalidServer)?;
-    let loopback = match url.host() {
-        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    };
     if !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
-        || (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+        || (url.scheme() != "https" && url.scheme() != "http")
     {
         return Err(DesktopError::InvalidServer);
     }
@@ -4178,7 +4173,7 @@ mod tests {
     fn daemon_profile_is_the_authoritative_codex_binary_for_preferences() {
         let dir = tempfile::tempdir().unwrap();
         let config = DesktopConfig {
-            server_url: DEFAULT_SERVER_URL.to_owned(),
+            server_url: "http://localhost:3000".to_owned(),
             refresh_interval_seconds: 4,
             claude_binary: "claude-custom".to_owned(),
             codex_binary: "legacy-codex".to_owned(),

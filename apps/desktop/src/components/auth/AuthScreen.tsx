@@ -76,16 +76,29 @@ export function AuthScreen({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [serverUrl, setServerUrl] = useState("https://platform.tannerlab.xyz");
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [serverUrl, setServerUrl] = useState(() => {
+    try {
+      return localStorage.getItem("agenthub_server_url") || "";
+    } catch {
+      return "";
+    }
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(initialError);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const cleanUrl = serverUrl.trim();
+    if (!cleanUrl) {
+      setError("请输入自部署服务器地址（如 http://localhost:3000）");
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
+      try {
+        localStorage.setItem("agenthub_server_url", cleanUrl);
+      } catch {}
       const next = await invoke<Snapshot>("authenticate", {
         input: {
           mode,
@@ -95,7 +108,7 @@ export function AuthScreen({
             mode === "register" && displayName.trim()
               ? displayName.trim()
               : undefined,
-          server_url: serverUrl.trim() ? serverUrl.trim() : undefined,
+          server_url: cleanUrl,
         },
       });
       onAuthenticated(next);
@@ -143,12 +156,29 @@ export function AuthScreen({
             <h2>{mode === "login" ? "管理员登录" : "首次初始化管理员"}</h2>
             <p>
               {mode === "login"
-                ? "登录后选择工作目录，连接并接续你的原生 Agent 会话"
-                : "首次启动请配置服务器管理员账号"}
+                ? "连接到自部署的 AgentHub 服务，接续你的原生 Agent 会话"
+                : "首次启动请配置服务器首位超级管理员账号"}
             </p>
           </header>
 
           <form onSubmit={submit} className="auth-form">
+            <label>
+              <span>服务器地址</span>
+              <input
+                type="url"
+                placeholder="例如 http://localhost:3000 或 https://你的服务器"
+                value={serverUrl}
+                onChange={(e) => {
+                  setServerUrl(e.target.value);
+                  try {
+                    localStorage.setItem("agenthub_server_url", e.target.value);
+                  } catch {}
+                }}
+                required
+                autoFocus={!serverUrl}
+              />
+            </label>
+
             <label>
               <span>管理员邮箱</span>
               <input
@@ -157,9 +187,10 @@ export function AuthScreen({
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                autoFocus
+                autoFocus={Boolean(serverUrl)}
               />
             </label>
+
             <label>
               <span>密码</span>
               <input
@@ -170,6 +201,7 @@ export function AuthScreen({
                 required
               />
             </label>
+
             {mode === "register" && (
               <label>
                 <span>显示名称（可选）</span>
@@ -178,26 +210,6 @@ export function AuthScreen({
                   placeholder="管理员"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                />
-              </label>
-            )}
-
-            <button
-              type="button"
-              className="advanced-toggle"
-              onClick={() => setShowAdvanced((v) => !v)}
-            >
-              {showAdvanced ? "收起高级设置" : "高级设置（自定义服务器）"}
-            </button>
-
-            {showAdvanced && (
-              <label className="advanced-field">
-                <span>服务器地址</span>
-                <input
-                  type="url"
-                  placeholder="https://platform.tannerlab.xyz"
-                  value={serverUrl}
-                  onChange={(e) => setServerUrl(e.target.value)}
                 />
               </label>
             )}
@@ -214,18 +226,18 @@ export function AuthScreen({
                   <RefreshCw className="spin" size={16} /> 正在连接...
                 </>
               ) : mode === "login" ? (
-                "登录并连接"
+                "连接并登录"
               ) : (
-                "初始化管理员"
+                "初始化管理员并连接"
               )}
             </button>
 
             <footer className="auth-footer">
               {mode === "login" ? (
                 <span>
-                  服务器尚未配置？
+                  服务器尚未初始化？
                   <button type="button" onClick={() => setMode("register")}>
-                    立即初始化
+                    首次初始化
                   </button>
                 </span>
               ) : (

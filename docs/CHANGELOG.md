@@ -24,6 +24,12 @@
   - `SettingsPage.tsx` 剥离多租户商业化设置（团队工作区 `team`、账单 `billing`）及 Telegram 绑定标识，彻底清除废弃的团队与账单状态、副作用与操作回调；
   - `account.ts` 清理废弃的团队成员/邀请类型与 Stripe 支付客户端接口；
   - 桌面端登录界面（`AuthScreen.tsx`）更新默认连接地址为 `https://platform.tannerlab.xyz`，统一单管理员操作用词；
+- **纯开源自部署解耦与全平台去除硬编码地址**：
+  - 彻底移除 `DEFAULT_SERVER_URL` 常量与所有硬编码平台地址（包括 `platform.tannerlab.xyz`）；
+  - 桌面端（`apps/desktop`）登录界面将“服务器地址”作为一级直观输入项，移除折叠的高级设置开关，用户可自由输入任意自部署地址（支持 `http://` 与 `https://`），并使用 `localStorage` 本地记忆上次使用的地址；
+  - 桌面端后端（`lib.rs`）与 Runner（`gateway.rs`）解除仅限回环地址使用 HTTP 的限制，支持家庭内网/局域网私有 IP（如 `http://192.168.x.x:3000`）、Tailscale/VPN 私网及公网域名；
+  - Windows 一键接入脚本（`Connect-AgentHub.ps1`）改造为通用自部署模式，交互式提示输入服务器地址并支持 `http/https`，清理旧版 `Connect-AgentPulse` 遗留脚本；
+  - 重新构建并归档桌面端安装包（NSIS setup 与 MSI）和原生监听接入包（ZIP 与 EXE），更新校验和清单。
 - **产物构建与发布归档**：
   - 发布桌面安装包 `AgentHub-v2.4.76-windows-x64-setup.exe` 与 `AgentHub-v2.4.76-x64.msi`；
   - 发布独立原生运行时监听包 `AgentHub-Runner-v2.4.76-windows-x64.zip`（含 `agenthub-runner.exe` 与一键连接脚本 `Connect-AgentHub.cmd`）；

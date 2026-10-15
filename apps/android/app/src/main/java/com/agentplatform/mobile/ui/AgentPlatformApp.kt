@@ -1145,7 +1145,7 @@ private fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     var gatewayBase by rememberSaveable {
-        mutableStateOf(config?.gatewayBase ?: "https://platform.tannerlab.xyz")
+        mutableStateOf(config?.gatewayBase ?: "")
     }
     var accessToken by rememberSaveable {
         mutableStateOf(config?.accessToken ?: "")
@@ -1193,7 +1193,7 @@ private fun SettingsScreen(
                         onValueChange = { gatewayBase = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Gateway 端点") },
-                        placeholder = { Text("https://platform.tannerlab.xyz") },
+                        placeholder = { Text("http://192.168.1.100:3000") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         shape = RoundedCornerShape(10.dp),
