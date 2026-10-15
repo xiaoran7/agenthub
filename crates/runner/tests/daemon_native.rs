@@ -1,4 +1,4 @@
-use agent_pulse_runner::{
+use agenthub_runner::{
     daemon_ipc,
     daemon_protocol::{
         DAEMON_PROTOCOL_VERSION, DaemonRequest, DaemonRequestEnvelope, DaemonResponse,
@@ -37,7 +37,7 @@ fn spawn_daemon(
     endpoint: &str,
 ) -> ChildGuard {
     ChildGuard(
-        Command::new(env!("CARGO_BIN_EXE_agent-pulse-runner"))
+        Command::new(env!("CARGO_BIN_EXE_agenthub-runner"))
             .arg("--identity")
             .arg(identity_path)
             .arg("daemon")

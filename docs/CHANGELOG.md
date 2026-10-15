@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+### 统一 Crate 与二进制命名为 `agenthub-runner`
+
+解决早期从 `agent-pulse` 演进遗留的命名分裂问题：
+- 将 `crates/runner/Cargo.toml` 包名正式重命名为 `agenthub-runner`；
+- 构建二进制直接生成 `agenthub-runner.exe` / `agenthub-runner`，彻底消除发布分发与部署脚本中手动重命名的历史包袱；
+- 统一更新 `AGENTS.md`、`README.md`、`deploy/windows/` 及架构文档，全栈品牌统一为 `agenthub-runner`。
+
 ### 架构演进：参考 Magpie 架构模式升级服务商网关发现、会话粘滞与工作区精准路由
 
-汲取 `yetone/magpie` 在多服务商网关抽象、会话粘滞（Session Affinity）保护 Prompt Cache，以及工作区确定性路径规范化方面的最佳实践，对 `agent-pulse-runner` 核心引擎进行全面升级：
+汲取 `yetone/magpie` 在多服务商网关抽象、会话粘滞（Session Affinity）保护 Prompt Cache，以及工作区确定性路径规范化方面的最佳实践，对 `agenthub-runner` 核心引擎进行全面升级：
 
 - **服务商网关自动发现梯队扩展（`crates/runner/src/claude_gateway.rs`）**：
   - 新增 `discover_claude_settings_env()`：自动解析 `~/.claude/settings.json` 中 `env.ANTHROPIC_BASE_URL` 与认证 Token，打通官方 CLI 配置与第三方中转；

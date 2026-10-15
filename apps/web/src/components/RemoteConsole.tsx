@@ -322,9 +322,24 @@ const RemoteToolCard = memo(function RemoteToolCard({
   const diffStats = parseDiffStats(item.command);
   const questionItems = parseQuestionData(item.command);
   const hasDiff = diffStats.additions > 0 || diffStats.deletions > 0;
+  const [copiedSection, setCopiedSection] = useState<string | null>(null);
+
+  const handleCopy = (section: string, text: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(text);
+      setCopiedSection(section);
+      setTimeout(() => {
+        setCopiedSection((cur) => (cur === section ? null : cur));
+      }, 1800);
+    }
+  };
 
   return (
-    <details className={`remote-tool ${status}`} data-tool={kind}>
+    <details
+      className={`remote-tool mcp-tool-decision-card state-${status}`}
+      data-tool={kind}
+    >
       <summary className="remote-tool-summary">
         <span className="remote-disclosure" aria-hidden="true">
           <svg
@@ -361,13 +376,19 @@ const RemoteToolCard = memo(function RemoteToolCard({
         </span>
         <span className={`remote-tool-status ${status}`}>
           {status === "running" && (
-            <span className="remote-tool-spinner" aria-hidden="true" />
+            <span className="remote-tool-pulse-dots" aria-hidden="true">
+              <span className="pulse-dot" />
+              <span className="pulse-dot" />
+              <span className="pulse-dot" />
+            </span>
           )}
-          {status === "running"
-            ? "执行中"
-            : status === "failed"
-              ? "失败"
-              : "完成"}
+          {status === "running" ? (
+            <span className="status-label">执行中…</span>
+          ) : status === "failed" ? (
+            <span className="status-label">执行失败</span>
+          ) : (
+            <span className="status-label">已完成</span>
+          )}
         </span>
       </summary>
       {(item.description || item.command || item.output) && (
@@ -427,28 +448,64 @@ const RemoteToolCard = memo(function RemoteToolCard({
             <div className="remote-diff-viewer">
               {diffStats.oldText && (
                 <div className="remote-diff-chunk del">
-                  <div className="remote-diff-tag">- 变更前</div>
+                  <div className="remote-diff-bar">
+                    <span className="remote-diff-tag">- 变更前</span>
+                    <button
+                      type="button"
+                      className="remote-card-mini-copy"
+                      onClick={(e) => handleCopy("diff-del", diffStats.oldText!, e)}
+                    >
+                      {copiedSection === "diff-del" ? "✓ 已复制" : "复制"}
+                    </button>
+                  </div>
                   <pre className="remote-diff-pre">{diffStats.oldText}</pre>
                 </div>
               )}
               {diffStats.newText && (
                 <div className="remote-diff-chunk add">
-                  <div className="remote-diff-tag">+ 变更后</div>
+                  <div className="remote-diff-bar">
+                    <span className="remote-diff-tag">+ 变更后</span>
+                    <button
+                      type="button"
+                      className="remote-card-mini-copy"
+                      onClick={(e) => handleCopy("diff-add", diffStats.newText!, e)}
+                    >
+                      {copiedSection === "diff-add" ? "✓ 已复制" : "复制"}
+                    </button>
+                  </div>
                   <pre className="remote-diff-pre">{diffStats.newText}</pre>
                 </div>
               )}
             </div>
           ) : item.command ? (
-            <div>
-              <div className="remote-tool-subhead">命令 / 参数</div>
+            <div className="remote-tool-section">
+              <div className="remote-tool-subhead-bar">
+                <span className="remote-tool-subhead">命令 / 参数输入</span>
+                <button
+                  type="button"
+                  className="remote-card-mini-copy"
+                  onClick={(e) => handleCopy("cmd", item.command!, e)}
+                >
+                  {copiedSection === "cmd" ? "✓ 已复制" : "复制"}
+                </button>
+              </div>
               <pre className="remote-tool-cmd">
                 {readableRemoteText(item.command)}
               </pre>
             </div>
           ) : null}
           {item.output && !questionItems && (
-            <div>
-              <div className="remote-tool-subhead">执行结果</div>
+            <div className="remote-tool-section">
+              <div className="remote-tool-subhead-bar">
+                <span className="remote-tool-subhead">执行结算输出</span>
+                <button
+                  type="button"
+                  className="remote-card-mini-copy"
+                  onClick={(e) => handleCopy("output", item.output!, e)}
+                >
+                  {copiedSection === "output" ? "✓ 已复制" : "复制"}
+                </button>
+              </div>
               <pre className="remote-tool-output">
                 {readableRemoteText(item.output)}
               </pre>
@@ -2024,27 +2081,47 @@ export function RemoteConsole({
                 const isCopied = copiedApprovalId === approval.approval_id;
                 return (
                   <section
-                    className="remote-approval"
+                    className="remote-approval mcp-tool-decision-card state-pending-approval"
                     key={approval.approval_id}
                   >
                     <div className="remote-approval-header">
                       <div className="remote-approval-title-wrap">
-                        <h3>需要你的确认</h3>
+                        <span className="remote-approval-shield-icon" aria-hidden="true">
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                          </svg>
+                        </span>
+                        <h3>权限与工具执行审批</h3>
                         <span className="remote-approval-tool-badge">
                           {approval.tool_name ?? "系统工具"}
                         </span>
                       </div>
-                      {approval.risk_level && (
-                        <span
-                          className={`remote-approval-badge ${approval.risk_level}`}
-                        >
-                          {approval.risk_level === "high"
-                            ? "高风险"
-                            : approval.risk_level === "medium"
-                              ? "中风险"
-                              : "低风险"}
+                      <div className="remote-approval-meta-right">
+                        {approval.risk_level && (
+                          <span
+                            className={`remote-approval-badge ${approval.risk_level}`}
+                          >
+                            {approval.risk_level === "high"
+                              ? "高风险拦截"
+                              : approval.risk_level === "medium"
+                                ? "中风险操作"
+                                : "受控操作"}
+                          </span>
+                        )}
+                        <span className="remote-approval-awaiting-pill">
+                          <span className="awaiting-dot" />
+                          等待决策
                         </span>
-                      )}
+                      </div>
                     </div>
                     <div className="remote-approval-desc">
                       <strong>
@@ -2054,25 +2131,25 @@ export function RemoteConsole({
                           ).name
                         }
                       </strong>{" "}
-                      请求执行【{approval.tool_name ?? "系统工具"}】
+                      请求在当前工作区执行【{approval.tool_name ?? "系统工具"}】
                       {approval.description && `：${approval.description}`}
                     </div>
                     {approval.command_preview && (
                       <div className="remote-approval-box-wrapper">
                         <div className="remote-approval-box-bar">
                           <span className="remote-approval-box-label">
-                            待执行命令
+                            待执行命令参数
                           </span>
                           <button
                             type="button"
-                            className="remote-approval-copy-btn"
+                            className="remote-card-mini-copy"
                             onClick={() =>
                               handleCopyText(
                                 approval.approval_id,
                                 approval.command_preview!,
                               )
                             }
-                            title="复制命令"
+                            title="复制完整命令"
                           >
                             {isCopied ? "✓ 已复制" : "复制命令"}
                           </button>
@@ -2086,18 +2163,18 @@ export function RemoteConsole({
                       <div className="remote-approval-box-wrapper">
                         <div className="remote-approval-box-bar">
                           <span className="remote-approval-box-label">
-                            涉及路径
+                            涉及目标文件路径
                           </span>
                           <button
                             type="button"
-                            className="remote-approval-copy-btn"
+                            className="remote-card-mini-copy"
                             onClick={() =>
                               handleCopyText(
                                 approval.approval_id,
                                 approval.path!,
                               )
                             }
-                            title="复制路径"
+                            title="复制文件路径"
                           >
                             {isCopied ? "✓ 已复制" : "复制路径"}
                           </button>
@@ -2110,6 +2187,7 @@ export function RemoteConsole({
                     <div className="remote-approval-actions">
                       <button
                         type="button"
+                        className="remote-approval-btn-decline"
                         disabled={
                           !connected ||
                           busy ||
@@ -2124,11 +2202,11 @@ export function RemoteConsole({
                           })
                         }
                       >
-                        {isDeclining ? "处理中…" : "拒绝"}
+                        {isDeclining ? "正在拒绝…" : "拒绝授权"}
                       </button>
                       <button
                         type="button"
-                        className="remote-primary"
+                        className="remote-primary remote-approval-btn-approve"
                         disabled={
                           !connected ||
                           busy ||
@@ -2143,7 +2221,7 @@ export function RemoteConsole({
                           })
                         }
                       >
-                        {isApproving ? "处理中…" : "允许此次操作"}
+                        {isApproving ? "正在授权…" : "允许此次执行"}
                       </button>
                     </div>
                   </section>
@@ -2154,14 +2232,32 @@ export function RemoteConsole({
                 const isMulti = Boolean(q.multi_select);
                 const currentSelections = selectedOptions[q.question_id] ?? [];
                 return (
-                  <section className="remote-question" key={q.question_id}>
+                  <section
+                    className="remote-question mcp-tool-decision-card state-pending-question"
+                    key={q.question_id}
+                  >
                     <div className="remote-question-header">
-                      <span>{q.header ?? "Agent 向你提问"}</span>
-                      {isMulti && (
-                        <span className="remote-question-type-badge">
-                          可多选
+                      <div className="remote-question-title-wrap">
+                        <span className="remote-question-glyph" aria-hidden="true">
+                          ?
                         </span>
-                      )}
+                        <span>{q.header ?? "Agent 向你提问"}</span>
+                      </div>
+                      <div className="remote-question-meta-right">
+                        {isMulti ? (
+                          <span className="remote-question-type-badge">
+                            可多选
+                          </span>
+                        ) : (
+                          <span className="remote-question-type-badge single">
+                            单项选择
+                          </span>
+                        )}
+                        <span className="remote-approval-awaiting-pill">
+                          <span className="awaiting-dot question" />
+                          等待答复
+                        </span>
+                      </div>
                     </div>
                     <div className="remote-question-prompt">{q.prompt}</div>
                     {q.options && q.options.length > 0 && (

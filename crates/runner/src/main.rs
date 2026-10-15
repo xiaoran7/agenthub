@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use agent_pulse_runner::{
+use agenthub_runner::{
     adapters::{
         claude,
         codex::{self, CodexThreadContext},
@@ -489,7 +489,7 @@ fn main() -> Result<()> {
         } => {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("daemon_requires_device_identity"))?;
-            agent_pulse_runner::daemon::run(agent_pulse_runner::daemon::DaemonConfig {
+            agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
                 database: db,
@@ -509,7 +509,7 @@ fn main() -> Result<()> {
             open_browser,
         } => {
             let identity = runtime_identity.unwrap_or_else(DeviceIdentity::generate);
-            agent_pulse_runner::daemon::run(agent_pulse_runner::daemon::DaemonConfig {
+            agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
                 database: db,
@@ -533,7 +533,7 @@ fn main() -> Result<()> {
         } => {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("remote_requires_bound_device_identity"))?;
-            agent_pulse_runner::daemon::run(agent_pulse_runner::daemon::DaemonConfig {
+            agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
                 database: db,
@@ -549,7 +549,7 @@ fn main() -> Result<()> {
             codex_binary,
             workspace,
         } => {
-            agent_pulse_runner::remote_ipc::run(codex_binary, workspace)?;
+            agenthub_runner::remote_ipc::run(codex_binary, workspace)?;
         }
         Command::Normalize { format, input } => {
             let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
@@ -567,7 +567,7 @@ fn main() -> Result<()> {
             let observation = match agent {
                 Agent::Claude => claude::normalize_hook(&input, &meta, &redactor)?,
                 Agent::Codex => codex::normalize_hook(&input, &meta, &redactor)?,
-                Agent::Antigravity => agent_pulse_runner::adapters::antigravity::normalize_hook(
+                Agent::Antigravity => agenthub_runner::adapters::antigravity::normalize_hook(
                     &input, &meta, &redactor,
                 )?,
                 Agent::Grok => grok::normalize_hook(&input, &meta, &redactor)?,
@@ -657,10 +657,10 @@ fn main() -> Result<()> {
                             .get("steps")
                             .cloned()
                             .unwrap_or(serde_json::json!([]));
-                        let steps: Vec<agent_pulse_runner::adapters::antigravity::AntigravityStep> =
+                        let steps: Vec<agenthub_runner::adapters::antigravity::AntigravityStep> =
                             serde_json::from_value(steps_val).unwrap_or_default();
                         let session_meta =
-                            agent_pulse_runner::adapters::antigravity::AntigravitySessionMetadata {
+                            agenthub_runner::adapters::antigravity::AntigravitySessionMetadata {
                                 session_id,
                                 cwd,
                                 is_process_alive: true,
@@ -668,7 +668,7 @@ fn main() -> Result<()> {
                                 last_activity_at,
                             };
                         if let Some(obs) =
-                            agent_pulse_runner::adapters::antigravity::normalize_transcript_steps(
+                            agenthub_runner::adapters::antigravity::normalize_transcript_steps(
                                 &steps,
                                 &session_meta,
                                 &meta,
@@ -1202,9 +1202,9 @@ fn normalize(
         }
         InputFormat::CodexHook => Ok(vec![codex::normalize_hook(input, meta, redactor)?]),
         InputFormat::AntigravityBrain => {
-            let steps = agent_pulse_runner::adapters::antigravity::parse_transcript_lines(input)?;
+            let steps = agenthub_runner::adapters::antigravity::parse_transcript_lines(input)?;
             let meta_session =
-                agent_pulse_runner::adapters::antigravity::AntigravitySessionMetadata {
+                agenthub_runner::adapters::antigravity::AntigravitySessionMetadata {
                     session_id: "preview-session".into(),
                     cwd: ".".into(),
                     is_process_alive: true,
@@ -1212,7 +1212,7 @@ fn normalize(
                     last_activity_at: None,
                 };
             Ok(
-                agent_pulse_runner::adapters::antigravity::normalize_transcript_steps(
+                agenthub_runner::adapters::antigravity::normalize_transcript_steps(
                     &steps,
                     &meta_session,
                     meta,
@@ -1223,7 +1223,7 @@ fn normalize(
             )
         }
         InputFormat::AntigravityHook => Ok(vec![
-            agent_pulse_runner::adapters::antigravity::normalize_hook(input, meta, redactor)?,
+            agenthub_runner::adapters::antigravity::normalize_hook(input, meta, redactor)?,
         ]),
         InputFormat::GrokSessions => Ok(grok::normalize_sessions_json(input, meta, redactor)?),
         InputFormat::GrokHook => Ok(vec![grok::normalize_hook(input, meta, redactor)?]),

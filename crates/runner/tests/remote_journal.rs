@@ -1,4 +1,4 @@
-use agent_pulse_runner::{remote_host::*, remote_journal::*};
+use agenthub_runner::{remote_host::*, remote_journal::*};
 use serde_json::{Value, json};
 
 fn command() -> RemoteCommand {

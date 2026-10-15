@@ -40,7 +40,7 @@ npm.cmd run dev --workspace @agent-pulse/server
 npm.cmd run dev --workspace @agent-pulse/web
 
 # 启动本机 Runner daemon
-cargo run -p agent-pulse-runner -- daemon
+cargo run -p agenthub-runner -- daemon
 ```
 
 完整验证命令：

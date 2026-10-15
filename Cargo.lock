@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-pulse-runner"
+name = "agenthub-runner"
 version = "2.4.76"
 dependencies = [
  "aes-gcm",

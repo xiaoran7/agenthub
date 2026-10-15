@@ -35,10 +35,10 @@ AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。�
 
 ### agenthubd
 
-`agenthubd` 是当前已经落地的架构角色，实现主体仍在 `agent-pulse-runner`。Desktop 通过自身可执行文件的隐藏 `--agenthubd` 模式承载同一实现，尚未提供独立命名的二进制或 OS 服务安装包：
+`agenthubd` 是当前已经落地的架构角色，实现主体由 `agenthub-runner` 承载：
 
-- 由 Desktop 自动连接或启动；退出 Desktop、退出登录和关闭 Remote 均不停止本地 Runtime；
-- 也可通过 `agent-pulse-runner daemon` 显式运行，`remote-run` 进入同一 daemon 主流程；
+- 由 Desktop 或独立命令行启动；退出 Desktop、退出登录和关闭 Remote 均不停止本地 Runtime；
+- 通过 `agenthub-runner daemon` 显式运行，`remote-run` 进入同一 daemon 主流程；
 - 管理设备身份、授权工作区和 Provider 可执行文件；
 - 启动/恢复官方 Runtime，长期持有控制通道；
 - 保存 Session Registry、写者所有权、Host generation、命令账本和可恢复事件日志；

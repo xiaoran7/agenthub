@@ -1,4 +1,4 @@
-use agent_pulse_runner::{
+use agenthub_runner::{
     device::DeviceIdentity,
     remote_journal::RemoteJournal,
     remote_network::{RemoteControl, run_with_control},

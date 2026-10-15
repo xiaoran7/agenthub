@@ -30,7 +30,7 @@
 | Android       | 原生移动端应用（Kotlin）                                                 | **暂时冻结**：由 Web 响应式与 PWA 承接     |
 | 其他 Provider | 发现仅作恢复候选；不声称可写 attach                                      | 仅在 Provider 提供可靠所有权/订阅机制后开放 |
 
-`agent-pulse-runner` 是当前可执行文件名，`agenthubd` 是已经落地的进程职责；Desktop 通过隐藏 `--agenthubd` 模式启动同一实现。当前没有独立命名的 daemon 二进制或 OS 服务安装包。旧 v1 元数据同步仍保留，但不得承载新的会话正文或被当成 Remote 完成证据。
+`agenthub-runner` 是当前可执行文件名与 Crate 名，`agenthubd` 是已经落地的进程职责；旧 v1 元数据同步仍保留，但不得承载新的会话正文或被当成 Remote 完成证据。
 
 ## 文档规则
 

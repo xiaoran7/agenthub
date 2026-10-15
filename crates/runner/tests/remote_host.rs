@@ -1,4 +1,4 @@
-use agent_pulse_runner::remote_host::*;
+use agenthub_runner::remote_host::*;
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -78,7 +78,7 @@ fn discovery_only_exports_authorized_metadata_and_never_grants_control() {
     assert!(host.sessions().is_empty());
 }
 fn connect(dir: &tempfile::TempDir, hub: &str, generation: &str) -> RemoteCommand {
-    let ws_id = agent_pulse_runner::privacy::workspace_id_for_path(&dir.path().to_string_lossy());
+    let ws_id = agenthub_runner::privacy::workspace_id_for_path(&dir.path().to_string_lossy());
     RemoteCommand {
         client_cmd_id: format!("create-{hub}"),
         hub_session_id: hub.into(),

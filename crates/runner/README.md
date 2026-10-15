@@ -1,6 +1,6 @@
 # AgentHub Runner
 
-`agent-pulse-runner` 是当前可执行文件名，承载本机会话 daemon、设备身份、Remote 连接和只读 Provider 发现。`agenthubd` 是已经落地的进程职责；当前没有独立命名的二进制或 OS 服务安装包。
+`agenthub-runner` 是当前可执行文件名与 Crate 名，承载本机会话 daemon、设备身份、Remote 连接和只读 Provider 发现。`agenthubd` 是已经落地的进程职责；当前没有独立命名的二进制或 OS 服务安装包。
 
 ## 运行模式
 
@@ -11,7 +11,7 @@
 - `device` / `sync` / `outbox`：设备绑定、签名批次和本地事件队列诊断。
 - `auth`：显式 opt-in 的本地兼容能力；默认不读取 Provider 凭据。
 
-精确子命令和参数以 `cargo run -p agent-pulse-runner -- --help` 及各子命令 `--help` 为准，不在 README 复制完整 CLI 手册。
+精确子命令和参数以 `cargo run -p agenthub-runner -- --help` 及各子命令 `--help` 为准，不在 README 复制完整 CLI 手册。
 
 ## 最短验证
 
@@ -26,8 +26,8 @@ cargo test --workspace
 初始化开发设备身份并查看命令：
 
 ```powershell
-cargo run -p agent-pulse-runner -- device init --identity runner-identity.json
-cargo run -p agent-pulse-runner -- --identity runner-identity.json device --help
+cargo run -p agenthub-runner -- device init --identity runner-identity.json
+cargo run -p agenthub-runner -- --identity runner-identity.json device --help
 ```
 
 身份文件包含设备私钥，只能保存在当前用户可读目录，不得提交、上传或跨设备复用。
@@ -35,7 +35,7 @@ cargo run -p agent-pulse-runner -- --identity runner-identity.json device --help
 ## daemon 示例
 
 ```powershell
-cargo run -p agent-pulse-runner -- --identity runner-identity.json daemon `
+cargo run -p agenthub-runner -- --identity runner-identity.json daemon `
   --codex-binary <codex可执行文件> `
   --workspace D:\Projects\Example `
   --db runner.db
@@ -48,7 +48,7 @@ Desktop 使用设备 ID 派生的当前用户 IPC endpoint；手工启动时通�
 完成设备绑定后，可为明确授权的工作区启动 Remote：
 
 ```powershell
-cargo run -p agent-pulse-runner -- --identity runner-identity.json remote-run `
+cargo run -p agenthub-runner -- --identity runner-identity.json remote-run `
   --codex-binary <codex可执行文件> `
   --workspace D:\Projects\Example `
   --db runner.db `

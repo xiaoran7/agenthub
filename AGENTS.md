@@ -36,7 +36,7 @@ AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**�
 ## 实施与验证
 
 - 当前战略聚焦 **Gateway + Web**：优先跑通 `agenthubd` (Runner) 经 WebSocket 上行直连自部署 Gateway，由 Web 端（PC/手机响应式）实现会话管理、流式过程、权限审批与急停；Desktop（Tauri）与原生 Android 暂时冻结。
-- 当前二进制仍名为 `agent-pulse-runner`；`agenthubd` 是已落地的进程职责。独立改名和 OS 服务安装属于后续里程碑。
+- 当前二进制与 Crate 已统一定名为 `agenthub-runner`；`agenthubd` 是已落地的进程职责。构建产物直接为 `agenthub-runner.exe`。
 - 新链路优先完成 Codex / Claude Code 官方 Runtime 经 agenthubd → Gateway Remote → Web 的完整闭环，其他 Provider 先保持发现/只读。
 - Rust 变更运行 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all --check`；TS 变更运行 `npm.cmd test`、`npm.cmd run typecheck`、`npm.cmd run format:check`。
 - 真实 CLI、Web 浏览器端控制、Gateway 重启和生产部署分别记录证据，不能互相替代。

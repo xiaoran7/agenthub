@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use agent_pulse_runner::{
+use agenthub_runner::{
     adapters::{
         claude,
         codex::{self, CodexThreadContext},

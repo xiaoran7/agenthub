@@ -1,4 +1,4 @@
-use agent_pulse_runner::{
+use agenthub_runner::{
     daemon_protocol::*,
     remote_host::{
         CommandReceipt, ExecutionState, PendingApprovalSnapshot, RemoteAction, RemoteCommand,

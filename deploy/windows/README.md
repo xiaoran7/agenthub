@@ -13,7 +13,7 @@
 构建 Runner：
 
 ```powershell
-cargo build --release -p agent-pulse-runner
+cargo build --release -p agenthub-runner
 ```
 
-构建完成后，把 `target\release\agent-pulse-runner.exe` 复制到本目录并命名为 `agenthub-runner.exe`，再把整个目录作为 Windows 接入包分发。
+构建完成后，二进制直接产出为 `target\release\agenthub-runner.exe`，复制到本目录即可作为 Windows 接入包分发。
