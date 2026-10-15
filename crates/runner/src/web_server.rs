@@ -339,6 +339,74 @@ fn handle_api(
                 }
             }
         }
+        ("POST", "/api/device/bind") => {
+            #[derive(Deserialize)]
+            struct BindReq {
+                gateway: String,
+                binding_code: String,
+            }
+            match serde_json::from_slice::<BindReq>(body) {
+                Ok(req) => {
+                    let home = std::env::var_os("USERPROFILE")
+                        .or_else(|| std::env::var_os("HOME"))
+                        .map(PathBuf::from);
+                    let Some(home) = home else {
+                        let err_json = json!({ "error": "home_dir_unavailable" });
+                        send_json_response(stream, 500, &err_json)?;
+                        return Ok(());
+                    };
+                    let identity_path = home.join(".agenthub").join("identity.json");
+                    let identity = match crate::device::DeviceIdentity::load(&identity_path) {
+                        Ok(id) => id,
+                        Err(err) => {
+                            let err_json = json!({ "error": format!("load_identity_failed: {}", err) });
+                            send_json_response(stream, 500, &err_json)?;
+                            return Ok(());
+                        }
+                    };
+
+                    let gateway_url = req.gateway.trim().trim_end_matches('/');
+                    let client = match crate::gateway::GatewayClient::new(
+                        gateway_url,
+                        Duration::from_secs(10),
+                    ) {
+                        Ok(c) => c,
+                        Err(err) => {
+                            let err_json = json!({ "error": format!("invalid_gateway_url: {}", err) });
+                            send_json_response(stream, 400, &err_json)?;
+                            return Ok(());
+                        }
+                    };
+
+                    match client.bind(&identity, req.binding_code.trim()) {
+                        Ok(binding) => {
+                            let binding_info = json!({
+                                "device_id": binding.device_id,
+                                "registered": binding.registered,
+                                "gateway": gateway_url,
+                                "paired_at": chrono::Utc::now().to_rfc3339()
+                            });
+                            let binding_path = home.join(".agenthub").join("binding.json");
+                            let _ = std::fs::write(&binding_path, serde_json::to_string_pretty(&binding_info).unwrap_or_default());
+                            let resp = json!({
+                                "ok": true,
+                                "message": "设备已成功完成配对与网关注册！",
+                                "binding": binding_info
+                            });
+                            send_json_response(stream, 200, &resp)?;
+                        }
+                        Err(err) => {
+                            let err_json = json!({ "error": format!("bind_failed: {}", err) });
+                            send_json_response(stream, 400, &err_json)?;
+                        }
+                    }
+                }
+                Err(err) => {
+                    let err_json = json!({ "error": format!("invalid_bind_payload: {}", err) });
+                    send_json_response(stream, 400, &err_json)?;
+                }
+            }
+        }
         _ => {
             let err_json = json!({ "error": "not_found" });
             send_json_response(stream, 404, &err_json)?;
@@ -549,7 +617,62 @@ fn build_dashboard_summary(
             "base_url": gateway_base_url,
             "models_count": gateway_models_count,
             "affinity_header": "x-session-affinity"
+        },
+        "device": get_device_info()
+    })
+}
+
+fn get_device_info() -> serde_json::Value {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+    let Some(home) = home else {
+        return json!({
+            "device_id": "unknown",
+            "public_key": "",
+            "paired": false,
+            "gateway_url": ""
+        });
+    };
+
+    let agenthub_dir = home.join(".agenthub");
+    let identity_path = agenthub_dir.join("identity.json");
+    let binding_path = agenthub_dir.join("binding.json");
+
+    let mut device_id = "unknown".to_string();
+    let mut public_key = "".to_string();
+
+    if let Ok(identity) = crate::device::DeviceIdentity::load(&identity_path) {
+        device_id = identity.device_id().to_string();
+        public_key = identity.public_key_hex();
+    } else if let Ok(content) = std::fs::read_to_string(&identity_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(id) = val.get("device_id").and_then(|v| v.as_str()) {
+                device_id = id.to_string();
+            }
+            if let Some(pk) = val.get("public_key").and_then(|v| v.as_str()) {
+                public_key = pk.to_string();
+            }
         }
+    }
+
+    let mut paired = false;
+    let mut gateway_url = String::new();
+    let mut paired_at = String::new();
+    if let Ok(binding_content) = std::fs::read_to_string(&binding_path) {
+        if let Ok(binding_val) = serde_json::from_str::<serde_json::Value>(&binding_content) {
+            paired = binding_val.get("registered").and_then(|v| v.as_bool()).unwrap_or(false);
+            gateway_url = binding_val.get("gateway").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            paired_at = binding_val.get("paired_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        }
+    }
+
+    json!({
+        "device_id": device_id,
+        "public_key": public_key,
+        "paired": paired,
+        "gateway_url": gateway_url,
+        "paired_at": paired_at
     })
 }
 

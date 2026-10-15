@@ -10,6 +10,28 @@
 - 构建二进制直接生成 `agenthub-runner.exe` / `agenthub-runner`，彻底消除发布分发与部署脚本中手动重命名的历史包袱；
 - 统一更新 `AGENTS.md`、`README.md`、`deploy/windows/` 及架构文档，全栈品牌统一为 `agenthub-runner`。
 
+### 体验升级：去除高饱和绿色动效、全面放开会话扫描上限与设备配对/云端绑定体系
+
+根据用户对仪表盘视觉体验、真实会话数据规模以及设备安全配对体系的最新要求，进行针对性重构与全面放开：
+
+- **视觉轻量内敛重构（去除显眼绿色动效）**：
+  - 彻底移除顶栏运行状态徽章中高饱和、突兀闪烁的扩散呼吸动画（`@keyframes pulse-ring` 与 `status-pulse-dot::after` 扩散圈）；
+  - 状态徽章回归 Aozora UI 经典克制灰阶风格（`var(--cds-surface-2)` 底色 + 微细边框 + 微圆角），配备常驻静态状态圆点；
+  - 既保留对服务在线/失联的即时感知，又消除了界面视觉干扰与掉帧诱因，整体观感更稳重优雅。
+- **全面放开多 Agent 历史会话探测截断（从 100~200 条跃升至数千/万级真实量级）**：
+  - 排查并打破各收集器对项目与会话条目数的历史硬编码限制：
+    - Claude Code 探测候选从 30 个项目 / 100 条截断上限彻底提升至 **500 个活跃项目 / 5,000+ 条会话**，`CLAUDE_RECENT_SESSION_LIMIT` 与 `CLAUDE_ALL_SESSION_LIMIT` 分别上调至 1,000 与 10,000 条；
+    - ZCode 会话枚举从 100 条提升至 **5,000 条**，且默认开启 `include_completed: true` 纳入历史完成会话；
+    - Codex 本地 Thread 发现上限从 100 条提升至 **5,000 条**，Antigravity 候选上限从 100 提升至 **2,000 条**；
+  - 真实完整展现开发者本地历史积累的真实数百到数千条会话资产与工程足迹。
+- **原生设备身份管理与云端 AgentHub 配对体系（`POST /api/device/bind`）**：
+  - 统一解析并打通本机唯一硬件指纹与 Ed25519 秘钥对（`~/.agenthub/identity.json` 与 `DeviceIdentity`）；
+  - 在仪表盘顶栏核心操作区引入「设备配对」模态弹窗（Pair Modal）：
+    - 明确标识当前处于「本地独立运作模式（免登就绪）」还是「已与云端 AgentHub 建立信任」；
+    - 直观展示并支持一键复制本机唯一 `Device ID` 与 Ed25519 硬件公钥；
+    - 提供网关地址与绑定码（Binding Code）快速输入表单，支持向云端 AgentHub 发起签名验证配对请求；
+  - 后端实现 `POST /api/device/bind`，绑定成功后自动安全持久化到 `~/.agenthub/binding.json`。
+
 ### 架构演进：参考 Magpie 架构模式升级服务商网关发现、会话粘滞与工作区精准路由
 
 汲取 `yetone/magpie` 在多服务商网关抽象、会话粘滞（Session Affinity）保护 Prompt Cache，以及工作区确定性路径规范化方面的最佳实践，对 `agenthub-runner` 核心引擎进行全面升级：

@@ -21,8 +21,8 @@ use std::sync::mpsc;
 const MAX_PROTOCOL_LINE_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(15);
 const CHILD_WAIT_INTERVAL: Duration = Duration::from_millis(10);
-const CLAUDE_RECENT_SESSION_LIMIT: usize = 100;
-const CLAUDE_ALL_SESSION_LIMIT: usize = 1_000;
+const CLAUDE_RECENT_SESSION_LIMIT: usize = 1_000;
+const CLAUDE_ALL_SESSION_LIMIT: usize = 10_000;
 const MAX_AGENT_TURN_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const LOCAL_CONTEXT_HEAD_BYTES: u64 = 512 * 1024;
 const LOCAL_CONTEXT_TAIL_BYTES: u64 = 2 * 1024 * 1024;
@@ -1133,7 +1133,7 @@ pub fn collect_antigravity_sessions_for_remote()
     }
 
     candidate_transcripts.sort_by_key(|(m, _, _)| std::cmp::Reverse(*m));
-    candidate_transcripts.truncate(100);
+    candidate_transcripts.truncate(2000);
 
     let mut sessions = Vec::with_capacity(candidate_transcripts.len());
     for (_, session_id, transcript_path) in candidate_transcripts {
@@ -1310,7 +1310,7 @@ pub fn collect_claude_sessions_for_remote()
         }
         // Limit scanning to most recent files per project to prevent unbounded I/O
         project_candidates.sort_by_key(|(m, _)| std::cmp::Reverse(*m));
-        project_candidates.truncate(30);
+        project_candidates.truncate(500);
 
         for (_, path) in project_candidates {
             if let Some(entry) = read_claude_transcript_metadata(&path, &program)?
@@ -1326,7 +1326,7 @@ pub fn collect_claude_sessions_for_remote()
         }
     }
     entries.sort_by_key(|entry| std::cmp::Reverse(entry.3));
-    entries.truncate(100);
+    entries.truncate(5000);
     Ok(entries
         .into_iter()
         .map(|(id, cwd, title, _)| (id, cwd, title))
@@ -2716,8 +2716,8 @@ pub fn find_antigravity_session_cwd(session_id: &str) -> Result<Option<PathBuf>,
     Ok(cwd.map(PathBuf::from))
 }
 
-const ZCODE_RECENT_SESSION_LIMIT: usize = 100;
-const ZCODE_ALL_SESSION_LIMIT: usize = 1_000;
+const ZCODE_RECENT_SESSION_LIMIT: usize = 1_000;
+const ZCODE_ALL_SESSION_LIMIT: usize = 10_000;
 
 pub fn discover_zcode_database() -> Result<Option<PathBuf>, CollectorError> {
     if let Some(path) = env::var_os("ZCODE_DB").filter(|v| !v.is_empty()) {

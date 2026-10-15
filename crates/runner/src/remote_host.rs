@@ -1042,7 +1042,7 @@ impl NativeTransport for MultiProviderTransport {
                 } else {
                     // A missing app-server must not hide locally discoverable Codex
                     // sessions. Metadata-only candidates cannot be resumed here.
-                    crate::collectors::collect_codex_local_threads(100)
+                    crate::collectors::collect_codex_local_threads(5000)
                         .unwrap_or_else(|_| json!({"data": [], "nextCursor": null}))
                 };
                 if let Some(items) = response["data"].as_array_mut() {
@@ -1053,13 +1053,13 @@ impl NativeTransport for MultiProviderTransport {
                 }
                 if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database()
                     && let Ok(payload) =
-                        crate::collectors::collect_zcode_sessions_from(&db_path, false)
+                        crate::collectors::collect_zcode_sessions_from(&db_path, true)
                     && let Ok(entries) = serde_json::from_str::<
                         Vec<crate::adapters::zcode::ZCodeSessionEntry>,
                     >(&payload)
                     && let Some(items) = response["data"].as_array_mut()
                 {
-                    for entry in entries.into_iter().take(100) {
+                    for entry in entries.into_iter().take(5000) {
                         items.push(json!({
                             "id": entry.session_id,
                             "cwd": entry.cwd,
@@ -2027,7 +2027,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         let mut candidates = Vec::new();
         let mut cursor: Option<String> = None;
         loop {
-            let mut params = json!({"limit": 100});
+            let mut params = json!({"limit": 500});
             if let Some(c) = &cursor {
                 params["cursor"] = json!(c);
             }
