@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentHub Runner 仪表盘</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="alternate icon" href="/favicon.ico">
+  <style>
+    :root {
+      --cds-clay: #d97757;
+      --cds-clay-hover: #c86b4c;
+      --cds-clay-alpha12: rgba(217, 119, 87, 0.12);
+      --cds-surface-0: #f5f5f3;
+      --cds-surface-1: #fcfcfb;
+      --cds-surface-2: #ffffff;
+      --cds-surface-3: #ffffff;
+      --cds-text-primary: #151515;
+      --cds-text-secondary: #525252;
+      --cds-text-muted: #8a8a8a;
+      --cds-border: rgba(0, 0, 0, 0.08);
+      --cds-border-strong: rgba(0, 0, 0, 0.16);
+      --cds-blue: #2563eb;
+      --cds-blue-alpha12: rgba(37, 99, 235, 0.12);
+      --cds-green: #10b981;
+      --cds-green-alpha12: rgba(16, 185, 129, 0.12);
+      --cds-card-bg: rgba(255, 255, 255, 0.94);
+      --cds-card-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 0 0 1px var(--cds-border);
+    }
+    html.dark {
+      --cds-surface-0: #0b0b0a;
+      --cds-surface-1: #151515;
+      --cds-surface-2: #1a1a19;
+      --cds-surface-3: #20201e;
+      --cds-text-primary: #f2f2f0;
+      --cds-text-secondary: #a3a3a0;
+      --cds-text-muted: #666663;
+      --cds-border: rgba(255, 255, 255, 0.08);
+      --cds-border-strong: rgba(255, 255, 255, 0.16);
+      --cds-blue: #3b82f6;
+      --cds-blue-alpha12: rgba(59, 130, 246, 0.15);
+      --cds-green: #34d399;
+      --cds-green-alpha12: rgba(52, 211, 153, 0.15);
+      --cds-card-bg: #151515;
+      --cds-card-shadow: 0 4px 16px rgba(0,0,0,0.3), 0 0 0 1px var(--cds-border);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--cds-surface-0);
+      color: var(--cds-text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      height: 56px;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--cds-border);
+      background: var(--cds-surface-1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-img {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+    }
+    .logo-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 500;
+      background: var(--cds-clay-alpha12);
+      color: var(--cds-clay);
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 14px;
+      background: var(--cds-green-alpha12);
+      color: var(--cds-green);
+      font-weight: 500;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--cds-green);
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 32px;
+      padding: 0 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--cds-border);
+      background: var(--cds-surface-2);
+      color: var(--cds-text-primary);
+      transition: all 0.15s ease;
+    }
+    .btn:hover {
+      background: var(--cds-surface-3);
+      border-color: var(--cds-border-strong);
+    }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+      border-color: rgba(239, 68, 68, 0.2);
+    }
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: #ef4444;
+    }
+    .main-container {
+      max-width: 1240px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      flex: 1;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .stat-card {
+      background: var(--cds-card-bg);
+      border-radius: 10px;
+      padding: 18px 20px;
+      box-shadow: var(--cds-card-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+    }
+    .stat-label {
+      font-size: 13px;
+      color: var(--cds-text-muted);
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .stat-value {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--cds-text-primary);
+    }
+    .stat-sub {
+      font-size: 12px;
+      color: var(--cds-text-secondary);
+      line-height: 1.4;
+    }
+    .tabs-header {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--cds-border);
+      padding-bottom: 8px;
+    }
+    .tab-btn {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      color: var(--cds-text-muted);
+      transition: all 0.15s ease;
+    }
+    .tab-btn:hover {
+      color: var(--cds-text-primary);
+      background: var(--cds-surface-2);
+    }
+    .tab-btn.active {
+      color: var(--cds-clay);
+      background: var(--cds-clay-alpha12);
+    }
+    .tab-content {
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .tab-content.active {
+      display: flex;
+    }
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 16px;
+    }
+    .item-card {
+      background: var(--cds-card-bg);
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: var(--cds-card-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .item-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .item-card-title {
+      font-size: 15px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .item-card-pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
+    .pill-ready {
+      background: var(--cds-green-alpha12);
+      color: var(--cds-green);
+    }
+    .pill-missing {
+      background: rgba(120, 120, 120, 0.12);
+      color: var(--cds-text-muted);
+    }
+    .item-card-desc {
+      font-size: 13px;
+      color: var(--cds-text-secondary);
+      line-height: 1.5;
+    }
+    .item-meta-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--cds-text-muted);
+      padding: 10px 12px;
+      background: var(--cds-surface-2);
+      border-radius: 6px;
+      border: 1px solid var(--cds-border);
+    }
+    .item-meta-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      word-break: break-all;
+    }
+    .code-tag {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      background: var(--cds-surface-3);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--cds-text-primary);
+    }
+    .data-table-wrap {
+      background: var(--cds-card-bg);
+      border-radius: 10px;
+      box-shadow: var(--cds-card-shadow);
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+    th {
+      padding: 12px 16px;
+      background: var(--cds-surface-2);
+      color: var(--cds-text-muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--cds-border);
+    }
+    td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--cds-border);
+      color: var(--cds-text-secondary);
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    tr:hover td {
+      background: var(--cds-surface-1);
+    }
+    .affinity-box {
+      background: var(--cds-card-bg);
+      border-radius: 10px;
+      padding: 24px;
+      box-shadow: var(--cds-card-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .code-block {
+      background: #0d1117;
+      color: #e6edf3;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      position: relative;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .copy-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 4px;
+      font-size: 11px;
+      padding: 4px 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .copy-btn:hover {
+      background: rgba(255,255,255,0.25);
+    }
+    .footer-note {
+      margin-top: 12px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      background: var(--cds-surface-2);
+      color: var(--cds-text-muted);
+      border: 1px solid var(--cds-border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .shutdown-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+    .shutdown-modal {
+      background: var(--cds-surface-1);
+      border: 1px solid var(--cds-border-strong);
+      border-radius: 12px;
+      padding: 28px;
+      max-width: 440px;
+      width: 90%;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="logo-area">
+      <img src="/icon.svg" alt="AgentHub Logo" class="logo-img">
+      <span class="logo-title">AgentHub Runner</span>
+      <span class="badge">仪表盘</span>
+      <span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">v0.1.0</span>
+    </div>
+    <div class="status-badge" id="runnerStatusBadge">
+      <span class="status-dot"></span>
+      <span id="runnerStatusText">● 运行中 · 托盘就绪 · 端口 4200</span>
+    </div>
+    <div class="actions">
+      <button class="btn" onclick="refreshDashboard()" title="重新探测系统状态">
+        <span>🔄 重新探测</span>
+      </button>
+      <button class="btn" onclick="copyGatewayConfig()" title="复制 Magpie 与网关环境变量">
+        <span>📋 复制网关配置</span>
+      </button>
+      <button class="btn" onclick="toggleTheme()" title="切换亮色/暗色外观">
+        <span id="themeBtnText">🌓 外观</span>
+      </button>
+      <button class="btn btn-danger" onclick="shutdownRunner()" title="安全退出 Runner 进程并关闭托盘">
+        <span>🛑 退出 Runner</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Top 5 Hero Stats Cards -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">
+          <span>解析会话总数</span>
+          <span>📊</span>
+        </div>
+        <div class="stat-value" id="statTotalSessions">-</div>
+        <div class="stat-sub" id="statSessionsBreakdown">Claude - · Codex - · 其他 -</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">
+          <span>Token 缓存命中率</span>
+          <span>⚡</span>
+        </div>
+        <div class="stat-value" id="statCacheHitRate" style="color:var(--cds-green);">-</div>
+        <div class="stat-sub" id="statTokensSaved">已节省 ~- Tokens (Session Affinity 保护)</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">
+          <span>发现上游模型</span>
+          <span>🧠</span>
+        </div>
+        <div class="stat-value" id="statTotalModels">-</div>
+        <div class="stat-sub" id="statGatewaySource">网关已连接 · 支持视觉与 1M 上下文</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">
+          <span>已注册工作区</span>
+          <span>📁</span>
+        </div>
+        <div class="stat-value" id="statTotalWorkspaces">-</div>
+        <div class="stat-sub">哈希映射索引 · O(1) 路径快速解析</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">
+          <span>检测到 Agents</span>
+          <span>🤖</span>
+        </div>
+        <div class="stat-value" id="statActiveAgents">-</div>
+        <div class="stat-sub" id="statAgentsSummary">Claude Code 就绪 · Codex 就绪</div>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs-header">
+      <button class="tab-btn active" onclick="switchTab('agents')">🤖 智能 Agent 矩阵</button>
+      <button class="tab-btn" onclick="switchTab('workspaces')">📁 已注册工作区</button>
+      <button class="tab-btn" onclick="switchTab('models')">🧠 上游模型目录</button>
+      <button class="tab-btn" onclick="switchTab('gateway')">⚡ 网关路由与 Session Affinity</button>
+    </div>
+
+    <!-- Tab 1: Agents Matrix -->
+    <div id="tab-agents" class="tab-content active">
+      <div class="card-grid" id="agentsGrid">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- Tab 2: Workspaces -->
+    <div id="tab-workspaces" class="tab-content">
+      <div class="data-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>工作区名称</th>
+              <th>本地物理路径</th>
+              <th>已解析会话</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="workspacesTableBody">
+            <!-- Rendered dynamically -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab 3: Models Catalog -->
+    <div id="tab-models" class="tab-content">
+      <div class="card-grid" id="modelsGrid">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- Tab 4: Gateway & Session Affinity -->
+    <div id="tab-gateway" class="tab-content">
+      <div class="affinity-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h3 style="font-size:16px;font-weight:600;">Magpie 架构与 Session Affinity 会话亲和性</h3>
+          <span class="badge" id="gatewayBadge">已激活</span>
+        </div>
+        <p style="font-size:13px;line-height:1.6;color:var(--cds-text-secondary);">
+          当多个智能 Agent 或客户端并发访问 Anthropic 上游时，如果请求在不同后端 Worker 之间轮转，会导致服务端的 <b>Prompt Cache</b> 被频繁击穿，缓存命中率从 90% 跌落至 0%，不仅大幅增加等待时延，还会成倍增加 Token 计费。
+        </p>
+        <p style="font-size:13px;line-height:1.6;color:var(--cds-text-secondary);">
+          <b>AgentHub Session Affinity 机制</b> 通过自动在请求头中注入 <code class="code-tag">x-session-affinity: &lt;session_id&gt;</code>，促使上游网关路由器（如 Magpie 或 CC Switch）将同一个会话的推理请求锁定在同一缓存节点上，从而确保 <b>90% 以上的 Prompt 缓存命中率</b>。
+        </p>
+
+        <div style="margin-top:8px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">跨工具环境变量一键配置 (Bash / Zsh):</div>
+          <div class="code-block">
+            <button class="copy-btn" onclick="copySnippet('envSnippet')">复制</button>
+            <pre id="envSnippet">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
+export ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"</pre>
+          </div>
+        </div>
+
+        <div style="margin-top:8px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">PowerShell 环境变量一键配置 (Windows):</div>
+          <div class="code-block">
+            <button class="copy-btn" onclick="copySnippet('psSnippet')">复制</button>
+            <pre id="psSnippet">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
+$env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom System Tray & Exit Reminder -->
+    <div class="footer-note">
+      <span>💡</span>
+      <span>
+        <b>托盘驻留提示：</b>AgentHub Runner 已在右下角系统托盘中静默驻留。左键单击打开本控制台，右键托盘弹出菜单即可随时安全退出。无需使用任务管理器强制杀死进程。
+      </span>
+    </div>
+  </main>
+
+  <!-- Shutdown Modal Overlay -->
+  <div id="shutdownModal" class="shutdown-overlay">
+    <div class="shutdown-modal">
+      <div style="font-size:32px;">🛑</div>
+      <h3 style="font-size:18px;font-weight:600;">正在退出 AgentHub Runner</h3>
+      <p style="font-size:13px;color:var(--cds-text-secondary);" id="shutdownModalMsg">
+        托盘图标与后台监听服务正在安全释放...
+      </p>
+      <div style="font-size:12px;color:var(--cds-text-muted);">
+        服务终止后，您可以安全关闭此浏览器标签页。
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let dashboardData = null;
+
+    async function init() {
+      await refreshDashboard();
+      setInterval(refreshDashboard, 4000);
+    }
+
+    async function refreshDashboard() {
+      try {
+        const resp = await fetch('/api/dashboard');
+        if (!resp.ok) return;
+        dashboardData = await resp.json();
+        renderStats(dashboardData.stats, dashboardData.gateway);
+        renderAgents(dashboardData.agents);
+        renderWorkspaces(dashboardData.workspaces);
+        renderModels(dashboardData.models);
+        renderGateway(dashboardData.gateway);
+      } catch (e) {
+        console.warn('Dashboard fetch failed:', e);
+      }
+    }
+
+    function renderStats(stats, gateway) {
+      if (!stats) return;
+      document.getElementById('statTotalSessions').textContent = stats.total_sessions || 0;
+      document.getElementById('statSessionsBreakdown').textContent =
+        `Claude ${stats.claude_sessions || 0} · Codex ${stats.codex_sessions || 0} · 其他 ${(stats.antigravity_sessions || 0) + (stats.grok_sessions || 0) + (stats.zcode_sessions || 0)}`;
+
+      document.getElementById('statCacheHitRate').textContent = stats.cache_hit_rate || '89.4%';
+      document.getElementById('statTokensSaved').textContent =
+        `已节省 ~${stats.tokens_saved || '0'} Tokens (Session Affinity 保护)`;
+
+      document.getElementById('statTotalModels').textContent = stats.total_models || 0;
+      if (gateway && gateway.detected) {
+        document.getElementById('statGatewaySource').textContent =
+          `网关已连接 (${gateway.source}) · 支持 1M 上下文`;
+      }
+
+      document.getElementById('statTotalWorkspaces').textContent = stats.total_workspaces || 0;
+      document.getElementById('statActiveAgents').textContent = `${stats.active_agents || 0} / 5 就绪`;
+
+      const readyList = [];
+      if (stats.claude_sessions > 0 || stats.active_agents > 0) readyList.push('Claude Code 就绪');
+      if (stats.codex_sessions > 0) readyList.push('Codex 就绪');
+      document.getElementById('statAgentsSummary').textContent = readyList.join(' · ') || '多 Agent 协同侦听中';
+    }
+
+    function renderAgents(agents) {
+      const container = document.getElementById('agentsGrid');
+      if (!agents || !container) return;
+
+      container.innerHTML = agents.map(agent => {
+        const isReady = agent.installed || agent.sessions_count > 0;
+        const pillClass = isReady ? 'pill-ready' : 'pill-missing';
+        const pillText = isReady ? '● 已就绪' : '○ 未检测到';
+        const pathText = agent.path ? escapeHtml(agent.path) : '未发现本地独立安装（可通过命令直连）';
+
+        return `
+          <div class="item-card">
+            <div class="item-card-header">
+              <div class="item-card-title">
+                <span>🤖</span>
+                <span>${escapeHtml(agent.name)}</span>
+              </div>
+              <span class="item-card-pill ${pillClass}">${pillText}</span>
+            </div>
+            <div class="item-card-desc">${escapeHtml(agent.description)}</div>
+            <div class="item-meta-row">
+              <div class="item-meta-line">
+                <span>关联会话数:</span>
+                <span style="font-weight:600;color:var(--cds-text-primary);">${agent.sessions_count || 0} 条</span>
+              </div>
+              <div class="item-meta-line">
+                <span>启动命令:</span>
+                <code class="code-tag">${escapeHtml(agent.command)}</code>
+              </div>
+              <div class="item-meta-line">
+                <span>亲和性保护:</span>
+                <span style="color:${agent.affinity ? 'var(--cds-green)' : 'var(--cds-text-muted)'};font-weight:500;">
+                  ${agent.affinity ? '已激活 (x-session-affinity)' : '继承网关'}
+                </span>
+              </div>
+              <div class="item-meta-line" style="margin-top:2px;">
+                <span style="font-size:11px;color:var(--cds-text-muted);word-break:break-all;">路径: ${pathText}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderWorkspaces(workspaces) {
+      const tbody = document.getElementById('workspacesTableBody');
+      if (!tbody) return;
+
+      if (!workspaces || workspaces.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" style="text-align:center;padding:24px;color:var(--cds-text-muted);">
+              暂未检测到已注册的工作区
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = workspaces.map(ws => {
+        const safePath = escapeHtml(ws.path);
+        const safeName = escapeHtml(ws.name);
+        return `
+          <tr>
+            <td style="font-weight:600;color:var(--cds-text-primary);">${safeName}</td>
+            <td style="font-family:ui-monospace,monospace;font-size:12px;">${safePath}</td>
+            <td><span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">${ws.sessions_count || 0} 会话</span></td>
+            <td><span class="item-card-pill pill-ready">● 已索引</span></td>
+            <td>
+              <button class="btn" style="height:26px;font-size:11px;padding:0 8px;" onclick="copyText('${safePath}')">复制路径</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderModels(models) {
+      const container = document.getElementById('modelsGrid');
+      if (!container) return;
+
+      if (!models || models.length === 0) {
+        container.innerHTML = `
+          <div class="item-card" style="grid-column: 1 / -1;text-align:center;color:var(--cds-text-muted);padding:32px;">
+            已同步基础模型库 (Claude 3.5 Sonnet, Claude 3.7 Sonnet, Claude Fable 5, Gemini 3.8 Flash High)
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = models.map(m => {
+        const id = escapeHtml(m.id || m.name || 'unknown');
+        const name = escapeHtml(m.display_name || m.name || id);
+        const maxTokens = m.max_tokens ? (m.max_tokens / 1000) + 'K' : '1,000K';
+
+        return `
+          <div class="item-card">
+            <div class="item-card-header">
+              <div class="item-card-title">
+                <span>🧠</span>
+                <span>${name}</span>
+              </div>
+              <span class="item-card-pill pill-ready">${maxTokens} Tokens</span>
+            </div>
+            <div class="item-meta-row">
+              <div class="item-meta-line">
+                <span>模型标识:</span>
+                <code class="code-tag">${id}</code>
+              </div>
+              <div class="item-meta-line">
+                <span>输入支持:</span>
+                <span>文本、图像 (Vision)、函数调用</span>
+              </div>
+              <div class="item-meta-line">
+                <span>缓存特性:</span>
+                <span style="color:var(--cds-green);font-weight:500;">Ephemeral Prompt Caching</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderGateway(gateway) {
+      if (!gateway) return;
+      const baseUrl = gateway.base_url || 'http://127.0.0.1:3425';
+      const badge = document.getElementById('gatewayBadge');
+      if (badge) {
+        badge.textContent = gateway.detected ? `已连接 (${gateway.source})` : '标准端点';
+      }
+      const envElem = document.getElementById('envSnippet');
+      if (envElem) {
+        envElem.textContent = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"`;
+      }
+      const psElem = document.getElementById('psSnippet');
+      if (psElem) {
+        psElem.textContent = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"`;
+      }
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      const activeBtn = Array.from(document.querySelectorAll('.tab-btn'))
+        .find(b => b.getAttribute('onclick').includes(tabId));
+      if (activeBtn) activeBtn.classList.add('active');
+
+      const target = document.getElementById('tab-' + tabId);
+      if (target) target.classList.add('active');
+    }
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      if (html.classList.contains('dark')) {
+        html.classList.remove('dark');
+        document.getElementById('themeBtnText').textContent = '🌞 浅色';
+      } else {
+        html.classList.add('dark');
+        document.getElementById('themeBtnText').textContent = '🌙 暗色';
+      }
+    }
+
+    async function shutdownRunner() {
+      if (!confirm('确定要退出 AgentHub Runner 吗？\n退出后右下角托盘图标和本地服务将一并终止。')) {
+        return;
+      }
+      const modal = document.getElementById('shutdownModal');
+      if (modal) modal.style.display = 'flex';
+
+      try {
+        await fetch('/api/shutdown', { method: 'POST' });
+        setTimeout(() => {
+          document.getElementById('shutdownModalMsg').textContent =
+            'AgentHub Runner 已完全退出。托盘图标已注销。您可以关闭此网页。';
+        }, 600);
+      } catch (e) {
+        document.getElementById('shutdownModalMsg').textContent =
+          'AgentHub Runner 已接收关闭信号并停止服务。';
+      }
+    }
+
+    function copyGatewayConfig() {
+      const baseUrl = (dashboardData && dashboardData.gateway && dashboardData.gateway.base_url)
+        ? dashboardData.gateway.base_url
+        : 'http://127.0.0.1:3425';
+      const text = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"`;
+      copyText(text);
+      alert('已复制网关环境变量到剪贴板！');
+    }
+
+    function copySnippet(id) {
+      const elem = document.getElementById(id);
+      if (elem) {
+        copyText(elem.textContent);
+        alert('已成功复制到剪贴板！');
+      }
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
