@@ -1647,6 +1647,34 @@ mod tests {
         assert_eq!(messages[2]["content"], "第二次提问");
         assert_eq!(messages[3]["content"], "第二次回复");
     }
+
+    #[test]
+    fn test_sanitize_claude_project_dir_and_workspace_lookup() {
+        let win_path = Path::new(r"D:\Claudespace\Project\agenthub");
+        let unix_path = Path::new("/home/user/code/agenthub");
+
+        assert_eq!(
+            sanitize_claude_project_dir(win_path),
+            "D--Claudespace-Project-agenthub"
+        );
+        assert_eq!(
+            sanitize_claude_project_dir(unix_path),
+            "-home-user-code-agenthub"
+        );
+
+        let home = tempfile::tempdir().unwrap();
+        let proj_dir = home
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("D--Claudespace-Project-agenthub");
+        fs::create_dir_all(&proj_dir).unwrap();
+        let target_file = proj_dir.join("test-sess-123.jsonl");
+        fs::write(&target_file, "{\"type\":\"user\"}\n").unwrap();
+
+        let resolved = find_claude_workspace_transcript(home.path(), win_path, "test-sess-123");
+        assert_eq!(resolved, Some(target_file));
+    }
 }
 
 #[cfg(test)]
