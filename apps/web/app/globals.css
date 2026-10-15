@@ -1,3 +1,5 @@
+@import "../src/components/cds-tokens.css";
+
 :root {
   /* Claude Typography Stacks */
   --font-serif:
@@ -19,10 +21,10 @@
   --radius-full: 9999px;
   --radius: 12px;
 
-  /* Universal Claude Terracotta */
-  --remote-terracotta: #d97757;
-  --remote-terracotta-hover: #c66547;
-  --remote-terracotta-soft: rgba(217, 119, 87, 0.12);
+  /* Universal Claude Terracotta Bridge */
+  --remote-terracotta: var(--cds-clay, #d97757);
+  --remote-terracotta-hover: var(--cds-clay-hover, #cc5a36);
+  --remote-terracotta-soft: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
 }
 
 /* Light Theme: Warm Natural Paper (Claude Editorial) */

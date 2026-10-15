@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased]
+
+### 网页端全面对齐 Claude 设计系统（CDS 阶段 1 & 阶段 2 改造）
+
+基于开源逆向工程标杆项目 `open-claude-ui`，对 `apps/web` 网页端进行深度高保真重构与工程交互物理学升级：
+
+- **阶段 1：引入完整 Claude 设计系统（CDS）设计令牌与表面阶梯**：
+  - 新建 `apps/web/src/components/cds-tokens.css`，定义官方 Surface 0 至 3 表面微对比阶梯（浅色 `#f5f5f3` 至 `#ffffff`，深色 `#0b0b0a` 至 `#20201e`）；
+  - 引入标志性陶土橙 `--cds-clay: #d97757` 及其悬停/加重/柔和背景色阶；
+  - 引入 Retina 高分屏发丝细边补偿（`--cds-ring-hairline: 0.5px`）、单闭合边框与双环 Popover 弥散微光投影系统；
+  - 建立精密角色语义圆角阶梯（Composer 20px、气泡 18px、模态框 16px、面板 10px、按钮 8px、Pill 999px）；
+  - 引入官方 7 档渐隐非线性 Alpha 遮罩（`.cds-scroll-fade-mask`），解决视网膜屏滚动边缘的色阶断层。
+- **阶段 2：会话核心流与输入终端工程重构**：
+  - **输入终端（ChatComposer）CJK 输入法双重互锁守卫**：
+    - 针对桌面端中日韩拼音/候选词输入法回车选字痛点，全面注入 `!(event.nativeEvent.isComposing || event.keyCode === 229)` 双重互锁，彻底杜绝输入汉字选词时意外发送消息；
+    - 输入框外壳升级为严格的 20px 同心圆角，注入 CDS 双环微光阴影（聚焦时产生柔和陶土环漫反射光晕）；
+  - **思考过程折叠器（ThinkingAccordion）全新上线**：
+    - 新增 `ThinkingAccordion.tsx` 独立组件，支持模型思考流的自动提取与展示；
+    - 采用 CSS Grid `0fr -> 1fr` 弹性伸缩，解决高度过渡卡顿与视口抖动；
+    - 思考流式生成中强制展开锁定，完成后交还用户折叠控制权；
+    - 思考中渲染陶土橙 3 点波浪跳跃微动效（`timeline-quiet-dot`），并支持一键引用复制（Copy as quote）；
+  - **用户会话气泡高保真对齐**：
+    - User 气泡升级为严格的 18px 圆角与柔和冷蓝灰底色（`--cds-bg-tint-blue: #f0f4f8`），搭配 `message-fade-up` 微弹超调入场动画。
+
 ## [2.4.76] - 2026-10-14
 
 ### 开源自部署架构重构（移除 Telegram OAuth，单管理员首次初始化与 SQLite 持久化）

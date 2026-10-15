@@ -26,6 +26,7 @@ import {
 import { MarkdownView } from "./MarkdownView";
 import { RemoteContextCapacity } from "./RemoteContextCapacity";
 import { SettingsPage } from "./SettingsPage";
+import { ThinkingAccordion } from "./ThinkingAccordion";
 import { parseNotificationPresentedAt } from "../lib/notifications";
 import type { PanelConfig } from "../lib/config";
 import { saveConfig } from "../lib/config";
@@ -69,6 +70,39 @@ const states: Record<string, string> = {
 };
 const key = (session: RemoteSession) =>
   `${session.runner_id}/${session.binding.hub_session_id}`;
+
+/**
+ * Extracts <thinking> or <thought> blocks from message content for CDS ThinkingAccordion.
+ */
+function splitThinkingContent(
+  content: string,
+  isStreaming = false,
+): {
+  thinking: string | null;
+  cleanText: string;
+  isThinkingLive: boolean;
+} {
+  const match = content.match(
+    /<(?:thinking|thought)>([\s\S]*?)(?:<\/(?:thinking|thought)>|$)/i,
+  );
+  if (!match)
+    return { thinking: null, cleanText: content, isThinkingLive: false };
+
+  const thinking = match[1]?.trim() ?? "";
+  const isThinkingLive =
+    isStreaming &&
+    !content.includes("</thinking>") &&
+    !content.includes("</thought>");
+  const cleanText = content
+    .replace(/<(?:thinking|thought)>[\s\S]*?(?:<\/(?:thinking|thought)>|$)/i, "")
+    .trim();
+
+  return {
+    thinking: thinking || null,
+    cleanText,
+    isThinkingLive,
+  };
+}
 
 /**
  * The shapes a tool call actually takes in a transcript. A wall of identical
@@ -1893,7 +1927,7 @@ export function RemoteConsole({
               </div>
             )}
             <div
-              className="remote-timeline"
+              className="remote-timeline cds-scroll-fade-mask"
               ref={timeline}
               onScroll={handleTimelineScroll}
               aria-label="会话内容"
@@ -1920,6 +1954,21 @@ export function RemoteConsole({
                     </p>
                   );
                 }
+                const isStreamingThis = Boolean(
+                  item.kind === "assistant" &&
+                    session?.binding.current_turn_id &&
+                    item === items[items.length - 1],
+                );
+                const rawText = readableRemoteText(item.text);
+                const { thinking, cleanText, isThinkingLive } =
+                  item.kind === "assistant"
+                    ? splitThinkingContent(rawText, isStreamingThis)
+                    : {
+                        thinking: null,
+                        cleanText: rawText,
+                        isThinkingLive: false,
+                      };
+
                 return (
                   <article
                     className={`remote-message ${item.kind}`}
@@ -1941,14 +1990,18 @@ export function RemoteConsole({
                       </div>
                     )}
                     <div className="remote-message-body">
-                      <MarkdownView
-                        content={readableRemoteText(item.text)}
-                        streaming={Boolean(
-                          item.kind === "assistant" &&
-                          session?.binding.current_turn_id &&
-                          item === items[items.length - 1],
-                        )}
-                      />
+                      {thinking && (
+                        <ThinkingAccordion
+                          thoughtText={thinking}
+                          isThinking={isThinkingLive}
+                        />
+                      )}
+                      {(cleanText || !thinking) && (
+                        <MarkdownView
+                          content={cleanText}
+                          streaming={isStreamingThis}
+                        />
+                      )}
                     </div>
                   </article>
                 );
@@ -2314,8 +2367,16 @@ export function RemoteConsole({
                     adjustTextareaHeight();
                   }}
                   onKeyDown={(event) => {
-                    // 移动端不通过回车触发发送，防止输入法确认词时误触发送
-                    if (!isMobile && event.key === "Enter" && !event.shiftKey) {
+                    const isComposing =
+                      (event.nativeEvent as KeyboardEvent).isComposing ||
+                      event.keyCode === 229;
+                    // 移动端不通过回车触发发送；桌面端双重互锁防输入法选词误发
+                    if (
+                      !isMobile &&
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !isComposing
+                    ) {
                       event.preventDefault();
                       if (canSend && text.trim()) {
                         void submit({
