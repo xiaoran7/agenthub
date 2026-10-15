@@ -48,6 +48,24 @@
   - `agenthub-runner daemon` 亦默认支持 `--web` 与 `--web-port` 参数无缝启用；
   - **默认无参启动模式**：直接双击 `agenthub-runner.exe` 即可自动拉起 Web 控制台并在默认浏览器中唤起控制台，彻底免去手动输入参数的繁琐流程。
 
+### 修复 Windows 双击启动偶发闪退与身份冲突问题（固化持久化设备身份与浏览器启动参数）
+
+针对用户直接双击运行 `agenthub-runner.exe` 时偶发闪退且右下角托盘消失的严重问题进行根本排查与彻底修复：
+
+- **根本原因 1（SQLite 日志身份绑定冲突）**：
+  - 双击默认启动 `web` 命令时，若未指定 `--identity` 参数，旧逻辑会每次调用 `DeviceIdentity::generate()` 生成随机的新 `device_id`；
+  - 随后本地 SQLite 嵌入日志引擎 `RemoteJournal::bind_identity()` 检测到现有 `agenthub.db` 中记录的设备 ID 与新随机 ID 不匹配，直接抛出 `IdentityMismatch` 错误导致进程瞬间闪退（进程存活不到 10ms），进而使得系统托盘图标与浏览器均无法正常建立。
+- **根本原因 2（Windows `cmd /c start` 路径解析空标题陷阱）**：
+  - Windows 原生 `start` 命令当首个参数被双引号包裹时会将其误认为是控制台窗口标题（Title），从而不会调起默认浏览器。
+- **修复方案与工程落地**：
+  - **默认设备身份持久化归一（`crates/runner/src/main.rs`）**：
+    - 新增 `resolve_or_create_default_identity()` 函数，统一在 `~/.agenthub/identity.json` 中持久化固化本地设备身份，避免每次启动随机生成；
+    - 在 `web` 命令缺省参数下优先加载该持久化身份，确保多次重启与热重载的设备身份绝对幂等稳定。
+  - **本地离线开发容错保护（`crates/runner/src/remote_journal.rs`）**：
+    - 在 `RemoteJournal::bind_identity()` 中对本地模式（`local://agenthub` 或空地址）做宽容度处理，当设备 ID 不一致时自动更新现有日志库中的单例身份记录，杜绝因本地开发或临时切换导致程序闪退。
+  - **浏览器安全唤起补全（`crates/runner/src/web_server.rs`）**：
+    - 将 Windows 下打开浏览器的参数修正为 `cmd /c start "" <url>`，保证目标网址始终被作为启动目标传递，浏览器弹窗精准拉起。
+
 ### Windows 系统托盘（System Tray）守护与优雅退出
 
 彻底解决无界面后台驻留时“无法直观感知运行状态”与“必须打开任务管理器才能杀进程”的痛点：

@@ -523,7 +523,7 @@ fn main() -> Result<()> {
             port,
             open_browser,
         } => {
-            let identity = runtime_identity.unwrap_or_else(DeviceIdentity::generate);
+            let identity = runtime_identity.unwrap_or_else(resolve_or_create_default_identity);
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
@@ -1257,3 +1257,25 @@ fn normalize(
         Ok(observations)
     })
 }
+
+fn resolve_or_create_default_identity() -> DeviceIdentity {
+    let home_dir = env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let agenthub_dir = home_dir.join(".agenthub");
+    let identity_path = agenthub_dir.join("identity.json");
+
+    if identity_path.exists() {
+        if let Ok(identity) = DeviceIdentity::load(&identity_path) {
+            return identity;
+        }
+    }
+
+    let identity = DeviceIdentity::generate();
+    if fs::create_dir_all(&agenthub_dir).is_ok() {
+        let _ = identity.save_new(&identity_path);
+    }
+    identity
+}
+

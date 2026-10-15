@@ -109,7 +109,7 @@ fn open_in_browser(url: &str) {
     #[cfg(target_os = "windows")]
     {
         let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", url])
+            .args(["/c", "start", "", url])
             .spawn();
     }
     #[cfg(target_os = "macos")]

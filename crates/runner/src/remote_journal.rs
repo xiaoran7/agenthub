@@ -139,6 +139,17 @@ impl RemoteJournal {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         if stored.0 != device_id {
+            // If re-opening in local/offline mode, keep the existing database without error.
+            if (stored.1 == "local://agenthub" || stored.1.trim().is_empty())
+                && (server == "local://agenthub" || server.trim().is_empty())
+            {
+                transaction.execute(
+                    "UPDATE remote_identity SET device_id=?1 WHERE singleton=1",
+                    params![device_id],
+                )?;
+                transaction.commit()?;
+                return Ok(());
+            }
             return Err(JournalError::IdentityMismatch);
         }
         // If re-opening in local/offline mode, keep the existing database without error.
