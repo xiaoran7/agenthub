@@ -11,40 +11,51 @@
       --cds-clay: #d97757;
       --cds-clay-hover: #c86b4c;
       --cds-clay-alpha12: rgba(217, 119, 87, 0.12);
-      --cds-surface-0: #f5f5f3;
-      --cds-surface-1: #fcfcfb;
-      --cds-surface-2: #ffffff;
-      --cds-surface-3: #ffffff;
-      --cds-text-primary: #151515;
-      --cds-text-secondary: #525252;
-      --cds-text-muted: #8a8a8a;
-      --cds-border: rgba(0, 0, 0, 0.08);
-      --cds-border-strong: rgba(0, 0, 0, 0.16);
-      --cds-blue: #2563eb;
-      --cds-blue-alpha12: rgba(37, 99, 235, 0.12);
-      --cds-green: #10b981;
-      --cds-green-alpha12: rgba(16, 185, 129, 0.12);
+      --cds-clay-alpha20: rgba(217, 119, 87, 0.20);
+      --cds-surface-0: #f6f8fa;
+      --cds-surface-1: #ffffff;
+      --cds-surface-2: #f8fafc;
+      --cds-surface-3: #f1f5f9;
+      --cds-text-primary: #0f172a;
+      --cds-text-secondary: #475569;
+      --cds-text-muted: #94a3b8;
+      --cds-border: rgba(15, 23, 42, 0.08);
+      --cds-border-strong: rgba(15, 23, 42, 0.14);
+      --cds-blue: #0284c7;
+      --cds-blue-alpha12: rgba(2, 132, 199, 0.12);
+      --cds-green: #059669;
+      --cds-green-alpha12: rgba(5, 150, 105, 0.12);
       --cds-card-bg: rgba(255, 255, 255, 0.94);
-      --cds-card-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 0 0 1px var(--cds-border);
+      --cds-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 0 0 1px var(--cds-border);
+      --cds-card-hover-shadow: 0 10px 25px -5px rgba(2, 132, 199, 0.08), 0 0 0 1px rgba(2, 132, 199, 0.2);
+      --cds-icon-bg: #f1f5f9;
+      --cds-icon-color: #334155;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
     }
+
     html.dark {
-      --cds-surface-0: #0b0b0a;
-      --cds-surface-1: #151515;
-      --cds-surface-2: #1a1a19;
-      --cds-surface-3: #20201e;
-      --cds-text-primary: #f2f2f0;
-      --cds-text-secondary: #a3a3a0;
-      --cds-text-muted: #666663;
+      --cds-surface-0: #0b0f17;
+      --cds-surface-1: #111827;
+      --cds-surface-2: #162032;
+      --cds-surface-3: #1e293b;
+      --cds-text-primary: #f8fafc;
+      --cds-text-secondary: #94a3b8;
+      --cds-text-muted: #64748b;
       --cds-border: rgba(255, 255, 255, 0.08);
       --cds-border-strong: rgba(255, 255, 255, 0.16);
-      --cds-blue: #3b82f6;
-      --cds-blue-alpha12: rgba(59, 130, 246, 0.15);
-      --cds-green: #34d399;
-      --cds-green-alpha12: rgba(52, 211, 153, 0.15);
-      --cds-card-bg: #151515;
-      --cds-card-shadow: 0 4px 16px rgba(0,0,0,0.3), 0 0 0 1px var(--cds-border);
+      --cds-blue: #38bdf8;
+      --cds-blue-alpha12: rgba(56, 189, 248, 0.15);
+      --cds-green: #10b981;
+      --cds-green-alpha12: rgba(16, 185, 129, 0.16);
+      --cds-card-bg: #111827;
+      --cds-card-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--cds-border);
+      --cds-card-hover-shadow: 0 12px 30px -5px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(56, 189, 248, 0.3);
+      --cds-icon-bg: #1e293b;
+      --cds-icon-color: #94a3b8;
     }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background: var(--cds-surface-0);
@@ -54,10 +65,39 @@
       overflow-y: auto;
       display: flex;
       flex-direction: column;
+      transition: background-color 0.25s ease, color 0.25s ease;
+      -webkit-font-smoothing: antialiased;
     }
+
+    /* SVG Icon Utility */
+    .icon {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2;
+      stroke: currentColor;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    .icon-lg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .icon-stat {
+      width: 18px;
+      height: 18px;
+      stroke-width: 2.2;
+    }
+
+    /* Header Bar */
     .header {
-      height: 56px;
-      padding: 0 24px;
+      height: 60px;
+      padding: 0 28px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -66,358 +106,542 @@
       position: sticky;
       top: 0;
       z-index: 100;
+      backdrop-filter: blur(12px);
+      transition: background-color 0.25s ease, border-color 0.25s ease;
     }
+
     .logo-area {
       display: flex;
       align-items: center;
       gap: 12px;
     }
+
     .logo-img {
       width: 32px;
       height: 32px;
-      border-radius: 7px;
+      border-radius: 8px;
+      transition: transform 0.2s var(--ease-out);
+      will-change: transform;
     }
+
+    .logo-area:hover .logo-img {
+      transform: scale(1.05) rotate(2deg);
+    }
+
     .logo-title {
       font-size: 15px;
-      font-weight: 600;
-      letter-spacing: -0.2px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
     }
+
     .badge {
       font-size: 11px;
       padding: 2px 8px;
-      border-radius: 12px;
-      font-weight: 500;
+      border-radius: 6px;
+      font-weight: 600;
       background: var(--cds-clay-alpha12);
       color: var(--cds-clay);
+      letter-spacing: 0.2px;
     }
+
     .status-badge {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       font-size: 12px;
-      padding: 4px 10px;
-      border-radius: 14px;
+      padding: 5px 12px;
+      border-radius: 20px;
       background: var(--cds-green-alpha12);
       color: var(--cds-green);
-      font-weight: 500;
+      font-weight: 600;
+      border: 1px solid rgba(16, 185, 129, 0.2);
     }
-    .status-dot {
-      width: 7px;
-      height: 7px;
+
+    .status-pulse-dot {
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       background: var(--cds-green);
+      position: relative;
     }
+
+    .status-pulse-dot::after {
+      content: '';
+      position: absolute;
+      top: -2px;
+      left: -2px;
+      right: -2px;
+      bottom: -2px;
+      border-radius: 50%;
+      background: var(--cds-green);
+      opacity: 0.5;
+      animation: pulse-ring 2s infinite var(--ease-out);
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(1); opacity: 0.6; }
+      100% { transform: scale(2.4); opacity: 0; }
+    }
+
     .actions {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
     }
+
     .btn {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      height: 32px;
-      padding: 0 12px;
-      border-radius: 6px;
+      gap: 7px;
+      height: 34px;
+      padding: 0 14px;
+      border-radius: 8px;
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
       border: 1px solid var(--cds-border);
       background: var(--cds-surface-2);
       color: var(--cds-text-primary);
-      transition: all 0.15s ease;
+      transition: all 0.2s var(--ease-out);
+      will-change: transform;
+      user-select: none;
     }
+
     .btn:hover {
       background: var(--cds-surface-3);
       border-color: var(--cds-border-strong);
+      transform: translateY(-1px);
     }
+
+    .btn:active {
+      transform: translateY(0) scale(0.97);
+    }
+
     .btn-danger {
-      background: rgba(239, 68, 68, 0.1);
+      background: rgba(239, 68, 68, 0.08);
       color: #ef4444;
       border-color: rgba(239, 68, 68, 0.2);
     }
+
     .btn-danger:hover {
-      background: rgba(239, 68, 68, 0.2);
+      background: rgba(239, 68, 68, 0.16);
       border-color: #ef4444;
+      color: #ef4444;
     }
+
     .main-container {
       max-width: 1240px;
       width: 100%;
       margin: 0 auto;
-      padding: 24px;
+      padding: 28px 24px 48px;
       display: flex;
       flex-direction: column;
       gap: 24px;
       flex: 1;
     }
+
+    /* Top Stats Grid */
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 16px;
     }
+
     .stat-card {
       background: var(--cds-card-bg);
-      border-radius: 10px;
-      padding: 18px 20px;
+      border-radius: 12px;
+      padding: 20px 22px;
       box-shadow: var(--cds-card-shadow);
       display: flex;
       flex-direction: column;
       gap: 8px;
-      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      transition: transform 0.22s var(--ease-out), box-shadow 0.22s var(--ease-out);
+      will-change: transform, box-shadow;
+      position: relative;
+      overflow: hidden;
     }
+
     .stat-card:hover {
       transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+      box-shadow: var(--cds-card-hover-shadow);
     }
-    .stat-label {
-      font-size: 13px;
-      color: var(--cds-text-muted);
-      font-weight: 500;
+
+    .stat-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
-    .stat-value {
-      font-size: 26px;
-      font-weight: 700;
-      letter-spacing: -0.5px;
-      color: var(--cds-text-primary);
+
+    .stat-label {
+      font-size: 13px;
+      color: var(--cds-text-muted);
+      font-weight: 600;
+      letter-spacing: -0.1px;
     }
+
+    .stat-icon-wrapper {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--cds-icon-bg);
+      color: var(--cds-icon-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .stat-card:hover .stat-icon-wrapper {
+      transform: scale(1.08);
+      background: var(--cds-blue-alpha12);
+      color: var(--cds-blue);
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.8px;
+      color: var(--cds-text-primary);
+      margin-top: 4px;
+    }
+
     .stat-sub {
       font-size: 12px;
       color: var(--cds-text-secondary);
       line-height: 1.4;
     }
-    .tabs-header {
+
+    /* Tabs Header */
+    .tabs-nav {
       display: flex;
-      gap: 8px;
-      border-bottom: 1px solid var(--cds-border);
-      padding-bottom: 8px;
+      gap: 6px;
+      padding: 4px;
+      background: var(--cds-surface-2);
+      border: 1px solid var(--cds-border);
+      border-radius: 10px;
+      width: fit-content;
+      max-width: 100%;
+      overflow-x: auto;
     }
+
     .tab-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       padding: 8px 16px;
       font-size: 13px;
       font-weight: 600;
-      border-radius: 6px;
+      border-radius: 8px;
       cursor: pointer;
       border: none;
       background: transparent;
-      color: var(--cds-text-muted);
-      transition: all 0.15s ease;
+      color: var(--cds-text-secondary);
+      transition: all 0.2s var(--ease-out);
+      will-change: transform;
+      user-select: none;
+      white-space: nowrap;
     }
+
     .tab-btn:hover {
       color: var(--cds-text-primary);
-      background: var(--cds-surface-2);
+      background: var(--cds-surface-3);
     }
+
     .tab-btn.active {
       color: var(--cds-clay);
-      background: var(--cds-clay-alpha12);
+      background: var(--cds-surface-1);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
     }
+
     .tab-content {
       display: none;
       flex-direction: column;
       gap: 16px;
+      animation: fadeIn 0.25s var(--ease-out);
     }
+
     .tab-content.active {
       display: flex;
     }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Card Grid */
     .card-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
       gap: 16px;
     }
+
     .item-card {
       background: var(--cds-card-bg);
-      border-radius: 10px;
-      padding: 20px;
+      border-radius: 12px;
+      padding: 22px;
       box-shadow: var(--cds-card-shadow);
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 14px;
+      transition: transform 0.22s var(--ease-out), box-shadow 0.22s var(--ease-out);
+      will-change: transform, box-shadow;
     }
+
+    .item-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--cds-card-hover-shadow);
+    }
+
     .item-card-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
+
     .item-card-title {
       font-size: 15px;
-      font-weight: 600;
+      font-weight: 700;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
     }
+
+    .agent-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: var(--cds-icon-bg);
+      color: var(--cds-blue);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
     .item-card-pill {
       font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-weight: 500;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
     }
+
     .pill-ready {
       background: var(--cds-green-alpha12);
       color: var(--cds-green);
+      border: 1px solid rgba(16, 185, 129, 0.2);
     }
+
     .pill-missing {
       background: rgba(120, 120, 120, 0.12);
       color: var(--cds-text-muted);
+      border: 1px solid var(--cds-border);
     }
+
     .item-card-desc {
       font-size: 13px;
       color: var(--cds-text-secondary);
       line-height: 1.5;
     }
+
     .item-meta-row {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 7px;
       font-size: 12px;
       color: var(--cds-text-muted);
-      padding: 10px 12px;
+      padding: 12px 14px;
       background: var(--cds-surface-2);
-      border-radius: 6px;
+      border-radius: 8px;
       border: 1px solid var(--cds-border);
     }
+
     .item-meta-line {
       display: flex;
       justify-content: space-between;
       align-items: center;
       word-break: break-all;
     }
+
     .code-tag {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 11px;
       background: var(--cds-surface-3);
-      padding: 2px 6px;
+      padding: 2px 7px;
       border-radius: 4px;
       color: var(--cds-text-primary);
+      border: 1px solid var(--cds-border);
     }
+
+    /* Data Table */
     .data-table-wrap {
       background: var(--cds-card-bg);
-      border-radius: 10px;
+      border-radius: 12px;
       box-shadow: var(--cds-card-shadow);
       overflow-x: auto;
+      border: 1px solid var(--cds-border);
     }
+
     table {
       width: 100%;
       border-collapse: collapse;
       text-align: left;
       font-size: 13px;
     }
+
     th {
-      padding: 12px 16px;
       background: var(--cds-surface-2);
-      color: var(--cds-text-muted);
+      padding: 14px 18px;
       font-weight: 600;
+      color: var(--cds-text-secondary);
       border-bottom: 1px solid var(--cds-border);
+      white-space: nowrap;
     }
+
     td {
-      padding: 14px 16px;
+      padding: 14px 18px;
       border-bottom: 1px solid var(--cds-border);
       color: var(--cds-text-secondary);
     }
+
     tr:last-child td {
       border-bottom: none;
     }
+
     tr:hover td {
-      background: var(--cds-surface-1);
+      background: var(--cds-surface-2);
     }
+
+    /* Affinity Box */
     .affinity-box {
       background: var(--cds-card-bg);
-      border-radius: 10px;
-      padding: 24px;
+      border-radius: 12px;
+      padding: 26px;
       box-shadow: var(--cds-card-shadow);
       display: flex;
       flex-direction: column;
       gap: 16px;
     }
+
     .code-block {
-      background: #0d1117;
-      color: #e6edf3;
-      padding: 16px;
+      background: var(--cds-surface-2);
+      border: 1px solid var(--cds-border);
       border-radius: 8px;
+      padding: 14px 16px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 13px;
-      line-height: 1.6;
+      font-size: 12px;
+      color: var(--cds-text-primary);
       position: relative;
-      border: 1px solid rgba(255,255,255,0.1);
+      overflow-x: auto;
     }
+
     .copy-btn {
       position: absolute;
-      top: 12px;
-      right: 12px;
-      background: rgba(255,255,255,0.1);
-      color: #fff;
-      border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 4px;
+      top: 10px;
+      right: 10px;
+      padding: 4px 10px;
       font-size: 11px;
-      padding: 4px 8px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .copy-btn:hover {
-      background: rgba(255,255,255,0.25);
-    }
-    .footer-note {
-      margin-top: 12px;
-      padding: 12px 16px;
-      border-radius: 8px;
-      font-size: 12px;
-      background: var(--cds-surface-2);
-      color: var(--cds-text-muted);
+      font-weight: 600;
+      border-radius: 5px;
+      background: var(--cds-surface-3);
       border: 1px solid var(--cds-border);
+      color: var(--cds-text-primary);
+      cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 4px;
+      transition: all 0.15s ease;
     }
+
+    .copy-btn:hover {
+      background: var(--cds-surface-1);
+      border-color: var(--cds-border-strong);
+    }
+
+    /* Footer Note */
+    .footer-note {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      border-radius: 10px;
+      background: var(--cds-blue-alpha12);
+      border: 1px solid rgba(2, 132, 199, 0.2);
+      font-size: 13px;
+      color: var(--cds-text-primary);
+      line-height: 1.5;
+    }
+
+    /* Shutdown Modal */
     .shutdown-overlay {
       position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.7);
-      backdrop-filter: blur(4px);
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(8px);
       display: none;
       align-items: center;
       justify-content: center;
       z-index: 999;
+      animation: fadeIn 0.2s ease;
     }
+
     .shutdown-modal {
       background: var(--cds-surface-1);
       border: 1px solid var(--cds-border-strong);
-      border-radius: 12px;
-      padding: 28px;
+      border-radius: 16px;
+      padding: 32px;
       max-width: 440px;
       width: 90%;
       text-align: center;
       display: flex;
       flex-direction: column;
       gap: 16px;
-      box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+      animation: scaleUp 0.25s var(--ease-out);
+    }
+
+    @keyframes scaleUp {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
     }
   </style>
 </head>
 <body>
+  <!-- Header Bar -->
   <header class="header">
     <div class="logo-area">
       <img src="/icon.svg" alt="AgentHub Logo" class="logo-img">
       <span class="logo-title">AgentHub Runner</span>
       <span class="badge">仪表盘</span>
-      <span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">v0.1.0</span>
+      <span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">v2.4.77</span>
     </div>
+
     <div class="status-badge" id="runnerStatusBadge">
-      <span class="status-dot"></span>
-      <span id="runnerStatusText">● 运行中 · 托盘就绪 · 端口 4200</span>
+      <span class="status-pulse-dot"></span>
+      <span id="runnerStatusText">运行中 · 托盘就绪 · 端口 4200</span>
     </div>
+
     <div class="actions">
       <button class="btn" onclick="refreshDashboard()" title="重新探测系统状态">
-        <span>🔄 重新探测</span>
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
+        <span>重新探测</span>
       </button>
+
       <button class="btn" onclick="copyGatewayConfig()" title="复制 Magpie 与网关环境变量">
-        <span>📋 复制网关配置</span>
+        <svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <span>复制网关配置</span>
       </button>
+
       <button class="btn" onclick="toggleTheme()" title="切换亮色/暗色外观">
-        <span id="themeBtnText">🌓 外观</span>
+        <span id="themeIcon">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        </span>
+        <span id="themeBtnText">外观</span>
       </button>
+
       <button class="btn btn-danger" onclick="shutdownRunner()" title="安全退出 Runner 进程并关闭托盘">
-        <span>🛑 退出 Runner</span>
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>
+        <span>退出 Runner</span>
       </button>
     </div>
   </header>
@@ -425,46 +649,61 @@
   <main class="main-container">
     <!-- Top 5 Hero Stats Cards -->
     <div class="stats-grid">
+      <!-- Stat 1: Total Sessions -->
       <div class="stat-card">
-        <div class="stat-label">
-          <span>解析会话总数</span>
-          <span>📊</span>
+        <div class="stat-header">
+          <span class="stat-label">解析会话总数</span>
+          <div class="stat-icon-wrapper">
+            <svg class="icon icon-stat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </div>
         </div>
         <div class="stat-value" id="statTotalSessions">-</div>
         <div class="stat-sub" id="statSessionsBreakdown">Claude - · Codex - · 其他 -</div>
       </div>
 
+      <!-- Stat 2: Cache Hit Rate -->
       <div class="stat-card">
-        <div class="stat-label">
-          <span>Token 缓存命中率</span>
-          <span>⚡</span>
+        <div class="stat-header">
+          <span class="stat-label">Token 缓存命中率</span>
+          <div class="stat-icon-wrapper" style="color:var(--cds-green);">
+            <svg class="icon icon-stat" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
         </div>
         <div class="stat-value" id="statCacheHitRate" style="color:var(--cds-green);">-</div>
         <div class="stat-sub" id="statTokensSaved">已节省 ~- Tokens (Session Affinity 保护)</div>
       </div>
 
+      <!-- Stat 3: Upstream Models -->
       <div class="stat-card">
-        <div class="stat-label">
-          <span>发现上游模型</span>
-          <span>🧠</span>
+        <div class="stat-header">
+          <span class="stat-label">发现上游模型</span>
+          <div class="stat-icon-wrapper" style="color:var(--cds-blue);">
+            <svg class="icon icon-stat" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </div>
         </div>
         <div class="stat-value" id="statTotalModels">-</div>
         <div class="stat-sub" id="statGatewaySource">网关已连接 · 支持视觉与 1M 上下文</div>
       </div>
 
+      <!-- Stat 4: Workspaces -->
       <div class="stat-card">
-        <div class="stat-label">
-          <span>已注册工作区</span>
-          <span>📁</span>
+        <div class="stat-header">
+          <span class="stat-label">已注册工作区</span>
+          <div class="stat-icon-wrapper">
+            <svg class="icon icon-stat" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </div>
         </div>
         <div class="stat-value" id="statTotalWorkspaces">-</div>
         <div class="stat-sub">哈希映射索引 · O(1) 路径快速解析</div>
       </div>
 
+      <!-- Stat 5: Agents -->
       <div class="stat-card">
-        <div class="stat-label">
-          <span>检测到 Agents</span>
-          <span>🤖</span>
+        <div class="stat-header">
+          <span class="stat-label">检测到 Agents</span>
+          <div class="stat-icon-wrapper" style="color:var(--cds-clay);">
+            <svg class="icon icon-stat" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
+          </div>
         </div>
         <div class="stat-value" id="statActiveAgents">-</div>
         <div class="stat-sub" id="statAgentsSummary">Claude Code 就绪 · Codex 就绪</div>
@@ -472,11 +711,26 @@
     </div>
 
     <!-- Navigation Tabs -->
-    <div class="tabs-header">
-      <button class="tab-btn active" onclick="switchTab('agents')">🤖 智能 Agent 矩阵</button>
-      <button class="tab-btn" onclick="switchTab('workspaces')">📁 已注册工作区</button>
-      <button class="tab-btn" onclick="switchTab('models')">🧠 上游模型目录</button>
-      <button class="tab-btn" onclick="switchTab('gateway')">⚡ 网关路由与 Session Affinity</button>
+    <div class="tabs-nav">
+      <button class="tab-btn active" onclick="switchTab('agents')">
+        <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
+        <span>智能 Agent 矩阵</span>
+      </button>
+
+      <button class="tab-btn" onclick="switchTab('workspaces')">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span>已注册工作区</span>
+      </button>
+
+      <button class="tab-btn" onclick="switchTab('models')">
+        <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span>上游模型目录</span>
+      </button>
+
+      <button class="tab-btn" onclick="switchTab('gateway')">
+        <svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <span>网关路由与 Session Affinity</span>
+      </button>
     </div>
 
     <!-- Tab 1: Agents Matrix -->
@@ -517,29 +771,35 @@
     <div id="tab-gateway" class="tab-content">
       <div class="affinity-box">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <h3 style="font-size:16px;font-weight:600;">Magpie 架构与 Session Affinity 会话亲和性</h3>
+          <h3 style="font-size:16px;font-weight:700;">Magpie 架构与 Session Affinity 会话亲和性</h3>
           <span class="badge" id="gatewayBadge">已激活</span>
         </div>
         <p style="font-size:13px;line-height:1.6;color:var(--cds-text-secondary);">
-          当多个智能 Agent 或客户端并发访问 Anthropic 上游时，如果请求在不同后端 Worker 之间轮转，会导致服务端的 <b>Prompt Cache</b> 被频繁击穿，缓存命中率从 90% 跌落至 0%，不仅大幅增加等待时延，还会成倍增加 Token 计费。
+          当多个智能 Agent 或客户端并发访问 Anthropic 上游时，若请求在不同后端 Worker 之间轮转，会导致服务端的 <b>Prompt Cache</b> 被频繁击穿，命中率从 90% 跌落至 0%，不仅大幅增加等待时延，还会成倍增加 Token 计费。
         </p>
         <p style="font-size:13px;line-height:1.6;color:var(--cds-text-secondary);">
           <b>AgentHub Session Affinity 机制</b> 通过自动在请求头中注入 <code class="code-tag">x-session-affinity: &lt;session_id&gt;</code>，促使上游网关路由器（如 Magpie 或 CC Switch）将同一个会话的推理请求锁定在同一缓存节点上，从而确保 <b>90% 以上的 Prompt 缓存命中率</b>。
         </p>
 
-        <div style="margin-top:8px;">
+        <div style="margin-top:6px;">
           <div style="font-size:13px;font-weight:600;margin-bottom:8px;">跨工具环境变量一键配置 (Bash / Zsh):</div>
           <div class="code-block">
-            <button class="copy-btn" onclick="copySnippet('envSnippet')">复制</button>
+            <button class="copy-btn" onclick="copySnippet('envSnippet')">
+              <svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>复制</span>
+            </button>
             <pre id="envSnippet">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
 export ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"</pre>
           </div>
         </div>
 
-        <div style="margin-top:8px;">
+        <div style="margin-top:6px;">
           <div style="font-size:13px;font-weight:600;margin-bottom:8px;">PowerShell 环境变量一键配置 (Windows):</div>
           <div class="code-block">
-            <button class="copy-btn" onclick="copySnippet('psSnippet')">复制</button>
+            <button class="copy-btn" onclick="copySnippet('psSnippet')">
+              <svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>复制</span>
+            </button>
             <pre id="psSnippet">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
 $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           </div>
@@ -549,7 +809,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
     <!-- Bottom System Tray & Exit Reminder -->
     <div class="footer-note">
-      <span>💡</span>
+      <svg class="icon icon-lg" style="color:var(--cds-blue);" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
       <span>
         <b>托盘驻留提示：</b>AgentHub Runner 已在右下角系统托盘中静默驻留。左键单击打开本控制台，右键托盘弹出菜单即可随时安全退出。无需使用任务管理器强制杀死进程。
       </span>
@@ -559,8 +819,10 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
   <!-- Shutdown Modal Overlay -->
   <div id="shutdownModal" class="shutdown-overlay">
     <div class="shutdown-modal">
-      <div style="font-size:32px;">🛑</div>
-      <h3 style="font-size:18px;font-weight:600;">正在退出 AgentHub Runner</h3>
+      <div style="margin:0 auto;width:48px;height:48px;border-radius:50%;background:rgba(239, 68, 68, 0.1);color:#ef4444;display:flex;align-items:center;justify-content:center;">
+        <svg class="icon" style="width:24px;height:24px;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      </div>
+      <h3 style="font-size:18px;font-weight:700;">正在退出 AgentHub Runner</h3>
       <p style="font-size:13px;color:var(--cds-text-secondary);" id="shutdownModalMsg">
         托盘图标与后台监听服务正在安全释放...
       </p>
@@ -572,6 +834,17 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
   <script>
     let dashboardData = null;
+
+    // Load persisted theme preference
+    (function initTheme() {
+      const saved = localStorage.getItem('agenthub_theme');
+      if (saved === 'light') {
+        document.documentElement.classList.remove('dark');
+      } else if (saved === 'dark') {
+        document.documentElement.classList.add('dark');
+      }
+      updateThemeButtonUI();
+    })();
 
     async function init() {
       await refreshDashboard();
@@ -618,6 +891,19 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       document.getElementById('statAgentsSummary').textContent = readyList.join(' · ') || '多 Agent 协同侦听中';
     }
 
+    function getAgentIcon(id) {
+      if (id === 'claude_code') {
+        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg>`;
+      } else if (id === 'codex') {
+        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>`;
+      } else if (id === 'antigravity') {
+        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></svg>`;
+      } else if (id === 'grok_build') {
+        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`;
+      }
+      return `<svg class="icon icon-lg" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>`;
+    }
+
     function renderAgents(agents) {
       const container = document.getElementById('agentsGrid');
       if (!agents || !container) return;
@@ -625,14 +911,14 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       container.innerHTML = agents.map(agent => {
         const isReady = agent.installed || agent.sessions_count > 0;
         const pillClass = isReady ? 'pill-ready' : 'pill-missing';
-        const pillText = isReady ? '● 已就绪' : '○ 未检测到';
+        const pillText = isReady ? '已就绪' : '未检测到';
         const pathText = agent.path ? escapeHtml(agent.path) : '未发现本地独立安装（可通过命令直连）';
 
         return `
           <div class="item-card">
             <div class="item-card-header">
               <div class="item-card-title">
-                <span>🤖</span>
+                <div class="agent-avatar">${getAgentIcon(agent.id)}</div>
                 <span>${escapeHtml(agent.name)}</span>
               </div>
               <span class="item-card-pill ${pillClass}">${pillText}</span>
@@ -649,7 +935,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
               </div>
               <div class="item-meta-line">
                 <span>亲和性保护:</span>
-                <span style="color:${agent.affinity ? 'var(--cds-green)' : 'var(--cds-text-muted)'};font-weight:500;">
+                <span style="color:${agent.affinity ? 'var(--cds-green)' : 'var(--cds-text-muted)'};font-weight:600;">
                   ${agent.affinity ? '已激活 (x-session-affinity)' : '继承网关'}
                 </span>
               </div>
@@ -685,7 +971,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
             <td style="font-weight:600;color:var(--cds-text-primary);">${safeName}</td>
             <td style="font-family:ui-monospace,monospace;font-size:12px;">${safePath}</td>
             <td><span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">${ws.sessions_count || 0} 会话</span></td>
-            <td><span class="item-card-pill pill-ready">● 已索引</span></td>
+            <td><span class="item-card-pill pill-ready">已索引</span></td>
             <td>
               <button class="btn" style="height:26px;font-size:11px;padding:0 8px;" onclick="copyText('${safePath}')">复制路径</button>
             </td>
@@ -716,7 +1002,9 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           <div class="item-card">
             <div class="item-card-header">
               <div class="item-card-title">
-                <span>🧠</span>
+                <div class="agent-avatar">
+                  <svg class="icon icon-lg" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                </div>
                 <span>${name}</span>
               </div>
               <span class="item-card-pill pill-ready">${maxTokens} Tokens</span>
@@ -732,7 +1020,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
               </div>
               <div class="item-meta-line">
                 <span>缓存特性:</span>
-                <span style="color:var(--cds-green);font-weight:500;">Ephemeral Prompt Caching</span>
+                <span style="color:var(--cds-green);font-weight:600;">Ephemeral Prompt Caching</span>
               </div>
             </div>
           </div>
@@ -771,12 +1059,28 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
     function toggleTheme() {
       const html = document.documentElement;
-      if (html.classList.contains('dark')) {
+      const isDark = html.classList.contains('dark');
+      if (isDark) {
         html.classList.remove('dark');
-        document.getElementById('themeBtnText').textContent = '🌞 浅色';
+        localStorage.setItem('agenthub_theme', 'light');
       } else {
         html.classList.add('dark');
-        document.getElementById('themeBtnText').textContent = '🌙 暗色';
+        localStorage.setItem('agenthub_theme', 'dark');
+      }
+      updateThemeButtonUI();
+    }
+
+    function updateThemeButtonUI() {
+      const isDark = document.documentElement.classList.contains('dark');
+      const iconSpan = document.getElementById('themeIcon');
+      const textSpan = document.getElementById('themeBtnText');
+
+      if (isDark) {
+        iconSpan.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`;
+        textSpan.textContent = '亮色';
+      } else {
+        iconSpan.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+        textSpan.textContent = '暗色';
       }
     }
 

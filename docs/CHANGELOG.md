@@ -29,6 +29,24 @@
   - 新增 `find_claude_workspace_transcript(home, workspace, session_id)`：基于工作区和会话 ID 直接精准锁定 `.claude/projects/<sanitized>/<session_id>.jsonl`，避免全目录递归扫描造成的延迟与跨项目同名 ID 穿透；
   - 编写配套单元测试覆盖 Windows 与 Unix 路径映射验证。
 
+### 仪表盘 UI/UX 全面升级与设计系统打磨 (Aozora UI & CDS)
+
+响应用户反馈，全面清除嵌入式 Web 仪表盘中的 Emoji，重构高阶视觉规范并强化交互动画：
+
+- **彻底消除 Emoji**：
+  - 顶栏按钮（重新探测、复制网关配置、外观切换、退出 Runner）全部改用高精度内联 SVG 矢量图标；
+  - 统计卡片指标（解析会话数、Token 缓存命中率、上游模型、工作区、智能 Agent）移除 Emoji，改用独立圆角浅色背景的 SVG 状态微图标；
+  - 标签页切换栏（智能 Agent 矩阵、已注册工作区、上游模型目录、网关路由与 Session Affinity）全面替换为清晰轻量图标；
+  - Agent 状态指示卡、关闭弹窗与底部托盘指引全面去除杂色 Emoji，改用符合设计系统的语义化徽章与几何图标。
+- **高保真亮色与暗色模式 (Light & Dark Mode)**：
+  - 完美适配 Aozora UI 与 Claude Design System (CDS) 设计规范，提供亮色（大留白、通透高纯白卡 `rgba(255,255,255,0.94)`、细边框、青空蓝与陶土橙品牌色）与暗色（深对比阶梯、深灰低饱和卡片）双套自适应主题；
+  - 接入 `localStorage` 自动持久化记忆用户偏好的外观模式，下次启动或刷新无缝恢复。
+- **60 FPS 硬件加速交互动效与 UX 细化**：
+  - 关键操作按钮、指标卡片与 Agent 单元卡新增 `translateY(-2px)` 悬浮微升动画与微拟物外发光投影；
+  - 按钮增加 `scale(0.97)` 点击触感微动效；
+  - 标签页切换采用 `cubic-bezier(0.16, 1, 0.3, 1)` 缓动与位移淡入，杜绝闪烁；
+  - 托盘运行状态指示灯加入 `pulse-ring` 呼吸动画，增强在线就绪感知。
+
 ### 架构演进：移除 Desktop 桌面端，为 Native Runtime 引入姿态 A 内嵌 CDS Web 控制台
 
 为降低工程维护复杂度、彻底解放桌面端 Webview 构建负担，完成桌面端剥离并为本机 Runtime 引入零依赖自包含 Web 前端：
