@@ -45,7 +45,19 @@
     - 集成思考流（Thinking Process）可折叠手风琴与 3 点陶土波浪跳跃动效；
     - 待审批命令呼吸高亮卡片与急停中断机制；
   - 提供 `agenthub-runner web` 专用便捷命令，启动即自动在默认浏览器唤起控制台（默认 `http://127.0.0.1:4200`）；
-  - `agenthub-runner daemon` 亦默认支持 `--web` 与 `--web-port` 参数无缝启用。
+  - `agenthub-runner daemon` 亦默认支持 `--web` 与 `--web-port` 参数无缝启用；
+  - **默认无参启动模式**：直接双击 `agenthub-runner.exe` 即可自动拉起 Web 控制台并在默认浏览器中唤起控制台，彻底免去手动输入参数的繁琐流程。
+
+### Windows 系统托盘（System Tray）守护与优雅退出
+
+彻底解决无界面后台驻留时“无法直观感知运行状态”与“必须打开任务管理器才能杀进程”的痛点：
+
+- **Windows 原生系统托盘常驻（`crates/runner/src/tray.rs`）**：
+  - 基于 Windows 原生 API（`Shell_NotifyIconW` / `CreatePopupMenu` / `TrackPopupMenu`），零额外重型框架依赖实现极致轻量托盘驻留；
+  - 托盘图标完整复用嵌入式 AgentHub 品牌图标，鼠标悬停即时展示当前绑定的 Web 控制台访问地址；
+  - 鼠标左键单击或双击托盘图标，自动在默认浏览器唤起/聚焦 Web 控制台界面；
+  - 鼠标右键点击弹出原生菜单，提供“打开 Web 控制台”与“退出 AgentHub Runner”；
+  - 点击“退出”自动通知所有守护线程优雅析构、注销托盘图标并干净退出，告别任务管理器强制杀进程。
 
 ### 品牌资产与图标保留（Windows PE 原生图标与 Web 终端 Favicon 双重内嵌）
 
