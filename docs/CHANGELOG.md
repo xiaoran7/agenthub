@@ -47,6 +47,19 @@
   - 提供 `agenthub-runner web` 专用便捷命令，启动即自动在默认浏览器唤起控制台（默认 `http://127.0.0.1:4200`）；
   - `agenthub-runner daemon` 亦默认支持 `--web` 与 `--web-port` 参数无缝启用。
 
+### 品牌资产与图标保留（Windows PE 原生图标与 Web 终端 Favicon 双重内嵌）
+
+彻底保留并内嵌 AgentHub 视觉识别与图标资产，确保交付形态精致完备：
+
+- **Windows 可执行文件 PE 图标内嵌（`crates/runner/build.rs`）**：
+  - 新增编译脚本 `crates/runner/build.rs`，在 Windows 构建阶段自动探测资源编译工具链（`windres.exe` 或 `rc.exe`）；
+  - 将 `crates/runner/resources/icon.ico` 编译为 COFF 格式 `.rsrc` 目标文件，并通过 `cargo:rustc-link-arg` 写入 PE 文件头；
+  - 产出的 `agenthub-runner.exe` 在 Windows 资源管理器、任务栏、Alt+Tab 切换器以及桌面快捷方式中均完整呈现原生 AgentHub 图标（已通过 `System.Drawing.Icon::ExtractAssociatedIcon` 32x32 提取验证）。
+- **内置 Web 控制台 Favicon 与品牌 Logo 嵌入（`crates/runner/src/web_server.rs`）**：
+  - 在轻量 HTTP 服务中内嵌静态资源路由 `/icon.svg` 与 `/favicon.ico`；
+  - Web 控制台 `<head>` 声明 SVG/ICO Favicon 标签，浏览器标签页即时显示 AgentHub 图标；
+  - 顶部导航栏左侧 Brand 位置原生呈现 20x20 AgentHub 矢量品牌 Logo。
+
 ### 网页端全面对齐 Claude 设计系统（CDS 阶段 1 & 阶段 2 改造）
 
 基于开源逆向工程标杆项目 `open-claude-ui`，对 `apps/web` 网页端进行深度高保真重构与工程交互物理学升级：
