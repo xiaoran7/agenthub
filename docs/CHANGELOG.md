@@ -30,6 +30,10 @@
   - 增强桌面端管理员初始化的密码长度校验（明确标注至少 10 位并提前拦截），优化 Rust 端 HTTP 400 状态码映射，提供清晰明确的规则提示；
   - 桌面端后端（`lib.rs`）与 Runner（`gateway.rs`）解除仅限回环地址使用 HTTP 的限制，支持家庭内网/局域网私有 IP（如 `http://192.168.x.x:3000`）、Tailscale/VPN 私网及公网域名；
   - Windows 一键接入脚本（`Connect-AgentHub.ps1`）改造为通用自部署模式，交互式提示输入服务器地址并支持 `http/https`，清理旧版 `Connect-AgentPulse` 遗留脚本；
+  - **端到端全链路错误提示与精准透传优化（彻底消除“无效响应”黑盒）**：
+    - 服务端（`services/api/src/accounts.ts` & `app.ts`）：修复 `normalizeDisplayName` 在空字符串/未传时未能安全回退至管理员默认名的问题；优化 4xx 状态码错误处理器，原样保留业务错误代码（`invalid_password`、`invalid_email`、`admin_already_exists` 等）及清晰的中文错误信息；
+    - 桌面端后端（`apps/desktop/src-tauri/src/lib.rs`）：重构 HTTP 响应与错误管道，启用 `http_status_as_error(false)` 完整捕获 4xx/5xx 响应正文；编写全新的 `parse_server_error_response`，将密码不足 10 位、邮箱无效、管理员已存在、设备冲突等转化为精准详尽的人性化中文提示；若遇到未匹配的服务端错误直接透传具体报错消息，杜绝粗暴映射为“服务器返回了无效响应”；
+    - 桌面端前端（`AuthScreen.tsx`）：新增邮箱格式校验与密码长度前置校验，未填显示名称时不再传递空字符串；
   - 重新构建并归档桌面端安装包（NSIS setup 与 MSI）和原生监听接入包（ZIP 与 EXE），更新校验和清单。
 - **产物构建与发布归档**：
   - 发布桌面安装包 `AgentHub-v2.4.76-windows-x64-setup.exe` 与 `AgentHub-v2.4.76-x64.msi`；

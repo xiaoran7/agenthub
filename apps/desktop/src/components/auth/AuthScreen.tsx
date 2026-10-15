@@ -93,6 +93,16 @@ export function AuthScreen({
       setError("请输入自部署服务器地址（如 http://localhost:3000）");
       return;
     }
+    const cleanEmail = email.trim();
+    if (
+      !cleanEmail ||
+      !cleanEmail.includes("@") ||
+      cleanEmail.startsWith("@") ||
+      cleanEmail.endsWith("@")
+    ) {
+      setError("请输入有效的管理员邮箱地址（如 admin@example.com）");
+      return;
+    }
     if (mode === "register" && password.length < 10) {
       setError("管理员密码长度至少需要 10 个字符");
       return;
@@ -103,14 +113,15 @@ export function AuthScreen({
       try {
         localStorage.setItem("agenthub_server_url", cleanUrl);
       } catch {}
+      const cleanDisplayName = displayName.trim();
       const next = await invoke<Snapshot>("authenticate", {
         input: {
           mode,
-          email: email.trim(),
+          email: cleanEmail,
           password,
           display_name:
-            mode === "register" && displayName.trim()
-              ? displayName.trim()
+            mode === "register" && cleanDisplayName
+              ? cleanDisplayName
               : undefined,
           server_url: cleanUrl,
         },

@@ -198,8 +198,18 @@ export function createGatewayApp(
         ? error.statusCode
         : undefined;
     if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
+      const code =
+        error instanceof ContractError
+          ? error.code
+          : typeof error === "object" &&
+              error !== null &&
+              "code" in error &&
+              typeof error.code === "string"
+            ? error.code
+            : "invalid_request";
       void reply.status(statusCode).send({
-        error: "invalid_request",
+        error: code,
+        code,
         message: error instanceof Error ? error.message : undefined,
       });
       return;

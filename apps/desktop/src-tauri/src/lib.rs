@@ -1916,11 +1916,16 @@ fn authenticate_inner(input: AuthInput, state: &DesktopState) -> Result<Value, D
     };
     let body = match input.mode {
         AuthMode::Login => json!({ "email": input.email, "password": input.password }),
-        AuthMode::Register => json!({
-            "email": input.email,
-            "password": input.password,
-            "display_name": input.display_name.unwrap_or_default()
-        }),
+        AuthMode::Register => {
+            let mut reg = json!({
+                "email": input.email,
+                "password": input.password,
+            });
+            if let Some(dn) = input.display_name.filter(|s| !s.trim().is_empty()) {
+                reg["display_name"] = json!(dn.trim());
+            }
+            reg
+        }
     };
     let (account, cookie) = authenticate_request(&server_url, path, &body)?;
     finish_login(&server_url, &cookie, account, state)
@@ -1985,23 +1990,34 @@ fn authenticate_request(
 ) -> Result<(Value, String), DesktopError> {
     let url = format!("{server_url}{path}");
     execute_http_with_fallback(|agent| {
-        let mut response = agent.post(&url).send_json(body)?;
-        let cookie = response
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .find_map(extract_session_cookie)
-            .ok_or_else(|| {
-                ureq::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "missing cookie",
-                ))
-            })?;
-        let account = response.body_mut().read_json::<Value>().map_err(|e| {
-            ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        })?;
-        Ok((account, cookie))
+        let mut response = agent
+            .post(&url)
+            .send_json(body)
+            .map_err(map_transport_error)?;
+
+        let status = response.status().as_u16();
+        if status >= 200 && status < 300 {
+            let cookie = response
+                .headers()
+                .get_all("set-cookie")
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .find_map(extract_session_cookie)
+                .ok_or_else(|| {
+                    DesktopError::Detailed("登录成功，但服务器未下发有效的会话凭据".to_owned())
+                })?;
+            let account = response
+                .body_mut()
+                .read_json::<Value>()
+                .map_err(|e| DesktopError::Detailed(format!("服务器响应解析失败：{e}")))?;
+            return Ok((account, cookie));
+        }
+
+        let body_str = response
+            .body_mut()
+            .read_to_string()
+            .unwrap_or_default();
+        Err(parse_server_error_response(status, &body_str))
     })
 }
 
@@ -3324,7 +3340,7 @@ fn read_dashboard_stream_with_agent(
         .header("cookie", cookie)
         .header("accept", "text/event-stream")
         .call()
-        .map_err(map_http_error)?;
+        .map_err(map_transport_error)?;
     if !response
         .headers()
         .get("content-type")
@@ -3444,9 +3460,102 @@ fn read_sse_line(reader: &mut impl BufRead) -> SseLine {
         .unwrap_or(SseLine::InvalidUtf8)
 }
 
+fn parse_server_error_response(status: u16, body_text: &str) -> DesktopError {
+    if let Ok(json) = serde_json::from_str::<Value>(body_text) {
+        let code = json
+            .get("code")
+            .or_else(|| json.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let message = json
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        match code {
+            "invalid_password" => {
+                let msg = if !message.is_empty() {
+                    message.to_owned()
+                } else {
+                    "管理员密码格式不符合要求：长度至少需 10 个字符".to_owned()
+                };
+                return DesktopError::Detailed(msg);
+            }
+            "invalid_display_name" => {
+                let msg = if !message.is_empty() {
+                    message.to_owned()
+                } else {
+                    "显示名称格式无效（不能超过 80 字符或包含非法控制字符）".to_owned()
+                };
+                return DesktopError::Detailed(msg);
+            }
+            "invalid_email" => {
+                let msg = if !message.is_empty() {
+                    message.to_owned()
+                } else {
+                    "邮箱地址格式无效，请输入正确的邮箱地址".to_owned()
+                };
+                return DesktopError::Detailed(msg);
+            }
+            "admin_already_exists" => {
+                return DesktopError::Detailed("服务器已初始化过管理员，请直接登录".to_owned());
+            }
+            "invalid_credentials" | "authentication_required" => {
+                return DesktopError::InvalidCredentials;
+            }
+            "login_rate_limited" | "rate_limited" => {
+                return DesktopError::LoginRateLimited;
+            }
+            "email_verification_required" => {
+                return DesktopError::EmailVerificationRequired;
+            }
+            "device_conflict" => {
+                return DesktopError::DeviceConflict;
+            }
+            _ => {
+                if !message.is_empty() {
+                    return DesktopError::Detailed(message.to_owned());
+                }
+                if !code.is_empty() && code != "invalid_request" {
+                    return DesktopError::Detailed(format!("服务器返回错误：{code}"));
+                }
+            }
+        }
+    }
+
+    let clean_text = body_text.trim();
+    if !clean_text.is_empty() && clean_text.len() < 300 && !clean_text.starts_with('<') {
+        return DesktopError::Detailed(format!("服务器提示（HTTP {status}）：{clean_text}"));
+    }
+
+    match status {
+        400 => DesktopError::Detailed("请求参数无效，请检查输入是否符合规则".to_owned()),
+        401 => DesktopError::InvalidCredentials,
+        403 => DesktopError::Detailed("访问被拒绝（HTTP 403），请检查权限".to_owned()),
+        404 => DesktopError::Detailed("请求的服务器接口不存在（HTTP 404），请检查服务器地址是否正确".to_owned()),
+        409 => DesktopError::DeviceConflict,
+        429 => DesktopError::LoginRateLimited,
+        500..=599 => DesktopError::Detailed(format!("服务器内部故障（HTTP {status}），请检查服务器运行日志")),
+        _ => DesktopError::Detailed(format!("服务器返回了非预期响应（HTTP {status}）")),
+    }
+}
+
+fn map_transport_error(error: ureq::Error) -> DesktopError {
+    match error {
+        ureq::Error::StatusCode(status) => parse_server_error_response(status, ""),
+        ureq::Error::Timeout(_)
+        | ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed
+        | ureq::Error::Io(_)
+        | ureq::Error::Tls(_)
+        | ureq::Error::Rustls(_) => DesktopError::Unreachable,
+        _ => DesktopError::Unreachable,
+    }
+}
+
 fn execute_http_with_fallback<T, F>(operation: F) -> Result<T, DesktopError>
 where
-    F: Fn(&ureq::Agent) -> Result<T, ureq::Error>,
+    F: Fn(&ureq::Agent) -> Result<T, DesktopError>,
 {
     let agents = [
         http_agent(None),
@@ -3460,20 +3569,11 @@ where
             match operation(agent) {
                 Ok(val) => return Ok(val),
                 Err(err) => {
-                    let is_unreachable = matches!(
-                        &err,
-                        ureq::Error::Timeout(_)
-                            | ureq::Error::HostNotFound
-                            | ureq::Error::ConnectionFailed
-                            | ureq::Error::Io(_)
-                            | ureq::Error::Tls(_)
-                            | ureq::Error::Rustls(_)
-                    );
-                    let mapped = map_http_error(err);
+                    let is_unreachable = matches!(&err, DesktopError::Unreachable);
                     if !is_unreachable {
-                        return Err(mapped);
+                        return Err(err);
                     }
-                    last_error = Some(mapped);
+                    last_error = Some(err);
                     if attempt == 0 {
                         std::thread::sleep(Duration::from_millis(200));
                     }
@@ -3499,29 +3599,40 @@ fn request_json(
                 if let Some(cookie) = cookie {
                     request = request.header("cookie", cookie);
                 }
-                request.call()
+                request.call().map_err(map_transport_error)
             }
             "POST" => {
                 let mut request = agent.post(&url);
                 if let Some(cookie) = cookie {
                     request = request.header("cookie", cookie);
                 }
-                request.send_json(body.unwrap_or(&Value::Null))
+                request.send_json(body.unwrap_or(&Value::Null)).map_err(map_transport_error)
             }
-            _ => return Err(ureq::Error::StatusCode(400)),
+            _ => return Err(DesktopError::InvalidAction),
         }?;
-        if response.status().as_u16() == 204 {
-            return Ok(json!({}));
+
+        let status = response.status().as_u16();
+        if status >= 200 && status < 300 {
+            if status == 204 {
+                return Ok(json!({}));
+            }
+            return response
+                .body_mut()
+                .read_json::<Value>()
+                .map_err(|e| DesktopError::Detailed(format!("服务器数据解析失败：{e}")));
         }
-        response
+
+        let body_str = response
             .body_mut()
-            .read_json::<Value>()
-            .map_err(|e| ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+            .read_to_string()
+            .unwrap_or_default();
+        Err(parse_server_error_response(status, &body_str))
     })
 }
 
 fn http_agent(proxy_url: Option<&str>) -> ureq::Agent {
     let mut builder = ureq::Agent::config_builder()
+        .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(6)))
         .user_agent(concat!(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub/",
@@ -3556,25 +3667,6 @@ fn dashboard_stream_agent(proxy_url: Option<&str>) -> ureq::Agent {
     }
 
     builder.build().new_agent()
-}
-
-fn map_http_error(error: ureq::Error) -> DesktopError {
-    match error {
-        ureq::Error::StatusCode(401) => DesktopError::InvalidCredentials,
-        ureq::Error::StatusCode(429) => DesktopError::LoginRateLimited,
-        ureq::Error::StatusCode(403) => DesktopError::EmailVerificationRequired,
-        ureq::Error::StatusCode(409) => DesktopError::DeviceConflict,
-        ureq::Error::StatusCode(400) => DesktopError::Detailed(
-            "请求参数无效，请检查输入（管理员密码长度至少需 10 个字符）".to_string(),
-        ),
-        ureq::Error::Timeout(_)
-        | ureq::Error::HostNotFound
-        | ureq::Error::ConnectionFailed
-        | ureq::Error::Io(_)
-        | ureq::Error::Tls(_)
-        | ureq::Error::Rustls(_) => DesktopError::Unreachable,
-        _ => DesktopError::InvalidResponse,
-    }
 }
 
 fn normalize_server_url(value: &str) -> Result<String, DesktopError> {
