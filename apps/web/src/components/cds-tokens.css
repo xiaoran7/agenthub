@@ -187,38 +187,38 @@
    生产核心关键帧动画 (CSS Keyframes)
    ========================================================================== */
 
-/* 1. 思考中三点波浪跳跃 */
+/* 1. 思考中三点波浪跳跃 (硬件加速 translate3d) */
 @keyframes timeline-quiet-dot {
   0%,
   8% {
     opacity: 0.2;
-    transform: translateY(2px);
+    transform: translate3d(0, 2px, 0);
   }
   22% {
     opacity: 1;
-    transform: translateY(-2.5px);
+    transform: translate3d(0, -2.5px, 0);
   }
   36%,
   70% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
   90%,
   100% {
     opacity: 0.2;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
-/* 2. 消息气泡微弹进入 */
+/* 2. 消息气泡微弹进入 (GPU 合成层加速) */
 @keyframes message-fade-up {
   0% {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translate3d(0, 8px, 0);
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -226,11 +226,11 @@
 @keyframes cds-clay-pulse {
   0%,
   100% {
-    transform: scale(1);
+    transform: scale(1) translateZ(0);
     opacity: 0.8;
   }
   50% {
-    transform: scale(1.15);
+    transform: scale(1.15) translateZ(0);
     opacity: 1;
   }
 }

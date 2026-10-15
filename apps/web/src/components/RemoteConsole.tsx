@@ -1201,13 +1201,21 @@ export function RemoteConsole({
 
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
   const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   const handleCopySessionId = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       void navigator.clipboard.writeText(id);
       setCopiedSessionId(id);
-      setTimeout(() => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => {
         setCopiedSessionId((cur) => (cur === id ? null : cur));
       }, 1500);
     }
@@ -1228,7 +1236,12 @@ export function RemoteConsole({
                 const matchesWs = ws.label.toLowerCase().includes(q);
                 const filteredItems = ws.items.filter((item) => {
                   if (matchesDev || matchesAgent || matchesWs) return true;
-                  return item.title.toLowerCase().includes(q);
+                  const itemKey =
+                    item.kind === "active" ? item.sessionKey : item.key;
+                  return (
+                    item.title.toLowerCase().includes(q) ||
+                    itemKey.toLowerCase().includes(q)
+                  );
                 });
                 if (filteredItems.length === 0 && !matchesWs) return null;
                 return {

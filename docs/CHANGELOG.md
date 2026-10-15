@@ -121,6 +121,34 @@
     - 主题切换升级为 CDS 标准 Segmented Control（浅色/深色/系统跟随模式一键直达），消除原生下拉单选的割裂感；
     - 升级底部账户卡片（`.remote-account-card`），配备圆形首字母头像、单行截断安全展示、设置抽屉呼出与退出登录按钮。
 
+### 代码审查与 60 FPS 渲染性能优化（全面对齐全局 CLAUDE.md 性能铁律）
+
+- **CSS 动效硬件加速升层（彻底杜绝滚动掉帧）**：
+  - 升级 `apps/web/src/components/cds-tokens.css` 中的关键帧动画（`timeline-quiet-dot`、`message-fade-up`、`cds-clay-pulse`），由 2D 坐标偏移重构为 3D 硬件加速矩阵（`translate3d(0, y, 0)`、`transform: translateZ(0)`）；
+  - 为高频渲染元素（`.remote-tree-badge-pending` 待审批微光徽章、`.remote-state-dot.running` 运行中脉冲灯、`.remote-tool-pulse-dots` 思考跳跃点、`.remote-approval.state-pending-approval` 呼吸边框）显式声明 `will-change: transform, opacity` 与独立合成层；
+  - 移动端侧滑抽屉（`.remote-sidebar`）动画全面切换为 `translate3d(-100%, 0, 0) -> translate3d(0, 0, 0)`，消除重排重绘，保障 60 FPS 顺滑手感。
+- **定时器竞态守卫与内存泄漏防护**：
+  - 在 `RemoteConsole.tsx` 中使用 `useRef<ReturnType<typeof setTimeout> | null>(null)` 托管会话 ID 复制状态定时器（`copyTimeoutRef`）；
+  - 在用户连续点击时主动取消前序未触发的定时器，并在组件销毁（`useEffect unmount`）时彻底清理，防止状态更新投递到已卸载组件。
+- **会话检索多维度安全过滤**：
+  - 优化会话树过滤算法，支持针对会话标题（`title`）与会话唯一标识符（`sessionKey` / `key`）的联合匹配；
+  - 针对 `TreeSessionItem` 的 Discriminated Union 联合类型进行安全判别（active 节点提取 `sessionKey`，candidate 节点提取 `key`），杜绝运行时属性丢失或未定义导致的异常。
+
+### Native Runtime 原生 Windows 系统托盘（System Tray）集成
+
+为进一步提升纯命令行原生 Runtime 的日常使用体验，在 `agenthub-runner` 中引入超轻量、零外部重量级依赖的 Windows 系统托盘守护：
+
+- **基于 Win32 原生 Shell API 实现（`crates/runner/src/tray.rs`）**：
+  - 通过 `windows-sys` 声明调用 `Shell_NotifyIconW`、`CreatePopupMenu`、`TrackPopupMenu` 与 `AppendMenuW`；
+  - 托盘图标自动复用 Windows PE 资源段中内嵌的应用程序原生图标；
+  - 内存开销微乎其微（小于 200KB），无需引入庞大第三方 GUI 运行时。
+- **交互与快捷菜单**：
+  - 托盘悬停提示实时显示当前内嵌 Web 服务端口与访问地址；
+  - 鼠标左键单击或双击：即刻通过系统默认浏览器唤起 Web 控制台；
+  - 鼠标右键单击：弹出原生右键菜单，提供“打开 Web 控制台”与“退出 AgentHub Runner”选项；
+- **缺省 CLI 体验优化（`crates/runner/src/main.rs`）**：
+  - 当直接双击运行 `agenthub-runner.exe` 或终端未传入任何子命令时，默认自动进入 `web` 模式（默认端口 4200，并自动在浏览器中唤起控制台与托盘）。
+
 ## [2.4.76] - 2026-10-14
 
 ### 开源自部署架构重构（移除 Telegram OAuth，单管理员首次初始化与 SQLite 持久化）
