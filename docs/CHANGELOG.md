@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.4.77] - 2026-10-15
 
 ### 统一 Crate 与二进制命名为 `agenthub-runner`
 
