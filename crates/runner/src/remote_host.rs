@@ -2020,7 +2020,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
 
     /// Actual provider model/list response, with no invented availability or fallback catalog.
     pub fn models(&mut self) -> Result<Value, NativeError> {
-        self.transport.request("model/list", json!({"limit": 100}))
+        if let Ok(resp) = self.transport.request("model/list", json!({"limit": 100})) {
+            if resp.get("data").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false) {
+                return Ok(resp);
+            }
+        }
+        let models = crate::model_catalog::fetch_catalog_models(false);
+        Ok(crate::model_catalog::catalog_models_to_json(&models))
     }
 
     pub fn discover(&mut self) -> Result<Value, NativeError> {

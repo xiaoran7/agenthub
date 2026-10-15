@@ -18,6 +18,8 @@ use thiserror::Error;
 #[cfg(test)]
 use std::sync::mpsc;
 
+pub mod workspace;
+
 const MAX_PROTOCOL_LINE_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_COLLECTOR_TIMEOUT: Duration = Duration::from_secs(15);
 const CHILD_WAIT_INTERVAL: Duration = Duration::from_millis(10);

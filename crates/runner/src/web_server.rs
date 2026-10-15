@@ -287,8 +287,23 @@ fn handle_api(
             send_json_response(stream, 200, &resp)?;
         }
         ("GET", "/api/models") => {
-            let resp = handler.handle(DaemonRequest::GetModels);
+            let catalog_models = crate::model_catalog::fetch_catalog_models(false);
+            if !catalog_models.is_empty() {
+                let resp = crate::model_catalog::catalog_models_to_json(&catalog_models);
+                send_json_response(stream, 200, &resp)?;
+            } else {
+                let resp = handler.handle(DaemonRequest::GetModels);
+                send_json_response(stream, 200, &resp)?;
+            }
+        }
+        ("POST", "/api/models/refresh") => {
+            let catalog_models = crate::model_catalog::fetch_catalog_models(true);
+            let resp = crate::model_catalog::catalog_models_to_json(&catalog_models);
             send_json_response(stream, 200, &resp)?;
+        }
+        ("GET", "/api/workspaces") => {
+            let ws = crate::collectors::workspace::discover_all_workspaces();
+            send_json_response(stream, 200, &json!({ "workspaces": ws }))?;
         }
         ("GET", "/api/discover") => {
             let resp = handler.handle(DaemonRequest::Discover);
@@ -474,6 +489,31 @@ fn build_dashboard_summary(
         }
     }
 
+    let catalog_models = crate::model_catalog::fetch_catalog_models(false);
+    let models_json: Vec<serde_json::Value> = if !catalog_models.is_empty() {
+        catalog_models
+            .iter()
+            .map(|m| {
+                json!({
+                    "id": m.id,
+                    "name": m.name,
+                    "display_name": m.display_name,
+                    "context_length": m.context_length,
+                    "context_window_str": m.context_window_str,
+                    "max_output_tokens": m.max_output_tokens,
+                    "input_modalities": m.input_modalities,
+                    "output_modalities": m.output_modalities,
+                    "supports_reasoning": m.supports_reasoning,
+                    "supports_tools": m.supports_tools,
+                    "supports_vision": m.supports_vision,
+                    "upstream_provider": m.upstream_provider,
+                })
+            })
+            .collect()
+    } else {
+        models
+    };
+
     let gateway_profile = crate::claude_gateway::discover_claude_gateway();
     let gateway_detected = gateway_profile.is_some();
     let gateway_source = gateway_profile
@@ -487,7 +527,7 @@ fn build_dashboard_summary(
     let gateway_models_count = gateway_profile
         .as_ref()
         .map(|p| p.models.len())
-        .unwrap_or(models.len());
+        .unwrap_or(models_json.len());
 
     let (claude_installed, claude_path) = find_executable(
         "claude",
@@ -571,20 +611,42 @@ fn build_dashboard_summary(
         }
     ]);
 
-    let workspaces_json: Vec<_> = registered_workspaces
-        .into_iter()
-        .map(|(path, count)| {
-            let name = PathBuf::from(&path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.clone());
-            json!({
-                "name": name,
-                "path": path,
-                "sessions_count": count
+    let discovered_workspaces = crate::collectors::workspace::discover_all_workspaces();
+    let workspaces_json: Vec<_> = if !discovered_workspaces.is_empty() {
+        discovered_workspaces
+            .into_iter()
+            .map(|w| {
+                json!({
+                    "name": w.name,
+                    "path": w.path,
+                    "sessions_count": w.session_count,
+                    "last_active_at_ms": w.last_active_at_ms,
+                    "last_active_str": w.last_active_str,
+                    "agents": w.agents,
+                    "is_git": w.is_git,
+                })
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        registered_workspaces
+            .into_iter()
+            .map(|(path, count)| {
+                let name = PathBuf::from(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone());
+                json!({
+                    "name": name,
+                    "path": path,
+                    "sessions_count": count,
+                    "last_active_at_ms": 0,
+                    "last_active_str": "历史会话",
+                    "agents": ["Local Agent"],
+                    "is_git": std::path::Path::new(&path).join(".git").exists(),
+                })
+            })
+            .collect()
+    };
 
     let total_sessions_stat = total_sessions.max(1);
     let est_tokens = (total_sessions_stat as u64) * 75_000;
@@ -601,7 +663,7 @@ fn build_dashboard_summary(
             "grok_sessions": grok_count,
             "zcode_sessions": zcode_count,
             "active_agents": active_agents_count,
-            "total_models": models.len().max(gateway_models_count),
+            "total_models": models_json.len().max(gateway_models_count),
             "total_workspaces": workspaces_json.len(),
             "estimated_tokens": format_num(est_tokens),
             "cached_tokens": format_num(saved_tokens),
@@ -610,7 +672,7 @@ fn build_dashboard_summary(
         },
         "agents": agents,
         "workspaces": workspaces_json,
-        "models": models,
+        "models": models_json,
         "gateway": {
             "detected": gateway_detected,
             "source": gateway_source,

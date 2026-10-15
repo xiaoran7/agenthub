@@ -11,6 +11,7 @@ pub mod daemon_protocol;
 pub mod device;
 pub mod domain;
 pub mod gateway;
+pub mod model_catalog;
 pub mod outbox;
 pub mod privacy;
 pub mod remote_host;

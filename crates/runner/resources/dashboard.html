@@ -798,8 +798,10 @@
             <tr>
               <th>工作区名称</th>
               <th>本地物理路径</th>
-              <th>已解析会话</th>
-              <th>状态</th>
+              <th>关联 Agents</th>
+              <th>最近活跃</th>
+              <th>会话数</th>
+              <th>Git 仓库</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -812,6 +814,15 @@
 
     <!-- Tab 3: Models Catalog -->
     <div id="tab-models" class="tab-content">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0 4px;">
+        <div style="font-size:13px;color:var(--cds-text-secondary);display:flex;align-items:center;gap:6px;">
+          <span>动态探测上游模型目录，实时捕获上下文窗口与模态支持</span>
+        </div>
+        <button class="btn" onclick="refreshModelsCatalog(event)" id="btnRefreshModels" style="height:30px;font-size:12px;display:flex;align-items:center;gap:6px;">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          <span>拉取最新模型</span>
+        </button>
+      </div>
       <div class="card-grid" id="modelsGrid">
         <!-- Rendered dynamically -->
       </div>
@@ -1124,7 +1135,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (!workspaces || workspaces.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="5" style="text-align:center;padding:24px;color:var(--cds-text-muted);">
+            <td colspan="7" style="text-align:center;padding:24px;color:var(--cds-text-muted);">
               暂未检测到已注册的工作区
             </td>
           </tr>
@@ -1135,12 +1146,25 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       tbody.innerHTML = workspaces.map(ws => {
         const safePath = escapeHtml(ws.path);
         const safeName = escapeHtml(ws.name);
+        const relativeTime = escapeHtml(ws.last_active_str || '历史会话');
+        const agents = Array.isArray(ws.agents) && ws.agents.length > 0
+          ? ws.agents.map(a => `<span class="badge" style="font-size:11px;padding:1px 6px;">${escapeHtml(a)}</span>`).join(' ')
+          : `<span style="font-size:12px;color:var(--cds-text-muted);">Local</span>`;
+        const gitBadge = ws.is_git
+          ? `<span class="item-card-pill pill-ready" style="font-size:11px;">Git</span>`
+          : `<span style="font-size:11px;color:var(--cds-text-muted);">-</span>`;
+
         return `
           <tr>
-            <td style="font-weight:600;color:var(--cds-text-primary);">${safeName}</td>
-            <td style="font-family:ui-monospace,monospace;font-size:12px;">${safePath}</td>
-            <td><span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">${ws.sessions_count || 0} 会话</span></td>
-            <td><span class="item-card-pill pill-ready">已索引</span></td>
+            <td style="font-weight:600;color:var(--cds-text-primary);display:flex;align-items:center;gap:6px;">
+              <svg class="icon" style="color:var(--cds-blue);width:15px;height:15px;" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span>${safeName}</span>
+            </td>
+            <td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--cds-text-secondary);word-break:break-all;">${safePath}</td>
+            <td>${agents}</td>
+            <td style="font-size:12px;color:var(--cds-text-secondary);">${relativeTime}</td>
+            <td><span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);font-weight:600;">${ws.sessions_count || 0} 会话</span></td>
+            <td>${gitBadge}</td>
             <td>
               <button class="btn" style="height:26px;font-size:11px;padding:0 8px;" onclick="copyText('${safePath}')">复制路径</button>
             </td>
@@ -1165,7 +1189,13 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       container.innerHTML = models.map(m => {
         const id = escapeHtml(m.id || m.name || 'unknown');
         const name = escapeHtml(m.display_name || m.name || id);
-        const maxTokens = m.max_tokens ? (m.max_tokens / 1000) + 'K' : '1,000K';
+        const contextStr = escapeHtml(m.context_window_str || (m.context_length ? (m.context_length >= 1000000 ? Math.round(m.context_length / 1000000) + 'M' : Math.round(m.context_length / 1000) + 'K') : '200K'));
+        const upstream = escapeHtml(m.upstream_provider || 'Active Gateway');
+
+        const tags = [];
+        if (m.supports_vision) tags.push('<span class="badge" style="color:var(--cds-blue);background:var(--cds-blue-alpha12);font-size:11px;">Vision 视觉</span>');
+        if (m.supports_reasoning) tags.push('<span class="badge" style="color:var(--cds-clay);background:rgba(217,119,6,0.12);font-size:11px;">Thinking 思考</span>');
+        if (m.supports_tools !== false) tags.push('<span class="badge" style="font-size:11px;">Tools 工具</span>');
 
         return `
           <div class="item-card">
@@ -1176,7 +1206,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
                 </div>
                 <span>${name}</span>
               </div>
-              <span class="item-card-pill pill-ready">${maxTokens} Tokens</span>
+              <span class="item-card-pill pill-ready">${contextStr} 上下文</span>
             </div>
             <div class="item-meta-row">
               <div class="item-meta-line">
@@ -1184,17 +1214,45 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
                 <code class="code-tag">${id}</code>
               </div>
               <div class="item-meta-line">
-                <span>输入支持:</span>
-                <span>文本、图像 (Vision)、函数调用</span>
+                <span>上游来源:</span>
+                <span style="font-size:12px;color:var(--cds-text-secondary);font-weight:600;">${upstream}</span>
               </div>
-              <div class="item-meta-line">
-                <span>缓存特性:</span>
-                <span style="color:var(--cds-green);font-weight:600;">Ephemeral Prompt Caching</span>
+              <div class="item-meta-line" style="margin-top:4px;gap:6px;">
+                ${tags.join(' ')}
+              </div>
+              <div class="item-meta-line" style="margin-top:2px;">
+                <span>Prompt Caching:</span>
+                <span style="color:var(--cds-green);font-weight:600;">已激活 Ephemeral 亲和性加速</span>
               </div>
             </div>
           </div>
         `;
       }).join('');
+    }
+
+    async function refreshModelsCatalog(event) {
+      const btn = document.getElementById('btnRefreshModels');
+      if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+      }
+      try {
+        const resp = await fetch('/api/models/refresh', { method: 'POST' });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.data) {
+            renderModels(data.data);
+            showToast('已拉取最新上游模型列表 (' + data.data.length + ' 个可用模型)');
+          }
+        }
+      } catch (e) {
+        showToast('刷新模型失败: ' + e.message, 'error');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+        }
+      }
     }
 
     function renderGateway(gateway) {

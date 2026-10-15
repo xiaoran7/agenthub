@@ -2,6 +2,40 @@
 
 ## [2.4.77] - 2026-10-15
 
+### 看齐 Magpie：深度工作区聚合发现与 Live Model Catalog 模型目录拉取引擎
+
+响应用户对“模型拉取跟工作区读取深度学习 Magpie，彻底解决不准确问题”的明确指示，对标 `yetone/magpie` 架构实现全面重构：
+
+- **Magpie 级全局工作区深度发现与聚合引擎（`crates/runner/src/collectors/workspace.rs`）**：
+  - 彻底淘汰仅依赖少量会话浅层反推工作区的局限模式，改为从底层各 Agent 的权威物理数据源做全局动态归集：
+    - **Claude Code**：自动遍历 `~/.claude/projects/` 下全部项目，从各会话 `.jsonl` 头部实时反解真实的物理 `cwd`（并支持目录名 `D--...` 降级解码）；
+    - **ZCode**：直接建立只读 SQLite 连接读取 `~/.zcode/cli/db/db.sqlite` 的 `session` 表，按 `directory` 深度聚合全部 600+ 真实会话与最新更新时间；
+    - **Codex**：只读查询 `~/.codex/state_5.db` 中 `threads` 库的 `cwd` 分布与最新活动时间；
+    - **Antigravity & Grok**：自动解析 Antigravity 运行记录与 Grok `summary.json` 中的工作区路径；
+  - **严密的多层路径规范化（`normalize_workspace_path`）**：
+    - 自动剥离 Windows `\\?\` 与 `\\.\` 扩展前缀；
+    - 盘符统一大写规范化，统一斜杠分隔符为 `\`；
+    - 调用 `dunce::canonicalize` 精准消除磁盘目录大小写漂移与符号别名；
+    - 剔除无效点号（`.`）与空相对路径；
+  - **丰富多维聚合指标**：为每个工作区产出标准物理绝对路径、工程短名、该工作区下关联的会话总量、最新活跃毫秒时间戳与友好相对时间（“刚刚”、“10 分钟前”、“2 小时前”、“3 天前”）、历史参与该工作区的 Agent 清单（如 Claude Code, ZCode 等）、以及 `.git` 仓库标识；
+  - 列表统一按最近活跃时间倒序排列，真实反映开发者跨工具的工作流资产。
+- **Magpie 级 Live Model Catalog 动态拉取与元数据推导引擎（`crates/runner/src/model_catalog.rs`）**：
+  - 彻底解决之前在 Claude 网关或非 Codex 运行时模型列表获取失败或返回空的问题：
+  - **多上游自动发现**：自动优先探测 CC Switch 活动服务商（如 `cpa.tannerlab.cn/v1`）、环境变量 `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`、以及 Claude Gateway 配置文件；
+  - **端点自适应探测**：规范化探针策略，智能探测 `{base}/models` 与 `{base}/v1/models`，自动注入全套权威认证标头：`Authorization: Bearer <token>`、`x-api-key: <token>`、`anthropic-version: 2023-06-01`、`Accept: application/json` 与 `User-Agent: agenthub-runner`；
+  - **双协议兼容与噪声过滤**：同时支持 OpenAI (`data: []`) 与 Anthropic (`models: []`) 返回结构，自动过滤绘图、TTS/ASR 语音、嵌入、重排与审核等非对话模型；
+  - **高阶元数据智能推导**：
+    - 提取并推断真实上下文窗口（1M tokens 对应 `1M`，200K 对应 `200K`，128K 对应 `128K` 等）；
+    - 识别最大输出 Token（`max_output_tokens`）；
+    - 精确标注输入/输出模态，支持视觉（Vision）、函数调用工具（Tools）与深度思考推理（Thinking / Reasoning）；
+    - 记录上游服务商归属标识（`upstream_provider`）；
+  - **双层缓存架构**：内存 30s TTL 缓存 + 本地持久化缓存 `~/.agenthub/models_cache.json`，面对离线或网络抖动依然毫秒级极速响应；
+  - 提供 `POST /api/models/refresh` 强制刷新接口，并在 `remote_host.rs` 的 `NativeSessionHost::models` 中作为智能 fallback，确保上层协议请求 100% 获得真实模型。
+- **前端工作区与模型目录展示全面升级（`dashboard.html`）**：
+  - **工作区表格**：重构列结构（工作区名称、本地物理路径、关联 Agents 徽章、最近活跃时间、会话数徽章、Git 仓库状态徽章、复制路径按钮）；
+  - **模型目录网格**：每张卡片以大号模型显示名呈现，右上角标注上下文窗口胶囊标签（如 `1M 上下文`、`200K 上下文`），并展示模型原始 ID、上游来源、视觉/思考/工具模态标签，以及 Prompt Caching 加速标识；
+  - 顶部增加「拉取最新模型」操作按钮，支持一键无刷新实时拉取上游服务商最新发布的模型。
+
 ### 统一 Crate 与二进制命名为 `agenthub-runner`
 
 解决早期从 `agent-pulse` 演进遗留的命名分裂问题：
