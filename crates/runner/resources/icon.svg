@@ -11,48 +11,48 @@
     </radialGradient>
   </defs>
 
-  <!-- Crisp White Squircle Background -->
+  <!-- Crisp White Squircle Background (Tight margin for maximum content scale) -->
   <rect width="504" height="504" x="4" y="4" rx="116" fill="url(#hubBg)" stroke="#e2e8f0" stroke-width="2.5"/>
 
   <!-- Subtle Central Ambient Glow -->
-  <circle cx="256" cy="256" r="80" fill="#0ea5e9" opacity="0.18" />
-  <circle cx="256" cy="256" r="45" fill="#38bdf8" opacity="0.25" />
+  <circle cx="256" cy="256" r="120" fill="#0ea5e9" opacity="0.20" />
+  <circle cx="256" cy="256" r="65" fill="#38bdf8" opacity="0.28" />
 
-  <!-- Radial spokes from center to vertices (Enlarged Cube R=162) -->
-  <g stroke="#0284c7" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="256" y1="256" x2="256" y2="94" />
-    <line x1="256" y1="256" x2="396" y2="175" />
-    <line x1="256" y1="256" x2="396" y2="337" />
-    <line x1="256" y1="256" x2="256" y2="418" />
-    <line x1="256" y1="256" x2="116" y2="337" />
-    <line x1="256" y1="256" x2="116" y2="175" />
+  <!-- Radial spokes & Hexagon perimeter (Maximized Cube R=205, center (256, 256)) -->
+  <g stroke="#0284c7" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="256" y1="256" x2="256" y2="51" />
+    <line x1="256" y1="256" x2="434" y2="153" />
+    <line x1="256" y1="256" x2="434" y2="359" />
+    <line x1="256" y1="256" x2="256" y2="461" />
+    <line x1="256" y1="256" x2="78" y2="359" />
+    <line x1="256" y1="256" x2="78" y2="153" />
 
     <!-- Hexagon perimeter -->
-    <polygon points="256,94 396,175 396,337 256,418 116,337 116,175" fill="none"/>
+    <polygon points="256,51 434,153 434,359 256,461 78,359 78,153" fill="none"/>
   </g>
 
-  <!-- Outer Vertex Ring Nodes -->
-  <g stroke="#0284c7" stroke-width="7" fill="#ffffff">
-    <circle cx="256" cy="94" r="18"/>
-    <circle cx="396" cy="175" r="18"/>
-    <circle cx="396" cy="337" r="18"/>
-    <circle cx="256" cy="418" r="18"/>
-    <circle cx="116" cy="337" r="18"/>
-    <circle cx="116" cy="175" r="18"/>
+  <!-- Outer Vertex Ring Nodes (Larger & thicker for high-DPI and 16x16 tray visibility) -->
+  <g stroke="#0284c7" stroke-width="10" fill="#ffffff">
+    <circle cx="256" cy="51" r="25"/>
+    <circle cx="434" cy="153" r="25"/>
+    <circle cx="434" cy="359" r="25"/>
+    <circle cx="256" cy="461" r="25"/>
+    <circle cx="78" cy="359" r="25"/>
+    <circle cx="78" cy="153" r="25"/>
   </g>
 
   <!-- Node Inner Accents -->
   <g fill="#0ea5e9">
-    <circle cx="256" cy="94" r="4"/>
-    <circle cx="396" cy="175" r="4"/>
-    <circle cx="396" cy="337" r="4"/>
-    <circle cx="256" cy="418" r="4"/>
-    <circle cx="116" cy="337" r="4"/>
-    <circle cx="116" cy="175" r="4"/>
+    <circle cx="256" cy="51" r="7"/>
+    <circle cx="434" cy="153" r="7"/>
+    <circle cx="434" cy="359" r="7"/>
+    <circle cx="256" cy="461" r="7"/>
+    <circle cx="78" cy="359" r="7"/>
+    <circle cx="78" cy="153" r="7"/>
   </g>
 
-  <!-- Glowing Central Core Orb -->
-  <circle cx="256" cy="256" r="34" fill="#0ea5e9" opacity="0.45" />
-  <circle cx="256" cy="256" r="22" fill="url(#centerOrb)" />
-  <circle cx="256" cy="256" r="8" fill="#ffffff" />
+  <!-- Glowing Central Core Orb (Enlarged Core) -->
+  <circle cx="256" cy="256" r="48" fill="#0ea5e9" opacity="0.45" />
+  <circle cx="256" cy="256" r="32" fill="url(#centerOrb)" />
+  <circle cx="256" cy="256" r="11" fill="#ffffff" />
 </svg>

@@ -117,6 +117,13 @@ enum Command {
             help = "Auto open web console in default browser"
         )]
         open_browser: bool,
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            help = "Hide Windows console window (run in background with system tray)"
+        )]
+        hide_console: bool,
     },
     /// Connect the local agenthubd control plane to the authenticated v3 Gateway.
     RemoteRun {
@@ -490,6 +497,7 @@ fn main() -> Result<()> {
         db: PathBuf::from("agenthub.db"),
         port: 4200,
         open_browser: true,
+        hide_console: true,
     });
 
     match command {
@@ -522,7 +530,11 @@ fn main() -> Result<()> {
             db,
             port,
             open_browser,
+            hide_console,
         } => {
+            if hide_console {
+                hide_windows_console();
+            }
             let identity = runtime_identity.unwrap_or_else(resolve_or_create_default_identity);
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
@@ -1278,4 +1290,18 @@ fn resolve_or_create_default_identity() -> DeviceIdentity {
     }
     identity
 }
+
+fn hide_windows_console() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows_sys::Win32::System::Console::GetConsoleWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+
+        let hwnd = GetConsoleWindow();
+        if hwnd != 0 as _ {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
+
 
