@@ -5,6 +5,7 @@
 ### 统一 Crate 与二进制命名为 `agenthub-runner`
 
 解决早期从 `agent-pulse` 演进遗留的命名分裂问题：
+
 - 将 `crates/runner/Cargo.toml` 包名正式重命名为 `agenthub-runner`；
 - 构建二进制直接生成 `agenthub-runner.exe` / `agenthub-runner`，彻底消除发布分发与部署脚本中手动重命名的历史包袱；
 - 统一更新 `AGENTS.md`、`README.md`、`deploy/windows/` 及架构文档，全栈品牌统一为 `agenthub-runner`。
@@ -67,6 +68,24 @@
     - 思考中渲染陶土橙 3 点波浪跳跃微动效（`timeline-quiet-dot`），并支持一键引用复制（Copy as quote）；
   - **用户会话气泡高保真对齐**：
     - User 气泡升级为严格的 18px 圆角与柔和冷蓝灰底色（`--cds-bg-tint-blue: #f0f4f8`），搭配 `message-fade-up` 微弹超调入场动画。
+- **阶段 3：工具执行与审批卡片重构（对齐 McpToolDecisionCard 3 态决策模型）**：
+  - **McpToolDecisionCard 3 态全生命周期交互模型**：
+    - **待授权态（State 1: Pending Authorization）**：
+      - 审批卡片应用双环浮动面板与陶土微光呼吸边框动画（`cds-clay-breathe-glow`）；
+      - 显著展示安全盾牌图标、风险等级徽章（`HIGH` / `MEDIUM` / `LOW`）与工具来源类别；
+      - 参数与命令预览区域提供一键复制至剪贴板能力（带有复制成功的绿色反馈态）；
+      - 按钮组提供陶土色加重主要同意按钮（`.remote-approval-btn-approve`）与次级拒绝按钮（`.remote-approval-btn-decline`）。
+    - **执行中状态（State 2: Running）**：
+      - 引入 3 点波浪脉冲指示灯（`.remote-tool-pulse-dots`），替代传统单调旋转 Loader；
+      - 卡片标题底部渲染双色动态 Shimmer 扫光进度条（`remote-tool-shimmer`），视觉动效既灵动又不喧宾夺主；
+      - 运行状态胶囊实时展示脉冲态。
+    - **结算完成态（State 3: Settlement）**：
+      - 成功态与失败态颜色全面对齐 CDS 绿色（`#16a34a` / `#4ade80`）与红色（`#ef4444`）微透明色阶；
+      - 引入结构化 Diff 比较器（`.remote-diff-viewer`）：支持代码变更按删除（Red）与增加（Green）分块呈现，各 Chunk 自带独立复制按钮（`.remote-card-mini-copy`）；
+      - 输出结果与命令预览区域支持折叠与自适应滚动，深浅模式文字对比度彻底达标 WCAG 2.1 AA。
+  - **问答与选项交互卡片（Prompt Questions）CDS 升级**：
+    - 支持单选与多选交互，选项按钮支持 hover 微上浮（`translateY(-0.5px)`）与高亮选中框；
+    - 代码/布局预览区域采用 Surface 0 等宽代码卡片格式化呈现。
 
 ## [2.4.76] - 2026-10-14
 
@@ -112,7 +131,6 @@
   - 新增 `services/api/test/admin-setup.test.ts` 端到端单元测试，全量 56 项测试 100% 通过；
   - Web 与 Desktop 前端通过 `npm run typecheck` 验证；
   - Tauri 后端通过 `cargo check` 编译检查。
-
 
 ### Web 远端控制台全面 Claude 化（Claude Design System 质感重塑）
 
@@ -313,7 +331,6 @@
   - 初始化 agenthub 项目 Volumes v1 结构化认知架构，扫描建立 369 个受管文件基线；
   - 配置 Claude Code MCP 服务器（`.mcp.json`）与 PreToolUse 编辑守护拦截 Hook（`.claude/settings.json`）；
   - 就位 `aoci.txt`、`aoci.meta.txt` 与 `aoci.code.txt` 认知资产骨架，严格隔离宿主机私有配置。
-
 
 ### 服务端自建轻量化与云端 Session 漫游支持
 
@@ -554,7 +571,7 @@ CC Switch 与第三方网关动态模型实时感知与下拉菜单即时刷新�
   - 发送锁死与状态机解耦：引入 `sending` 状态切分，杜绝面板前置校验早退将输入锁死的异常分支，避免后台轮询过早释放状态；
   - 错误详情全链路透传：在 `remote_host.rs` 与 `lib.rs` 的 `turn/completed` 事件中透传底层 CLI 的真实报错信息，彻底告别空洞模糊的“Agent 执行失败”。
 - **根治新建会话 429 重试风暴与假死无响应**：
-  - 根因定位：第三方网关（CC Switch / Claude-3p）配置中，`claude-fable-5` 映射的上游模型（Gemini 3.8 Flash）遭遇配额耗尽（`429 RESOURCE_EXHAUSTED`）。Claude Code CLI 默认触发指数退避 10 次重试循环，每次重试等待 25~30 秒，导致子进程被阻塞长达 5~10 分钟；同时 `parse_agent_turn_update` 未解析 `system.api_retry` 事件，前端聊天面板仅显示通用静态提示“正在思考与执行...”，输入框锁死，给用户造成“根本无法新建对话”的完全卡死体验；
+  - 根因定位：第三方网关（CC Switch / Claude-3p）配置中，`claude-fable-5` 映射的上游模型（Gemini 3.8 Flash）遭遇配额耗尽（`429 RESOURCE_EXHAUSTED`）。Claude Code CLI 默认触发指数退避 10 次重试循环，每次重试等待 25~~30 秒，导致子进程被阻塞长达 5~~10 分钟；同时 `parse_agent_turn_update` 未解析 `system.api_retry` 事件，前端聊天面板仅显示通用静态提示“正在思考与执行...”，输入框锁死，给用户造成“根本无法新建对话”的完全卡死体验；
   - 智能路由与模型优先级：在 `crates/runner/src/claude_gateway.rs` 和 `apps/desktop/src-tauri/src/lib.rs` 中重构网关模型解析与排序，将实测配额充足、秒级响应的旗舰模型 `Claude Opus 5 (Alpha)` 设为默认首选（实测 2.1 秒极速完成响应）；
   - 限制网关异常重试次数：通过 `inject_into_command` 注入 `CLAUDE_CODE_MAX_RETRIES=2`，将网络或配额异常情况下的重试耗时从 5 分钟硬编码超时缩减至快速响应，彻底杜绝无尽阻塞；
   - 透传明确的 API 错误信息：在 `crates/runner/src/collectors/mod.rs` 的 `run_agent_stream_process` 中，当进程因 API 错误（如 429 配额用尽、认证失败等）以非 0 退出时，自动从输出流提取真实的人类可读错误文本（`final_agent_message`），以 `ProtocolError` 准确报告给前端展示，告别模糊晦涩的“exit code: 1”。
@@ -866,6 +883,7 @@ Agent CLI 二进制发现改为「候选收集 → 版本探测 → 择优 + 回
 ## 2026-09-26 — 文档核对与精简
 
 - 核对 Runtime、清单与协议边界，修正 Claude 实现状态；统一规则，保留按日期的验收记录。
+
 ## 2026-09-26 — 单项目 Agent 入口
 
 - 规则、长期偏好和相关排障经验迁入本项目，agent 不再依赖父目录共享文档。

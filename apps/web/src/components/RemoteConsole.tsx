@@ -453,7 +453,9 @@ const RemoteToolCard = memo(function RemoteToolCard({
                     <button
                       type="button"
                       className="remote-card-mini-copy"
-                      onClick={(e) => handleCopy("diff-del", diffStats.oldText!, e)}
+                      onClick={(e) =>
+                        handleCopy("diff-del", diffStats.oldText!, e)
+                      }
                     >
                       {copiedSection === "diff-del" ? "✓ 已复制" : "复制"}
                     </button>
@@ -468,7 +470,9 @@ const RemoteToolCard = memo(function RemoteToolCard({
                     <button
                       type="button"
                       className="remote-card-mini-copy"
-                      onClick={(e) => handleCopy("diff-add", diffStats.newText!, e)}
+                      onClick={(e) =>
+                        handleCopy("diff-add", diffStats.newText!, e)
+                      }
                     >
                       {copiedSection === "diff-add" ? "✓ 已复制" : "复制"}
                     </button>
@@ -2086,7 +2090,10 @@ export function RemoteConsole({
                   >
                     <div className="remote-approval-header">
                       <div className="remote-approval-title-wrap">
-                        <span className="remote-approval-shield-icon" aria-hidden="true">
+                        <span
+                          className="remote-approval-shield-icon"
+                          aria-hidden="true"
+                        >
                           <svg
                             width="14"
                             height="14"
@@ -2238,7 +2245,10 @@ export function RemoteConsole({
                   >
                     <div className="remote-question-header">
                       <div className="remote-question-title-wrap">
-                        <span className="remote-question-glyph" aria-hidden="true">
+                        <span
+                          className="remote-question-glyph"
+                          aria-hidden="true"
+                        >
                           ?
                         </span>
                         <span>{q.header ?? "Agent 向你提问"}</span>
