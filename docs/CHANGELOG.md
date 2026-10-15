@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### 架构演进：参考 Magpie 架构模式升级服务商网关发现、会话粘滞与工作区精准路由
+
+汲取 `yetone/magpie` 在多服务商网关抽象、会话粘滞（Session Affinity）保护 Prompt Cache，以及工作区确定性路径规范化方面的最佳实践，对 `agent-pulse-runner` 核心引擎进行全面升级：
+
+- **服务商网关自动发现梯队扩展（`crates/runner/src/claude_gateway.rs`）**：
+  - 新增 `discover_claude_settings_env()`：自动解析 `~/.claude/settings.json` 中 `env.ANTHROPIC_BASE_URL` 与认证 Token，打通官方 CLI 配置与第三方中转；
+  - 新增 `discover_magpie_provider()`：自动探测 `%APPDATA%/magpie/providers.json` 与 `~/.config/magpie/providers.json`，无缝对接 Magpie 本地网关（默认端口 3425）；
+  - 动态拉取并归一化上游可用模型清单，自动补全别名与展示标签。
+- **会话粘滞（Session Affinity）与 Prompt Cache 强效保护**：
+  - 在 `ClaudeGatewayProfile::inject_into_command_with_session` 中，调起 Claude Code CLI 进程时自动注入会话亲和性标识：
+    - 环境变量：`X_MAGPIE_SESSION`、`X_CONVERSATION_ID`、`CLAUDE_CODE_CONVERSATION_ID`；
+    - HTTP 自定义标头：通过 `ANTHROPIC_CUSTOM_HEADERS` 注入 `x-session-affinity`、`x-magpie-session` 与 `x-conversation-id`；
+  - 彻底杜绝多账号轮询场景下跨轮次切换账号导致的 Prompt Cache 击穿，大幅削减输入 Token 消耗并降低延迟；
+  - 在新会话流式启动（`run_agent_session_start_streaming`）时，根据首轮输入提取确定性 SHA-256 隐式指纹（`magpie-{hex}`），使得首轮即便无显式 Session ID 也能安全锁定同账号。
+- **确定性工作区路径转换与 O(1) 会话定位（`crates/runner/src/conversation.rs`）**：
+  - 引入 `sanitize_claude_project_dir(path)`：将工作区路径中的 `:`, `\`, `/` 统一规范化为 `-`，与官方 Claude 项目及 Magpie 路径编码完全对齐；
+  - 新增 `find_claude_workspace_transcript(home, workspace, session_id)`：基于工作区和会话 ID 直接精准锁定 `.claude/projects/<sanitized>/<session_id>.jsonl`，避免全目录递归扫描造成的延迟与跨项目同名 ID 穿透；
+  - 编写配套单元测试覆盖 Windows 与 Unix 路径映射验证。
+
 ### 架构演进：移除 Desktop 桌面端，为 Native Runtime 引入姿态 A 内嵌 CDS Web 控制台
 
 为降低工程维护复杂度、彻底解放桌面端 Webview 构建负担，完成桌面端剥离并为本机 Runtime 引入零依赖自包含 Web 前端：
