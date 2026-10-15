@@ -168,6 +168,30 @@ fn handle_connection(
 
     let (path, query) = parse_path_and_query(full_path);
 
+    if path == "/favicon.ico" {
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "image/x-icon",
+            FAVICON_ICO,
+            false,
+        )?;
+        return Ok(());
+    }
+
+    if path == "/icon.svg" {
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "image/svg+xml",
+            ICON_SVG.as_bytes(),
+            false,
+        )?;
+        return Ok(());
+    }
+
     // REST API endpoints
     if path.starts_with("/api/") {
         handle_api(&mut stream, method, path, &query, &body, handler)?;
@@ -333,6 +357,10 @@ fn send_response(
     Ok(())
 }
 
+/// 嵌入式自包含静态图标资源
+const FAVICON_ICO: &[u8] = include_bytes!("../resources/icon.ico");
+const ICON_SVG: &str = include_str!("../resources/icon.svg");
+
 /// 嵌入式自包含 CDS (Claude Design System) 单页前端
 const INDEX_HTML: &str = r#"<!DOCTYPE html>
 <html lang="zh-CN" class="dark">
@@ -340,6 +368,8 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AgentHub Runner Console</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="alternate icon" href="/favicon.ico">
   <style>
     :root {
       --cds-clay: #d97757;
@@ -667,6 +697,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
 <body>
   <div class="header">
     <div class="brand">
+      <img src="/icon.svg" alt="AgentHub" style="width: 20px; height: 20px; border-radius: 4px; display: inline-block; vertical-align: middle;" />
       <span>AgentHub Runner</span>
       <span class="brand-badge">CDS Native</span>
     </div>
