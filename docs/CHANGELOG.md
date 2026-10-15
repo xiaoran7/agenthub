@@ -21,7 +21,8 @@
 - **前端登录门禁与控制台对齐（`apps/web` & `apps/desktop`）**：
   - `AccountGate.tsx` 动态响应 `fetchAuthStatus()`：服务器初次启动展示“系统初次安装 · 初始化超级管理员”表单；已初始化后展示“管理员登录”表单；
   - 移除临时调试与绕过按钮（`agenthub_selfhost_direct`）；
-  - `SettingsPage.tsx` 剥离多租户商业化设置（团队工作区 `team`、账单 `billing`）及 Telegram 绑定标识；
+  - `SettingsPage.tsx` 剥离多租户商业化设置（团队工作区 `team`、账单 `billing`）及 Telegram 绑定标识，彻底清除废弃的团队与账单状态、副作用与操作回调；
+  - `account.ts` 清理废弃的团队成员/邀请类型与 Stripe 支付客户端接口；
   - 桌面端登录界面（`AuthScreen.tsx`）更新默认连接地址为 `http://127.0.0.1:3001`，统一单管理员操作用词；
 - **全栈工程质量与测试验证**：
   - 新增 `services/api/test/admin-setup.test.ts` 端到端单元测试，全量 56 项测试 100% 通过；

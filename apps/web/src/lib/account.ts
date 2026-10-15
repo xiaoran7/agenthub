@@ -40,28 +40,6 @@ export interface AccountView {
   workspace_entitlements?: AccountView["entitlements"];
 }
 
-export interface TeamMemberView {
-  user_id: string;
-  email: string;
-  display_name: string;
-  role: WorkspaceRole;
-  joined_at: string;
-}
-
-export interface TeamInvitationView {
-  invitation_id: string;
-  email: string;
-  role: InviteRole;
-  created_at: string;
-  expires_at: string;
-}
-
-export interface TeamWorkspaceView {
-  workspace: WorkspaceSummary;
-  members: TeamMemberView[];
-  invitations: TeamInvitationView[];
-  member_limit: number;
-}
 
 export interface WebSessionView {
   session_id: string;
@@ -123,13 +101,6 @@ export interface AuditPage {
   next_before?: string;
 }
 
-export interface BillingStatus {
-  available: boolean;
-  provider?: string;
-  checkout: boolean;
-  portal: boolean;
-  subscription: AccountView["subscription"];
-}
 
 export class AccountApiError extends Error {
   readonly code: string;
@@ -249,15 +220,6 @@ export async function revokeOtherWebSessions(): Promise<number> {
   return body.revoked;
 }
 
-export async function fetchTeamWorkspace(): Promise<TeamWorkspaceView> {
-  const response = await fetch("/v1/team", {
-    cache: "no-store",
-    credentials: "same-origin",
-  });
-  if (!response.ok) throw await accountError(response);
-  return (await response.json()) as TeamWorkspaceView;
-}
-
 export async function fetchAuditEvents(
   scope: AuditScope,
   before?: string,
@@ -270,85 +232,6 @@ export async function fetchAuditEvents(
   });
   if (!response.ok) throw await accountError(response);
   return (await response.json()) as AuditPage;
-}
-
-export async function fetchBillingStatus(): Promise<BillingStatus> {
-  const response = await fetch("/v1/billing", {
-    cache: "no-store",
-    credentials: "same-origin",
-  });
-  if (!response.ok) throw await accountError(response);
-  return (await response.json()) as BillingStatus;
-}
-
-export async function createBillingCheckout(
-  plan: "pro" | "team",
-): Promise<string> {
-  const body = await accountRequest<{ url: unknown }>("/v1/billing/checkout", {
-    plan,
-  });
-  return billingRedirectUrl(body.url);
-}
-
-export async function openBillingPortal(): Promise<string> {
-  const body = await accountRequest<{ url: unknown }>("/v1/billing/portal", {});
-  return billingRedirectUrl(body.url);
-}
-
-export async function createTeamInvitation(input: {
-  email: string;
-  role: InviteRole;
-}): Promise<{
-  invitation_id: string;
-  invitation_url: string;
-  email: string;
-  role: InviteRole;
-  expires_at: string;
-}> {
-  return accountRequest("/v1/team/invitations", input);
-}
-
-export async function acceptTeamInvitation(token: string): Promise<void> {
-  await accountRequest<{ accepted: boolean }>("/v1/team/invitations/accept", {
-    token,
-  });
-}
-
-export async function revokeTeamInvitation(
-  invitationId: string,
-): Promise<void> {
-  await accountMutation(
-    `/v1/team/invitations/${encodeURIComponent(invitationId)}`,
-    "DELETE",
-  );
-}
-
-export async function updateTeamMember(
-  userId: string,
-  role: InviteRole,
-): Promise<void> {
-  await accountMutation(
-    `/v1/team/members/${encodeURIComponent(userId)}`,
-    "PATCH",
-    { role },
-  );
-}
-
-export async function removeTeamMember(userId: string): Promise<void> {
-  await accountMutation(
-    `/v1/team/members/${encodeURIComponent(userId)}`,
-    "DELETE",
-  );
-}
-
-export async function switchWorkspace(
-  workspaceOwnerId: string,
-): Promise<WorkspaceSummary[]> {
-  const response = await accountRequest<{ workspaces: WorkspaceSummary[] }>(
-    "/v1/team/workspace",
-    { workspace_owner_id: workspaceOwnerId },
-  );
-  return response.workspaces;
 }
 
 export interface AuthStatusResponse {
@@ -468,22 +351,3 @@ async function accountError(response: Response): Promise<AccountApiError> {
   return new AccountApiError(response.status, code);
 }
 
-function billingRedirectUrl(value: unknown): string {
-  if (typeof value !== "string") throw new AccountApiError(502, "http_error");
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new AccountApiError(502, "http_error");
-  }
-  if (
-    url.protocol !== "https:" ||
-    (url.hostname !== "checkout.stripe.com" &&
-      !url.hostname.endsWith(".checkout.stripe.com") &&
-      url.hostname !== "billing.stripe.com" &&
-      !url.hostname.endsWith(".billing.stripe.com"))
-  ) {
-    throw new AccountApiError(502, "http_error");
-  }
-  return url.toString();
-}

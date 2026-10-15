@@ -19,28 +19,15 @@ import type { DeviceRecord } from "../lib/types";
 import {
   accountErrorMessage,
   changePassword,
-  createBillingCheckout,
-  createTeamInvitation,
-  currentAccount,
   fetchAuditEvents,
-  fetchBillingStatus,
-  fetchTeamWorkspace,
   fetchWebSessions,
-  openBillingPortal,
-  removeTeamMember,
   requestEmailVerification,
   revokeOtherWebSessions,
-  revokeTeamInvitation,
   revokeWebSession,
-  switchWorkspace,
-  updateTeamMember,
   type AccountView,
   type AuditEvent,
   type AuditPage,
   type AuditScope,
-  type BillingStatus,
-  type InviteRole,
-  type TeamWorkspaceView,
   type WebSessionView,
 } from "../lib/account";
 import {
@@ -229,20 +216,9 @@ export function SettingsPage({
   const [accountAction, setAccountAction] = useState<string>();
   const [accountMessage, setAccountMessage] = useState<string>();
   const [accountError, setAccountError] = useState<string>();
-  const [billing, setBilling] = useState<BillingStatus>();
-  const [billingAction, setBillingAction] = useState<string>();
-  const [billingMessage, setBillingMessage] = useState<string>();
-  const [billingError, setBillingError] = useState<string>();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [team, setTeam] = useState<TeamWorkspaceView>();
-  const [teamEmail, setTeamEmail] = useState("");
-  const [teamRole, setTeamRole] = useState<InviteRole>("member");
-  const [teamAction, setTeamAction] = useState<string>();
-  const [teamMessage, setTeamMessage] = useState<string>();
-  const [teamError, setTeamError] = useState<string>();
-  const [invitationUrl, setInvitationUrl] = useState<string>();
   const [auditScope, setAuditScope] = useState<AuditScope>("account");
   const [auditPage, setAuditPage] = useState<AuditPage>();
   const [auditError, setAuditError] = useState<string>();
@@ -306,25 +282,6 @@ export function SettingsPage({
   }, [account]);
 
   useEffect(() => {
-    if (account === undefined) {
-      setBilling(undefined);
-      return;
-    }
-    let cancelled = false;
-    setBillingError(undefined);
-    void fetchBillingStatus()
-      .then((status) => {
-        if (!cancelled) setBilling(status);
-      })
-      .catch((cause) => {
-        if (!cancelled) setBillingError(accountErrorMessage(cause));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [account]);
-
-  useEffect(() => {
     if (account === undefined) return;
     let cancelled = false;
     setAuditLoading(true);
@@ -343,27 +300,6 @@ export function SettingsPage({
       cancelled = true;
     };
   }, [account, auditRevision, auditScope]);
-
-  useEffect(() => {
-    if (team?.workspace.role === "admin" && teamRole === "admin") {
-      setTeamRole("member");
-    }
-  }, [team, teamRole]);
-
-  useEffect(() => {
-    if (account === undefined) return;
-    let cancelled = false;
-    void fetchTeamWorkspace()
-      .then((next) => {
-        if (!cancelled) setTeam(next);
-      })
-      .catch((cause) => {
-        if (!cancelled) setTeamError(accountErrorMessage(cause));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [account]);
 
   function refreshAudit() {
     setAuditRevision((current) => current + 1);
@@ -405,34 +341,6 @@ export function SettingsPage({
       setAccountError(accountErrorMessage(cause));
     } finally {
       setAccountAction(undefined);
-    }
-  }
-
-  async function startBillingCheckout(plan: "pro" | "team") {
-    setBillingAction(plan);
-    setBillingError(undefined);
-    setBillingMessage(undefined);
-    try {
-      const url = await createBillingCheckout(plan);
-      window.location.assign(url);
-    } catch (cause) {
-      setBillingError(accountErrorMessage(cause));
-    } finally {
-      setBillingAction(undefined);
-    }
-  }
-
-  async function startBillingPortal() {
-    setBillingAction("portal");
-    setBillingError(undefined);
-    setBillingMessage(undefined);
-    try {
-      const url = await openBillingPortal();
-      window.location.assign(url);
-    } catch (cause) {
-      setBillingError(accountErrorMessage(cause));
-    } finally {
-      setBillingAction(undefined);
     }
   }
 
@@ -501,109 +409,6 @@ export function SettingsPage({
       setAccountError(accountErrorMessage(cause));
     } finally {
       setAccountAction(undefined);
-    }
-  }
-
-  async function selectWorkspace(workspaceOwnerId: string) {
-    setTeamAction("workspace");
-    setTeamError(undefined);
-    setInvitationUrl(undefined);
-    try {
-      await switchWorkspace(workspaceOwnerId);
-      const next = await currentAccount();
-      if (next === undefined) throw new Error("account unavailable");
-      onWorkspaceChanged(next);
-      setTeam(await fetchTeamWorkspace());
-      setTeamMessage("工作区已切换。");
-      refreshAudit();
-    } catch (cause) {
-      setTeamError(accountErrorMessage(cause));
-    } finally {
-      setTeamAction(undefined);
-    }
-  }
-
-  async function inviteMember() {
-    setTeamAction("invite");
-    setTeamError(undefined);
-    setTeamMessage(undefined);
-    setInvitationUrl(undefined);
-    try {
-      const invitation = await createTeamInvitation({
-        email: teamEmail,
-        role: teamRole,
-      });
-      setInvitationUrl(
-        invitation.invitation_url.startsWith("#")
-          ? `${window.location.origin}/${invitation.invitation_url.replace("token=", "team_invitation=")}`
-          : invitation.invitation_url,
-      );
-      setTeamEmail("");
-      setTeam(await fetchTeamWorkspace());
-      setTeamMessage("邀请已创建；链接只在本次设置窗口显示。");
-      refreshAudit();
-    } catch (cause) {
-      setTeamError(accountErrorMessage(cause));
-    } finally {
-      setTeamAction(undefined);
-    }
-  }
-
-  async function copyInvitation() {
-    if (invitationUrl === undefined) return;
-    try {
-      await navigator.clipboard.writeText(invitationUrl);
-      setTeamMessage("邀请链接已复制。");
-    } catch {
-      setTeamError("无法自动复制，请手动选择邀请链接。");
-    }
-  }
-
-  async function changeMemberRole(userId: string, role: InviteRole) {
-    setTeamAction(userId);
-    setTeamError(undefined);
-    try {
-      await updateTeamMember(userId, role);
-      setTeam(await fetchTeamWorkspace());
-      setTeamMessage("成员角色已更新。");
-      refreshAudit();
-    } catch (cause) {
-      setTeamError(accountErrorMessage(cause));
-    } finally {
-      setTeamAction(undefined);
-    }
-  }
-
-  async function removeMember(userId: string) {
-    if (!window.confirm("将这个成员移出当前工作区？其会话会回到个人工作区。")) {
-      return;
-    }
-    setTeamAction(userId);
-    setTeamError(undefined);
-    try {
-      await removeTeamMember(userId);
-      setTeam(await fetchTeamWorkspace());
-      setTeamMessage("成员已移出工作区。");
-      refreshAudit();
-    } catch (cause) {
-      setTeamError(accountErrorMessage(cause));
-    } finally {
-      setTeamAction(undefined);
-    }
-  }
-
-  async function cancelInvitation(invitationId: string) {
-    setTeamAction(invitationId);
-    setTeamError(undefined);
-    try {
-      await revokeTeamInvitation(invitationId);
-      setTeam(await fetchTeamWorkspace());
-      setTeamMessage("邀请已撤销。");
-      refreshAudit();
-    } catch (cause) {
-      setTeamError(accountErrorMessage(cause));
-    } finally {
-      setTeamAction(undefined);
     }
   }
 
