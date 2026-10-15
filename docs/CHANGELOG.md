@@ -48,14 +48,16 @@
   - `agenthub-runner daemon` 亦默认支持 `--web` 与 `--web-port` 参数无缝启用；
   - **默认无参启动模式**：直接双击 `agenthub-runner.exe` 即可自动拉起 Web 控制台并在默认浏览器中唤起控制台，彻底免去手动输入参数的繁琐流程。
 
-### 体验升级：无感后台静默启动（自动隐藏黑框）与核心视觉元素超大化重构
+### 体验升级：无感后台静默启动（原生 Windows GUI 子系统彻底杜绝黑框）与核心视觉元素超大化重构
 
-根据用户体验反馈，对桌面驻留体验与图标视觉层级进行全面调优升级：
+根据用户体验反馈与截图实测，对桌面驻留体验与图标视觉层级进行全面调优升级：
 
-- **Windows 控制台黑框静默隐藏（`crates/runner/src/main.rs`）**：
-  - 在 `agenthub-runner web` 模式（默认无参双击启动模式）新增 `--hide-console` 标志位（默认值为 `true`）；
-  - Windows 环境下调用 Windows 原生 API `GetConsoleWindow()` 与 `ShowWindow(hwnd, SW_HIDE)`，在完成启动初始化后直接静默隐藏黑色控制台窗口；
-  - 彻底摆脱常驻黑框遮挡桌面的问题，以真正 Windows 原生后台托盘应用的形式安静驻留；若开发者通过命令行调试亦可通过 `--hide-console false` 保留终端输出。
+- **原生 Windows GUI 子系统（彻底消除 Windows Terminal / 控制台黑框）**：
+  - Windows 11 默认采用 Windows Terminal 作为终端宿主，单纯使用 API 隐藏已创建的控制台窗口时，Windows Terminal 的外层标签容器依然会被创建并闪烁残留；
+  - 在 `crates/runner/src/main.rs` 引入 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`，将 PE 头声明为 Windows 原生 GUI 子系统：
+    - **双击完全无黑框**：Windows 内核在启动时根本不为其创建、分配任何控制台窗口或 Windows Terminal 标签页；
+    - **命令行无缝兼容**：在 `main()` 入口调用 `AttachConsole(ATTACH_PARENT_PROCESS)`，若用户从现有的 CMD / PowerShell 终端执行 CLI 命令，依然能无缝附着到父终端输出结果与帮助信息；
+  - 彻底杜绝黑框弹窗困扰，以纯净的桌面后台托盘应用形态安静运行。
 - **品牌图标核心元素饱满超大化重塑（`crates/runner/resources/`）**：
   - **核心骨架全幅扩展**：将六边形与辐射连接轴的主半径由 162 扩大至 **205**（占用比例提升至 80%+），边框线条粗细提升至 **15px**，外接圆节点扩大至 **25px** 并强化至 10px 描边；
   - **中心能量核心强化**：中心核心光球半径由 22 提升至 **32px**，高斯发光光晕提升至 **48px**，中心高光点增至 **11px**；

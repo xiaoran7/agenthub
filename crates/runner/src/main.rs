@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::{
     env, fs,
     io::{self, Read},
@@ -474,6 +476,15 @@ enum SyncCommand {
 }
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+        // If launched from an existing terminal/command prompt, attach to parent console so CLI output works.
+        // If double-clicked in Explorer, AttachConsole returns false, and with windows_subsystem = "windows"
+        // no console window is created at all.
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+
     let cli = Cli::parse();
     let identity_path = cli.identity.clone();
     let runtime_identity = cli
