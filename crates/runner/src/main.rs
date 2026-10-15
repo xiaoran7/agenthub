@@ -73,7 +73,7 @@ struct Cli {
     auth_cache: Option<PathBuf>,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -95,6 +95,7 @@ enum Command {
         #[arg(
             long,
             default_value_t = false,
+            action = clap::ArgAction::Set,
             help = "Auto open web console in default browser"
         )]
         open_browser: bool,
@@ -109,7 +110,12 @@ enum Command {
         db: PathBuf,
         #[arg(long, default_value_t = 4200)]
         port: u16,
-        #[arg(long, default_value_t = true)]
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            help = "Auto open web console in default browser"
+        )]
         open_browser: bool,
     },
     /// Connect the local agenthubd control plane to the authenticated v3 Gateway.
@@ -131,6 +137,7 @@ enum Command {
         #[arg(
             long,
             default_value_t = false,
+            action = clap::ArgAction::Set,
             help = "Auto open web console in default browser"
         )]
         open_browser: bool,
@@ -477,7 +484,15 @@ fn main() -> Result<()> {
     let allow_credential_access = cli.allow_credential_access;
     let auth_cache = cli.auth_cache;
 
-    match cli.command {
+    let command = cli.command.unwrap_or(Command::Web {
+        codex_binary: PathBuf::from("codex"),
+        workspace: vec![PathBuf::from(".")],
+        db: PathBuf::from("agenthub.db"),
+        port: 4200,
+        open_browser: true,
+    });
+
+    match command {
         Command::Daemon {
             codex_binary,
             workspace,

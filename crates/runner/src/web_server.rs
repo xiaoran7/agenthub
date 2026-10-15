@@ -74,6 +74,9 @@ pub fn serve(
         });
     }
 
+    let web_url = format!("http://127.0.0.1:{}", actual_port);
+    crate::tray::start_tray(web_url, stopped.clone());
+
     let server_stopped = stopped.clone();
     let server_handler = handler.clone();
 
