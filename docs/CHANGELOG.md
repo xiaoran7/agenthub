@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### 架构演进：移除 Desktop 桌面端，为 Native Runtime 引入姿态 A 内嵌 CDS Web 控制台
+
+为降低工程维护复杂度、彻底解放桌面端 Webview 构建负担，完成桌面端剥离并为本机 Runtime 引入零依赖自包含 Web 前端：
+
+- **彻底移除桌面端（`apps/desktop`）**：
+  - 从根目录 `Cargo.toml` 移除 `apps/desktop/src-tauri` workspace 成员，从 Git 中彻底删除 `apps/desktop` 全量代码与资源；
+  - 根目录 Rust 工作区完全收敛为 `crates/runner`，单命令编译极速完成。
+- **Native Runtime 姿态 A 轻量自包含 Web 控制台（`crates/runner/src/web_server.rs`）**：
+  - 基于 Rust 标准库 `std::net::TcpListener` 实现零外部框架依赖、内存占用小于 10MB 的高效内嵌 HTTP 服务；
+  - 直接调用本地 `DaemonRequestHandler`，近乎 0 毫秒延迟映射 `status`、`snapshot`、`events`、`conversation`、`execute` 与 `discover` 核心 API；
+  - 单文件二进制内嵌基于 CDS（Claude Design System）规范的轻量 SPA 前端：
+    - 支持深浅色主题自适应（Surface 0~3 微对比阶梯与陶土橙品牌色）；
+    - 集成 CJK 输入法合成双重互锁守卫（输入中文候选词按回车绝不误触发发送）；
+    - 集成思考流（Thinking Process）可折叠手风琴与 3 点陶土波浪跳跃动效；
+    - 待审批命令呼吸高亮卡片与急停中断机制；
+  - 提供 `agenthub-runner web` 专用便捷命令，启动即自动在默认浏览器唤起控制台（默认 `http://127.0.0.1:4200`）；
+  - `agenthub-runner daemon` 亦默认支持 `--web` 与 `--web-port` 参数无缝启用。
+
 ### 网页端全面对齐 Claude 设计系统（CDS 阶段 1 & 阶段 2 改造）
 
 基于开源逆向工程标杆项目 `open-claude-ui`，对 `apps/web` 网页端进行深度高保真重构与工程交互物理学升级：

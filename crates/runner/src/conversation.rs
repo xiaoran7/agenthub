@@ -487,6 +487,41 @@ fn collect_provider_transcripts(
     }
 }
 
+/// Deterministically sanitizes a workspace path to Claude's on-disk project directory format.
+/// Following Claude Code conventions (and Magpie's workspace sanitization), path separators
+/// (`/`, `\`) and drive colon (`:`) are converted to hyphens (`-`).
+pub fn sanitize_claude_project_dir(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            ':' | '/' | '\\' => out.push('-'),
+            _ => out.push(ch),
+        }
+    }
+    // Collapse any redundant hyphens if necessary or trim leading/trailing
+    out
+}
+
+/// Directly resolves a Claude Code transcript file for a specific workspace and session ID
+/// without sweeping entire directory trees.
+pub fn find_claude_workspace_transcript(
+    home: &Path,
+    workspace: &Path,
+    session_id: &str,
+) -> Option<PathBuf> {
+    let sanitized = sanitize_claude_project_dir(workspace);
+    let direct = home
+        .join(".claude")
+        .join("projects")
+        .join(&sanitized)
+        .join(format!("{session_id}.jsonl"));
+    if direct.is_file() {
+        return Some(direct);
+    }
+    None
+}
+
 pub(crate) fn find_transcript_file(root: &Path, session_id: &str, depth: usize) -> Option<PathBuf> {
     let mut matches = Vec::new();
     collect_transcript_files(root, session_id, depth, &mut matches);

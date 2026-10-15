@@ -148,6 +148,16 @@ impl ClaudeGatewayProfile {
 
     /// Injects the discovered gateway environment variables and resolved model into a child command.
     pub fn inject_into_command(&self, command: &mut Command, model_override: &mut Option<String>) {
+        self.inject_into_command_with_session(command, model_override, None);
+    }
+
+    /// Injects the discovered gateway environment variables, session affinity headers, and resolved model into a child command.
+    pub fn inject_into_command_with_session(
+        &self,
+        command: &mut Command,
+        model_override: &mut Option<String>,
+        session_id: Option<&str>,
+    ) {
         if env::var_os("ANTHROPIC_BASE_URL").is_none() {
             command.env("ANTHROPIC_BASE_URL", &self.base_url);
         }
@@ -159,6 +169,31 @@ impl ClaudeGatewayProfile {
         if env::var_os("CLAUDE_CODE_MAX_RETRIES").is_none() {
             command.env("CLAUDE_CODE_MAX_RETRIES", "2");
         }
+
+        // Session Affinity & Prompt Cache Protection:
+        // Inject session identifier into headers / environment so upstream gateways (e.g. Magpie, CC Switch)
+        // can stick to the same upstream account, maximizing prompt cache hits and reducing latency.
+        if let Some(sid) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let clean_sid = sid
+                .strip_prefix("claude_")
+                .or_else(|| sid.strip_prefix("antigravity_"))
+                .or_else(|| sid.strip_prefix("grok_"))
+                .unwrap_or(sid);
+
+            command.env("X_MAGPIE_SESSION", clean_sid);
+            command.env("X_CONVERSATION_ID", clean_sid);
+            command.env("CLAUDE_CODE_CONVERSATION_ID", clean_sid);
+
+            if env::var_os("ANTHROPIC_CUSTOM_HEADERS").is_none() {
+                command.env(
+                    "ANTHROPIC_CUSTOM_HEADERS",
+                    format!(
+                        "x-session-affinity={clean_sid},x-magpie-session={clean_sid},x-conversation-id={clean_sid}"
+                    ),
+                );
+            }
+        }
+
         if let Some(resolved) = self.resolve_model(model_override.as_deref()) {
             *model_override = Some(resolved);
         }
@@ -446,7 +481,7 @@ fn merge_gateway_models(target: &mut Vec<ClaudeGatewayModel>, incoming: Vec<Clau
     }
 }
 
-/// Discovers active Claude gateway configuration from environment, `cc-switch.db`, `Claude-3p`, or `Claude` profiles.
+/// Discovers active Claude gateway configuration from environment, `settings.json`, `magpie`, `cc-switch.db`, `Claude-3p`, or `Claude` profiles.
 pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
     let cc_switch = discover_cc_switch_active_provider();
     let roots = gateway_search_roots();
@@ -480,7 +515,27 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
-    // 2. Discover from host-creds-*.json (active CC Switch local proxy loopback)
+    // 2. Discover from Claude settings.json env (where Magpie or manual config writes ANTHROPIC_BASE_URL)
+    if let Some((base_url, auth_token, models, source_name)) = discover_claude_settings_env() {
+        return Some(ClaudeGatewayProfile::new(
+            base_url,
+            auth_token,
+            source_name,
+            models,
+        ));
+    }
+
+    // 3. Discover from Magpie configuration (~/.config/magpie/providers.json or %APPDATA%/magpie/providers.json)
+    if let Some((base_url, auth_token, models, source_name)) = discover_magpie_provider() {
+        return Some(ClaudeGatewayProfile::new(
+            base_url,
+            auth_token,
+            source_name,
+            models,
+        ));
+    }
+
+    // 4. Discover from host-creds-*.json (active CC Switch local proxy loopback)
     if let Some((proxy_url, proxy_token, source_name)) = discover_host_creds(&roots) {
         let mut models = if let Some(ref cc) = cc_switch {
             cc.models.clone()
@@ -502,7 +557,7 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
-    // 3. Discover directly from cc-switch.db if active provider has upstream base_url & token
+    // 5. Discover directly from cc-switch.db if active provider has upstream base_url & token
     if let Some(cc) = cc_switch
         && let Some(upstream_url) = cc.upstream_base_url
         && let Some(upstream_token) = cc.upstream_auth_token
@@ -518,7 +573,7 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
-    // 4. Discover from configLibrary static metadata as fallback
+    // 6. Discover from configLibrary static metadata as fallback
     if let Some((base_url, auth_token, models, source_name)) = discover_config_library(&roots) {
         return Some(ClaudeGatewayProfile::new(
             base_url,
@@ -528,6 +583,106 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
+    None
+}
+
+/// Discovers gateway env vars directly from `~/.claude/settings.json`.
+pub fn discover_claude_settings_env() -> Option<(String, String, Vec<ClaudeGatewayModel>, String)> {
+    let home = crate::collectors::home_dir()?;
+    let path = home.join(".claude").join("settings.json");
+    if !path.is_file() {
+        return None;
+    }
+    let content = fs::read_to_string(&path).ok()?;
+    let val: Value = serde_json::from_str(&content).ok()?;
+    let env_obj = val.get("env")?.as_object()?;
+    let base_url = env_obj
+        .get("ANTHROPIC_BASE_URL")?
+        .as_str()?
+        .trim()
+        .to_string();
+    if base_url.is_empty() {
+        return None;
+    }
+    let auth_token = env_obj
+        .get("ANTHROPIC_AUTH_TOKEN")
+        .or_else(|| env_obj.get("ANTHROPIC_API_KEY"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    if auth_token.is_empty() {
+        return None;
+    }
+    let live_models = fetch_live_upstream_models(&base_url, &auth_token);
+    Some((
+        base_url,
+        auth_token,
+        live_models,
+        "claude-settings".to_string(),
+    ))
+}
+
+/// Discovers active gateway from magpie configuration (`~/.config/magpie/providers.json` or `%APPDATA%/magpie/providers.json`).
+pub fn discover_magpie_provider() -> Option<(String, String, Vec<ClaudeGatewayModel>, String)> {
+    let mut candidate_paths = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = env::var_os("APPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+        {
+            candidate_paths.push(appdata.join("magpie").join("providers.json"));
+        }
+    }
+    if let Some(home) = crate::collectors::home_dir() {
+        candidate_paths.push(home.join(".config").join("magpie").join("providers.json"));
+    }
+
+    for path in candidate_paths {
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(val) = serde_json::from_str::<Value>(&content) else {
+            continue;
+        };
+        let Some(providers) = val.as_array() else {
+            continue;
+        };
+        if let Some(p) = providers.first() {
+            let key = p.get("key").and_then(Value::as_str).unwrap_or("").trim();
+            let name = p.get("name").and_then(Value::as_str).unwrap_or("").trim();
+            let anthropic_base = p
+                .get("anthropic")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+
+            let (base_url, auth_token) = if !anthropic_base.is_empty() {
+                (anthropic_base.to_string(), key.to_string())
+            } else {
+                (
+                    "http://127.0.0.1:3425/v1".to_string(),
+                    if key.is_empty() {
+                        "magpie".to_string()
+                    } else {
+                        key.to_string()
+                    },
+                )
+            };
+
+            let live_models = fetch_live_upstream_models(&base_url, &auth_token);
+            let display_name = if name.is_empty() {
+                "magpie".to_string()
+            } else {
+                format!("magpie:{name}")
+            };
+            return Some((base_url, auth_token, live_models, display_name));
+        }
+    }
     None
 }
 

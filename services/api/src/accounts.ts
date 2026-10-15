@@ -1520,7 +1520,11 @@ export async function currentSessionIdentity(
 
 export function normalizeEmail(value: unknown): string {
   if (typeof value !== "string") {
-    throw new AccountError("invalid_email", "邮箱地址格式无效，请输入正确的邮箱", 400);
+    throw new AccountError(
+      "invalid_email",
+      "邮箱地址格式无效，请输入正确的邮箱",
+      400,
+    );
   }
   const normalized = value.trim().toLowerCase();
   if (
@@ -1528,7 +1532,11 @@ export function normalizeEmail(value: unknown): string {
     normalized.length > 254 ||
     !EMAIL_PATTERN.test(normalized)
   ) {
-    throw new AccountError("invalid_email", "邮箱地址格式无效，请输入正确的邮箱", 400);
+    throw new AccountError(
+      "invalid_email",
+      "邮箱地址格式无效，请输入正确的邮箱",
+      400,
+    );
   }
   return normalized;
 }
@@ -1539,21 +1547,14 @@ export function normalizeDisplayName(value: unknown, email: string): string {
     return defaultName || "管理员";
   }
   if (typeof value !== "string") {
-    throw new AccountError(
-      "invalid_display_name",
-      "显示名称格式无效",
-      400,
-    );
+    throw new AccountError("invalid_display_name", "显示名称格式无效", 400);
   }
   const normalized = value.trim();
   if (normalized.length === 0) {
     const defaultName = email.slice(0, email.indexOf("@")).trim();
     return defaultName || "管理员";
   }
-  if (
-    normalized.length > 80 ||
-    /[\u0000-\u001f\u007f]/u.test(normalized)
-  ) {
+  if (normalized.length > 80 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
     throw new AccountError(
       "invalid_display_name",
       "显示名称长度不能超过 80 个字符或包含控制字符",
@@ -1569,10 +1570,18 @@ export function validatePassword(value: unknown): string {
   }
   const bytes = Buffer.byteLength(value, "utf8");
   if (value.length < 10) {
-    throw new AccountError("invalid_password", "管理员密码长度至少需要 10 个字符", 400);
+    throw new AccountError(
+      "invalid_password",
+      "管理员密码长度至少需要 10 个字符",
+      400,
+    );
   }
   if (value.length > 128 || bytes > 512) {
-    throw new AccountError("invalid_password", "密码长度不能超过 128 个字符", 400);
+    throw new AccountError(
+      "invalid_password",
+      "密码长度不能超过 128 个字符",
+      400,
+    );
   }
   return value;
 }

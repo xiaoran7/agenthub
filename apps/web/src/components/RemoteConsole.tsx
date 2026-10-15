@@ -94,7 +94,10 @@ function splitThinkingContent(
     !content.includes("</thinking>") &&
     !content.includes("</thought>");
   const cleanText = content
-    .replace(/<(?:thinking|thought)>[\s\S]*?(?:<\/(?:thinking|thought)>|$)/i, "")
+    .replace(
+      /<(?:thinking|thought)>[\s\S]*?(?:<\/(?:thinking|thought)>|$)/i,
+      "",
+    )
     .trim();
 
   return {
@@ -1956,8 +1959,8 @@ export function RemoteConsole({
                 }
                 const isStreamingThis = Boolean(
                   item.kind === "assistant" &&
-                    session?.binding.current_turn_id &&
-                    item === items[items.length - 1],
+                  session?.binding.current_turn_id &&
+                  item === items[items.length - 1],
                 );
                 const rawText = readableRemoteText(item.text);
                 const { thinking, cleanText, isThinkingLive } =

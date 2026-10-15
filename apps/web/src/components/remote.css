@@ -1436,9 +1436,13 @@ details[open] > .remote-tool-summary > .remote-disclosure {
      into the composer instead of colliding with its border. */
   margin: 24px auto 20px;
   padding: 12px 16px 10px 18px;
-  border: 1px solid var(--cds-border, var(--remote-composer-border, var(--remote-line)));
+  border: 1px solid
+    var(--cds-border, var(--remote-composer-border, var(--remote-line)));
   border-radius: var(--cds-radius-composer, 20px);
-  background: var(--cds-surface-3, var(--remote-composer-bg, var(--remote-surface)));
+  background: var(
+    --cds-surface-3,
+    var(--remote-composer-bg, var(--remote-surface))
+  );
   box-shadow: var(--cds-shadow-composer, 0 4px 20px rgba(0, 0, 0, 0.035));
   transition:
     border-color 0.2s ease,
@@ -1474,7 +1478,10 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 }
 .remote-composer-card:focus-within {
   border-color: var(--cds-clay, #d97757);
-  background: var(--cds-surface-3, var(--remote-composer-bg, var(--remote-surface)));
+  background: var(
+    --cds-surface-3,
+    var(--remote-composer-bg, var(--remote-surface))
+  );
   box-shadow: var(--cds-shadow-composer-focus);
 }
 .remote-composer-input-wrapper {

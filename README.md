@@ -4,22 +4,22 @@ AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**�
 
 它不实现自己的 Agent 推理循环，而是调用 Codex、Claude Code 等官方 Runtime。会话由本机 `agenthubd`（Runner）经官方协议托管；在任意设备通过自部署的 **Gateway + Web** 看到同一 Session 的实时过程，继续对话、处理审批或急停。读取历史只有一个目的：判断并执行“继续”。
 
-> **路线调整（2026-10）**：当前聚焦 **Gateway + Web** 自部署主线。Web 端同时承担桌面浏览器与移动设备（响应式 PWA）的远程全功能控制；Desktop（Tauri）与原生 Android 暂时冻结，延后至下一阶段。
+> **架构演进（2026-10）**：彻底移除重型 Desktop 桌面客户端（Tauri），收敛为双端闭环：
+> 1. **本机 Runner（内置轻量自包含 Web 控制台）**：单二进制文件秒级启动，自带 CDS 设计系统内嵌 Web 界面（`agenthub-runner web`），无需安装任何桌面运行库；
+> 2. **远程 Web 控制台（`apps/web`）**：承担桌面浏览器与移动设备（响应式 PWA）的跨设备远程全功能控制。
 
 ## 产品结构
 
 ```text
 本机 agenthubd (Runner) ──官方协议──► Codex / Claude Code Runtime
+      │                     └────► 内置轻量 Web 控制台 (http://127.0.0.1:4200)
       │
-      └──主动出站 (WebSocket/TLS)──► Gateway ◄── Web (PC / 手机浏览器)
-                                      ┆
-                                   [挂起/延后: Desktop / Android]
+      └──主动出站 (WebSocket/TLS)──► Gateway ◄── 远程 Web 控制端 (PC / 手机浏览器)
 ```
 
-- **agenthubd (Runner)**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等，并主动向 Gateway 建立出站连接；可由 `agent-pulse-runner daemon` 启动。
+- **agenthubd (Runner)**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等，并主动向 Gateway 建立出站连接；内置 CDS 轻量 Web 控制台，可由 `agenthub-runner web` 或 `agenthub-runner daemon` 启动。
 - **Gateway**：自部署控制中枢。负责设备与用户身份、命令账本、状态路由、事件持久化与重放，不运行 Agent，也不是 Session 真相源。
 - **Web**：核心远程控制端（自部署单页应用，支持桌面与移动端响应式）。用于跨设备查看实时执行、续聊、处理权限审批与紧急中断。
-- **Desktop / Android（暂时冻结）**：已暂停主动迭代，代码保留在工程中，核心精力全部收敛至 Gateway + Web 闭环。
 
 官方协议不支持第三方 attach 正在运行的 CLI 进程，因此“远程继续”要求 Session 由 `agenthubd` 托管：**create / resume** 是托管的正式能力；**discover** 只产生恢复候选的只读元数据，不等于取得控制权，三种语义不能互相冒充。
 

@@ -27,7 +27,10 @@ export class SqliteAccountStore implements AccountStore {
   readonly #db: DatabaseSync;
   readonly #now: () => Date;
 
-  constructor(pathOrDb: string | DatabaseSync, options: { now?: () => Date } = {}) {
+  constructor(
+    pathOrDb: string | DatabaseSync,
+    options: { now?: () => Date } = {},
+  ) {
     if (typeof pathOrDb === "string") {
       const dir = dirname(pathOrDb);
       if (dir && dir !== "." && dir !== "") {
@@ -79,7 +82,9 @@ export class SqliteAccountStore implements AccountStore {
 
   async hasAnyAdmin(): Promise<boolean> {
     const row = this.#db
-      .prepare("SELECT COUNT(*) as count FROM agent_pulse_users WHERE status = 'active'")
+      .prepare(
+        "SELECT COUNT(*) as count FROM agent_pulse_users WHERE status = 'active'",
+      )
       .get() as { count: number | bigint } | undefined;
     const count = Number(row?.count ?? 0);
     return count > 0;
@@ -229,7 +234,9 @@ export class SqliteAccountStore implements AccountStore {
     if (!row || row.status !== "active") return undefined;
 
     this.#db
-      .prepare("UPDATE agent_pulse_web_sessions SET last_seen_at = ? WHERE digest = ?")
+      .prepare(
+        "UPDATE agent_pulse_web_sessions SET last_seen_at = ? WHERE digest = ?",
+      )
       .run(now, digest);
 
     return {
@@ -303,17 +310,24 @@ export class SqliteAccountStore implements AccountStore {
     changedAt?: string;
   }): Promise<PasswordChangeResult> {
     const user = this.#db
-      .prepare("SELECT password_hash, status FROM agent_pulse_users WHERE user_id = ?")
+      .prepare(
+        "SELECT password_hash, status FROM agent_pulse_users WHERE user_id = ?",
+      )
       .get(input.userId) as
-      | { password_hash: string; status: string }
-      | undefined;
+      { password_hash: string; status: string } | undefined;
 
-    if (!user || user.status !== "active" || user.password_hash !== input.expectedPasswordHash) {
+    if (
+      !user ||
+      user.status !== "active" ||
+      user.password_hash !== input.expectedPasswordHash
+    ) {
       return { updated: false, revoked_sessions: 0 };
     }
 
     this.#db
-      .prepare("UPDATE agent_pulse_users SET password_hash = ? WHERE user_id = ?")
+      .prepare(
+        "UPDATE agent_pulse_users SET password_hash = ? WHERE user_id = ?",
+      )
       .run(input.passwordHash, input.userId);
 
     const revoked = await this.revokeOtherWebSessions(
@@ -333,7 +347,9 @@ export class SqliteAccountStore implements AccountStore {
   }): Promise<LoginAttemptResult> {
     const nowMs = Date.parse(input.now);
     const row = this.#db
-      .prepare("SELECT * FROM agent_pulse_login_attempts WHERE scope_digest = ?")
+      .prepare(
+        "SELECT * FROM agent_pulse_login_attempts WHERE scope_digest = ?",
+      )
       .get(input.scopeDigest) as
       | {
           scope_digest: string;
@@ -343,7 +359,10 @@ export class SqliteAccountStore implements AccountStore {
         }
       | undefined;
 
-    if (!row || Date.parse(row.window_started_at) + input.windowSeconds * 1_000 <= nowMs) {
+    if (
+      !row ||
+      Date.parse(row.window_started_at) + input.windowSeconds * 1_000 <= nowMs
+    ) {
       this.#db
         .prepare(
           `INSERT INTO agent_pulse_login_attempts (scope_digest, attempt_count, window_started_at, blocked_until)
@@ -360,13 +379,17 @@ export class SqliteAccountStore implements AccountStore {
     if (row.blocked_until && Date.parse(row.blocked_until) > nowMs) {
       return {
         allowed: false,
-        retry_after_seconds: Math.ceil((Date.parse(row.blocked_until) - nowMs) / 1_000),
+        retry_after_seconds: Math.ceil(
+          (Date.parse(row.blocked_until) - nowMs) / 1_000,
+        ),
       };
     }
 
     const nextAttempts = row.attempt_count + 1;
     if (nextAttempts > input.maximumAttempts) {
-      const blockedUntil = new Date(nowMs + input.blockSeconds * 1_000).toISOString();
+      const blockedUntil = new Date(
+        nowMs + input.blockSeconds * 1_000,
+      ).toISOString();
       this.#db
         .prepare(
           "UPDATE agent_pulse_login_attempts SET attempt_count = ?, blocked_until = ? WHERE scope_digest = ?",
@@ -562,7 +585,9 @@ export class SqliteAccountStore implements AccountStore {
     return { applied: true, duplicate: false, account: view };
   }
 
-  async billingReference(_userId: string): Promise<BillingReference | undefined> {
+  async billingReference(
+    _userId: string,
+  ): Promise<BillingReference | undefined> {
     return undefined;
   }
 

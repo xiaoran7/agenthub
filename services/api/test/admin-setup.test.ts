@@ -50,7 +50,10 @@ test("admin first-run setup lifecycle and rejection of subsequent registrations"
   const setupAccount = JSON.parse(setupResp.body);
   assert.equal(setupAccount.user.email, "admin@selfhosted.local");
   assert.equal(setupAccount.user.display_name, "SuperAdmin");
-  assert.ok(setupResp.headers["set-cookie"], "setup must issue a session cookie");
+  assert.ok(
+    setupResp.headers["set-cookie"],
+    "setup must issue a session cookie",
+  );
 
   // 3. Status after setup: needs_setup must be false
   const updatedStatus = await app.inject({
@@ -99,7 +102,9 @@ test("admin first-run setup lifecycle and rejection of subsequent registrations"
   // 7. Restart simulation: Open same SQLite DB with new SqliteAccountStore instance
   const restartedAccounts = new SqliteAccountStore(TEST_DB);
   assert.equal(await restartedAccounts.hasAnyAdmin(), true);
-  const adminUser = await restartedAccounts.findAccountByEmail("admin@selfhosted.local");
+  const adminUser = await restartedAccounts.findAccountByEmail(
+    "admin@selfhosted.local",
+  );
   assert.ok(adminUser);
   assert.equal(adminUser.display_name, "SuperAdmin");
 });

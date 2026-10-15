@@ -5,22 +5,22 @@
 
 :root {
   /* 1. 表面色彩阶梯 (Surfaces & Colors) */
-  --cds-surface-0: #f5f5f3;        /* 窗口/侧边栏基层 Canvas */
-  --cds-surface-1: #fcfcfb;        /* 主画布背景底色 */
-  --cds-surface-2: #ffffff;        /* 消息气泡/卡片表面 */
-  --cds-surface-3: #ffffff;        /* 浮动面板/输入终端表面 */
-  --cds-surface-popover: #ffffff;  /* 悬浮 Popover 纯白表面 */
+  --cds-surface-0: #f5f5f3; /* 窗口/侧边栏基层 Canvas */
+  --cds-surface-1: #fcfcfb; /* 主画布背景底色 */
+  --cds-surface-2: #ffffff; /* 消息气泡/卡片表面 */
+  --cds-surface-3: #ffffff; /* 浮动面板/输入终端表面 */
+  --cds-surface-popover: #ffffff; /* 悬浮 Popover 纯白表面 */
 
-  --cds-clay: #d97757;             /* 品牌陶土主色 */
-  --cds-clay-hover: #cc5a36;       /* 陶土色悬停加深态 */
-  --cds-clay-light: #fbf3ef;       /* 陶土极浅背景色 */
+  --cds-clay: #d97757; /* 品牌陶土主色 */
+  --cds-clay-hover: #cc5a36; /* 陶土色悬停加深态 */
+  --cds-clay-light: #fbf3ef; /* 陶土极浅背景色 */
   --cds-clay-soft: rgba(217, 119, 87, 0.12);
 
   /* 2. Alpha 透明度与边框色系 */
   --cds-alpha-0: hsla(0, 0%, 8%, 0);
   --cds-alpha-1: hsla(0, 0%, 8%, 0.05); /* Ghost hover, skeleton */
-  --cds-alpha-2: hsla(0, 0%, 8%, 0.10); /* Standard border */
-  --cds-alpha-3: hsla(0, 0%, 8%, 0.20); /* Border strong */
+  --cds-alpha-2: hsla(0, 0%, 8%, 0.1); /* Standard border */
+  --cds-alpha-3: hsla(0, 0%, 8%, 0.2); /* Border strong */
   --cds-alpha-4: hsla(0, 0%, 8%, 0.35); /* Heavy divider */
 
   --cds-border: var(--cds-alpha-2);
@@ -34,24 +34,36 @@
 
   /* 4. 阴影系统 (Elevation Shadows) */
   --cds-shadow-color: rgba(0, 0, 0, 0.08);
-  --cds-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05), 0 2px 8px 0 var(--cds-shadow-color);
-  --cds-shadow-md: 0 2px 4px 0 rgba(0, 0, 0, 0.05), 0 6px 16px 0 var(--cds-shadow-color);
-  --cds-shadow-lg: 0 4px 8px 0 rgba(0, 0, 0, 0.06), 0 12px 28px -2px var(--cds-shadow-color);
-  --cds-shadow-popover: inset 0 0 0 var(--cds-ring-inner) var(--cds-ring-color),
-                        0 0 0 var(--cds-ring-outer) var(--cds-ring-color),
-                        0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  --cds-shadow-sm:
+    0 1px 2px 0 rgba(0, 0, 0, 0.05), 0 2px 8px 0 var(--cds-shadow-color);
+  --cds-shadow-md:
+    0 2px 4px 0 rgba(0, 0, 0, 0.05), 0 6px 16px 0 var(--cds-shadow-color);
+  --cds-shadow-lg:
+    0 4px 8px 0 rgba(0, 0, 0, 0.06), 0 12px 28px -2px var(--cds-shadow-color);
+  --cds-shadow-popover:
+    inset 0 0 0 var(--cds-ring-inner) var(--cds-ring-color),
+    0 0 0 var(--cds-ring-outer) var(--cds-ring-color),
+    0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
 
   --cds-panel-shadow: 0 0 0 1px var(--cds-border), var(--cds-shadow-sm);
-  --cds-panel-shadow-hover: 0 0 0 1px var(--cds-border-strong), 0 4px 16px -2px rgba(0, 0, 0, 0.09);
+  --cds-panel-shadow-hover:
+    0 0 0 1px var(--cds-border-strong), 0 4px 16px -2px rgba(0, 0, 0, 0.09);
 
   /* 5. 核心输入终端双环阴影 (Composer Shadow) */
-  --cds-shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.035), inset 0 0 0 1px var(--cds-border);
-  --cds-shadow-composer-hover: 0 4px 24px rgba(0, 0, 0, 0.06), inset 0 0 0 1px var(--cds-border-strong);
-  --cds-shadow-composer-focus: 0 4px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 1px var(--cds-clay), 0 0 0 1.5px rgba(217, 119, 87, 0.25);
+  --cds-shadow-composer:
+    0 4px 20px rgba(0, 0, 0, 0.035), inset 0 0 0 1px var(--cds-border);
+  --cds-shadow-composer-hover:
+    0 4px 24px rgba(0, 0, 0, 0.06), inset 0 0 0 1px var(--cds-border-strong);
+  --cds-shadow-composer-focus:
+    0 4px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 1px var(--cds-clay),
+    0 0 0 1.5px rgba(217, 119, 87, 0.25);
 
   /* 6. 三层焦点微光环与拖拽微光 */
-  --cds-focus-shadow: inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay), 0 0 6px 1px rgba(217, 119, 87, 0.25);
-  --cds-shadow-drop-glow: inset 0 0 24px -2px rgba(217, 119, 87, 0.20), inset 0 0 0 2px var(--cds-clay);
+  --cds-focus-shadow:
+    inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay),
+    0 0 6px 1px rgba(217, 119, 87, 0.25);
+  --cds-shadow-drop-glow:
+    inset 0 0 24px -2px rgba(217, 119, 87, 0.2), inset 0 0 0 2px var(--cds-clay);
 
   /* 7. 交互填充与文本色阶 */
   --cds-fill-ghost-hover: var(--cds-alpha-1);
@@ -84,12 +96,16 @@
 }
 
 /* 高分屏视网膜物理发丝细线补偿 */
-@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 2dppx), (resolution >= 2x) {
+@media (-webkit-min-device-pixel-ratio: 2),
+  (min-resolution: 2dppx),
+  (resolution >= 2x) {
   :root {
     --cds-ring-hairline: 0.5px;
   }
 }
-@media (-webkit-min-device-pixel-ratio: 3), (min-resolution: 3dppx), (resolution >= 3x) {
+@media (-webkit-min-device-pixel-ratio: 3),
+  (min-resolution: 3dppx),
+  (resolution >= 3x) {
   :root {
     --cds-ring-hairline: calc(1px / 3);
   }
@@ -98,7 +114,9 @@
 /* ==========================================================================
    Dark Mode 暗色模式变量重载
    ========================================================================== */
-[data-theme="dark"], :root[data-theme="dark"], .dark {
+[data-theme="dark"],
+:root[data-theme="dark"],
+.dark {
   --cds-surface-0: #0b0b0a;
   --cds-surface-1: #151515;
   --cds-surface-2: #1a1a19;
@@ -107,13 +125,13 @@
   --cds-clay: #d97757;
   --cds-clay-hover: #e08264;
   --cds-clay-light: rgba(217, 119, 87, 0.15);
-  --cds-clay-soft: rgba(217, 119, 87, 0.20);
+  --cds-clay-soft: rgba(217, 119, 87, 0.2);
 
   --cds-alpha-0: hsla(0, 0%, 100%, 0);
   --cds-alpha-1: hsla(0, 0%, 100%, 0.05);
   --cds-alpha-2: hsla(0, 0%, 100%, 0.09);
   --cds-alpha-3: hsla(0, 0%, 100%, 0.18);
-  --cds-alpha-4: hsla(0, 0%, 100%, 0.30);
+  --cds-alpha-4: hsla(0, 0%, 100%, 0.3);
 
   --cds-border: var(--cds-alpha-2);
   --cds-border-strong: var(--cds-alpha-3);
@@ -121,24 +139,36 @@
   /* 双环暗色模式：内高光 1px + 外轮廓 0px */
   --cds-ring-inner: 1px;
   --cds-ring-outer: 0px;
-  --cds-ring-color: rgba(255, 255, 255, 0.10);
+  --cds-ring-color: rgba(255, 255, 255, 0.1);
 
-  --cds-shadow-color: rgba(0, 0, 0, 0.40);
-  --cds-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4), 0 2px 8px 0 var(--cds-shadow-color);
-  --cds-shadow-md: 0 2px 4px 0 rgba(0, 0, 0, 0.4), 0 6px 16px 0 var(--cds-shadow-color);
-  --cds-shadow-lg: 0 4px 8px 0 rgba(0, 0, 0, 0.5), 0 16px 36px -2px var(--cds-shadow-color);
-  --cds-shadow-popover: inset 0 0 0 1px rgba(255, 255, 255, 0.10),
-                        0 8px 28px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.45);
+  --cds-shadow-color: rgba(0, 0, 0, 0.4);
+  --cds-shadow-sm:
+    0 1px 2px 0 rgba(0, 0, 0, 0.4), 0 2px 8px 0 var(--cds-shadow-color);
+  --cds-shadow-md:
+    0 2px 4px 0 rgba(0, 0, 0, 0.4), 0 6px 16px 0 var(--cds-shadow-color);
+  --cds-shadow-lg:
+    0 4px 8px 0 rgba(0, 0, 0, 0.5), 0 16px 36px -2px var(--cds-shadow-color);
+  --cds-shadow-popover:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 8px 28px rgba(0, 0, 0, 0.65),
+    0 2px 8px rgba(0, 0, 0, 0.45);
 
   --cds-panel-shadow: 0 0 0 1px var(--cds-border), var(--cds-shadow-sm);
-  --cds-panel-shadow-hover: 0 0 0 1px var(--cds-border-strong), 0 6px 20px rgba(0, 0, 0, 0.6);
+  --cds-panel-shadow-hover:
+    0 0 0 1px var(--cds-border-strong), 0 6px 20px rgba(0, 0, 0, 0.6);
 
-  --cds-shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 0 0 1px var(--cds-border);
-  --cds-shadow-composer-hover: 0 4px 24px rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--cds-border-strong);
-  --cds-shadow-composer-focus: 0 4px 24px rgba(0, 0, 0, 0.65), inset 0 0 0 1px var(--cds-clay), 0 0 0 1.5px rgba(217, 119, 87, 0.35);
+  --cds-shadow-composer:
+    0 4px 20px rgba(0, 0, 0, 0.4), inset 0 0 0 1px var(--cds-border);
+  --cds-shadow-composer-hover:
+    0 4px 24px rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--cds-border-strong);
+  --cds-shadow-composer-focus:
+    0 4px 24px rgba(0, 0, 0, 0.65), inset 0 0 0 1px var(--cds-clay),
+    0 0 0 1.5px rgba(217, 119, 87, 0.35);
 
-  --cds-focus-shadow: inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay), 0 0 8px 2px rgba(217, 119, 87, 0.35);
-  --cds-shadow-drop-glow: inset 0 0 24px -2px rgba(217, 119, 87, 0.30), inset 0 0 0 2px var(--cds-clay);
+  --cds-focus-shadow:
+    inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay),
+    0 0 8px 2px rgba(217, 119, 87, 0.35);
+  --cds-shadow-drop-glow:
+    inset 0 0 24px -2px rgba(217, 119, 87, 0.3), inset 0 0 0 2px var(--cds-clay);
 
   --cds-fill-ghost-hover: var(--cds-alpha-1);
   --cds-fill-ghost-selected: var(--cds-alpha-2);
@@ -159,60 +189,90 @@
 
 /* 1. 思考中三点波浪跳跃 */
 @keyframes timeline-quiet-dot {
-  0%, 8%   { opacity: 0.2; transform: translateY(2px); }
-  22%      { opacity: 1; transform: translateY(-2.5px); }
-  36%, 70% { opacity: 1; transform: translateY(0); }
-  90%, 100%{ opacity: 0.2; transform: translateY(0); }
+  0%,
+  8% {
+    opacity: 0.2;
+    transform: translateY(2px);
+  }
+  22% {
+    opacity: 1;
+    transform: translateY(-2.5px);
+  }
+  36%,
+  70% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  90%,
+  100% {
+    opacity: 0.2;
+    transform: translateY(0);
+  }
 }
 
 /* 2. 消息气泡微弹进入 */
 @keyframes message-fade-up {
-  0%   { opacity: 0; transform: translateY(8px); }
-  100% { opacity: 1; transform: translateY(0); }
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 3. 陶土明度呼吸脉冲 */
 @keyframes cds-clay-pulse {
-  0%, 100% { transform: scale(1); opacity: 0.8; }
-  50%      { transform: scale(1.15); opacity: 1; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
 }
 
 /* 4. 7 档渐隐非线性 Alpha 遮罩类 */
 .cds-scroll-fade-mask {
-  mask-image: linear-gradient(to bottom,
+  mask-image: linear-gradient(
+    to bottom,
     transparent,
-    #0000000d calc(var(--cds-scroll-fade-top) * .15),
-    #00000026 calc(var(--cds-scroll-fade-top) * .3),
-    #0000004d calc(var(--cds-scroll-fade-top) * .45),
-    #00000080 calc(var(--cds-scroll-fade-top) * .6),
-    #000000b3 calc(var(--cds-scroll-fade-top) * .75),
-    #000000d9 calc(var(--cds-scroll-fade-top) * .87),
+    #0000000d calc(var(--cds-scroll-fade-top) * 0.15),
+    #00000026 calc(var(--cds-scroll-fade-top) * 0.3),
+    #0000004d calc(var(--cds-scroll-fade-top) * 0.45),
+    #00000080 calc(var(--cds-scroll-fade-top) * 0.6),
+    #000000b3 calc(var(--cds-scroll-fade-top) * 0.75),
+    #000000d9 calc(var(--cds-scroll-fade-top) * 0.87),
     #000 var(--cds-scroll-fade-top),
     #000 calc(100% - var(--cds-scroll-fade-bottom)),
-    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * .87),
-    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * .75),
-    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * .6),
-    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * .45),
-    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * .3),
-    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * .15),
+    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * 0.87),
+    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * 0.75),
+    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * 0.6),
+    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * 0.45),
+    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * 0.3),
+    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * 0.15),
     transparent
   );
-  -webkit-mask-image: linear-gradient(to bottom,
+  -webkit-mask-image: linear-gradient(
+    to bottom,
     transparent,
-    #0000000d calc(var(--cds-scroll-fade-top) * .15),
-    #00000026 calc(var(--cds-scroll-fade-top) * .3),
-    #0000004d calc(var(--cds-scroll-fade-top) * .45),
-    #00000080 calc(var(--cds-scroll-fade-top) * .6),
-    #000000b3 calc(var(--cds-scroll-fade-top) * .75),
-    #000000d9 calc(var(--cds-scroll-fade-top) * .87),
+    #0000000d calc(var(--cds-scroll-fade-top) * 0.15),
+    #00000026 calc(var(--cds-scroll-fade-top) * 0.3),
+    #0000004d calc(var(--cds-scroll-fade-top) * 0.45),
+    #00000080 calc(var(--cds-scroll-fade-top) * 0.6),
+    #000000b3 calc(var(--cds-scroll-fade-top) * 0.75),
+    #000000d9 calc(var(--cds-scroll-fade-top) * 0.87),
     #000 var(--cds-scroll-fade-top),
     #000 calc(100% - var(--cds-scroll-fade-bottom)),
-    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * .87),
-    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * .75),
-    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * .6),
-    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * .45),
-    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * .3),
-    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * .15),
+    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * 0.87),
+    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * 0.75),
+    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * 0.6),
+    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * 0.45),
+    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * 0.3),
+    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * 0.15),
     transparent
   );
 }

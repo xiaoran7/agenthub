@@ -40,7 +40,6 @@ export interface AccountView {
   workspace_entitlements?: AccountView["entitlements"];
 }
 
-
 export interface WebSessionView {
   session_id: string;
   created_at: string;
@@ -100,7 +99,6 @@ export interface AuditPage {
   events: AuditEvent[];
   next_before?: string;
 }
-
 
 export class AccountApiError extends Error {
   readonly code: string;
@@ -350,4 +348,3 @@ async function accountError(response: Response): Promise<AccountApiError> {
   }
   return new AccountApiError(response.status, code);
 }
-

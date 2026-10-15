@@ -3304,7 +3304,11 @@ fn run_agent_session_turn_streaming_once(
             effective_model = find_claude_session_model(session_id);
         }
         if let Some(gateway) = crate::claude_gateway::discover_claude_gateway() {
-            gateway.inject_into_command(&mut command, &mut effective_model);
+            gateway.inject_into_command_with_session(
+                &mut command,
+                &mut effective_model,
+                Some(session_id),
+            );
         }
     }
     let effective_model_ref = effective_model.as_deref();
@@ -3396,7 +3400,22 @@ pub fn run_agent_session_start_streaming(
     if agent == crate::domain::AgentType::ClaudeCode
         && let Some(gateway) = crate::claude_gateway::discover_claude_gateway()
     {
-        gateway.inject_into_command(&mut command, &mut effective_model);
+        // For fresh sessions, compute implicit fingerprint from prompt so upstream gateway retains prompt cache
+        let trimmed_prompt = prompt.trim();
+        let implicit_sid = if !trimmed_prompt.is_empty() {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(trimmed_prompt.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+            Some(format!("magpie-{}", &hash[..12]))
+        } else {
+            None
+        };
+        gateway.inject_into_command_with_session(
+            &mut command,
+            &mut effective_model,
+            implicit_sid.as_deref(),
+        );
     }
     let effective_model_ref = effective_model.as_deref();
     let effective_options = TurnOptions {

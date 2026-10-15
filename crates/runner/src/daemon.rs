@@ -23,6 +23,9 @@ pub struct DaemonConfig {
     pub identity: DeviceIdentity,
     pub server: Option<String>,
     pub ipc_endpoint: Option<String>,
+    pub enable_web: bool,
+    pub web_port: Option<u16>,
+    pub open_browser: bool,
 }
 
 #[derive(Clone)]
@@ -130,10 +133,11 @@ pub fn run(config: DaemonConfig) -> Result<()> {
     });
     let ipc_endpoint = endpoint.clone();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let ipc_handler_thread = ipc_handler.clone();
     let ipc_thread = thread::Builder::new()
         .name("agenthubd-ipc".into())
         .spawn(move || {
-            daemon_ipc::serve_with_ready(&ipc_endpoint, ipc_handler, ipc_control, ready_tx)
+            daemon_ipc::serve_with_ready(&ipc_endpoint, ipc_handler_thread, ipc_control, ready_tx)
         })
         .context("ipc_thread_start_failed")?;
     match ready_rx.recv_timeout(Duration::from_secs(5)) {
@@ -147,6 +151,14 @@ pub fn run(config: DaemonConfig) -> Result<()> {
             ipc_stopped.store(true, Ordering::Relaxed);
             return Err(anyhow::anyhow!("ipc_start_timeout"));
         }
+    }
+
+    if config.enable_web {
+        let web_cfg = crate::web_server::WebServerConfig {
+            port: config.web_port.unwrap_or(4200),
+            open_browser: config.open_browser,
+        };
+        let _ = crate::web_server::serve(web_cfg, ipc_handler.clone(), ipc_stopped.clone());
     }
 
     let result = run_with_local_control(

@@ -88,6 +88,29 @@ enum Command {
         db: PathBuf,
         #[arg(long, help = "Override the per-device named pipe or Unix socket")]
         ipc_endpoint: Option<String>,
+        #[arg(long, default_value_t = true, help = "Enable embedded CDS web console")]
+        web: bool,
+        #[arg(long, default_value_t = 4200, help = "Embedded web console port")]
+        web_port: u16,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Auto open web console in default browser"
+        )]
+        open_browser: bool,
+    },
+    /// Launch the native runtime with an embedded CDS web console and auto-open browser.
+    Web {
+        #[arg(long, default_value = "codex")]
+        codex_binary: PathBuf,
+        #[arg(long, default_value = ".")]
+        workspace: Vec<PathBuf>,
+        #[arg(long, default_value = "agenthub.db")]
+        db: PathBuf,
+        #[arg(long, default_value_t = 4200)]
+        port: u16,
+        #[arg(long, default_value_t = true)]
+        open_browser: bool,
     },
     /// Connect the local agenthubd control plane to the authenticated v3 Gateway.
     RemoteRun {
@@ -101,6 +124,16 @@ enum Command {
         server: String,
         #[arg(long, help = "Override the per-device named pipe or Unix socket")]
         ipc_endpoint: Option<String>,
+        #[arg(long, default_value_t = true, help = "Enable embedded CDS web console")]
+        web: bool,
+        #[arg(long, default_value_t = 4200, help = "Embedded web console port")]
+        web_port: u16,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Auto open web console in default browser"
+        )]
+        open_browser: bool,
     },
     /// Local JSONL control channel for a persistent Codex app-server Host.
     /// This is not yet the authenticated Gateway transport.
@@ -450,6 +483,9 @@ fn main() -> Result<()> {
             workspace,
             db,
             ipc_endpoint,
+            web,
+            web_port,
+            open_browser,
         } => {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("daemon_requires_device_identity"))?;
@@ -460,6 +496,29 @@ fn main() -> Result<()> {
                 identity,
                 server: None,
                 ipc_endpoint,
+                enable_web: web,
+                web_port: Some(web_port),
+                open_browser,
+            })?;
+        }
+        Command::Web {
+            codex_binary,
+            workspace,
+            db,
+            port,
+            open_browser,
+        } => {
+            let identity = runtime_identity.unwrap_or_else(DeviceIdentity::generate);
+            agent_pulse_runner::daemon::run(agent_pulse_runner::daemon::DaemonConfig {
+                codex_binary,
+                workspaces: workspace,
+                database: db,
+                identity,
+                server: None,
+                ipc_endpoint: None,
+                enable_web: true,
+                web_port: Some(port),
+                open_browser,
             })?;
         }
         Command::RemoteRun {
@@ -468,6 +527,9 @@ fn main() -> Result<()> {
             db,
             server,
             ipc_endpoint,
+            web,
+            web_port,
+            open_browser,
         } => {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("remote_requires_bound_device_identity"))?;
@@ -478,6 +540,9 @@ fn main() -> Result<()> {
                 identity,
                 server: Some(server),
                 ipc_endpoint,
+                enable_web: web,
+                web_port: Some(web_port),
+                open_browser,
             })?;
         }
         Command::RemoteHost {
