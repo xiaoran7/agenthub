@@ -93,6 +93,10 @@ export function AuthScreen({
       setError("请输入自部署服务器地址（如 http://localhost:3000）");
       return;
     }
+    if (mode === "register" && password.length < 10) {
+      setError("管理员密码长度至少需要 10 个字符");
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -195,7 +199,7 @@ export function AuthScreen({
               <span>密码</span>
               <input
                 type="password"
-                placeholder="••••••••••"
+                placeholder={mode === "register" ? "至少 10 位密码" : "••••••••••"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required

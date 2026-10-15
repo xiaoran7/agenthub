@@ -27,6 +27,7 @@
 - **纯开源自部署解耦与全平台去除硬编码地址**：
   - 彻底移除 `DEFAULT_SERVER_URL` 常量与所有硬编码平台地址（包括 `platform.tannerlab.xyz`）；
   - 桌面端（`apps/desktop`）登录界面将“服务器地址”作为一级直观输入项，移除折叠的高级设置开关，用户可自由输入任意自部署地址（支持 `http://` 与 `https://`），并使用 `localStorage` 本地记忆上次使用的地址；
+  - 增强桌面端管理员初始化的密码长度校验（明确标注至少 10 位并提前拦截），优化 Rust 端 HTTP 400 状态码映射，提供清晰明确的规则提示；
   - 桌面端后端（`lib.rs`）与 Runner（`gateway.rs`）解除仅限回环地址使用 HTTP 的限制，支持家庭内网/局域网私有 IP（如 `http://192.168.x.x:3000`）、Tailscale/VPN 私网及公网域名；
   - Windows 一键接入脚本（`Connect-AgentHub.ps1`）改造为通用自部署模式，交互式提示输入服务器地址并支持 `http/https`，清理旧版 `Connect-AgentPulse` 遗留脚本；
   - 重新构建并归档桌面端安装包（NSIS setup 与 MSI）和原生监听接入包（ZIP 与 EXE），更新校验和清单。

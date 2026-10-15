@@ -3564,6 +3564,9 @@ fn map_http_error(error: ureq::Error) -> DesktopError {
         ureq::Error::StatusCode(429) => DesktopError::LoginRateLimited,
         ureq::Error::StatusCode(403) => DesktopError::EmailVerificationRequired,
         ureq::Error::StatusCode(409) => DesktopError::DeviceConflict,
+        ureq::Error::StatusCode(400) => DesktopError::Detailed(
+            "请求参数无效，请检查输入（管理员密码长度至少需 10 个字符）".to_string(),
+        ),
         ureq::Error::Timeout(_)
         | ureq::Error::HostNotFound
         | ureq::Error::ConnectionFailed
@@ -4045,10 +4048,11 @@ mod tests {
         assert!(extract_session_cookie("other=secret; Path=/").is_none());
     }
     #[test]
-    fn rejects_insecure_remote_servers() {
+    fn accepts_http_and_https_servers() {
         assert!(normalize_server_url("https://platform.tannerlab.xyz/").is_ok());
         assert!(normalize_server_url("http://localhost:3000").is_ok());
-        assert!(normalize_server_url("http://example.com").is_err());
+        assert!(normalize_server_url("http://192.168.1.100:3000").is_ok());
+        assert!(normalize_server_url("ftp://example.com").is_err());
     }
 
     #[test]
