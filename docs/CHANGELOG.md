@@ -2,23 +2,39 @@
 
 ## [2.4.78] - 2026-10-16
 
-### 体验大升级：彻底根治数据库桌面污染，全面转向类似 Magpie 独立桌面 App 架构与零黑框静默启动
+### 体验大升级：彻底根治数据库桌面污染，全面转向类似 Magpie 独立桌面 App 架构、窗口尺寸适中居中与零黑框静默启动
 
-根据用户“桌面 agenthub.db 彻底根治隐藏”、“一秒黑框都不想见到”、“改为类似 Magpie 的独立桌面版而不是网页版”的核心体验诉求，完成深层架构与运行形态升级：
+根据用户“桌面 agenthub.db 彻底根治隐藏”、“一秒黑框都不想见到”、“改为类似 Magpie 的独立桌面版而不是网页版”、“顶部同色、右边滑动栏没有必要、页面最开始打开出现在屏幕中间且尺寸适中，UI/UX 与 Session 解析深度学习 Magpie”的核心诉求，完成深层架构与运行形态升级：
 
+- **看齐 Magpie 的独立桌面应用窗口体验（紧凑小巧、居中启动、顶部同色、无滑动栏）**：
+  - **黄金小巧尺寸 (~780x680)**：淘汰默认 1280x820 大屏幕铺满的不适感，采用 Magpie 经典的精致桌面卡片级尺寸（780 宽 x 680 高）；
+  - **屏幕自适应动态居中**：在 `crates/runner/src/tray.rs` 中通过 Win32 `GetSystemMetrics(SM_CXSCREEN / SM_CYSCREEN)` 精准动态计算屏幕正中央坐标 `(sw - 780)/2, (sh - 680)/2`，通过 `--window-position=X,Y` 确保每次启动或托盘呼出时完美呈现在屏幕正中心；
+  - **顶部标题栏与背景同色（深色一体化）**：
+    - 在 HTML 头部注入 `<meta name="theme-color" content="#111827" id="themeColorMeta">` 与 `<meta name="color-scheme" content="dark light">`；
+    - 提供规范的 Web App Manifest (`/manifest.json`)，设定 `theme_color: "#111827"` 与 `background_color: "#0b0f17"`；
+    - Edge 独立 App 启动参数注入 `--force-dark-mode`，标题栏与控制台背景浑然一体，彻底告别刺眼的白条；
+    - 支持外观亮色/暗色切换时，动态联动更新 `themeColorMeta` 保持随时同色；
+  - **彻底移除臃肿丑陋的右侧原生滚动条**：
+    - 全局注入 `scrollbar-width: none !important; -ms-overflow-style: none !important;` 以及 `::-webkit-scrollbar { display: none !important; }`；
+    - 内容自适应滚动的同时完全隐去原生 17px 滚动条轨道，视觉纯净轻盈。
+- **UI/UX 与功能对标 Magpie：会话解析 (Sessions) 树状分组与用量分析 (Usage)**：
+  - **清晰干脆的会话解析树 (Sessions)**：
+    - 按工作区或物理目录智能聚类历史会话，展示工作区路径与会话数量；
+    - 智能提取提示词 (Prompt)、Provider 标签、相对活跃时间与 Token 消耗统计；
+    - 每条会话配备一键复制 `claude --resume <session_id>` 恢复命令；
+    - 支持按提示词、会话 ID 或工作区名字的实时本地快速搜索过滤；
+  - **用量分析看板 (Usage)**：
+    - 直观呈现总 Prompt Tokens、总 Completion Tokens，以及基于 90% 缓存命中率预估节省的美金金额；
+    - 动态解析各模型调用占比与可视化进度条；
+  - **干净干脆的 Agent 识别与轻量呈现**：
+    - 快速展示 Claude Code、Codex、Antigravity、Grok、ZCode 的就绪状态与启动命令。
 - **数据库路径从根源收拢归正（彻底杜绝桌面杂物）**：
   - 将默认数据库路径从易受启动工作目录影响的 `./agenthub.db` 彻底改为用户专属配置隐藏目录：`~/.agenthub/agenthub.db`（`crates/runner/src/main.rs`）；
   - **自动平滑迁移与清理**：在启动阶段探测当前工作目录（如用户桌面），若存在历史遗留的 `agenthub.db` 且用户隐藏目录尚无数据库，自动将 `.db`、`.db-wal`、`.db-shm` 完整无损迁移至 `~/.agenthub/`，并即时清除桌面本地残留；
   - 无论用户从桌面、开始菜单或任意目录双击启动，数据状态全局统一，桌面 100% 保持极致整洁。
 - **一秒黑框彻底消除（真·零黑框静默运行）**：
   - **无条件 Windows GUI 子系统**：在 `crates/runner/src/main.rs` 中将 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` 规范化为 `#![windows_subsystem = "windows"]`，无论 Debug 还是 Release 模式，Windows 内核绝不创建任何控制台或 Windows Terminal 标签页；
-  - **铲除 `cmd /c start` 闪烁黑框**：彻底移除此前在服务就绪后调用 `cmd.exe` 打开网页的逻辑（该逻辑是导致启动半秒后瞬时闪现黑框的根因），全面改由 Win32 API 配合进程级 `CREATE_NO_WINDOW (0x08000000)` 静默拉起。
-- **看齐 Magpie：独立桌面原生应用形态（Desktop App Window Mode）**：
-  - 彻底淘汰在外部浏览器中弹出一个临时网页 Tab 的割裂体验，全面切换为现代独立桌面客户端架构；
-  - 优先调用系统自带原生 Microsoft Edge 独立应用模式（`--app=http://127.0.0.1:{port}`），搭配 `--window-size=1280,820`、独立隔离的用户配置目录（`~/.agenthub/app_profile`）以及 `--no-first-run`：
-    - **无浏览器元素侵扰**：没有浏览器标签栏、地址栏、书签栏与工具栏，呈现出纯正的独立桌面客户端窗口；
-    - **精美原生窗体控件**：具备完整的原生标题栏控制、高分屏抗锯齿和丝滑缩放；
-    - **系统托盘联动升级**：右键菜单升级为“打开桌面控制台”与“打开数据目录 (~/.agenthub)”，双击托盘图标可即时唤起并聚焦桌面主窗口。
+  - **铲除 `cmd /c start` 闪烁黑框**：彻底移除此前在服务就绪后调用 `cmd.exe` 打开网页的逻辑，全面改由 Win32 API 配合进程级 `CREATE_NO_WINDOW (0x08000000)` 静默拉起。
 - **产物更新**：
   - 编译产物已同步部署至桌面 `agenthub-runner.exe`，并统一归档至 `Deliverables/agenthub/`（附 SHA256 校验清单）。
 

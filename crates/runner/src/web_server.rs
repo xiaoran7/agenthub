@@ -183,6 +183,19 @@ fn handle_connection(
         return Ok(());
     }
 
+    if path == "/manifest.json" {
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "application/manifest+json",
+            MANIFEST_JSON.as_bytes(),
+            false,
+            Some("public, max-age=86400"),
+        )?;
+        return Ok(());
+    }
+
     // REST API endpoints
     if path.starts_with("/api/") {
         handle_api(&mut stream, method, path, &query, &body, handler, stopped, port)?;
@@ -428,11 +441,13 @@ fn build_dashboard_summary(
     let mut grok_count = 0;
     let mut zcode_count = 0;
     let mut workspace_map: HashMap<String, usize> = HashMap::new();
+    let mut discovered_sessions: Vec<serde_json::Value> = Vec::new();
 
     if let crate::daemon_protocol::DaemonResponse::Discovery(ref val) = discover_res {
         if let Some(candidates) = val.get("candidates").and_then(serde_json::Value::as_array) {
             total_sessions = candidates.len();
             for c in candidates {
+                discovered_sessions.push(c.clone());
                 let provider = c.get("provider").and_then(serde_json::Value::as_str).unwrap_or("");
                 match provider {
                     "claude_code" | "claude" => claude_count += 1,
@@ -663,6 +678,7 @@ fn build_dashboard_summary(
             "models_count": gateway_models_count,
             "affinity_header": "x-session-affinity"
         },
+        "sessions": discovered_sessions,
         "device": get_device_info()
     })
 }
@@ -831,6 +847,23 @@ const ICON_SVG: &str = include_str!("../resources/icon.svg");
 
 /// 嵌入式自包含 CDS (Claude Design System) 单页前端
 const INDEX_HTML: &str = include_str!("../resources/dashboard.html");
+
+/// 嵌入式 PWA Web App Manifest，用于驱动 Edge 桌面应用模式的主题色与窗口特征
+const MANIFEST_JSON: &str = r##"{
+  "name": "AgentHub Runner",
+  "short_name": "AgentHub",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f17",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}"##;
 
 #[cfg(test)]
 mod tests {
