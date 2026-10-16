@@ -691,9 +691,7 @@ fn build_dashboard_summary(
             .collect()
     };
 
-    let total_sessions_stat = total_sessions.max(1);
-    let est_tokens = (total_sessions_stat as u64) * 75_000;
-    let saved_tokens = (est_tokens as f64 * 0.894) as u64;
+    let total_agents_count = agents.as_array().map(|a| a.len()).unwrap_or(0);
 
     json!({
         "device_id": "local-dev",
@@ -706,12 +704,9 @@ fn build_dashboard_summary(
             "grok_sessions": grok_count,
             "zcode_sessions": zcode_count,
             "active_agents": active_agents_count,
+            "total_agents": total_agents_count,
             "total_models": models_json.len().max(gateway_models_count),
             "total_workspaces": workspaces_json.len(),
-            "estimated_tokens": format_num(est_tokens),
-            "cached_tokens": format_num(saved_tokens),
-            "cache_hit_rate": "89.4%",
-            "tokens_saved": format_num(saved_tokens)
         },
         "agents": agents,
         "workspaces": workspaces_json,
@@ -821,20 +816,6 @@ fn check_agent_dir(dir_name: &str) -> (bool, Option<String>) {
         }
     }
     (false, None)
-}
-
-fn format_num(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
-    for (i, c) in chars.into_iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result
 }
 
 fn send_json_response<T: Serialize>(

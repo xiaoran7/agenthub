@@ -243,15 +243,15 @@ mod windows_tray {
                 .unwrap_or_else(|| PathBuf::from("."));
             let profile_dir = home.join(".agenthub").join("app_profile");
 
-            // 计算屏幕中心坐标，像 Magpie 一样小巧居中显示 (~780x680)
+            // 计算屏幕中心坐标，像 Magpie 一样舒适居中显示 (940x720)
             let (pos_x, pos_y, win_w, win_h) = unsafe {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
                 };
                 let sw = GetSystemMetrics(SM_CXSCREEN);
                 let sh = GetSystemMetrics(SM_CYSCREEN);
-                let w = 780;
-                let h = 680;
+                let w = 940;
+                let h = 720;
                 let x = ((sw - w) / 2).max(0);
                 let y = ((sh - h) / 2).max(0);
                 (x, y, w, h)

@@ -34,31 +34,29 @@
       --seg-track: transparent;
       --seg-thumb: var(--card);
       --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
-      --ctl-fg: #63636b;
-      --line: #e3e3e8;
+      --ctl-fg: #52525b;
+      --line: #e2e2e8;
       --line-2: #ececf0;
-      --fg: #1c1c21;
-      --fg-2: #4b4b53;
-      --muted: #85858d;
-      --faint: #b9b9c2;
+      --fg: #09090b;
+      --fg-2: #27272a;
+      --muted: #52525b;
+      --faint: #71717a;
       --accent: #4f46e5;
       --accent-soft: #eeedfd;
       --accent-fg: #ffffff;
-      --green: #189a58;
-      --green-soft: #e4f6ec;
-      --red: #d64545;
-      --red-soft: #fbe9e9;
+      --green: #15803d;
+      --green-soft: #dcfce7;
+      --red: #dc2626;
+      --red-soft: #fee2e2;
       --amber: #b45309;
-      --amber-soft: #fbf0df;
+      --amber-soft: #fef3c7;
       --shadow: 0 16px 44px rgba(20, 22, 30, 0.16), 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
-      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-      --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --code: "Cascadia Mono", Consolas, "SF Mono", monospace;
       --ease: cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    /* Windows' own text faces, and Chinese in YaHei UI, its UI face for it, not
-       the webview's fallback; the generic monospace is SimSun on a Chinese Windows,
-       thin and unhinted at 11px (Magpie #690) */
+    /* Windows' own text faces, and Chinese in YaHei UI */
     :root.win, html.win {
       --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
       --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace;
@@ -75,20 +73,20 @@
       --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
       --line: #333339;
       --line-2: #2c2c32;
-      --fg: #ededf1;
-      --fg-2: #b9b9c1;
-      --muted: #8b8b94;
-      --faint: #56565f;
-      --ctl-fg: #a1a1aa;
+      --fg: #fafafa;
+      --fg-2: #e4e4e7;
+      --muted: #a1a1aa;
+      --faint: #71717a;
+      --ctl-fg: #d4d4d8;
       --accent: #a5b4fc;
       --accent-soft: #2b2c47;
       --accent-fg: #14142a;
-      --green: #6fd99b;
-      --green-soft: #1e3a2b;
-      --red: #f28b82;
+      --green: #4ade80;
+      --green-soft: #14532d;
+      --red: #f87171;
       --red-soft: #45272a;
-      --amber: #f2b544;
-      --amber-soft: #3f3220;
+      --amber: #fbbf24;
+      --amber-soft: #451a03;
       --shadow: 0 16px 44px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
     }
 
@@ -108,8 +106,8 @@
 
     body {
       font-family: var(--font);
-      font-size: 13px;
-      line-height: 1.45;
+      font-size: 14px;
+      line-height: 1.5;
       background: var(--bg);
       color: var(--fg);
       min-height: 100vh;
@@ -137,14 +135,14 @@
       outline-offset: 1px;
     }
 
-    /* Magpie Desktop Top Navigation Bar (46px - Seamless Surface) */
+    /* Magpie Desktop Top Navigation Bar (48px - Seamless Surface) */
     .top {
-      height: 46px;
-      padding: 0 10px 0 14px;
+      height: 48px;
+      padding: 0 12px 0 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
+      gap: 12px;
       background: var(--bg);
       position: sticky;
       top: 0;
@@ -156,9 +154,43 @@
     .top-status {
       display: flex;
       align-items: center;
+      gap: 8px;
       flex: 0 0 auto;
       user-select: none;
       -webkit-app-region: no-drag;
+    }
+
+    /* Prominent Web Console Pair Button */
+    .pair-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 26px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-decoration: none;
+      user-select: none;
+    }
+    .pair-btn.paired {
+      background: var(--green-soft);
+      color: var(--green);
+      border: 1px solid rgba(21, 128, 61, 0.25);
+    }
+    .pair-btn.unpaired {
+      background: var(--amber-soft);
+      color: var(--amber);
+      border: 1px solid rgba(180, 83, 9, 0.25);
+    }
+    .pair-btn:hover {
+      filter: brightness(0.96);
+      transform: translateY(-0.5px);
+    }
+    .pair-btn:active {
+      transform: scale(0.97);
     }
 
     /* Magpie Segmented Navigation Switch (.seg) */
@@ -174,7 +206,7 @@
       position: relative;
       display: inline-flex;
       align-items: center;
-      padding: 2px;
+      padding: 3px;
       border-radius: 8px;
       background: transparent;
       flex-shrink: 0;
@@ -183,22 +215,22 @@
       position: relative;
       z-index: 1;
       white-space: nowrap;
-      height: 24px;
-      padding: 0 11px;
+      height: 28px;
+      padding: 0 13px;
       border-radius: 6px;
-      font-size: 12.5px;
-      font-weight: 400;
+      font-size: 13.5px;
+      font-weight: 500;
       color: var(--ctl-fg);
       transition: color 0.18s var(--ease), background 0.14s var(--ease);
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 6px;
       flex-shrink: 0;
       cursor: pointer;
     }
     .seg button .icon {
-      width: 13px;
-      height: 13px;
+      width: 14px;
+      height: 14px;
       flex-shrink: 0;
     }
     .seg button:hover:not(.on) {
@@ -208,7 +240,7 @@
       color: var(--fg);
       background: var(--seg-thumb);
       box-shadow: var(--seg-edge);
-      font-weight: 500;
+      font-weight: 600;
     }
 
     /* Actions Bar */
@@ -224,18 +256,19 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      height: 24px;
-      padding: 0 8px;
+      height: 26px;
+      padding: 0 9px;
       border-radius: 999px;
       background: var(--card);
       border: 1px solid var(--line);
-      font-size: 11px;
+      font-size: 12px;
+      font-weight: 500;
       color: var(--fg-2);
       font-variant-numeric: tabular-nums;
     }
     .status-dot {
-      width: 6px;
-      height: 6px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--green);
       box-shadow: 0 0 0 2px var(--green-soft);
@@ -247,8 +280,8 @@
     }
 
     .icon-btn {
-      width: 26px;
-      height: 26px;
+      width: 28px;
+      height: 28px;
       border-radius: 7px;
       display: inline-flex;
       align-items: center;
@@ -257,8 +290,8 @@
       transition: background 0.12s, color 0.12s, transform 0.1s;
     }
     .icon-btn .icon {
-      width: 14px;
-      height: 14px;
+      width: 15px;
+      height: 15px;
     }
     .icon-btn:hover {
       background: var(--card);
@@ -274,7 +307,7 @@
 
     /* Magpie Authentic Unified LED Metric Strip (.led-strip) */
     .led-strip-wrap {
-      padding: 2px 14px 10px;
+      padding: 4px 14px 12px;
       flex: none;
       background: var(--bg);
     }
@@ -288,10 +321,17 @@
     }
     .led-strip .blk {
       min-width: 0;
-      padding: 11px 15px 10px;
+      padding: 12px 16px 12px;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
+      transition: background 0.12s ease;
+    }
+    .led-strip .blk.clickable {
+      cursor: pointer;
+    }
+    .led-strip .blk.clickable:hover {
+      background: var(--card-2);
     }
     .led-strip .blk + .blk {
       border-left: 1px solid var(--line-2);
@@ -300,18 +340,18 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 11px;
-      color: var(--muted);
-      font-weight: 500;
+      font-size: 13px;
+      color: var(--fg-2);
+      font-weight: 600;
     }
     .led-strip .v {
       display: block;
-      margin-top: 2px;
-      font-size: 22px;
-      font-weight: 600;
+      margin-top: 3px;
+      font-size: 26px;
+      font-weight: 700;
       letter-spacing: -0.02em;
       font-variant-numeric: tabular-nums;
-      line-height: 1.2;
+      line-height: 1.25;
       color: var(--fg);
     }
     .led-strip .v.cost {
@@ -319,8 +359,9 @@
     }
     .led-strip .sub {
       display: block;
-      margin-top: 3px;
-      font-size: 11px;
+      margin-top: 4px;
+      font-size: 12px;
+      font-weight: 500;
       color: var(--muted);
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
@@ -391,9 +432,9 @@
     .row {
       display: flex;
       align-items: center;
-      gap: 10px;
-      min-height: 42px;
-      padding: 7px 12px;
+      gap: 12px;
+      min-height: 48px;
+      padding: 9px 14px;
       border-top: 1px solid var(--line-2);
       transition: background 0.12s ease;
     }
@@ -409,18 +450,20 @@
       flex: 1;
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 4px;
     }
     .row .name {
-      font-size: 12.5px;
-      font-weight: 500;
+      font-size: 14.5px;
+      font-weight: 600;
       color: var(--fg);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      line-height: 1.4;
     }
     .row .sub {
-      font-size: 11px;
+      font-size: 12.5px;
+      font-weight: 500;
       color: var(--muted);
       white-space: nowrap;
       overflow: hidden;
@@ -428,38 +471,40 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      line-height: 1.3;
     }
 
     /* Magpie Authentic Stat Breakdown Row (.row.stat) - Matches Magpie 14.png */
     .row.stat {
-      min-height: 38px;
-      padding: 7px 14px;
-      gap: 12px;
+      min-height: 44px;
+      padding: 9px 16px;
+      gap: 14px;
     }
     .row.stat .who {
-      flex: 0 1 220px;
+      flex: 0 1 240px;
       min-width: 0;
       display: flex;
       flex-direction: column;
       justify-content: center;
-      gap: 2px;
+      gap: 3px;
     }
     .row.stat .who .top-line {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       min-width: 0;
     }
     .row.stat .who .name {
-      font-size: 13px;
-      font-weight: 500;
+      font-size: 14.5px;
+      font-weight: 600;
       color: var(--fg);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     .row.stat .who .sub {
-      font-size: 11px;
+      font-size: 12px;
+      font-weight: 500;
       color: var(--muted);
       white-space: nowrap;
       overflow: hidden;
@@ -467,11 +512,11 @@
     }
     .row.stat .share {
       flex: 1 1 auto;
-      height: 5px;
+      height: 6px;
       border-radius: 999px;
       background: var(--pill);
       overflow: hidden;
-      margin: 0 6px;
+      margin: 0 8px;
       min-width: 50px;
     }
     .row.stat .share i {
@@ -487,35 +532,35 @@
       flex-direction: column;
       align-items: flex-end;
       flex: none;
-      min-width: 76px;
+      min-width: 84px;
       font-variant-numeric: tabular-nums;
     }
     .row.stat .num b {
       font-weight: 600;
-      font-size: 13px;
+      font-size: 14px;
       color: var(--fg);
     }
     .row.stat .num small {
-      font-size: 10.5px;
+      font-size: 11.5px;
       color: var(--muted);
       white-space: nowrap;
     }
     .row.stat .cost {
       flex: none;
-      min-width: 60px;
+      min-width: 64px;
       text-align: right;
       color: var(--green);
       font-variant-numeric: tabular-nums;
-      font-size: 12px;
-      font-weight: 500;
+      font-size: 13px;
+      font-weight: 600;
     }
 
     /* Magpie Discrete Badges & Pills */
     .pill-tag {
-      font-size: 10.5px;
+      font-size: 12px;
       font-weight: 500;
-      padding: 1px 6px;
-      border-radius: 999px;
+      padding: 2px 7px;
+      border-radius: 6px;
       background: var(--pill);
       color: var(--fg-2);
       border: 1px solid var(--line-2);
@@ -523,25 +568,30 @@
       display: inline-flex;
       align-items: center;
       gap: 4px;
+      white-space: nowrap;
     }
     .pill-ready {
       background: var(--green-soft);
       color: var(--green);
-      border-color: transparent;
+      border-color: rgba(21, 128, 61, 0.2);
+      font-weight: 600;
     }
     .pill-accent {
       background: var(--accent-soft);
       color: var(--accent);
-      border-color: transparent;
+      border-color: rgba(79, 70, 229, 0.2);
+      font-weight: 600;
     }
 
     .code-tag {
       font-family: var(--code);
-      font-size: 11px;
-      padding: 1px 5px;
-      border-radius: 4px;
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 5px;
       background: var(--pill);
       color: var(--fg);
+      font-weight: 500;
+      white-space: nowrap;
     }
 
     /* Magpie Button Styles */
@@ -549,13 +599,13 @@
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      height: 24px;
-      padding: 0 9px;
+      height: 26px;
+      padding: 0 10px;
       border: 1px solid var(--line);
       border-radius: 999px;
       background: var(--card);
       color: var(--fg-2);
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 500;
       cursor: pointer;
       transition: background 0.12s, color 0.12s, border-color 0.12s;
@@ -572,8 +622,8 @@
 
     /* Sessions Tree Section */
     .brand-icon-box {
-      width: 28px;
-      height: 28px;
+      width: 30px;
+      height: 30px;
       border-radius: 7px;
       display: flex;
       align-items: center;
@@ -595,14 +645,14 @@
       flex-wrap: wrap;
     }
     .sm-filter {
-      height: 26px;
+      height: 30px;
       border-radius: 999px;
       background: var(--pill);
       border: 1px solid var(--line);
       color: var(--fg);
-      font-size: 11.5px;
-      padding: 0 12px;
-      width: 220px;
+      font-size: 13px;
+      padding: 0 14px;
+      width: 260px;
       outline: none;
       transition: border-color 0.15s, background 0.15s;
       font-family: inherit;
@@ -614,14 +664,14 @@
 
     .sm-folder-header {
       background: var(--card-2);
-      padding: 8px 12px;
+      padding: 10px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
+      gap: 10px;
       cursor: pointer;
       border-top: 1px solid var(--line);
-      font-size: 12px;
+      font-size: 13.5px;
     }
     .sm-folder-header:first-child {
       border-top: none;
@@ -631,21 +681,21 @@
       color: var(--fg);
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
     }
     .sm-folder-path {
       font-family: var(--code);
-      font-size: 10.5px;
-      color: var(--faint);
+      font-size: 12px;
+      color: var(--muted);
       margin-left: 6px;
-      font-weight: normal;
+      font-weight: 500;
     }
 
     /* Usage Analytics Elements */
     .usage-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
+      gap: 12px;
     }
     .progress-track {
       height: 6px;
@@ -678,32 +728,32 @@
       border: 1px solid var(--line);
       border-radius: 12px;
       box-shadow: var(--shadow);
-      padding: 20px 22px;
-      max-width: 460px;
+      padding: 22px 24px;
+      max-width: 480px;
       width: 90%;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 16px;
     }
 
     .form-group {
       display: flex;
       flex-direction: column;
-      gap: 5px;
+      gap: 6px;
     }
     .form-label {
-      font-size: 11px;
+      font-size: 12.5px;
       font-weight: 600;
-      color: var(--muted);
+      color: var(--fg-2);
     }
     .form-input {
-      height: 30px;
-      padding: 0 10px;
-      border-radius: 6px;
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 7px;
       background: var(--pill);
       border: 1px solid var(--line);
       color: var(--fg);
-      font-size: 12px;
+      font-size: 13px;
       outline: none;
       font-family: inherit;
       transition: border-color 0.15s, background 0.15s;
@@ -750,6 +800,10 @@
         <span class="status-dot"></span>
         <span id="runnerStatusText">端口 4200</span>
       </div>
+      <button class="pair-btn unpaired" id="headerPairBtn" onclick="openPairModal()" title="云端 Web 控制台设备配对与绑定状态">
+        <span class="pair-dot"></span>
+        <span id="headerPairText">未绑定 Web 控制台</span>
+      </button>
     </div>
 
     <!-- Segmented Navigation Switch in middle flow -->
@@ -820,28 +874,27 @@
       <div class="blk">
         <span class="k">
           <span>解析会话</span>
-          <svg class="icon" style="color:var(--muted);width:12px;height:12px;" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <svg class="icon" style="color:var(--muted);width:14px;height:14px;" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </span>
         <span class="v" id="statTotalSessions">-</span>
         <span class="sub" id="statSessionsBreakdown">Claude - · Codex -</span>
       </div>
 
-      <!-- 2. 缓存命中率 -->
-      <div class="blk">
+      <!-- 2. 云端 Web 绑定 (真实设备配对状态) -->
+      <div class="blk clickable" onclick="openPairModal()" title="点击进入设备身份配对与云端控制台绑定">
         <span class="k">
-          <span>缓存命中率</span>
-          <svg class="icon" style="color:var(--green);width:12px;height:12px;" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>云端 Web 绑定</span>
+          <svg class="icon" style="color:var(--accent);width:14px;height:14px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         </span>
-        <span class="v cost" id="statCacheHitRate">-</span>
-        <span class="sub" id="statTokensSaved">节省 ~- Tokens</span>
-        <div class="meter"><i id="statCacheMeter" style="width:0%;"></i></div>
+        <span class="v" id="statWebPairingStatus" style="font-size:20px;margin-top:5px;">未绑定</span>
+        <span class="sub" id="statWebPairingSub">点击关联 Web 控制台</span>
       </div>
 
       <!-- 3. 上游模型 -->
       <div class="blk">
         <span class="k">
           <span>上游模型</span>
-          <svg class="icon" style="color:var(--accent);width:12px;height:12px;" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <svg class="icon" style="color:var(--accent);width:14px;height:14px;" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         </span>
         <span class="v" id="statTotalModels">-</span>
         <span class="sub" id="statGatewaySource">多模型自动路由</span>
@@ -851,20 +904,20 @@
       <div class="blk">
         <span class="k">
           <span>已注册工作区</span>
-          <svg class="icon" style="color:var(--muted);width:12px;height:12px;" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <svg class="icon" style="color:var(--muted);width:14px;height:14px;" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         </span>
         <span class="v" id="statTotalWorkspaces">-</span>
-        <span class="sub">O(1) 路径快速解析</span>
+        <span class="sub" id="statWorkspacesSub">本地项目根目录</span>
       </div>
 
       <!-- 5. Agents 矩阵 -->
       <div class="blk">
         <span class="k">
           <span>Agents 矩阵</span>
-          <svg class="icon" style="color:var(--amber);width:12px;height:12px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
+          <svg class="icon" style="color:var(--amber);width:14px;height:14px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
         </span>
         <span class="v" id="statActiveAgents">-</span>
-        <span class="sub" id="statAgentsSummary">多智能体就绪</span>
+        <span class="sub" id="statAgentsSummary">智能体就绪</span>
       </div>
     </div>
   </div>
@@ -1191,22 +1244,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       document.getElementById('statSessionsBreakdown').textContent =
         `Claude ${stats.claude_sessions || 0} · Codex ${stats.codex_sessions || 0} · 其他 ${(stats.antigravity_sessions || 0) + (stats.grok_sessions || 0) + (stats.zcode_sessions || 0)}`;
 
-      const hitRateText = stats.cache_hit_rate || '89.4%';
-      document.getElementById('statCacheHitRate').textContent = hitRateText;
-      const meterEl = document.getElementById('statCacheMeter');
-      if (meterEl) {
-        const pct = parseFloat(String(hitRateText).replace('%', '')) || 89.4;
-        meterEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
-      }
-      document.getElementById('statTokensSaved').textContent =
-        `节省 ~${stats.tokens_saved || '0'} Tokens`;
-
       document.getElementById('statTotalModels').textContent = stats.total_models || 0;
       if (gateway && gateway.detected) {
         let src = String(gateway.source || '').trim();
-        // Remove long temporary host-creds json path if present
         if (src.includes('host-creds') || src.includes('.json')) {
-          src = 'CC Switch / 动态网关';
+          src = '动态检测网关';
         }
         document.getElementById('statGatewaySource').textContent = src || '多模型自动路由';
       } else {
@@ -1214,12 +1256,13 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
 
       document.getElementById('statTotalWorkspaces').textContent = stats.total_workspaces || 0;
-      document.getElementById('statActiveAgents').textContent = `${stats.active_agents || 0} / 8 就绪`;
+      const wsElem = document.getElementById('statWorkspacesSub');
+      if (wsElem) wsElem.textContent = '本地项目开发根目录';
 
-      const readyList = [];
-      if (stats.claude_sessions > 0 || stats.active_agents > 0) readyList.push('Claude Code 就绪');
-      if (stats.codex_sessions > 0) readyList.push('Codex 就绪');
-      document.getElementById('statAgentsSummary').textContent = readyList.join(' · ') || '多 Agent 协同就绪';
+      const activeAgents = stats.active_agents || 0;
+      const totalAgents = stats.total_agents || 8;
+      document.getElementById('statActiveAgents').textContent = `${activeAgents} / ${totalAgents} 就绪`;
+      document.getElementById('statAgentsSummary').textContent = `${activeAgents} 个智能体已就绪`;
     }
 
     function getAgentIcon(id, size = 18) {
@@ -1298,7 +1341,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
             </div>
             <div style="flex:none;display:flex;align-items:center;gap:6px;">
               <span class="pill-tag">${agent.sessions_count || 0} 会话</span>
-              <button class="sm-btn" onclick="copyText('${escapeHtml(agent.command || agent.id)}')">复制命令</button>
             </div>
           </div>
         `;
@@ -1352,7 +1394,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           const iconHtml = getAgentIcon(rawProvider, 18);
           const timeStr = escapeHtml(item.relative_time || item.created_at || '最近');
           const tokens = item.total_tokens ? item.total_tokens.toLocaleString() : (item.prompt_tokens ? (item.prompt_tokens + (item.completion_tokens || 0)).toLocaleString() : '-');
-          const resumeCmd = item.resume_command || `claude --resume ${sid}`;
 
           const modelName = escapeHtml(item.model || item.model_name || '');
           const modelTag = modelName ? `<span class="pill-tag">${modelName}</span>` : '';
@@ -1371,12 +1412,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
                   <span>${timeStr}</span>
                   ${tokens !== '-' ? `<span>${tokens} Tokens</span>` : ''}
                 </div>
-              </div>
-              <div style="flex:none;">
-                <button class="sm-btn" onclick="copyText('${escapeHtml(resumeCmd)}')" title="复制恢复会话命令">
-                  <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  <span>继续会话</span>
-                </button>
               </div>
             </div>
           `;
@@ -1755,6 +1790,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const pairedBox = document.getElementById('pairedStatusBox');
       const pairedInfo = document.getElementById('pairedGatewayInfo');
 
+      const headerBtn = document.getElementById('headerPairBtn');
+      const headerText = document.getElementById('headerPairText');
+      const statStatus = document.getElementById('statWebPairingStatus');
+      const statSub = document.getElementById('statWebPairingSub');
+
       if (deviceIdElem) deviceIdElem.textContent = device.device_id || '-';
       if (deviceKeyElem) {
         const pk = device.public_key || '';
@@ -1763,6 +1803,20 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
 
       if (device.paired) {
+        if (headerBtn) {
+          headerBtn.className = 'pair-btn paired';
+        }
+        const gw = device.gateway_url ? device.gateway_url.replace(/^https?:\/\//, '') : '已配对';
+        if (headerText) {
+          headerText.textContent = `已绑定: ${gw}`;
+        }
+        if (statStatus) {
+          statStatus.textContent = '已绑定';
+          statStatus.style.color = 'var(--green)';
+        }
+        if (statSub) {
+          statSub.textContent = gw;
+        }
         if (pairedBox) {
           pairedBox.style.display = 'block';
           if (pairedInfo) {
@@ -1770,6 +1824,19 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           }
         }
       } else {
+        if (headerBtn) {
+          headerBtn.className = 'pair-btn unpaired';
+        }
+        if (headerText) {
+          headerText.textContent = '未绑定 Web 控制台';
+        }
+        if (statStatus) {
+          statStatus.textContent = '未绑定';
+          statStatus.style.color = 'var(--fg)';
+        }
+        if (statSub) {
+          statSub.textContent = '点击关联 Web 控制台';
+        }
         if (pairedBox) pairedBox.style.display = 'none';
       }
     }
@@ -1906,7 +1973,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         });
 
         const resData = await resp.json();
-        if (resp.ok && resData.status === 'ok') {
+        if (resp.ok && (resData.ok === true || resData.status === 'ok')) {
           alert('恭喜，设备成功与云端 AgentHub 完成配对绑定！');
           if (codeInput) codeInput.value = '';
           closePairModal();
