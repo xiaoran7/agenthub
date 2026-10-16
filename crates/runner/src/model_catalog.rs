@@ -106,24 +106,24 @@ pub fn format_context_tokens(tokens: usize) -> String {
 }
 
 /// Infer context window length when upstream omits explicit `context_length`.
+/// Returns 0 and empty string if not explicitly declared or identifiable from the identifier,
+/// to avoid fabricating speculative context figures.
 pub fn infer_context_window(model_id: &str) -> (usize, String) {
     let id = model_id.to_ascii_lowercase();
 
-    let tokens = if id.contains("1m") || id.contains("gemini-1.5") || id.contains("gemini-2") || id.contains("gemini-3") {
+    let tokens = if id.contains("1m") {
         1_000_000
     } else if id.contains("2m") {
         2_000_000
-    } else if id.contains("fable") || id.contains("opus") || id.contains("sonnet") || id.contains("haiku") {
-        200_000
-    } else if id.contains("gpt-5") || id.contains("gpt-4.5") || id.contains("gpt-4o") || id.contains("o1") || id.contains("o3") {
-        128_000
-    } else if id.contains("deepseek") || id.contains("kimi") || id.contains("qwen") || id.contains("glm") {
-        128_000
     } else {
-        128_000
+        0
     };
 
-    let s = format_context_tokens(tokens);
+    let s = if tokens > 0 {
+        format_context_tokens(tokens)
+    } else {
+        String::new()
+    };
     (tokens, s)
 }
 
@@ -499,9 +499,10 @@ mod tests {
         assert_eq!(tokens, 1_000_000);
         assert_eq!(str_rep, "1M");
 
+        // Models without explicit 1m/2m or upstream context length return 0 / empty string
         let (tokens, str_rep) = infer_context_window("claude-fable-5");
-        assert_eq!(tokens, 200_000);
-        assert_eq!(str_rep, "200K");
+        assert_eq!(tokens, 0);
+        assert_eq!(str_rep, "");
     }
 
     #[test]

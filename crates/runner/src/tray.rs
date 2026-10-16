@@ -263,7 +263,6 @@ mod windows_tray {
                 &format!("--window-size={},{}", win_w, win_h),
                 &format!("--window-position={},{}", pos_x, pos_y),
                 &format!("--user-data-dir={}", profile_dir.display()),
-                "--force-dark-mode",
                 "--no-first-run",
                 "--no-default-browser-check",
             ]);
