@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![windows_subsystem = "windows"]
 
 use std::{
     env, fs,
@@ -86,8 +86,8 @@ enum Command {
         codex_binary: PathBuf,
         #[arg(long, required = true)]
         workspace: Vec<PathBuf>,
-        #[arg(long)]
-        db: PathBuf,
+        #[arg(long, help = "Database path (defaults to ~/.agenthub/agenthub.db)")]
+        db: Option<PathBuf>,
         #[arg(long, help = "Override the per-device named pipe or Unix socket")]
         ipc_endpoint: Option<String>,
         #[arg(long, default_value_t = true, help = "Enable embedded CDS web console")]
@@ -98,7 +98,7 @@ enum Command {
             long,
             default_value_t = false,
             action = clap::ArgAction::Set,
-            help = "Auto open web console in default browser"
+            help = "Auto open desktop console window"
         )]
         open_browser: bool,
     },
@@ -108,15 +108,15 @@ enum Command {
         codex_binary: PathBuf,
         #[arg(long, default_value = ".")]
         workspace: Vec<PathBuf>,
-        #[arg(long, default_value = "agenthub.db")]
-        db: PathBuf,
+        #[arg(long, help = "Database path (defaults to ~/.agenthub/agenthub.db)")]
+        db: Option<PathBuf>,
         #[arg(long, default_value_t = 4200)]
         port: u16,
         #[arg(
             long,
             default_value_t = true,
             action = clap::ArgAction::Set,
-            help = "Auto open web console in default browser"
+            help = "Auto open desktop console window"
         )]
         open_browser: bool,
         #[arg(
@@ -505,7 +505,7 @@ fn main() -> Result<()> {
     let command = cli.command.unwrap_or(Command::Web {
         codex_binary: PathBuf::from("codex"),
         workspace: vec![PathBuf::from(".")],
-        db: PathBuf::from("agenthub.db"),
+        db: None,
         port: 4200,
         open_browser: true,
         hide_console: true,
@@ -523,6 +523,7 @@ fn main() -> Result<()> {
         } => {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("daemon_requires_device_identity"))?;
+            let db = db.unwrap_or_else(resolve_default_db_path);
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
@@ -546,6 +547,7 @@ fn main() -> Result<()> {
             if hide_console {
                 hide_windows_console();
             }
+            let db = db.unwrap_or_else(resolve_default_db_path);
             let identity = runtime_identity.unwrap_or_else(resolve_or_create_default_identity);
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
@@ -1300,6 +1302,41 @@ fn resolve_or_create_default_identity() -> DeviceIdentity {
         let _ = identity.save_new(&identity_path);
     }
     identity
+}
+
+fn resolve_default_db_path() -> PathBuf {
+    let home_dir = env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let agenthub_dir = home_dir.join(".agenthub");
+    let _ = fs::create_dir_all(&agenthub_dir);
+    let target_db = agenthub_dir.join("agenthub.db");
+
+    // 平滑迁移与自动清理：如果当前工作目录存在历史遗留的 agenthub.db，且 ~/.agenthub/ 下尚无数据库
+    // 则完整将本地的 db 及 wal/shm 复制到 ~/.agenthub/ 并安全清除本地文件，保证桌面绝对干净
+    let local_db = PathBuf::from("agenthub.db");
+    if local_db.is_file() {
+        if !target_db.exists() {
+            if fs::copy(&local_db, &target_db).is_ok() {
+                let _ = fs::remove_file(&local_db);
+                let local_wal = PathBuf::from("agenthub.db-wal");
+                let target_wal = agenthub_dir.join("agenthub.db-wal");
+                if local_wal.is_file() {
+                    let _ = fs::copy(&local_wal, &target_wal);
+                    let _ = fs::remove_file(&local_wal);
+                }
+                let local_shm = PathBuf::from("agenthub.db-shm");
+                let target_shm = agenthub_dir.join("agenthub.db-shm");
+                if local_shm.is_file() {
+                    let _ = fs::copy(&local_shm, &target_shm);
+                    let _ = fs::remove_file(&local_shm);
+                }
+            }
+        }
+    }
+
+    target_db
 }
 
 fn hide_windows_console() {

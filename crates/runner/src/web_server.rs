@@ -70,7 +70,7 @@ pub fn serve(
         let url = format!("http://127.0.0.1:{}", actual_port);
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
-            open_in_browser(&url);
+            crate::tray::open_desktop_window(&url);
         });
     }
 
@@ -103,23 +103,6 @@ pub fn serve(
         })?;
 
     Ok(actual_port)
-}
-
-fn open_in_browser(url: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open").arg(url).spawn();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
-    }
 }
 
 fn handle_connection(
