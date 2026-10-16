@@ -538,6 +538,12 @@ fn build_dashboard_summary(
     let (antigravity_installed, antigravity_path) = check_agent_dir(".antigravity");
     let (grok_installed, grok_path) = check_agent_dir(".grok");
     let (zcode_installed, zcode_path) = find_executable("zcode", &[]);
+    let (gemini_installed, gemini_path) = find_executable(
+        "gemini",
+        &[r"AppData\Roaming\npm\gemini.cmd", r".local\bin\gemini"],
+    );
+    let (cursor_installed, cursor_path) = find_executable("cursor", &[]);
+    let (cline_installed, cline_path) = check_agent_dir(".cline");
 
     let mut active_agents_count = 0;
     if claude_installed {
@@ -553,6 +559,15 @@ fn build_dashboard_summary(
         active_agents_count += 1;
     }
     if zcode_installed {
+        active_agents_count += 1;
+    }
+    if gemini_installed {
+        active_agents_count += 1;
+    }
+    if cursor_installed {
+        active_agents_count += 1;
+    }
+    if cline_installed {
         active_agents_count += 1;
     }
 
@@ -606,6 +621,36 @@ fn build_dashboard_summary(
             "command": "zcode",
             "affinity": false,
             "description": "系统级代码助手与快速原型生成器"
+        },
+        {
+            "id": "gemini_cli",
+            "name": "Gemini CLI",
+            "installed": gemini_installed,
+            "path": gemini_path,
+            "sessions_count": 0,
+            "command": "gemini",
+            "affinity": false,
+            "description": "Google Gemini 官方命令行编程助手"
+        },
+        {
+            "id": "cursor",
+            "name": "Cursor Agent",
+            "installed": cursor_installed,
+            "path": cursor_path,
+            "sessions_count": 0,
+            "command": "cursor",
+            "affinity": false,
+            "description": "Cursor 编辑器核心代码代理与终端执行引擎"
+        },
+        {
+            "id": "cline",
+            "name": "Cline",
+            "installed": cline_installed,
+            "path": cline_path,
+            "sessions_count": 0,
+            "command": "cline",
+            "affinity": false,
+            "description": "开源自主代码代理与工具编排助手"
         }
     ]);
 
