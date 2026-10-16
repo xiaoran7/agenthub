@@ -78,6 +78,23 @@
   - **级联退出保证**：当 Runner 退出、崩溃或接收到关闭信号时，Windows 内核自动级联终结所有托管的 Edge 实例及相关渲染进程，从物理层面上杜绝因 Runner 终止而导致桌面残留孤儿白屏窗口的隐患；
   - **双重退出保险**：在托盘退出处理及 `crates/runner/src/daemon.rs` 停止流程中增设主动 `cleanup_desktop_window()`，实现正常清理与内核兜底双保险。
 
+### 像素级对齐 Magpie 原生排版与字体系统，统一窗口标题栏与顶栏色彩 (Authentic Magpie Typography & Seamless Titlebar)
+
+紧扣用户“前端风格字体再抄一下magpie、现在的字体和排版太差劲了、翻magpie源码抄啊、顶部条颜色还是不一致”的明确指令，直接深入 `Project/magpie` 原生源码（`internal/gui/assets/app.css` 与 `titletint_windows.go`），深度提取排版规范与 DirectWrite 渲染规则，彻底解决视效痛点：
+
+- **深度复刻 Magpie 官方 DirectWrite 字体族栈与排版标准**：
+  - **Windows 原生高质量渲染栈**：从 Magpie 提取 `:root.win, html.win` 规则，UI 字体强制采用 `"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif`，代码与等宽字体采用 `"Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace`，彻底杜绝 Windows 默认宋体或中文字符回落导致的锯齿与排版混乱；
+  - **首屏预执行防止 FOUC**：在 `<head>` 中置入零依赖的即时执行脚本 (IIFE)，在 DOM 首屏绘制前立即测定 Windows 系统环境（添加 `win` 类）并解析存储的主题偏好（同步设定 `dark` 类与 `<meta name="theme-color">`），消除页面加载时的字体跳动与色彩闪烁；
+  - **字重与字号微米级校准**：严格对齐 Magpie 标准阶梯：页面主文本采用 12px/1.45 行高、二级说明 11px、标题 13px/14px 加粗、指标大字采用 22px 带 `-0.02em` 紧凑字间距与 `tabular-nums` 等宽数字，排版质感达到原生桌面应用级别。
+- **彻底根治原生窗口标题栏与顶栏色彩不一致**：
+  - **Manifest 与 DWM 原生标题栏对齐**：修改 `crates/runner/src/web_server.rs` 中的 `MANIFEST_JSON`，将 PWA `theme_color` 与 `background_color` 从深黑统一设为 Magpie 默认的明亮浅灰 `#f4f4f6`，使 Edge 桌面宿主窗口的原生 DWM 标题栏底色与应用完全无缝统一；
+  - **无缝顶栏边缘 (Borderless Surface)**：对齐 Magpie 的 `.top` 导航栏设计，彻底移除 `.top` 原有的灰色 `border-bottom`，使窗口标题栏与 46px 导航栏浑然一体，消除割裂条纹；
+  - **无轨式分段控制器 (Trackless .seg)**：移除分段切换器原有的灰色底框，未激活按钮直接悬浮在底色上，仅当前激活标签带有纯白高质感微阴影滑块卡片，视觉通透干净。
+- **重构 Magpie 一体化 5 联 `.led-strip` 指标条**：
+  - 彻底抛弃原先离散拼贴的独立指标盒子，改用 Magpie 原生的 12px 圆角统一白卡网格容器（`.led-strip`）；
+  - 单元格间采用精细内部分隔线（`.blk + .blk { border-left: 1px solid var(--line-2); }`）；
+  - 在缓存命中率卡片中集成 4px 动态条形仪表盘（`.meter i`），随实时命中率平滑伸缩。
+
 ## [2.4.78] - 2026-10-16
 
 ### 体验大升级：彻底根治数据库桌面污染，全面转向类似 Magpie 独立桌面 App 架构、窗口尺寸适中居中与零黑框静默启动
