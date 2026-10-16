@@ -1,11 +1,19 @@
 #[cfg(target_os = "windows")]
 mod windows_tray {
+    use std::ffi::c_void;
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::io::AsRawHandle;
     use std::ptr::null;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
 
-    use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -28,12 +36,48 @@ mod windows_tray {
     struct TrayState {
         web_url: Mutex<String>,
         running: Arc<AtomicBool>,
+        active_child: Mutex<Option<std::process::Child>>,
+    }
+
+    fn get_or_create_app_job() -> Option<HANDLE> {
+        static APP_JOB: OnceLock<Option<usize>> = OnceLock::new();
+        let val = APP_JOB.get_or_init(|| unsafe {
+            let handle = CreateJobObjectW(null(), null());
+            if handle == 0 as _ {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast::<c_void>(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) == 0
+            {
+                CloseHandle(handle);
+                return None;
+            }
+            Some(handle as usize)
+        });
+        val.map(|h| h as HANDLE)
+    }
+
+    pub fn cleanup_desktop_window() {
+        if let Some(state) = TRAY_STATE.get() {
+            if let Ok(mut lock) = state.active_child.lock() {
+                if let Some(mut child) = lock.take() {
+                    let _ = child.kill();
+                }
+            }
+        }
     }
 
     pub fn start_tray(web_url: String, running: Arc<AtomicBool>) {
         let _ = TRAY_STATE.set(TrayState {
             web_url: Mutex::new(web_url.clone()),
             running,
+            active_child: Mutex::new(None),
         });
 
         thread::spawn(move || unsafe {
@@ -155,6 +199,7 @@ mod windows_tray {
                     } else if id == ID_TRAY_OPEN_DATA_DIR {
                         open_data_dir();
                     } else if id == ID_TRAY_EXIT {
+                        cleanup_desktop_window();
                         if let Some(state) = TRAY_STATE.get() {
                             state.running.store(false, Ordering::SeqCst);
                         }
@@ -223,7 +268,22 @@ mod windows_tray {
                 "--no-default-browser-check",
             ]);
             cmd.creation_flags(CREATE_NO_WINDOW);
-            if cmd.spawn().is_ok() {
+            if let Ok(child) = cmd.spawn() {
+                // 将 Edge 子进程绑定至 Windows Job Object，当 Runner 进程终止时系统自动强杀，杜绝孤儿白屏
+                if let Some(job) = get_or_create_app_job() {
+                    unsafe {
+                        let raw_handle = child.as_raw_handle() as HANDLE;
+                        let _ = AssignProcessToJobObject(job, raw_handle);
+                    }
+                }
+                if let Some(state) = TRAY_STATE.get() {
+                    if let Ok(mut lock) = state.active_child.lock() {
+                        if let Some(mut old) = lock.take() {
+                            let _ = old.kill();
+                        }
+                        *lock = Some(child);
+                    }
+                }
                 return;
             }
         }
@@ -287,10 +347,12 @@ mod non_windows_tray {
             let _ = std::process::Command::new("xdg-open").arg(url).spawn();
         }
     }
+
+    pub fn cleanup_desktop_window() {}
 }
 
 #[cfg(target_os = "windows")]
-pub use windows_tray::{open_desktop_window, start_tray};
+pub use windows_tray::{cleanup_desktop_window, open_desktop_window, start_tray};
 
 #[cfg(not(target_os = "windows"))]
-pub use non_windows_tray::{open_desktop_window, start_tray};
+pub use non_windows_tray::{cleanup_desktop_window, open_desktop_window, start_tray};

@@ -22,6 +22,10 @@
   - 统一为 Magpie 的精致行级结构：左侧主次两行 (`.who` / `.name` / `.sub`)，右侧状态胶囊与元数据标签 (`.meta-tags`)；
   - Windows 原生字形栈规范：首选 `"Segoe UI Variable Text"`，等宽字体优先 `"Cascadia Mono"`，配合 Microsoft YaHei UI 保证中英文极致清晰度；
   - 会话树分组、搜索过滤器、设备配对浮层与关闭确认模态框全面同步 Magpie 视觉标准。
+- **内核级进程生命周期绑定（彻底根绝孤儿白屏与残留进程）**：
+  - **Windows Job Object 强托管**：在 `crates/runner/src/tray.rs` 中引入 Win32 `CreateJobObjectW`，配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 限制标志；拉起 Edge 独立 App 窗口后，立刻通过 `AssignProcessToJobObject` 将其子进程加入作业对象托管；
+  - **级联退出保证**：当 Runner 退出、崩溃或接收到关闭信号时，Windows 内核自动级联终结所有托管的 Edge 实例及相关渲染进程，从物理层面上杜绝因 Runner 终止而导致桌面残留孤儿白屏窗口的隐患；
+  - **双重退出保险**：在托盘退出处理及 `crates/runner/src/daemon.rs` 停止流程中增设主动 `cleanup_desktop_window()`，实现正常清理与内核兜底双保险。
 
 ## [2.4.78] - 2026-10-16
 

@@ -172,6 +172,7 @@ pub fn run(config: DaemonConfig) -> Result<()> {
     );
     control.stopped.store(true, Ordering::Relaxed);
     ipc_stopped.store(true, Ordering::Relaxed);
+    crate::tray::cleanup_desktop_window();
     #[cfg(windows)]
     let _ = daemon_ipc::request(
         &endpoint,
