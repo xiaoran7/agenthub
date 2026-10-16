@@ -854,8 +854,8 @@ const MANIFEST_JSON: &str = r##"{
   "short_name": "AgentHub",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0b0f17",
-  "theme_color": "#111827",
+  "background_color": "#1a1a1e",
+  "theme_color": "#1a1a1e",
   "icons": [
     {
       "src": "/icon.svg",

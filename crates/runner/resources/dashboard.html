@@ -2,61 +2,75 @@
 <html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#111827" id="themeColorMeta">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1a1a1e" id="themeColorMeta">
   <meta name="color-scheme" content="dark light">
   <link rel="manifest" href="/manifest.json">
-  <title>AgentHub Runner 仪表盘</title>
+  <title>AgentHub Runner</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="alternate icon" href="/favicon.ico">
   <style>
+    /* Magpie-grade Design System & Desktop Theme Variables */
     :root {
-      --cds-clay: #d97757;
-      --cds-clay-hover: #c86b4c;
-      --cds-clay-alpha12: rgba(217, 119, 87, 0.12);
-      --cds-clay-alpha20: rgba(217, 119, 87, 0.20);
-      --cds-surface-0: #f6f8fa;
-      --cds-surface-1: #ffffff;
-      --cds-surface-2: #f8fafc;
-      --cds-surface-3: #f1f5f9;
-      --cds-text-primary: #0f172a;
-      --cds-text-secondary: #475569;
-      --cds-text-muted: #94a3b8;
-      --cds-border: rgba(15, 23, 42, 0.08);
-      --cds-border-strong: rgba(15, 23, 42, 0.14);
-      --cds-blue: #0284c7;
-      --cds-blue-alpha12: rgba(2, 132, 199, 0.12);
-      --cds-green: #059669;
-      --cds-green-alpha12: rgba(5, 150, 105, 0.12);
-      --cds-card-bg: rgba(255, 255, 255, 0.94);
-      --cds-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 0 0 1px var(--cds-border);
-      --cds-card-hover-shadow: 0 10px 25px -5px rgba(2, 132, 199, 0.08), 0 0 0 1px rgba(2, 132, 199, 0.2);
-      --cds-icon-bg: #f1f5f9;
-      --cds-icon-color: #334155;
-      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --bg: #1a1a1e;
+      --card: #232327;
+      --card-2: #1f1f23;
+      --pill: #2d2d33;
+      --pill-hover: #36363d;
+      --seg-track: rgba(255, 255, 255, 0.04);
+      --seg-thumb: rgba(255, 255, 255, 0.14);
+      --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
+      --line: #333339;
+      --line-2: #2c2c32;
+      --fg: #ededf1;
+      --fg-2: #b9b9c1;
+      --muted: #8b8b94;
+      --faint: #56565f;
+      --ctl-fg: #a1a1aa;
+      --accent: #a5b4fc;
+      --accent-soft: #2b2c47;
+      --accent-fg: #14142a;
+      --green: #6fd99b;
+      --green-soft: #1e3a2b;
+      --red: #f28b82;
+      --red-soft: #45272a;
+      --amber: #f2b544;
+      --amber-soft: #3f3220;
+      --shadow: 0 16px 44px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+      --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    html.dark {
-      --cds-surface-0: #0b0f17;
-      --cds-surface-1: #111827;
-      --cds-surface-2: #162032;
-      --cds-surface-3: #1e293b;
-      --cds-text-primary: #f8fafc;
-      --cds-text-secondary: #94a3b8;
-      --cds-text-muted: #64748b;
-      --cds-border: rgba(255, 255, 255, 0.08);
-      --cds-border-strong: rgba(255, 255, 255, 0.16);
-      --cds-blue: #38bdf8;
-      --cds-blue-alpha12: rgba(56, 189, 248, 0.15);
-      --cds-green: #10b981;
-      --cds-green-alpha12: rgba(16, 185, 129, 0.16);
-      --cds-card-bg: #111827;
-      --cds-card-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--cds-border);
-      --cds-card-hover-shadow: 0 12px 30px -5px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(56, 189, 248, 0.3);
-      --cds-icon-bg: #1e293b;
-      --cds-icon-color: #94a3b8;
+    html:not(.dark) {
+      --bg: #f4f4f6;
+      --card: #ffffff;
+      --card-2: #f9f9fb;
+      --pill: #f1f1f4;
+      --pill-hover: #e9e9ee;
+      --seg-track: #e6e6eb;
+      --seg-thumb: #ffffff;
+      --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+      --ctl-fg: #63636b;
+      --line: #e3e3e8;
+      --line-2: #ececf0;
+      --fg: #1c1c21;
+      --fg-2: #4b4b53;
+      --muted: #85858d;
+      --faint: #b9b9c2;
+      --accent: #4f46e5;
+      --accent-soft: #eeedfd;
+      --accent-fg: #ffffff;
+      --green: #189a58;
+      --green-soft: #e4f6ec;
+      --red: #d64545;
+      --red-soft: #fbe9e9;
+      --amber: #b45309;
+      --amber-soft: #fbf0df;
+      --shadow: 0 16px 44px rgba(20, 22, 30, 0.16), 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
     }
 
+    /* Universal Scrollbar Elimination for Clean Desktop Mode */
     * {
       box-sizing: border-box;
       margin: 0;
@@ -64,7 +78,6 @@
       scrollbar-width: none !important;
       -ms-overflow-style: none !important;
     }
-
     *::-webkit-scrollbar {
       display: none !important;
       width: 0 !important;
@@ -72,25 +85,480 @@
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: var(--cds-surface-0);
-      color: var(--cds-text-primary);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+      background: var(--bg);
+      color: var(--fg);
       min-height: 100vh;
-      overflow-x: hidden;
-      overflow-y: auto;
       display: flex;
       flex-direction: column;
-      transition: background-color 0.25s ease, color 0.25s ease;
+      overflow-x: hidden;
+      overflow-y: auto;
       -webkit-font-smoothing: antialiased;
-      scrollbar-width: none !important;
-      -ms-overflow-style: none !important;
+      user-select: none;
+      -webkit-user-select: none;
+      cursor: default;
     }
 
-    /* SVG Icon Utility */
+    button {
+      font: inherit;
+      color: inherit;
+      background: none;
+      border: 0;
+      cursor: default;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    /* Magpie Header Bar (46px) */
+    .top {
+      height: 46px;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--line-2);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      flex: none;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      flex-shrink: 0;
+    }
+    .brand-logo {
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      display: block;
+    }
+    .brand-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .ver-pill {
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--muted);
+      background: var(--pill);
+      padding: 1px 6px;
+      border-radius: 999px;
+      border: 1px solid var(--line-2);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Magpie Segmented Navigation Switch (.seg) */
+    .seg {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      display: inline-flex;
+      padding: 2px;
+      border-radius: 8px;
+      background: var(--seg-track);
+      border: 0.5px solid var(--line-2);
+    }
+    .seg button {
+      position: relative;
+      z-index: 1;
+      white-space: nowrap;
+      height: 25px;
+      padding: 0 11px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ctl-fg);
+      transition: color 0.18s var(--ease), background 0.14s var(--ease);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .seg button:hover:not(.on) {
+      color: var(--fg-2);
+    }
+    .seg button.on {
+      color: var(--fg);
+      background: var(--seg-thumb);
+      box-shadow: var(--seg-edge);
+      font-weight: 600;
+    }
+
+    /* Actions Bar */
+    .actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 8px 0 6px;
+      border-radius: 999px;
+      background: var(--pill);
+      border: 1px solid var(--line);
+      font-size: 11px;
+      color: var(--fg-2);
+      margin-right: 4px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 2px var(--green-soft);
+      transition: background-color 0.2s ease;
+    }
+    .status-pill.offline .status-dot {
+      background: var(--red);
+      box-shadow: 0 0 0 2px var(--red-soft);
+    }
+
+    .icon-btn {
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      transition: background 0.12s, color 0.12s, transform 0.1s;
+    }
+    .icon-btn:hover {
+      background: var(--pill);
+      color: var(--fg);
+    }
+    .icon-btn:active {
+      transform: scale(0.95);
+    }
+    .icon-btn.winclose:hover {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    /* Hero Stats Strip (Compact Magpie Information Density) */
+    .hero-strip {
+      padding: 10px 14px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      flex: none;
+      background: var(--bg);
+    }
+    .hero-tile {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      transition: border-color 0.15s ease;
+    }
+    .hero-tile:hover {
+      border-color: var(--muted);
+    }
+    .hero-label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .hero-value {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--fg);
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+    .hero-sub {
+      font-size: 10.5px;
+      color: var(--fg-2);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Views Layout */
+    .view {
+      flex: 1;
+      padding: 4px 14px 20px;
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      animation: view-in 0.2s var(--ease);
+    }
+    .view.active {
+      display: flex;
+    }
+    @keyframes view-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Magpie Standard List & Row System (.list, .row) */
+    .list {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      flex: none;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+      padding: 7px 12px;
+      border-top: 1px solid var(--line-2);
+      transition: background 0.12s ease;
+    }
+    .row:first-child {
+      border-top: none;
+    }
+    .row:hover {
+      background: var(--card-2);
+    }
+
+    .row .who {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .row .name {
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--fg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row .sub {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Magpie Discrete Badges & Pills */
+    .pill-tag {
+      font-size: 10.5px;
+      font-weight: 500;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: var(--pill);
+      color: var(--fg-2);
+      border: 1px solid var(--line-2);
+      font-variant-numeric: tabular-nums;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .pill-ready {
+      background: var(--green-soft);
+      color: var(--green);
+      border-color: transparent;
+    }
+    .pill-accent {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: transparent;
+    }
+
+    .code-tag {
+      font-family: var(--code);
+      font-size: 11px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--pill);
+      color: var(--fg);
+    }
+
+    /* Magpie Button Styles */
+    .sm-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 24px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--fg-2);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+      flex-shrink: 0;
+    }
+    .sm-btn:hover {
+      background: var(--pill);
+      color: var(--fg);
+      border-color: var(--muted);
+    }
+    .sm-btn:active {
+      transform: scale(0.97);
+    }
+
+    /* Sessions Tree Section */
+    .sm-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 2px 6px;
+      flex-wrap: wrap;
+    }
+    .sm-filter {
+      height: 26px;
+      border-radius: 999px;
+      background: var(--pill);
+      border: 1px solid var(--line);
+      color: var(--fg);
+      font-size: 11.5px;
+      padding: 0 12px;
+      width: 220px;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+      font-family: inherit;
+    }
+    .sm-filter:focus {
+      border-color: var(--accent);
+      background: var(--card);
+    }
+
+    .sm-folder-header {
+      background: var(--card-2);
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      cursor: pointer;
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+    }
+    .sm-folder-header:first-child {
+      border-top: none;
+    }
+    .sm-folder-title {
+      font-weight: 600;
+      color: var(--fg);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .sm-folder-path {
+      font-family: var(--code);
+      font-size: 10.5px;
+      color: var(--faint);
+      margin-left: 6px;
+      font-weight: normal;
+    }
+
+    /* Usage Analytics Elements */
+    .usage-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .progress-track {
+      height: 6px;
+      border-radius: 3px;
+      background: var(--pill);
+      overflow: hidden;
+      margin: 4px 0;
+    }
+    .progress-thumb {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--accent);
+      transition: width 0.3s ease;
+    }
+
+    /* Modal Dialogs */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      animation: view-in 0.15s var(--ease);
+    }
+    .modal-dialog {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 20px 22px;
+      max-width: 460px;
+      width: 90%;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .form-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .form-input {
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 6px;
+      background: var(--pill);
+      border: 1px solid var(--line);
+      color: var(--fg);
+      font-size: 12px;
+      outline: none;
+      font-family: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .form-input:focus {
+      border-color: var(--accent);
+      background: var(--card);
+    }
+
+    /* SVGs */
     .icon {
-      width: 16px;
-      height: 16px;
-      stroke-width: 2;
+      width: 14px;
+      height: 14px;
+      stroke-width: 1.8;
       stroke: currentColor;
       fill: none;
       stroke-linecap: round;
@@ -100,1048 +568,314 @@
       vertical-align: middle;
     }
 
-    .icon-lg {
-      width: 20px;
-      height: 20px;
-    }
-
-    .icon-stat {
-      width: 18px;
-      height: 18px;
-      stroke-width: 2.2;
-    }
-
-    /* Header Bar */
-    .header {
-      height: 60px;
-      padding: 0 28px;
+    /* Footer Banner */
+    .footer-bar {
+      margin-top: auto;
+      padding: 8px 14px;
+      border-top: 1px solid var(--line-2);
+      font-size: 11px;
+      color: var(--muted);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid var(--cds-border);
-      background: var(--cds-surface-1);
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      backdrop-filter: blur(12px);
-      transition: background-color 0.25s ease, border-color 0.25s ease;
-    }
-
-    .logo-area {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .logo-img {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      transition: transform 0.2s var(--ease-out);
-      will-change: transform;
-    }
-
-    .logo-area:hover .logo-img {
-      transform: scale(1.05) rotate(2deg);
-    }
-
-    .logo-title {
-      font-size: 15px;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-    }
-
-    .badge {
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 6px;
-      font-weight: 600;
-      background: var(--cds-clay-alpha12);
-      color: var(--cds-clay);
-      letter-spacing: 0.2px;
-    }
-
-    .status-badge {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      padding: 5px 12px;
-      border-radius: 8px;
-      background: var(--cds-surface-2);
-      color: var(--cds-text-secondary);
-      font-weight: 500;
-      border: 1px solid var(--cds-border);
-      transition: all 0.2s ease;
-    }
-
-    .status-badge:hover {
-      background: var(--cds-surface-3);
-      border-color: var(--cds-border-strong);
-    }
-
-    .status-badge.offline {
-      background: rgba(239, 68, 68, 0.08);
-      color: #ef4444;
-      border-color: rgba(239, 68, 68, 0.25);
-    }
-
-    .status-pulse-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--cds-green);
-      flex-shrink: 0;
-      transition: background-color 0.2s ease;
-    }
-
-    .status-badge.offline .status-pulse-dot {
-      background: #ef4444;
-    }
-
-    .actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      height: 34px;
-      padding: 0 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      border: 1px solid var(--cds-border);
-      background: var(--cds-surface-2);
-      color: var(--cds-text-primary);
-      transition: all 0.2s var(--ease-out);
-      will-change: transform;
-      user-select: none;
-    }
-
-    .btn:hover {
-      background: var(--cds-surface-3);
-      border-color: var(--cds-border-strong);
-      transform: translateY(-1px);
-    }
-
-    .btn:active {
-      transform: translateY(0) scale(0.97);
-    }
-
-    .btn-danger {
-      background: rgba(239, 68, 68, 0.08);
-      color: #ef4444;
-      border-color: rgba(239, 68, 68, 0.2);
-    }
-
-    .btn-danger:hover {
-      background: rgba(239, 68, 68, 0.16);
-      border-color: #ef4444;
-      color: #ef4444;
-    }
-
-    .main-container {
-      max-width: 1240px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 28px 24px 48px;
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-      flex: 1;
-    }
-
-    /* Top Stats Grid */
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-    }
-
-    .stat-card {
-      background: var(--cds-card-bg);
-      border-radius: 12px;
-      padding: 20px 22px;
-      box-shadow: var(--cds-card-shadow);
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      transition: transform 0.22s var(--ease-out), box-shadow 0.22s var(--ease-out);
-      will-change: transform, box-shadow;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .stat-card:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--cds-card-hover-shadow);
-    }
-
-    .stat-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .stat-label {
-      font-size: 13px;
-      color: var(--cds-text-muted);
-      font-weight: 600;
-      letter-spacing: -0.1px;
-    }
-
-    .stat-icon-wrapper {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      background: var(--cds-icon-bg);
-      color: var(--cds-icon-color);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s ease;
-    }
-
-    .stat-card:hover .stat-icon-wrapper {
-      transform: scale(1.08);
-      background: var(--cds-blue-alpha12);
-      color: var(--cds-blue);
-    }
-
-    .stat-value {
-      font-size: 28px;
-      font-weight: 700;
-      letter-spacing: -0.8px;
-      color: var(--cds-text-primary);
-      margin-top: 4px;
-    }
-
-    .stat-sub {
-      font-size: 12px;
-      color: var(--cds-text-secondary);
-      line-height: 1.4;
-    }
-
-    /* Tabs Header */
-    .tabs-nav {
-      display: flex;
-      gap: 6px;
-      padding: 4px;
-      background: var(--cds-surface-2);
-      border: 1px solid var(--cds-border);
-      border-radius: 10px;
-      width: fit-content;
-      max-width: 100%;
-      overflow-x: auto;
-    }
-
-    .tab-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
-      font-size: 13px;
-      font-weight: 600;
-      border-radius: 8px;
-      cursor: pointer;
-      border: none;
-      background: transparent;
-      color: var(--cds-text-secondary);
-      transition: all 0.2s var(--ease-out);
-      will-change: transform;
-      user-select: none;
-      white-space: nowrap;
-    }
-
-    .tab-btn:hover {
-      color: var(--cds-text-primary);
-      background: var(--cds-surface-3);
-    }
-
-    .tab-btn.active {
-      color: var(--cds-clay);
-      background: var(--cds-surface-1);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    }
-
-    .tab-content {
-      display: none;
-      flex-direction: column;
-      gap: 16px;
-      animation: fadeIn 0.25s var(--ease-out);
-    }
-
-    .tab-content.active {
-      display: flex;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(6px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Card Grid */
-    .card-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-      gap: 16px;
-    }
-
-    .item-card {
-      background: var(--cds-card-bg);
-      border-radius: 12px;
-      padding: 22px;
-      box-shadow: var(--cds-card-shadow);
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      transition: transform 0.22s var(--ease-out), box-shadow 0.22s var(--ease-out);
-      will-change: transform, box-shadow;
-    }
-
-    .item-card:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--cds-card-hover-shadow);
-    }
-
-    .item-card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .item-card-title {
-      font-size: 15px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .agent-avatar {
-      width: 28px;
-      height: 28px;
-      border-radius: 6px;
-      background: var(--cds-icon-bg);
-      color: var(--cds-blue);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .item-card-pill {
-      font-size: 11px;
-      padding: 3px 9px;
-      border-radius: 6px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-    }
-
-    .pill-ready {
-      background: var(--cds-green-alpha12);
-      color: var(--cds-green);
-      border: 1px solid rgba(16, 185, 129, 0.2);
-    }
-
-    .pill-missing {
-      background: rgba(120, 120, 120, 0.12);
-      color: var(--cds-text-muted);
-      border: 1px solid var(--cds-border);
-    }
-
-    .item-card-desc {
-      font-size: 13px;
-      color: var(--cds-text-secondary);
-      line-height: 1.5;
-    }
-
-    .item-meta-row {
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      font-size: 12px;
-      color: var(--cds-text-muted);
-      padding: 12px 14px;
-      background: var(--cds-surface-2);
-      border-radius: 8px;
-      border: 1px solid var(--cds-border);
-    }
-
-    .item-meta-line {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      word-break: break-all;
-    }
-
-    .code-tag {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 11px;
-      background: var(--cds-surface-3);
-      padding: 2px 7px;
-      border-radius: 4px;
-      color: var(--cds-text-primary);
-      border: 1px solid var(--cds-border);
-    }
-
-    /* Data Table */
-    .data-table-wrap {
-      background: var(--cds-card-bg);
-      border-radius: 12px;
-      box-shadow: var(--cds-card-shadow);
-      overflow-x: auto;
-      border: 1px solid var(--cds-border);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      text-align: left;
-      font-size: 13px;
-    }
-
-    th {
-      background: var(--cds-surface-2);
-      padding: 14px 18px;
-      font-weight: 600;
-      color: var(--cds-text-secondary);
-      border-bottom: 1px solid var(--cds-border);
-      white-space: nowrap;
-    }
-
-    td {
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--cds-border);
-      color: var(--cds-text-secondary);
-    }
-
-    tr:last-child td {
-      border-bottom: none;
-    }
-
-    tr:hover td {
-      background: var(--cds-surface-2);
-    }
-
-    /* Affinity Box */
-    .affinity-box {
-      background: var(--cds-card-bg);
-      border-radius: 12px;
-      padding: 26px;
-      box-shadow: var(--cds-card-shadow);
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    .code-block {
-      background: var(--cds-surface-2);
-      border: 1px solid var(--cds-border);
-      border-radius: 8px;
-      padding: 14px 16px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-      color: var(--cds-text-primary);
-      position: relative;
-      overflow-x: auto;
-    }
-
-    .copy-btn {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      padding: 4px 10px;
-      font-size: 11px;
-      font-weight: 600;
-      border-radius: 5px;
-      background: var(--cds-surface-3);
-      border: 1px solid var(--cds-border);
-      color: var(--cds-text-primary);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      transition: all 0.15s ease;
-    }
-
-    .copy-btn:hover {
-      background: var(--cds-surface-1);
-      border-color: var(--cds-border-strong);
-    }
-
-    /* Magpie-grade Sessions Tree View */
-    .session-tree-group {
-      background: var(--cds-card-bg);
-      border-radius: 12px;
-      box-shadow: var(--cds-card-shadow);
-      margin-bottom: 16px;
-      overflow: hidden;
-      border: 1px solid var(--cds-border);
-      transition: box-shadow 0.2s ease;
-    }
-
-    .session-tree-group:hover {
-      box-shadow: var(--cds-card-hover-shadow);
-    }
-
-    .session-group-header {
-      padding: 14px 20px;
-      background: var(--cds-surface-2);
-      border-bottom: 1px solid var(--cds-border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      cursor: pointer;
-      user-select: none;
-    }
-
-    .session-group-title {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-weight: 700;
-      font-size: 14px;
-      color: var(--cds-text-primary);
-    }
-
-    .session-group-path {
-      font-family: ui-monospace, monospace;
-      font-size: 11px;
-      color: var(--cds-text-muted);
-      font-weight: normal;
-    }
-
-    .session-item {
-      padding: 14px 20px;
-      border-bottom: 1px solid var(--cds-border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      transition: background 0.15s ease;
-    }
-
-    .session-item:last-child {
-      border-bottom: none;
-    }
-
-    .session-item:hover {
-      background: var(--cds-surface-2);
-    }
-
-    .session-main {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      flex: 1;
-      min-width: 0;
-    }
-
-    .session-prompt {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--cds-text-primary);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .session-meta-line {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 12px;
-      color: var(--cds-text-muted);
-      flex-wrap: wrap;
-    }
-
-    .session-id-tag {
-      font-family: ui-monospace, monospace;
-      font-size: 11px;
-      padding: 1px 6px;
-      border-radius: 4px;
-      background: var(--cds-surface-3);
-      color: var(--cds-text-secondary);
-    }
-
-    .session-stats-bar {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-shrink: 0;
-    }
-
-    /* Magpie-grade Usage Charts & Cards */
-    .usage-metric-card {
-      background: var(--cds-card-bg);
-      border-radius: 12px;
-      padding: 20px;
-      box-shadow: var(--cds-card-shadow);
-      border: 1px solid var(--cds-border);
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .progress-bar-bg {
-      height: 8px;
-      border-radius: 4px;
-      background: var(--cds-surface-3);
-      overflow: hidden;
-      position: relative;
-    }
-
-    .progress-bar-fill {
-      height: 100%;
-      border-radius: 4px;
-      background: linear-gradient(90deg, var(--cds-blue), var(--cds-green));
-      transition: width 0.4s ease;
-    }
-
-    /* Footer Note */
-    .footer-note {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 18px;
-      border-radius: 10px;
-      background: var(--cds-blue-alpha12);
-      border: 1px solid rgba(2, 132, 199, 0.2);
-      font-size: 13px;
-      color: var(--cds-text-primary);
-      line-height: 1.5;
-    }
-
-    /* Shutdown Modal */
-    .shutdown-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.65);
-      backdrop-filter: blur(8px);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 999;
-      animation: fadeIn 0.2s ease;
-    }
-
-    .shutdown-modal {
-      background: var(--cds-surface-1);
-      border: 1px solid var(--cds-border-strong);
-      border-radius: 16px;
-      padding: 32px;
-      max-width: 440px;
-      width: 90%;
-      text-align: center;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-      animation: scaleUp 0.25s var(--ease-out);
-    }
-
-    /* Pair Modal */
-    .pair-modal {
-      background: var(--cds-surface-1);
-      border: 1px solid var(--cds-border-strong);
-      border-radius: 16px;
-      padding: 28px;
-      max-width: 520px;
-      width: 92%;
-      text-align: left;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      box-shadow: 0 24px 48px rgba(0,0,0,0.45);
-      animation: scaleUp 0.25s var(--ease-out);
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .form-label {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--cds-text-secondary);
-    }
-
-    .form-input {
-      height: 36px;
-      padding: 0 12px;
-      border-radius: 8px;
-      background: var(--cds-surface-2);
-      border: 1px solid var(--cds-border);
-      color: var(--cds-text-primary);
-      font-size: 13px;
-      outline: none;
-      transition: all 0.15s ease;
-      font-family: inherit;
-    }
-
-    .form-input:focus {
-      border-color: var(--cds-blue);
-      box-shadow: 0 0 0 2px var(--cds-blue-alpha12);
-    }
-
-    @keyframes scaleUp {
-      from { transform: scale(0.95); opacity: 0; }
-      to { transform: scale(1); opacity: 1; }
+      background: var(--bg);
     }
   </style>
 </head>
 <body>
-  <!-- Header Bar -->
-  <header class="header">
-    <div class="logo-area">
-      <img src="/icon.svg" alt="AgentHub Logo" class="logo-img">
-      <span class="logo-title">AgentHub Runner</span>
-      <span class="badge">仪表盘</span>
-      <span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">v2.4.77</span>
+  <!-- Magpie 46px Header Bar -->
+  <header class="top">
+    <!-- Brand on left -->
+    <div class="brand">
+      <img src="/icon.svg" alt="AgentHub" class="brand-logo">
+      <span class="brand-title">AgentHub</span>
+      <span class="ver-pill">Runner v2.4.79</span>
     </div>
 
-    <div class="status-badge" id="runnerStatusBadge">
-      <span class="status-pulse-dot"></span>
-      <span id="runnerStatusText">运行中 · 托盘就绪 · 端口 4200</span>
-    </div>
+    <!-- Segmented Navigation Switch (.seg) in middle -->
+    <nav class="seg" id="nav" aria-label="Main navigation">
+      <button class="on" onclick="switchView('sessions')" id="nav-sessions">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>会话 Sessions</span>
+      </button>
+      <button onclick="switchView('agents')" id="nav-agents">
+        <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
+        <span>智能体 Agents</span>
+      </button>
+      <button onclick="switchView('usage')" id="nav-usage">
+        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        <span>用量 Usage</span>
+      </button>
+      <button onclick="switchView('models')" id="nav-models">
+        <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span>模型 Models</span>
+      </button>
+      <button onclick="switchView('workspaces')" id="nav-workspaces">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span>工作区</span>
+      </button>
+      <button onclick="switchView('gateway')" id="nav-gateway">
+        <svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <span>网关 Gateway</span>
+      </button>
+    </nav>
 
+    <!-- Discrete Actions on right -->
     <div class="actions">
-      <button class="btn" onclick="openPairModal()" title="查看本机设备身份与云端 AgentHub 配对状态">
+      <!-- Quiet status indicator -->
+      <div class="status-pill" id="runnerStatusBadge" title="本地守护监听服务端口与状态">
+        <span class="status-dot"></span>
+        <span id="runnerStatusText">端口 4200</span>
+      </div>
+
+      <!-- Device pair button -->
+      <button class="icon-btn" onclick="openPairModal()" title="设备配对与身份标识" id="pairBtn">
         <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        <span id="pairBtnText">设备配对</span>
       </button>
 
-      <button class="btn" onclick="refreshDashboard()" title="重新探测系统状态">
+      <!-- Sync button -->
+      <button class="icon-btn" onclick="refreshDashboard()" title="重新探测系统状态与会话" id="refreshBtn">
         <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
-        <span>重新探测</span>
       </button>
 
-      <button class="btn" onclick="copyGatewayConfig()" title="复制 Magpie 与网关环境变量">
+      <!-- Copy gateway config -->
+      <button class="icon-btn" onclick="copyGatewayConfig()" title="复制环境变量配置 (ANTHROPIC_BASE_URL)">
         <svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        <span>复制网关配置</span>
       </button>
 
-      <button class="btn" onclick="toggleTheme()" title="切换亮色/暗色外观">
+      <!-- Theme toggle -->
+      <button class="icon-btn" onclick="toggleTheme()" title="切换亮暗主题外观">
         <span id="themeIcon">
           <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
         </span>
-        <span id="themeBtnText">外观</span>
       </button>
 
-      <button class="btn btn-danger" onclick="shutdownRunner()" title="安全退出 Runner 进程并关闭托盘">
-        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>
-        <span>退出 Runner</span>
+      <!-- Exit button -->
+      <button class="icon-btn winclose" onclick="shutdownRunner()" title="退出 AgentHub Runner">
+        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
   </header>
 
-  <main class="main-container">
-    <!-- Top 5 Hero Stats Cards -->
-    <div class="stats-grid">
-      <!-- Stat 1: Total Sessions -->
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-label">解析会话总数</span>
-          <div class="stat-icon-wrapper">
-            <svg class="icon icon-stat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          </div>
-        </div>
-        <div class="stat-value" id="statTotalSessions">-</div>
-        <div class="stat-sub" id="statSessionsBreakdown">Claude - · Codex - · 其他 -</div>
+  <!-- Magpie Hero Stats Strip -->
+  <section class="hero-strip">
+    <div class="hero-tile">
+      <div class="hero-label">
+        <span>解析会话</span>
+        <svg class="icon" style="color:var(--muted);width:12px;height:12px;" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       </div>
-
-      <!-- Stat 2: Cache Hit Rate -->
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-label">Token 缓存命中率</span>
-          <div class="stat-icon-wrapper" style="color:var(--cds-green);">
-            <svg class="icon icon-stat" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          </div>
-        </div>
-        <div class="stat-value" id="statCacheHitRate" style="color:var(--cds-green);">-</div>
-        <div class="stat-sub" id="statTokensSaved">已节省 ~- Tokens (Session Affinity 保护)</div>
-      </div>
-
-      <!-- Stat 3: Upstream Models -->
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-label">发现上游模型</span>
-          <div class="stat-icon-wrapper" style="color:var(--cds-blue);">
-            <svg class="icon icon-stat" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          </div>
-        </div>
-        <div class="stat-value" id="statTotalModels">-</div>
-        <div class="stat-sub" id="statGatewaySource">网关已连接 · 支持视觉与 1M 上下文</div>
-      </div>
-
-      <!-- Stat 4: Workspaces -->
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-label">已注册工作区</span>
-          <div class="stat-icon-wrapper">
-            <svg class="icon icon-stat" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-          </div>
-        </div>
-        <div class="stat-value" id="statTotalWorkspaces">-</div>
-        <div class="stat-sub">哈希映射索引 · O(1) 路径快速解析</div>
-      </div>
-
-      <!-- Stat 5: Agents -->
-      <div class="stat-card">
-        <div class="stat-header">
-          <span class="stat-label">检测到 Agents</span>
-          <div class="stat-icon-wrapper" style="color:var(--cds-clay);">
-            <svg class="icon icon-stat" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
-          </div>
-        </div>
-        <div class="stat-value" id="statActiveAgents">-</div>
-        <div class="stat-sub" id="statAgentsSummary">Claude Code 就绪 · Codex 就绪</div>
-      </div>
+      <div class="hero-value" id="statTotalSessions">-</div>
+      <div class="hero-sub" id="statSessionsBreakdown">Claude - · Codex -</div>
     </div>
 
-    <!-- Navigation Tabs -->
-    <div class="tabs-nav">
-      <button class="tab-btn active" onclick="switchTab('agents')">
-        <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
-        <span>智能 Agent 矩阵</span>
-      </button>
+    <div class="hero-tile">
+      <div class="hero-label">
+        <span>缓存命中率</span>
+        <svg class="icon" style="color:var(--green);width:12px;height:12px;" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <div class="hero-value" id="statCacheHitRate" style="color:var(--green);">-</div>
+      <div class="hero-sub" id="statTokensSaved">节省 ~- Tokens</div>
+    </div>
 
-      <button class="tab-btn" onclick="switchTab('sessions')">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <span>会话解析 (Sessions)</span>
-      </button>
+    <div class="hero-tile">
+      <div class="hero-label">
+        <span>上游模型</span>
+        <svg class="icon" style="color:var(--accent);width:12px;height:12px;" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      </div>
+      <div class="hero-value" id="statTotalModels">-</div>
+      <div class="hero-sub" id="statGatewaySource">1M 上下文 · 视觉支持</div>
+    </div>
 
-      <button class="tab-btn" onclick="switchTab('usage')">
-        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-        <span>用量分析 (Usage)</span>
-      </button>
-
-      <button class="tab-btn" onclick="switchTab('workspaces')">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    <div class="hero-tile">
+      <div class="hero-label">
         <span>已注册工作区</span>
+        <svg class="icon" style="color:var(--muted);width:12px;height:12px;" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div class="hero-value" id="statTotalWorkspaces">-</div>
+      <div class="hero-sub">O(1) 路径快速解析</div>
+    </div>
+
+    <div class="hero-tile">
+      <div class="hero-label">
+        <span>Agents 矩阵</span>
+        <svg class="icon" style="color:var(--amber);width:12px;height:12px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
+      </div>
+      <div class="hero-value" id="statActiveAgents">-</div>
+      <div class="hero-sub" id="statAgentsSummary">多智能体就绪</div>
+    </div>
+  </section>
+
+  <!-- View 1: Magpie Sessions Tree (Default Active) -->
+  <main class="view active" id="view-sessions">
+    <div class="sm-toolbar">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="search" id="sessionSearchInput" placeholder="搜索会话提示词、ID 或工作区..." class="sm-filter" oninput="filterSessionsList()">
+        <span class="pill-tag" id="sessionCountBadge">0 个历史会话</span>
+      </div>
+      <button class="sm-btn" onclick="refreshDashboard()">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
+        <span>刷新列表</span>
       </button>
-
-      <button class="tab-btn" onclick="switchTab('models')">
-        <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        <span>上游模型目录</span>
-      </button>
-
-      <button class="tab-btn" onclick="switchTab('gateway')">
-        <svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        <span>网关路由与 Session Affinity</span>
-      </button>
     </div>
-
-    <!-- Tab 1: Agents Matrix -->
-    <div id="tab-agents" class="tab-content active">
-      <div class="card-grid" id="agentsGrid">
-        <!-- Rendered dynamically -->
-      </div>
-    </div>
-
-    <!-- Tab: Magpie-grade Sessions Tree View -->
-    <div id="tab-sessions" class="tab-content">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0 4px;flex-wrap:wrap;gap:10px;">
-        <div style="font-size:13px;color:var(--cds-text-secondary);display:flex;align-items:center;gap:6px;">
-          <span>按工作区目录智能聚类历史会话，实时统计 Prompt / 补全 Token 消耗与恢复指令</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <input type="text" id="sessionSearchInput" placeholder="按提示词/会话ID过滤..." class="form-input" style="height:30px;width:200px;font-size:12px;" oninput="filterSessionsList()">
-          <button class="btn" onclick="refreshDashboard()" style="height:30px;font-size:12px;display:flex;align-items:center;gap:6px;">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-            <span>刷新会话</span>
-          </button>
-        </div>
-      </div>
-      <div id="sessionsContainer">
-        <!-- Rendered dynamically -->
-      </div>
-    </div>
-
-    <!-- Tab: Magpie-grade Usage Analytics -->
-    <div id="tab-usage" class="tab-content">
-      <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
-        <div class="usage-metric-card">
-          <div style="font-size:13px;font-weight:600;color:var(--cds-text-muted);">总输入/Prompt Tokens</div>
-          <div style="font-size:26px;font-weight:700;color:var(--cds-blue);" id="usagePromptTokens">-</div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="usagePromptBar" style="width: 75%;"></div>
-          </div>
-          <div style="font-size:12px;color:var(--cds-text-secondary);">Session Affinity 重点加速区域</div>
-        </div>
-
-        <div class="usage-metric-card">
-          <div style="font-size:13px;font-weight:600;color:var(--cds-text-muted);">总输出/Completion Tokens</div>
-          <div style="font-size:26px;font-weight:700;color:var(--cds-green);" id="usageCompletionTokens">-</div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="usageCompletionBar" style="width: 45%;background:var(--cds-green);"></div>
-          </div>
-          <div style="font-size:12px;color:var(--cds-text-secondary);">大模型生成代码及推理量</div>
-        </div>
-
-        <div class="usage-metric-card">
-          <div style="font-size:13px;font-weight:600;color:var(--cds-text-muted);">预估节省资金 (Prompt Cache)</div>
-          <div style="font-size:26px;font-weight:700;color:var(--cds-clay);" id="usageEstimatedSaved">$ -</div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="usageCacheBar" style="width: 90%;background:var(--cds-clay);"></div>
-          </div>
-          <div style="font-size:12px;color:var(--cds-text-secondary);">基于 90% 缓存命中率与标准上游费率测算</div>
-        </div>
-      </div>
-
-      <div class="affinity-box" style="margin-top:16px;">
-        <h3 style="font-size:15px;font-weight:700;margin-bottom:12px;">模型调用分布与请求统计</h3>
-        <div id="usageModelBreakdown" style="display:flex;flex-direction:column;gap:12px;">
-          <!-- Rendered dynamically -->
-        </div>
-      </div>
-    </div>
-
-    <!-- Tab 2: Workspaces -->
-    <div id="tab-workspaces" class="tab-content">
-      <div class="data-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>工作区名称</th>
-              <th>本地物理路径</th>
-              <th>关联 Agents</th>
-              <th>最近活跃</th>
-              <th>会话数</th>
-              <th>Git 仓库</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="workspacesTableBody">
-            <!-- Rendered dynamically -->
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Tab 3: Models Catalog -->
-    <div id="tab-models" class="tab-content">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0 4px;">
-        <div style="font-size:13px;color:var(--cds-text-secondary);display:flex;align-items:center;gap:6px;">
-          <span>动态探测上游模型目录，实时捕获上下文窗口与模态支持</span>
-        </div>
-        <button class="btn" onclick="refreshModelsCatalog(event)" id="btnRefreshModels" style="height:30px;font-size:12px;display:flex;align-items:center;gap:6px;">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-          <span>拉取最新模型</span>
-        </button>
-      </div>
-      <div class="card-grid" id="modelsGrid">
-        <!-- Rendered dynamically -->
-      </div>
-    </div>
-
-    <!-- Tab 4: Gateway & Session Affinity -->
-    <div id="tab-gateway" class="tab-content">
-      <div class="affinity-box">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <h3 style="font-size:16px;font-weight:700;">Magpie 架构与 Session Affinity 会话亲和性</h3>
-          <span class="badge" id="gatewayBadge">已激活</span>
-        </div>
-        <p style="font-size:13px;line-height:1.6;color:var(--cds-text-secondary);">
-          当多个智能 Agent 或客户端并发访问 Anthropic 上游时，若请求在不同后端 Worker 之间轮转，会导致服务端的 <b>Prompt Cache</b> 被频繁击穿，命中率从 90% 跌落至 0%，不仅大幅增加等待时延，还会成倍增加 Token 计费。
-        </p>
-        <p style="font-size:13px;line-height:1.6;color:var(--cds-text-secondary);">
-          <b>AgentHub Session Affinity 机制</b> 通过自动在请求头中注入 <code class="code-tag">x-session-affinity: &lt;session_id&gt;</code>，促使上游网关路由器（如 Magpie 或 CC Switch）将同一个会话的推理请求锁定在同一缓存节点上，从而确保 <b>90% 以上的 Prompt 缓存命中率</b>。
-        </p>
-
-        <div style="margin-top:6px;">
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">跨工具环境变量一键配置 (Bash / Zsh):</div>
-          <div class="code-block">
-            <button class="copy-btn" onclick="copySnippet('envSnippet')">
-              <svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              <span>复制</span>
-            </button>
-            <pre id="envSnippet">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
-export ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"</pre>
-          </div>
-        </div>
-
-        <div style="margin-top:6px;">
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">PowerShell 环境变量一键配置 (Windows):</div>
-          <div class="code-block">
-            <button class="copy-btn" onclick="copySnippet('psSnippet')">
-              <svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              <span>复制</span>
-            </button>
-            <pre id="psSnippet">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
-$env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Bottom System Tray & Exit Reminder -->
-    <div class="footer-note">
-      <svg class="icon icon-lg" style="color:var(--cds-blue);" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-      <span>
-        <b>托盘驻留提示：</b>AgentHub Runner 已在右下角系统托盘中静默驻留。左键单击打开本控制台，右键托盘弹出菜单即可随时安全退出。无需使用任务管理器强制杀死进程。
-      </span>
+    <div id="sessionsContainer" style="display:flex;flex-direction:column;gap:8px;">
+      <!-- Dynamic workspace groups -->
     </div>
   </main>
 
-  <!-- Device Pairing Modal Overlay -->
-  <div id="pairModal" class="shutdown-overlay">
-    <div class="pair-modal">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <div style="width:36px;height:36px;border-radius:8px;background:var(--cds-blue-alpha12);color:var(--cds-blue);display:flex;align-items:center;justify-content:center;">
-            <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          </div>
-          <div>
-            <h3 style="font-size:16px;font-weight:700;">设备身份与 AgentHub 配对</h3>
-            <div style="font-size:12px;color:var(--cds-text-muted);" id="devicePairSubtitle">本地独立运作模式 (免登就绪)</div>
-          </div>
+  <!-- View 2: Agents Matrix -->
+  <main class="view" id="view-agents">
+    <div class="list" id="agentsGrid">
+      <!-- Dynamic agents list -->
+    </div>
+  </main>
+
+  <!-- View 3: Usage Analytics -->
+  <main class="view" id="view-usage">
+    <div class="usage-grid">
+      <div class="hero-tile">
+        <div class="hero-label">总输入 Prompt Tokens</div>
+        <div class="hero-value" style="color:var(--accent);" id="usagePromptTokens">-</div>
+        <div class="progress-track">
+          <div class="progress-thumb" id="usagePromptBar" style="width: 75%;"></div>
         </div>
-        <button class="btn" style="height:28px;padding:0 8px;" onclick="closePairModal()">
+        <div class="hero-sub">Session Affinity 缓存保护区域</div>
+      </div>
+
+      <div class="hero-tile">
+        <div class="hero-label">总输出 Completion Tokens</div>
+        <div class="hero-value" style="color:var(--green);" id="usageCompletionTokens">-</div>
+        <div class="progress-track">
+          <div class="progress-thumb" id="usageCompletionBar" style="width: 45%;background:var(--green);"></div>
+        </div>
+        <div class="hero-sub">模型推理及代码生成总量</div>
+      </div>
+
+      <div class="hero-tile">
+        <div class="hero-label">预估节省资金 (Prompt Cache)</div>
+        <div class="hero-value" style="color:var(--amber);" id="usageEstimatedSaved">$ -</div>
+        <div class="progress-track">
+          <div class="progress-thumb" id="usageCacheBar" style="width: 90%;background:var(--amber);"></div>
+        </div>
+        <div class="hero-sub">基于 90% 缓存命中率与基准费率测算</div>
+      </div>
+    </div>
+
+    <div class="list" style="margin-top:6px;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--line-2);font-weight:600;font-size:12.5px;">
+        模型调用分布与请求统计
+      </div>
+      <div id="usageModelBreakdown" style="padding:10px 14px;display:flex;flex-direction:column;gap:10px;">
+        <!-- Dynamic model usage rows -->
+      </div>
+    </div>
+  </main>
+
+  <!-- View 4: Models Catalog -->
+  <main class="view" id="view-models">
+    <div class="sm-toolbar">
+      <span style="font-size:12px;color:var(--muted);">动态捕获上游模型可用目录、上下文窗口与多模态特性</span>
+      <button class="sm-btn" onclick="refreshModelsCatalog(event)" id="btnRefreshModels">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
+        <span>同步上游最新模型</span>
+      </button>
+    </div>
+    <div class="list" id="modelsGrid">
+      <!-- Dynamic models list -->
+    </div>
+  </main>
+
+  <!-- View 5: Workspaces -->
+  <main class="view" id="view-workspaces">
+    <div class="list" id="workspacesList">
+      <!-- Dynamic workspaces list -->
+    </div>
+  </main>
+
+  <!-- View 6: Gateway & Affinity -->
+  <main class="view" id="view-gateway">
+    <div class="list" style="padding:14px;display:flex;flex-direction:column;gap:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:13px;font-weight:600;">Magpie 架构与 Session Affinity 会话亲和性</span>
+        <span class="pill-tag pill-ready" id="gatewayBadge">已激活</span>
+      </div>
+      <p style="font-size:12px;line-height:1.6;color:var(--fg-2);">
+        当智能 Agent（如 Claude Code）高频发起多轮交互时，若请求在不同上游网关 Worker 间漂移，服务端的 <b>Prompt Cache</b> 将被频繁击穿，命中率由 90% 跌落至 0%，大幅增加时延并成倍损耗 Token。
+      </p>
+      <p style="font-size:12px;line-height:1.6;color:var(--fg-2);">
+        <b>AgentHub Session Affinity 机制</b> 通过在请求头注入 <code class="code-tag">x-session-affinity: &lt;session_id&gt;</code>，促使上游 Magpie 网关将同一会话路由锁定在相同节点上，保障 <b>90% 以上缓存命中率</b>。
+      </p>
+
+      <div style="margin-top:4px;">
+        <div style="font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;">跨平台环境变量配置 (Bash / Zsh):</div>
+        <div style="position:relative;background:var(--card-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-family:var(--code);font-size:11.5px;">
+          <button class="sm-btn" style="position:absolute;right:8px;top:6px;" onclick="copySnippet('envSnippet')">复制</button>
+          <pre id="envSnippet" style="margin:0;white-space:pre-wrap;">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
+export ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"</pre>
+        </div>
+      </div>
+
+      <div style="margin-top:4px;">
+        <div style="font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;">PowerShell 环境变量配置 (Windows):</div>
+        <div style="position:relative;background:var(--card-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-family:var(--code);font-size:11.5px;">
+          <button class="sm-btn" style="position:absolute;right:8px;top:6px;" onclick="copySnippet('psSnippet')">复制</button>
+          <pre id="psSnippet" style="margin:0;white-space:pre-wrap;">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
+$env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer Status Bar -->
+  <footer class="footer-bar">
+    <span>AgentHub Runner · 静默驻留系统托盘 · 右键托盘图标安全退出</span>
+    <span style="font-family:var(--code);font-size:10.5px;">127.0.0.1:4200</span>
+  </footer>
+
+  <!-- Device Pairing Modal -->
+  <div id="pairModal" class="modal-overlay">
+    <div class="modal-dialog">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <svg class="icon" style="color:var(--accent);width:16px;height:16px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span style="font-size:13.5px;font-weight:600;">设备身份与 AgentHub 配对</span>
+        </div>
+        <button class="icon-btn" onclick="closePairModal()">
           <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
 
-      <div style="background:var(--cds-surface-2);border:1px solid var(--cds-border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+      <div style="background:var(--card-2);border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:11px;font-weight:600;color:var(--cds-text-secondary);">本机唯一设备标识 (Device ID):</span>
-          <button class="btn" style="height:22px;padding:0 6px;font-size:11px;" onclick="copyDeviceId()">复制</button>
+          <span style="font-size:11px;font-weight:600;color:var(--muted);">本机唯一设备 ID:</span>
+          <button class="sm-btn" style="height:20px;padding:0 6px;font-size:10.5px;" onclick="copyDeviceId()">复制</button>
         </div>
-        <div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--cds-blue);word-break:break-all;" id="modalDeviceId">-</div>
+        <div style="font-family:var(--code);font-size:11.5px;color:var(--accent);word-break:break-all;" id="modalDeviceId">-</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
-          <span style="font-size:11px;color:var(--cds-text-muted);">Ed25519 硬件公钥:</span>
-          <span style="font-size:11px;color:var(--cds-text-muted);font-family:ui-monospace,monospace;" id="modalDeviceKey">-</span>
+          <span style="font-size:11px;color:var(--muted);">Ed25519 硬件公钥:</span>
+          <span style="font-size:11px;color:var(--muted);font-family:var(--code);" id="modalDeviceKey">-</span>
         </div>
       </div>
 
-      <div id="pairedStatusBox" style="display:none;background:var(--cds-green-alpha12);border:1px solid rgba(16,185,129,0.25);border-radius:10px;padding:12px;">
-        <div style="font-size:13px;font-weight:600;color:var(--cds-green);display:flex;align-items:center;gap:6px;">
+      <div id="pairedStatusBox" style="display:none;background:var(--green-soft);border:1px solid transparent;border-radius:8px;padding:10px;">
+        <div style="font-size:12px;font-weight:600;color:var(--green);display:flex;align-items:center;gap:6px;">
           <svg class="icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-          <span>已成功配对到云端网关</span>
+          <span>已成功配对到云端 AgentHub</span>
         </div>
-        <div style="font-size:12px;color:var(--cds-text-secondary);margin-top:4px;" id="pairedGatewayInfo"></div>
+        <div style="font-size:11px;color:var(--fg-2);margin-top:3px;" id="pairedGatewayInfo"></div>
       </div>
 
-      <form id="pairForm" onsubmit="submitDevicePairing(event)" style="display:flex;flex-direction:column;gap:12px;">
+      <form id="pairForm" onsubmit="submitDevicePairing(event)" style="display:flex;flex-direction:column;gap:10px;">
         <div class="form-group">
-          <label class="form-label" for="gatewayInput">AgentHub 网关地址 (Gateway URL):</label>
+          <label class="form-label" for="gatewayInput">AgentHub 网关地址:</label>
           <input class="form-input" id="gatewayInput" type="text" placeholder="https://agenthub.example.com" value="https://agenthub.tannerlab.xyz">
         </div>
         <div class="form-group">
-          <label class="form-label" for="bindingCodeInput">配对绑定码 (Binding Code):</label>
+          <label class="form-label" for="bindingCodeInput">配对绑定码:</label>
           <input class="form-input" id="bindingCodeInput" type="text" placeholder="从 AgentHub Web 控制台获取 6 位或动态绑定码" required>
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
-          <button type="button" class="btn" onclick="closePairModal()">取消</button>
-          <button type="submit" class="btn" style="background:var(--cds-blue);color:#fff;border-color:var(--cds-blue);" id="pairSubmitBtn">
+          <button type="button" class="sm-btn" onclick="closePairModal()">取消</button>
+          <button type="submit" class="sm-btn" style="background:var(--accent);color:var(--accent-fg);border-color:transparent;" id="pairSubmitBtn">
             <span>立即配对绑定</span>
           </button>
         </div>
@@ -1149,18 +883,18 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     </div>
   </div>
 
-  <!-- Shutdown Modal Overlay -->
-  <div id="shutdownModal" class="shutdown-overlay">
-    <div class="shutdown-modal">
-      <div style="margin:0 auto;width:48px;height:48px;border-radius:50%;background:rgba(239, 68, 68, 0.1);color:#ef4444;display:flex;align-items:center;justify-content:center;">
-        <svg class="icon" style="width:24px;height:24px;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+  <!-- Shutdown Modal -->
+  <div id="shutdownModal" class="modal-overlay">
+    <div class="modal-dialog" style="text-align:center;align-items:center;">
+      <div style="width:40px;height:40px;border-radius:50%;background:var(--red-soft);color:var(--red);display:flex;align-items:center;justify-content:center;">
+        <svg class="icon" style="width:20px;height:20px;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
       </div>
-      <h3 style="font-size:18px;font-weight:700;">正在退出 AgentHub Runner</h3>
-      <p style="font-size:13px;color:var(--cds-text-secondary);" id="shutdownModalMsg">
+      <div style="font-size:15px;font-weight:600;">正在退出 AgentHub Runner</div>
+      <p style="font-size:12px;color:var(--muted);" id="shutdownModalMsg">
         托盘图标与后台监听服务正在安全释放...
       </p>
-      <div style="font-size:12px;color:var(--cds-text-muted);">
-        服务终止后，您可以安全关闭此浏览器标签页。
+      <div style="font-size:11px;color:var(--faint);">
+        服务终止后，您可以安全关闭此桌面窗口。
       </div>
     </div>
   </div>
@@ -1178,12 +912,12 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     let consecutiveFailures = 0;
     let allSessionsData = [];
 
-    // Load persisted theme preference
+    // Theme initialization
     (function initTheme() {
       const saved = localStorage.getItem('agenthub_theme');
       if (saved === 'light') {
         document.documentElement.classList.remove('dark');
-      } else if (saved === 'dark') {
+      } else {
         document.documentElement.classList.add('dark');
       }
       updateThemeButtonUI();
@@ -1192,6 +926,18 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     async function init() {
       await refreshDashboard();
       setInterval(refreshDashboard, 4000);
+    }
+
+    // Switch between Magpie views
+    function switchView(viewId) {
+      document.querySelectorAll('.seg button').forEach(b => b.classList.remove('on'));
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+
+      const btn = document.getElementById('nav-' + viewId);
+      if (btn) btn.classList.add('on');
+
+      const view = document.getElementById('view-' + viewId);
+      if (view) view.classList.add('active');
     }
 
     async function refreshDashboard() {
@@ -1207,7 +953,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         dashboardData = await resp.json();
         renderStats(dashboardData.stats, dashboardData.gateway);
 
-        // 仅在数据发生实际变更时才执行大面积 DOM 树重绘，防止 DOM 颠簸与掉帧
+        // Dirty-check DOM updates
         const agentsStr = JSON.stringify(dashboardData.agents || []);
         if (agentsStr !== lastRenderState.agentsJson) {
           renderAgents(dashboardData.agents);
@@ -1265,10 +1011,10 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       if (online) {
         badge.classList.remove('offline');
-        text.textContent = '运行中 · 托盘就绪 · 端口 4200';
+        text.textContent = '端口 4200';
       } else {
         badge.classList.add('offline');
-        text.textContent = '连接中断 · 正在自动重连...';
+        text.textContent = '重连中...';
       }
     }
 
@@ -1280,12 +1026,12 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       document.getElementById('statCacheHitRate').textContent = stats.cache_hit_rate || '89.4%';
       document.getElementById('statTokensSaved').textContent =
-        `已节省 ~${stats.tokens_saved || '0'} Tokens (Session Affinity 保护)`;
+        `节省 ~${stats.tokens_saved || '0'} Tokens`;
 
       document.getElementById('statTotalModels').textContent = stats.total_models || 0;
       if (gateway && gateway.detected) {
         document.getElementById('statGatewaySource').textContent =
-          `网关已连接 (${gateway.source}) · 支持 1M 上下文`;
+          `网关 (${gateway.source}) · 1M 上下文`;
       }
 
       document.getElementById('statTotalWorkspaces').textContent = stats.total_workspaces || 0;
@@ -1294,20 +1040,18 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const readyList = [];
       if (stats.claude_sessions > 0 || stats.active_agents > 0) readyList.push('Claude Code 就绪');
       if (stats.codex_sessions > 0) readyList.push('Codex 就绪');
-      document.getElementById('statAgentsSummary').textContent = readyList.join(' · ') || '多 Agent 协同侦听中';
+      document.getElementById('statAgentsSummary').textContent = readyList.join(' · ') || '多 Agent 协同就绪';
     }
 
     function getAgentIcon(id) {
       if (id === 'claude_code') {
-        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg>`;
+        return `<svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg>`;
       } else if (id === 'codex') {
-        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>`;
+        return `<svg class="icon" style="color:var(--green);" viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>`;
       } else if (id === 'antigravity') {
-        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></svg>`;
-      } else if (id === 'grok_build') {
-        return `<svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`;
+        return `<svg class="icon" style="color:var(--amber);" viewBox="0 0 24 24"><polygon points="12 2 15 8 22 9 17 14 18 21 12 17 6 21 7 14 2 9 9 8 12 2"/></svg>`;
       }
-      return `<svg class="icon icon-lg" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>`;
+      return `<svg class="icon" style="color:var(--muted);" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>`;
     }
 
     function renderAgents(agents) {
@@ -1316,85 +1060,196 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       container.innerHTML = agents.map(agent => {
         const isReady = agent.installed || agent.sessions_count > 0;
-        const pillClass = isReady ? 'pill-ready' : 'pill-missing';
-        const pillText = isReady ? '已就绪' : '未检测到';
-        const pathText = agent.path ? escapeHtml(agent.path) : '未发现本地独立安装（可通过命令直连）';
+        const pillHtml = isReady
+          ? `<span class="pill-tag pill-ready">已就绪</span>`
+          : `<span class="pill-tag">未检测到</span>`;
+        const pathText = agent.path ? escapeHtml(agent.path) : '未检测到独立二进制 (可通过别名直连)';
 
         return `
-          <div class="item-card">
-            <div class="item-card-header">
-              <div class="item-card-title">
-                <div class="agent-avatar">${getAgentIcon(agent.id)}</div>
-                <span>${escapeHtml(agent.name)}</span>
+          <div class="row">
+            <div style="flex:none;">${getAgentIcon(agent.id)}</div>
+            <div class="who">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="name">${escapeHtml(agent.name)}</span>
+                <span class="code-tag">${escapeHtml(agent.command || agent.id)}</span>
+                ${pillHtml}
               </div>
-              <span class="item-card-pill ${pillClass}">${pillText}</span>
+              <div class="sub">
+                <span>${escapeHtml(agent.description || '')}</span>
+                <span>·</span>
+                <span style="font-family:var(--code);font-size:10.5px;">${pathText}</span>
+              </div>
             </div>
-            <div class="item-card-desc">${escapeHtml(agent.description)}</div>
-            <div class="item-meta-row">
-              <div class="item-meta-line">
-                <span>关联会话数:</span>
-                <span style="font-weight:600;color:var(--cds-text-primary);">${agent.sessions_count || 0} 条</span>
-              </div>
-              <div class="item-meta-line">
-                <span>启动命令:</span>
-                <code class="code-tag">${escapeHtml(agent.command)}</code>
-              </div>
-              <div class="item-meta-line">
-                <span>亲和性保护:</span>
-                <span style="color:${agent.affinity ? 'var(--cds-green)' : 'var(--cds-text-muted)'};font-weight:600;">
-                  ${agent.affinity ? '已激活 (x-session-affinity)' : '继承网关'}
-                </span>
-              </div>
-              <div class="item-meta-line" style="margin-top:2px;">
-                <span style="font-size:11px;color:var(--cds-text-muted);word-break:break-all;">路径: ${pathText}</span>
-              </div>
+            <div style="flex:none;display:flex;align-items:center;gap:6px;">
+              <span class="pill-tag">${agent.sessions_count || 0} 会话</span>
+              <button class="sm-btn" onclick="copyText('${escapeHtml(agent.command || agent.id)}')">复制命令</button>
             </div>
           </div>
         `;
       }).join('');
     }
 
-    function renderWorkspaces(workspaces) {
-      const tbody = document.getElementById('workspacesTableBody');
-      if (!tbody) return;
+    // Magpie-grade Sessions Tree View
+    function renderSessions(sessions) {
+      const container = document.getElementById('sessionsContainer');
+      const badge = document.getElementById('sessionCountBadge');
+      if (!container) return;
 
-      if (!workspaces || workspaces.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="7" style="text-align:center;padding:24px;color:var(--cds-text-muted);">
-              暂未检测到已注册的工作区
-            </td>
-          </tr>
+      if (!sessions || sessions.length === 0) {
+        container.innerHTML = `
+          <div class="list" style="padding:28px;text-align:center;color:var(--muted);">
+            暂未解析到历史会话记录 (正在后台扫描 Claude Code / Codex / Antigravity 会话数据)
+          </div>
         `;
+        if (badge) badge.textContent = '0 个历史会话';
         return;
       }
 
-      tbody.innerHTML = workspaces.map(ws => {
-        const safePath = escapeHtml(ws.path);
-        const safeName = escapeHtml(ws.name);
-        const relativeTime = escapeHtml(ws.last_active_str || '历史会话');
-        const agents = Array.isArray(ws.agents) && ws.agents.length > 0
-          ? ws.agents.map(a => `<span class="badge" style="font-size:11px;padding:1px 6px;">${escapeHtml(a)}</span>`).join(' ')
-          : `<span style="font-size:12px;color:var(--cds-text-muted);">Local</span>`;
-        const gitBadge = ws.is_git
-          ? `<span class="item-card-pill pill-ready" style="font-size:11px;">Git</span>`
-          : `<span style="font-size:11px;color:var(--cds-text-muted);">-</span>`;
+      if (badge) badge.textContent = `${sessions.length} 个历史会话`;
+
+      // Group sessions by workspace
+      const groups = {};
+      sessions.forEach(s => {
+        const key = s.workspace_path || s.cwd || '默认工作区';
+        if (!groups[key]) {
+          groups[key] = {
+            path: key,
+            name: s.workspace_name || key.split(/[/\\]/).filter(Boolean).pop() || key,
+            items: []
+          };
+        }
+        groups[key].items.push(s);
+      });
+
+      const groupKeys = Object.keys(groups);
+      container.innerHTML = groupKeys.map((k, idx) => {
+        const grp = groups[k];
+        const safePath = escapeHtml(grp.path);
+        const safeName = escapeHtml(grp.name);
+        const count = grp.items.length;
+
+        const itemsHtml = grp.items.map(item => {
+          const sid = escapeHtml(item.session_id || item.id || 'unknown');
+          const prompt = escapeHtml(item.prompt || item.title || item.first_prompt || '无标题会话');
+          const provider = escapeHtml(item.agent_name || item.provider || 'claude');
+          const timeStr = escapeHtml(item.relative_time || item.created_at || '最近');
+          const tokens = item.total_tokens ? item.total_tokens.toLocaleString() : (item.prompt_tokens ? (item.prompt_tokens + (item.completion_tokens || 0)).toLocaleString() : '-');
+          const resumeCmd = item.resume_command || `claude --resume ${sid}`;
+
+          return `
+            <div class="row">
+              <div style="flex:none;">
+                <svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              </div>
+              <div class="who">
+                <div class="name" title="${prompt}">${prompt}</div>
+                <div class="sub">
+                  <span class="code-tag">${sid.substring(0, 10)}</span>
+                  <span class="pill-tag">${provider}</span>
+                  <span>${timeStr}</span>
+                  ${tokens !== '-' ? `<span>${tokens} Tokens</span>` : ''}
+                </div>
+              </div>
+              <div style="flex:none;">
+                <button class="sm-btn" onclick="copyText('${escapeHtml(resumeCmd)}')" title="复制恢复会话命令">
+                  <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  <span>继续会话</span>
+                </button>
+              </div>
+            </div>
+          `;
+        }).join('');
 
         return `
-          <tr>
-            <td style="font-weight:600;color:var(--cds-text-primary);display:flex;align-items:center;gap:6px;">
-              <svg class="icon" style="color:var(--cds-blue);width:15px;height:15px;" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              <span>${safeName}</span>
-            </td>
-            <td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--cds-text-secondary);word-break:break-all;">${safePath}</td>
-            <td>${agents}</td>
-            <td style="font-size:12px;color:var(--cds-text-secondary);">${relativeTime}</td>
-            <td><span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);font-weight:600;">${ws.sessions_count || 0} 会话</span></td>
-            <td>${gitBadge}</td>
-            <td>
-              <button class="btn" style="height:26px;font-size:11px;padding:0 8px;" onclick="copyText('${safePath}')">复制路径</button>
-            </td>
-          </tr>
+          <div class="list">
+            <div class="sm-folder-header" onclick="toggleSessionGroup('grp-${idx}')">
+              <div class="sm-folder-title">
+                <svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span>${safeName}</span>
+                <span class="sm-folder-path">${safePath}</span>
+              </div>
+              <span class="pill-tag">${count} 条</span>
+            </div>
+            <div id="grp-${idx}">
+              ${itemsHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function toggleSessionGroup(id) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.style.display = el.style.display === 'none' ? 'block' : 'none';
+      }
+    }
+
+    function filterSessionsList() {
+      const q = (document.getElementById('sessionSearchInput')?.value || '').toLowerCase().trim();
+      if (!q) {
+        renderSessions(allSessionsData);
+        return;
+      }
+      const filtered = allSessionsData.filter(s => {
+        const text = `${s.prompt || ''} ${s.session_id || ''} ${s.workspace_name || ''} ${s.workspace_path || ''}`.toLowerCase();
+        return text.includes(q);
+      });
+      renderSessions(filtered);
+    }
+
+    // Magpie Usage Analytics
+    function renderUsageAnalytics(sessions, stats) {
+      let promptTotal = 0;
+      let completionTotal = 0;
+      const modelMap = {};
+
+      sessions.forEach(s => {
+        const pt = s.prompt_tokens || 0;
+        const ct = s.completion_tokens || 0;
+        promptTotal += pt;
+        completionTotal += ct;
+
+        const m = s.model || s.agent_name || 'claude-3-7-sonnet';
+        modelMap[m] = (modelMap[m] || 0) + (pt + ct);
+      });
+
+      if (promptTotal === 0 && stats && stats.tokens_saved) {
+        promptTotal = 1248500;
+        completionTotal = 312000;
+      }
+
+      const pElem = document.getElementById('usagePromptTokens');
+      const cElem = document.getElementById('usageCompletionTokens');
+      const sElem = document.getElementById('usageEstimatedSaved');
+      if (pElem) pElem.textContent = promptTotal.toLocaleString();
+      if (cElem) cElem.textContent = completionTotal.toLocaleString();
+      if (sElem) {
+        const savedDollars = ((promptTotal * 0.9 * 12) / 1000000).toFixed(2);
+        sElem.textContent = `$ ${savedDollars}`;
+      }
+
+      const breakdownContainer = document.getElementById('usageModelBreakdown');
+      if (!breakdownContainer) return;
+
+      const entries = Object.entries(modelMap);
+      if (entries.length === 0) {
+        entries.push(['claude-3-7-sonnet', 850000], ['claude-3-5-sonnet', 420000], ['codex-gpt-4o', 180000]);
+      }
+      const totalAll = entries.reduce((acc, curr) => acc + curr[1], 0) || 1;
+
+      breakdownContainer.innerHTML = entries.map(([model, count]) => {
+        const pct = Math.min(100, Math.round((count / totalAll) * 100));
+        return `
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="display:flex;justify-content:space-between;font-size:11.5px;">
+              <span style="font-weight:600;color:var(--fg);">${escapeHtml(model)}</span>
+              <span style="color:var(--muted);font-variant-numeric:tabular-nums;">${count.toLocaleString()} Tokens (${pct}%)</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-thumb" style="width: ${pct}%;"></div>
+            </div>
+          </div>
         `;
       }).join('');
     }
@@ -1405,8 +1260,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       if (!models || models.length === 0) {
         container.innerHTML = `
-          <div class="item-card" style="grid-column: 1 / -1;text-align:center;color:var(--cds-text-muted);padding:32px;">
-            已同步基础模型库 (Claude 3.5 Sonnet, Claude 3.7 Sonnet, Claude Fable 5, Gemini 3.8 Flash High)
+          <div style="padding:24px;text-align:center;color:var(--muted);">
+            已接入基础模型库 (Claude 3.5 Sonnet, Claude 3.7 Sonnet, Claude Fable 5, Gemini 3.8 Flash High)
           </div>
         `;
         return;
@@ -1419,37 +1274,31 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const upstream = escapeHtml(m.upstream_provider || 'Active Gateway');
 
         const tags = [];
-        if (m.supports_vision) tags.push('<span class="badge" style="color:var(--cds-blue);background:var(--cds-blue-alpha12);font-size:11px;">Vision 视觉</span>');
-        if (m.supports_reasoning) tags.push('<span class="badge" style="color:var(--cds-clay);background:rgba(217,119,6,0.12);font-size:11px;">Thinking 思考</span>');
-        if (m.supports_tools !== false) tags.push('<span class="badge" style="font-size:11px;">Tools 工具</span>');
+        if (m.supports_vision) tags.push('<span class="pill-tag pill-accent">Vision</span>');
+        if (m.supports_reasoning) tags.push('<span class="pill-tag" style="color:var(--amber);">Thinking</span>');
+        if (m.supports_tools !== false) tags.push('<span class="pill-tag">Tools</span>');
 
         return `
-          <div class="item-card">
-            <div class="item-card-header">
-              <div class="item-card-title">
-                <div class="agent-avatar">
-                  <svg class="icon icon-lg" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                </div>
-                <span>${name}</span>
-              </div>
-              <span class="item-card-pill pill-ready">${contextStr} 上下文</span>
+          <div class="row">
+            <div style="flex:none;">
+              <svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             </div>
-            <div class="item-meta-row">
-              <div class="item-meta-line">
-                <span>模型标识:</span>
-                <code class="code-tag">${id}</code>
+            <div class="who">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="name">${name}</span>
+                <span class="code-tag">${id}</span>
+                <span class="pill-tag pill-ready">${contextStr} 上下文</span>
               </div>
-              <div class="item-meta-line">
-                <span>上游来源:</span>
-                <span style="font-size:12px;color:var(--cds-text-secondary);font-weight:600;">${upstream}</span>
-              </div>
-              <div class="item-meta-line" style="margin-top:4px;gap:6px;">
+              <div class="sub">
+                <span>来源: ${upstream}</span>
+                <span>·</span>
+                <span>Session Affinity 缓存保护</span>
+                <span>·</span>
                 ${tags.join(' ')}
               </div>
-              <div class="item-meta-line" style="margin-top:2px;">
-                <span>Prompt Caching:</span>
-                <span style="color:var(--cds-green);font-weight:600;">已激活 Ephemeral 亲和性加速</span>
-              </div>
+            </div>
+            <div style="flex:none;">
+              <button class="sm-btn" onclick="copyText('${id}')">复制 ID</button>
             </div>
           </div>
         `;
@@ -1460,7 +1309,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const btn = document.getElementById('btnRefreshModels');
       if (btn) {
         btn.disabled = true;
-        btn.style.opacity = '0.7';
+        btn.style.opacity = '0.6';
       }
       try {
         const resp = await fetch('/api/models/refresh', { method: 'POST' });
@@ -1468,11 +1317,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           const data = await resp.json();
           if (data && data.data) {
             renderModels(data.data);
-            showToast('已拉取最新上游模型列表 (' + data.data.length + ' 个可用模型)');
+            alert('已拉取最新上游模型列表 (' + data.data.length + ' 个可用模型)');
           }
         }
       } catch (e) {
-        showToast('刷新模型失败: ' + e.message, 'error');
+        alert('刷新模型失败: ' + e.message);
       } finally {
         if (btn) {
           btn.disabled = false;
@@ -1481,12 +1330,63 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
     }
 
+    function renderWorkspaces(workspaces) {
+      const container = document.getElementById('workspacesList');
+      if (!container) return;
+
+      if (!workspaces || workspaces.length === 0) {
+        container.innerHTML = `
+          <div style="padding:24px;text-align:center;color:var(--muted);">
+            暂未检测到已注册的工作区
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = workspaces.map(ws => {
+        const safePath = escapeHtml(ws.path);
+        const safeName = escapeHtml(ws.name);
+        const relativeTime = escapeHtml(ws.last_active_str || '历史会话');
+        const agents = Array.isArray(ws.agents) && ws.agents.length > 0
+          ? ws.agents.map(a => `<span class="pill-tag">${escapeHtml(a)}</span>`).join(' ')
+          : `<span class="pill-tag">Local</span>`;
+        const gitBadge = ws.is_git
+          ? `<span class="pill-tag pill-ready">Git</span>`
+          : ``;
+
+        return `
+          <div class="row">
+            <div style="flex:none;">
+              <svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="who">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="name">${safeName}</span>
+                ${gitBadge}
+                <span class="pill-tag pill-accent">${ws.sessions_count || 0} 会话</span>
+              </div>
+              <div class="sub">
+                <span style="font-family:var(--code);font-size:10.5px;">${safePath}</span>
+                <span>·</span>
+                <span>${relativeTime}</span>
+                <span>·</span>
+                ${agents}
+              </div>
+            </div>
+            <div style="flex:none;">
+              <button class="sm-btn" onclick="copyText('${safePath}')">复制路径</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
     function renderGateway(gateway) {
       if (!gateway) return;
       const baseUrl = gateway.base_url || 'http://127.0.0.1:3425';
       const badge = document.getElementById('gatewayBadge');
       if (badge) {
-        badge.textContent = gateway.detected ? `已连接 (${gateway.source})` : '标准端点';
+        badge.textContent = gateway.detected ? `已连接 (${gateway.source})` : '标准端点就绪';
       }
       const envElem = document.getElementById('envSnippet');
       if (envElem) {
@@ -1498,16 +1398,30 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
     }
 
-    function switchTab(tabId) {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    function renderDevice(device) {
+      if (!device) return;
+      const deviceIdElem = document.getElementById('modalDeviceId');
+      const deviceKeyElem = document.getElementById('modalDeviceKey');
+      const pairedBox = document.getElementById('pairedStatusBox');
+      const pairedInfo = document.getElementById('pairedGatewayInfo');
 
-      const activeBtn = Array.from(document.querySelectorAll('.tab-btn'))
-        .find(b => b.getAttribute('onclick').includes(tabId));
-      if (activeBtn) activeBtn.classList.add('active');
+      if (deviceIdElem) deviceIdElem.textContent = device.device_id || '-';
+      if (deviceKeyElem) {
+        const pk = device.public_key || '';
+        deviceKeyElem.textContent = pk.length > 20 ? (pk.substring(0, 10) + '...' + pk.substring(pk.length - 8)) : pk;
+        deviceKeyElem.title = pk;
+      }
 
-      const target = document.getElementById('tab-' + tabId);
-      if (target) target.classList.add('active');
+      if (device.paired) {
+        if (pairedBox) {
+          pairedBox.style.display = 'block';
+          if (pairedInfo) {
+            pairedInfo.textContent = `网关: ${device.gateway_url || '-'} · 配对时间: ${device.paired_at || '-'}`;
+          }
+        }
+      } else {
+        if (pairedBox) pairedBox.style.display = 'none';
+      }
     }
 
     function toggleTheme() {
@@ -1517,11 +1431,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (isDark) {
         html.classList.remove('dark');
         localStorage.setItem('agenthub_theme', 'light');
-        if (themeMeta) themeMeta.setAttribute('content', '#ffffff');
+        if (themeMeta) themeMeta.setAttribute('content', '#f4f4f6');
       } else {
         html.classList.add('dark');
         localStorage.setItem('agenthub_theme', 'dark');
-        if (themeMeta) themeMeta.setAttribute('content', '#111827');
+        if (themeMeta) themeMeta.setAttribute('content', '#1a1a1e');
       }
       updateThemeButtonUI();
     }
@@ -1529,19 +1443,16 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     function updateThemeButtonUI() {
       const isDark = document.documentElement.classList.contains('dark');
       const iconSpan = document.getElementById('themeIcon');
-      const textSpan = document.getElementById('themeBtnText');
       const themeMeta = document.getElementById('themeColorMeta');
 
       if (themeMeta) {
-        themeMeta.setAttribute('content', isDark ? '#111827' : '#ffffff');
+        themeMeta.setAttribute('content', isDark ? '#1a1a1e' : '#f4f4f6');
       }
 
       if (isDark) {
         iconSpan.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`;
-        textSpan.textContent = '亮色';
       } else {
         iconSpan.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
-        textSpan.textContent = '暗色';
       }
     }
 
@@ -1556,7 +1467,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         await fetch('/api/shutdown', { method: 'POST' });
         setTimeout(() => {
           document.getElementById('shutdownModalMsg').textContent =
-            'AgentHub Runner 已完全退出。托盘图标已注销。您可以关闭此网页。';
+            'AgentHub Runner 已完全退出。托盘图标已注销。您可以关闭此桌面窗口。';
         }, 600);
       } catch (e) {
         document.getElementById('shutdownModalMsg').textContent =
@@ -1591,38 +1502,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
-      }
-    }
-
-    function renderDevice(device) {
-      if (!device) return;
-      const deviceIdElem = document.getElementById('modalDeviceId');
-      const deviceKeyElem = document.getElementById('modalDeviceKey');
-      const subtitleElem = document.getElementById('devicePairSubtitle');
-      const pairedBox = document.getElementById('pairedStatusBox');
-      const pairBtnText = document.getElementById('pairBtnText');
-      const pairedInfo = document.getElementById('pairedGatewayInfo');
-
-      if (deviceIdElem) deviceIdElem.textContent = device.device_id || '-';
-      if (deviceKeyElem) {
-        const pk = device.public_key || '';
-        deviceKeyElem.textContent = pk.length > 20 ? (pk.substring(0, 10) + '...' + pk.substring(pk.length - 8)) : pk;
-        deviceKeyElem.title = pk;
-      }
-
-      if (device.paired) {
-        if (pairBtnText) pairBtnText.textContent = '已配对 Hub';
-        if (subtitleElem) subtitleElem.textContent = '已与云端 AgentHub 建立信任';
-        if (pairedBox) {
-          pairedBox.style.display = 'block';
-          if (pairedInfo) {
-            pairedInfo.textContent = `网关: ${device.gateway_url || '-'} · 配对时间: ${device.paired_at || '-'}`;
-          }
-        }
-      } else {
-        if (pairBtnText) pairBtnText.textContent = '设备配对';
-        if (subtitleElem) subtitleElem.textContent = '本地独立运作模式 (免登就绪)';
-        if (pairedBox) pairedBox.style.display = 'none';
       }
     }
 
@@ -1700,165 +1579,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
-    }
-
-    // Magpie-grade Sessions Tree View Renderer
-    function renderSessions(sessions) {
-      const container = document.getElementById('sessionsContainer');
-      if (!container) return;
-
-      if (!sessions || sessions.length === 0) {
-        container.innerHTML = `
-          <div class="session-tree-group" style="padding:32px;text-align:center;color:var(--cds-text-muted);">
-            暂未解析到历史会话记录 (正在扫描 Claude Code / Codex / Antigravity 会话目录)
-          </div>
-        `;
-        return;
-      }
-
-      // Group sessions by workspace or directory
-      const groups = {};
-      sessions.forEach(s => {
-        const key = s.workspace_path || s.cwd || '未知工作区目录';
-        if (!groups[key]) {
-          groups[key] = {
-            path: key,
-            name: s.workspace_name || key.split(/[/\\]/).filter(Boolean).pop() || key,
-            items: []
-          };
-        }
-        groups[key].items.push(s);
-      });
-
-      const groupKeys = Object.keys(groups);
-      container.innerHTML = groupKeys.map((k, idx) => {
-        const grp = groups[k];
-        const safePath = escapeHtml(grp.path);
-        const safeName = escapeHtml(grp.name);
-        const count = grp.items.length;
-
-        const itemsHtml = grp.items.map(item => {
-          const sid = escapeHtml(item.session_id || item.id || 'unknown');
-          const prompt = escapeHtml(item.prompt || item.title || item.first_prompt || '无提示词记录');
-          const provider = escapeHtml(item.agent_name || item.provider || 'claude');
-          const timeStr = escapeHtml(item.relative_time || item.created_at || '最近');
-          const tokens = item.total_tokens ? item.total_tokens.toLocaleString() : (item.prompt_tokens ? (item.prompt_tokens + (item.completion_tokens || 0)).toLocaleString() : '-');
-          const resumeCmd = item.resume_command || `claude --resume ${sid}`;
-
-          return `
-            <div class="session-item">
-              <div class="session-main">
-                <div class="session-prompt" title="${prompt}">${prompt}</div>
-                <div class="session-meta-line">
-                  <span class="session-id-tag">${sid.substring(0, 12)}...</span>
-                  <span class="badge" style="font-size:10px;padding:1px 6px;">${provider}</span>
-                  <span>${timeStr}</span>
-                  <span>${tokens !== '-' ? `${tokens} Tokens` : ''}</span>
-                </div>
-              </div>
-              <div class="session-stats-bar">
-                <button class="btn" style="height:26px;font-size:11px;padding:0 8px;" onclick="copyText('${escapeHtml(resumeCmd)}')" title="复制继续会话命令: ${escapeHtml(resumeCmd)}">
-                  <svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  <span>继续会话</span>
-                </button>
-              </div>
-            </div>
-          `;
-        }).join('');
-
-        return `
-          <div class="session-tree-group">
-            <div class="session-group-header" onclick="toggleSessionGroup('grp-${idx}')">
-              <div class="session-group-title">
-                <svg class="icon" style="color:var(--cds-blue);" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                <span>${safeName}</span>
-                <span class="badge" style="background:var(--cds-blue-alpha12);color:var(--cds-blue);">${count} 条</span>
-              </div>
-              <div class="session-group-path">${safePath}</div>
-            </div>
-            <div id="grp-${idx}">
-              ${itemsHtml}
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
-    function toggleSessionGroup(id) {
-      const el = document.getElementById(id);
-      if (el) {
-        el.style.display = el.style.display === 'none' ? 'block' : 'none';
-      }
-    }
-
-    function filterSessionsList() {
-      const q = (document.getElementById('sessionSearchInput')?.value || '').toLowerCase().trim();
-      if (!q) {
-        renderSessions(allSessionsData);
-        return;
-      }
-      const filtered = allSessionsData.filter(s => {
-        const text = `${s.prompt || ''} ${s.session_id || ''} ${s.workspace_name || ''} ${s.workspace_path || ''}`.toLowerCase();
-        return text.includes(q);
-      });
-      renderSessions(filtered);
-    }
-
-    // Magpie-grade Usage Analytics Renderer
-    function renderUsageAnalytics(sessions, stats) {
-      let promptTotal = 0;
-      let completionTotal = 0;
-      const modelMap = {};
-
-      sessions.forEach(s => {
-        const pt = s.prompt_tokens || 0;
-        const ct = s.completion_tokens || 0;
-        promptTotal += pt;
-        completionTotal += ct;
-
-        const m = s.model || s.agent_name || 'claude-3-7-sonnet';
-        modelMap[m] = (modelMap[m] || 0) + (pt + ct);
-      });
-
-      if (promptTotal === 0 && stats && stats.tokens_saved) {
-        promptTotal = 1248500;
-        completionTotal = 312000;
-      }
-
-      const pElem = document.getElementById('usagePromptTokens');
-      const cElem = document.getElementById('usageCompletionTokens');
-      const sElem = document.getElementById('usageEstimatedSaved');
-      if (pElem) pElem.textContent = promptTotal.toLocaleString();
-      if (cElem) cElem.textContent = completionTotal.toLocaleString();
-      if (sElem) {
-        // Assume ~$3 per million cache read tokens vs $15 full tokens = ~$12 saved per 1M tokens
-        const savedDollars = ((promptTotal * 0.9 * 12) / 1000000).toFixed(2);
-        sElem.textContent = `$ ${savedDollars}`;
-      }
-
-      const breakdownContainer = document.getElementById('usageModelBreakdown');
-      if (!breakdownContainer) return;
-
-      const entries = Object.entries(modelMap);
-      if (entries.length === 0) {
-        entries.push(['claude-3-7-sonnet', 850000], ['claude-3-5-sonnet', 420000], ['codex-gpt-4o', 180000]);
-      }
-      const totalAll = entries.reduce((acc, curr) => acc + curr[1], 0) || 1;
-
-      breakdownContainer.innerHTML = entries.map(([model, count]) => {
-        const pct = Math.min(100, Math.round((count / totalAll) * 100));
-        return `
-          <div style="display:flex;flex-direction:column;gap:4px;">
-            <div style="display:flex;justify-content:space-between;font-size:12px;">
-              <span style="font-weight:600;color:var(--cds-text-primary);">${escapeHtml(model)}</span>
-              <span style="color:var(--cds-text-muted);">${count.toLocaleString()} Tokens (${pct}%)</span>
-            </div>
-            <div class="progress-bar-bg">
-              <div class="progress-bar-fill" style="width: ${pct}%;"></div>
-            </div>
-          </div>
-        `;
-      }).join('');
     }
 
     window.addEventListener('DOMContentLoaded', init);
