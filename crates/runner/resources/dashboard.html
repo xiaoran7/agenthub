@@ -115,12 +115,13 @@
       outline-offset: 1px;
     }
 
-    /* Magpie Header Bar (46px) */
+    /* Magpie Desktop Header Bar (42px) */
     .top {
-      height: 46px;
-      padding: 0 14px;
+      height: 42px;
+      padding: 0 12px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 10px;
       background: var(--bg);
       border-bottom: 1px solid var(--line-2);
@@ -128,64 +129,78 @@
       top: 0;
       z-index: 100;
       flex: none;
+      -webkit-app-region: drag;
     }
 
     .brand {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-      flex-shrink: 0;
+      gap: 6px;
+      flex: 0 0 auto;
+      user-select: none;
+      -webkit-app-region: no-drag;
     }
     .brand-logo {
-      width: 20px;
-      height: 20px;
-      border-radius: 5px;
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
       display: block;
     }
     .brand-title {
-      font-size: 13.5px;
+      font-size: 13px;
       font-weight: 600;
       color: var(--fg);
+      letter-spacing: -0.01em;
     }
     .ver-pill {
-      font-size: 10.5px;
+      font-size: 10px;
       font-weight: 500;
       color: var(--muted);
       background: var(--pill);
-      padding: 1px 6px;
+      padding: 1px 5px;
       border-radius: 999px;
-      border: 1px solid var(--line-2);
+      border: 0.5px solid var(--line-2);
       font-variant-numeric: tabular-nums;
     }
 
     /* Magpie Segmented Navigation Switch (.seg) */
+    .nav-wrap {
+      flex: 1 1 auto;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-width: 0;
+      -webkit-app-region: no-drag;
+    }
     .seg {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
       display: inline-flex;
+      align-items: center;
       padding: 2px;
-      border-radius: 8px;
+      border-radius: 7px;
       background: var(--seg-track);
       border: 0.5px solid var(--line-2);
+      flex-shrink: 0;
     }
     .seg button {
       position: relative;
       z-index: 1;
       white-space: nowrap;
-      height: 25px;
-      padding: 0 11px;
-      border-radius: 6px;
-      font-size: 12px;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 5px;
+      font-size: 11.5px;
       font-weight: 500;
       color: var(--ctl-fg);
-      transition: color 0.18s var(--ease), background 0.14s var(--ease);
+      transition: color 0.16s var(--ease), background 0.14s var(--ease);
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .seg button .icon {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
     }
     .seg button:hover:not(.on) {
       color: var(--fg-2);
@@ -199,29 +214,30 @@
 
     /* Actions Bar */
     .actions {
-      margin-left: auto;
       display: flex;
       align-items: center;
-      gap: 4px;
-      flex-shrink: 0;
+      gap: 3px;
+      flex: 0 0 auto;
+      -webkit-app-region: no-drag;
     }
 
     .status-pill {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      height: 24px;
-      padding: 0 8px 0 6px;
+      gap: 5px;
+      height: 22px;
+      padding: 0 7px;
       border-radius: 999px;
       background: var(--pill);
-      border: 1px solid var(--line);
-      font-size: 11px;
+      border: 0.5px solid var(--line-2);
+      font-size: 10.5px;
       color: var(--fg-2);
-      margin-right: 4px;
+      margin-right: 2px;
+      font-variant-numeric: tabular-nums;
     }
     .status-dot {
-      width: 6px;
-      height: 6px;
+      width: 5px;
+      height: 5px;
       border-radius: 50%;
       background: var(--green);
       box-shadow: 0 0 0 2px var(--green-soft);
@@ -233,14 +249,18 @@
     }
 
     .icon-btn {
-      width: 26px;
-      height: 26px;
-      border-radius: 7px;
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       color: var(--muted);
       transition: background 0.12s, color 0.12s, transform 0.1s;
+    }
+    .icon-btn .icon {
+      width: 13px;
+      height: 13px;
     }
     .icon-btn:hover {
       background: var(--pill);
@@ -254,14 +274,26 @@
       color: var(--red);
     }
 
+    @media (max-width: 720px) {
+      .ver-pill { display: none; }
+      .status-pill { padding: 0 5px; }
+      .seg button { padding: 0 6px; font-size: 11px; }
+    }
+    @media (max-width: 600px) {
+      .brand-title { display: none; }
+      .status-pill span:not(.status-dot) { display: none; }
+      .status-pill { padding: 0 5px; width: 18px; justify-content: center; }
+    }
+
     /* Hero Stats Strip (Compact Magpie Information Density) */
     .hero-strip {
-      padding: 10px 14px;
+      padding: 8px 12px;
       display: grid;
       grid-template-columns: repeat(5, 1fr);
-      gap: 8px;
+      gap: 6px;
       flex: none;
       background: var(--bg);
+      border-bottom: 1px solid var(--line-2);
     }
     .hero-tile {
       background: var(--card);
@@ -583,7 +615,7 @@
   </style>
 </head>
 <body>
-  <!-- Magpie 46px Header Bar -->
+  <!-- Magpie Desktop Header Bar -->
   <header class="top">
     <!-- Brand on left -->
     <div class="brand">
@@ -592,33 +624,35 @@
       <span class="ver-pill">Runner v2.4.79</span>
     </div>
 
-    <!-- Segmented Navigation Switch (.seg) in middle -->
-    <nav class="seg" id="nav" aria-label="Main navigation">
-      <button class="on" onclick="switchView('sessions')" id="nav-sessions">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <span>会话 Sessions</span>
-      </button>
-      <button onclick="switchView('agents')" id="nav-agents">
-        <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
-        <span>智能体 Agents</span>
-      </button>
-      <button onclick="switchView('usage')" id="nav-usage">
-        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-        <span>用量 Usage</span>
-      </button>
-      <button onclick="switchView('models')" id="nav-models">
-        <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        <span>模型 Models</span>
-      </button>
-      <button onclick="switchView('workspaces')" id="nav-workspaces">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <span>工作区</span>
-      </button>
-      <button onclick="switchView('gateway')" id="nav-gateway">
-        <svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        <span>网关 Gateway</span>
-      </button>
-    </nav>
+    <!-- Segmented Navigation Switch in middle flow -->
+    <div class="nav-wrap">
+      <nav class="seg" id="nav" aria-label="Main navigation">
+        <button class="on" onclick="switchView('sessions')" id="nav-sessions" title="会话 Sessions">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>会话</span>
+        </button>
+        <button onclick="switchView('agents')" id="nav-agents" title="智能体 Agents">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
+          <span>智能体</span>
+        </button>
+        <button onclick="switchView('usage')" id="nav-usage" title="用量 Usage">
+          <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          <span>用量</span>
+        </button>
+        <button onclick="switchView('models')" id="nav-models" title="模型 Models">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>模型</span>
+        </button>
+        <button onclick="switchView('workspaces')" id="nav-workspaces" title="工作区 Workspaces">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span>工作区</span>
+        </button>
+        <button onclick="switchView('gateway')" id="nav-gateway" title="网关 Gateway">
+          <svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>网关</span>
+        </button>
+      </nav>
+    </div>
 
     <!-- Discrete Actions on right -->
     <div class="actions">
