@@ -6,6 +6,16 @@
 
 根据用户在实机截图中的直接指正（“字体要大要清楚、删掉无后端按钮、全面解除硬编码、恢复绑定网页端逻辑”），进行深度优化与彻底闭环：
 
+- **全平台安装包构建与产物归档（`Deliverables/AgentHub/`）**：
+  - 同步递增全平台版本至 v2.4.79（Android `versionCode = 79`，`versionName = "2.4.79"`，Runner 与 Cargo 统一同步至 `2.4.79`）；
+  - 成功编译并归档 Windows x64 Runner 原生程序包（`agenthub-runner.exe` 与 `AgentHub-Runner-v2.4.79-windows-x64.zip`）及 Android Debug APK（`AgentHub-v2.4.79-android-debug.apk`）至 `Deliverables/AgentHub/`；
+  - 严格执行工程铁律删除旧版本历史产物，并生成全新 `AgentHub-v2.4.79-SHA256.txt` 校验和；
+  - 产物 SHA256 校验和：
+    - Windows Runner: `cf2e076b52c35e12a48e01c3c121578678d733b2e20927f4b18008f3d9b2ef75` (`agenthub-runner.exe`)
+    - Windows Runner Zip: `cd0465b25e86f81bb610f430d7ea7300b598de233dcc475134ae9d981a7182a3` (`AgentHub-Runner-v2.4.79-windows-x64.zip`)
+    - Android Debug APK: `dd0a3d179bc445cb5807a3fd975e4fabd1f2883022214f69b7bba897e5a1a452` (`AgentHub-v2.4.79-android-debug.apk`)
+  - 依规主动终止 Gradle Daemon 守护进程，彻底释放编译内存。
+
 - **字体排版与清晰度全面放大重构 (High-DPI Desktop DirectWrite Typography)**：
   - **原生高清字体栈**：引入 `"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif` 与代码字体 `"Cascadia Mono", Consolas, "SF Mono", monospace`，启用 `-webkit-font-smoothing: antialiased` 与清晰渲染；
   - **清晰度与字号比例放大**：基准字号由 12.5px 放大至 14px，标题由 13px 放大至 14.5px-15px，核心数值由 22px 提升至 26px 粗体；
