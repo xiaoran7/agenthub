@@ -226,21 +226,40 @@ mod windows_tray {
 
     /// The console window's size, in one place with the page's own tokens: the
     /// daemon decides how big the frame opens, the page adapts to whatever it gets.
-    const WINDOW_DEFAULT: (u32, u32) = (1240, 820);
+    /// A reading window, not a canvas: magpie's main window opens at 660×600 and
+    /// grows with the reader's choice, and so does this one.
+    const WINDOW_DEFAULT: (u32, u32) = (980, 720);
     const WINDOW_MIN: (u32, u32) = (720, 520);
-
-    fn read_window_size(dir: &std::path::Path) -> Option<(u32, u32)> {
-        let text = std::fs::read_to_string(dir.join("app_window.txt")).ok()?;
-        let mut parts = text.lines().next()?.trim().split(',');
-        let w: u32 = parts.next()?.trim().parse().ok()?;
-        let h: u32 = parts.next()?.trim().parse().ok()?;
-        (w > 0 && h > 0).then_some((w, h))
-    }
+    /// The old console opened at 1240×820; a frame at least this big is its
+    /// remains, not a size the reader picked.
+    const OLD_FRAME_MIN: (i32, i32) = (1150, 780);
 
     /// Where this machine leaves the app window: remembered size (clamped to the
-    /// screen's work area and the console's minimum), centred on the primary screen.
+    /// screen and the console's minimum), centred on the screen.
     fn remember_window_rect(dir: &std::path::Path) -> (i32, i32, u32, u32) {
-        let (aw, ah) = unsafe {
+        let (aw, ah) = screen_size();
+        let (req_w, req_h) = std::fs::read_to_string(dir.join("app_window.txt"))
+            .ok()
+            .and_then(|text| {
+                let mut parts = text.lines().next()?.trim().split(',');
+                let w: u32 = parts.next()?.trim().parse().ok()?;
+                let h: u32 = parts.next()?.trim().parse().ok()?;
+                (w > 0 && h > 0).then_some((w, h))
+            })
+            .unwrap_or(WINDOW_DEFAULT);
+        // leave the taskbar and window chrome room; never bigger than the screen
+        let cap_w = (aw as f32 * 0.94) as u32;
+        let cap_h = (ah as f32 * 0.90) as u32;
+        let win_w = req_w.clamp(WINDOW_MIN.0.min(cap_w), cap_w);
+        let win_h = req_h.clamp(WINDOW_MIN.1.min(cap_h), cap_h);
+        // the middle of the screen as the frame's top left
+        let x = ((aw.saturating_sub(win_w)) / 2) as i32;
+        let y = ((ah.saturating_sub(win_h)) / 2) as i32;
+        (x, y, win_w, win_h)
+    }
+
+    fn screen_size() -> (u32, u32) {
+        unsafe {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
             };
@@ -248,16 +267,105 @@ mod windows_tray {
                 GetSystemMetrics(SM_CXSCREEN).max(1) as u32,
                 GetSystemMetrics(SM_CYSCREEN).max(1) as u32,
             )
+        }
+    }
+
+    /// Edge keeps the app window's last size and place in the profile's
+    /// Preferences and opens it there on every launch, ignoring the size and
+    /// position it is asked for. A frame from the old console (at least
+    /// 1150×780, or maximised) is resized to the console's size and centred; any
+    /// other frame is only moved when it sits off the middle of the screen, so
+    /// the size a reader picked is kept.
+    fn fit_kept_window(prefs: &std::path::Path) {
+        let Ok(text) = std::fs::read_to_string(prefs) else {
+            return;
         };
-        // leave the taskbar and window chrome room; never bigger than the screen
-        let cap_w = (aw as f32 * 0.94) as u32;
-        let cap_h = (ah as f32 * 0.90) as u32;
-        let (req_w, req_h) = read_window_size(dir).unwrap_or(WINDOW_DEFAULT);
-        let win_w = req_w.clamp(WINDOW_MIN.0.min(cap_w), cap_w);
-        let win_h = req_h.clamp(WINDOW_MIN.1.min(cap_h), cap_h);
-        let x = ((aw.saturating_sub(win_w)) / 2) as i32;
-        let y = ((ah.saturating_sub(win_h)) / 3) as i32;
-        (x, y, win_w, win_h)
+        let Ok(mut prefs_json) = text.parse::<serde_json::Value>() else {
+            return;
+        };
+        let Some(apps) = prefs_json["browser"]["app_window_placement"].as_object_mut() else {
+            return;
+        };
+        let num =
+            |v: &serde_json::Value, k: &str| v.get(k).and_then(|n| n.as_i64()).unwrap_or(0) as i32;
+        let is_frame = |v: &serde_json::Value| v.get("left").is_some() && v.get("top").is_some();
+        // app_window_placement: process id -> display -> profile -> app -> frame
+        let mut frames = Vec::new();
+        for app in apps.values() {
+            let Some(displays) = app.as_object() else {
+                continue;
+            };
+            for display in displays.values() {
+                let Some(profiles) = display.as_object() else {
+                    continue;
+                };
+                for held in profiles.values() {
+                    if let Some(held) = held.as_object() {
+                        frames.extend(held.values().filter(|v| is_frame(v)));
+                    }
+                }
+            }
+        }
+        let Some(latest) = frames
+            .iter()
+            .max_by_key(|v| num(v, "right") + num(v, "bottom"))
+        else {
+            return;
+        };
+        let (left, top, right, bottom) = (
+            num(latest, "left"),
+            num(latest, "top"),
+            num(latest, "right"),
+            num(latest, "bottom"),
+        );
+        let (aw, ah) = (screen_size().0 as i32, screen_size().1 as i32);
+        let stale = num(latest, "maximized") != 0
+            || (right - left) >= OLD_FRAME_MIN.0
+            || (bottom - top) >= OLD_FRAME_MIN.1;
+        let (w, h) = if stale {
+            (
+                WINDOW_DEFAULT.0 as i32,
+                WINDOW_DEFAULT.1.min(ah as u32 * 9 / 10) as i32,
+            )
+        } else {
+            (right - left, bottom - top)
+        };
+        let (x, y) = ((aw - w) / 2, (ah - h) / 2);
+        // a few pixels of slack for the frame's own border
+        let slack = 8;
+        if !stale && (left - x).abs() <= slack && (top - y).abs() <= slack {
+            return;
+        }
+        for app in apps.values_mut() {
+            let Some(displays) = app.as_object_mut() else {
+                continue;
+            };
+            for display in displays.values_mut() {
+                let Some(profiles) = display.as_object_mut() else {
+                    continue;
+                };
+                for held in profiles.values_mut() {
+                    let Some(held) = held.as_object_mut() else {
+                        continue;
+                    };
+                    for frame in held.values_mut() {
+                        if !is_frame(frame) {
+                            continue;
+                        }
+                        frame["left"] = x.into();
+                        frame["top"] = y.into();
+                        frame["right"] = (x + w).into();
+                        frame["bottom"] = (y + h).into();
+                        if let Some(maximized) = frame.get_mut("maximized") {
+                            *maximized = false.into();
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(updated) = serde_json::to_string(&prefs_json) {
+            let _ = std::fs::write(prefs, updated);
+        }
     }
 
     pub fn open_desktop_window(url: &str) {
@@ -287,21 +395,24 @@ mod windows_tray {
             let profile_dir = home.join(".agenthub").join("app_profile");
 
             let (pos_x, pos_y, win_w, win_h) = remember_window_rect(&home.join(".agenthub"));
+            let prefs = profile_dir.join("Default").join("Preferences");
 
             // a reader who resizes the window (and the runner is stopped while it
             // sits at that size) gets it back the same: Edge keeps its last
             // window in the profile's Preferences, which outlives the window
-            let kept = profile_dir.join("Default").join("Preferences").is_file();
             let mut args = vec![
                 format!("--app={}", url),
                 format!("--user-data-dir={}", profile_dir.display()),
                 "--no-first-run".to_string(),
                 "--no-default-browser-check".to_string(),
             ];
-            if !kept {
-                args.push(format!("--window-size={},{}", win_w, win_h));
-                args.push(format!("--window-position={},{}", pos_x, pos_y));
+            if prefs.is_file() {
+                fit_kept_window(&prefs);
             }
+            // passed on every launch: the first window of a new profile takes
+            // them, and Edge ignores both once the profile has a frame
+            args.push(format!("--window-size={},{}", win_w, win_h));
+            args.push(format!("--window-position={},{}", pos_x, pos_y));
             let mut cmd = std::process::Command::new(edge);
             cmd.args(&args);
             cmd.creation_flags(CREATE_NO_WINDOW);

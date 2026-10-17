@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.4.85] - 2026-10-17
+
+### 窗口缩到阅读尺度、首次出现落在屏幕正中 (Smaller, Centred Window)
+
+用户反馈“尺寸有必要这么大吗，你看看 magpie，而且窗口刚出现的时候要在屏幕中心”。两件事一起做：
+
+- **尺寸 (Size)**：默认窗口从 1240×820 收到 **980×720**（最小 720×520），参照 magpie 主窗口的 660×600 量级——magpie 是阅读型小窗，AgentHub 控制台比它多一栏侧边导航与统计卡，980 宽正好让侧栏与内容都站得住（侧栏阈值 1200px 不变，窄窗自动收进顶栏）。网页令牌 `AppLayout.window` 与页面兜底同步改为同一组数字；新增测试不再写死宽度，改为从 `tray.rs` 的 `WINDOW_DEFAULT` 读出来比对，前后端数字不会再各走各的。
+- **居中 (Centred)**：此前调试发现，`--window-size / --window-position` 只在 profile 还没有窗口记录时生效，Edge 一旦在 `Preferences → browser.app_window_placement` 里存下外框，就会原样恢复——本机一直停在旧的 945×1012、贴左上角 (10,10)。现在每次启动先用 `fit_kept_window()` 看一眼 Edge 记下的外框：属于旧控制台量级（≥1150×780，或处于最大化）的先按 980×720 改小；任何偏离屏幕中线的外框都平移回正中（外框大小不变，读者自己拖出来的尺寸保留）。`--window-size / --window-position` 改为每次都传，新 profile 第一次开窗同样落在正中。
+- **验证 (Verification)**：用真实 `agenthub-runner.exe` 走完整开窗链路（独立命名管道 + 4201 端口，不碰正在使用的 4200 实例）。先人为把 `Preferences` 写回旧值 945×1012 @ (10,10)，启动后外框实测 **980×720 @ (470,180)**：x 方向 (1920−980)/2=470，中线与屏幕中线重合，截图中窗口左右两边的桌面留白等宽；截图同时确认“侧栏收进顶栏、统计卡两列、页面无横向溢出”。`cargo test --workspace` 全部通过（165 单元 + 集成 26/17/7/5/3）；clippy / fmt 只报本次未触碰的既有文件。
+- **说明 (Note)**：2.4.84 条目里“`Preferences` 未改动”的遗留反馈已在本版处理——只调整外框位置与旧尺寸，不改任何浏览器其它配置；改动前已留存 `Preferences.before-2.4.85` 备份，验完即删。
+
+### 交付产物：Windows 与 Android 同步至 2.4.85 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.85-windows-x64.zip`，按「打新包必删旧包」删除 2.4.84 的 zip 与 APK；本机安装目录 `Deliverables/AgentHub/` 同步替换 `agenthub-runner.exe`，保留 `agenthub-runner.exe.2.4.82.bak` 回滚。
+- **Android Debug APK**：`versionCode=85`、`versionName=2.4.85`。
+- **校验清单**：`AgentHub-v2.4.85-SHA256.txt` 收录 exe、zip、APK 与内嵌 `dashboard.html` / `dashboard.css`。
+
 ## [2.4.84] - 2026-10-17
 
 ### 分界线跟窗口自适应、页面跟随窗口宽度 (Rail Follows the Window, Content Follows the Rail)

@@ -1290,7 +1290,7 @@ fn app_layout_json(port: u16) -> String {
         "webPort": port,
         "gatewayPort": 3425,
         "window": {
-            "width": 1240, "height": 820, "minWidth": 720, "minHeight": 520,
+            "width": 980, "height": 720, "minWidth": 720, "minHeight": 520,
             "sideMinWidth": 168, "sideWidth": 236, "sideMaxWidth": 340
         },
         // the rail comes back once there is room for it and a full column of
@@ -1391,7 +1391,17 @@ mod tests {
         let json = app_layout_json(4321);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("layout json");
         assert_eq!(parsed["webPort"], 4321);
-        assert_eq!(parsed["window"]["width"], 1240);
+        // one size for the daemon's frame and the page's tokens, read here from
+        // the daemon's own constant so the two cannot drift apart
+        let tray = include_str!("tray.rs");
+        let default = tray
+            .split("const WINDOW_DEFAULT: (u32, u32) = (")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .expect("WINDOW_DEFAULT");
+        let mut sides = default.split(',').map(|n| n.trim().parse::<u64>().unwrap());
+        assert_eq!(parsed["window"]["width"], sides.next().unwrap());
+        assert_eq!(parsed["window"]["height"], sides.next().unwrap());
     }
 
     #[test]
