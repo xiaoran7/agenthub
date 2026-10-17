@@ -236,6 +236,9 @@
     .side-gw > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
     /* beside the sidebar the header says where the reader is and holds the icons */
     .top { padding-left: 20px; }
+    /* over the page the header starts at its inset, so the brand, the toggle
+       and the view below all stand on one line */
+    :root.no-side .top { padding-left: var(--inset); }
     .crumb { display: flex; align-items: baseline; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: var(--fs-title); }
     .crumb > span { color: var(--muted); }
     .crumb > i { font-style: normal; color: var(--faint); }
@@ -468,8 +471,14 @@
         .actions { gap: 3px; }
 
         /* ---- the sidebar ------------------------------------------------------- */
-        body.window { --side-w: var(--layout-side-w, 236px); }
-        :root:not(.no-side) { padding-left: var(--side-w); }
+        /* a width the reader dragged to wins over the window's own share */
+        body.window { --side-w: var(--side-w-override, var(--layout-side-w, 236px)); }
+        /* the page's column starts where the rail ends, so it follows the rail
+           itself; no window breakpoint has to guess the same width twice */
+        body { position: relative; }
+        .sidebar { position: absolute; }
+        .view-slot, .foot { margin-left: var(--side-w); }
+        :root.no-side .view-slot, :root.no-side .foot { margin-left: 0; }
         .sidebar { width: var(--side-w); background: var(--card); }
         /* a centre column is a place to sit in, not to read across: the page
            spans it and keeps only its own inset */

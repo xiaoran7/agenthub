@@ -19,7 +19,7 @@
     window.AppLayout = Object.assign({
       version: 'dev',
       window: { width: 1240, height: 820, minWidth: 720, minHeight: 520, sideMinWidth: 168, sideWidth: 236, sideMaxWidth: 340 },
-      sidebarAt: 1024, sidebarNarrow: 212,
+      sidebarAt: 1200, sidebarNarrow: 212,
       contentMax: 1280,
       inset: 18, radius: 14, radiusSm: 10, topBar: 54,
       dashboardPollMs: 4000, firstProbeRetries: 2, firstProbeRetryMs: 1500,
@@ -39,6 +39,7 @@
         var w = a.window || {};
         var side = Math.round(Math.max(a.sidebarNarrow || 212, Math.min(w.sideWidth || 236, Math.round((window.innerWidth || 1280) * 0.24))));
         var chrome = '--layout-side-w:' + side + 'px;'
+          + '--layout-side-at:' + (a.sidebarAt || 1200) + 'px;'
           + '--layout-inset:' + (a.inset || 18) + 'px;'
           + '--layout-radius:' + (a.radius || 14) + 'px;'
           + '--layout-radius-s:' + (a.radiusSm || 10) + 'px;'
@@ -74,10 +75,9 @@
       var meta = document.querySelector('meta[name="theme-color"]');
       if (meta && bg) meta.setAttribute('content', bg);
 
-      // the pages beside the window or over it: the reader's own choice, kept
-      // for the window; none picked, the sidebar from AppLayout.sidebarAt
-      var layout = localStorage.getItem(store.layout);
-      var showSide = layout === 'side' ? true : layout === 'top' ? false : (window.innerWidth || 0) >= (AppLayout.sidebarAt || 1024);
+      // the pages beside the window or over it: the window's own width decides
+      // (AppLayout.sidebarAt), and turning it with the button lasts the session
+      var showSide = (window.innerWidth || 0) >= (AppLayout.sidebarAt || 1200);
       document.documentElement.classList.toggle('no-side', !showSide);
       document.documentElement.dataset.nav = showSide ? 'side' : 'top';
 
@@ -510,20 +510,16 @@
         }
       }
       setInterval(refreshDashboard, LAYOUT.dashboardPollMs || 4000);
-      // the reader's own choice of layout or width; the default follows the window
+      // the page follows the window it is drawn in; a turn tucked away or
+      // opened with the button only holds until the next resize
       window.addEventListener('resize', () => {
-        if (layoutPicked()) layoutNav();
+        if (sidePinned !== null) followWindow();
       }, { passive: true });
     }
 
     // The sidebar's #nav is the header's switch when the sidebar is away. It is
     // the same #nav with its buttons and handlers, moved between the two, as
     // magpie does: a Mac sidebar turning into a tab bar (app.js layoutNav).
-    function layoutPicked() {
-      const pick = localStorage.getItem(STORE.layout);
-      return pick === 'side' || pick === 'top';
-    }
-
     // beside the sidebar the header says where the reader is; without it, #nav
     // takes the centre and the brand goes back into the header
     function layoutNav() {
@@ -567,18 +563,31 @@
       return on;
     }
 
+    // The pages sit beside the rail while the window has room for both and
+    // fold into the header when it does not. Toggling pins the reader's choice
+    // for the session only; a resize hands the decision back to the window, so
+    // a narrow window or a phone never keeps a rail it has no room for.
+    var sidePinned = null;
+
+    function sidebarFits() {
+      return (window.innerWidth || 0) >= (LAYOUT.sidebarAt || 1200);
+    }
+
     function setSideNav(on, remember) {
+      if (remember) sidePinned = on;
       document.body.classList.toggle('side-nav', on);
       document.documentElement.classList.toggle('no-side', !on);
       document.documentElement.dataset.nav = on ? 'side' : 'top';
-      if (remember) {
-        try { localStorage.setItem(STORE.layout, on ? 'side' : 'top'); } catch (e) {}
-      }
       layoutNav();
     }
 
     function toggleSideNav() {
       setSideNav(document.documentElement.classList.contains('no-side'), true);
+    }
+
+    function followWindow() {
+      sidePinned = null;
+      setSideNav(sidebarFits(), false);
     }
 
     // the sidebar's edge drags it wider or narrower; double-click gives it back
@@ -609,6 +618,10 @@
         document.body.classList.remove('side-drag');
         const w = Math.round(edge.getBoundingClientRect().left);
         try { localStorage.setItem(STORE.sideWidth, String(w)); } catch (e) {}
+        // reading the edge's place made the browser flush the override into
+        // the rail's width; give it back to the tokens, which carry the same
+        // width, so the next token pass cannot drop it
+        document.documentElement.style.removeProperty('--side-w-override');
       };
       edge.addEventListener('pointerup', end);
       edge.addEventListener('pointercancel', end);
@@ -617,6 +630,7 @@
         const cur = Math.round(edge.getBoundingClientRect().left);
         document.documentElement.style.setProperty('--side-w-override', fit(cur + (e.key === 'ArrowRight' ? 12 : -12)) + 'px');
         try { localStorage.setItem(STORE.sideWidth, String(Math.round(edge.getBoundingClientRect().left))); } catch (err) {}
+        document.documentElement.style.removeProperty('--side-w-override');
         e.preventDefault();
       });
       edge.addEventListener('dblclick', () => {

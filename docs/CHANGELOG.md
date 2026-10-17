@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.4.84] - 2026-10-17
+
+### 分界线跟窗口自适应、页面跟随窗口宽度 (Rail Follows the Window, Content Follows the Rail)
+
+用户截图指出侧边栏与内容之间的分界线位置不对，内容应当自适应。根因有两层，一起修掉：
+
+- **分界线的根因（两套数字各说各话）**：页面最初按“窗口宽 ≥ 1024px 就显示侧栏”决定布局；而拖动侧栏时写下的 `--side-w-override` 在每次窗口缩放重算布局令牌时被清掉，侧栏宽度被重置；另外默认窗口 1240 宽时，侧栏 236px 加内边距后正文只剩约 968px，触发了正文自己的窄屏容器断点，统计卡从四列折成两列，进一步把页面挤成“左边一段空白、右边两列卡片”。
+- **内容跟侧栏走 (Content Follows the Rail)**：`body` 改为相对定位、侧栏绝对定位，正文区与底栏用 `margin-left: var(--side-w)` 从侧栏边缘起排，不再依赖 `html` 的 padding；“有没有侧栏”由 CSS 直接读取栏宽本身决定，不会再和窗口断点各算一遍。`--side-w` 优先取读者拖出来的宽度，其次才是窗口按比例算出的宽度。
+- **页面跟随窗口 (Layout Follows the Window)**：侧栏出现阈值从 1024px 提高到 **1200px**（`AppLayout.sidebarAt`），这个值由令牌 `--layout-side-at` 带给页面，前后端只写一份。按钮切换只在本次会话内生效，任何一次窗口缩放都重新按窗口宽度决定布局，窄窗口或手机上不会残留一条占地方的侧栏。原先“记住读者选的布局”的 `localStorage` 逻辑删除——它正是窄窗口下仍带侧栏的原因。
+- **拖动宽度不再被吞**：拖动或键盘调整侧栏宽度后，先读下边缘坐标再移除 `--side-w-override`（浏览器此时已把宽度刷进样式），宽度交由令牌携带，下一次缩放重算令牌也不会丢。
+- **顶栏对齐**：侧栏收起时顶栏左内边距改为 `--inset`，品牌、开关与下方页面内容在同一条竖线上。
+- **验证 (Verification)**：临时身份（`device init`）起独立 daemon 于 4799 端口，经 CDP 在 1100 / 1240 / 1300 / 1920 四种宽度核对：1100px 下侧栏收进顶栏、正文从 0 起排、顶栏与正文左内边距同为 18px；1240px 及以上侧栏出现、正文左边界正好等于栏宽 236px、统计卡保持四列；全程无横向溢出。`cargo test --workspace` 全部通过（165 单元 + 集成 26/17/7/5/3）；`cargo clippy -p agenthub-runner --all-targets -- -D warnings` 与 `cargo fmt --all --check` 仍只报本次未触碰的既有文件（`build.rs`、`collectors`、`conversation.rs`、`main.rs`、`remote_host.rs`）。
+
+- **遗留问题 (Known issue)**：本机窗口曾由 2.4.83 以 940×720 的旧逻辑记录过尺寸，Edge 自带的 `Preferences` 会原样恢复 945×1012 的外框，导致 4200 端口下侧栏收进顶栏；判定逻辑本身在 1120 / 1240 / 1300 / 1920 四种宽度下均正确。想回到默认 1240×820 的大窗，拖动窗口边框放大即可，Edge 会记住新尺寸。源窗口的 `Preferences` 未改动，没有替读者动私人浏览器配置。
+
+### 交付产物：Windows 与 Android 同步至 2.4.84 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.84-windows-x64.zip`，按「打新包必删旧包」删除 2.4.83 的 zip 与 APK；本机安装目录 `Deliverables/AgentHub/` 同步替换 `agenthub-runner.exe`，保留一份 `agenthub-runner.exe.2.4.82.bak` 回滚。
+- **Android Debug APK**：`versionCode=84`、`versionName=2.4.84`。
+- **校验清单**：`AgentHub-v2.4.84-SHA256.txt` 收录 exe `e6a88289…`、zip `a421dafa…`、APK `53d02beb…`，以及内嵌 `dashboard.html`（`db21514d…`，98,395 字节）与 `dashboard.css`（`cf9e88f3…`，53,856 字节）。
+
 ## [2.4.83] - 2026-10-17
 
 ### 侧边栏开关真正生效、顶栏改为 magpie 式分段切换、硬编码全面收口 (Sidebar Toggle, Header Track & Hardcoded Values)

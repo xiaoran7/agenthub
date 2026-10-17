@@ -1293,7 +1293,9 @@ fn app_layout_json(port: u16) -> String {
             "width": 1240, "height": 820, "minWidth": 720, "minHeight": 520,
             "sideMinWidth": 168, "sideWidth": 236, "sideMaxWidth": 340
         },
-        "sidebarAt": 1024, "sidebarNarrow": 212, "contentMax": 1280,
+        // the rail comes back once there is room for it and a full column of
+        // text beside it; narrower than that the header's switch takes over
+        "sidebarAt": 1200, "sidebarNarrow": 212, "contentMax": 1280,
         "inset": 18, "radius": 14, "radiusSm": 10, "topBar": 54,
         "dashboardPollMs": 4000, "firstProbeRetries": 2, "firstProbeRetryMs": 1500,
         "emptyGraceMs": 15000, "emptyStrikes": 3,

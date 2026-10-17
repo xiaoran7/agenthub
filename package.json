@@ -1,7 +1,7 @@
 {
   "name": "agenthub",
   "private": true,
-  "version": "2.4.83",
+  "version": "2.4.84",
   "workspaces": [
     "packages/*",
     "services/*",
