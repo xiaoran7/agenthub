@@ -10,7 +10,10 @@
   - **后端发现去重管道**：在 `discover()` 收集 `candidates` 与 `web_server.rs` 聚合 `discovered_sessions` 时增加基于 `provider_session_id` 的 `HashSet` 集合去重，确保即使存在任何网络或宿主级重叠候选也不会被二次计数或计费。
   - **前端防护保障**：在 `dashboard.html` 的 `renderSessions` 中引入客户端 `Set` 快速去重，保障历史会话树图结构唯一展示。
 - **Google Gemini 官方 4 尖曲面星芒矢量图标重构 (Authentic Gemini Sparkle Icon)**：
-  - 彻底替换 `dashboard.html` 中 `getModelIcon` 将 Gemini 错误绘制为类似医疗十字/加号（`M12 4v16M4 12h16`）的临时占位符，采用 Google Gemini 官方标准的 4-pointed curved star（曲面四角星芒星）高精矢量路径（`M12 3.5C12 8.194 ...`），配合 Google 经典红紫蓝三色对角平滑渐变底图与高光白星，完美还原官方品牌标识。
+  - 彻底剔除任何自行臆造的加号/十字占位符，直接拉取 Google 官方资产库（`gstatic.com` 官方 CDN 与 `lobehub/lobe-icons` 标准库）发布的权威 Google Gemini 专属星芒标识：
+    - 精确采纳 Google 官方 28×28 原版内凹曲率路径 `M14 28C14 26.0633 13.6267 24.2433 12.88 22.54...`；
+    - 配备官方正版径向渐变 `radialGradient` 渲染色彩体系（`#9168C0` 紫色 → `#5684D1` 蓝色 → `#1BA1E3` 浅青蓝），完美还原 Google 官方原厂视觉；
+  - 同步更新模型用量分布（Models Breakdown）与智能体图标列表（Agents Grid）中的 Gemini 徽标，实现统一高保真官方品牌辨识度；
   - 同步拓展支持 Qwen（通义千问）、MiniMax（稀宇科技）、GLM（智谱清言）、StepFun（阶跃星辰）、Grok 及 Stealth 系列模型的专属品牌识别徽标。
 - **产物更新与交付归档 (Deliverables Synchronization)**：
   - 编译全新 Release 版本 Windows 可执行文件 `agenthub-runner.exe`，重新压制 `AgentHub-Runner-v2.4.79-windows-x64.zip`；

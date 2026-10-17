@@ -15,993 +15,512 @@
         document.documentElement.classList.add("win");
       }
       var saved = localStorage.getItem('agenthub_theme');
-      var isDark = saved === 'dark';
-      if (isDark) {
+      if (saved === 'dark') {
         document.documentElement.classList.add('dark');
         var meta = document.getElementById('themeColorMeta');
         if (meta) meta.setAttribute('content', '#1a1a1e');
       }
+      if (localStorage.getItem('agenthub_side_nav') === '0') {
+        document.documentElement.classList.add('no-side');
+      }
+      var w = parseInt(localStorage.getItem('agenthub_side_w') || '', 10);
+      if (w >= 168 && w <= 420) {
+        document.documentElement.style.setProperty('--side-w-override', w + 'px');
+      }
     })();
   </script>
   <style>
-    /* Magpie Authentic Design System & Desktop Theme Tokens */
+    /* ==========================================================================
+       AgentHub Runner — embedded web console.
+       Layered directly on magpie's design system and layout primitives.
+         magpie — https://github.com/yetone/magpie
+         MIT License, Copyright (c) 2026 yetone
+       Design tokens, the 46px header, the fixed sidebar with grouped nav labels,
+       the self-scrolling .view, .list/.row/.row.stat, .stats/.kpi, .led-strip,
+       .chips/.segs, .text/.icon buttons, .modal/.dialog and .editor come from
+       magpie's internal/gui/assets/app.css. Only app-specific composition is
+       added below, in the same idiom. See README.md § 开源引用与上游溯源.
+       ========================================================================== */
     :root {
       --bg: #f4f4f6;
       --card: #ffffff;
       --card-2: #f9f9fb;
       --pill: #f1f1f4;
       --pill-hover: #e9e9ee;
-      --seg-track: transparent;
+      --seg-track: #e6e6eb;
       --seg-thumb: var(--card);
-      --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
-      --ctl-fg: #52525b;
-      --line: #e2e2e8;
+      --seg-edge: 0 1px 2px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .08);
+      --ctl-fg: #63636b;
+      --line: #e3e3e8;
       --line-2: #ececf0;
-      --fg: #09090b;
-      --fg-2: #27272a;
-      --muted: #52525b;
-      --faint: #71717a;
+      --fg: #1c1c21;
+      --fg-2: #4b4b53;
+      --muted: #85858d;
+      --faint: #b9b9c2;
       --accent: #4f46e5;
       --accent-soft: #eeedfd;
       --accent-fg: #ffffff;
-      --green: #15803d;
-      --green-soft: #dcfce7;
-      --red: #dc2626;
-      --red-soft: #fee2e2;
+      --sel: #ecebfb;
+      --green: #189a58;
+      --green-soft: #e4f6ec;
+      --red: #d64545;
+      --red-soft: #fbe9e9;
       --amber: #b45309;
-      --amber-soft: #fef3c7;
-      --shadow: 0 16px 44px rgba(20, 22, 30, 0.16), 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
-      --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-      --code: "Cascadia Mono", Consolas, "SF Mono", monospace;
-      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --amber-soft: #fbf0df;
+      --drift: #ce2c31;
+      --drift-soft: #feebec;
+      --pop-bg: rgba(255, 255, 255, .94);
+      --shadow: 0 16px 44px rgba(20, 22, 30, .16), 0 2px 8px rgba(20, 22, 30, .06), 0 0 0 .5px rgba(20, 22, 30, .1);
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --logo-invert: 0;
+      --tk-s: #1a7f45; --tk-k: #7c3aed; --tk-f: #1d4ed8; --tk-n: #b45309; --tk-v: #0e7490; --tk-o: #a21caf; --tk-c: #85858d;
+      --c1: #4f46e5; --c2: #0ea5e9; --c3: #10b981; --c4: #f59e0b; --c5: #ec4899; --c6: #8b5cf6; --c7: #64748b;
     }
-
-    /* Windows' own text faces, and Chinese in YaHei UI */
-    :root.win, html.win {
-      --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
-      --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace;
-    }
-
     html.dark {
       --bg: #1a1a1e;
       --card: #232327;
       --card-2: #1f1f23;
       --pill: #2d2d33;
       --pill-hover: #36363d;
-      --seg-track: transparent;
-      --seg-thumb: rgba(255, 255, 255, 0.14);
-      --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
+      --seg-track: rgba(255, 255, 255, .035);
+      --seg-thumb: rgba(255, 255, 255, .15);
+      --seg-edge: inset 0 .5px 0 rgba(255, 255, 255, .08), 0 1px 2px rgba(0, 0, 0, .3);
       --line: #333339;
       --line-2: #2c2c32;
-      --fg: #fafafa;
-      --fg-2: #e4e4e7;
-      --muted: #a1a1aa;
-      --faint: #71717a;
-      --ctl-fg: #d4d4d8;
+      --fg: #ededf1;
+      --fg-2: #b9b9c1;
+      --muted: #8b8b94;
+      --faint: #56565f;
+      --ctl-fg: #a1a1aa;
       --accent: #a5b4fc;
       --accent-soft: #2b2c47;
       --accent-fg: #14142a;
-      --green: #4ade80;
-      --green-soft: #14532d;
-      --red: #f87171;
+      --sel: #33345a;
+      --green: #6fd99b;
+      --green-soft: #1e3a2b;
+      --red: #f28b82;
       --red-soft: #45272a;
-      --amber: #fbbf24;
-      --amber-soft: #451a03;
-      --shadow: 0 16px 44px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+      --amber: #f2b544;
+      --amber-soft: #3f3220;
+      --drift: #ff9592;
+      --drift-soft: #3b1219;
+      --pop-bg: rgba(38, 38, 43, .96);
+      --shadow: 0 16px 44px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(255, 255, 255, .1);
+      --logo-invert: 1;
+      --tk-s: #98d8a4; --tk-k: #c4b5fd; --tk-f: #93c5fd; --tk-n: #f2b544; --tk-v: #67e8f9; --tk-o: #f0abfc; --tk-c: #8b8b94;
+      --c1: #a5b4fc; --c2: #7dd3fc; --c3: #6ee7b7; --c4: #fcd34d; --c5: #f9a8d4; --c6: #c4b5fd; --c7: #94a3b8;
     }
+    :root { --ease: cubic-bezier(.2, .8, .2, 1); }
+    :root.win { --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+    :root.win { --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace; }
 
-    /* Universal Scrollbar Elimination for Clean Desktop Mode */
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      scrollbar-width: none !important;
-      -ms-overflow-style: none !important;
-    }
-    *::-webkit-scrollbar {
-      display: none !important;
-      width: 0 !important;
-      height: 0 !important;
-    }
-
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
     body {
-      font-family: var(--font);
-      font-size: 14px;
-      line-height: 1.5;
-      background: var(--bg);
+      font: normal 400 13px/1.4 var(--font);
       color: var(--fg);
-      min-height: 100vh;
+      background: var(--bg);
       display: flex;
       flex-direction: column;
-      overflow-x: hidden;
-      overflow-y: auto;
+      overflow: hidden;
       -webkit-font-smoothing: antialiased;
       user-select: none;
       -webkit-user-select: none;
       cursor: default;
     }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: default; appearance: none; -webkit-appearance: none; text-align: center; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    input { font: inherit; color: var(--fg); }
+    .grow { flex: 1; }
+    [hidden] { display: none !important; }
+    code { font: normal 400 11.5px var(--code); }
 
-    button {
-      font: inherit;
-      color: inherit;
-      background: none;
-      border: 0;
-      cursor: default;
-      appearance: none;
-      -webkit-appearance: none;
-    }
-    button:focus-visible, input:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 1px;
-    }
+    /* ---- icons ------------------------------------------------------------- */
+    /* a box of its own: an inline brand svg has no size to fall back on */
+    .ic { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 16px; height: 16px; }
+    .ic > svg { width: 100%; height: 100%; display: block; }
 
-    /* Magpie Desktop Top Navigation Bar (48px - Seamless Surface) */
-    .top {
-      height: 48px;
-      padding: 0 12px 0 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      background: var(--bg);
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      flex: none;
-      -webkit-app-region: drag;
-    }
-
-    .top-status {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex: 0 0 auto;
-      user-select: none;
-      -webkit-app-region: no-drag;
-    }
-
-    /* Prominent Web Console Pair Button */
-    .pair-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 26px;
-      padding: 0 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      text-decoration: none;
-      user-select: none;
-    }
-    .pair-btn.paired {
-      background: var(--green-soft);
-      color: var(--green);
-      border: 1px solid rgba(21, 128, 61, 0.25);
-    }
-    .pair-btn.unpaired {
-      background: var(--amber-soft);
-      color: var(--amber);
-      border: 1px solid rgba(180, 83, 9, 0.25);
-    }
-    .pair-btn:hover {
-      filter: brightness(0.96);
-      transform: translateY(-0.5px);
-    }
-    .pair-btn:active {
-      transform: scale(0.97);
-    }
-
-    /* Magpie Segmented Navigation Switch (.seg) */
-    .nav-wrap {
-      flex: 1 1 auto;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-width: 0;
-      -webkit-app-region: no-drag;
-    }
-    .seg {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      padding: 3px;
-      border-radius: 8px;
-      background: transparent;
-      flex-shrink: 0;
-    }
-    .seg button {
-      position: relative;
-      z-index: 1;
-      white-space: nowrap;
-      height: 28px;
-      padding: 0 13px;
-      border-radius: 6px;
-      font-size: 13.5px;
-      font-weight: 500;
-      color: var(--ctl-fg);
-      transition: color 0.18s var(--ease), background 0.14s var(--ease);
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
-      cursor: pointer;
-    }
-    .seg button .icon {
-      width: 14px;
-      height: 14px;
-      flex-shrink: 0;
-    }
-    .seg button:hover:not(.on) {
-      color: var(--fg);
-    }
-    .seg button.on {
-      color: var(--fg);
-      background: var(--seg-thumb);
-      box-shadow: var(--seg-edge);
-      font-weight: 600;
-    }
-
-    /* Actions Bar */
-    .actions {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      flex: 0 0 auto;
-      -webkit-app-region: no-drag;
-    }
-
-    .status-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 26px;
-      padding: 0 9px;
-      border-radius: 999px;
-      background: var(--card);
-      border: 1px solid var(--line);
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--fg-2);
-      font-variant-numeric: tabular-nums;
-    }
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 0 2px var(--green-soft);
-      transition: background-color 0.2s ease;
-    }
-    .status-pill.offline .status-dot {
-      background: var(--red);
-      box-shadow: 0 0 0 2px var(--red-soft);
-    }
-
-    .icon-btn {
-      width: 28px;
-      height: 28px;
-      border-radius: 7px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--muted);
-      transition: background 0.12s, color 0.12s, transform 0.1s;
-    }
-    .icon-btn .icon {
-      width: 15px;
-      height: 15px;
-    }
-    .icon-btn:hover {
-      background: var(--card);
-      color: var(--fg);
-    }
-    .icon-btn:active {
-      transform: scale(0.95);
-    }
-    .icon-btn.winclose:hover {
-      background: var(--red-soft);
-      color: var(--red);
-    }
-
-    /* Magpie Authentic Unified LED Metric Strip (.led-strip) */
-    .led-strip-wrap {
-      padding: 4px 14px 12px;
-      flex: none;
-      background: var(--bg);
-    }
-    .led-strip {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    .led-strip .blk {
-      min-width: 0;
-      padding: 12px 16px 12px;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-start;
-      transition: background 0.12s ease;
-    }
-    .led-strip .blk.clickable {
-      cursor: pointer;
-    }
-    .led-strip .blk.clickable:hover {
-      background: var(--card-2);
-    }
-    .led-strip .blk + .blk {
-      border-left: 1px solid var(--line-2);
-    }
-    .led-strip .k {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 13px;
-      color: var(--fg-2);
-      font-weight: 600;
-    }
-    .led-strip .v {
-      display: block;
-      margin-top: 3px;
-      font-size: 26px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      font-variant-numeric: tabular-nums;
-      line-height: 1.25;
-      color: var(--fg);
-    }
-    .led-strip .v.cost {
-      color: var(--green);
-    }
-    .led-strip .sub {
-      display: block;
-      margin-top: 4px;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--muted);
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .led-strip .sub b {
-      font-weight: 600;
-      color: var(--fg-2);
-    }
-    .led-strip .meter {
-      height: 4px;
-      margin-top: 6px;
-      border-radius: 2px;
-      background: var(--pill);
-      overflow: hidden;
-    }
-    .led-strip .meter i {
-      display: block;
-      height: 100%;
-      border-radius: 2px;
-      background: var(--green);
-      transition: width 0.3s ease;
-    }
-
-    @media (max-width: 640px) {
-      .top-status { display: none; }
-      .seg button { padding: 0 6px; font-size: 11px; }
-      .led-strip {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-      .led-strip .blk:nth-child(odd) {
-        border-left: 0;
-      }
-      .led-strip .blk:nth-child(n + 3) {
-        border-top: 1px solid var(--line-2);
-      }
-      .led-strip .blk:last-child:nth-child(odd) {
-        grid-column: 1 / -1;
-      }
-    }
-
-    /* Views Layout */
-    .view {
-      flex: 1;
-      padding: 4px 14px 20px;
-      display: none;
-      flex-direction: column;
-      gap: 10px;
-      animation: view-in 0.2s var(--ease);
-    }
-    .view.active {
-      display: flex;
-    }
-    @keyframes view-in {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Magpie Standard List & Row System (.list, .row) */
-    .list {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      overflow: hidden;
-      flex: none;
-    }
-    .row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-height: 48px;
-      padding: 9px 14px;
-      border-top: 1px solid var(--line-2);
-      transition: background 0.12s ease;
-    }
-    .row:first-child {
-      border-top: none;
-    }
-    .row:hover {
-      background: var(--card-2);
-    }
-
-    .row .who {
-      min-width: 0;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .row .name {
-      font-size: 14.5px;
-      font-weight: 600;
-      color: var(--fg);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      line-height: 1.4;
-    }
-    .row .sub {
-      font-size: 12.5px;
-      font-weight: 500;
-      color: var(--muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      line-height: 1.3;
-    }
-
-    /* Magpie Authentic Stat Breakdown Row (.row.stat) - Matches Magpie 14.png */
-    .row.stat {
-      min-height: 44px;
-      padding: 9px 16px;
-      gap: 14px;
-    }
-    .row.stat .who {
-      flex: 0 1 240px;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 3px;
-    }
-    .row.stat .who .top-line {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-    }
-    .row.stat .who .name {
-      font-size: 14.5px;
-      font-weight: 600;
-      color: var(--fg);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .row.stat .who .sub {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .row.stat .share {
-      flex: 1 1 auto;
-      height: 6px;
-      border-radius: 999px;
-      background: var(--pill);
-      overflow: hidden;
-      margin: 0 8px;
-      min-width: 50px;
-    }
-    .row.stat .share i {
-      display: block;
-      height: 100%;
-      border-radius: 999px;
-      background: var(--accent);
-      opacity: 0.85;
-      transition: width 0.3s var(--ease);
-    }
-    .row.stat .num {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      flex: none;
-      min-width: 84px;
-      font-variant-numeric: tabular-nums;
-    }
-    .row.stat .num b {
-      font-weight: 600;
-      font-size: 14px;
-      color: var(--fg);
-    }
-    .row.stat .num small {
-      font-size: 11.5px;
-      color: var(--muted);
-      white-space: nowrap;
-    }
-    .row.stat .cost {
-      flex: none;
-      min-width: 64px;
-      text-align: right;
-      color: var(--green);
-      font-variant-numeric: tabular-nums;
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    /* Magpie Discrete Badges & Pills */
-    .pill-tag {
-      font-size: 12px;
-      font-weight: 500;
-      padding: 2px 7px;
-      border-radius: 6px;
-      background: var(--pill);
-      color: var(--fg-2);
-      border: 1px solid var(--line-2);
-      font-variant-numeric: tabular-nums;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      white-space: nowrap;
-    }
-    .pill-ready {
-      background: var(--green-soft);
-      color: var(--green);
-      border-color: rgba(21, 128, 61, 0.2);
-      font-weight: 600;
-    }
-    .pill-accent {
-      background: var(--accent-soft);
-      color: var(--accent);
-      border-color: rgba(79, 70, 229, 0.2);
-      font-weight: 600;
-    }
-
-    .code-tag {
-      font-family: var(--code);
-      font-size: 12px;
-      padding: 2px 6px;
-      border-radius: 5px;
-      background: var(--pill);
-      color: var(--fg);
-      font-weight: 500;
-      white-space: nowrap;
-    }
-
-    /* Magpie Button Styles */
-    .sm-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      height: 26px;
-      padding: 0 10px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--card);
-      color: var(--fg-2);
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.12s, color 0.12s, border-color 0.12s;
-      flex-shrink: 0;
-    }
-    .sm-btn:hover {
-      background: var(--pill);
-      color: var(--fg);
-      border-color: var(--muted);
-    }
-    .sm-btn:active {
-      transform: scale(0.97);
-    }
-
-    /* Sessions Tree Section */
-    .brand-icon-box {
-      width: 30px;
-      height: 30px;
-      border-radius: 7px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      background: var(--pill);
-      border: 1px solid var(--line-2);
-      overflow: hidden;
-    }
-    .brand-icon-box svg {
-      display: block;
-    }
-    .sm-toolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 2px 2px 6px;
-      flex-wrap: wrap;
-    }
-    .sm-filter {
-      height: 30px;
-      border-radius: 999px;
-      background: var(--pill);
-      border: 1px solid var(--line);
-      color: var(--fg);
-      font-size: 13px;
-      padding: 0 14px;
-      width: 260px;
-      outline: none;
-      transition: border-color 0.15s, background 0.15s;
-      font-family: inherit;
-    }
-    .sm-filter:focus {
-      border-color: var(--accent);
-      background: var(--card);
-    }
-
-    .sm-folder-header {
-      background: var(--card-2);
-      padding: 10px 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      cursor: pointer;
-      border-top: 1px solid var(--line);
-      font-size: 13.5px;
-    }
-    .sm-folder-header:first-child {
-      border-top: none;
-    }
-    .sm-folder-title {
-      font-weight: 600;
-      color: var(--fg);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .sm-folder-path {
-      font-family: var(--code);
-      font-size: 12px;
-      color: var(--muted);
-      margin-left: 6px;
-      font-weight: 500;
-    }
-
-    /* Usage Analytics Elements (Magpie Standard) */
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 1px;
-      background: var(--line);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: hidden;
-      flex: none;
-    }
-    .stats.empty {
-      display: block;
-      background: var(--card);
-    }
-    .stats .none {
-      padding: 18px 16px;
-      color: var(--muted);
-      text-align: center;
-      line-height: 1.5;
-    }
-    .kpi {
-      background: var(--card);
-      padding: 12px 14px 11px;
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-    }
-    .kpi b {
-      font-size: 20px;
-      font-weight: 600;
-      letter-spacing: -.01em;
-      font-variant-numeric: tabular-nums;
-      line-height: 1.15;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      color: var(--fg);
-    }
-    .kpi b .u {
-      font-style: normal;
-      font-size: 13px;
-      font-weight: 500;
-      letter-spacing: 0;
-      color: var(--muted);
-      margin: 0 3px 0 2px;
-    }
-    .kpi span {
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: .05em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-    .kpi small {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 3px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    @media (max-width: 680px) {
-      .stats {
-        grid-template-columns: repeat(2, 1fr);
-      }
-    }
-
-    /* Modal Dialogs */
-    .modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(4px);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-      animation: view-in 0.15s var(--ease);
-    }
-    .modal-dialog {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      box-shadow: var(--shadow);
-      padding: 22px 24px;
-      max-width: 480px;
-      width: 90%;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .form-label {
-      font-size: 12.5px;
-      font-weight: 600;
-      color: var(--fg-2);
-    }
-    .form-input {
-      height: 34px;
-      padding: 0 12px;
-      border-radius: 7px;
-      background: var(--pill);
-      border: 1px solid var(--line);
-      color: var(--fg);
-      font-size: 13px;
-      outline: none;
-      font-family: inherit;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .form-input:focus {
-      border-color: var(--accent);
-      background: var(--card);
-    }
-
-    /* SVGs */
+    /* ---- header ------------------------------------------------------------ */
+    .top { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; height: 46px; flex: none; position: relative; }
+    .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: .01em; }
+    .logo { color: var(--fg); display: inline-flex; }
+    .logo svg { display: block; }
+    .seg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: inline-flex; padding: 2px; border-radius: 8px; }
+    .seg > .thumb { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 6px; background: var(--seg-thumb); box-shadow: var(--seg-edge); pointer-events: none; transition: left .22s var(--ease), width .22s var(--ease); }
+    .seg button { position: relative; z-index: 1; white-space: nowrap; height: 24px; padding: 0 12px; border-radius: 6px; font-size: 12.5px; color: var(--ctl-fg); transition: color .18s var(--ease), transform .14s var(--ease); }
+    .seg button.on { color: var(--fg); }
+    .seg button:hover:not(.on) { color: var(--fg-2); }
+    .actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
     .icon {
-      width: 14px;
-      height: 14px;
-      stroke-width: 1.8;
-      stroke: currentColor;
-      fill: none;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-      flex-shrink: 0;
-      display: inline-block;
-      vertical-align: middle;
-    }
-
-    /* Footer Banner */
-    .footer-bar {
-      margin-top: auto;
-      padding: 8px 14px;
-      border-top: 1px solid var(--line-2);
-      font-size: 11px;
+      width: 26px; height: 26px; border-radius: 7px;
+      display: inline-flex; align-items: center; justify-content: center;
       color: var(--muted);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: var(--bg);
+      transition: background .12s, color .12s;
     }
+    .icon:hover, .icon.on { background: var(--pill); color: var(--fg); }
+    .icon svg { width: 16px; height: 16px; display: block; }
+    .icon.winclose { align-self: center; width: 22px; height: 22px; margin-left: 8px; border-radius: 50%; background: var(--pill); color: var(--fg-2); }
+    .icon.winclose:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+
+    /* ---- the sidebar ------------------------------------------------------- */
+    /* the pages down the left in groups, the gateway and the pairing state at
+       the foot; the same #nav is the header's switch otherwise */
+    .nav-gl, .nav-ic, .side-l, .crumb { display: none; }
+    html.no-side body.side-nav { --side-w: 0px; padding-left: 0; }
+    html.no-side .sidebar { display: none; }
+    body.side-nav { --side-w: var(--side-w-override, 212px); padding-left: var(--side-w); }
+    @media (max-width: 859px) { body.side-nav { --side-w: var(--side-w-override, 184px); } }
+    .sidebar {
+      position: fixed; left: 0; top: 0; bottom: 0; z-index: 10; width: var(--side-w, 212px);
+      display: flex; flex-direction: column;
+      background: var(--bg); border-right: .5px solid var(--line);
+    }
+    .side-edge { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 1; cursor: col-resize; touch-action: none; }
+    .side-edge:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+    body.side-drag, body.side-drag * { cursor: col-resize !important; }
+    .side-top { flex: none; display: flex; align-items: center; height: 46px; padding: 0 18px; }
+    .side-top .brand { font-size: 13.5px; }
+    .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; }
+    .side-foot { flex: none; max-height: 55%; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; border-top: .5px solid var(--line-2); }
+    :is(.side-scroll, .side-foot) { scrollbar-width: thin; }
+    :is(.side-scroll, .side-foot)::-webkit-scrollbar { width: 8px; }
+    :is(.side-scroll, .side-foot)::-webkit-scrollbar-thumb { background: transparent; border: 2px solid transparent; border-radius: 8px; background-clip: padding-box; }
+    :is(.side-scroll, .side-foot):hover::-webkit-scrollbar-thumb { background-color: var(--faint); }
+    body.side-nav #nav { position: static; transform: none; display: flex; flex-direction: column; gap: 1px; padding: 0; border-radius: 0; }
+    body.side-nav #nav > .thumb { display: none; }
+    body.side-nav .nav-gl { display: block; padding: 14px 8px 4px; font-size: 11px; font-weight: 500; letter-spacing: .04em; color: var(--muted); }
+    body.side-nav .nav-gl:first-child { padding-top: 2px; }
+    body.side-nav #nav button[data-view] {
+      display: flex; align-items: center; justify-content: flex-start; gap: 9px;
+      width: 100%; height: 30px; padding: 0 8px; border-radius: 7px;
+      font-size: 13px; color: var(--fg-2); text-align: left; white-space: nowrap;
+    }
+    body.side-nav #nav button[data-view] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    body.side-nav #nav button[data-view]:hover:not(.on) { background: var(--pill); color: var(--fg); }
+    body.side-nav #nav button[data-view].on { background: var(--card); color: var(--fg); box-shadow: var(--seg-edge); font-weight: 500; }
+    body.side-nav .nav-ic { display: block; flex: none; color: var(--muted); }
+    body.side-nav #nav button.on .nav-ic { color: var(--fg); }
+    body.side-nav .side-l { display: inline; }
+    body.side-nav #nav button[data-view]:active:not(.on) { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+    /* the gateway, under the pages: where it listens; a click opens its page */
+    .side-gw { display: flex; align-items: center; gap: 8px; height: 26px; margin-top: 2px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; color: var(--muted); text-align: left; white-space: nowrap; }
+    .side-gw:hover { background: var(--pill); color: var(--fg-2); }
+    .side-gw > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .side-gw.off > i { background: var(--faint); box-shadow: none; }
+    .side-gw > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+    /* beside the sidebar the header says where the reader is and holds the icons */
+    body.side-nav .top { padding-left: 20px; }
+    body.side-nav .crumb { display: flex; align-items: baseline; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13.5px; }
+    .crumb > span { color: var(--muted); }
+    .crumb > i { font-style: normal; color: var(--faint); }
+    .crumb > b { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+    .side-toggle { flex: none; }
+    .side-toggle .st-pane { fill: currentColor; opacity: .32; transition: opacity .3s var(--ease); }
+    body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
+
+    /* ---- views ------------------------------------------------------------- */
+    .view { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 4px; display: none; flex-direction: column; animation: view-in .24s var(--ease); }
+    .view.active { display: flex; }
+    @keyframes view-in { from { opacity: 0; transform: translateY(5px); } }
+    body.window .view { padding: 2px 16px 8px; }
+    /* a width the eye can follow across, centred in a maximized window */
+    body.window .view { padding-left: max(16px, calc(50% - 600px)); padding-right: max(16px, calc(50% - 600px)); }
+    .view:focus { outline: none; }
+    @media (prefers-reduced-motion: reduce) { .view { animation-name: none; } }
+    .view > * { flex: none; }
+    /* Windows and Linux draw a classic scrollbar; a thin rounded thumb instead */
+    :where(body:not(.mac)) ::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+    :where(body:not(.mac)) ::-webkit-scrollbar-thumb { background: var(--faint); border: 3px solid transparent; border-radius: 10px; background-clip: padding-box; }
+    :where(body:not(.mac)) ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+    :where(body:not(.mac)) ::-webkit-scrollbar-button, :where(body:not(.mac)) ::-webkit-scrollbar-corner { display: none; background: transparent; }
+
+    /* ---- lists ------------------------------------------------------------- */
+    .list { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
+    .row { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 5px 9px 5px 11px; }
+    body.window .row { min-height: 48px; padding: 7px 12px 7px 14px; gap: 12px; }
+    .row + .row { border-top: 1px solid var(--line-2); }
+    .row .ic { width: 18px; height: 18px; }
+    body.window .row .ic { width: 22px; height: 22px; }
+    .row .name { font-weight: 500; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .row .who { min-width: 0; flex: 1 1 auto; }
+    .row .sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .row .name-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .empty-state { padding: 36px 20px; text-align: center; color: var(--muted); font-size: 12.5px; }
+    .empty-state b { display: block; color: var(--fg); font-weight: 500; margin-bottom: 4px; font-size: 13px; }
+
+    /* the stat row: who / share / num / cost, as in magpie's usage tables */
+    .row.stat .who { flex: 0 0 180px; }
+    .row.stat .share { flex: 1 1 auto; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; margin: 0 6px; }
+    .row.stat .share i { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .7; }
+    .row.stat .num { display: flex; flex-direction: column; align-items: flex-end; flex: none; min-width: 64px; font-variant-numeric: tabular-nums; }
+    .row.stat .num b { font-weight: 600; }
+    .row.stat .num small { font-size: 10.5px; color: var(--muted); }
+    .row.stat .cost { flex: none; min-width: 58px; text-align: right; color: var(--green); font-variant-numeric: tabular-nums; font-size: 12px; }
+
+    .row-head { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 14px; background: var(--card-2); }
+    .label { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+    .row-head .label { margin-right: auto; }
+
+    /* ---- buttons ----------------------------------------------------------- */
+    .text { font-size: 12px; color: var(--ctl-fg); padding: 3px 7px; border-radius: 6px; white-space: nowrap; transition: background .12s, color .12s; }
+    .text:hover { color: var(--fg); background: var(--pill); }
+    .text.action { height: 27px; padding: 0 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg-2); box-shadow: 0 1px 1px rgba(0, 0, 0, .04); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+    .text.action:hover { border-color: var(--muted); background: var(--card-2); color: var(--fg); }
+    .text.action:disabled { opacity: .6; }
+    .text.primary { color: var(--accent-fg); background: var(--accent); font-weight: 500; border-color: transparent; }
+    .text.primary:hover { background: var(--accent); color: var(--accent-fg); filter: brightness(1.08); }
+    .text.accent { color: var(--accent); }
+    .text.accent:hover { background: var(--accent-soft); color: var(--accent); }
+
+    /* ---- chips, tags, inputs ----------------------------------------------- */
+    .tag { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; color: var(--muted); background: var(--pill); white-space: nowrap; }
+    .tag.ok { color: var(--green); background: var(--green-soft); }
+    .tag.accent { color: var(--accent); background: var(--accent-soft); }
+    .tag.warn { color: var(--amber); background: var(--amber-soft); }
+    .tag.err { color: var(--red); background: var(--red-soft); }
+    .tag.mono { font-family: var(--code); font-size: 10.5px; letter-spacing: 0; }
+    .row .sub .tag { height: 17px; padding: 0 6px; font-size: 10.5px; }
+    .row .sub.flow { display: flex; align-items: center; gap: 5px; }
+    .mono { font-family: var(--code); font-size: 11px; }
+    .inp { height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; outline: none; min-width: 0; user-select: text; -webkit-user-select: text; }
+    .inp:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); outline: none; }
+    .inp::placeholder { color: var(--faint); }
+
+    /* ---- app composition --------------------------------------------------- */
+    .tools { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; flex: none; }
+    .tools .inp { width: 280px; }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    .mt { margin-top: 12px; }
+    .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .status#runnerStatusBadge { display: inline-flex; align-items: center; gap: 7px; }
+    .status#runnerStatusBadge.offline { color: var(--red); }
+    .status#runnerStatusBadge.offline .dot { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+
+    .group-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 14px; background: var(--card-2); cursor: default; }
+    .group-head:hover { background: var(--pill); }
+    .group-head .gname { font-weight: 500; font-size: 12.5px; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .group-head .gpath { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 10.5px; color: var(--faint); }
+    .group-head .chev { flex: none; margin-left: auto; color: var(--faint); display: inline-flex; transition: transform .2s var(--ease); }
+    .group-head .chev svg { width: 14px; height: 14px; display: block; }
+    .group-head.closed .chev { transform: rotate(-90deg); }
+
+    .snippet { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2); }
+    .snippet pre { flex: 1; min-width: 0; overflow-x: auto; font: normal 400 11.5px var(--code); color: var(--fg-2); white-space: pre; user-select: text; -webkit-user-select: text; }
+    .prose { font-size: 12.5px; line-height: 1.7; color: var(--fg-2); }
+    .prose + .prose { margin-top: 8px; }
+    .prose b { color: var(--fg); font-weight: 600; }
+    .prose code { padding: 1px 5px; border-radius: 5px; background: var(--pill); color: var(--accent); }
+
+    /* ---- the ledger strip -------------------------------------------------- */
+    .led-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
+    .led-strip .blk { min-width: 0; padding: 11px 15px 10px; text-align: left; }
+    .led-strip .blk + .blk { border-left: 1px solid var(--line-2); }
+    .led-strip .blk.clickable:hover { background: var(--card-2); }
+    .led-strip .k { display: block; font-size: 11px; color: var(--muted); }
+    .led-strip .v { display: block; margin-top: 2px; font-size: 22px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .led-strip .sub { display: block; margin-top: 3px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ---- the KPI grid ------------------------------------------------------ */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
+    .kpi { background: var(--card); padding: 12px 14px 11px; display: flex; flex-direction: column; min-width: 0; }
+    .kpi b { font-size: 20px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kpi b .u { font-style: normal; font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--muted); margin: 0 3px 0 2px; }
+    .kpi span { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-top: 3px; }
+    .kpi small { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+    /* ---- footer ------------------------------------------------------------ */
+    .foot { display: flex; align-items: center; gap: 10px; padding: 0 14px 6px; min-height: 28px; flex: none; }
+    .status { font-size: 11.5px; color: var(--muted); }
+    .status.ok { color: var(--green); }
+    .status.err { color: var(--red); }
+    .status.warn { color: var(--amber); }
+
+    /* ---- modal ------------------------------------------------------------- */
+    .modal { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; padding: 28px 24px; background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur(8px) saturate(1.1); backdrop-filter: blur(8px) saturate(1.1); }
+    body.window .modal { padding: 16px 24px 24px; }
+    .modal .dialog { width: min(600px, 100%); min-width: 0; max-height: 100%; overflow-y: auto; border-radius: 14px; background: var(--card); box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .12); display: flex; flex-direction: column; animation: dialog-in .2s var(--ease); }
+    @keyframes dialog-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
+    @media (prefers-reduced-motion: reduce) { .modal .dialog { animation: none; } }
+
+    /* ---- editor / form grid ------------------------------------------------ */
+    .editor { padding: 16px 18px 14px; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px 14px; align-items: start; }
+    .editor .ehead { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line-2); }
+    .editor .ehead b { font-weight: 600; }
+    .editor .ehead .note { font-size: 12px; color: var(--muted); }
+    .editor label { font-size: 12px; color: var(--fg-2); text-align: right; padding-top: 5px; }
+    .editor .hint { font-size: 11px; color: var(--fg-2); margin-top: 4px; }
+    .editor .full { grid-column: 1 / -1; }
+    .editor .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line-2); margin-top: 2px; }
+    .editor .pair { display: flex; gap: 8px; align-items: center; }
+    .editor .pair > .inp, .editor .pair > .code-box { flex: 1; min-width: 0; }
+    .editor .side { display: flex; gap: 4px; align-items: center; flex: none; }
+    .editor form.grid { grid-column: 1 / -1; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px 14px; align-items: start; }
+    .editor form.grid > .bar { grid-column: 1 / -1; }
+    .editor input[type="text"], .editor input[type="password"] { height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; outline: none; width: 100%; min-width: 0; user-select: text; -webkit-user-select: text; }
+    .editor input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); outline: none; }
+    .editor input::placeholder { color: var(--faint); }
+    .code-box { display: block; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card-2); font-family: var(--code); font-size: 11.5px; color: var(--fg-2); word-break: break-all; user-select: text; -webkit-user-select: text; }
+    .code-box.accent { color: var(--accent); }
+    .ok-box { grid-column: 1 / -1; padding: 9px 11px; border-radius: 9px; background: var(--green-soft); color: var(--green); }
+    .ok-box b { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+    .ok-box b svg { width: 14px; height: 14px; }
+    .ok-box .sub { font-size: 11px; color: var(--fg-2); margin-top: 3px; }
+    .round { width: 38px; height: 38px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--red-soft); color: var(--red); }
+    .round svg { width: 19px; height: 19px; }
+    .center-note { grid-column: 1 / -1; text-align: center; font-size: 12px; color: var(--muted); }
+    .center-title { grid-column: 1 / -1; text-align: center; font-size: 14.5px; font-weight: 600; }
   </style>
 </head>
-<body>
-  <!-- Magpie Desktop Header Bar -->
-  <header class="top">
-    <!-- Clean left status indicator -->
-    <div class="top-status">
-      <div class="status-pill" id="runnerStatusBadge" title="本地守护监听服务端口与状态">
-        <span class="status-dot"></span>
-        <span id="runnerStatusText">端口 4200</span>
-      </div>
-      <button class="pair-btn unpaired" id="headerPairBtn" onclick="openPairModal()" title="云端 Web 控制台设备配对与绑定状态">
-        <span class="pair-dot"></span>
+<body class="window side-nav">
+  <!-- the pages, in groups; the gateway and the pairing state at the foot -->
+  <aside class="sidebar" id="side">
+    <div class="side-top">
+      <span class="brand">
+        <span class="logo">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.8"/>
+            <circle cx="5" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="19" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="5" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="19" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M9.8 9.8 6.4 6.4M14.2 9.8l3.4-3.4M9.8 14.2l-3.4 3.4M14.2 14.2l3.4 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span>AgentHub</span>
+      </span>
+    </div>
+    <div class="side-scroll" id="sideScroll">
+      <!-- #nav lives here while the sidebar shows, in the header otherwise -->
+    </div>
+    <div class="side-foot">
+      <button class="side-gw off" id="headerPairBtn" onclick="openPairModal()" title="云端 Web 控制台设备配对与绑定状态">
+        <i></i>
         <span id="headerPairText">未绑定 Web 控制台</span>
       </button>
+      <button class="side-gw off" id="sideGwBtn" onclick="switchView('gateway')" title="上游网关探测状态与 Session Affinity 配置">
+        <i></i>
+        <span id="sideGwText">网关未探测</span>
+      </button>
     </div>
+    <div class="side-edge" id="sideEdge" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整侧栏宽度"></div>
+  </aside>
 
-    <!-- Segmented Navigation Switch in middle flow -->
-    <div class="nav-wrap">
-      <nav class="seg" id="nav" aria-label="Main navigation">
-        <button class="on" onclick="switchView('sessions')" id="nav-sessions" title="会话 Sessions">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span>会话</span>
-        </button>
-        <button onclick="switchView('agents')" id="nav-agents" title="智能体 Agents">
-          <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
-          <span>智能体</span>
-        </button>
-        <button onclick="switchView('usage')" id="nav-usage" title="用量 Usage">
-          <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-          <span>用量</span>
-        </button>
-        <button onclick="switchView('models')" id="nav-models" title="模型 Models">
-          <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          <span>模型</span>
-        </button>
-        <button onclick="switchView('workspaces')" id="nav-workspaces" title="工作区 Workspaces">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-          <span>工作区</span>
-        </button>
-        <button onclick="switchView('gateway')" id="nav-gateway" title="网关 Gateway">
-          <svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          <span>网关</span>
-        </button>
-      </nav>
-    </div>
-
-    <!-- Discrete Actions on right -->
+  <header class="top">
+    <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="折叠 / 展开侧栏">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect class="st-pane" x="3" y="4.5" width="7.5" height="15" rx="1.8" stroke="none"/>
+        <rect x="13.5" y="4.5" width="7.5" height="15" rx="1.8" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+    </button>
+    <div class="crumb"><span>AgentHub</span><i>/</i><b id="crumbNow">会话</b></div>
+    <nav class="seg" id="nav" aria-label="主导航">
+      <span class="thumb" id="segThumb"></span>
+      <span class="nav-gl">工作台</span>
+      <button data-view="sessions" class="on" onclick="switchView('sessions')" title="会话 Sessions">
+        <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h12v8H9l-4 3v-3H4z"/></g></svg>
+        <span>会话</span>
+      </button>
+      <button data-view="agents" onclick="switchView('agents')" title="智能体 Agents">
+        <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="14" height="9" rx="2"/><path d="M10 3.5v3.5M7.5 11.5h.01M12.5 11.5h.01M6 16v1.5M14 16v1.5"/></g></svg>
+        <span>智能体</span>
+      </button>
+      <span class="nav-gl">洞察</span>
+      <button data-view="usage" onclick="switchView('usage')" title="用量 Usage">
+        <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16V9M8 16V5M12 16v-5M16 16V7"/></g></svg>
+        <span>用量</span>
+      </button>
+      <button data-view="models" onclick="switchView('models')" title="模型 Models">
+        <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5 17 6l-7 3.5L3 6z"/><path d="M3 10l7 3.5L17 10M3 14l7 3.5L17 14"/></g></svg>
+        <span>模型</span>
+      </button>
+      <span class="nav-gl">系统</span>
+      <button data-view="workspaces" onclick="switchView('workspaces')" title="工作区 Workspaces">
+        <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a1.5 1.5 0 0 1 1.5-1.5h3L9 6.5h6.5A1.5 1.5 0 0 1 17 8v6a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14z"/></g></svg>
+        <span>工作区</span>
+      </button>
+      <button data-view="gateway" onclick="switchView('gateway')" title="网关 Gateway">
+        <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="5" rx="1.5"/><rect x="3" y="11" width="14" height="5" rx="1.5"/><path d="M6 6.5h.01M6 13.5h.01"/></g></svg>
+        <span>网关</span>
+      </button>
+    </nav>
     <div class="actions">
-      <!-- Device pair button -->
-      <button class="icon-btn" onclick="openPairModal()" title="设备配对与身份标识" id="pairBtn">
-        <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <button class="icon" onclick="openPairModal()" title="设备配对与身份标识" id="pairBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       </button>
-
-      <!-- Sync button -->
-      <button class="icon-btn" onclick="refreshDashboard()" title="重新探测系统状态与会话" id="refreshBtn">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
+      <button class="icon" onclick="refreshDashboard()" title="重新探测系统状态与会话" id="refreshBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
       </button>
-
-      <!-- Copy gateway config -->
-      <button class="icon-btn" onclick="copyGatewayConfig()" title="复制环境变量配置 (ANTHROPIC_BASE_URL)">
-        <svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <button class="icon" onclick="copyGatewayConfig()" title="复制环境变量配置 (ANTHROPIC_BASE_URL)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       </button>
-
-      <!-- Theme toggle -->
-      <button class="icon-btn" onclick="toggleTheme()" title="切换亮暗主题外观">
-        <span id="themeIcon">
-          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        </span>
+      <button class="icon" onclick="toggleTheme()" title="切换亮暗主题外观">
+        <span id="themeIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span>
       </button>
-
-      <!-- Exit button -->
-      <button class="icon-btn winclose" onclick="shutdownRunner()" title="退出 AgentHub Runner">
-        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      <button class="icon winclose" onclick="shutdownRunner()" title="退出 AgentHub Runner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
       </button>
     </div>
   </header>
 
-  <!-- Magpie Authentic Unified LED Metric Strip -->
-  <div class="led-strip-wrap">
+  <!-- View 1: the sessions tree, the landing page -->
+  <main class="view active" id="view-sessions" tabindex="-1">
     <div class="led-strip">
-      <!-- 1. 解析会话 -->
       <div class="blk">
-        <span class="k">
-          <span>解析会话</span>
-          <svg class="icon" style="color:var(--muted);width:14px;height:14px;" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        </span>
+        <span class="k">解析会话</span>
         <span class="v" id="statTotalSessions">-</span>
         <span class="sub" id="statSessionsBreakdown">Claude - · Codex -</span>
       </div>
-
-      <!-- 2. 云端 Web 绑定 (真实设备配对状态) -->
-      <div class="blk clickable" onclick="openPairModal()" title="点击进入设备身份配对与云端控制台绑定">
-        <span class="k">
-          <span>云端 Web 绑定</span>
-          <svg class="icon" style="color:var(--accent);width:14px;height:14px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        </span>
-        <span class="v" id="statWebPairingStatus" style="font-size:20px;margin-top:5px;">未绑定</span>
+      <button class="blk clickable" onclick="openPairModal()" title="点击进入设备身份配对与云端控制台绑定">
+        <span class="k">云端 Web 绑定</span>
+        <span class="v" id="statWebPairingStatus">未绑定</span>
         <span class="sub" id="statWebPairingSub">点击关联 Web 控制台</span>
-      </div>
-
-      <!-- 3. 上游模型 -->
+      </button>
       <div class="blk">
-        <span class="k">
-          <span>上游模型</span>
-          <svg class="icon" style="color:var(--accent);width:14px;height:14px;" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        </span>
+        <span class="k">上游模型</span>
         <span class="v" id="statTotalModels">-</span>
         <span class="sub" id="statGatewaySource">多模型自动路由</span>
       </div>
-
-      <!-- 4. 已注册工作区 -->
       <div class="blk">
-        <span class="k">
-          <span>已注册工作区</span>
-          <svg class="icon" style="color:var(--muted);width:14px;height:14px;" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        </span>
+        <span class="k">已注册工作区</span>
         <span class="v" id="statTotalWorkspaces">-</span>
-        <span class="sub" id="statWorkspacesSub">本地项目根目录</span>
+        <span class="sub" id="statWorkspacesSub">本地项目开发根目录</span>
       </div>
-
-      <!-- 5. Agents 矩阵 -->
       <div class="blk">
-        <span class="k">
-          <span>Agents 矩阵</span>
-          <svg class="icon" style="color:var(--amber);width:14px;height:14px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>
-        </span>
+        <span class="k">Agents 矩阵</span>
         <span class="v" id="statActiveAgents">-</span>
         <span class="sub" id="statAgentsSummary">智能体就绪</span>
       </div>
     </div>
-  </div>
 
-  <!-- View 1: Magpie Sessions Tree (Default Active) -->
-  <main class="view active" id="view-sessions">
-    <div class="sm-toolbar">
-      <div style="display:flex;align-items:center;gap:8px;">
-        <input type="search" id="sessionSearchInput" placeholder="搜索会话提示词、ID 或工作区..." class="sm-filter" oninput="filterSessionsList()">
-        <span class="pill-tag" id="sessionCountBadge">0 个历史会话</span>
-      </div>
-      <button class="sm-btn" onclick="refreshDashboard()">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
-        <span>刷新列表</span>
+    <div class="tools mt">
+      <input type="search" id="sessionSearchInput" class="inp" placeholder="搜索提示词、会话 ID 或工作区…" oninput="filterSessionsList()">
+      <span class="tag" id="sessionCountBadge">0 个历史会话</span>
+      <span class="grow"></span>
+      <button class="text action" onclick="refreshDashboard()">
+        <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
+        <span>刷新</span>
       </button>
     </div>
-    <div id="sessionsContainer" style="display:flex;flex-direction:column;gap:8px;">
-      <!-- Dynamic workspace groups -->
+    <div class="stack" id="sessionsContainer">
+      <!-- dynamic workspace groups -->
     </div>
   </main>
 
-  <!-- View 2: Agents Matrix -->
-  <main class="view" id="view-agents">
+  <!-- View 2: the agents matrix -->
+  <main class="view" id="view-agents" tabindex="-1">
+    <div class="tools"><span class="label">官方运行时探测矩阵</span></div>
     <div class="list" id="agentsGrid">
-      <!-- Dynamic agents list -->
+      <!-- dynamic agents list -->
     </div>
   </main>
 
-  <!-- View 3: Usage Analytics (Magpie Standard) -->
-  <main class="view" id="view-usage">
-    <!-- Magpie 4-grid KPI tiles -->
+  <!-- View 3: usage analytics -->
+  <main class="view" id="view-usage" tabindex="-1">
     <div class="stats" id="usageKpiStats">
       <div class="kpi">
         <b id="kpiCost">$0.00</b>
-        <span>预估花费 (Cost)</span>
+        <span>预估花费 Cost</span>
         <small id="kpiCostSub">基于模型标准费率测算</small>
       </div>
       <div class="kpi">
@@ -1011,167 +530,171 @@
       </div>
       <div class="kpi">
         <b id="kpiCache">0</b>
-        <span>缓存读取 (Cache)</span>
+        <span>缓存读取 Cache</span>
         <small id="kpiCacheSub">hit rate 0%</small>
       </div>
       <div class="kpi">
         <b id="kpiCalls">0</b>
         <span>总调用会话</span>
-        <small id="kpiCallsSub">已扫描历史会话</small>
+        <small id="kpiCallsSub">跨多智能体累计会话</small>
       </div>
     </div>
 
-    <!-- Models Breakdown List -->
-    <div class="list" style="margin-top:12px;">
-      <div style="padding:10px 14px;border-bottom:1px solid var(--line-2);font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:space-between;">
-        <span>模型用量分布 (Models Breakdown)</span>
-        <span class="pill-tag" id="usageModelsCount">0 种模型</span>
+    <div class="list mt">
+      <div class="row-head">
+        <span class="label">模型用量分布</span>
+        <span class="tag" id="usageModelsCount">0 种模型</span>
       </div>
-      <div id="usageModels" style="display:flex;flex-direction:column;">
-        <!-- Dynamic model stat rows -->
+      <div id="usageModels">
+        <!-- dynamic model stat rows -->
       </div>
     </div>
 
-    <!-- Agents Breakdown List -->
-    <div class="list" style="margin-top:12px;">
-      <div style="padding:10px 14px;border-bottom:1px solid var(--line-2);font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:space-between;">
-        <span>智能体用量分布 (Agents Breakdown)</span>
-        <span class="pill-tag" id="usageAgentsCount">0 个智能体</span>
+    <div class="list mt">
+      <div class="row-head">
+        <span class="label">智能体用量分布</span>
+        <span class="tag" id="usageAgentsCount">0 个智能体</span>
       </div>
-      <div id="usageAgents" style="display:flex;flex-direction:column;">
-        <!-- Dynamic agent stat rows -->
+      <div id="usageAgents">
+        <!-- dynamic agent stat rows -->
       </div>
     </div>
   </main>
 
-  <!-- View 4: Models Catalog -->
-  <main class="view" id="view-models">
-    <div class="sm-toolbar">
-      <span style="font-size:12px;color:var(--muted);">动态捕获模型可用状态与调用量排行</span>
-      <button class="sm-btn" onclick="refreshModelsCatalog(event)" id="btnRefreshModels">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
+  <!-- View 4: the model catalog -->
+  <main class="view" id="view-models" tabindex="-1">
+    <div class="tools">
+      <span class="label">动态捕获模型可用状态与调用量排行</span>
+      <span class="grow"></span>
+      <button class="text action" onclick="refreshModelsCatalog(event)" id="btnRefreshModels">
+        <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
         <span>同步上游最新模型</span>
       </button>
     </div>
     <div class="list" id="modelsGrid">
-      <!-- Dynamic models list -->
+      <!-- dynamic models list -->
     </div>
   </main>
 
-  <!-- View 5: Workspaces -->
-  <main class="view" id="view-workspaces">
-    <div class="sm-toolbar">
-      <span style="font-size:12px;color:var(--muted);">项目工作区会话活动与 Token 消耗排行</span>
-    </div>
+  <!-- View 5: workspaces -->
+  <main class="view" id="view-workspaces" tabindex="-1">
+    <div class="tools"><span class="label">项目工作区会话活动与 Token 消耗排行</span></div>
     <div class="list" id="workspacesList">
-      <!-- Dynamic workspaces list -->
+      <!-- dynamic workspaces list -->
     </div>
   </main>
 
-  <!-- View 6: Gateway & Affinity -->
-  <main class="view" id="view-gateway">
-    <div class="list" style="padding:14px;display:flex;flex-direction:column;gap:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:13px;font-weight:600;">Magpie 架构与 Session Affinity 会话亲和性</span>
-        <span class="pill-tag pill-ready" id="gatewayBadge">已激活</span>
-      </div>
-      <p style="font-size:12px;line-height:1.6;color:var(--fg-2);">
-        当智能 Agent（如 Claude Code）高频发起多轮交互时，若请求在不同上游网关 Worker 间漂移，服务端的 <b>Prompt Cache</b> 将被频繁击穿，命中率由 90% 跌落至 0%，大幅增加时延并成倍损耗 Token。
-      </p>
-      <p style="font-size:12px;line-height:1.6;color:var(--fg-2);">
-        <b>AgentHub Session Affinity 机制</b> 通过在请求头注入 <code class="code-tag">x-session-affinity: &lt;session_id&gt;</code>，促使上游 Magpie 网关将同一会话路由锁定在相同节点上，保障 <b>90% 以上缓存命中率</b>。
-      </p>
+  <!-- View 6: gateway & session affinity -->
+  <main class="view" id="view-gateway" tabindex="-1">
+    <div class="tools">
+      <span class="label">网关与 Session Affinity 会话亲和性</span>
+      <span class="grow"></span>
+      <span class="tag ok" id="gatewayBadge">已激活</span>
+    </div>
+    <div class="list">
+      <div class="row" style="align-items:flex-start;padding-top:12px;padding-bottom:12px;">
+        <span class="ic" style="color:var(--accent);width:18px;height:18px;margin-top:2px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>
+        </span>
+        <div class="who">
+          <p class="prose">
+            当智能 Agent(如 Claude Code)高频发起多轮交互时,若请求在不同上游网关 Worker 间漂移,服务端的 <b>Prompt Cache</b> 将被频繁击穿,命中率由 90% 跌落至 0%,大幅增加时延并成倍损耗 Token。
+          </p>
+          <p class="prose">
+            <b>AgentHub Session Affinity 机制</b> 通过在请求头注入 <code>x-session-affinity: &lt;session_id&gt;</code>,促使上游网关将同一会话路由锁定在相同节点上,保障 <b>90% 以上缓存命中率</b>。
+          </p>
 
-      <div style="margin-top:4px;">
-        <div style="font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;">跨平台环境变量配置 (Bash / Zsh):</div>
-        <div style="position:relative;background:var(--card-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-family:var(--code);font-size:11.5px;">
-          <button class="sm-btn" style="position:absolute;right:8px;top:6px;" onclick="copySnippet('envSnippet')">复制</button>
-          <pre id="envSnippet" style="margin:0;white-space:pre-wrap;">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
+          <div style="margin-top:12px;">
+            <span class="label">跨平台环境变量配置 (Bash / Zsh)</span>
+            <div class="snippet">
+              <pre id="envSnippet">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
 export ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"</pre>
-        </div>
-      </div>
+              <button class="text accent" onclick="copySnippet('envSnippet')">复制</button>
+            </div>
+          </div>
 
-      <div style="margin-top:4px;">
-        <div style="font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:6px;">PowerShell 环境变量配置 (Windows):</div>
-        <div style="position:relative;background:var(--card-2);border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-family:var(--code);font-size:11.5px;">
-          <button class="sm-btn" style="position:absolute;right:8px;top:6px;" onclick="copySnippet('psSnippet')">复制</button>
-          <pre id="psSnippet" style="margin:0;white-space:pre-wrap;">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
+          <div style="margin-top:12px;">
+            <span class="label">PowerShell 环境变量配置 (Windows)</span>
+            <div class="snippet">
+              <pre id="psSnippet">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
 $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
+              <button class="text accent" onclick="copySnippet('psSnippet')">复制</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   </main>
 
-  <!-- Footer Status Bar -->
-  <footer class="footer-bar">
-    <span>AgentHub Runner · 静默驻留系统托盘 · 右键托盘图标安全退出</span>
-    <span style="font-family:var(--code);font-size:10.5px;">127.0.0.1:4200</span>
+  <footer class="foot">
+    <span class="status" id="runnerStatusBadge" title="本地守护监听服务端口与状态">
+      <i class="dot"></i>
+      <span id="runnerStatusText">端口 4200</span>
+    </span>
+    <span class="grow"></span>
+    <span class="status">AgentHub Runner · 静默驻留系统托盘 · 右键托盘图标安全退出</span>
+    <span class="status mono">127.0.0.1:4200</span>
   </footer>
 
-  <!-- Device Pairing Modal -->
-  <div id="pairModal" class="modal-overlay">
-    <div class="modal-dialog">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <svg class="icon" style="color:var(--accent);width:16px;height:16px;" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span style="font-size:13.5px;font-weight:600;">设备身份与 AgentHub 配对</span>
-        </div>
-        <button class="icon-btn" onclick="closePairModal()">
-          <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </div>
-
-      <div style="background:var(--card-2);border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:11px;font-weight:600;color:var(--muted);">本机唯一设备 ID:</span>
-          <button class="sm-btn" style="height:20px;padding:0 6px;font-size:10.5px;" onclick="copyDeviceId()">复制</button>
-        </div>
-        <div style="font-family:var(--code);font-size:11.5px;color:var(--accent);word-break:break-all;" id="modalDeviceId">-</div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
-          <span style="font-size:11px;color:var(--muted);">Ed25519 硬件公钥:</span>
-          <span style="font-size:11px;color:var(--muted);font-family:var(--code);" id="modalDeviceKey">-</span>
-        </div>
-      </div>
-
-      <div id="pairedStatusBox" style="display:none;background:var(--green-soft);border:1px solid transparent;border-radius:8px;padding:10px;">
-        <div style="font-size:12px;font-weight:600;color:var(--green);display:flex;align-items:center;gap:6px;">
-          <svg class="icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-          <span>已成功配对到云端 AgentHub</span>
-        </div>
-        <div style="font-size:11px;color:var(--fg-2);margin-top:3px;" id="pairedGatewayInfo"></div>
-      </div>
-
-      <form id="pairForm" onsubmit="submitDevicePairing(event)" style="display:flex;flex-direction:column;gap:10px;">
-        <div class="form-group">
-          <label class="form-label" for="gatewayInput">AgentHub 网关地址:</label>
-          <input class="form-input" id="gatewayInput" type="text" placeholder="例如: https://agenthub.yourdomain.com 或 http://100.x.x.x:3000">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="bindingCodeInput">配对绑定码:</label>
-          <input class="form-input" id="bindingCodeInput" type="text" placeholder="从 AgentHub Web 控制台获取 6 位或动态绑定码" required>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
-          <button type="button" class="sm-btn" onclick="closePairModal()">取消</button>
-          <button type="submit" class="sm-btn" style="background:var(--accent);color:var(--accent-fg);border-color:transparent;" id="pairSubmitBtn">
-            <span>立即配对绑定</span>
+  <!-- device pairing -->
+  <div id="pairModal" class="modal">
+    <div class="dialog">
+      <div class="editor">
+        <div class="ehead">
+          <span class="ic" style="color:var(--accent);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </span>
+          <b>设备身份与 AgentHub 配对</b>
+          <span class="note">本机 Ed25519 身份 · 主动出站绑定</span>
+          <button class="icon" style="margin-left:auto;" onclick="closePairModal()" title="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
           </button>
         </div>
-      </form>
+
+        <label>设备 ID</label>
+        <div class="pair">
+          <span class="code-box accent" id="modalDeviceId">-</span>
+          <span class="side"><button class="text accent" onclick="copyDeviceId()">复制</button></span>
+        </div>
+
+        <label>硬件公钥</label>
+        <div><span class="code-box" id="modalDeviceKey">-</span></div>
+
+        <div class="ok-box" id="pairedStatusBox" style="display:none;">
+          <b>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            <span>已成功配对到云端 AgentHub</span>
+          </b>
+          <div class="sub" id="pairedGatewayInfo"></div>
+        </div>
+
+        <form class="grid" id="pairForm" onsubmit="submitDevicePairing(event)">
+          <label for="gatewayInput">网关地址</label>
+          <input id="gatewayInput" type="text" placeholder="例如: https://agenthub.yourdomain.com 或 http://100.x.x.x:3000">
+          <label for="bindingCodeInput">配对绑定码</label>
+          <input id="bindingCodeInput" type="text" placeholder="从 AgentHub Web 控制台获取的绑定码" required>
+          <div class="bar">
+            <span class="grow"></span>
+            <button type="button" class="text action" onclick="closePairModal()">取消</button>
+            <button type="submit" class="text action primary" id="pairSubmitBtn">
+              <span>立即配对绑定</span>
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
-  <!-- Shutdown Modal -->
-  <div id="shutdownModal" class="modal-overlay">
-    <div class="modal-dialog" style="text-align:center;align-items:center;">
-      <div style="width:40px;height:40px;border-radius:50%;background:var(--red-soft);color:var(--red);display:flex;align-items:center;justify-content:center;">
-        <svg class="icon" style="width:20px;height:20px;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-      </div>
-      <div style="font-size:15px;font-weight:600;">正在退出 AgentHub Runner</div>
-      <p style="font-size:12px;color:var(--muted);" id="shutdownModalMsg">
-        托盘图标与后台监听服务正在安全释放...
-      </p>
-      <div style="font-size:11px;color:var(--faint);">
-        服务终止后，您可以安全关闭此桌面窗口。
+  <!-- shutdown -->
+  <div id="shutdownModal" class="modal">
+    <div class="dialog" style="width:min(380px,100%);">
+      <div class="editor" style="grid-template-columns:minmax(0,1fr);justify-items:center;gap:8px;">
+        <span class="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M14.8 9.2 9.2 14.8M9.2 9.2l5.6 5.6"/></svg>
+        </span>
+        <span class="center-title">正在退出 AgentHub Runner</span>
+        <p class="center-note" id="shutdownModalMsg">托盘图标与后台监听服务正在安全释放…</p>
+        <p class="center-note" style="color:var(--faint);font-size:11px;">服务终止后,您可以安全关闭此桌面窗口。</p>
       </div>
     </div>
   </div>
@@ -1190,7 +713,16 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     let consecutiveFailures = 0;
     let allSessionsData = [];
 
-    // Theme initialization - Default to authentic Magpie light theme
+    const VIEW_LABELS = {
+      sessions: '会话',
+      agents: '智能体',
+      usage: '用量',
+      models: '模型',
+      workspaces: '工作区',
+      gateway: '网关'
+    };
+
+    // Theme initialization - defaults to the light theme
     (function initTheme() {
       const saved = localStorage.getItem('agenthub_theme');
       if (saved === 'dark') {
@@ -1198,24 +730,114 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       } else {
         document.documentElement.classList.remove('dark');
       }
+      if (localStorage.getItem('agenthub_side_nav') === '0') {
+        document.body.classList.remove('side-nav');
+      }
+      const w = parseInt(localStorage.getItem('agenthub_side_w') || '', 10);
+      if (w >= 168 && w <= 420) {
+        document.documentElement.style.setProperty('--side-w-override', w + 'px');
+      }
       updateThemeButtonUI();
     })();
 
     async function init() {
+      layoutNav();
+      initSideEdge();
+      const savedView = localStorage.getItem('agenthub_view');
+      switchView(VIEW_LABELS[savedView] ? savedView : 'sessions', true);
       await refreshDashboard();
       setInterval(refreshDashboard, 4000);
     }
 
-    // Switch between Magpie views
-    function switchView(viewId) {
-      document.querySelectorAll('.seg button').forEach(b => b.classList.remove('on'));
+    // The sidebar's #nav is the header's switch when the sidebar is away.
+    function layoutNav() {
+      const nav = document.getElementById('nav');
+      const sideScroll = document.getElementById('sideScroll');
+      const actions = document.querySelector('.top .actions');
+      if (!nav || !sideScroll || !actions) return;
+      if (document.body.classList.contains('side-nav')) {
+        sideScroll.appendChild(nav);
+      } else {
+        actions.parentNode.insertBefore(nav, actions);
+      }
+      moveSegThumb(false);
+    }
+
+    function toggleSideNav() {
+      const on = !document.body.classList.contains('side-nav');
+      document.body.classList.toggle('side-nav', on);
+      try { localStorage.setItem('agenthub_side_nav', on ? '1' : '0'); } catch (e) {}
+      layoutNav();
+    }
+
+    // The sidebar's edge drags it wider or narrower.
+    function initSideEdge() {
+      const edge = document.getElementById('sideEdge');
+      if (!edge) return;
+      let dragging = false;
+      const width = () => Math.round(edge.getBoundingClientRect().left) + 4;
+
+      edge.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        try { edge.setPointerCapture(e.pointerId); } catch (err) {}
+        document.body.classList.add('side-drag');
+        e.preventDefault();
+      });
+      edge.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const w = Math.max(168, Math.min(420, Math.round(e.clientX)));
+        document.documentElement.style.setProperty('--side-w-override', w + 'px');
+      });
+      const end = () => {
+        if (!dragging) return;
+        dragging = false;
+        document.body.classList.remove('side-drag');
+        try { localStorage.setItem('agenthub_side_w', String(width())); } catch (e) {}
+      };
+      edge.addEventListener('pointerup', end);
+      edge.addEventListener('pointercancel', end);
+      edge.addEventListener('dblclick', () => {
+        document.documentElement.style.removeProperty('--side-w-override');
+        try { localStorage.removeItem('agenthub_side_w'); } catch (e) {}
+      });
+    }
+
+    // The thumb under the open tab, in the header's switch only.
+    function moveSegThumb(animate) {
+      const nav = document.getElementById('nav');
+      const thumb = document.getElementById('segThumb');
+      if (!nav || !thumb) return;
+      const btn = nav.querySelector('button.on');
+      if (!btn) return;
+      if (!animate) thumb.style.transition = 'none';
+      thumb.style.left = btn.offsetLeft + 'px';
+      thumb.style.width = btn.offsetWidth + 'px';
+      if (!animate) { void thumb.offsetWidth; thumb.style.transition = ''; }
+    }
+
+    // Switch between the views
+    function switchView(viewId, silent) {
+      if (!VIEW_LABELS[viewId]) return;
+      document.querySelectorAll('#nav button[data-view]').forEach(b => b.classList.remove('on'));
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
 
-      const btn = document.getElementById('nav-' + viewId);
+      const btn = document.getElementById('nav-' + viewId) ||
+        document.querySelector(`#nav button[data-view="${viewId}"]`);
       if (btn) btn.classList.add('on');
 
       const view = document.getElementById('view-' + viewId);
-      if (view) view.classList.add('active');
+      if (view) {
+        view.classList.add('active');
+        if (!silent) view.scrollTop = 0;
+      }
+
+      const crumb = document.getElementById('crumbNow');
+      if (crumb) crumb.textContent = VIEW_LABELS[viewId];
+
+      if (!silent) {
+        try { localStorage.setItem('agenthub_view', viewId); } catch (e) {}
+      }
+      moveSegThumb(!silent);
     }
 
     async function refreshDashboard() {
@@ -1324,8 +946,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       const activeAgents = stats.active_agents || 0;
       const totalAgents = stats.total_agents || 8;
-      document.getElementById('statActiveAgents').textContent = `${activeAgents} / ${totalAgents} 就绪`;
-      document.getElementById('statAgentsSummary').textContent = `${activeAgents} 个智能体已就绪`;
+      document.getElementById('statActiveAgents').textContent = activeAgents;
+      document.getElementById('statAgentsSummary').textContent = `共 ${totalAgents} 个 · 已就绪 ${activeAgents} 个`;
     }
 
     function getAgentIcon(id, size = 18) {
@@ -1342,19 +964,19 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (k.includes('codex')) {
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Codex</title><path d="M19.503 0H4.496A4.496 4.496 0 000 4.496v15.007A4.496 4.496 0 004.496 24h15.007A4.496 4.496 0 0024 19.503V4.496A4.496 4.496 0 0019.503 0z" fill="#3941FF"/><path d="M9.064 3.344a4.578 4.578 0 012.285-.312c1 .115 1.891.54 2.673 1.275.01.01.024.017.037.021a.09.09 0 00.043 0 4.55 4.55 0 013.046.275l.047.022.116.057a4.581 4.581 0 012.188 2.399c.209.51.313 1.041.315 1.595a4.24 4.24 0 01-.134 1.223.123.123 0 00.03.115c.594.607.988 1.33 1.183 2.17.289 1.425-.007 2.71-.887 3.854l-.136.166a4.548 4.548 0 01-2.201 1.388.123.123 0 00-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838-1.187-.006-2.239-.44-3.157-1.302a.107.107 0 00-.105-.024c-.388.125-.78.143-1.204.138a4.441 4.441 0 01-1.945-.466 4.544 4.544 0 01-1.61-1.335c-.152-.202-.303-.392-.414-.617a5.81 5.81 0 01-.37-.961 4.582 4.582 0 01-.014-2.298.124.124 0 00.006-.056.085.085 0 00-.027-.048 4.467 4.467 0 01-1.034-1.651 3.896 3.896 0 01-.251-1.192 5.189 5.189 0 01.141-1.6c.337-1.112.982-1.985 1.933-2.618.212-.141.413-.251.601-.33.215-.089.43-.164.646-.227a.098.098 0 00.065-.066 4.51 4.51 0 01.829-1.615 4.535 4.535 0 011.837-1.388zm3.482 10.565a.637.637 0 000 1.272h3.636a.637.637 0 100-1.272h-3.636zM8.462 9.23a.637.637 0 00-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 101.095.649l1.454-2.455a.636.636 0 00.005-.64L8.462 9.23z" fill="#FFFFFF"/></svg>`;
       }
-      // ZCode (Dark badge with white 'Z')
+      // ZCode (dark badge with a white Z)
       if (k.includes('zcode') || k.startsWith('sess_')) {
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>ZCode</title><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M6.2 6.5h11.6v2.6l-6.8 6.5h6.8v2.6H6.2v-2.6l6.8-6.5H6.2V6.5z" fill="#ffffff"/></svg>`;
       }
       // Gemini CLI
       if (k.includes('gemini')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Gemini CLI</title><defs><linearGradient id="gemini-grad-${size}" x1="24" y1="6.587" x2="0" y2="16.494" gradientUnits="userSpaceOnUse"><stop stop-color="#EE4D5D"/><stop offset=".328" stop-color="#B381DD"/><stop offset=".476" stop-color="#207CFE"/></linearGradient></defs><path d="M0 4.391A4.391 4.391 0 014.391 0h15.217A4.391 4.391 0 0124 4.391v15.217A4.391 4.391 0 0119.608 24H4.391A4.391 4.391 0 010 19.608V4.391z" fill="url(#gemini-grad-${size})"/><path clip-rule="evenodd" d="M19.74 1.444a2.816 2.816 0 012.816 2.816v15.48a2.816 2.816 0 01-2.816 2.816H4.26a2.816 2.816 0 01-2.816-2.816V4.26A2.816 2.816 0 014.26 1.444h15.48zM7.236 8.564l7.752 3.728-7.752 3.727v2.802l9.557-4.596v-3.866L7.236 5.763v2.801z" fill="#1E1E2E" fill-rule="evenodd"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" style="flex:none;" fill="none"><title>Gemini CLI</title><defs><radialGradient id="gemini-sparkle-agent-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#paint0_radial_gemini_agent_${size})"/><defs><radialGradient id="paint0_radial_gemini_agent_${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs></svg>`;
       }
       // Grok
       if (k.includes('grok')) {
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Grok</title><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" fill="#111113"/></svg>`;
       }
-      // Antigravity (Rocket engine badge)
+      // Antigravity
       if (k.includes('antigravity')) {
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Antigravity</title><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z" fill="#00B95C"/><path d="M15.269 7.747c1.058 4.557 5.691 7.374 10.348 6.293 4.657-1.082 7.575-5.653 6.516-10.21-1.058-4.556-5.691-7.374-10.348-6.292-4.657 1.082-7.575 5.653-6.516 10.21z" fill="#FC413D"/><path d="M9.932 27.617c1.04 4.482 5.384 7.303 9.7 6.3 4.316-1.002 6.971-5.448 5.93-9.93-1.04-4.483-5.384-7.304-9.7-6.301-4.316 1.002-6.971 5.448-5.93 9.93z" fill="#3186FF"/><path d="M2.572-8.185C.392-3.329 2.778 2.472 7.9 4.771c5.122 2.3 11.042.227 13.222-4.63 2.18-4.855-.205-10.656-5.327-12.955-5.122-2.3-11.042-.227-13.222 4.63z" fill="#FBBC04"/></svg>`;
       }
@@ -1370,47 +992,47 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (k.includes('opencode')) {
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>OpenCode</title><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z" fill="#10A37F"/></svg>`;
       }
-      // Default clean neutral terminal badge
+      // Default neutral terminal badge
       return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>`;
     }
 
     function renderAgents(agents) {
       const container = document.getElementById('agentsGrid');
-      if (!agents || !container) return;
+      if (!container) return;
+
+      if (!agents || agents.length === 0) {
+        container.innerHTML = `<div class="empty-state"><b>未检测到任何官方运行时</b>请确认 Claude Code / Codex 等 CLI 已安装并位于 PATH 中</div>`;
+        return;
+      }
 
       container.innerHTML = agents.map(agent => {
         const isReady = agent.installed || agent.sessions_count > 0;
-        const pillHtml = isReady
-          ? `<span class="pill-tag pill-ready">已就绪</span>`
-          : `<span class="pill-tag">未检测到</span>`;
-        const pathText = agent.path ? escapeHtml(agent.path) : '未检测到独立二进制 (可通过别名直连)';
+        const tagHtml = isReady
+          ? `<span class="tag ok">已就绪</span>`
+          : `<span class="tag">未检测到</span>`;
+        const pathText = escapeHtml(agent.path || '未检测到独立二进制 (可通过别名直连)');
 
         return `
           <div class="row">
-            <div class="brand-icon-box" style="width:32px;height:32px;border-radius:8px;">
-              ${getAgentIcon(agent.id, 20)}
-            </div>
+            <span class="ic">${getAgentIcon(agent.id, 22)}</span>
             <div class="who">
-              <div style="display:flex;align-items:center;gap:8px;">
+              <div class="name-line">
                 <span class="name">${escapeHtml(agent.name)}</span>
-                <span class="code-tag">${escapeHtml(agent.command || agent.id)}</span>
-                ${pillHtml}
+                <span class="tag mono">${escapeHtml(agent.command || agent.id)}</span>
+                ${tagHtml}
               </div>
-              <div class="sub">
+              <div class="sub flow">
                 <span>${escapeHtml(agent.description || '')}</span>
-                <span>·</span>
-                <span style="font-family:var(--code);font-size:10.5px;">${pathText}</span>
+                <span class="mono" style="color:var(--faint);">${pathText}</span>
               </div>
             </div>
-            <div style="flex:none;display:flex;align-items:center;gap:6px;">
-              <span class="pill-tag">${agent.sessions_count || 0} 会话</span>
-            </div>
+            <span class="tag">${agent.sessions_count || 0} 会话</span>
           </div>
         `;
       }).join('');
     }
 
-    // Magpie-grade Sessions Tree View
+    // The sessions tree, grouped by workspace
     function renderSessions(sessions) {
       const container = document.getElementById('sessionsContainer');
       const badge = document.getElementById('sessionCountBadge');
@@ -1430,8 +1052,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       if (!sessions || sessions.length === 0) {
         container.innerHTML = `
-          <div class="list" style="padding:28px;text-align:center;color:var(--muted);">
-            暂未解析到历史会话记录 (正在后台扫描 Claude Code / Codex / ZCode / Antigravity 会话数据)
+          <div class="list">
+            <div class="empty-state">
+              <b>暂未解析到历史会话记录</b>
+              正在后台扫描 Claude Code / Codex / ZCode / Antigravity 会话数据
+            </div>
           </div>
         `;
         if (badge) badge.textContent = '0 个历史会话';
@@ -1474,7 +1099,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const safeName = escapeHtml(grp.name);
         const count = grp.items.length;
 
-        // Inside each group, ensure sessions are sorted chronologically descending
         grp.items.sort((a, b) => {
           const ta = a.last_activity_at_ms || a.time_updated || a.updatedAt || a.recencyAt || a.createdAt || 0;
           const tb = b.last_activity_at_ms || b.time_updated || b.updatedAt || b.recencyAt || b.createdAt || 0;
@@ -1511,18 +1135,16 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           const tokens = item.total_tokens ? Number(item.total_tokens).toLocaleString() : (item.prompt_tokens ? (Number(item.prompt_tokens) + (Number(item.completion_tokens) || 0)).toLocaleString() : '-');
 
           const modelName = escapeHtml(item.model || item.model_name || '');
-          const modelTag = modelName ? `<span class="pill-tag">${modelName}</span>` : '';
+          const modelTag = modelName ? `<span class="tag">${modelName}</span>` : '';
 
           return `
             <div class="row">
-              <div class="brand-icon-box">
-                ${iconHtml}
-              </div>
+              <span class="ic">${iconHtml}</span>
               <div class="who">
                 <div class="name" title="${prompt}">${prompt}</div>
-                <div class="sub">
-                  <span class="code-tag">${sid.substring(0, 10)}</span>
-                  <span class="pill-tag">${provider}</span>
+                <div class="sub flow">
+                  <span class="tag mono">${sid.substring(0, 10)}</span>
+                  <span class="tag">${provider}</span>
                   ${modelTag}
                   <span>${timeStr}</span>
                   ${tokens !== '-' ? `<span>${tokens} Tokens</span>` : ''}
@@ -1534,13 +1156,16 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
         return `
           <div class="list">
-            <div class="sm-folder-header" onclick="toggleSessionGroup('grp-${idx}')">
-              <div class="sm-folder-title">
-                <svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                <span>${safeName}</span>
-                <span class="sm-folder-path">${safePath}</span>
-              </div>
-              <span class="pill-tag">${count} 条</span>
+            <div class="group-head" onclick="toggleSessionGroup('grp-${idx}')">
+              <span class="ic" style="color:var(--accent);width:15px;height:15px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              </span>
+              <span class="gname" title="${safeName}">${safeName}</span>
+              <span class="gpath" title="${safePath}">${safePath}</span>
+              <span class="tag">${count} 条</span>
+              <span class="chev">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </span>
             </div>
             <div id="grp-${idx}">
               ${itemsHtml}
@@ -1552,9 +1177,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
     function toggleSessionGroup(id) {
       const el = document.getElementById(id);
-      if (el) {
-        el.style.display = el.style.display === 'none' ? 'block' : 'none';
-      }
+      if (!el) return;
+      const head = el.previousElementSibling;
+      const closing = el.style.display !== 'none';
+      el.style.display = closing ? 'none' : 'block';
+      if (head) head.classList.toggle('closed', closing);
     }
 
     function filterSessionsList() {
@@ -1570,7 +1197,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       renderSessions(filtered);
     }
 
-    // Magpie-grade Number and Cost Formatting
+    // Number and cost formatting
     function fmtN(n, formatUnitTag = false) {
       if (typeof n !== 'number') n = Number(n) || 0;
       let val = '';
@@ -1611,7 +1238,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#0066FF"/><path d="M6 14c2-4 6-6 10-4-3 5-7 6-10 4z" fill="#FFFFFF"/></svg>`;
       }
       if (k.includes('gemini')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><defs><linearGradient id="m-gemini-${size}" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse"><stop stop-color="#EE4D5D"/><stop offset=".5" stop-color="#B381DD"/><stop offset="1" stop-color="#207CFE"/></linearGradient></defs><rect width="24" height="24" rx="4.5" fill="url(#m-gemini-${size})"/><path d="M12 3.5C12 8.194 8.194 12 3.5 12C8.194 12 12 15.806 12 20.5C12 15.806 15.806 12 20.5 12C15.806 12 12 8.194 12 3.5Z" fill="#FFFFFF"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" style="flex:none;" fill="none"><defs><radialGradient id="m-gemini-sparkle-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#m-gemini-sparkle-${size})"/></svg>`;
       }
       if (k.includes('qwen')) {
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#615CED"/><path d="M12 5.5l5.5 3.5v6l-5.5 3.5L6.5 15V9L12 5.5z" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/></svg>`;
@@ -1649,7 +1276,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       return '';
     }
 
-    // Magpie Standard Usage Analytics
     function renderUsageAnalytics(usage, sessions, stats) {
       let costUsd = 0.0;
       let totalTokens = 0;
@@ -1748,7 +1374,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         agentsList.sort((a, b) => b.total_tokens - a.total_tokens);
       }
 
-      // Update 4 KPI Cards
+      // Update the 4 KPI tiles
       const costEl = document.getElementById('kpiCost');
       const tokensEl = document.getElementById('kpiTokens');
       const tokensSubEl = document.getElementById('kpiTokensSub');
@@ -1765,7 +1391,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (callsEl) callsEl.textContent = calls.toLocaleString();
       if (callsSubEl) callsSubEl.textContent = '跨多智能体累计会话';
 
-      // Render Models Breakdown
+      // Render the models breakdown
       const modelsContainer = document.getElementById('usageModels');
       const modelsCountEl = document.getElementById('usageModelsCount');
       if (modelsCountEl) modelsCountEl.textContent = `${modelsList.length} 种模型`;
@@ -1773,20 +1399,20 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (modelsContainer) {
         if (modelsList.length === 0) {
           modelsContainer.innerHTML = `
-            <div style="padding:28px 16px;text-align:center;color:var(--muted);font-size:13px;">
-              暂无模型调用数据 (会话产生实际交互后将自动统计 Token 消耗)
+            <div class="empty-state">
+              <b>暂无模型调用数据</b>
+              会话产生实际交互后将自动统计 Token 消耗
             </div>
           `;
         } else {
           modelsContainer.innerHTML = modelsList.map(m => {
             const pct = Math.max(0, Math.min(100, m.share_pct || 0));
             const cStr = Number(m.estimated_cost_usd || 0).toFixed(2);
-            const iconSvg = getModelIcon(m.name, 20);
             return `
               <div class="row stat">
-                ${iconSvg}
+                <span class="ic">${getModelIcon(m.name, 20)}</span>
                 <div class="who">
-                  <div class="top-line">
+                  <div class="name-line">
                     <span class="name">${escapeHtml(m.name)}</span>
                   </div>
                   <div class="sub">${(m.calls || 0).toLocaleString()} 次调用 · 缓存命中 ${m.cache_hit_rate_pct || 0}%</div>
@@ -1805,7 +1431,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         }
       }
 
-      // Render Agents Breakdown
+      // Render the agents breakdown
       const agentsContainer = document.getElementById('usageAgents');
       const agentsCountEl = document.getElementById('usageAgentsCount');
       if (agentsCountEl) agentsCountEl.textContent = `${agentsList.length} 个智能体`;
@@ -1813,20 +1439,20 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (agentsContainer) {
         if (agentsList.length === 0) {
           agentsContainer.innerHTML = `
-            <div style="padding:28px 16px;text-align:center;color:var(--muted);font-size:13px;">
-              暂无智能体调用数据
+            <div class="empty-state">
+              <b>暂无智能体调用数据</b>
+              会话产生实际交互后将自动统计
             </div>
           `;
         } else {
           agentsContainer.innerHTML = agentsList.map(a => {
             const pct = Math.max(0, Math.min(100, a.share_pct || 0));
             const cStr = Number(a.estimated_cost_usd || 0).toFixed(2);
-            const iconSvg = getAgentIcon(a.id || a.name, 20);
             return `
               <div class="row stat">
-                ${iconSvg}
+                <span class="ic">${getAgentIcon(a.id || a.name, 20)}</span>
                 <div class="who">
-                  <div class="top-line">
+                  <div class="name-line">
                     <span class="name">${escapeHtml(a.name)}</span>
                   </div>
                   <div class="sub">${(a.calls || 0).toLocaleString()} 次调用 · 缓存命中 ${a.cache_hit_rate_pct || 0}%</div>
@@ -1846,7 +1472,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
     }
 
-    // Magpie-grade Model Catalog & Token Analytics View
     function renderModels(models) {
       const container = document.getElementById('modelsGrid');
       if (!container) return;
@@ -1872,7 +1497,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         }
       });
 
-      // If backend did not provide a catalog, dynamically build catalog from real sessions!
+      // If the backend sent no catalog, build one from the sessions seen
       if (list.length === 0) {
         Object.keys(modelStats).forEach(k => {
           const st = modelStats[k];
@@ -1888,19 +1513,18 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       if (list.length === 0) {
         container.innerHTML = `
-          <div style="grid-column: 1 / -1; padding: 40px 16px; text-align: center; color: var(--muted); font-size: 13px;">
-            暂无模型记录 (会话中使用模型后将自动提取并展示真实模型画册)
+          <div class="empty-state">
+            <b>暂无模型记录</b>
+            会话中使用模型后将自动提取并展示真实模型画册
           </div>
         `;
         return;
       }
 
-      // Prepare items with stats
       const items = list.map(m => {
         const id = (m.id || m.name || '').toLowerCase();
         const name = m.display_name || m.name || m.id || 'Unknown Model';
 
-        // Find matching stats
         let st = modelStats[id];
         if (!st) {
           const foundKey = Object.keys(modelStats).find(k => id.includes(k) || k.includes(id));
@@ -1913,12 +1537,12 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const calls = st ? st.calls : 0;
 
         const tags = [];
-        if (m.supports_vision) tags.push('<span class="pill-tag pill-accent">Vision</span>');
-        if (m.supports_reasoning) tags.push('<span class="pill-tag" style="color:var(--amber);">Thinking</span>');
-        // ONLY show context window if explicitly declared and > 0, never fabricate 200k!
+        if (m.supports_vision) tags.push('<span class="tag accent">Vision</span>');
+        if (m.supports_reasoning) tags.push('<span class="tag warn">Thinking</span>');
+        // only a context window the backend declared, never a fabricated default
         const ctxStr = m.context_window_str || (m.context_length > 0 ? (m.context_length >= 1000000 ? Math.round(m.context_length / 1000000) + 'M' : Math.round(m.context_length / 1000) + 'K') : '');
         if (ctxStr) {
-          tags.push(`<span class="pill-tag pill-ready">${escapeHtml(ctxStr)}</span>`);
+          tags.push(`<span class="tag ok">${escapeHtml(ctxStr)}</span>`);
         }
 
         return {
@@ -1932,7 +1556,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         };
       });
 
-      // Sort by token consumption descending
       items.sort((a, b) => b.totalTokens - a.totalTokens);
 
       const maxTokens = Math.max(1, items[0]?.totalTokens || totalTokensAll || 1);
@@ -1948,11 +1571,9 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
         return `
           <div class="row stat">
-            <div style="flex:none;">
-              <svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-            </div>
+            <span class="ic">${getModelIcon(item.name, 20)}</span>
             <div class="who">
-              <div class="top-line">
+              <div class="name-line">
                 <span class="name" title="${safeName}">${safeName}</span>
                 ${item.tags.join(' ')}
               </div>
@@ -1972,10 +1593,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
     async function refreshModelsCatalog(event) {
       const btn = document.getElementById('btnRefreshModels');
-      if (btn) {
-        btn.disabled = true;
-        btn.style.opacity = '0.6';
-      }
+      if (btn) btn.disabled = true;
       try {
         const resp = await fetch('/api/models/refresh', { method: 'POST' });
         if (resp.ok) {
@@ -1988,22 +1606,19 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       } catch (e) {
         alert('刷新模型失败: ' + e.message);
       } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.style.opacity = '1';
-        }
+        if (btn) btn.disabled = false;
       }
     }
 
-    // Magpie-grade Workspace Ranking View
     function renderWorkspaces(workspaces) {
       const container = document.getElementById('workspacesList');
       if (!container) return;
 
       if (!workspaces || workspaces.length === 0) {
         container.innerHTML = `
-          <div style="padding:24px;text-align:center;color:var(--muted);">
-            暂未检测到已注册的工作区
+          <div class="empty-state">
+            <b>暂未检测到已注册的工作区</b>
+            在项目目录下启动任意官方 Agent 后将自动登记
           </div>
         `;
         return;
@@ -2047,11 +1662,9 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const tokens = wsStats[ws.path] || 0;
         const pct = Math.min(100, Math.round((tokens / maxWsTokens) * 100));
         const tokensStr = tokens > 0 ? fmtN(tokens) : `${ws.sessions_count || 0} 会话`;
-        const gitBadge = ws.is_git
-          ? `<span class="pill-tag pill-ready">Git</span>`
-          : ``;
+        const gitBadge = ws.is_git ? `<span class="tag ok">Git</span>` : '';
 
-        // Shorten path for subtext (e.g. Project/agenthub)
+        // Shorten the path for the subtext
         let shortPath = safePath;
         if (shortPath.length > 40) {
           const parts = shortPath.split(/[\\/]/);
@@ -2062,18 +1675,16 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
         return `
           <div class="row stat">
-            <div style="flex:none;">
-              <svg class="icon" style="color:var(--accent);" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            </div>
+            <span class="ic" style="color:var(--accent);">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </span>
             <div class="who">
-              <div class="top-line">
+              <div class="name-line">
                 <span class="name" title="${safeName}">${safeName}</span>
                 ${gitBadge}
-                <span class="pill-tag">${ws.sessions_count || 0} 会话</span>
+                <span class="tag">${ws.sessions_count || 0} 会话</span>
               </div>
-              <div class="sub">
-                <span style="font-family:var(--code);font-size:10.5px;">${shortPath}</span>
-              </div>
+              <div class="sub mono" style="color:var(--faint);">${shortPath}</div>
             </div>
             <div class="share" title="${pct}% 活跃度">
               <i style="width: ${Math.max(tokens > 0 ? 2 : (ws.sessions_count ? 5 : 0), pct)}%;"></i>
@@ -2091,10 +1702,21 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     function renderGateway(gateway) {
       if (!gateway) return;
       const baseUrl = gateway.base_url || 'http://127.0.0.1:3425';
+
       const badge = document.getElementById('gatewayBadge');
       if (badge) {
-        badge.textContent = gateway.detected ? `已连接 (${gateway.source})` : '标准端点就绪';
+        badge.textContent = gateway.detected ? `已连接 · ${gateway.source || 'gateway'}` : '标准端点就绪';
+        badge.className = gateway.detected ? 'tag ok' : 'tag';
       }
+
+      const gwBtn = document.getElementById('sideGwBtn');
+      const gwText = document.getElementById('sideGwText');
+      if (gwBtn) gwBtn.classList.toggle('off', !gateway.detected);
+      if (gwText) {
+        const host = String(baseUrl).replace(/^https?:\/\//, '');
+        gwText.textContent = gateway.detected ? `网关 ${host}` : '网关未探测';
+      }
+
       const envElem = document.getElementById('envSnippet');
       if (envElem) {
         envElem.textContent = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"`;
@@ -2112,8 +1734,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const pairedBox = document.getElementById('pairedStatusBox');
       const pairedInfo = document.getElementById('pairedGatewayInfo');
 
-      const headerBtn = document.getElementById('headerPairBtn');
-      const headerText = document.getElementById('headerPairText');
+      const pairBtn = document.getElementById('headerPairBtn');
+      const pairText = document.getElementById('headerPairText');
       const statStatus = document.getElementById('statWebPairingStatus');
       const statSub = document.getElementById('statWebPairingSub');
 
@@ -2125,20 +1747,14 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
 
       if (device.paired) {
-        if (headerBtn) {
-          headerBtn.className = 'pair-btn paired';
-        }
+        if (pairBtn) pairBtn.classList.remove('off');
         const gw = device.gateway_url ? device.gateway_url.replace(/^https?:\/\//, '') : '已配对';
-        if (headerText) {
-          headerText.textContent = `已绑定: ${gw}`;
-        }
+        if (pairText) pairText.textContent = `已绑定 ${gw}`;
         if (statStatus) {
           statStatus.textContent = '已绑定';
           statStatus.style.color = 'var(--green)';
         }
-        if (statSub) {
-          statSub.textContent = gw;
-        }
+        if (statSub) statSub.textContent = gw;
         if (pairedBox) {
           pairedBox.style.display = 'block';
           if (pairedInfo) {
@@ -2146,19 +1762,13 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           }
         }
       } else {
-        if (headerBtn) {
-          headerBtn.className = 'pair-btn unpaired';
-        }
-        if (headerText) {
-          headerText.textContent = '未绑定 Web 控制台';
-        }
+        if (pairBtn) pairBtn.classList.add('off');
+        if (pairText) pairText.textContent = '未绑定 Web 控制台';
         if (statStatus) {
           statStatus.textContent = '未绑定';
           statStatus.style.color = 'var(--fg)';
         }
-        if (statSub) {
-          statSub.textContent = '点击关联 Web 控制台';
-        }
+        if (statSub) statSub.textContent = '点击关联 Web 控制台';
         if (pairedBox) pairedBox.style.display = 'none';
       }
     }
@@ -2188,10 +1798,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         themeMeta.setAttribute('content', isDark ? '#1a1a1e' : '#f4f4f6');
       }
 
+      if (!iconSpan) return;
       if (isDark) {
-        iconSpan.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`;
+        iconSpan.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.2M12 19.8V22M4.22 4.22l1.56 1.56M18.22 18.22l1.56 1.56M2 12h2.2M19.8 12H22M4.22 19.78l1.56-1.56M18.22 5.78l1.56-1.56"/></svg>`;
       } else {
-        iconSpan.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+        iconSpan.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
       }
     }
 
@@ -2332,6 +1943,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     }
 
     window.addEventListener('DOMContentLoaded', init);
+    window.addEventListener('resize', () => moveSegThumb(false));
   </script>
 </body>
 </html>
