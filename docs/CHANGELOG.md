@@ -40,6 +40,13 @@
 - **重写内容归档 (Rewrite Recap)**：2.4.79 一线落地的结构重写内容一并归档留痕 —— Foundation 层移植（双主题令牌、46px 顶栏、`.view`、`.list` / `.row` / `.row.stat`、`.stats` / `.kpi`、`.led-strip`、`.chips` / `.segs`、`.text` / `.icon`、`.modal` / `.dialog`、`.editor` 网格与细滚动条）；侧栏 `aside.sidebar` 取代顶栏导航（品牌区 + 工作台 / 洞察 / 系统三组 `.nav-gl` 分组标签 + 底部网关与配对状态，宽度可拖拽 168–420px、双击复位，窄窗折叠进顶栏）；面包屑顶栏与按按钮几何移动的 `.seg` 滑块 `#segThumb`；页脚状态条（Runner 徽标、端口、上游网关端点）。
 - **验证 (Verification)**：在真实托盘窗口尺寸 940×720 下，对运行中 daemon 的 `/api/dashboard` 快照渲染全部六个视图的明暗两套主题逐张核对；并以错误探针切换全部视图、调用全部渲染函数，结果为 `no throw`、`no console.error`。`cargo build --release -p agenthub-runner` 通过，`target/release/agenthub-runner.exe` 中可检出本次新增的资源标记。
 
+### 交付产物：Windows 与 Android 同步至 2.4.80 (Deliverables Repack)
+
+- **Windows x64 Runner**：重新压制 `AgentHub-Runner-v2.4.80-windows-x64.zip`（4444214 字节，SHA-256 `e0fb1159…401645`），按「打新包必删旧包」删除 2.4.79 的 zip 与哈希表；散装 `agenthub-runner.exe` 受 `.gitignore` 的 `*.exe` 约束不入库，仅 zip 与哈希表进版本库。
+- **内嵌控制台一致性**：源码 `crates/runner/resources/dashboard.html` 108437 字节，SHA-256 `0da5982c…b7f9be`；打包 exe 在偏移 8340688 处内嵌的正是这 108437 字节（逐字节相同），运行中的 daemon `GET /` 返回同一哈希，窗口即新版控制台。
+- **Android Debug APK**：`clean` 后按 `apps/android/README.md` 执行 `testDebugUnitTest lintDebug assembleDebug`，四项单元测试 0 失败、lint 通过；归档 `AgentHub-v2.4.80-android-debug.apk`（9836754 字节，SHA-256 `64653941…9324390`，`versionCode=80`、`versionName=2.4.80`，Android Debug 证书签名已验证），删除 `AgentHub-v2.4.79-android-debug.apk`。
+- **校验清单**：`AgentHub-v2.4.80-SHA256.txt` 统一收录 exe、zip 与 APK 三项哈希，纳入 Android 产物后由 2 条扩充为 3 条。
+
 ## [2.4.79] - 2026-10-17
 
 ### 修复跨智能体分页导致的会话全量重复解析缺陷与 Google Gemini 官方四角星矢量图标 (Session Deduplication & Authentic Gemini Icon)
