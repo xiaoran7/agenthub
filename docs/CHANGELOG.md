@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.4.87] - 2026-10-17
+
+### 删掉导航分组标签、顶栏统一为一套配色 (No Group Labels, One Header Palette)
+
+用户截图圈出顶栏里的「工作台」「洞察」「系统」，问「这是啥呀」，并要求顶栏配色跟 magpie 一致、不混用两种底色：
+
+- **分组标签全删 (Group Labels Gone)**：顶栏分段切换里夹着的「工作台 / 洞察 / 系统」删除，侧边栏里的同名分组小标题也一并删除——导航只剩页面本身，按顺序排开，不再被不属于页面的词打断。`fitNavTrack()` 不再为标签留位置。
+- **顶栏一套配色 (One Palette)**：顶栏背景从白卡改成与页面同色的浅灰底（`--bg`），去掉投影和渐变。分段切换是一条 `--fg` 5% 的淡灰底轨，当前页是低饱和的 `--accent-soft` 色块 + 强调色文字，图标跟着当前页变色。顶栏里不再出现「白卡 + 灰轨 + 白滑块」三种底色。
+- **按空间取舍 (Fit by Space)**：`fitNavTrack()` 重写——用一份不在文档流里的克隆量出每个页面标签的真实宽度，按顶栏实际剩余空间取「当前页 + 左右邻居」，放得下就整词显示并带图标；顶栏挤时先收图标，再收成两个字，保证露出来的每一项都点得到、当前页永远在。浏览器缩放、侧栏开关、切换页面都会重新算。
+- **顺带修掉 (Along the Way)**：窄正文时「刚刚」「1 小时前」被挤成竖排——时间列改为不限宽、不再被压缩；条目模型名在窄正文下隐藏，时间对齐其他行。侧边栏宽度上限放到窗口的 30%，侧栏展开时正文仍有 560px 以上。
+- **验证 (Verification)**：headless Edge 经 CDP 在 820×600（侧栏开 / 关）、700×560、1920×1000 下截图：顶栏无任何分组标签；收起时六个页面名连同图标整词排开并居中，700px 宽时同样整词显示；侧栏开启时顶栏只剩主题 / 刷新 / 退出，轨道底部是同一浅灰；真实 Edge 窗口 820×600 截图确认标题栏下方、顶栏、页面底同色。`node --check` 页面脚本通过。
+
+### 交付产物：Windows 与 Android 同步至 2.4.87 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.87-windows-x64.zip`，按「打新包必删旧包」删除 2.4.86 的 zip 与 APK；本机安装目录 `Deliverables/AgentHub/` 同步替换 `agenthub-runner.exe`。
+- **Android Debug APK**：`versionCode=87`、`versionName=2.4.87`。
+- **校验清单**：`AgentHub-v2.4.87-SHA256.txt` 收录 exe、zip、APK 与内嵌 `dashboard.html` / `dashboard.css`。
+
 ## [2.4.86] - 2026-10-17
 
 ### 更小巧的窗口、更干净的顶栏、侧边栏开关不再「有去无回」 (Smaller Window, Quieter Header, A Rail That Can Close)

@@ -165,7 +165,7 @@
     .logo svg { display: block; }
     .seg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: inline-flex; padding: 2px; border-radius: 8px; }
     .seg > .thumb, #navTopSlot > .thumb { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 6px; background: var(--seg-thumb); box-shadow: var(--seg-edge); pointer-events: none; transition: translate .22s var(--ease), width .22s var(--ease); }
-    .seg button { position: relative; z-index: 1; white-space: nowrap; height: 24px; padding: 0 12px; border-radius: 6px; font-size: var(--fs-body); color: var(--ctl-fg); transition: color .18s var(--ease), transform .14s var(--ease); }
+    .seg button { position: relative; z-index: 1; height: 24px; padding: 0 12px; border-radius: 6px; font-size: var(--fs-body); color: var(--ctl-fg); transition: color .18s var(--ease), transform .14s var(--ease); }
     .seg button.on { color: var(--fg); }
     .seg button:hover:not(.on) { color: var(--fg-2); }
     .actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
@@ -185,7 +185,7 @@
        the foot; the same #nav is the header's switch otherwise */
     /* the console's frame is whichever way it was built: the window beside the
        sidebar or a page in a browser tab. These rules hold for either. */
-    .nav-gl, .nav-ic, .side-l, .crumb { display: none; }
+    .nav-ic, .side-l, .crumb { display: none; }
     /* the rail exists to be walked beside the page; the page sets its width */
     :root.no-side { --side-w: 0px; }
     .sidebar {
@@ -215,8 +215,6 @@
     #navSideSlot { container: nav-box / inline-size; }
     @container nav-box (width > 0) {
       #nav { display: flex; position: static; transform: none; flex-direction: column; gap: 2px; padding: 0; border-radius: 0; width: 100%; min-height: 0; }
-      .nav-gl { display: block; padding: 18px 10px 6px; font-size: calc(var(--fs-note) - 1px); font-weight: 600; letter-spacing: .06em; color: var(--muted); }
-      .nav-gl:first-child { padding-top: 2px; }
       #nav button[data-view] {
         display: flex; align-items: center; justify-content: flex-start; gap: 11px;
         width: 100%; height: 36px; padding: 0 11px; border-radius: var(--r-s);
@@ -429,8 +427,7 @@
            card of its own that lifts off the page as the content scrolls under it */
         .top {
           height: var(--top-h); gap: 10px; padding: 0 12px 0 12px;
-          background: var(--card); border-bottom: var(--rule);
-          box-shadow: 0 1px 0 color-mix(in srgb, var(--line) 60%, transparent);
+          background: var(--bg); border-bottom: var(--rule);
         }
         .top .brand { font-size: var(--fs-title); font-weight: 650; letter-spacing: -.01em; }
         .top .brand .logo svg { width: 20px; height: 20px; }
@@ -462,24 +459,31 @@
           left: auto; top: auto; transform: none;
           align-self: center; display: flex; flex-direction: row; flex: none; height: 36px;
           max-width: 100%;
-          padding: 2px; border-radius: 10px; gap: 0; background: var(--seg-track);
-          box-shadow: inset 0 .5px 1px rgba(0, 0, 0, .05);
+          padding: 2px; border-radius: 10px; gap: 0; background: color-mix(in srgb, var(--fg) 5%, transparent);
         }
-        #navTopSlot > .thumb { top: 2px; bottom: 2px; left: 0; border-radius: 8px; }
+        #navTopSlot > .thumb { top: 2px; bottom: 2px; left: 0; border-radius: 8px; background: var(--accent-soft); box-shadow: none; }
         .top .top-slot > #nav button[data-view] {
           display: inline-flex; width: auto; height: 32px; padding: 0 12px; border-radius: 8px;
           font-size: var(--fs-body); gap: 6px; align-items: center; justify-content: center;
-          text-align: center; white-space: nowrap; color: var(--fg-2); font-weight: 500;
+          text-align: center; color: var(--fg-2); font-weight: 500;
         }
+        /* more specific than the rail's own row rule, which would show the name
+           and hide the icons the track keeps. With room the names stand whole
+           beside their icons; when the header is short of space (fitNavTrack)
+           the icons give way, then the names fold to two characters */
+        .top .top-slot > #nav button[data-view] > span { display: inline; white-space: nowrap; text-overflow: clip; }
+        #navTopSlot > #nav:not(.tight) .nav-ic { display: inline-block; }
+        #navTopSlot > #nav.tight .nav-ic { display: none; }
+        #navTopSlot > #nav.tight button[data-view] { padding: 0 10px; }
         .top .top-slot > #nav button[data-view]:hover:not(.on) { background: transparent; color: var(--fg); }
-        .top .top-slot > #nav button[data-view].on { background: transparent; box-shadow: none; font-weight: 600; }
-        .top .top-slot > #nav .nav-ic { display: inline-block; flex: none; opacity: .8; }
-        .top .top-slot > #nav .nav-gl { display: inline-flex; align-items: center; padding: 0 6px 0 9px; white-space: nowrap; font-size: calc(var(--fs-note) - 1px); color: var(--faint); font-weight: 600; letter-spacing: .04em; }
+        .top .top-slot > #nav button[data-view].on { background: transparent; box-shadow: none; font-weight: 600; color: var(--accent); }
+        .top .top-slot > #nav .nav-ic { flex: none; opacity: .55; }
+        .top .top-slot > #nav button.on .nav-ic { opacity: 1; }
         .actions { gap: 3px; }
 
         /* ---- the sidebar ------------------------------------------------------- */
         /* a width the reader dragged to wins over the window's own share */
-        body.window { --side-w: min(var(--side-w-override, var(--layout-side-w, 236px)), calc(var(--viewport-w, 100vw) * .25)); }
+        body.window { --side-w: min(var(--side-w-override, var(--layout-side-w, 236px)), calc(var(--viewport-w, 100vw) * .3)); }
         /* the page's column starts where the rail ends, so it follows the rail
            itself; no window breakpoint has to guess the same width twice */
         body { position: relative; }
@@ -559,7 +563,7 @@
         #sessionsContainer .row .who { min-width: 0; }
         #sessionsContainer .row .name { font-weight: 480; font-size: var(--fs-body); }
         #sessionsContainer .row .who .when {
-          flex: none; align-self: center; width: 96px; margin-left: auto; margin-right: 14px;
+          flex: none; align-self: center; width: auto; min-width: 92px; margin-left: auto; margin-right: 0;
           text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
           font-size: var(--fs-note); color: var(--faint); font-variant-numeric: tabular-nums;
         }
@@ -571,6 +575,12 @@
         #sessionsContainer .row .model + .when { margin-left: 10px; }
         #sessionsContainer .session-facts { gap: 7px; }
         #sessionsContainer .session-facts .tokens { color: var(--faint); font-size: calc(var(--fs-note) - 1px); }
+        /* when the rail leaves the page narrow, the model note goes first and the
+           clock keeps its line whole */
+        @container view-q (max-width: 640px) {
+          #sessionsContainer .row .model { display: none; }
+          #sessionsContainer .row .who .when { width: auto; max-width: 140px; }
+        }
         #sessionsContainer .session-facts .tag.cap { padding: 1px 6px; font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--fg-2); background: var(--card-2); border: var(--rule-2); height: 19px; }
 
         /* ---- stat rows: shared column grid ------------------------------------- */
@@ -696,7 +706,7 @@
           .led-strip .blk:nth-child(4) { border-top: var(--rule-2); }
           .tools .inp { width: auto; flex: 1 1 auto; min-width: 0; }
           #sessionsContainer .row .sub .tokens { display: none; }
-          #sessionsContainer .row .who .when { width: auto; max-width: 84px; }
+          #sessionsContainer .row .who .when { width: auto; max-width: 140px; }
           #sessionsContainer .group-head .gpath { display: none; }
           .stats { grid-template-columns: 1fr 1fr; }
           .row.stat,
@@ -730,42 +740,11 @@
    writes .side-nav on <body> and .no-side on <html>; both are read here, so a
    click, a remembered choice and a resize all land in the same place.
    ========================================================================== */
-/* one toggle at a time: the rail's head has the button that closes it, the
-   header has the button that opens it — never both in the same row */
 .sidebar { display: none; }
 body.side-nav .sidebar { display: flex; }
-body.side-nav .top .side-toggle { display: none; }
 body:not(.side-nav) .top .side-toggle,
 body:not(.side-nav) .top .crumb,
 body:not(.side-nav) .top .top-slot { display: flex; }
-.top .top-slot { align-items: center; justify-content: center; flex: 1 1 auto; min-width: 0; height: auto; overflow: hidden; }
-/* the track shows no more than the header has room for and takes every pixel
-   of it; the words never wrap, so what does not fit stands outside until the
-   page changes */
-#navTopSlot > #nav { flex: none; min-width: 0; max-width: 100%; }
-.view-slot { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* beside the rail the count is the ledger's; the header only says the link lives */
-body.side-nav .live { padding: 0 9px; gap: 0; }
-body.side-nav .live > b, body.side-nav .live > span { display: none; }
-/* one brand, two homes: empty wherever it is not beside the rail */
-#brandTop:empty, #brandSide:empty { display: none; }
-/* the header holds the toggle, then the brand, then where you are */
-body.side-nav .top .crumb { margin-left: 2px; }
-/* px here, not a share of the window: the page's container query reads this
-   padding, and a percentage would make page and query size each other */
-.view { padding: 16px var(--inset) 20px; }
-/* the header only has the room it has: as it narrows the track drops first the
-   icons, then the group titles, then whatever pages do not fit (fitNavTrack
-   keeps the open one), so every name that shows is a name one can click */
-/* a narrow track shows the open page and its neighbours; as it narrows it drops
-   first the group titles, then the icons, keeping every name it shows clickable */
-@container slot-q (max-width: 900px) {
-  .top .top-slot > #nav { padding: 2px; gap: 0; border-radius: 10px; height: 36px; }
-  .top .top-slot > #nav button[data-view] { height: 32px; padding: 0 10px; border-radius: 8px; }
-  #navTopSlot > .thumb { top: 2px; bottom: 2px; border-radius: 8px; }
-}
-@container slot-q (max-width: 760px) {
-  .top .top-slot > #nav button[data-view] { padding: 0 11px; }
-  .top .top-slot > #nav button[data-view] .nav-ic { display: none; }
-}
 body.side-nav .top .side-toggle { display: none; }
+/* the track sits in the middle of the header whatever is either side of it */
+.top .top-slot { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center; height: auto; min-width: 0; max-width: calc(100% - 24px); }

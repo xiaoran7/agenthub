@@ -124,7 +124,6 @@
          sidebar does; state lives at the foot -->
     <div class="nav-slot side-slot" id="navSideSlot">
           <nav id="nav" aria-label="主导航">
-      <span class="nav-gl">工作台</span>
       <button data-view="sessions" class="on" onclick="switchView('sessions')" title="会话 Sessions">
         <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h12v8H9l-4 3v-3H4z"/></g></svg>
         <span>会话</span>
@@ -133,7 +132,6 @@
         <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="14" height="9" rx="2"/><path d="M10 3.5v3.5M7.5 11.5h.01M12.5 11.5h.01M6 16v1.5M14 16v1.5"/></g></svg>
         <span>智能体</span>
       </button>
-      <span class="nav-gl">洞察</span>
       <button data-view="usage" onclick="switchView('usage')" title="用量 Usage">
         <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16V9M8 16V5M12 16v-5M16 16V7"/></g></svg>
         <span>用量</span>
@@ -142,7 +140,6 @@
         <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5 17 6l-7 3.5L3 6z"/><path d="M3 10l7 3.5L17 10M3 14l7 3.5L17 14"/></g></svg>
         <span>模型</span>
       </button>
-      <span class="nav-gl">系统</span>
       <button data-view="workspaces" onclick="switchView('workspaces')" title="工作区 Workspaces">
         <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a1.5 1.5 0 0 1 1.5-1.5h3L9 6.5h6.5A1.5 1.5 0 0 1 17 8v6a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14z"/></g></svg>
         <span>工作区</span>
@@ -188,9 +185,6 @@
     </button>
     <div class="nav-slot top-slot" id="navTopSlot"><span class="thumb" id="segThumb"></span></div>
     <div class="actions">
-      <button class="icon" onclick="openPairModal()" title="设备配对与身份标识" id="pairBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-      </button>
       <button class="icon" onclick="refreshDashboard()" title="重新探测系统状态与会话" id="refreshBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
       </button>
@@ -676,31 +670,72 @@
       if (animate === false) { void thumb.offsetWidth; thumb.style.transition = ''; }
     }
 
-    // in the header the track shows no more than the header has room for; the
-    // open page is always one of what it shows
+    // In the header the track sits centred and shows the open page and what is
+    // either side of it — the switch is for turning the page, not for listing
+    // every page twice. What fits is worked out from the header's free space,
+    // measured with the track out of the flow, so the track never squeezes the
+    // icons beside it.
     function fitNavTrack() {
       const slot = document.getElementById('navTopSlot');
       const nav = document.getElementById('nav');
-      if (!slot || !nav) return;
-      const lim = slot.clientWidth;
-      if (!lim) return;
+      const top = document.querySelector('.top');
+      if (!slot || !nav || !top) return;
+      const buttons = [...nav.querySelectorAll('button[data-view]')];
+      if (!buttons.length) return;
       const gap = parseFloat(getComputedStyle(nav).columnGap) || 0;
-      const items = [...nav.children];
-      const widths = items.map((el) => el.getBoundingClientRect().width);
-      const total = widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, widths.length - 1);
-      if (total <= lim) { items.forEach((el) => { el.style.display = ''; }); return; }
-      let i = 0;
-      while (i < items.length - 1 && !items[i].classList.contains('on')) i++;
-      let from = 0;
-      let room = 0;
-      for (let j = i; j < items.length; j++) {
-        const need = widths[j] + (j > i ? gap : 0);
-        if (room + need > lim && j > i) break;
-        room += need;
+      const pad = parseFloat(getComputedStyle(nav).paddingLeft) * 2 || 0;
+      // a clone of the track, out of the flow, says how wide each page is at
+      // the header's current type size
+      let measure = document.getElementById('navMeasure');
+      if (!measure) {
+        measure = nav.cloneNode(true);
+        measure.id = 'navMeasure';
+        measure.style.cssText = '';
+        measure.setAttribute('aria-hidden', 'true');
+        measure.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:-9999px;height:auto;width:max-content';
+        document.body.appendChild(measure);
       }
-      for (let j = 0; j < i; j++) room += widths[j] + gap;
-      while (from < i && room > lim) { room -= widths[from] + gap; from++; }
-      items.forEach((el, j) => { el.style.display = j < from ? 'none' : ''; });
+      measure.querySelectorAll('button[data-view]').forEach((b) => {
+        b.style.display = '';
+        const span = b.querySelector('span');
+        if (span) span.textContent = span.dataset.full || span.textContent.trim();
+      });
+      const widths = [...measure.querySelectorAll('button[data-view]')].map((b) => b.getBoundingClientRect().width);
+      // the header's own padding and gaps are the same with the track in the
+      // flow or out of it; the icons beside the slot are what the track must
+      // leave room for
+      const topStyle = getComputedStyle(top);
+      const inner = top.clientWidth - parseFloat(topStyle.paddingLeft) - parseFloat(topStyle.paddingRight);
+      const gaps = (top.children.length - 1) * (parseFloat(topStyle.columnGap) || 0);
+      const others = [...top.children].filter((el) => el !== slot && el !== nav && el.offsetParent !== null)
+        .reduce((sum, el) => sum + el.getBoundingClientRect().width, 0);
+      const free = Math.max(0, inner - others - gaps);
+      let open = buttons.findIndex((b) => b.classList.contains('on'));
+      if (open < 0) open = 0;
+      const pick = (r) => {
+        const from = Math.max(0, open - r);
+        const to = Math.min(buttons.length - 1, open + r);
+        let wid = pad + gap * (to - from);
+        for (let j = from; j <= to; j++) wid += widths[j] || 0;
+        return { from, to, wid };
+      };
+      let best = pick(0);
+      for (let r = 1; r < buttons.length; r++) {
+        const next = pick(r);
+        if (next.wid > free) break;
+        best = next;
+      }
+      // the open page alone never hides; what is left of the header sets how
+      // the track takes it: with room the names stand with their icons, then
+      // the icons give way, then the names fold to their first two characters
+      buttons.forEach((b, j) => { b.style.display = j >= best.from && j <= best.to ? '' : 'none'; });
+      nav.classList.remove('tight');
+      nav.classList.toggle('tight', pick(best.to - best.from).wid > free);
+      buttons.forEach((b) => {
+        const span = b.querySelector('span');
+        if (span && !span.dataset.full) span.dataset.full = span.textContent.trim();
+        if (span) span.textContent = nav.classList.contains('tight') ? span.dataset.full.slice(0, 2) : span.dataset.full;
+      });
     }
 
     // Switch between the views
@@ -723,6 +758,9 @@
       if (!silent) {
         try { localStorage.setItem(STORE.view, viewId); } catch (e) {}
       }
+      // the clone the track measures itself with follows the page
+      const seen = document.getElementById('navMeasure');
+      if (seen) seen.querySelectorAll('button[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === viewId));
       fitNavTrack();
       scaleSegThumb(!silent);
     }

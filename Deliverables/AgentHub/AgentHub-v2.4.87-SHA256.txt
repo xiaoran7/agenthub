@@ -1,0 +1,9 @@
+AgentHub 2.4.87 SHA-256 (2026-10-17)
+
+af6654c85d52fcf14a32f408f4d13690554ddd130ffb30dab9e49378299dca45  agenthub-runner.exe
+cc2b00d886b4105893d22ae896198fa514525ce6b6f971ad05649804bee5ec9a  AgentHub-Runner-v2.4.87-windows-x64.zip
+bf99161a4eb188c73de0c8849a4d1edb23ce43f8e7f1e850b37922f6c18304e4  AgentHub-v2.4.87-android-debug.apk
+
+embedded console (crates/runner/resources/)
+d781c89d90beda95f9978567218e16b5e0d31d63e17336a5203ac8bde93eae33  dashboard.html (102272 bytes)
+c330f87d79373df3dcbfcbac1edb043e24bbec823f09f8385872d15f78b003a1  dashboard.css (54396 bytes)
