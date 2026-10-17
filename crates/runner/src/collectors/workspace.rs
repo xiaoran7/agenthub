@@ -18,7 +18,8 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    sync::{OnceLock, RwLock},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, Utc};
@@ -126,8 +127,28 @@ struct WorkspaceAccumulator {
     is_git: bool,
 }
 
+fn workspace_cache() -> &'static RwLock<Option<(Instant, Vec<DiscoveredWorkspace>)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, Vec<DiscoveredWorkspace>)>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
+/// Explicitly invalidates the cached workspace list.
+pub fn invalidate_workspace_cache() {
+    if let Ok(mut guard) = workspace_cache().write() {
+        *guard = None;
+    }
+}
+
 /// Discovers and aggregates all workspaces across all supported agents.
 pub fn discover_all_workspaces() -> Vec<DiscoveredWorkspace> {
+    if let Ok(guard) = workspace_cache().read() {
+        if let Some((cached_at, ref list)) = *guard {
+            if cached_at.elapsed() < Duration::from_secs(6) {
+                return list.clone();
+            }
+        }
+    }
+
     let mut map: HashMap<String, WorkspaceAccumulator> = HashMap::new();
 
     // 1. Scan Claude Code projects
@@ -167,6 +188,10 @@ pub fn discover_all_workspaces() -> Vec<DiscoveredWorkspace> {
 
     // Sort by latest active activity descending
     results.sort_by_key(|w| std::cmp::Reverse(w.last_active_at_ms));
+
+    if let Ok(mut guard) = workspace_cache().write() {
+        *guard = Some((Instant::now(), results.clone()));
+    }
     results
 }
 

@@ -4,9 +4,12 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        OnceLock, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self, JoinHandle},
-    time::{Duration, Instant, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::DateTime;
@@ -1147,8 +1150,23 @@ pub fn find_antigravity_session_info(
     Ok(Some((cwd_path, title)))
 }
 
+fn antigravity_remote_sessions_cache()
+-> &'static RwLock<Option<(Instant, Vec<(String, String, Option<String>, i64)>)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, Vec<(String, String, Option<String>, i64)>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
 pub fn collect_antigravity_sessions_for_remote()
 -> Result<Vec<(String, String, Option<String>, i64)>, CollectorError> {
+    if let Ok(guard) = antigravity_remote_sessions_cache().read() {
+        if let Some((cached_at, ref list)) = *guard {
+            if cached_at.elapsed() < Duration::from_secs(5) {
+                return Ok(list.clone());
+            }
+        }
+    }
+
     let Some(home) = discover_antigravity_home()? else {
         return Ok(Vec::new());
     };
@@ -1206,6 +1224,10 @@ pub fn collect_antigravity_sessions_for_remote()
         }
         sessions.push((session_id, cwd.unwrap_or_default(), title, modified_at_ms));
     }
+
+    if let Ok(mut guard) = antigravity_remote_sessions_cache().write() {
+        *guard = Some((Instant::now(), sessions.clone()));
+    }
     Ok(sessions)
 }
 
@@ -1248,8 +1270,23 @@ pub fn find_grok_session_info(
     Ok(None)
 }
 
+fn grok_remote_sessions_cache()
+-> &'static RwLock<Option<(Instant, Vec<(String, String, Option<String>, Option<String>, i64)>)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, Vec<(String, String, Option<String>, Option<String>, i64)>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
 pub fn collect_grok_sessions_for_remote()
 -> Result<Vec<(String, String, Option<String>, Option<String>, i64)>, CollectorError> {
+    if let Ok(guard) = grok_remote_sessions_cache().read() {
+        if let Some((cached_at, ref list)) = *guard {
+            if cached_at.elapsed() < Duration::from_secs(5) {
+                return Ok(list.clone());
+            }
+        }
+    }
+
     let home = discover_grok_home()?;
     let program = "Grok remote session store".to_owned();
     let sessions_dir = home.join("sessions");
@@ -1291,6 +1328,9 @@ pub fn collect_grok_sessions_for_remote()
         }
     }
     sessions.truncate(100);
+    if let Ok(mut guard) = grok_remote_sessions_cache().write() {
+        *guard = Some((Instant::now(), sessions.clone()));
+    }
     Ok(sessions)
 }
 
@@ -1324,8 +1364,23 @@ pub fn find_claude_session_info(
     Ok(None)
 }
 
+fn claude_remote_sessions_cache()
+-> &'static RwLock<Option<(Instant, Vec<ClaudeRemoteSessionEntry>)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, Vec<ClaudeRemoteSessionEntry>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
 pub fn collect_claude_sessions_for_remote()
 -> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError> {
+    if let Ok(guard) = claude_remote_sessions_cache().read() {
+        if let Some((cached_at, ref entries)) = *guard {
+            if cached_at.elapsed() < Duration::from_secs(5) {
+                return Ok(entries.clone());
+            }
+        }
+    }
+
     let config_dir = discover_claude_config_dir()?;
     let projects_dir = config_dir.join("projects");
     if !projects_dir.is_dir() {
@@ -1384,6 +1439,9 @@ pub fn collect_claude_sessions_for_remote()
     }
     entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_activity_at_ms));
     entries.truncate(5000);
+    if let Ok(mut guard) = claude_remote_sessions_cache().write() {
+        *guard = Some((Instant::now(), entries.clone()));
+    }
     Ok(entries)
 }
 
@@ -1397,10 +1455,36 @@ pub fn collect_codex_local_threads(limit: u32) -> Result<Value, CollectorError> 
     collect_codex_local_threads_from(&database, limit)
 }
 
+struct CodexLocalThreadsCache {
+    db_path: PathBuf,
+    limit: u32,
+    db_mtime: Option<SystemTime>,
+    cached_at: Instant,
+    data: Value,
+}
+
+fn codex_threads_cache() -> &'static RwLock<Option<CodexLocalThreadsCache>> {
+    static CACHE: OnceLock<RwLock<Option<CodexLocalThreadsCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
 pub fn collect_codex_local_threads_from(
     database: &Path,
     limit: u32,
 ) -> Result<Value, CollectorError> {
+    let mtime = fs::metadata(database).ok().and_then(|m| m.modified().ok());
+    if let Ok(guard) = codex_threads_cache().read() {
+        if let Some(ref c) = *guard {
+            if c.db_path == database
+                && c.limit == limit
+                && c.db_mtime == mtime
+                && c.cached_at.elapsed() < Duration::from_secs(5)
+            {
+                return Ok(c.data.clone());
+            }
+        }
+    }
+
     let program = "Codex local state".to_owned();
     let connection = Connection::open_with_flags(
         database,
@@ -1500,7 +1584,17 @@ pub fn collect_codex_local_threads_from(
         })?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|source| CollectorError::Database { program, source })?;
-    Ok(json!({ "data": rows, "nextCursor": null }))
+    let result = json!({ "data": rows, "nextCursor": null });
+    if let Ok(mut guard) = codex_threads_cache().write() {
+        *guard = Some(CodexLocalThreadsCache {
+            db_path: database.to_path_buf(),
+            limit,
+            db_mtime: mtime,
+            cached_at: Instant::now(),
+            data: result.clone(),
+        });
+    }
+    Ok(result)
 }
 
 /// Reads Codex's metadata-only SQLite columns and a bounded tail of each
@@ -2820,10 +2914,36 @@ pub fn collect_zcode_sessions(include_completed: bool) -> Result<String, Collect
     collect_zcode_sessions_from(&database, include_completed)
 }
 
+struct ZCodeSessionsCache {
+    db_path: PathBuf,
+    include_completed: bool,
+    db_mtime: Option<SystemTime>,
+    cached_at: Instant,
+    payload: String,
+}
+
+fn zcode_sessions_cache() -> &'static RwLock<Option<ZCodeSessionsCache>> {
+    static CACHE: OnceLock<RwLock<Option<ZCodeSessionsCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
 pub fn collect_zcode_sessions_from(
     database: &Path,
     include_completed: bool,
 ) -> Result<String, CollectorError> {
+    let mtime = fs::metadata(database).ok().and_then(|m| m.modified().ok());
+    if let Ok(guard) = zcode_sessions_cache().read() {
+        if let Some(ref c) = *guard {
+            if c.db_path == database
+                && c.include_completed == include_completed
+                && c.db_mtime == mtime
+                && c.cached_at.elapsed() < Duration::from_secs(5)
+            {
+                return Ok(c.payload.clone());
+            }
+        }
+    }
+
     let program = "ZCode session store".to_owned();
     let connection = Connection::open_with_flags(
         database,
@@ -2917,7 +3037,17 @@ pub fn collect_zcode_sessions_from(
             source,
         })?;
 
-    serde_json::to_string(&rows).map_err(|source| CollectorError::InvalidJson { program, source })
+    let payload = serde_json::to_string(&rows).map_err(|source| CollectorError::InvalidJson { program, source })?;
+    if let Ok(mut guard) = zcode_sessions_cache().write() {
+        *guard = Some(ZCodeSessionsCache {
+            db_path: database.to_path_buf(),
+            include_completed,
+            db_mtime: mtime,
+            cached_at: Instant::now(),
+            payload: payload.clone(),
+        });
+    }
+    Ok(payload)
 }
 
 pub fn collect_zcode_session_contexts(

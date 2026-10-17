@@ -2,6 +2,22 @@
 
 ## [2.4.79] - 2026-10-17
 
+### 全面引入内存缓存机制、消除高频轮询磁盘 I/O 与反序列化开销 (High-Performance In-Memory Caching Architecture)
+
+根据用户指示（“全面引入内存缓存的机制，不要每次都重新加载很低效”），在 AgentHub Runner 与 Web 守护层中全面落地高并发安全内存缓存体系：
+
+- **会话发现与跨引擎聚合高速缓存 (Session & Workspace In-Memory Cache)**：
+  - **Claude / Antigravity / Grok 远程会话缓存 (5s TTL)**：在 `crates/runner/src/collectors/mod.rs` 中采用 `std::sync::{OnceLock, RwLock}` 建立各 Provider 级别的 `remote_sessions_cache`，避免前端每 4 秒轮询时重复递归扫描 `~/.claude/projects/`、`~/.gemini/antigravity/` 和 `~/.grok/sessions/`；
+  - **ZCode / Codex 数据库状态感知缓存 (DB mtime & size fingerprint)**：针对本地 SQLite 数据库（`~/.zcode/cli/db/db.sqlite` 与 `~/.codex/state_5.db`），根据文件修改时间戳与文件大小做指纹比对。只有在 SQLite 数据库产生写入（mtime 或 size 改变）时才真正执行只读 SQL 查询，否则以零开销返回内存缓存；
+  - **工作区跨 Agent 聚合缓存 (6s TTL)**：在 `crates/runner/src/collectors/workspace.rs` 中建立 `workspace_cache()`，将原本跨 5 家 Agent 目录与数据库的聚合操作收拢为线程安全的内存缓存，并支持 `invalidate_workspace_cache()` 主动驱逐。
+- **对话预览与转录文件按需增量加载 (Bounded Conversation & Path Index Cache)**：
+  - **Claude Transcript 文件路径索引 (`HashMap<String, PathBuf>`, 30s TTL)**：在 `crates/runner/src/conversation.rs` 引入 `claude_path_index()`，将原本查找某个 session_id 需要在深层目录递归扫描 $O(N \times M)$ 次的问题优化为 $O(1)$ 的内存字典索引；
+  - **带容量上限与文件指纹的对话消息缓存 (LRU/Cap 256 Entry)**：针对动辄数兆甚至数十兆的 `.jsonl` 对话历史，基于 `(PathBuf, len, mtime)` 构建消息体内存缓存，命中且文件未发生变化时直接克隆反序列化结果，彻底阻断高频点击会话时的磁盘 I/O 尖峰，同时控制容量上限防止内存无限膨胀。
+- **Web 服务与环境检测缓存 (Dashboard Summary & Executable Probe Cache)**：
+  - **Dashboard 概览缓存 (2s TTL)**：在 `crates/runner/src/web_server.rs` 中为 `/api/dashboard/summary` 建立 2 秒微缓存，抵御前端多标签页或多组件重叠轮询造成的 CPU 波动；
+  - **设备静态信息缓存 (5s TTL)**：缓存 CPU / 架构 / 操作系统等系统信息；
+  - **可执行文件探测与 Agent 目录存在性缓存 (30s TTL)**：在 `find_executable` 与 `check_agent_dir` 中建立 `executable_cache()` 与 `agent_dir_cache()`，消除在每个轮询周期中数十次触发 `where.exe`、`PATH` 遍历及硬盘 `is_dir()` 检查的低效行为。
+
 ### 真实拉取用量与真实模型分布、会话按时间倒序排列、解除生产网关地址硬编码
 
 根据用户反馈（“用量硬编码模型没有真正拉取、会话按agent排序没有按时间排序、生产地址不要硬编码让用户自己来”），实施全面彻底重构与闭环：

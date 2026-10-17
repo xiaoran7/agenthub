@@ -4,11 +4,11 @@ use std::{
     net::{TcpListener, TcpStream},
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, OnceLock, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -426,10 +426,25 @@ fn handle_api(
     Ok(())
 }
 
+fn dashboard_summary_cache() -> &'static RwLock<Option<(Instant, serde_json::Value)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, serde_json::Value)>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
 fn build_dashboard_summary(
     handler: &Arc<dyn DaemonRequestHandler>,
     port: u16,
 ) -> serde_json::Value {
+    if let Ok(guard) = dashboard_summary_cache().read() {
+        if let Some((cached_at, ref val)) = *guard {
+            if cached_at.elapsed() < Duration::from_secs(2) {
+                let mut v = val.clone();
+                v["port"] = json!(port);
+                return v;
+            }
+        }
+    }
+
     let discover_res = handler.handle(DaemonRequest::Discover);
     let models_res = handler.handle(DaemonRequest::GetModels);
     let status_res = handler.handle(DaemonRequest::GetStatus);
@@ -693,7 +708,7 @@ fn build_dashboard_summary(
 
     let total_agents_count = agents.as_array().map(|a| a.len()).unwrap_or(0);
 
-    json!({
+    let summary = json!({
         "device_id": "local-dev",
         "port": port,
         "stats": {
@@ -720,10 +735,28 @@ fn build_dashboard_summary(
         },
         "sessions": discovered_sessions,
         "device": get_device_info()
-    })
+    });
+
+    if let Ok(mut guard) = dashboard_summary_cache().write() {
+        *guard = Some((Instant::now(), summary.clone()));
+    }
+    summary
+}
+
+fn device_info_cache() -> &'static RwLock<Option<(Instant, serde_json::Value)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, serde_json::Value)>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
 }
 
 fn get_device_info() -> serde_json::Value {
+    if let Ok(guard) = device_info_cache().read() {
+        if let Some((cached_at, ref val)) = *guard {
+            if cached_at.elapsed() < Duration::from_secs(5) {
+                return val.clone();
+            }
+        }
+    }
+
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from);
@@ -768,54 +801,101 @@ fn get_device_info() -> serde_json::Value {
         }
     }
 
-    json!({
+    let res = json!({
         "device_id": device_id,
         "public_key": public_key,
         "paired": paired,
         "gateway_url": gateway_url,
         "paired_at": paired_at
-    })
+    });
+
+    if let Ok(mut guard) = device_info_cache().write() {
+        *guard = Some((Instant::now(), res.clone()));
+    }
+    res
+}
+
+fn executable_cache() -> &'static RwLock<HashMap<String, (Instant, (bool, Option<String>))>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 fn find_executable(name: &str, relative_hints: &[&str]) -> (bool, Option<String>) {
+    if let Ok(guard) = executable_cache().read() {
+        if let Some((cached_at, res)) = guard.get(name) {
+            if cached_at.elapsed() < Duration::from_secs(30) {
+                return res.clone();
+            }
+        }
+    }
+
+    let mut found = (false, None);
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         let home_path = PathBuf::from(home);
         for hint in relative_hints {
             let full = home_path.join(hint);
             if full.exists() {
-                return (true, Some(full.to_string_lossy().to_string()));
+                found = (true, Some(full.to_string_lossy().to_string()));
+                break;
             }
         }
     }
 
-    if let Some(path_var) = std::env::var_os("PATH") {
-        let paths = std::env::split_paths(&path_var);
-        #[cfg(target_os = "windows")]
-        let exts = [".cmd", ".exe", ".bat", ""];
-        #[cfg(not(target_os = "windows"))]
-        let exts = [""];
+    if !found.0 {
+        if let Some(path_var) = std::env::var_os("PATH") {
+            let paths = std::env::split_paths(&path_var);
+            #[cfg(target_os = "windows")]
+            let exts = [".cmd", ".exe", ".bat", ""];
+            #[cfg(not(target_os = "windows"))]
+            let exts = [""];
 
-        for p in paths {
-            for ext in &exts {
-                let candidate = p.join(format!("{}{}", name, ext));
-                if candidate.is_file() {
-                    return (true, Some(candidate.to_string_lossy().to_string()));
+            for p in paths {
+                for ext in &exts {
+                    let candidate = p.join(format!("{}{}", name, ext));
+                    if candidate.is_file() {
+                        found = (true, Some(candidate.to_string_lossy().to_string()));
+                        break;
+                    }
+                }
+                if found.0 {
+                    break;
                 }
             }
         }
     }
 
-    (false, None)
+    if let Ok(mut guard) = executable_cache().write() {
+        guard.insert(name.to_string(), (Instant::now(), found.clone()));
+    }
+    found
+}
+
+fn agent_dir_cache() -> &'static RwLock<HashMap<String, (Instant, (bool, Option<String>))>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 fn check_agent_dir(dir_name: &str) -> (bool, Option<String>) {
+    if let Ok(guard) = agent_dir_cache().read() {
+        if let Some((cached_at, res)) = guard.get(dir_name) {
+            if cached_at.elapsed() < Duration::from_secs(30) {
+                return res.clone();
+            }
+        }
+    }
+
+    let mut found = (false, None);
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         let full = PathBuf::from(home).join(dir_name);
         if full.is_dir() {
-            return (true, Some(full.to_string_lossy().to_string()));
+            found = (true, Some(full.to_string_lossy().to_string()));
         }
     }
-    (false, None)
+
+    if let Ok(mut guard) = agent_dir_cache().write() {
+        guard.insert(dir_name.to_string(), (Instant::now(), found.clone()));
+    }
+    found
 }
 
 fn send_json_response<T: Serialize>(

@@ -8,6 +8,8 @@
 use crate::domain::AgentType;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant, SystemTime};
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
@@ -20,6 +22,59 @@ const MAX_CONVERSATION_MESSAGES: usize = 300;
 /// Response budget for one IPC frame (`MAX_DAEMON_FRAME_BYTES` is 1 MiB);
 /// keeps the serialized preview comfortably inside a single frame.
 const MAX_CONVERSATION_RESPONSE_BYTES: usize = 512 * 1024;
+
+struct CachedConversationEntry {
+    fingerprints: Vec<(PathBuf, u64, Option<SystemTime>)>,
+    cached_at: Instant,
+    messages: Vec<Value>,
+}
+
+fn conversation_cache() -> &'static RwLock<HashMap<(AgentType, String), CachedConversationEntry>> {
+    static CACHE: OnceLock<RwLock<HashMap<(AgentType, String), CachedConversationEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn claude_path_index() -> &'static RwLock<Option<(Instant, HashMap<String, PathBuf>)>> {
+    static INDEX: OnceLock<RwLock<Option<(Instant, HashMap<String, PathBuf>)>>> = OnceLock::new();
+    INDEX.get_or_init(|| RwLock::new(None))
+}
+
+fn ensure_claude_path_index(projects_root: &Path) {
+    if let Ok(guard) = claude_path_index().read() {
+        if let Some((cached_at, ref map)) = *guard {
+            if cached_at.elapsed() < Duration::from_secs(30) && !map.is_empty() {
+                return;
+            }
+        }
+    }
+
+    let mut map = HashMap::new();
+    populate_claude_index(projects_root, 0, &mut map);
+    if let Ok(mut guard) = claude_path_index().write() {
+        *guard = Some((Instant::now(), map));
+    }
+}
+
+fn populate_claude_index(root: &Path, depth: usize, map: &mut HashMap<String, PathBuf>) {
+    if depth > 3 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path.extension().and_then(|v| v.to_str()) == Some("jsonl")
+        {
+            if let Some(stem) = path.file_stem().and_then(|v| v.to_str()) {
+                map.entry(stem.to_string()).or_insert(path);
+            }
+        } else if path.is_dir() {
+            populate_claude_index(&path, depth + 1, map);
+        }
+    }
+}
 
 pub fn validate_session_id(value: &str) -> Result<(), &'static str> {
     if value.is_empty()
@@ -53,23 +108,95 @@ pub fn load_session_conversation(
         .unwrap_or(session_id);
 
     if agent_type == AgentType::ZCode {
-        return load_zcode_session_conversation(home, session_id);
+        let db_path = home.join(".zcode").join("cli").join("db").join("db.sqlite");
+        let mtime = fs::metadata(&db_path).ok().and_then(|m| m.modified().ok());
+        let len = fs::metadata(&db_path).ok().map(|m| m.len()).unwrap_or(0);
+        let key = (AgentType::ZCode, session_id.to_string());
+        if let Ok(guard) = conversation_cache().read() {
+            if let Some(entry) = guard.get(&key) {
+                if entry.cached_at.elapsed() < Duration::from_secs(10)
+                    && entry.fingerprints == vec![(db_path.clone(), len, mtime)]
+                {
+                    return entry.messages.clone();
+                }
+            }
+        }
+        let res = load_zcode_session_conversation(home, session_id);
+        if let Ok(mut guard) = conversation_cache().write() {
+            if guard.len() >= 256 {
+                guard.clear();
+            }
+            guard.insert(
+                key,
+                CachedConversationEntry {
+                    fingerprints: vec![(db_path, len, mtime)],
+                    cached_at: Instant::now(),
+                    messages: res.clone(),
+                },
+            );
+        }
+        return res;
     }
     let mut paths = Vec::new();
     match agent_type {
         AgentType::Codex => {
             collect_provider_transcripts(&home.join(".codex"), raw_session_id, 0, &mut paths)
         }
-        AgentType::ClaudeCode => collect_transcript_files(
-            &home.join(".claude/projects"),
-            raw_session_id,
-            0,
-            &mut paths,
-        ),
+        AgentType::ClaudeCode => {
+            let projects_root = home.join(".claude").join("projects");
+            ensure_claude_path_index(&projects_root);
+            let mut found = false;
+            if let Ok(guard) = claude_path_index().read() {
+                if let Some((_, ref map)) = *guard {
+                    if let Some(p) = map.get(raw_session_id) {
+                        if p.is_file() {
+                            paths.push(p.clone());
+                            found = true;
+                        }
+                    }
+                }
+            }
+            if !found {
+                collect_transcript_files(
+                    &projects_root,
+                    raw_session_id,
+                    0,
+                    &mut paths,
+                );
+                if let Some(first) = paths.first() {
+                    if let Ok(mut guard) = claude_path_index().write() {
+                        if let Some((_, ref mut map)) = *guard {
+                            map.insert(raw_session_id.to_string(), first.clone());
+                        }
+                    }
+                }
+            }
+        }
         _ => paths.extend(find_agent_transcript(home, agent_type, raw_session_id)),
     }
     paths.sort();
     paths.dedup();
+
+    let fingerprints: Vec<(PathBuf, u64, Option<SystemTime>)> = paths
+        .iter()
+        .map(|p| {
+            let meta = fs::metadata(p).ok();
+            let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime = meta.and_then(|m| m.modified().ok());
+            (p.clone(), len, mtime)
+        })
+        .collect();
+
+    let cache_key = (agent_type, session_id.to_string());
+    if let Ok(guard) = conversation_cache().read() {
+        if let Some(entry) = guard.get(&cache_key) {
+            if entry.cached_at.elapsed() < Duration::from_secs(10)
+                && entry.fingerprints == fingerprints
+            {
+                return entry.messages.clone();
+            }
+        }
+    }
     let mut omitted = paths.len() > 8;
     if paths.len() > 8 {
         let tail = paths.split_off(paths.len() - 4);
@@ -151,7 +278,21 @@ pub fn load_session_conversation(
         }
         items.extend(normalized);
     }
-    budget_conversation(items, omitted)
+    let output = budget_conversation(items, omitted);
+    if let Ok(mut guard) = conversation_cache().write() {
+        if guard.len() >= 256 {
+            guard.clear();
+        }
+        guard.insert(
+            cache_key,
+            CachedConversationEntry {
+                fingerprints,
+                cached_at: Instant::now(),
+                messages: output.clone(),
+            },
+        );
+    }
+    output
 }
 
 /// Reads the bounded head/tail windows of one transcript and returns the parsed
