@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.4.80] - 2026-10-17
+
+### 内嵌控制台 Magpie 结构重写后的正确性修复与上游溯源 (Console Correctness Fixes & Upstream Attribution)
+
+根据用户指示（“真的 daemon 前端要不然直接照抄 magpie 的 UI 吧，感觉 magpie 用着舒心，现在的 UI 太丑了”），`crates/runner/resources/dashboard.html` 不再做令牌级微调，而是把 magpie 的设计系统与布局原语整层移植过来。**结构重写本身已随 2.4.79 一线的提交落地并压进该版二进制**（当时未单独留痕，见文末「重写内容归档」）；本次为紧随其后的正确性修复、行级细节与上游归属留痕：
+
+- **数据正确性修复 (Data Correctness)**：
+  - **渲染顺序缺陷**：`refreshDashboard()` 原先在 `allSessionsData` 赋值前渲染工作区与模型视图，叠加脏检查门禁后这两个视图的调用量恒为 0；现改为先发布 sessions，再让工作区 / 模型 / 用量的脏检查以 `sessionsChanged` 参与判定；
+  - **模型匹配过度贪婪**：画册 id 与转录模型名以归一化后**精确相等**匹配，不再使用子串包含（原实现会把含 `auto`、`big` 等短键的无关模型全部并入同一行，导致一排模型显示同一个 79M / 5 次调用）；同时把转录中出现但画册未收录的模型一并纳入排行，二者都只用真实 Token 数据，不合成条目；
+  - **费用口径统一**：模型视图改用后端 `/api/dashboard` 已聚合的每模型 `estimated_cost_usd`，仅在缺失时回退本地费率估算，消除同一模型在“模型”与“用量”两个视图显示两个不同金额（如 `gemini-3.8-flash-n` 的 ≈$855 与 ≈$98.44）的问题。
+- **行与组件细节 (Rows & Components)**：
+  - 会话行：隐藏 `unknown` 会话 ID、Provider 中文映射、Token 紧凑格式化、模型名超长省略；
+  - 智能体行：长二进制路径改为省略号截断，不再冲出卡片；
+  - 网关徽标：探测到的凭据文件名超长时省略并置入 `title`；
+  - Claude Code / Claude Desktop 图标改用 18px 下仍可辨认的 Claude 星芒，替换原先糊成一团的字标。
+- **开源引用与上游溯源 (Upstream Attribution)**：按工程规范补记上游归属与维护边界 —— 上游为 magpie（`https://github.com/yetone/magpie`，MIT License, Copyright (c) 2026 yetone），负责本机 Runner 内嵌 Web 控制台的设计系统与布局原语：
+  - `README.md` 新增「开源引用与上游溯源」章节；
+  - `docs/ARCHITECTURE.md` 的 `agenthubd` 下新增「内嵌 Web 控制台」小节，写明该页面为 `include_str!` 单文件资源、六个视图共用一份 `/api/dashboard` 快照、以及写入动作仍走既有 HTTP 接口；
+  - `docs/DESIGN_SYSTEM.md` 新增第 6 节，声明该界面为独立表面、不套用跨端令牌，并重申第 5 节动效与性能约束继续适用；
+  - 上游文件头注释与 MIT 版权声明原文保留在 `dashboard.html` 样式表起始处；故障排查顺序为「先核对上游 Release / Commit / Issue / PR，再考虑本地补丁」。
+- **重写内容归档 (Rewrite Recap)**：2.4.79 一线落地的结构重写内容一并归档留痕 —— Foundation 层移植（双主题令牌、46px 顶栏、`.view`、`.list` / `.row` / `.row.stat`、`.stats` / `.kpi`、`.led-strip`、`.chips` / `.segs`、`.text` / `.icon`、`.modal` / `.dialog`、`.editor` 网格与细滚动条）；侧栏 `aside.sidebar` 取代顶栏导航（品牌区 + 工作台 / 洞察 / 系统三组 `.nav-gl` 分组标签 + 底部网关与配对状态，宽度可拖拽 168–420px、双击复位，窄窗折叠进顶栏）；面包屑顶栏与按按钮几何移动的 `.seg` 滑块 `#segThumb`；页脚状态条（Runner 徽标、端口、上游网关端点）。
+- **验证 (Verification)**：在真实托盘窗口尺寸 940×720 下，对运行中 daemon 的 `/api/dashboard` 快照渲染全部六个视图的明暗两套主题逐张核对；并以错误探针切换全部视图、调用全部渲染函数，结果为 `no throw`、`no console.error`。`cargo build --release -p agenthub-runner` 通过，`target/release/agenthub-runner.exe` 中可检出本次新增的资源标记。
+
 ## [2.4.79] - 2026-10-17
 
 ### 修复跨智能体分页导致的会话全量重复解析缺陷与 Google Gemini 官方四角星矢量图标 (Session Deduplication & Authentic Gemini Icon)

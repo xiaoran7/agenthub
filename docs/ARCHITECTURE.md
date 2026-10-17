@@ -48,6 +48,14 @@ AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。�
 
 同一设备只能有一个 daemon 实例持有数据库和 Provider Host。Desktop 退出只断开本地订阅，退出登录和关闭 Remote 只撤销 Gateway 暴露；本地 Runtime 继续运行。停止本地 daemon 的独立产品控制和 OS 服务生命周期仍待后续实现。
 
+#### 内嵌 Web 控制台
+
+`agenthub-runner web` / `daemon --web` 会由 daemon 自带一个单文件内嵌控制台，默认 `http://127.0.0.1:4200`，由托盘进程以 Edge `--app=` 窗口打开：
+
+- 页面是单一静态资源 `crates/runner/resources/dashboard.html`，经 `include_str!` 编入二进制，无外部 JS/CSS 依赖、无构建步骤；六个视图（会话、智能体、用量、模型、工作区、网关）全部读取 `GET /api/dashboard` 的同一份聚合快照；
+- 该页面的设计系统与布局原语逐条移植自上游开源项目 magpie（`https://github.com/yetone/magpie`，MIT License, Copyright (c) 2026 yetone）的 `internal/gui/assets/app.css`，AgentHub 只追加业务组合与数据绑定。上游归属、许可证与维护边界见 [README 开源引用与上游溯源](../README.md#开源引用与上游溯源)；
+- 控制台只是本机控制面的只读+命令薄壳，不持有 Session 状态机：写入动作（模型目录刷新、设备绑定、安全退出）仍经 daemon 的既有 HTTP 接口，语义与 Desktop IPC 一致。
+
 ### Desktop
 
 Desktop 是 `agenthubd` 的富客户端和当前启动器：

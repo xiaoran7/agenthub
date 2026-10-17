@@ -57,3 +57,11 @@ AgentHub 的 Workspace-First（工作区优先）会话组织、多 Agent 远程
   最终状态；焦点、筛选、详情导航和数据刷新不能依赖动画完成回调。
 - Android 动效服从系统 Animator duration scale；缩放为 `0x` 时 Compose 直接收敛到
   最终状态。stagger 延迟封顶 270ms，长列表不能因索引增长而无限延后可见内容。
+
+## 6. 本机 Runner 内嵌控制台（独立表面）
+
+`crates/runner/resources/dashboard.html`（`agenthub-runner web`，默认 `http://127.0.0.1:4200`）是单文件内嵌控制台，**不套用第 2 节的跨端令牌**，而是直接采用上游 magpie 的设计系统（见 [README 开源引用与上游溯源](../README.md#开源引用与上游溯源)）：
+
+- 令牌、46px 顶栏、带分组标签的固定侧栏、自滚动视图、`.list` / `.row` / `.row.stat` 行模型、`.stats` / `.kpi` 指标卡与 `.editor` 表单网格均来自 magpie 的 `internal/gui/assets/app.css`，上游归属与维护边界归该仓库；
+- 该界面只服务本机单窗口（托盘窗口 940×720），不承担跨端一致性；跨端 Web 与 Android 仍以第 2 节为准；
+- 第 5 节的动效与性能约束继续适用：只驱动 `transform` / `opacity`，不用 `background-attachment: fixed`，模糊只出现在遮挡层 `.modal`，滚动列表内不叠加大面积 `backdrop-filter`，轮询刷新不低于 500ms。
