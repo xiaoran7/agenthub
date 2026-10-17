@@ -1,3 +1,9 @@
-cf2e076b52c35e12a48e01c3c121578678d733b2e20927f4b18008f3d9b2ef75 *agenthub-runner.exe
-cd0465b25e86f81bb610f430d7ea7300b598de233dcc475134ae9d981a7182a3 *AgentHub-Runner-v2.4.79-windows-x64.zip
-dd0a3d179bc445cb5807a3fd975e4fabd1f2883022214f69b7bba897e5a1a452 *AgentHub-v2.4.79-android-debug.apk
+﻿
+Algorithm Hash                                                             Path                                        
+--------- ----                                                             ----                                        
+SHA256    E280755C86C23FD8065ADD3A0FCAF22692FDFF6E69DFA5CCF402E609FA590817 D:\Claudespace\Project\agenthub\Deliverab...
+SHA256    55453CA2AF8D477522017229559575A0CCD4D6917F3A719D97E32DBDFDB6296E D:\Claudespace\Project\agenthub\Deliverab...
+SHA256    DD0A3D179BC445CB5807A3FD975E4FABD1F2883022214F69B7BBA897E5A1A452 D:\Claudespace\Project\agenthub\Deliverab...
+
+
+
