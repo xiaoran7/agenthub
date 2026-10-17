@@ -18,10 +18,10 @@
     // against a literal.
     window.AppLayout = Object.assign({
       version: 'dev',
-      window: { width: 980, height: 720, minWidth: 720, minHeight: 520, sideMinWidth: 168, sideWidth: 236, sideMaxWidth: 340 },
-      sidebarAt: 1200, sidebarNarrow: 212,
-      contentMax: 1280,
-      inset: 18, radius: 14, radiusSm: 10, topBar: 54,
+      window: { width: 820, height: 600, minWidth: 640, minHeight: 460, sideMinWidth: 168, sideWidth: 212, sideMaxWidth: 300 },
+      sidebarAt: 820, sidebarNarrow: 200,
+      contentMax: 1100,
+      inset: 16, radius: 14, radiusSm: 10, topBar: 48,
       dashboardPollMs: 4000, firstProbeRetries: 2, firstProbeRetryMs: 1500,
       emptyGraceMs: 15000, emptyStrikes: 3,
       gatewayPort: 3425,
@@ -47,10 +47,10 @@
           + '--layout-content-w:' + (a.contentMax || 1280) + 'px;';
         var s = Math.max(0, Math.min(1, ((window.innerWidth || 1280) - 960) / 560));
         document.documentElement.style.cssText = chrome
-          + '--fs-note:' + (12.5 + s * 1.5).toFixed(1) + 'px;'
-          + '--fs-body:' + (13.5 + s * 1.5).toFixed(1) + 'px;'
-          + '--fs-title:' + (15 + s * 2).toFixed(1) + 'px;'
-          + '--fs-figure:' + (26 + s * 6).toFixed(1) + 'px;';
+          + '--fs-note:' + (13.5 + s * 1.5).toFixed(1) + 'px;'
+          + '--fs-body:' + (14.5 + s * 1.5).toFixed(1) + 'px;'
+          + '--fs-title:' + (16 + s * 2).toFixed(1) + 'px;'
+          + '--fs-figure:' + (28 + s * 6).toFixed(1) + 'px;';
       }
       var AppLayout = window.AppLayout;
       var win = AppLayout.window || {};
@@ -75,9 +75,11 @@
       var meta = document.querySelector('meta[name="theme-color"]');
       if (meta && bg) meta.setAttribute('content', bg);
 
-      // the pages beside the window or over it: the window's own width decides
-      // (AppLayout.sidebarAt), and turning it with the button lasts the session
-      var showSide = (window.innerWidth || 0) >= (AppLayout.sidebarAt || 1200);
+      // the rail stays where the reader last left it: every window opens with
+      // the rail open until a click says otherwise. The window's width
+      // (AppLayout.sidebarAt) sets the default only on a first visit
+      var sidePref = localStorage.getItem(store.sideNav);
+      var showSide = sidePref ? sidePref === 'on' : (window.innerWidth || 0) >= (AppLayout.sidebarAt || 1200);
       document.documentElement.classList.toggle('no-side', !showSide);
       document.documentElement.dataset.nav = showSide ? 'side' : 'top';
 
@@ -111,6 +113,12 @@
         </span>
         <span>AgentHub</span>
       </span>
+      <button class="icon side-toggle rail-toggle" onclick="toggleSideNav()" title="隐藏侧边栏 (Ctrl+Shift+S)" aria-label="隐藏侧边栏">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect class="st-pane" x="2.5" y="3.5" width="19" height="17" rx="2.4" stroke="currentColor" stroke-width="1.6"/>
+          <path class="st-pane" d="M9 3.5v17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
     </div>
     <!-- the brand sits above and the pages take the whole rail, as magpie's
          sidebar does; state lives at the foot -->
@@ -159,28 +167,32 @@
   </aside>
 
   <header class="top">
-    <span class="brand" id="brandTop" aria-hidden="true"></span>
+    <span class="brand" id="brandTop" aria-hidden="true">
+      <span class="logo">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.8"/>
+          <circle cx="5" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="19" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="5" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="19" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M9.8 9.8 6.4 6.4M14.2 9.8l3.4-3.4M9.8 14.2l-3.4 3.4M14.2 14.2l3.4 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span>AgentHub</span>
+    </span>
     <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="显示 / 隐藏侧边栏" aria-label="显示或隐藏侧边栏">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect class="st-pane" x="3" y="4.5" width="7.5" height="15" rx="1.8" stroke="none"/>
-        <rect x="13.5" y="4.5" width="7.5" height="15" rx="1.8" stroke="currentColor" stroke-width="1.6"/>
+        <rect class="st-pane" x="2.5" y="3.5" width="19" height="17" rx="2.4" stroke="currentColor" stroke-width="1.6"/>
+        <path class="st-pane" d="M9 3.5v17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
     </button>
-    <div class="crumb"><span>AgentHub</span><i>/</i><b id="crumbNow">会话</b></div>
     <div class="nav-slot top-slot" id="navTopSlot"><span class="thumb" id="segThumb"></span></div>
-    <!-- the live link: a quiet dot here, the count itself is in the ledger below -->
-    <span class="live" id="liveStrip" title="历史会话与后台自动刷新的状态">
-      <i></i><b id="liveCount">—</b><span>个会话</span>
-    </span>
     <div class="actions">
       <button class="icon" onclick="openPairModal()" title="设备配对与身份标识" id="pairBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       </button>
       <button class="icon" onclick="refreshDashboard()" title="重新探测系统状态与会话" id="refreshBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
-      </button>
-      <button class="icon" onclick="copyGatewayConfig()" title="复制环境变量配置 (ANTHROPIC_BASE_URL)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       </button>
       <button class="icon" onclick="toggleTheme()" title="切换亮暗主题外观">
         <span id="themeIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span>
@@ -512,9 +524,7 @@
       setInterval(refreshDashboard, LAYOUT.dashboardPollMs || 4000);
       // the page follows the window it is drawn in; a turn tucked away or
       // opened with the button only holds until the next resize
-      window.addEventListener('resize', () => {
-        if (sidePinned !== null) followWindow();
-      }, { passive: true });
+      window.addEventListener('resize', clampSideWidth, { passive: true });
     }
 
     // The sidebar's #nav is the header's switch when the sidebar is away. It is
@@ -528,21 +538,11 @@
       const topSlot = document.getElementById('navTopSlot');
       const top = document.querySelector('.top');
       const on = !document.documentElement.classList.contains('no-side') && document.body.classList.contains('side-nav');
-      // the brand has one home per arrangement: the rail's head beside it, the
-      // header's first slot over it
-      const brand = document.getElementById(on ? 'brandSide' : 'brandTop');
-      const crumb = document.querySelector('.top .crumb');
       if (!nav || !sideSlot || !topSlot || !top) return;
-      if (on) {
-        sideSlot.appendChild(nav);
-        const head = sideSlot.parentElement.previousElementSibling;
-        if (brand && head) head.insertBefore(brand, head.firstChild);
-        if (crumb) crumb.hidden = false;
-      } else {
-        topSlot.appendChild(nav);
-        if (brand) top.insertBefore(brand, top.firstChild);
-        if (crumb) crumb.hidden = true;
-      }
+      // the brand never moves: the rail's head carries it beside the rail, the
+      // header carries its own copy; what moves with the switch is #nav alone
+      if (on) sideSlot.appendChild(nav);
+      else topSlot.appendChild(nav);
       // beside the rail the names are the rail's own rows, not the header's
       // rounded track; over the page they go back to being that track
       nav.classList.toggle('seg', !on);
@@ -553,8 +553,6 @@
         toggle.setAttribute('aria-label', label);
         toggle.setAttribute('aria-pressed', String(on));
       }
-      const strip = document.getElementById('liveStrip');
-      if (strip) strip.classList.toggle('quiet', on);
       fitNavTrack();
       scaleSegThumb(false);
       // the rail's state is html.no-side (the bootstrap key); body.side-nav is
@@ -563,11 +561,12 @@
       return on;
     }
 
-    // The pages sit beside the rail while the window has room for both and
-    // fold into the header when it does not. Toggling pins the reader's choice
-    // for the session only; a resize hands the decision back to the window, so
-    // a narrow window or a phone never keeps a rail it has no room for.
+    // The rail is the reader's: the button in its head, the button in the
+    // header and Ctrl+Shift+S all turn it, and the choice outlives the window.
+    // No resize ever takes the button away — the header's toggle is always
+    // there, whether the rail is open or not.
     var sidePinned = null;
+    clampSideWidth();
 
     function sidebarFits() {
       return (window.innerWidth || 0) >= (LAYOUT.sidebarAt || 1200);
@@ -575,6 +574,7 @@
 
     function setSideNav(on, remember) {
       if (remember) sidePinned = on;
+      try { localStorage.setItem(STORE.sideNav, on ? 'on' : 'off'); } catch (e) {}
       document.body.classList.toggle('side-nav', on);
       document.documentElement.classList.toggle('no-side', !on);
       document.documentElement.dataset.nav = on ? 'side' : 'top';
@@ -588,6 +588,13 @@
     function followWindow() {
       sidePinned = null;
       setSideNav(sidebarFits(), false);
+    }
+
+    // the rail's width is shared with the page: a rail turned on in a window
+    // too narrow for both takes a quarter of it and leaves the rest to the page
+    function clampSideWidth() {
+      const w = Math.min(window.innerWidth || 0, document.documentElement.clientWidth || 0);
+      if (w) document.documentElement.style.setProperty('--viewport-w', w + 'px');
     }
 
     // the sidebar's edge drags it wider or narrower; double-click gives it back
@@ -712,8 +719,6 @@
         if (!silent) view.scrollTop = 0;
       }
 
-      const crumb = document.getElementById('crumbNow');
-      if (crumb) crumb.textContent = VIEW_LABELS[viewId];
 
       if (!silent) {
         try { localStorage.setItem(STORE.view, viewId); } catch (e) {}
@@ -817,20 +822,10 @@
       updateConnectionStatus(false);
     }
 
-    // the header's live strip says what the console currently knows: how many
-    // sessions it last saw, and whether the daemon is still answering
+    // whether the daemon is still answering; the ledger's tiles say so, the
+    // header only settles the pairing dot down while the link is broken
     function updateConnectionStatus(online) {
-      const strip = document.getElementById('liveStrip');
-      if (strip) {
-        strip.classList.toggle('off', !online);
-        strip.classList.remove('stale');
-        // the dot alone carries the state in the header; the words wait for the
-        // page switch to be away, where there is room for them
-        strip.classList.toggle('quiet', document.body.classList.contains('side-nav'));
-        strip.title = online
-          ? `历史会话 · ${POLL_HINT}`
-          : '与 Runner 的连接中断，正在重连…';
-      }
+      document.documentElement.classList.toggle('link-off', !online);
       if (!online) {
         consecutiveEmptyResponses = 0;
       }
@@ -840,8 +835,6 @@
       if (!stats) return;
       const totalSessions = stats.total_sessions || 0;
       document.getElementById('statTotalSessions').textContent = totalSessions;
-      const liveCount = document.getElementById('liveCount');
-      if (liveCount) liveCount.textContent = totalSessions.toLocaleString();
       const breakdown = document.getElementById('statSessionsBreakdown');
       breakdown.textContent =
         `Coding Assistant ${stats.claude_sessions || 0} · Codex ${stats.codex_sessions || 0} · 其他 ${(stats.antigravity_sessions || 0) + (stats.grok_sessions || 0) + (stats.zcode_sessions || 0)}`;
@@ -1052,11 +1045,8 @@
               <span class="ic">${getAgentIcon(rawProvider, 18)}</span>
               <div class="who">
                 <div class="name" title="${prompt}">${prompt}</div>
-                <div class="sub flow session-facts">
-                  ${modelName ? `<span class="mono tag cap"><span class="tt">${modelName}</span></span>` : ''}
-                  ${rawTokens > 0 ? `<span class="mono tokens">${fmtN(rawTokens)} Tokens</span>` : ''}
-                </div>
               </div>
+              ${modelName ? `<span class="model" title="${modelName}">${modelName}</span>` : ''}
               <time class="when">${escapeHtml(timeStr)}</time>
             </div>
           `;

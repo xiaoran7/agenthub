@@ -226,13 +226,13 @@ mod windows_tray {
 
     /// The console window's size, in one place with the page's own tokens: the
     /// daemon decides how big the frame opens, the page adapts to whatever it gets.
-    /// A reading window, not a canvas: magpie's main window opens at 660×600 and
-    /// grows with the reader's choice, and so does this one.
-    const WINDOW_DEFAULT: (u32, u32) = (980, 720);
-    const WINDOW_MIN: (u32, u32) = (720, 520);
-    /// The old console opened at 1240×820; a frame at least this big is its
-    /// remains, not a size the reader picked.
-    const OLD_FRAME_MIN: (i32, i32) = (1150, 780);
+    /// A reading window, not a canvas, as magpie's 660×600 is; this one carries
+    /// a rail as well, so 820×600. Sized after 2.4.86 was first tuned.
+    const WINDOW_DEFAULT: (u32, u32) = (820, 600);
+    const WINDOW_MIN: (u32, u32) = (640, 460);
+    /// The console before 2.4.86 opened at 980×720; a frame at least this big is
+    /// its remains, not a size the reader picked in this one.
+    const OLD_FRAME_MIN: (i32, i32) = (1000, 680);
 
     /// Where this machine leaves the app window: remembered size (clamped to the
     /// screen and the console's minimum), centred on the screen.
@@ -272,8 +272,8 @@ mod windows_tray {
 
     /// Edge keeps the app window's last size and place in the profile's
     /// Preferences and opens it there on every launch, ignoring the size and
-    /// position it is asked for. A frame from the old console (at least
-    /// 1150×780, or maximised) is resized to the console's size and centred; any
+    /// position it is asked for. A frame from an older console (at least
+    /// 1000×680, or maximised) is resized to the console's size and centred; any
     /// other frame is only moved when it sits off the middle of the screen, so
     /// the size a reader picked is kept.
     fn fit_kept_window(prefs: &std::path::Path) {

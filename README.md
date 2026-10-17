@@ -62,7 +62,7 @@ npm.cmd run format:check
 | -------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [magpie](https://github.com/yetone/magpie) | MIT License, Copyright (c) 2026 yetone | 本机 Runner 内嵌 Web 控制台（`crates/runner/resources/dashboard.html` 与 `dashboard.css`）的设计系统与布局原语 |
 
-Runner 控制台的视觉与布局不再自行发明。`dashboard.css`（由页面以 `/dashboard.css?v=<版本>` 引入）的 Foundation 层逐条移植自 magpie 的 `internal/gui/assets/app.css`：双主题设计令牌（background、card、text、muted、line、accent 与 `--ease` 缓动）、顶栏、带分组标签的侧栏及其顶栏 `.seg` 分段形态、可自滚动的 `.view`、`.list` / `.row` / `.row.stat` 行模型、`.stats` / `.kpi` 指标卡、`.chips` / `.segs` 分段控件、`.text` / `.icon` 按钮、`.modal` / `.dialog` 与 `.editor` 表单网格。AgentHub 只在其上追加业务组合（会话、智能体、用量、模型、工作区、网关六个视图）与数据绑定。
+Runner 控制台的视觉与布局不再自行发明。`dashboard.css`（由页面以 `/dashboard.css?v=<版本>` 引入）的 Foundation 层逐条移植自 magpie 的 `internal/gui/assets/app.css`：双主题设计令牌（background、card、text、muted、line、accent 与 `--ease` 缓动）、顶栏、带分组标签的侧栏及其顶栏 `.seg` 分段形态（一条圆角底轨、滑块托起当前页）、可自滚动的 `.view`、`.list` / `.row` / `.row.stat` 行模型、`.stats` / `.kpi` 指标卡、`.chips` / `.segs` 分段控件、`.text` / `.icon` 按钮、`.modal` / `.dialog` 与 `.editor` 表单网格。AgentHub 只在其上追加业务组合（会话、智能体、用量、模型、工作区、网关六个视图）与数据绑定。
 
 上游文件头注释与 MIT 版权声明原文保留在 `dashboard.css` 起始处。该模块的主权与维护边界属于上游仓库：出现视觉或布局缺陷时，先核对 magpie 上游的 Release / Commit / Issue / PR，确认上游未修复后再考虑本地补丁。
 

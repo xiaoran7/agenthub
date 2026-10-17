@@ -24,10 +24,10 @@
         :root {
           /* the type scale the whole console is built on: the window is laid out
              for reading, not for squeezing — every size below is a step of it */
-          --fs-note: 12.5px;    /* captions, paths, secondary facts */
-          --fs-body: 13.5px;    /* body and control text */
-          --fs-title: 15px;     /* page titles, brand */
-          --fs-figure: 26px;    /* the big figures */
+          --fs-note: 13.5px;    /* captions, paths, secondary facts */
+          --fs-body: 14.5px;    /* body and control text */
+          --fs-title: 16px;     /* page titles, brand */
+          --fs-figure: 28px;    /* the big figures */
         --rf: var(--fs-body) / 15;  /* the rem of this design, in body steps */
 
           --bg: #f4f5f8;
@@ -176,7 +176,7 @@
       transition: background .12s, color .12s;
     }
     .icon:hover, .icon.on { background: var(--pill); color: var(--fg); }
-    .icon svg { width: 16px; height: 16px; display: block; }
+    .icon svg { width: 17px; height: 17px; display: block; }
     .icon.winclose { align-self: center; width: 22px; height: 22px; margin-left: 8px; border-radius: 50%; background: var(--pill); color: var(--fg-2); }
     .icon.winclose:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
 
@@ -191,12 +191,13 @@
     .sidebar {
       position: fixed; left: 0; top: 0; bottom: 0; z-index: 10; width: var(--side-w, 212px);
       display: flex; flex-direction: column;
-      background: var(--bg); border-right: .5px solid var(--line);
+      background: var(--bg); border-right: var(--rule);
     }
     .side-edge { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 1; cursor: col-resize; touch-action: none; }
     .side-edge:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
     body.side-drag, body.side-drag * { cursor: col-resize !important; }
-    .side-top { flex: none; display: flex; align-items: center; height: 46px; padding: 0 18px; }
+    .side-top { flex: none; display: flex; align-items: center; gap: 6px; height: var(--top-h); padding: 0 10px 0 14px; }
+    .side-top .rail-toggle { margin-left: auto; }
     .side-top .brand { font-size: var(--fs-title); }
     .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; }
     .side-foot { flex: none; max-height: 55%; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; border-top: .5px solid var(--line-2); }
@@ -244,8 +245,9 @@
     .crumb > i { font-style: normal; color: var(--faint); }
     .crumb > b { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
     .side-toggle { flex: none; }
-    .side-toggle .st-pane { fill: currentColor; opacity: .32; transition: opacity .3s var(--ease); }
-    :root.no-side .side-toggle .st-pane { opacity: 0; }
+    .side-toggle .st-pane { opacity: .28; transition: opacity .3s var(--ease); }
+    .side-toggle:hover .st-pane { opacity: .55; }
+    :root.no-side .side-toggle .st-pane { opacity: .28; }
 
     /* ---- views ------------------------------------------------------------- */
     .view { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 16px 8px; display: none; flex-direction: column; animation: view-in .24s var(--ease); }
@@ -450,6 +452,7 @@
         .live.stale > i { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
         .live.off > i { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
         .live.off { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
+        :root.link-off .side-gw i { background: var(--red); }
 
         /* the header's page switch, when the sidebar is away: one rounded track,
            grouped names over it, the open page on a lifted thumb — magpie's .seg */
@@ -459,11 +462,15 @@
           left: auto; top: auto; transform: none;
           align-self: center; display: flex; flex-direction: row; flex: none; height: 36px;
           max-width: 100%;
-          padding: 3px; border-radius: 11px; gap: 1px; background: var(--seg-track);
+          padding: 2px; border-radius: 10px; gap: 0; background: var(--seg-track);
           box-shadow: inset 0 .5px 1px rgba(0, 0, 0, .05);
         }
-        #navTopSlot > .thumb { top: 3px; bottom: 3px; left: 0; border-radius: 8px; }
-        .top .top-slot > #nav button[data-view] { display: inline-flex; width: auto; height: 30px; padding: 0 13px; border-radius: 8px; font-size: var(--fs-body); gap: 6px; align-items: center; justify-content: center; text-align: center; white-space: nowrap; color: var(--fg-2); font-weight: 500; }
+        #navTopSlot > .thumb { top: 2px; bottom: 2px; left: 0; border-radius: 8px; }
+        .top .top-slot > #nav button[data-view] {
+          display: inline-flex; width: auto; height: 32px; padding: 0 12px; border-radius: 8px;
+          font-size: var(--fs-body); gap: 6px; align-items: center; justify-content: center;
+          text-align: center; white-space: nowrap; color: var(--fg-2); font-weight: 500;
+        }
         .top .top-slot > #nav button[data-view]:hover:not(.on) { background: transparent; color: var(--fg); }
         .top .top-slot > #nav button[data-view].on { background: transparent; box-shadow: none; font-weight: 600; }
         .top .top-slot > #nav .nav-ic { display: inline-block; flex: none; opacity: .8; }
@@ -472,7 +479,7 @@
 
         /* ---- the sidebar ------------------------------------------------------- */
         /* a width the reader dragged to wins over the window's own share */
-        body.window { --side-w: var(--side-w-override, var(--layout-side-w, 236px)); }
+        body.window { --side-w: min(var(--side-w-override, var(--layout-side-w, 236px)), calc(var(--viewport-w, 100vw) * .25)); }
         /* the page's column starts where the rail ends, so it follows the rail
            itself; no window breakpoint has to guess the same width twice */
         body { position: relative; }
@@ -556,6 +563,12 @@
           text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
           font-size: var(--fs-note); color: var(--faint); font-variant-numeric: tabular-nums;
         }
+        #sessionsContainer .row .model {
+          flex: none; max-width: 180px; margin-left: auto; min-width: 0; flex-shrink: 1;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          font-family: var(--code); font-size: var(--fs-note); color: var(--faint);
+        }
+        #sessionsContainer .row .model + .when { margin-left: 10px; }
         #sessionsContainer .session-facts { gap: 7px; }
         #sessionsContainer .session-facts .tokens { color: var(--faint); font-size: calc(var(--fs-note) - 1px); }
         #sessionsContainer .session-facts .tag.cap { padding: 1px 6px; font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--fg-2); background: var(--card-2); border: var(--rule-2); height: 19px; }
@@ -717,8 +730,11 @@
    writes .side-nav on <body> and .no-side on <html>; both are read here, so a
    click, a remembered choice and a resize all land in the same place.
    ========================================================================== */
+/* one toggle at a time: the rail's head has the button that closes it, the
+   header has the button that opens it — never both in the same row */
 .sidebar { display: none; }
 body.side-nav .sidebar { display: flex; }
+body.side-nav .top .side-toggle { display: none; }
 body:not(.side-nav) .top .side-toggle,
 body:not(.side-nav) .top .crumb,
 body:not(.side-nav) .top .top-slot { display: flex; }
@@ -741,11 +757,15 @@ body.side-nav .top .crumb { margin-left: 2px; }
 /* the header only has the room it has: as it narrows the track drops first the
    icons, then the group titles, then whatever pages do not fit (fitNavTrack
    keeps the open one), so every name that shows is a name one can click */
-@container slot-q (max-width: 700px) {
-  .top .top-slot > #nav button[data-view] { padding: 0 8px; }
+/* a narrow track shows the open page and its neighbours; as it narrows it drops
+   first the group titles, then the icons, keeping every name it shows clickable */
+@container slot-q (max-width: 900px) {
+  .top .top-slot > #nav { padding: 2px; gap: 0; border-radius: 10px; height: 36px; }
+  .top .top-slot > #nav button[data-view] { height: 32px; padding: 0 10px; border-radius: 8px; }
+  #navTopSlot > .thumb { top: 2px; bottom: 2px; border-radius: 8px; }
+}
+@container slot-q (max-width: 760px) {
+  .top .top-slot > #nav button[data-view] { padding: 0 11px; }
   .top .top-slot > #nav button[data-view] .nav-ic { display: none; }
 }
-@container slot-q (max-width: 860px) {
-  .top .top-slot > #nav button[data-view] { padding: 0 9px; }
-  .top .top-slot > #nav .nav-gl { display: none; }
-}
+body.side-nav .top .side-toggle { display: none; }

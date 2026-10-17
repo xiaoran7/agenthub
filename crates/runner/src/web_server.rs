@@ -1290,13 +1290,14 @@ fn app_layout_json(port: u16) -> String {
         "webPort": port,
         "gatewayPort": 3425,
         "window": {
-            "width": 980, "height": 720, "minWidth": 720, "minHeight": 520,
-            "sideMinWidth": 168, "sideWidth": 236, "sideMaxWidth": 340
+            "width": 820, "height": 600, "minWidth": 640, "minHeight": 460,
+            "sideMinWidth": 168, "sideWidth": 212, "sideMaxWidth": 300
         },
-        // the rail comes back once there is room for it and a full column of
-        // text beside it; narrower than that the header's switch takes over
-        "sidebarAt": 1200, "sidebarNarrow": 212, "contentMax": 1280,
-        "inset": 18, "radius": 14, "radiusSm": 10, "topBar": 54,
+        // the rail opens with the window beside at least a 560px column of
+        // text; the button in its head folds it into the header, and the choice
+        // outlives the window. On a first visit a narrow window starts folded
+        "sidebarAt": 820, "sidebarNarrow": 200, "contentMax": 1100,
+        "inset": 16, "radius": 14, "radiusSm": 10, "topBar": 48,
         "dashboardPollMs": 4000, "firstProbeRetries": 2, "firstProbeRetryMs": 1500,
         "emptyGraceMs": 15000, "emptyStrikes": 3,
         "themeBg": { "light": "#f4f5f8", "dark": "#1a1a1e" },
