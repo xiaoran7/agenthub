@@ -2,6 +2,38 @@
 
 ## [2.4.79] - 2026-10-17
 
+### 全面对标 Magpie 级别用量统计与高精模型/智能体消耗分布 (Magpie-Grade Usage Analytics Architecture)
+
+根据用户指示（“这个用量你实在写不好你就超magpie好不好”），深入参考并直接对齐 Magpie（`github.com/yetone/magpie`）用量统计子系统与界面架构规范，从根源上彻底解决历史会话虽被解析但用量统计呈现 0 的断流缺陷，全面构建权威后端聚合与极简高精看板：
+
+- **候选发现管道（Candidate Pipeline）元数据完整透传**：
+  - 修复 `crates/runner/src/remote_host.rs` 中 `discover(&mut self)` 步骤将 `thread/list` 提取到的 `model`、`prompt_tokens`、`completion_tokens`、`total_tokens`、`cache_read_tokens`、`last_activity_at_ms` 字段丢失的关键漏洞，使会话候选集（`candidates`）完整继承 Token 维度与模型归属。
+- **Claude Code 转录文件（Transcript）全会话多轮累计**：
+  - 优化 `crates/runner/src/collectors/mod.rs` 中的 `read_claude_transcript_metadata` 函数，取消单轮 Assistant 消息命中后的提前 `break`，向上扫描至上限 512 行完整累计多轮交互产生的所有输入、输出及缓存 Token。
+- **后端权威用量聚合接口与定价矩阵（Authoritative Backend Aggregator & Pricing）**：
+  - 在 `crates/runner/src/web_server.rs` 的 `/api/dashboard/summary` 中建立与 Magpie 一致的统计模型，输出权威 `usage` 实体：
+    - `calls`：总会话与调用次数；
+    - `input` / `output` / `cache_read` / `total_tokens`：全量 Token 统计；
+    - `cache_hit_rate_pct`：缓存命中率计算 `100 * cache_read / (input + cache_read + cache_write)`；
+    - `cost_usd`：基于官方标准费率梯度的精准预估花费计算（Opus、Sonnet/Fable、Haiku/Flash、DeepSeek、GPT/Codex）；
+    - `models` 与 `agents`：按 Token 消耗降序排列的结构化用量占比数组，提供 `share_pct`、`cache_hit_rate_pct` 与 `estimated_cost_usd`。
+- **Magpie 原生级 4-Grid KPI 卡片与双板块用量分布看板（Magpie-Grade High-DPI UI）**：
+  - **4 组 KPI 核心数据磁贴（`.stats` & `.kpi`）**：
+    - **预估花费 (Cost)**：`≈$X.XX`，副标注明“基于模型标准费率测算”；
+    - **总 Token 消耗**：紧凑格式化（如 `1.2M`、`850K`），小字标明 `${in} in · ${out} out`；
+    - **缓存读取 (Cache)**：展示实际读取缓存量与高亮 `hit rate XX%`；
+    - **总调用会话 (Calls)**：展示跨多智能体累计分析会话总数。
+  - **模型用量分布 (Models Breakdown)**：
+    - 采用 Magpie 原生 `.row.stat` 条目化布局，支持 Anthropic、OpenAI、DeepSeek、Gemini 及通用芯片级矢量徽标；
+    - 动态展示模型名称、调用次数、缓存命中率、占比进度条（`share i`）、Token 数量及预估美元花费。
+  - **智能体用量分布 (Agents Breakdown)**：
+    - 完整继承 Claude Code、Codex、ZCode、Antigravity、Grok 等专属品牌矢量图标与色彩；
+    - 展示各智能体调用量、占比进度条、总消耗及预估花费。
+  - **前端与后端无缝双重保障**：优先直连消费后端权威 `usage` 聚合数据，同时保留客户端会话级增量计算回退，确保任何场景下均不出现数据白板或空白状态。
+- **产物更新与构建归档（`Deliverables/AgentHub/`）**：
+  - 重新编译 Release 原生程序 `agenthub-runner.exe`，重新打包 `AgentHub-Runner-v2.4.79-windows-x64.zip`；
+  - 同步更新 `Deliverables/AgentHub/AgentHub-v2.4.79-SHA256.txt` 校验和。
+
 ### 全面引入内存缓存机制、消除高频轮询磁盘 I/O 与反序列化开销 (High-Performance In-Memory Caching Architecture)
 
 根据用户指示（“全面引入内存缓存的机制，不要每次都重新加载很低效”），在 AgentHub Runner 与 Web 守护层中全面落地高并发安全内存缓存体系：

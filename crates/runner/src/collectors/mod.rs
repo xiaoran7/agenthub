@@ -1018,18 +1018,8 @@ fn read_claude_transcript_metadata(
                 (current, None) => current,
             };
         }
-        // A real session is settled as soon as it has produced output and its
-        // metadata is complete, so the common case still stops after a handful
-        // of lines. Only sessions that never answered are read to the cap.
-        if has_output
-            && session_id.is_some()
-            && cwd.is_some()
-            && started_at_ms.is_some()
-            && title.is_some()
-            && model.is_some()
-        {
-            break;
-        }
+        // Continue scanning up to TRANSCRIPT_METADATA_SCAN_LINES to aggregate
+        // all assistant token usage across turns, matching Magpie's session accounting.
     }
 
     let session_id = session_id

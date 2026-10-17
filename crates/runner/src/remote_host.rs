@@ -2113,6 +2113,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                 .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
                         })
                         .map(|name| name.chars().take(160).collect::<String>());
+                    let pt = thread.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
+                    let ct = thread.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0);
+                    let tt = thread.get("total_tokens").and_then(Value::as_u64).unwrap_or(pt + ct);
+                    let cr = thread.get("cache_read_tokens").and_then(Value::as_u64).unwrap_or(0);
+                    let last_ms = thread.get("last_activity_at_ms").and_then(Value::as_i64).unwrap_or(0);
+                    let model = thread.get("model").cloned().unwrap_or(Value::Null);
+
                     candidates.push(json!({
                         "provider_session_id": id,
                         "provider": thread["provider"],
@@ -2120,7 +2127,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         "workspace_path": cwd,
                         "title": title,
                         "execution_state": execution_state(&thread["status"]),
-                        "control_connected": false
+                        "control_connected": false,
+                        "model": model,
+                        "prompt_tokens": pt,
+                        "completion_tokens": ct,
+                        "total_tokens": tt,
+                        "cache_read_tokens": cr,
+                        "last_activity_at_ms": last_ms
                     }));
                 }
             }

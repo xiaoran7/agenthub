@@ -458,12 +458,133 @@ fn build_dashboard_summary(
     let mut workspace_map: HashMap<String, usize> = HashMap::new();
     let mut discovered_sessions: Vec<serde_json::Value> = Vec::new();
 
+    let mut total_prompt_tokens: u64 = 0;
+    let mut total_completion_tokens: u64 = 0;
+    let mut total_cache_read_tokens: u64 = 0;
+    let mut total_cost_usd: f64 = 0.0;
+
+    struct ModelAgg {
+        name: String,
+        provider: String,
+        calls: usize,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cache_read_tokens: u64,
+        total_tokens: u64,
+        cost_usd: f64,
+    }
+
+    struct AgentAgg {
+        id: String,
+        name: String,
+        calls: usize,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cache_read_tokens: u64,
+        total_tokens: u64,
+        cost_usd: f64,
+    }
+
+    fn calc_cost(model_name: &str, prompt: u64, completion: u64, cache_read: u64) -> f64 {
+        let m = model_name.to_ascii_lowercase();
+        let (input_rate, output_rate, cache_read_rate) = if m.contains("opus") {
+            (15.0, 75.0, 1.5)
+        } else if m.contains("sonnet") || m.contains("fable") || m.contains("mythos") {
+            (3.0, 15.0, 0.3)
+        } else if m.contains("haiku") || m.contains("flash") || m.contains("mini") {
+            (0.25, 1.25, 0.025)
+        } else if m.contains("deepseek") {
+            (0.14, 0.28, 0.014)
+        } else if m.contains("codex") || m.contains("gpt-5") || m.contains("gpt-4") {
+            (2.5, 10.0, 1.25)
+        } else {
+            (3.0, 15.0, 0.3)
+        };
+        let regular_prompt = prompt.saturating_sub(cache_read);
+        (regular_prompt as f64 * input_rate
+            + completion as f64 * output_rate
+            + cache_read as f64 * cache_read_rate)
+            / 1_000_000.0
+    }
+
+    let mut model_aggs: HashMap<String, ModelAgg> = HashMap::new();
+    let mut agent_aggs: HashMap<String, AgentAgg> = HashMap::new();
+
     if let crate::daemon_protocol::DaemonResponse::Discovery(ref val) = discover_res {
         if let Some(candidates) = val.get("candidates").and_then(serde_json::Value::as_array) {
             total_sessions = candidates.len();
             for c in candidates {
                 discovered_sessions.push(c.clone());
                 let provider = c.get("provider").and_then(serde_json::Value::as_str).unwrap_or("");
+                let pt = c.get("prompt_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let ct = c.get("completion_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let cr = c.get("cache_read_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let tt = c.get("total_tokens").and_then(serde_json::Value::as_u64).unwrap_or(pt + ct);
+
+                total_prompt_tokens = total_prompt_tokens.saturating_add(pt);
+                total_completion_tokens = total_completion_tokens.saturating_add(ct);
+                total_cache_read_tokens = total_cache_read_tokens.saturating_add(cr);
+
+                let raw_model = c.get("model").and_then(serde_json::Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+                let model_name = match raw_model {
+                    Some(m) => m.to_string(),
+                    None => match provider {
+                        "claude_code" | "claude" => "claude-sonnet-4-6".to_string(),
+                        "codex" => "gpt-5-codex".to_string(),
+                        "antigravity" => "antigravity-deep-reasoning".to_string(),
+                        "grok_build" | "grok" => "grok-3-developer".to_string(),
+                        "zcode" => "zcode-pro-turbo".to_string(),
+                        _ => "general-agent-model".to_string(),
+                    },
+                };
+
+                let cost = calc_cost(&model_name, pt, ct, cr);
+                total_cost_usd += cost;
+
+                // Model aggregation
+                let model_entry = model_aggs.entry(model_name.clone()).or_insert_with(|| ModelAgg {
+                    name: model_name.clone(),
+                    provider: provider.to_string(),
+                    calls: 0,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    cache_read_tokens: 0,
+                    total_tokens: 0,
+                    cost_usd: 0.0,
+                });
+                model_entry.calls += 1;
+                model_entry.prompt_tokens = model_entry.prompt_tokens.saturating_add(pt);
+                model_entry.completion_tokens = model_entry.completion_tokens.saturating_add(ct);
+                model_entry.cache_read_tokens = model_entry.cache_read_tokens.saturating_add(cr);
+                model_entry.total_tokens = model_entry.total_tokens.saturating_add(tt);
+                model_entry.cost_usd += cost;
+
+                // Agent aggregation
+                let (agent_id, agent_display_name) = match provider {
+                    "claude_code" | "claude" => ("claude_code", "Claude Code"),
+                    "codex" => ("codex", "Codex App-Server"),
+                    "antigravity" => ("antigravity", "Antigravity"),
+                    "grok_build" | "grok" => ("grok_build", "Grok Build"),
+                    "zcode" => ("zcode", "ZCode Agent"),
+                    _ => ("other", "Other Agent"),
+                };
+                let agent_entry = agent_aggs.entry(agent_id.to_string()).or_insert_with(|| AgentAgg {
+                    id: agent_id.to_string(),
+                    name: agent_display_name.to_string(),
+                    calls: 0,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    cache_read_tokens: 0,
+                    total_tokens: 0,
+                    cost_usd: 0.0,
+                });
+                agent_entry.calls += 1;
+                agent_entry.prompt_tokens = agent_entry.prompt_tokens.saturating_add(pt);
+                agent_entry.completion_tokens = agent_entry.completion_tokens.saturating_add(ct);
+                agent_entry.cache_read_tokens = agent_entry.cache_read_tokens.saturating_add(cr);
+                agent_entry.total_tokens = agent_entry.total_tokens.saturating_add(tt);
+                agent_entry.cost_usd += cost;
+
                 match provider {
                     "claude_code" | "claude" => claude_count += 1,
                     "codex" => codex_count += 1,
@@ -478,6 +599,86 @@ fn build_dashboard_summary(
             }
         }
     }
+
+    let overall_tokens = total_prompt_tokens.saturating_add(total_completion_tokens);
+    let overall_cache_hit_rate = if total_prompt_tokens > 0 {
+        ((total_cache_read_tokens as f64 / total_prompt_tokens as f64) * 100.0).round().min(100.0) as u32
+    } else {
+        0
+    };
+
+    let mut models_breakdown_vec: Vec<ModelAgg> = model_aggs.into_values().collect();
+    models_breakdown_vec.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    let models_breakdown: Vec<serde_json::Value> = models_breakdown_vec
+        .into_iter()
+        .map(|m| {
+            let share_pct = if overall_tokens > 0 {
+                ((m.total_tokens as f64 / overall_tokens as f64) * 100.0).round().min(100.0) as u32
+            } else {
+                0
+            };
+            let hit_rate = if m.prompt_tokens > 0 {
+                ((m.cache_read_tokens as f64 / m.prompt_tokens as f64) * 100.0).round().min(100.0) as u32
+            } else {
+                0
+            };
+            json!({
+                "id": m.name,
+                "name": m.name,
+                "provider": m.provider,
+                "calls": m.calls,
+                "prompt_tokens": m.prompt_tokens,
+                "completion_tokens": m.completion_tokens,
+                "cache_read_tokens": m.cache_read_tokens,
+                "total_tokens": m.total_tokens,
+                "cache_hit_rate_pct": hit_rate,
+                "share_pct": share_pct,
+                "estimated_cost_usd": (m.cost_usd * 100.0).round() / 100.0
+            })
+        })
+        .collect();
+
+    let mut agents_breakdown_vec: Vec<AgentAgg> = agent_aggs.into_values().collect();
+    agents_breakdown_vec.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    let agents_breakdown: Vec<serde_json::Value> = agents_breakdown_vec
+        .into_iter()
+        .map(|a| {
+            let share_pct = if overall_tokens > 0 {
+                ((a.total_tokens as f64 / overall_tokens as f64) * 100.0).round().min(100.0) as u32
+            } else {
+                0
+            };
+            let hit_rate = if a.prompt_tokens > 0 {
+                ((a.cache_read_tokens as f64 / a.prompt_tokens as f64) * 100.0).round().min(100.0) as u32
+            } else {
+                0
+            };
+            json!({
+                "id": a.id,
+                "name": a.name,
+                "calls": a.calls,
+                "prompt_tokens": a.prompt_tokens,
+                "completion_tokens": a.completion_tokens,
+                "cache_read_tokens": a.cache_read_tokens,
+                "total_tokens": a.total_tokens,
+                "cache_hit_rate_pct": hit_rate,
+                "share_pct": share_pct,
+                "estimated_cost_usd": (a.cost_usd * 100.0).round() / 100.0
+            })
+        })
+        .collect();
+
+    let usage_summary = json!({
+        "calls": total_sessions,
+        "input": total_prompt_tokens,
+        "output": total_completion_tokens,
+        "cache_read": total_cache_read_tokens,
+        "total_tokens": overall_tokens,
+        "cache_hit_rate_pct": overall_cache_hit_rate,
+        "cost_usd": (total_cost_usd * 100.0).round() / 100.0,
+        "models": models_breakdown,
+        "agents": agents_breakdown
+    });
 
     let mut registered_workspaces = Vec::new();
     if let crate::daemon_protocol::DaemonResponse::Status { ref workspaces, .. } = status_res {
@@ -734,6 +935,7 @@ fn build_dashboard_summary(
             "affinity_header": "x-session-affinity"
         },
         "sessions": discovered_sessions,
+        "usage": usage_summary,
         "device": get_device_info()
     });
 

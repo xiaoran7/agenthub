@@ -691,24 +691,73 @@
       font-weight: 500;
     }
 
-    /* Usage Analytics Elements */
-    .usage-grid {
+    /* Usage Analytics Elements (Magpie Standard) */
+    .stats {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 12px;
-    }
-    .progress-track {
-      height: 6px;
-      border-radius: 3px;
-      background: var(--pill);
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: 12px;
       overflow: hidden;
-      margin: 4px 0;
+      flex: none;
     }
-    .progress-thumb {
-      height: 100%;
-      border-radius: 3px;
-      background: var(--accent);
-      transition: width 0.3s ease;
+    .stats.empty {
+      display: block;
+      background: var(--card);
+    }
+    .stats .none {
+      padding: 18px 16px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.5;
+    }
+    .kpi {
+      background: var(--card);
+      padding: 12px 14px 11px;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .kpi b {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -.01em;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.15;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--fg);
+    }
+    .kpi b .u {
+      font-style: normal;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0;
+      color: var(--muted);
+      margin: 0 3px 0 2px;
+    }
+    .kpi span {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .kpi small {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    @media (max-width: 680px) {
+      .stats {
+        grid-template-columns: repeat(2, 1fr);
+      }
     }
 
     /* Modal Dialogs */
@@ -946,43 +995,51 @@
     </div>
   </main>
 
-  <!-- View 3: Usage Analytics -->
+  <!-- View 3: Usage Analytics (Magpie Standard) -->
   <main class="view" id="view-usage">
-    <div class="usage-grid">
-      <div class="hero-tile">
-        <div class="hero-label">总输入 Prompt Tokens</div>
-        <div class="hero-value" style="color:var(--accent);" id="usagePromptTokens">-</div>
-        <div class="progress-track">
-          <div class="progress-thumb" id="usagePromptBar" style="width: 75%;"></div>
-        </div>
-        <div class="hero-sub">Session Affinity 缓存保护区域</div>
+    <!-- Magpie 4-grid KPI tiles -->
+    <div class="stats" id="usageKpiStats">
+      <div class="kpi">
+        <b id="kpiCost">$0.00</b>
+        <span>预估花费 (Cost)</span>
+        <small id="kpiCostSub">基于模型标准费率测算</small>
       </div>
-
-      <div class="hero-tile">
-        <div class="hero-label">总输出 Completion Tokens</div>
-        <div class="hero-value" style="color:var(--green);" id="usageCompletionTokens">-</div>
-        <div class="progress-track">
-          <div class="progress-thumb" id="usageCompletionBar" style="width: 45%;background:var(--green);"></div>
-        </div>
-        <div class="hero-sub">模型推理及代码生成总量</div>
+      <div class="kpi">
+        <b id="kpiTokens">0</b>
+        <span>总 Token 消耗</span>
+        <small id="kpiTokensSub">0 in · 0 out</small>
       </div>
-
-      <div class="hero-tile">
-        <div class="hero-label">预估节省资金 (Prompt Cache)</div>
-        <div class="hero-value" style="color:var(--amber);" id="usageEstimatedSaved">$ -</div>
-        <div class="progress-track">
-          <div class="progress-thumb" id="usageCacheBar" style="width: 90%;background:var(--amber);"></div>
-        </div>
-        <div class="hero-sub">基于 90% 缓存命中率与基准费率测算</div>
+      <div class="kpi">
+        <b id="kpiCache">0</b>
+        <span>缓存读取 (Cache)</span>
+        <small id="kpiCacheSub">hit rate 0%</small>
+      </div>
+      <div class="kpi">
+        <b id="kpiCalls">0</b>
+        <span>总调用会话</span>
+        <small id="kpiCallsSub">已扫描历史会话</small>
       </div>
     </div>
 
-    <div class="list" style="margin-top:6px;">
-      <div style="padding:10px 14px;border-bottom:1px solid var(--line-2);font-weight:600;font-size:12.5px;">
-        模型调用分布与请求统计
+    <!-- Models Breakdown List -->
+    <div class="list" style="margin-top:12px;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--line-2);font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:space-between;">
+        <span>模型用量分布 (Models Breakdown)</span>
+        <span class="pill-tag" id="usageModelsCount">0 种模型</span>
       </div>
-      <div id="usageModelBreakdown" style="padding:10px 14px;display:flex;flex-direction:column;gap:10px;">
-        <!-- Dynamic model usage rows -->
+      <div id="usageModels" style="display:flex;flex-direction:column;">
+        <!-- Dynamic model stat rows -->
+      </div>
+    </div>
+
+    <!-- Agents Breakdown List -->
+    <div class="list" style="margin-top:12px;">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--line-2);font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:space-between;">
+        <span>智能体用量分布 (Agents Breakdown)</span>
+        <span class="pill-tag" id="usageAgentsCount">0 个智能体</span>
+      </div>
+      <div id="usageAgents" style="display:flex;flex-direction:column;">
+        <!-- Dynamic agent stat rows -->
       </div>
     </div>
   </main>
@@ -1127,7 +1184,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       modelsJson: '',
       gatewayJson: '',
       deviceJson: '',
-      sessionsJson: ''
+      sessionsJson: '',
+      usageJson: ''
     };
     let consecutiveFailures = 0;
     let allSessionsData = [];
@@ -1209,8 +1267,13 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const sessionsStr = JSON.stringify(sessions);
         if (sessionsStr !== lastRenderState.sessionsJson) {
           renderSessions(sessions);
-          renderUsageAnalytics(sessions, dashboardData.stats);
           lastRenderState.sessionsJson = sessionsStr;
+        }
+
+        const usageStr = JSON.stringify(dashboardData.usage || {});
+        if (usageStr !== lastRenderState.usageJson || sessionsStr !== lastRenderState.sessionsJson) {
+          renderUsageAnalytics(dashboardData.usage, sessions, dashboardData.stats);
+          lastRenderState.usageJson = usageStr;
         }
       } catch (e) {
         handleFetchFailure();
@@ -1496,14 +1559,49 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     }
 
     // Magpie-grade Number and Cost Formatting
-    function fmtN(n) {
+    function fmtN(n, formatUnitTag = false) {
       if (typeof n !== 'number') n = Number(n) || 0;
-      if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-      if (n >= 1e7) return Math.round(n / 1e6) + 'M';
-      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-      if (n >= 1e5) return Math.round(n / 1e3) + 'K';
-      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-      return String(n);
+      let val = '';
+      let unit = '';
+      if (n >= 1e9) {
+        val = (n / 1e9).toFixed(2);
+        unit = 'B';
+      } else if (n >= 1e7) {
+        val = String(Math.round(n / 1e6));
+        unit = 'M';
+      } else if (n >= 1e6) {
+        val = (n / 1e6).toFixed(1);
+        unit = 'M';
+      } else if (n >= 1e5) {
+        val = String(Math.round(n / 1e3));
+        unit = 'K';
+      } else if (n >= 1e3) {
+        val = (n / 1e3).toFixed(1);
+        unit = 'K';
+      } else {
+        return String(n);
+      }
+      if (formatUnitTag) {
+        return `${val}<i class="u">${unit}</i>`;
+      }
+      return `${val}${unit}`;
+    }
+
+    function getModelIcon(name, size = 18) {
+      const k = String(name || '').toLowerCase().trim();
+      if (k.includes('claude') || k.includes('sonnet') || k.includes('opus') || k.includes('haiku') || k.includes('fable') || k.includes('mythos')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#FAF3EF"/><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill="#D97757" fill-rule="nonzero"/></svg>`;
+      }
+      if (k.includes('gpt') || k.includes('codex') || k.includes('o1') || k.includes('o3') || k.includes('o4')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#3941FF"/><circle cx="12" cy="12" r="5" fill="#FFFFFF"/></svg>`;
+      }
+      if (k.includes('deepseek')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#0066FF"/><path d="M6 14c2-4 6-6 10-4-3 5-7 6-10 4z" fill="#FFFFFF"/></svg>`;
+      }
+      if (k.includes('gemini')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><defs><linearGradient id="m-gemini-${size}" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse"><stop stop-color="#EE4D5D"/><stop offset=".5" stop-color="#B381DD"/><stop offset="1" stop-color="#207CFE"/></linearGradient></defs><rect width="24" height="24" rx="4.5" fill="url(#m-gemini-${size})"/><path d="M12 4v16M4 12h16" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+      }
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>`;
     }
 
     function fmtCostFromTokens(tokens, modelName) {
@@ -1521,76 +1619,201 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       return '';
     }
 
-    // Magpie Usage Analytics
-    function renderUsageAnalytics(sessions, stats) {
-      let promptTotal = 0;
-      let completionTotal = 0;
-      const modelMap = {};
+    // Magpie Standard Usage Analytics
+    function renderUsageAnalytics(usage, sessions, stats) {
+      let costUsd = 0.0;
+      let totalTokens = 0;
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let cacheRead = 0;
+      let cacheHitRate = 0;
+      let calls = 0;
+      let modelsList = [];
+      let agentsList = [];
 
-      (sessions || []).forEach(s => {
-        const pt = Number(s.prompt_tokens) || 0;
-        const ct = Number(s.completion_tokens) || 0;
-        const tt = Number(s.total_tokens) || (pt + ct);
-        promptTotal += pt;
-        completionTotal += ct;
+      if (usage && typeof usage === 'object' && (usage.total_tokens || usage.calls || (usage.models && usage.models.length > 0))) {
+        // Authoritative backend aggregated metrics
+        costUsd = Number(usage.cost_usd) || 0.0;
+        totalTokens = Number(usage.total_tokens) || 0;
+        inputTokens = Number(usage.input) || 0;
+        outputTokens = Number(usage.output) || 0;
+        cacheRead = Number(usage.cache_read) || 0;
+        cacheHitRate = Number(usage.cache_hit_rate_pct) || 0;
+        calls = Number(usage.calls) || (sessions ? sessions.length : 0);
+        modelsList = Array.isArray(usage.models) ? usage.models : [];
+        agentsList = Array.isArray(usage.agents) ? usage.agents : [];
+      } else {
+        // Robust client-side fallback aggregation
+        const modelMap = {};
+        const agentMap = {};
+        (sessions || []).forEach(s => {
+          const pt = Number(s.prompt_tokens) || 0;
+          const ct = Number(s.completion_tokens) || 0;
+          const tt = Number(s.total_tokens) || (pt + ct);
+          const cr = Number(s.cache_read_tokens) || 0;
+          inputTokens += pt;
+          outputTokens += ct;
+          totalTokens += tt;
+          cacheRead += cr;
+          calls++;
 
-        // Extract genuine model name if present
-        let m = (s.model || s.model_name || '').trim();
-        if (!m && s.agent_name) {
-          m = `${s.agent_name} (默认)`;
+          let m = (s.model || s.model_name || '').trim() || 'default';
+          if (!modelMap[m]) modelMap[m] = { name: m, calls: 0, total_tokens: 0, prompt_tokens: 0, cache_read_tokens: 0 };
+          modelMap[m].calls++;
+          modelMap[m].total_tokens += tt;
+          modelMap[m].prompt_tokens += pt;
+          modelMap[m].cache_read_tokens += cr;
+
+          let a = (s.provider || s.agent_name || 'agent').trim();
+          if (!agentMap[a]) agentMap[a] = { id: a, name: a, calls: 0, total_tokens: 0, prompt_tokens: 0, cache_read_tokens: 0 };
+          agentMap[a].calls++;
+          agentMap[a].total_tokens += tt;
+          agentMap[a].prompt_tokens += pt;
+          agentMap[a].cache_read_tokens += cr;
+        });
+
+        if (inputTokens > 0) {
+          cacheHitRate = Math.min(100, Math.round((cacheRead / inputTokens) * 100));
         }
-        if (m) {
-          modelMap[m] = (modelMap[m] || 0) + (tt > 0 ? tt : (pt + ct));
-        }
-      });
 
-      const pElem = document.getElementById('usagePromptTokens');
-      const cElem = document.getElementById('usageCompletionTokens');
-      const sElem = document.getElementById('usageEstimatedSaved');
-      if (pElem) pElem.textContent = promptTotal.toLocaleString();
-      if (cElem) cElem.textContent = completionTotal.toLocaleString();
-      if (sElem) {
-        const savedDollars = ((promptTotal * 0.9 * 12) / 1000000).toFixed(2);
-        sElem.textContent = `$ ${savedDollars}`;
+        const calcCost = (mName, tt) => {
+          const k = mName.toLowerCase();
+          let r = 8.0;
+          if (k.includes('haiku') || k.includes('flash')) r = 0.8;
+          else if (k.includes('opus')) r = 30.0;
+          else if (k.includes('sonnet') || k.includes('fable')) r = 12.0;
+          else if (k.includes('deepseek')) r = 0.55;
+          return (tt * r) / 1000000;
+        };
+
+        const totalAll = Math.max(1, totalTokens);
+        modelsList = Object.values(modelMap).map(m => {
+          const c = calcCost(m.name, m.total_tokens);
+          costUsd += c;
+          const hr = m.prompt_tokens > 0 ? Math.min(100, Math.round((m.cache_read_tokens / m.prompt_tokens) * 100)) : 0;
+          return {
+            name: m.name,
+            calls: m.calls,
+            total_tokens: m.total_tokens,
+            share_pct: Math.min(100, Math.round((m.total_tokens / totalAll) * 100)),
+            cache_hit_rate_pct: hr,
+            estimated_cost_usd: c
+          };
+        });
+        modelsList.sort((a, b) => b.total_tokens - a.total_tokens);
+
+        agentsList = Object.values(agentMap).map(a => {
+          const c = calcCost(a.name, a.total_tokens);
+          const hr = a.prompt_tokens > 0 ? Math.min(100, Math.round((a.cache_read_tokens / a.prompt_tokens) * 100)) : 0;
+          return {
+            id: a.id,
+            name: a.name,
+            calls: a.calls,
+            total_tokens: a.total_tokens,
+            share_pct: Math.min(100, Math.round((a.total_tokens / totalAll) * 100)),
+            cache_hit_rate_pct: hr,
+            estimated_cost_usd: c
+          };
+        });
+        agentsList.sort((a, b) => b.total_tokens - a.total_tokens);
       }
 
-      const breakdownContainer = document.getElementById('usageModelBreakdown');
-      if (!breakdownContainer) return;
+      // Update 4 KPI Cards
+      const costEl = document.getElementById('kpiCost');
+      const tokensEl = document.getElementById('kpiTokens');
+      const tokensSubEl = document.getElementById('kpiTokensSub');
+      const cacheEl = document.getElementById('kpiCache');
+      const cacheSubEl = document.getElementById('kpiCacheSub');
+      const callsEl = document.getElementById('kpiCalls');
+      const callsSubEl = document.getElementById('kpiCallsSub');
 
-      const entries = Object.entries(modelMap);
-      if (entries.length === 0) {
-        breakdownContainer.innerHTML = `
-          <div style="padding:32px 16px;text-align:center;color:var(--muted);font-size:13px;">
-            暂无模型调用数据 (会话产生实际交互后将自动统计 Token 消耗)
-          </div>
-        `;
-        return;
+      if (costEl) costEl.textContent = `≈$${costUsd.toFixed(2)}`;
+      if (tokensEl) tokensEl.innerHTML = fmtN(totalTokens, true);
+      if (tokensSubEl) tokensSubEl.textContent = `${fmtN(inputTokens)} in · ${fmtN(outputTokens)} out`;
+      if (cacheEl) cacheEl.innerHTML = fmtN(cacheRead, true);
+      if (cacheSubEl) cacheSubEl.textContent = `hit rate ${cacheHitRate}%`;
+      if (callsEl) callsEl.textContent = calls.toLocaleString();
+      if (callsSubEl) callsSubEl.textContent = '跨多智能体累计会话';
+
+      // Render Models Breakdown
+      const modelsContainer = document.getElementById('usageModels');
+      const modelsCountEl = document.getElementById('usageModelsCount');
+      if (modelsCountEl) modelsCountEl.textContent = `${modelsList.length} 种模型`;
+
+      if (modelsContainer) {
+        if (modelsList.length === 0) {
+          modelsContainer.innerHTML = `
+            <div style="padding:28px 16px;text-align:center;color:var(--muted);font-size:13px;">
+              暂无模型调用数据 (会话产生实际交互后将自动统计 Token 消耗)
+            </div>
+          `;
+        } else {
+          modelsContainer.innerHTML = modelsList.map(m => {
+            const pct = Math.max(0, Math.min(100, m.share_pct || 0));
+            const cStr = Number(m.estimated_cost_usd || 0).toFixed(2);
+            const iconSvg = getModelIcon(m.name, 20);
+            return `
+              <div class="row stat">
+                ${iconSvg}
+                <div class="who">
+                  <div class="top-line">
+                    <span class="name">${escapeHtml(m.name)}</span>
+                  </div>
+                  <div class="sub">${(m.calls || 0).toLocaleString()} 次调用 · 缓存命中 ${m.cache_hit_rate_pct || 0}%</div>
+                </div>
+                <div class="share" title="${pct}% 调用占比">
+                  <i style="width: ${Math.max(2, pct)}%;"></i>
+                </div>
+                <div class="num">
+                  <b>${fmtN(m.total_tokens || 0)}</b>
+                  <small>${pct}%</small>
+                </div>
+                <div class="cost">≈$${cStr}</div>
+              </div>
+            `;
+          }).join('');
+        }
       }
 
-      // Sort models by token consumption descending
-      entries.sort((a, b) => b[1] - a[1]);
+      // Render Agents Breakdown
+      const agentsContainer = document.getElementById('usageAgents');
+      const agentsCountEl = document.getElementById('usageAgentsCount');
+      if (agentsCountEl) agentsCountEl.textContent = `${agentsList.length} 个智能体`;
 
-      const totalAll = entries.reduce((acc, curr) => acc + curr[1], 0) || 1;
-
-      breakdownContainer.innerHTML = entries.map(([model, count]) => {
-        const pct = Math.min(100, Math.round((count / totalAll) * 100));
-        const costStr = fmtCostFromTokens(count, model);
-        return `
-          <div class="row stat">
-            <div class="who">
-              <span class="name" style="font-size:12.5px;">${escapeHtml(model)}</span>
+      if (agentsContainer) {
+        if (agentsList.length === 0) {
+          agentsContainer.innerHTML = `
+            <div style="padding:28px 16px;text-align:center;color:var(--muted);font-size:13px;">
+              暂无智能体调用数据
             </div>
-            <div class="share" title="${pct}% 调用占比">
-              <i style="width: ${Math.max(2, pct)}%;"></i>
-            </div>
-            <div class="num">
-              <b>${fmtN(count)}</b>
-              <small>${pct}%</small>
-            </div>
-            <div class="cost">${costStr}</div>
-          </div>
-        `;
-      }).join('');
+          `;
+        } else {
+          agentsContainer.innerHTML = agentsList.map(a => {
+            const pct = Math.max(0, Math.min(100, a.share_pct || 0));
+            const cStr = Number(a.estimated_cost_usd || 0).toFixed(2);
+            const iconSvg = getAgentIcon(a.id || a.name, 20);
+            return `
+              <div class="row stat">
+                ${iconSvg}
+                <div class="who">
+                  <div class="top-line">
+                    <span class="name">${escapeHtml(a.name)}</span>
+                  </div>
+                  <div class="sub">${(a.calls || 0).toLocaleString()} 次调用 · 缓存命中 ${a.cache_hit_rate_pct || 0}%</div>
+                </div>
+                <div class="share" title="${pct}% 调用占比">
+                  <i style="width: ${Math.max(2, pct)}%;"></i>
+                </div>
+                <div class="num">
+                  <b>${fmtN(a.total_tokens || 0)}</b>
+                  <small>${pct}%</small>
+                </div>
+                <div class="cost">≈$${cStr}</div>
+              </div>
+            `;
+          }).join('');
+        }
+      }
     }
 
     // Magpie-grade Model Catalog & Token Analytics View
