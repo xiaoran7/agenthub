@@ -13,18 +13,31 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let ico_path = Path::new(&manifest_dir).join("resources").join("icon.ico");
 
+    let manifest_path = Path::new(&manifest_dir).join("resources").join("app.manifest");
+
     println!("cargo:rerun-if-changed=resources/icon.ico");
     println!("cargo:rerun-if-changed=resources/icon.svg");
+    println!("cargo:rerun-if-changed=resources/app.manifest");
     println!("cargo:rerun-if-changed=build.rs");
 
-    if !ico_path.exists() {
+    let mut rc_content = String::new();
+    if ico_path.exists() {
+        rc_content.push_str(&format!(
+            "1 ICON \"{}\"\n",
+            ico_path.to_str().unwrap().replace('\\', "/")
+        ));
+    }
+    if manifest_path.exists() {
+        rc_content.push_str(&format!(
+            "1 24 \"{}\"\n",
+            manifest_path.to_str().unwrap().replace('\\', "/")
+        ));
+    }
+
+    if rc_content.is_empty() {
         return;
     }
 
-    let rc_content = format!(
-        "1 ICON \"{}\"\n",
-        ico_path.to_str().unwrap().replace('\\', "/")
-    );
     let rc_path = Path::new(&out_dir).join("app_icon.rc");
     let res_path = Path::new(&out_dir).join("app_icon.res");
 

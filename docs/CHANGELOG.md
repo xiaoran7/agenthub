@@ -25,6 +25,10 @@
   - 彻底移除配对弹窗输入框中写死的 `value="https://agenthub.tannerlab.xyz"` 生产地址；
   - 采用通用中立的占位提示 `placeholder="例如: https://agenthub.yourdomain.com 或 http://100.x.x.x:3000"`；
   - 弹窗打开时优先自适应回填 `localStorage.getItem('agenthub_custom_gateway')` 或设备已配置网关，用户输入自定义网关地址后自动持久化到本地 `localStorage`，完全交由用户自由支配。
+- **Windows 托盘极简圆润菜单与 Fluent 现代清单 (Compact Rounded Tray Context Menu)**：
+  - **选项极致精简与高质感对齐**：彻底移除冗长笨拙的文本（原“打开桌面控制台”、“打开数据目录 (~/.agenthub)”、“退出 AgentHub Runner”），全面精简为两项超短极简菜单项：`Show App` 与 `Exit`，中间保留纯净细分割线，菜单整体小巧紧凑；
+  - **嵌入 Common Controls v6 现代清单元数据**：新建并在 `.rc` 编译期嵌入 `resources/app.manifest`，启用 Microsoft.Windows.Common-Controls 6.0.0.0 与 PerMonitorV2 高 DPI 感知，使 Windows 11 DWM 自动为 Win32 弹窗和托盘右键菜单应用现代大圆角卡片渲染；
+  - **调用 uxtheme!SetPreferredAppMode 现代主题**：托盘线程加载 `uxtheme.dll` 序号 135 开启系统级主题支持，菜单外观与 Windows 11 Fluent 视觉无缝融合。
 - **产物更新与构建归档（`Deliverables/AgentHub/`）**：
   - 重新编译 Release 原生程序 `agenthub-runner.exe`，重新打包 `AgentHub-Runner-v2.4.79-windows-x64.zip`；
   - 同步更新 `Deliverables/AgentHub/AgentHub-v2.4.79-SHA256.txt` 校验和。

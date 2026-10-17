@@ -81,6 +81,8 @@ mod windows_tray {
         });
 
         thread::spawn(move || unsafe {
+            enable_modern_menu_theme();
+
             let hinstance: HINSTANCE = GetModuleHandleW(null());
             let class_name: Vec<u16> = "AgentHubRunnerTrayClass\0".encode_utf16().collect();
 
@@ -165,18 +167,16 @@ mod windows_tray {
                         SetForegroundWindow(hwnd);
 
                         let hmenu = CreatePopupMenu();
-                        let open_desktop_text: Vec<u16> = "打开桌面控制台\0".encode_utf16().collect();
-                        let open_dir_text: Vec<u16> = "打开数据目录 (~/.agenthub)\0".encode_utf16().collect();
-                        let exit_text: Vec<u16> = "退出 AgentHub Runner\0".encode_utf16().collect();
+                        let show_app_text: Vec<u16> = "Show App\0".encode_utf16().collect();
+                        let exit_text: Vec<u16> = "Exit\0".encode_utf16().collect();
 
-                        AppendMenuW(hmenu, MF_STRING, ID_TRAY_OPEN_DESKTOP, open_desktop_text.as_ptr());
-                        AppendMenuW(hmenu, MF_STRING, ID_TRAY_OPEN_DATA_DIR, open_dir_text.as_ptr());
+                        AppendMenuW(hmenu, MF_STRING, ID_TRAY_OPEN_DESKTOP, show_app_text.as_ptr());
                         AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
                         AppendMenuW(hmenu, MF_STRING, ID_TRAY_EXIT, exit_text.as_ptr());
 
                         TrackPopupMenu(
                             hmenu,
-                            TPM_RIGHTBUTTON,
+                            TPM_RIGHTBUTTON | 0x0020 /* TPM_BOTTOMALIGN */ | 0x0000 /* TPM_LEFTALIGN */,
                             pt.x,
                             pt.y,
                             0,
@@ -325,6 +325,25 @@ mod windows_tray {
                 null(),
                 SW_SHOWNORMAL,
             );
+        }
+    }
+
+    #[allow(non_snake_case)]
+    fn enable_modern_menu_theme() {
+        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+        unsafe {
+            let uxtheme: Vec<u16> = "uxtheme.dll\0".encode_utf16().collect();
+            let module = LoadLibraryW(uxtheme.as_ptr());
+            if module != 0 as _ {
+                // Ordinal 135 is SetPreferredAppMode (Windows 10 1903+ / Windows 11)
+                let set_preferred_app_mode = GetProcAddress(module, 135 as _);
+                if let Some(func) = set_preferred_app_mode {
+                    type FnSetPreferredAppMode = unsafe extern "system" fn(i32) -> i32;
+                    let func: FnSetPreferredAppMode = std::mem::transmute(func);
+                    // 2 = AllowDark (Windows modern theme for menus, native rounded borders and Fluent style)
+                    func(2);
+                }
+            }
         }
     }
 }
