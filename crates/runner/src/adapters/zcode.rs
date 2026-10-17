@@ -33,6 +33,16 @@ pub struct ZCodeSessionEntry {
     pub latest_tool_name: Option<String>,
     pub latest_tool_status: Option<String>,
     pub is_running: bool,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
+    #[serde(default)]
+    pub input_tokens: Option<u64>,
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_read_tokens: Option<u64>,
 }
 
 pub fn normalize_sessions_json(
@@ -151,6 +161,11 @@ mod tests {
             latest_tool_name: Some("Bash".to_string()),
             latest_tool_status: Some("running".to_string()),
             is_running: true,
+            model: Some("gpt-6-luna".to_string()),
+            total_tokens: Some(1200),
+            input_tokens: Some(1000),
+            output_tokens: Some(200),
+            cache_read_tokens: Some(0),
         };
 
         let meta = ObservationMeta::now("device-test");
@@ -180,6 +195,11 @@ mod tests {
             latest_tool_name: None,
             latest_tool_status: None,
             is_running: false,
+            model: None,
+            total_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
         };
 
         let meta = ObservationMeta::now("device-test");

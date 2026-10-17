@@ -1598,8 +1598,8 @@ mod tests {
         println!("Collected {} claude sessions for remote", entries.len());
         let mut empty_count = 0;
         let mut ok_count = 0;
-        for (id, _cwd, _title) in entries.iter() {
-            let prefixed = format!("claude_{}", id);
+        for entry in entries.iter() {
+            let prefixed = format!("claude_{}", entry.session_id);
             let messages = load_session_conversation(&home, AgentType::ClaudeCode, &prefixed);
             if messages.is_empty() {
                 empty_count += 1;

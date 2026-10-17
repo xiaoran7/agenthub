@@ -1,6 +1,33 @@
 # Changelog
 
-## [2.4.79] - 2026-10-16
+## [2.4.79] - 2026-10-17
+
+### 真实拉取用量与真实模型分布、会话按时间倒序排列、解除生产网关地址硬编码
+
+根据用户反馈（“用量硬编码模型没有真正拉取、会话按agent排序没有按时间排序、生产地址不要硬编码让用户自己来”），实施全面彻底重构与闭环：
+
+- **真实拉取用量与真实模型分布 (Dynamic Real Model & Token Aggregation)**：
+  - **多引擎全量提取真实模型与 Token**：
+    - **Claude Code**：深度扫描 `~/.claude/projects/*/*.jsonl`，真实提取 `type == "assistant"` 消息内的 `message.model` 以及精准的 `input_tokens`、`output_tokens`、`cache_read_input_tokens` 与 `cache_creation_input_tokens`；
+    - **OpenAI Codex**：直接从本地 `state_5.sqlite` 查询 `model` 与 `tokens_used` 字段，严格遵循隐私约束，同时输出真实的会话模型与消耗 Token；
+    - **ZCode**：从 `~/.zcode/cli/db/db.sqlite` 提取会话的真实 `data.modelID`、`input_tokens`、`output_tokens`、`total_tokens` 与缓存读 Token；
+    - **Antigravity / Grok Build**：从 JSONL/Summary 提取真实模型与修改时间戳；
+  - **彻底清除所有硬编码假模型与假数据**：
+    - 前端彻底拔除 `claude-3-7-sonnet` 假模型回退与假数据（如 `1248500`、`850000` 等），完全以会话中实际抓取到的模型（如 `gemini-3.8-flash-n`、`gpt-6-luna`、`mimo-v2.6-flash-free`、`claude-3-5-sonnet` 等）与真实 Token 计数进行聚合；
+    - 无调用数据时展示优雅的 0 状态提示，绝不伪造虚假数据。
+- **会话按时间倒序排列 (Chronological Session Ordering)**：
+  - **后端统一发现排序**：在 `crates/runner/src/remote_host.rs` 的 `discover()` 中，所有来自 Codex、ZCode、Claude Code、Antigravity、Grok 的会话统一定位其最新活动时间戳（`last_activity_at_ms`），并在组合后整体按时间戳进行全局降序排序，最新的会话永远排在最前面，彻底打破原先按 Provider 堆叠的次序；
+  - **前端双层时间倒序**：
+    - 前端 `renderSessions` 对全量会话做最新时间降序排列；
+    - 工作区分组依据各自组内最新会话的时间倒序排列（最近活跃的项目目录排在最上方）；
+    - 组内会话严格按最新活动时间倒序排列，并智能格式化为人类可读的友好相对时间（如“刚刚”、“5分钟前”、“2小时前”、“10月17日 14:30”）。
+- **解除生产网关地址硬编码 (User-Configurable Gateway & LocalStorage Persistence)**：
+  - 彻底移除配对弹窗输入框中写死的 `value="https://agenthub.tannerlab.xyz"` 生产地址；
+  - 采用通用中立的占位提示 `placeholder="例如: https://agenthub.yourdomain.com 或 http://100.x.x.x:3000"`；
+  - 弹窗打开时优先自适应回填 `localStorage.getItem('agenthub_custom_gateway')` 或设备已配置网关，用户输入自定义网关地址后自动持久化到本地 `localStorage`，完全交由用户自由支配。
+- **产物更新与构建归档（`Deliverables/AgentHub/`）**：
+  - 重新编译 Release 原生程序 `agenthub-runner.exe`，重新打包 `AgentHub-Runner-v2.4.79-windows-x64.zip`；
+  - 同步更新 `Deliverables/AgentHub/AgentHub-v2.4.79-SHA256.txt` 校验和。
 
 ### 字体排版与对比度重构、清除无后端按钮、全面解除硬编码与突出云端 Web 绑定
 

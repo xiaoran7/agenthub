@@ -235,6 +235,22 @@ pub struct ClaudeTranscriptEntry {
     /// a `custom-title.json`, so it otherwise looks identical to a real one in
     /// the sidebar while Claude Code's own `/resume` list hides it.
     pub has_output: bool,
+    pub model: Option<String>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cache_read_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeRemoteSessionEntry {
+    pub session_id: String,
+    pub cwd: String,
+    pub title: Option<String>,
+    pub last_activity_at_ms: i64,
+    pub model: Option<String>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cache_read_tokens: u64,
 }
 
 /// Enumerates Claude Code's documented local transcript store without invoking
@@ -929,6 +945,10 @@ fn read_claude_transcript_metadata(
     let mut title = None;
     let mut started_at_ms: Option<i64> = None;
     let mut has_output = false;
+    let mut model = None;
+    let mut prompt_tokens: u64 = 0;
+    let mut completion_tokens: u64 = 0;
+    let mut cache_read_tokens: u64 = 0;
 
     // Metadata is repeated on transcript entries. Bound the scan so a damaged
     // or adversarial transcript cannot make background collection unbounded.
@@ -950,6 +970,25 @@ fn read_claude_transcript_metadata(
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if value.get("type").and_then(Value::as_str) == Some("assistant") {
+            has_output = true;
+            if model.is_none() {
+                model = value
+                    .pointer("/message/model")
+                    .or_else(|| value.get("model"))
+                    .and_then(Value::as_str)
+                    .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS));
+            }
+            if let Some(usage) = value.pointer("/message/usage") {
+                let input = usage_u64(usage, "input_tokens");
+                let output = usage_u64(usage, "output_tokens");
+                let cache_read = usage_u64(usage, "cache_read_input_tokens");
+                let cache_write = usage_u64(usage, "cache_creation_input_tokens");
+                prompt_tokens = prompt_tokens.saturating_add(input).saturating_add(cache_read).saturating_add(cache_write);
+                completion_tokens = completion_tokens.saturating_add(output);
+                cache_read_tokens = cache_read_tokens.saturating_add(cache_read);
+            }
+        }
         if !has_output && is_assistant_output(&value) {
             has_output = true;
         }
@@ -984,6 +1023,7 @@ fn read_claude_transcript_metadata(
             && cwd.is_some()
             && started_at_ms.is_some()
             && title.is_some()
+            && model.is_some()
         {
             break;
         }
@@ -1003,6 +1043,10 @@ fn read_claude_transcript_metadata(
         started_at_ms,
         last_activity_at_ms,
         has_output,
+        model,
+        prompt_tokens,
+        completion_tokens,
+        cache_read_tokens,
     }))
 }
 
@@ -1104,7 +1148,7 @@ pub fn find_antigravity_session_info(
 }
 
 pub fn collect_antigravity_sessions_for_remote()
--> Result<Vec<(String, String, Option<String>)>, CollectorError> {
+-> Result<Vec<(String, String, Option<String>, i64)>, CollectorError> {
     let Some(home) = discover_antigravity_home()? else {
         return Ok(Vec::new());
     };
@@ -1138,7 +1182,7 @@ pub fn collect_antigravity_sessions_for_remote()
     candidate_transcripts.truncate(2000);
 
     let mut sessions = Vec::with_capacity(candidate_transcripts.len());
-    for (_, session_id, transcript_path) in candidate_transcripts {
+    for (modified_at_ms, session_id, transcript_path) in candidate_transcripts {
         let (_, cwd, _) = read_antigravity_transcript_sample(&transcript_path, &program)?;
         let mut title = None;
         if let Ok(file) = fs::File::open(&transcript_path) {
@@ -1160,7 +1204,7 @@ pub fn collect_antigravity_sessions_for_remote()
                 }
             }
         }
-        sessions.push((session_id, cwd.unwrap_or_default(), title));
+        sessions.push((session_id, cwd.unwrap_or_default(), title, modified_at_ms));
     }
     Ok(sessions)
 }
@@ -1205,7 +1249,7 @@ pub fn find_grok_session_info(
 }
 
 pub fn collect_grok_sessions_for_remote()
--> Result<Vec<(String, String, Option<String>)>, CollectorError> {
+-> Result<Vec<(String, String, Option<String>, Option<String>, i64)>, CollectorError> {
     let home = discover_grok_home()?;
     let program = "Grok remote session store".to_owned();
     let sessions_dir = home.join("sessions");
@@ -1235,7 +1279,14 @@ pub fn collect_grok_sessions_for_remote()
             {
                 let cwd = summary.info.cwd.unwrap_or_default();
                 let title = summary.generated_title;
-                sessions.push((session_id, cwd, title));
+                let model = summary.current_model_id;
+                let time_ms = summary
+                    .last_active_at
+                    .or(summary.updated_at)
+                    .and_then(|t| DateTime::parse_from_rfc3339(&t).ok())
+                    .map(|d| d.timestamp_millis())
+                    .unwrap_or(0);
+                sessions.push((session_id, cwd, title, model, time_ms));
             }
         }
     }
@@ -1274,7 +1325,7 @@ pub fn find_claude_session_info(
 }
 
 pub fn collect_claude_sessions_for_remote()
--> Result<Vec<(String, String, Option<String>)>, CollectorError> {
+-> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError> {
     let config_dir = discover_claude_config_dir()?;
     let projects_dir = config_dir.join("projects");
     if !projects_dir.is_dir() {
@@ -1318,21 +1369,22 @@ pub fn collect_claude_sessions_for_remote()
             if let Some(entry) = read_claude_transcript_metadata(&path, &program)?
                 && entry.has_output
             {
-                entries.push((
-                    entry.session_id,
-                    entry.cwd,
-                    entry.title,
-                    entry.last_activity_at_ms,
-                ));
+                entries.push(ClaudeRemoteSessionEntry {
+                    session_id: entry.session_id,
+                    cwd: entry.cwd,
+                    title: entry.title,
+                    last_activity_at_ms: entry.last_activity_at_ms.unwrap_or(0),
+                    model: entry.model,
+                    prompt_tokens: entry.prompt_tokens,
+                    completion_tokens: entry.completion_tokens,
+                    cache_read_tokens: entry.cache_read_tokens,
+                });
             }
         }
     }
-    entries.sort_by_key(|entry| std::cmp::Reverse(entry.3));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_activity_at_ms));
     entries.truncate(5000);
-    Ok(entries
-        .into_iter()
-        .map(|(id, cwd, title, _)| (id, cwd, title))
-        .collect())
+    Ok(entries)
 }
 
 /// Reads Codex's metadata-only state database when an app-server executable is
@@ -1397,8 +1449,10 @@ pub fn collect_codex_local_threads_from(
     } else {
         "updated_at"
     };
+    let model_expr = optional_column(&columns, &["model"]);
+    let tokens_expr = optional_column(&columns, &["tokens_used"]);
     let sql = format!(
-        "SELECT id, cwd, {created}, {updated}, {recency}, {source} FROM threads{archived_filter} ORDER BY {order_by} DESC LIMIT ?1"
+        "SELECT id, cwd, {created}, {updated}, {recency}, {source}, {model_expr}, {tokens_expr} FROM threads{archived_filter} ORDER BY {order_by} DESC LIMIT ?1"
     );
     let mut statement = connection
         .prepare(&sql)
@@ -1408,15 +1462,37 @@ pub fn collect_codex_local_threads_from(
         })?;
     let rows = statement
         .query_map([i64::from(limit)], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "cwd": row.get::<_, String>(1).unwrap_or_default(),
-                "createdAt": row.get::<_, Option<i64>>(2)?.unwrap_or_default(),
-                "updatedAt": row.get::<_, Option<i64>>(3)?.unwrap_or_default(),
-                "recencyAt": row.get::<_, Option<i64>>(4)?.unwrap_or_default(),
-                "source": row.get::<_, String>(5).unwrap_or_else(|_| "localStore".to_owned()),
+            let id = row.get::<_, String>(0)?;
+            let cwd = row.get::<_, String>(1).unwrap_or_default();
+            let created_at = row.get::<_, Option<i64>>(2)?.unwrap_or_default();
+            let updated_at = row.get::<_, Option<i64>>(3)?.unwrap_or_default();
+            let recency_at = row.get::<_, Option<i64>>(4)?.unwrap_or_default();
+            let source = row.get::<_, String>(5).unwrap_or_else(|_| "localStore".to_owned());
+            let model = row.get::<_, Option<String>>(6).ok().flatten();
+            let tokens_used = row.get::<_, Option<i64>>(7).ok().flatten().unwrap_or(0).max(0) as u64;
+            let last_activity_at_ms = recency_at.max(updated_at).max(created_at);
+
+            let mut item = json!({
+                "id": id,
+                "session_id": id,
+                "cwd": cwd,
+                "workspace_path": cwd,
+                "createdAt": created_at,
+                "updatedAt": updated_at,
+                "recencyAt": recency_at,
+                "last_activity_at_ms": last_activity_at_ms,
+                "source": source,
                 "status": { "type": "persisted" }
-            }))
+            });
+            if let Some(m) = model {
+                item["model"] = json!(m);
+            }
+            if tokens_used > 0 {
+                item["total_tokens"] = json!(tokens_used);
+                item["prompt_tokens"] = json!(tokens_used);
+                item["completion_tokens"] = json!(0);
+            }
+            Ok(item)
         })
         .map_err(|source| CollectorError::Database {
             program: program.clone(),
@@ -2780,7 +2856,12 @@ pub fn collect_zcode_sessions_from(
             ) as title,
             s.directory,
             s.time_created,
-            s.time_updated
+            s.time_updated,
+            (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as model,
+            (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as total_tokens,
+            (SELECT json_extract(data, '$.tokens.input') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as input_tokens,
+            (SELECT json_extract(data, '$.tokens.output') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as output_tokens,
+            (SELECT json_extract(data, '$.tokens.cache.read') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as cache_read_tokens
         FROM session s
         WHERE (s.parent_id IS NULL OR s.parent_id = '')
           AND s.id NOT LIKE 'sess_subagent%'
@@ -2802,6 +2883,11 @@ pub fn collect_zcode_sessions_from(
             let cwd: Option<String> = row.get(2)?;
             let time_created: i64 = row.get(3)?;
             let time_updated: i64 = row.get(4)?;
+            let model: Option<String> = row.get(5)?;
+            let total_tokens: Option<i64> = row.get(6)?;
+            let input_tokens: Option<i64> = row.get(7)?;
+            let output_tokens: Option<i64> = row.get(8)?;
+            let cache_read_tokens: Option<i64> = row.get(9)?;
 
             Ok(crate::adapters::zcode::ZCodeSessionEntry {
                 session_id,
@@ -2814,6 +2900,11 @@ pub fn collect_zcode_sessions_from(
                 latest_tool_name: None,
                 latest_tool_status: None,
                 is_running: false,
+                model,
+                total_tokens: total_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
+                input_tokens: input_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
+                output_tokens: output_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
+                cache_read_tokens: cache_read_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
             })
         })
         .map_err(|source| CollectorError::Database {

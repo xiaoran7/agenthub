@@ -1048,6 +1048,7 @@ impl NativeTransport for MultiProviderTransport {
                 if let Some(items) = response["data"].as_array_mut() {
                     for item in items {
                         item["provider"] = json!("codex");
+                        item["agent_name"] = json!("codex");
                         item["resumable"] = json!(self.codex.is_some());
                     }
                 }
@@ -1060,11 +1061,26 @@ impl NativeTransport for MultiProviderTransport {
                     && let Some(items) = response["data"].as_array_mut()
                 {
                     for entry in entries.into_iter().take(5000) {
+                        let pt = entry.input_tokens.unwrap_or(0);
+                        let ct = entry.output_tokens.unwrap_or(0);
+                        let tt = entry.total_tokens.unwrap_or(pt + ct);
                         items.push(json!({
                             "id": entry.session_id,
+                            "session_id": entry.session_id,
                             "cwd": entry.cwd,
-                            "name": entry.title,
+                            "workspace_path": entry.cwd,
+                            "name": entry.title.clone().unwrap_or_else(|| entry.session_id.clone()),
+                            "title": entry.title,
                             "provider": "zcode",
+                            "agent_name": "zcode",
+                            "model": entry.model,
+                            "total_tokens": tt,
+                            "prompt_tokens": pt,
+                            "completion_tokens": ct,
+                            "cache_read_tokens": entry.cache_read_tokens.unwrap_or(0),
+                            "last_activity_at_ms": entry.time_updated,
+                            "time_updated": entry.time_updated,
+                            "time_created": entry.time_created,
                             "resumable": true,
                             "status": { "type": "idle" }
                         }));
@@ -1073,12 +1089,22 @@ impl NativeTransport for MultiProviderTransport {
                 if let Ok(claude_entries) = crate::collectors::collect_claude_sessions_for_remote()
                     && let Some(items) = response["data"].as_array_mut()
                 {
-                    for (session_id, cwd, title) in claude_entries {
+                    for entry in claude_entries {
                         items.push(json!({
-                            "id": format!("claude_{}", session_id),
-                            "cwd": cwd,
-                            "name": title.unwrap_or_else(|| session_id.clone()),
+                            "id": format!("claude_{}", entry.session_id),
+                            "session_id": format!("claude_{}", entry.session_id),
+                            "cwd": entry.cwd,
+                            "workspace_path": entry.cwd,
+                            "name": entry.title.clone().unwrap_or_else(|| entry.session_id.clone()),
+                            "title": entry.title,
                             "provider": "claude_code",
+                            "agent_name": "claude_code",
+                            "model": entry.model,
+                            "prompt_tokens": entry.prompt_tokens,
+                            "completion_tokens": entry.completion_tokens,
+                            "total_tokens": entry.prompt_tokens + entry.completion_tokens,
+                            "cache_read_tokens": entry.cache_read_tokens,
+                            "last_activity_at_ms": entry.last_activity_at_ms,
                             "status": { "type": "idle" }
                         }));
                     }
@@ -1087,12 +1113,17 @@ impl NativeTransport for MultiProviderTransport {
                     crate::collectors::collect_antigravity_sessions_for_remote()
                     && let Some(items) = response["data"].as_array_mut()
                 {
-                    for (session_id, cwd, title) in antigravity_entries {
+                    for (session_id, cwd, title, modified_at_ms) in antigravity_entries {
                         items.push(json!({
                             "id": format!("antigravity_{}", session_id),
+                            "session_id": format!("antigravity_{}", session_id),
                             "cwd": cwd,
-                            "name": title.unwrap_or_else(|| session_id.clone()),
+                            "workspace_path": cwd,
+                            "name": title.clone().unwrap_or_else(|| session_id.clone()),
+                            "title": title,
                             "provider": "antigravity",
+                            "agent_name": "antigravity",
+                            "last_activity_at_ms": modified_at_ms,
                             "status": { "type": "idle" }
                         }));
                     }
@@ -1100,15 +1131,33 @@ impl NativeTransport for MultiProviderTransport {
                 if let Ok(grok_entries) = crate::collectors::collect_grok_sessions_for_remote()
                     && let Some(items) = response["data"].as_array_mut()
                 {
-                    for (session_id, cwd, title) in grok_entries {
+                    for (session_id, cwd, title, model, time_ms) in grok_entries {
                         items.push(json!({
                             "id": format!("grok_{}", session_id),
+                            "session_id": format!("grok_{}", session_id),
                             "cwd": cwd,
-                            "name": title.unwrap_or_else(|| session_id.clone()),
+                            "workspace_path": cwd,
+                            "name": title.clone().unwrap_or_else(|| session_id.clone()),
+                            "title": title,
                             "provider": "grok_build",
+                            "agent_name": "grok_build",
+                            "model": model,
+                            "last_activity_at_ms": time_ms,
                             "status": { "type": "idle" }
                         }));
                     }
+                }
+                if let Some(items) = response["data"].as_array_mut() {
+                    items.sort_by_key(|item| {
+                        let ms = item.get("last_activity_at_ms")
+                            .and_then(Value::as_i64)
+                            .or_else(|| item.get("updatedAt").and_then(Value::as_i64))
+                            .or_else(|| item.get("time_updated").and_then(Value::as_i64))
+                            .or_else(|| item.get("recencyAt").and_then(Value::as_i64))
+                            .or_else(|| item.get("createdAt").and_then(Value::as_i64))
+                            .unwrap_or(0);
+                        std::cmp::Reverse(ms)
+                    });
                 }
                 Ok(response)
             }

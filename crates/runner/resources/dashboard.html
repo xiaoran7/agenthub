@@ -1087,7 +1087,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       <form id="pairForm" onsubmit="submitDevicePairing(event)" style="display:flex;flex-direction:column;gap:10px;">
         <div class="form-group">
           <label class="form-label" for="gatewayInput">AgentHub 网关地址:</label>
-          <input class="form-input" id="gatewayInput" type="text" placeholder="https://agenthub.example.com" value="https://agenthub.tannerlab.xyz">
+          <input class="form-input" id="gatewayInput" type="text" placeholder="例如: https://agenthub.yourdomain.com 或 http://100.x.x.x:3000">
         </div>
         <div class="form-group">
           <label class="form-label" for="bindingCodeInput">配对绑定码:</label>
@@ -1356,7 +1356,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (!sessions || sessions.length === 0) {
         container.innerHTML = `
           <div class="list" style="padding:28px;text-align:center;color:var(--muted);">
-            暂未解析到历史会话记录 (正在后台扫描 Claude Code / Codex / Antigravity 会话数据)
+            暂未解析到历史会话记录 (正在后台扫描 Claude Code / Codex / ZCode / Antigravity 会话数据)
           </div>
         `;
         if (badge) badge.textContent = '0 个历史会话';
@@ -1365,9 +1365,16 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       if (badge) badge.textContent = `${sessions.length} 个历史会话`;
 
-      // Group sessions by workspace
+      // Sort sessions chronologically descending (newest activity first)
+      const sortedSessions = [...sessions].sort((a, b) => {
+        const ta = a.last_activity_at_ms || a.time_updated || a.updatedAt || a.recencyAt || a.createdAt || 0;
+        const tb = b.last_activity_at_ms || b.time_updated || b.updatedAt || b.recencyAt || b.createdAt || 0;
+        return tb - ta;
+      });
+
+      // Group sessions by workspace while preserving recency order
       const groups = {};
-      sessions.forEach(s => {
+      sortedSessions.forEach(s => {
         const key = s.workspace_path || s.cwd || '默认工作区';
         if (!groups[key]) {
           groups[key] = {
@@ -1379,21 +1386,54 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         groups[key].items.push(s);
       });
 
-      const groupKeys = Object.keys(groups);
+      // Sort workspace groups by their latest session's activity timestamp descending
+      const groupKeys = Object.keys(groups).sort((k1, k2) => {
+        const max1 = Math.max(0, ...groups[k1].items.map(s => s.last_activity_at_ms || s.time_updated || s.updatedAt || s.recencyAt || s.createdAt || 0));
+        const max2 = Math.max(0, ...groups[k2].items.map(s => s.last_activity_at_ms || s.time_updated || s.updatedAt || s.recencyAt || s.createdAt || 0));
+        return max2 - max1;
+      });
+
       container.innerHTML = groupKeys.map((k, idx) => {
         const grp = groups[k];
         const safePath = escapeHtml(grp.path);
         const safeName = escapeHtml(grp.name);
         const count = grp.items.length;
 
+        // Inside each group, ensure sessions are sorted chronologically descending
+        grp.items.sort((a, b) => {
+          const ta = a.last_activity_at_ms || a.time_updated || a.updatedAt || a.recencyAt || a.createdAt || 0;
+          const tb = b.last_activity_at_ms || b.time_updated || b.updatedAt || b.recencyAt || b.createdAt || 0;
+          return tb - ta;
+        });
+
         const itemsHtml = grp.items.map(item => {
           const sid = escapeHtml(item.session_id || item.id || 'unknown');
-          const prompt = escapeHtml(item.prompt || item.title || item.first_prompt || '无标题会话');
-          const rawProvider = item.provider || item.agent_name || (sid.startsWith('sess_') ? 'zcode' : (sid.startsWith('antigravity_') ? 'antigravity' : (sid.startsWith('claude_') ? 'claude_code' : 'claude')));
+          const prompt = escapeHtml(item.prompt || item.title || item.first_prompt || item.name || '无标题会话');
+          const rawProvider = item.provider || item.agent_name || (sid.startsWith('sess_') ? 'zcode' : (sid.startsWith('antigravity_') ? 'antigravity' : (sid.startsWith('claude_') ? 'claude_code' : (sid.startsWith('grok_') ? 'grok_build' : 'codex'))));
           const provider = escapeHtml(rawProvider);
           const iconHtml = getAgentIcon(rawProvider, 18);
-          const timeStr = escapeHtml(item.relative_time || item.created_at || '最近');
-          const tokens = item.total_tokens ? item.total_tokens.toLocaleString() : (item.prompt_tokens ? (item.prompt_tokens + (item.completion_tokens || 0)).toLocaleString() : '-');
+
+          let timeStr = item.relative_time;
+          if (!timeStr) {
+            const ts = item.last_activity_at_ms || item.time_updated || item.updatedAt || item.recencyAt || item.createdAt;
+            if (ts) {
+              const ms = ts < 10000000000 ? ts * 1000 : ts;
+              const date = new Date(ms);
+              const now = Date.now();
+              const diffMin = Math.round((now - ms) / 60000);
+              if (diffMin < 1) timeStr = '刚刚';
+              else if (diffMin < 60) timeStr = `${diffMin}分钟前`;
+              else if (diffMin < 1440) timeStr = `${Math.floor(diffMin / 60)}小时前`;
+              else {
+                timeStr = `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+              }
+            } else {
+              timeStr = item.created_at || '最近';
+            }
+          }
+          timeStr = escapeHtml(timeStr);
+
+          const tokens = item.total_tokens ? Number(item.total_tokens).toLocaleString() : (item.prompt_tokens ? (Number(item.prompt_tokens) + (Number(item.completion_tokens) || 0)).toLocaleString() : '-');
 
           const modelName = escapeHtml(item.model || item.model_name || '');
           const modelTag = modelName ? `<span class="pill-tag">${modelName}</span>` : '';
@@ -1487,20 +1527,22 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       let completionTotal = 0;
       const modelMap = {};
 
-      sessions.forEach(s => {
-        const pt = s.prompt_tokens || 0;
-        const ct = s.completion_tokens || 0;
+      (sessions || []).forEach(s => {
+        const pt = Number(s.prompt_tokens) || 0;
+        const ct = Number(s.completion_tokens) || 0;
+        const tt = Number(s.total_tokens) || (pt + ct);
         promptTotal += pt;
         completionTotal += ct;
 
-        const m = s.model || s.agent_name || 'claude-3-7-sonnet';
-        modelMap[m] = (modelMap[m] || 0) + (pt + ct);
+        // Extract genuine model name if present
+        let m = (s.model || s.model_name || '').trim();
+        if (!m && s.agent_name) {
+          m = `${s.agent_name} (默认)`;
+        }
+        if (m) {
+          modelMap[m] = (modelMap[m] || 0) + (tt > 0 ? tt : (pt + ct));
+        }
       });
-
-      if (promptTotal === 0 && stats && stats.tokens_saved) {
-        promptTotal = 1248500;
-        completionTotal = 312000;
-      }
 
       const pElem = document.getElementById('usagePromptTokens');
       const cElem = document.getElementById('usageCompletionTokens');
@@ -1517,8 +1559,17 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       const entries = Object.entries(modelMap);
       if (entries.length === 0) {
-        entries.push(['claude-3-7-sonnet', 850000], ['claude-3-5-sonnet', 420000], ['codex-gpt-4o', 180000]);
+        breakdownContainer.innerHTML = `
+          <div style="padding:32px 16px;text-align:center;color:var(--muted);font-size:13px;">
+            暂无模型调用数据 (会话产生实际交互后将自动统计 Token 消耗)
+          </div>
+        `;
+        return;
       }
+
+      // Sort models by token consumption descending
+      entries.sort((a, b) => b[1] - a[1]);
+
       const totalAll = entries.reduce((acc, curr) => acc + curr[1], 0) || 1;
 
       breakdownContainer.innerHTML = entries.map(([model, count]) => {
@@ -1925,6 +1976,13 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     function openPairModal() {
       const modal = document.getElementById('pairModal');
       if (modal) modal.style.display = 'flex';
+      const gatewayInput = document.getElementById('gatewayInput');
+      if (gatewayInput && !gatewayInput.value) {
+        const savedGateway = localStorage.getItem('agenthub_custom_gateway') ||
+                             (dashboardData && dashboardData.device && dashboardData.device.gateway_url) ||
+                             (dashboardData && dashboardData.gateway && dashboardData.gateway.url) || '';
+        if (savedGateway) gatewayInput.value = savedGateway;
+      }
       if (dashboardData && dashboardData.device) {
         renderDevice(dashboardData.device);
       }
@@ -1960,6 +2018,10 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         alert('请输入配对绑定码');
         return;
       }
+
+      try {
+        localStorage.setItem('agenthub_custom_gateway', gateway);
+      } catch (e) {}
 
       const origText = submitBtn.innerHTML;
       submitBtn.disabled = true;
