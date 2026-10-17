@@ -1416,6 +1416,18 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const badge = document.getElementById('sessionCountBadge');
       if (!container) return;
 
+      const seen = new Set();
+      const dedupedSessions = [];
+      for (const s of (sessions || [])) {
+        const sid = s.provider_session_id || s.id || s.session_id;
+        if (sid) {
+          if (seen.has(sid)) continue;
+          seen.add(sid);
+        }
+        dedupedSessions.push(s);
+      }
+      sessions = dedupedSessions;
+
       if (!sessions || sessions.length === 0) {
         container.innerHTML = `
           <div class="list" style="padding:28px;text-align:center;color:var(--muted);">
@@ -1599,7 +1611,25 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#0066FF"/><path d="M6 14c2-4 6-6 10-4-3 5-7 6-10 4z" fill="#FFFFFF"/></svg>`;
       }
       if (k.includes('gemini')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><defs><linearGradient id="m-gemini-${size}" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse"><stop stop-color="#EE4D5D"/><stop offset=".5" stop-color="#B381DD"/><stop offset="1" stop-color="#207CFE"/></linearGradient></defs><rect width="24" height="24" rx="4.5" fill="url(#m-gemini-${size})"/><path d="M12 4v16M4 12h16" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><defs><linearGradient id="m-gemini-${size}" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse"><stop stop-color="#EE4D5D"/><stop offset=".5" stop-color="#B381DD"/><stop offset="1" stop-color="#207CFE"/></linearGradient></defs><rect width="24" height="24" rx="4.5" fill="url(#m-gemini-${size})"/><path d="M12 3.5C12 8.194 8.194 12 3.5 12C8.194 12 12 15.806 12 20.5C12 15.806 15.806 12 20.5 12C15.806 12 12 8.194 12 3.5Z" fill="#FFFFFF"/></svg>`;
+      }
+      if (k.includes('qwen')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#615CED"/><path d="M12 5.5l5.5 3.5v6l-5.5 3.5L6.5 15V9L12 5.5z" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/></svg>`;
+      }
+      if (k.includes('minimax') || k.includes('abab')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#FF4D4F"/><path d="M6 15V9l4 4 4-4v6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      }
+      if (k.includes('glm') || k.includes('zhipu')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#0F62FE"/><circle cx="12" cy="12" r="5" stroke="#FFFFFF" stroke-width="2.2"/><circle cx="12" cy="12" r="1.8" fill="#FFFFFF"/></svg>`;
+      }
+      if (k.includes('grok')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M7 17l10-10M17 17L7 7" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+      }
+      if (k.includes('step')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#2563EB"/><path d="M6 18h4v-4h4v-4h4V6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      }
+      if (k.includes('stealth') || k.includes('bunny')) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#7C3AED"/><path d="M12 4l3 6-3 4-3-4 3-6zm0 10l4 6H8l4-6z" fill="#FFFFFF"/></svg>`;
       }
       return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>`;
     }

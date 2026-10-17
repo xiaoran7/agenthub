@@ -2,6 +2,21 @@
 
 ## [2.4.79] - 2026-10-17
 
+### 修复跨智能体分页导致的会话全量重复解析缺陷与 Google Gemini 官方四角星矢量图标 (Session Deduplication & Authentic Gemini Icon)
+
+- **跨智能体分页边界漏洞修复与多重去重保障 (Multi-Provider Pagination Boundary Fix)**：
+  - **根因分析**：在 `crates/runner/src/remote_host.rs` 的 `thread/list` 方法中，当存在 Codex 本地会话跨页游标（`nextCursor`）时，`discover()` 会进入 `loop` 请求下一页；但原实现中未校验请求是否为首页，导致每一页均无条件重复追加全部 306 个 Claude Code 会话、320 个 ZCode 会话及 Antigravity/Grok 会话，使得总会话数由真实的 724 个激增至 1,355 个，且相邻显示完全重复。
+  - **后端分页隔离**：在 `thread/list` 中引入 `is_first_page = params.get("cursor").map_or(true, ...)` 门禁，外部智能体历史会话仅在首页注入，后续游标请求仅处理对应宿主分页数据。
+  - **后端发现去重管道**：在 `discover()` 收集 `candidates` 与 `web_server.rs` 聚合 `discovered_sessions` 时增加基于 `provider_session_id` 的 `HashSet` 集合去重，确保即使存在任何网络或宿主级重叠候选也不会被二次计数或计费。
+  - **前端防护保障**：在 `dashboard.html` 的 `renderSessions` 中引入客户端 `Set` 快速去重，保障历史会话树图结构唯一展示。
+- **Google Gemini 官方 4 尖曲面星芒矢量图标重构 (Authentic Gemini Sparkle Icon)**：
+  - 彻底替换 `dashboard.html` 中 `getModelIcon` 将 Gemini 错误绘制为类似医疗十字/加号（`M12 4v16M4 12h16`）的临时占位符，采用 Google Gemini 官方标准的 4-pointed curved star（曲面四角星芒星）高精矢量路径（`M12 3.5C12 8.194 ...`），配合 Google 经典红紫蓝三色对角平滑渐变底图与高光白星，完美还原官方品牌标识。
+  - 同步拓展支持 Qwen（通义千问）、MiniMax（稀宇科技）、GLM（智谱清言）、StepFun（阶跃星辰）、Grok 及 Stealth 系列模型的专属品牌识别徽标。
+- **产物更新与交付归档 (Deliverables Synchronization)**：
+  - 编译全新 Release 版本 Windows 可执行文件 `agenthub-runner.exe`，重新压制 `AgentHub-Runner-v2.4.79-windows-x64.zip`；
+  - 重新计算并刷新 `Deliverables/AgentHub/AgentHub-v2.4.79-SHA256.txt` 权威哈希校验文件；
+  - 线上后台守护平滑热重启，验证 `total_sessions` 准确降为 724，重复计数完全归零。
+
 ### 全面对标 Magpie 级别用量统计与高精模型/智能体消耗分布 (Magpie-Grade Usage Analytics Architecture)
 
 根据用户指示（“这个用量你实在写不好你就超magpie好不好”），深入参考并直接对齐 Magpie（`github.com/yetone/magpie`）用量统计子系统与界面架构规范，从根源上彻底解决历史会话虽被解析但用量统计呈现 0 的断流缺陷，全面构建权威后端聚合与极简高精看板：

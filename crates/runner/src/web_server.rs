@@ -512,8 +512,17 @@ fn build_dashboard_summary(
 
     if let crate::daemon_protocol::DaemonResponse::Discovery(ref val) = discover_res {
         if let Some(candidates) = val.get("candidates").and_then(serde_json::Value::as_array) {
-            total_sessions = candidates.len();
+            let mut seen_session_ids = std::collections::HashSet::new();
             for c in candidates {
+                let sid = c
+                    .get("provider_session_id")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| c.get("id").and_then(serde_json::Value::as_str))
+                    .or_else(|| c.get("session_id").and_then(serde_json::Value::as_str))
+                    .unwrap_or("");
+                if !sid.is_empty() && !seen_session_ids.insert(sid.to_string()) {
+                    continue;
+                }
                 discovered_sessions.push(c.clone());
                 let provider = c.get("provider").and_then(serde_json::Value::as_str).unwrap_or("");
                 let pt = c.get("prompt_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
@@ -597,6 +606,7 @@ fn build_dashboard_summary(
                     *workspace_map.entry(ws.to_string()).or_insert(0) += 1;
                 }
             }
+            total_sessions = discovered_sessions.len();
         }
     }
 
