@@ -612,7 +612,7 @@ fn build_dashboard_summary(
 
     let overall_tokens = total_prompt_tokens.saturating_add(total_completion_tokens);
     let overall_cache_hit_rate = if total_prompt_tokens > 0 {
-        ((total_cache_read_tokens as f64 / total_prompt_tokens as f64) * 100.0).round().min(100.0) as u32
+        ((total_cache_read_tokens as f64 / total_prompt_tokens as f64) * 100.0).round().clamp(0.0, 100.0) as u32
     } else {
         0
     };

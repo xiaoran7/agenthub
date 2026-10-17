@@ -112,8 +112,14 @@
       --c1: #a5b4fc; --c2: #7dd3fc; --c3: #6ee7b7; --c4: #fcd34d; --c5: #f9a8d4; --c6: #c4b5fd; --c7: #94a3b8;
     }
     :root { --ease: cubic-bezier(.2, .8, .2, 1); }
+    /* the rhythm of the console: every block stands on the same half-pixel line,
+       the way the screen's own columns and dividers are drawn */
+    :root { --rule: .5px solid var(--line); --rule-2: .5px solid var(--line-2); --inset: 16px; --r: 10px; }
     :root.win { --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
     :root.win { --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace; }
+    /* data reads first: every figure is a column that lines up under the one above it */
+    :root { --num: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
+    :root.win { --num: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
@@ -245,6 +251,7 @@
     .row .name { font-weight: 500; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .row .who { min-width: 0; flex: 1 1 auto; }
     .row .sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .row .sub, .group-head .gname { user-select: text; -webkit-user-select: text; }
     .row .name-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
     .empty-state { padding: 36px 20px; text-align: center; color: var(--muted); font-size: 12.5px; }
     .empty-state b { display: block; color: var(--fg); font-weight: 500; margin-bottom: 4px; font-size: 13px; }
@@ -302,8 +309,6 @@
     .mt { margin-top: 12px; }
     .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
     .status#runnerStatusBadge { display: inline-flex; align-items: center; gap: 7px; }
-    .status#runnerStatusBadge.offline { color: var(--red); }
-    .status#runnerStatusBadge.offline .dot { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
 
     .group-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 14px; background: var(--card-2); cursor: default; }
     .group-head:hover { background: var(--pill); }
@@ -350,6 +355,9 @@
     .modal .dialog { width: min(600px, 100%); min-width: 0; max-height: 100%; overflow-y: auto; border-radius: 14px; background: var(--card); box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .12); display: flex; flex-direction: column; animation: dialog-in .2s var(--ease); }
     @keyframes dialog-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
     @media (prefers-reduced-motion: reduce) { .modal .dialog { animation: none; } }
+    /* the blur belongs to the page behind the dialog, not to the paper itself:
+       the card stays opaque and the form fields stay crisp */
+    .modal .dialog { background: var(--bg); }
 
     /* ---- editor / form grid ------------------------------------------------ */
     .editor { padding: 16px 18px 14px; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px 14px; align-items: start; }
@@ -378,6 +386,208 @@
     .round svg { width: 19px; height: 19px; }
     .center-note { grid-column: 1 / -1; text-align: center; font-size: 12px; color: var(--muted); }
     .center-title { grid-column: 1 / -1; text-align: center; font-size: 14.5px; font-weight: 600; }
+
+    /* ==========================================================================
+       Layout pass: the same primitives, drawn on a half-pixel grid.
+       magpie's 1px borders and 12px cards were tuned for its full window; a
+       940px tray window wants quieter seams, tighter columns and data that
+       lines up. Everything below only restyles the rules above.
+       ========================================================================== */
+    /* hairline rules everywhere, so no divider outweighs the text it separates */
+    .list, .led-strip, .stats, .top, .sidebar, .foot { border-width: 0; }
+    .list { border: var(--rule); border-radius: var(--r); }
+    .led-strip { border: var(--rule); border-radius: var(--r); }
+    .stats { border: var(--rule); border-radius: var(--r); }
+    .sidebar { border-right: var(--rule); }
+    .row + .row { border-top: var(--rule-2); }
+    .led-strip .blk + .blk { border-left: var(--rule-2); }
+
+    /* ---- header ------------------------------------------------------------ */
+    /* brand · where you are · what is live. the strip is the console's only
+       ambient signal: green when sessions are flowing in, red when they are not */
+    .top { border-bottom: var(--rule); background: var(--card); }
+    .top .brand { font-size: 13.5px; letter-spacing: .005em; }
+    .live {
+      display: inline-flex; align-items: center; gap: 7px; flex: none;
+      height: 24px; padding: 0 9px 0 8px; border-radius: 999px;
+      border: var(--rule); background: var(--card-2);
+      font-size: 11.5px; color: var(--ctl-fg); white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .live > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .live > b { font-weight: 600; color: var(--fg); }
+    .live > span { color: var(--muted); }
+    .live.stale > i { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+    .live.off > i { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+    .live.off { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
+
+    /* ---- the ledger --------------------------------------------------------- */
+    /* the four facts that answer "what is this machine doing right now" */
+    .led-strip { grid-template-columns: 1fr 1fr 1fr 1fr; background: var(--card); }
+    .led-strip .blk { padding: 12px var(--inset) 11px; }
+    .led-strip .k { font-size: 11px; letter-spacing: .02em; color: var(--muted); }
+    .led-strip .v { margin-top: 4px; font: 600 22px/1.15 var(--num); letter-spacing: -.025em; }
+    .led-strip .sub { margin-top: 3px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .led-strip .blk.clickable { position: relative; cursor: default; }
+    .led-strip .blk.clickable:hover { background: var(--card-2); }
+    /* a call to action, not a badge: the unpaired tile is the one thing to do */
+    .led-strip .blk.cta .v { color: var(--accent); }
+    .led-strip .blk.cta .sub { color: var(--accent); opacity: .75; }
+    .led-strip .blk.cta::after {
+      content: "›"; position: absolute; right: 12px; top: 13px;
+      font-size: 15px; line-height: 1; color: var(--accent); opacity: .5;
+      transition: transform .16s var(--ease), opacity .16s var(--ease);
+    }
+    .led-strip .blk.cta:hover::after { transform: translateX(2px); opacity: 1; }
+
+    /* ---- filter bar --------------------------------------------------------- */
+    .tools { margin: 12px 0 8px; gap: 6px; }
+    .tools .inp { width: 260px; height: 28px; }
+    .tools .tag { background: transparent; border: var(--rule); height: 22px; }
+
+    /* ---- session groups ----------------------------------------------------- */
+    .stack { gap: 8px; }
+    .group-head { min-height: 36px; padding: 0 var(--inset); background: var(--card); border-bottom: var(--rule-2); transition: background .14s; }
+    .group-head:hover { background: var(--card-2); }
+    .group-head .gname { font-weight: 600; font-size: 12.5px; letter-spacing: -.005em; }
+    .group-head > .ic { color: var(--muted); }
+    .group-head .gpath { color: var(--faint); font-size: 10.5px; }
+    .group-head.closed { border-bottom-color: transparent; }
+    .group-head .chev { color: var(--muted); }
+
+    // a session is a title and one line of facts; the provider is a leading
+       hairline glyph, not a pill, so the titles carry the whole width */
+    #sessionsContainer .row { gap: 10px; padding-top: 7px; padding-bottom: 7px; }
+    #sessionsContainer .row .who { min-width: 0; }
+    #sessionsContainer .row .name { font-weight: 400; font-size: 13px; color: var(--fg); }
+    #sessionsContainer .row .who .when {
+      flex: none; align-self: center; width: 84px; margin-left: auto; margin-right: 13px;
+      text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
+    }
+    #sessionsContainer .session-facts { gap: 6px; }
+    #sessionsContainer .session-facts .tokens { color: var(--faint); font-size: 10.5px; }
+    #sessionsContainer .session-facts .tag.cap { padding: 1px 5px; font-family: var(--code); font-size: 10px; color: var(--fg-2); background: var(--card-2); border: var(--rule-2); }
+    #sessionsContainer .group-head { cursor: default; }
+    #sessionsContainer .group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 0; }
+    #sessionsContainer .group-body[hidden] { display: none; }
+    #sessionsContainer .gpath { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sessionsContainer .gcount { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    /* ---- stat rows: shared column grid ------------------------------------- */
+    /* who | share | number | (extra). the columns are explicit so every list in
+       the console puts its figures under the same edges */
+    .row.stat { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(96px, 1.4fr) 92px; align-items: center; gap: 14px; }
+    .row.stat > .ic { grid-column: 1; align-self: center; }
+    .row.stat .who { flex: none; grid-column: 2; }
+    .row.stat .share { grid-column: 3; flex: none; height: 3px; margin: 0; background: var(--pill); }
+    .row.stat .share i { background: var(--accent); opacity: 1; }
+    .row.stat .num { grid-column: 4; align-items: flex-end; min-width: 0; }
+    .row.stat .num b { font: 600 12.5px/1.3 var(--num); letter-spacing: -.01em; }
+    .row.stat .num small { font-size: 10.5px; }
+    /* the ledger's second figure shares the number column, above the figure */
+    .row.stat .cost { grid-column: 4; grid-row: 1; align-self: start; justify-self: end; margin-top: -1px; min-width: 0; color: var(--muted); font-size: 10.5px; }
+    .row.stat.has-cost { grid-template-rows: auto auto; }
+    #modelsGrid .row.stat,
+    #usageModels .row.stat,
+    #usageAgents .row.stat { grid-template-columns: 20px minmax(0, 1fr) minmax(80px, 1.2fr) 84px auto; }
+    #workspacesList .row.stat { grid-template-columns: 20px minmax(0, 1fr) minmax(80px, 1.2fr) 84px auto; }
+    /* the .who column carries the model's own icon, so there is no extra cell */
+    #modelsGrid .row.stat { grid-template-columns: minmax(0, 1fr) minmax(80px, 1.2fr) 84px auto; }
+    #modelsGrid .row.stat .who .name-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    #modelsGrid .row.stat .who .name-line .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #modelsGrid .row.stat .who .ic { width: 18px; height: 18px; margin-left: -20px; }
+    #modelsGrid .row.stat .who { grid-column: 1; grid-row: 1; flex: none; }
+    #modelsGrid .row.stat .cost,
+    #usageModels .row.stat .cost,
+    #usageAgents .row.stat .cost,
+    #workspacesList .row.stat .cost { grid-column: 5; grid-row: 1; align-self: center; justify-self: end; margin: 0; color: var(--green); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #workspacesList .row.stat .cost { color: var(--muted); font-size: 11.5px; }
+    /* the folder reads as one line: the parent is context, the leaf is the name */
+    .ws-loc { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--code); font-size: 10.5px; color: var(--faint); margin-top: 1px; }
+    .ws-loc .ws-leaf { color: var(--fg-2); }
+    /* a workspace's leading mark is its own initials, not a repeated folder icon */
+    .ws-ini {
+      width: 20px; height: 20px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;
+      background: var(--card-2); border: var(--rule); color: var(--muted); font-size: 9.5px; letter-spacing: .02em;
+    }
+    .row .name-line .tag.ok { height: 17px; font-size: 10px; padding: 0 5px; }
+
+    /* ---- section heads ------------------------------------------------------ */
+    .row-head { min-height: 34px; padding: 0 var(--inset); background: var(--card); border-bottom: var(--rule-2); }
+    .label { font-size: 11px; letter-spacing: .03em; text-transform: none; color: var(--muted); font-weight: 500; }
+    .row-head .tag { background: transparent; border: var(--rule); height: 20px; }
+
+    /* ---- KPIs --------------------------------------------------------------- */
+    .stats { grid-template-columns: repeat(4, 1fr); background: var(--line-2); }
+    .kpi { padding: 12px var(--inset) 11px; background: var(--card); }
+    .kpi b { font: 600 21px/1.15 var(--num); letter-spacing: -.025em; }
+    .kpi span { font-size: 11px; letter-spacing: .02em; text-transform: none; font-weight: 500; }
+    .kpi small { font-variant-numeric: tabular-nums; }
+
+    /* ---- gateway view: a two-column editor, the ops desk ------------------- */
+    #view-gateway .tools .tag.ok { background: var(--green-soft); border-color: transparent; color: var(--green); }
+    /* a credential file's name is an identifier, not a sentence: let it shrink */
+    #view-gateway .tools .tag { flex: 0 1 auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 10.5px; }
+    #view-gateway .row-head .label { flex: none; }
+    .gw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: start; }
+    .gw-grid .list { margin: 0; }
+    .gw-card { padding: var(--inset); }
+    .gw-card p { font-size: 12.5px; line-height: 1.72; color: var(--fg-2); }
+    .gw-card p + p { margin-top: 6px; }
+    .gw-facts { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 7px 12px; margin-top: 14px; padding-top: 14px; border-top: var(--rule-2); font-size: 12px; }
+    .gw-facts dt { color: var(--muted); }
+    .gw-facts dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 11.5px; color: var(--fg-2); user-select: text; -webkit-user-select: text; }
+    .snippet { margin-top: 6px; padding: 11px 12px; border: var(--rule); border-radius: 8px; background: var(--card-2); display: block; }
+    .snippet pre { padding: 0; font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+    /* ---- empty states are invitations, not placeholders -------------------- */
+    .empty-state { padding: 34px 20px 30px; text-align: left; max-width: 460px; margin: 0 auto; }
+    .empty-state b { display: block; font: 600 13px/1.4 var(--font); color: var(--fg); margin-bottom: 4px; }
+    .empty-state span.why { display: block; font-size: 12px; line-height: 1.65; color: var(--muted); }
+    .empty-state .retry { margin-top: 12px; display: inline-flex; }
+
+    /* ---- toast: one line of feedback where the action happened -------------- */
+    .toast {
+      position: fixed; left: 50%; bottom: 34px; z-index: 40;
+      transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
+      display: flex; align-items: center; gap: 8px; max-width: min(520px, calc(100vw - 40px));
+      padding: 8px 12px; border-radius: 8px;
+      border: var(--rule); background: var(--card); color: var(--fg);
+      font-size: 12px; line-height: 1.5;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .12), 0 1px 3px rgba(0, 0, 0, .06);
+      transition: opacity .18s var(--ease), transform .18s var(--ease);
+    }
+    .toast.on { opacity: 1; transform: translate(-50%, 0); }
+    .toast::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .toast.err::before { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+
+    /* ---- focus and reduced motion ------------------------------------------ */
+    button:focus-visible, input:focus-visible, .group-head:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 7px;
+    }
+    .group-head { cursor: default; }
+    @media (prefers-reduced-motion: reduce) {
+      .led-strip .blk.cta::after, .group-head .chev, .live > i, .toast { transition: none; }
+    }
+    @media (max-width: 720px) {
+      .gw-grid { grid-template-columns: minmax(0, 1fr); }
+      .live { display: none; }
+      .led-strip { grid-template-columns: 1fr 1fr; }
+      .tools .inp { width: auto; flex: 1 1 auto; min-width: 0; }
+      #sessionsContainer .row .sub .tokens { display: none; }
+      #sessionsContainer .row .who .when { width: auto; max-width: 72px; }
+      #sessionsContainer .group-head .gpath { display: none; }
+      .stats { grid-template-columns: 1fr 1fr; }
+      .row.stat,
+      #modelsGrid .row.stat,
+      #usageModels .row.stat,
+      #usageAgents .row.stat,
+      #workspacesList .row.stat { grid-template-columns: 20px minmax(0, 1fr) auto; }
+      .row.stat .share { display: none; }
+      .row.stat .num { grid-column: 3; }
+      .row.stat .cost { display: none; }
+    }
   </style>
 </head>
 <body class="window side-nav">
@@ -415,13 +625,16 @@
   </aside>
 
   <header class="top">
-    <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="折叠 / 展开侧栏">
+    <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="显示 / 隐藏侧边栏" aria-label="显示或隐藏侧边栏">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <rect class="st-pane" x="3" y="4.5" width="7.5" height="15" rx="1.8" stroke="none"/>
         <rect x="13.5" y="4.5" width="7.5" height="15" rx="1.8" stroke="currentColor" stroke-width="1.6"/>
       </svg>
     </button>
     <div class="crumb"><span>AgentHub</span><i>/</i><b id="crumbNow">会话</b></div>
+    <span class="live" id="liveStrip" title="历史会话与后台自动刷新的状态">
+      <i></i><b id="liveCount">—</b><span>个会话</span>
+    </span>
     <nav class="seg" id="nav" aria-label="主导航">
       <span class="thumb" id="segThumb"></span>
       <span class="nav-gl">工作台</span>
@@ -475,11 +688,11 @@
   <main class="view active" id="view-sessions" tabindex="-1">
     <div class="led-strip">
       <div class="blk">
-        <span class="k">解析会话</span>
+        <span class="k">历史会话</span>
         <span class="v" id="statTotalSessions">-</span>
-        <span class="sub" id="statSessionsBreakdown">Claude - · Codex -</span>
+        <span class="sub" id="statSessionsBreakdown" title="Coding Assistant · Codex · 其他来源">Coding Assistant - · Codex -</span>
       </div>
-      <button class="blk clickable" onclick="openPairModal()" title="点击进入设备身份配对与云端控制台绑定">
+      <button class="blk clickable cta" id="pairTile" onclick="openPairModal()" title="点击关联云端 Web 控制台">
         <span class="k">云端 Web 绑定</span>
         <span class="v" id="statWebPairingStatus">未绑定</span>
         <span class="sub" id="statWebPairingSub">点击关联 Web 控制台</span>
@@ -490,14 +703,9 @@
         <span class="sub" id="statGatewaySource">多模型自动路由</span>
       </div>
       <div class="blk">
-        <span class="k">已注册工作区</span>
+        <span class="k">工作区</span>
         <span class="v" id="statTotalWorkspaces">-</span>
         <span class="sub" id="statWorkspacesSub">本地项目开发根目录</span>
-      </div>
-      <div class="blk">
-        <span class="k">Agents 矩阵</span>
-        <span class="v" id="statActiveAgents">-</span>
-        <span class="sub" id="statAgentsSummary">智能体就绪</span>
       </div>
     </div>
 
@@ -505,7 +713,7 @@
       <input type="search" id="sessionSearchInput" class="inp" placeholder="搜索提示词、会话 ID 或工作区…" oninput="filterSessionsList()">
       <span class="tag" id="sessionCountBadge">0 个历史会话</span>
       <span class="grow"></span>
-      <button class="text action" onclick="refreshDashboard()">
+      <button class="text action" onclick="refreshDashboard()" title="立即重新探测">
         <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
         <span>刷新</span>
       </button>
@@ -539,7 +747,7 @@
       <div class="kpi">
         <b id="kpiCache">0</b>
         <span>缓存读取 Cache</span>
-        <small id="kpiCacheSub">hit rate 0%</small>
+        <small id="kpiCacheSub">命中率 0%</small>
       </div>
       <div class="kpi">
         <b id="kpiCalls">0</b>
@@ -595,39 +803,45 @@
   <!-- View 6: gateway & session affinity -->
   <main class="view" id="view-gateway" tabindex="-1">
     <div class="tools">
-      <span class="label">网关与 Session Affinity 会话亲和性</span>
+      <span class="label">网关与会话亲和</span>
       <span class="grow"></span>
       <span class="tag ok" id="gatewayBadge">已激活</span>
     </div>
-    <div class="list">
-      <div class="row" style="align-items:flex-start;padding-top:12px;padding-bottom:12px;">
-        <span class="ic" style="color:var(--accent);width:18px;height:18px;margin-top:2px;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>
-        </span>
-        <div class="who">
-          <p class="prose">
-            当智能 Agent(如 Claude Code)高频发起多轮交互时,若请求在不同上游网关 Worker 间漂移,服务端的 <b>Prompt Cache</b> 将被频繁击穿,命中率由 90% 跌落至 0%,大幅增加时延并成倍损耗 Token。
+    <div class="gw-grid">
+      <div class="list">
+        <div class="row-head"><span class="label">为什么需要会话亲和</span></div>
+        <div class="gw-card">
+          <p>
+            智能体一轮对话里会连续发出很多次请求。请求若落到不同上游节点，服务端的
+            <b>Prompt Cache</b> 就会被反复打穿，命中率从 90% 掉到接近 0，延迟和 Token 一起涨。
           </p>
-          <p class="prose">
-            <b>AgentHub Session Affinity 机制</b> 通过在请求头注入 <code>x-session-affinity: &lt;session_id&gt;</code>,促使上游网关将同一会话路由锁定在相同节点上,保障 <b>90% 以上缓存命中率</b>。
+          <p>
+            AgentHub 在请求头里带上 <code>x-session-affinity</code>，让上游把同一个会话固定在同一个节点上，缓存才留得住。
           </p>
-
-          <div style="margin-top:12px;">
-            <span class="label">跨平台环境变量配置 (Bash / Zsh)</span>
-            <div class="snippet">
-              <pre id="envSnippet">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
+          <dl class="gw-facts">
+            <dt>网关地址</dt><dd id="gwBaseUrl">-</dd>
+            <dt>亲和请求头</dt><dd>x-session-affinity</dd>
+            <dt>当前来源</dt><dd id="gwSource">-</dd>
+          </dl>
+        </div>
+      </div>
+      <div class="list">
+        <div class="row-head">
+          <span class="label">让一个智能体走网关</span>
+          <span class="grow"></span>
+          <button class="text accent" onclick="copySnippet('envSnippet')">复制 Bash</button>
+          <button class="text accent" onclick="copySnippet('psSnippet')">复制 PowerShell</button>
+        </div>
+        <div class="gw-card">
+          <span class="label">Bash / Zsh</span>
+          <div class="snippet" style="margin-top:6px;">
+            <pre id="envSnippet">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
 export ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"</pre>
-              <button class="text accent" onclick="copySnippet('envSnippet')">复制</button>
-            </div>
           </div>
-
-          <div style="margin-top:12px;">
-            <span class="label">PowerShell 环境变量配置 (Windows)</span>
-            <div class="snippet">
-              <pre id="psSnippet">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
+          <span class="label" style="display:block;margin-top:14px;">PowerShell (Windows)</span>
+          <div class="snippet" style="margin-top:6px;">
+            <pre id="psSnippet">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
 $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
-              <button class="text accent" onclick="copySnippet('psSnippet')">复制</button>
-            </div>
           </div>
         </div>
       </div>
@@ -635,12 +849,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
   </main>
 
   <footer class="foot">
-    <span class="status" id="runnerStatusBadge" title="本地守护监听服务端口与状态">
-      <i class="dot"></i>
-      <span id="runnerStatusText">端口 4200</span>
-    </span>
     <span class="grow"></span>
-    <span class="status">AgentHub Runner · 静默驻留系统托盘 · 右键托盘图标安全退出</span>
+    <span class="status" id="footPort">端口 4200</span>
     <span class="status mono" id="footEndpoint">127.0.0.1:4200</span>
   </footer>
 
@@ -678,7 +888,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
         <form class="grid" id="pairForm" onsubmit="submitDevicePairing(event)">
           <label for="gatewayInput">网关地址</label>
-          <input id="gatewayInput" type="text" placeholder="例如: https://agenthub.yourdomain.com 或 http://100.x.x.x:3000">
+          <input id="gatewayInput" type="text" placeholder="控制台地址，例如 https://agenthub.yourdomain.com">
           <label for="bindingCodeInput">配对绑定码</label>
           <input id="bindingCodeInput" type="text" placeholder="从 AgentHub Web 控制台获取的绑定码" required>
           <div class="bar">
@@ -707,6 +917,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     </div>
   </div>
 
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
   <script>
     let dashboardData = null;
     let lastRenderState = {
@@ -719,7 +931,12 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       usageJson: ''
     };
     let consecutiveFailures = 0;
-    let allSessionsData = [];
+    let consecutiveEmptyResponses = 0;
+    let allSessionsData = [];          // what the renders rank and search
+    let lastGoodSessions = [];          // the last snapshot that had sessions
+    let refreshing = false;
+    let renderSeq = 0;
+    let sessionsRenderedAt = 0;
 
     const VIEW_LABELS = {
       sessions: '会话',
@@ -777,7 +994,15 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (endpoint) endpoint.textContent = `${location.hostname || '127.0.0.1'}:${PORT}`;
       const savedView = localStorage.getItem('agenthub_view');
       switchView(VIEW_LABELS[savedView] ? savedView : 'sessions', true);
-      await refreshDashboard();
+      // the first probe can land while the daemon is still scanning its
+      // transcripts; ask again before telling anyone there are no sessions
+      const ok = await refreshDashboard();
+      if (!ok || (dashboardData && (dashboardData.sessions || []).length === 0)) {
+        for (let i = 0; i < 2 && !(dashboardData && (dashboardData.sessions || []).length > 0); i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          await refreshDashboard();
+        }
+      }
       setInterval(refreshDashboard, 4000);
     }
 
@@ -873,42 +1098,72 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     }
 
     async function refreshDashboard() {
+      // a probe can take over a second; never let two snapshots render out of order
+      if (refreshing) return false;
+      refreshing = true;
+      const seq = ++renderSeq;
       try {
-        const resp = await fetch('/api/dashboard');
+        const resp = await fetch('/api/dashboard', { cache: 'no-store' });
         if (!resp.ok) {
           handleFetchFailure();
-          return;
+          return false;
         }
+        const data = await resp.json();
+        if (seq !== renderSeq) return false;
         consecutiveFailures = 0;
         updateConnectionStatus(true);
 
-        dashboardData = await resp.json();
+        dashboardData = data;
         renderStats(dashboardData.stats, dashboardData.gateway);
 
-        // the sessions feed the workspace and model rankings, so publish them first
+        // the sessions feed the workspace and model rankings, so publish them first.
+        // a zero-length snapshot is kept off the rankings: the lists keep their last
+        // good figures until sessions come back, instead of flapping to empty
         const sessions = dashboardData.sessions || [];
-        const sessionsStr = JSON.stringify(sessions);
-        const sessionsChanged = sessionsStr !== lastRenderState.sessionsJson;
-        allSessionsData = sessions;
-        lastRenderState.sessionsJson = sessionsStr;
+        if (sessions.length > 0) {
+          const sessionsStr = JSON.stringify(sessions);
+          const sessionsChanged = sessionsStr !== lastRenderState.sessionsJson;
+          lastGoodSessions = sessions;
+          allSessionsData = sessions;
+          lastRenderState.sessionsJson = sessionsStr;
 
-        // Dirty-check DOM updates
-        const agentsStr = JSON.stringify(dashboardData.agents || []);
-        if (agentsStr !== lastRenderState.agentsJson) {
-          renderAgents(dashboardData.agents);
-          lastRenderState.agentsJson = agentsStr;
-        }
+          // Dirty-check DOM updates
+          const agentsStr = JSON.stringify(dashboardData.agents || []);
+          if (agentsStr !== lastRenderState.agentsJson) {
+            renderAgents(dashboardData.agents);
+            lastRenderState.agentsJson = agentsStr;
+          }
 
-        const wsStr = JSON.stringify(dashboardData.workspaces || []);
-        if (wsStr !== lastRenderState.workspacesJson || sessionsChanged) {
-          renderWorkspaces(dashboardData.workspaces);
-          lastRenderState.workspacesJson = wsStr;
-        }
+          const wsStr = JSON.stringify(dashboardData.workspaces || []);
+          if (wsStr !== lastRenderState.workspacesJson || sessionsChanged) {
+            renderWorkspaces(dashboardData.workspaces);
+            lastRenderState.workspacesJson = wsStr;
+          }
 
-        const modelsStr = JSON.stringify(dashboardData.models || []);
-        if (modelsStr !== lastRenderState.modelsJson || sessionsChanged) {
-          renderModels(dashboardData.models);
-          lastRenderState.modelsJson = modelsStr;
+          const modelsStr = JSON.stringify(dashboardData.models || []);
+          if (modelsStr !== lastRenderState.modelsJson || sessionsChanged) {
+            renderModels(dashboardData.models);
+            lastRenderState.modelsJson = modelsStr;
+          }
+
+          const usageStr = JSON.stringify(dashboardData.usage || {});
+          if (usageStr !== lastRenderState.usageJson || sessionsChanged) {
+            renderUsageAnalytics(dashboardData.usage, sessions, dashboardData.stats);
+            lastRenderState.usageJson = usageStr;
+          }
+
+          if (sessionsChanged) {
+            renderSessions(sessions);
+          }
+        } else {
+          // an empty answer only earns the empty state once it has held for a
+          // while; a single zero snapshot is a probe, not a verdict
+          consecutiveEmptyResponses++;
+          const settled = consecutiveEmptyResponses >= 3 || Date.now() - sessionsRenderedAt > 15000;
+          if (lastGoodSessions.length === 0 || settled) {
+            allSessionsData = [];
+            renderSessions([], settled ? 'empty' : 'pending');
+          }
         }
 
         const gatewayStr = JSON.stringify(dashboardData.gateway || {});
@@ -922,47 +1177,46 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           renderDevice(dashboardData.device);
           lastRenderState.deviceJson = deviceStr;
         }
-
-        if (sessionsChanged) {
-          renderSessions(sessions);
-        }
-
-        const usageStr = JSON.stringify(dashboardData.usage || {});
-        if (usageStr !== lastRenderState.usageJson || sessionsChanged) {
-          renderUsageAnalytics(dashboardData.usage, sessions, dashboardData.stats);
-          lastRenderState.usageJson = usageStr;
-        }
+        return true;
       } catch (e) {
         handleFetchFailure();
+        return false;
+      } finally {
+        refreshing = false;
       }
     }
 
     function handleFetchFailure() {
       consecutiveFailures++;
-      if (consecutiveFailures >= 2) {
-        updateConnectionStatus(false);
-      }
+      updateConnectionStatus(false);
     }
 
+    // the header's live strip says what the console currently knows: how many
+    // sessions it last saw, and whether the daemon is still answering
     function updateConnectionStatus(online) {
-      const badge = document.getElementById('runnerStatusBadge');
-      const text = document.getElementById('runnerStatusText');
-      if (!badge || !text) return;
-
-      if (online) {
-        badge.classList.remove('offline');
-        text.textContent = `端口 ${PORT}`;
-      } else {
-        badge.classList.add('offline');
-        text.textContent = '重连中...';
+      const strip = document.getElementById('liveStrip');
+      if (strip) {
+        strip.classList.toggle('off', !online);
+        strip.classList.remove('stale');
+        strip.title = online
+          ? '历史会话 · 每 4 秒自动探测一次'
+          : '与 Runner 的连接中断，正在重连…';
+      }
+      if (!online) {
+        consecutiveEmptyResponses = 0;
       }
     }
 
     function renderStats(stats, gateway) {
       if (!stats) return;
-      document.getElementById('statTotalSessions').textContent = stats.total_sessions || 0;
-      document.getElementById('statSessionsBreakdown').textContent =
-        `Claude ${stats.claude_sessions || 0} · Codex ${stats.codex_sessions || 0} · 其他 ${(stats.antigravity_sessions || 0) + (stats.grok_sessions || 0) + (stats.zcode_sessions || 0)}`;
+      const totalSessions = stats.total_sessions || 0;
+      document.getElementById('statTotalSessions').textContent = totalSessions;
+      const liveCount = document.getElementById('liveCount');
+      if (liveCount) liveCount.textContent = totalSessions.toLocaleString();
+      const breakdown = document.getElementById('statSessionsBreakdown');
+      breakdown.textContent =
+        `Coding Assistant ${stats.claude_sessions || 0} · Codex ${stats.codex_sessions || 0} · 其他 ${(stats.antigravity_sessions || 0) + (stats.grok_sessions || 0) + (stats.zcode_sessions || 0)}`;
+      breakdown.title = breakdown.textContent;
 
       document.getElementById('statTotalModels').textContent = stats.total_models || 0;
       if (gateway && gateway.detected) {
@@ -976,13 +1230,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
 
       document.getElementById('statTotalWorkspaces').textContent = stats.total_workspaces || 0;
-      const wsElem = document.getElementById('statWorkspacesSub');
-      if (wsElem) wsElem.textContent = '本地项目开发根目录';
-
-      const activeAgents = stats.active_agents || 0;
-      const totalAgents = stats.total_agents || 8;
-      document.getElementById('statActiveAgents').textContent = activeAgents;
-      document.getElementById('statAgentsSummary').textContent = `共 ${totalAgents} 个 · 已就绪 ${activeAgents} 个`;
+      const wsSub = document.getElementById('statWorkspacesSub');
+      if (wsSub) {
+        const agents = stats.active_agents || 0;
+        wsSub.textContent = agents > 0 ? `${agents} 个智能体在线` : '本地项目开发根目录';
+      }
     }
 
     function getAgentIcon(id, size = 18) {
@@ -1032,7 +1284,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (!container) return;
 
       if (!agents || agents.length === 0) {
-        container.innerHTML = `<div class="empty-state"><b>未检测到任何官方运行时</b>请确认 Claude Code / Codex 等 CLI 已安装并位于 PATH 中</div>`;
+        container.innerHTML = `<div class="empty-state"><b>没有发现可用的智能体</b><span class="why">安装 Coding Assistant 或 Codex 并确保它在 PATH 中，刷新后即可在这里看到。</span></div>`;
         return;
       }
 
@@ -1041,7 +1293,9 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const tagHtml = isReady
           ? `<span class="tag ok">已就绪</span>`
           : `<span class="tag">未检测到</span>`;
-        const pathText = escapeHtml(agent.path || '未检测到独立二进制 (可通过别名直连)');
+        const pathText = agent.path
+          ? escapeHtml(agent.path)
+          : '未找到独立程序，智能体仍可通过命令别名直连';
 
         return `
           <div class="row">
@@ -1057,51 +1311,55 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
                 <span class="mono" style="color:var(--faint);">${pathText}</span>
               </div>
             </div>
-            <span class="tag">${agent.sessions_count || 0} 会话</span>
+            <span class="tag">${agent.sessions_count || 0} 个会话</span>
           </div>
         `;
       }).join('');
     }
 
-    // The sessions tree, grouped by workspace
-    function renderSessions(sessions) {
+    // The sessions tree, grouped by workspace.
+    //   mode 'data'    a snapshot with sessions;
+    //   mode 'pending' a zero snapshot that has not held long enough to trust;
+    //   mode 'empty'   no sessions, and the daemon keeps saying so.
+    // The badge and the filter live here too, so every render resets them
+    // instead of leaving a filtered count behind.
+    function renderSessions(sessions, mode = 'data') {
       const container = document.getElementById('sessionsContainer');
       const badge = document.getElementById('sessionCountBadge');
       if (!container) return;
 
-      const seen = new Set();
-      const dedupedSessions = [];
-      for (const s of (sessions || [])) {
-        const sid = s.provider_session_id || s.id || s.session_id;
-        if (sid) {
-          if (seen.has(sid)) continue;
-          seen.add(sid);
-        }
-        dedupedSessions.push(s);
-      }
-      sessions = dedupedSessions;
+      const dedupedSessions = dedupeSessions(sessions || []);
 
-      if (!sessions || sessions.length === 0) {
-        container.innerHTML = `
-          <div class="list">
+      if (dedupedSessions.length === 0) {
+        if (mode === 'pending') {
+          container.innerHTML = `
             <div class="empty-state">
-              <b>暂未解析到历史会话记录</b>
-              正在后台扫描 Claude Code / Codex / ZCode / Antigravity 会话数据
+              <b>正在读取会话记录…</b>
+              <span class="why">第一次探测还在扫描本机的会话数据，结果很快就会补上。</span>
             </div>
+          `;
+          if (badge) badge.textContent = '正在读取…';
+          return;
+        }
+        container.innerHTML = `
+          <div class="empty-state">
+            <b>还没有可读取的会话</b>
+            <span class="why">在任意目录下运行一次 Coding Assistant、Codex 或 ZCode，对话结束后会话就会出现在这里。如果刚结束的会话还没出现，稍等几秒再看。</span>
+            <button class="text action retry" onclick="refreshDashboard()">
+              <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
+              <span>重新读取</span>
+            </button>
           </div>
         `;
         if (badge) badge.textContent = '0 个历史会话';
         return;
       }
 
-      if (badge) badge.textContent = `${sessions.length} 个历史会话`;
+      if (badge) badge.textContent = `${dedupedSessions.length.toLocaleString()} 个历史会话`;
 
       // Sort sessions chronologically descending (newest activity first)
-      const sortedSessions = [...sessions].sort((a, b) => {
-        const ta = a.last_activity_at_ms || a.time_updated || a.updatedAt || a.recencyAt || a.createdAt || 0;
-        const tb = b.last_activity_at_ms || b.time_updated || b.updatedAt || b.recencyAt || b.createdAt || 0;
-        return tb - ta;
-      });
+      const sortedSessions = [...dedupedSessions].sort(sessionRecency);
+      const total = sortedSessions.length;
 
       // Group sessions by workspace while preserving recency order
       const groups = {};
@@ -1119,42 +1377,35 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
       // Sort workspace groups by their latest session's activity timestamp descending
       const groupKeys = Object.keys(groups).sort((k1, k2) => {
-        const max1 = Math.max(0, ...groups[k1].items.map(s => s.last_activity_at_ms || s.time_updated || s.updatedAt || s.recencyAt || s.createdAt || 0));
-        const max2 = Math.max(0, ...groups[k2].items.map(s => s.last_activity_at_ms || s.time_updated || s.updatedAt || s.recencyAt || s.createdAt || 0));
+        const max1 = Math.max(0, ...groups[k1].items.slice(0, 1).map(sessionRecencyValue));
+        const max2 = Math.max(0, ...groups[k2].items.slice(0, 1).map(sessionRecencyValue));
         return max2 - max1;
       });
 
-      container.innerHTML = groupKeys.map((k, idx) => {
+      container.innerHTML = groupKeys.map((k) => {
         const grp = groups[k];
         const safePath = escapeHtml(grp.path);
         const safeName = escapeHtml(grp.name);
         const count = grp.items.length;
-
-        grp.items.sort((a, b) => {
-          const ta = a.last_activity_at_ms || a.time_updated || a.updatedAt || a.recencyAt || a.createdAt || 0;
-          const tb = b.last_activity_at_ms || b.time_updated || b.updatedAt || b.recencyAt || b.createdAt || 0;
-          return tb - ta;
-        });
+        const closed = collapsedGroups.has(k);
 
         const itemsHtml = grp.items.map(item => {
           const rawId = item.session_id || item.id || '';
           const hasId = !!rawId && rawId !== 'unknown';
           const prompt = escapeHtml(item.prompt || item.title || item.first_prompt || item.name || '无标题会话');
           const rawProvider = item.provider || item.agent_name || (rawId.startsWith('sess_') ? 'zcode' : (rawId.startsWith('antigravity_') ? 'antigravity' : (rawId.startsWith('claude_') ? 'claude_code' : (rawId.startsWith('grok_') ? 'grok_build' : 'codex'))));
-          const provider = escapeHtml(providerLabel(rawProvider));
-          const iconHtml = getAgentIcon(rawProvider, 18);
 
           let timeStr = item.relative_time;
           if (!timeStr) {
-            const ts = item.last_activity_at_ms || item.time_updated || item.updatedAt || item.recencyAt || item.createdAt;
+            const ts = sessionRecencyValue(item);
             if (ts) {
               const ms = ts < 10000000000 ? ts * 1000 : ts;
               const date = new Date(ms);
               const now = Date.now();
               const diffMin = Math.round((now - ms) / 60000);
               if (diffMin < 1) timeStr = '刚刚';
-              else if (diffMin < 60) timeStr = `${diffMin}分钟前`;
-              else if (diffMin < 1440) timeStr = `${Math.floor(diffMin / 60)}小时前`;
+              else if (diffMin < 60) timeStr = `${diffMin} 分钟前`;
+              else if (diffMin < 1440) timeStr = `${Math.floor(diffMin / 60)} 小时前`;
               else {
                 timeStr = `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
               }
@@ -1162,72 +1413,104 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
               timeStr = item.created_at || '最近';
             }
           }
-          timeStr = escapeHtml(timeStr);
 
           const rawTokens = Number(item.total_tokens) || ((Number(item.prompt_tokens) || 0) + (Number(item.completion_tokens) || 0));
-          const tokensStr = rawTokens > 0 ? `${fmtN(rawTokens)} Tokens` : '';
-
           const modelName = escapeHtml(item.model || item.model_name || '');
-          const modelTag = modelName ? `<span class="tag cap"><span class="tt">${modelName}</span></span>` : '';
+          const fullId = hasId ? escapeHtml(rawId) : '';
 
           return `
-            <div class="row">
-              <span class="ic">${iconHtml}</span>
+            <div class="row" title="${providerLabel(rawProvider)}${fullId ? ' · ' + fullId : ''}${modelName ? ' · ' + modelName : ''}${rawTokens > 0 ? ' · ' + fmtN(rawTokens) + ' Tokens' : ''}">
+              <span class="ic">${getAgentIcon(rawProvider, 18)}</span>
               <div class="who">
                 <div class="name" title="${prompt}">${prompt}</div>
-                <div class="sub flow">
-                  <span class="tag">${provider}</span>
-                  ${hasId ? `<span class="tag mono">${escapeHtml(rawId.substring(0, 10))}</span>` : ''}
-                  ${modelTag}
-                  <span>${timeStr}</span>
-                  ${tokensStr ? `<span>${tokensStr}</span>` : ''}
+                <div class="sub flow session-facts">
+                  ${modelName ? `<span class="mono tag cap"><span class="tt">${modelName}</span></span>` : ''}
+                  ${rawTokens > 0 ? `<span class="mono tokens">${fmtN(rawTokens)} Tokens</span>` : ''}
                 </div>
               </div>
+              <time class="when">${escapeHtml(timeStr)}</time>
             </div>
           `;
         }).join('');
 
         return `
-          <div class="list">
-            <div class="group-head" onclick="toggleSessionGroup('grp-${idx}')">
+          <div class="list" data-group="${escapeHtml(k)}">
+            <div class="group-head${closed ? ' closed' : ''}" role="button" tabindex="0" aria-expanded="${!closed}" onclick="toggleSessionGroup(this)">
               <span class="ic" style="color:var(--accent);width:15px;height:15px;">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
               </span>
               <span class="gname" title="${safeName}">${safeName}</span>
               <span class="gpath" title="${safePath}">${safePath}</span>
-              <span class="tag">${count} 条</span>
+              <span class="gcount" title="${count} 个会话${count !== total ? '，共 ' + total + ' 个' : ''}">${count}${count !== total ? ' / ' + total : ''}</span>
               <span class="chev">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
               </span>
             </div>
-            <div id="grp-${idx}">
+            <div class="group-body"${closed ? ' hidden' : ''}>
               ${itemsHtml}
             </div>
           </div>
         `;
       }).join('');
+      sessionsRenderedAt = Date.now();
     }
 
-    function toggleSessionGroup(id) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      const head = el.previousElementSibling;
-      const closing = el.style.display !== 'none';
-      el.style.display = closing ? 'none' : 'block';
-      if (head) head.classList.toggle('closed', closing);
+    function sessionRecencyValue(s) {
+      return s.last_activity_at_ms || s.time_updated || s.updatedAt || s.recencyAt || s.createdAt || 0;
+    }
+
+    function sessionRecency(a, b) {
+      return sessionRecencyValue(b) - sessionRecencyValue(a);
+    }
+
+    function dedupeSessions(sessions) {
+      const seen = new Set();
+      const out = [];
+      for (const s of sessions) {
+        const sid = s.provider_session_id || s.id || s.session_id;
+        if (sid) {
+          if (seen.has(sid)) continue;
+          seen.add(sid);
+        }
+        out.push(s);
+      }
+      return out;
+    }
+
+    // a group folds from its head; the fold survives re-renders and reloads
+    const collapsedGroups = new Set(
+      (() => { try { return JSON.parse(localStorage.getItem('agenthub_closed_groups') || '[]'); } catch (e) { return []; } })()
+    );
+
+    function toggleSessionGroup(head) {
+      const list = head.closest('.list');
+      const body = list && list.querySelector('.group-body');
+      if (!body) return;
+      const key = list.getAttribute('data-group') || '';
+      const closing = !head.classList.contains('closed');
+      head.classList.toggle('closed', closing);
+      head.setAttribute('aria-expanded', String(!closing));
+      body.hidden = closing;
+      if (closing) collapsedGroups.add(key); else collapsedGroups.delete(key);
+      try { localStorage.setItem('agenthub_closed_groups', JSON.stringify([...collapsedGroups])); } catch (e) {}
     }
 
     function filterSessionsList() {
       const q = (document.getElementById('sessionSearchInput')?.value || '').toLowerCase().trim();
+      const badge = document.getElementById('sessionCountBadge');
+      const base = dedupeSessions(lastGoodSessions);
       if (!q) {
-        renderSessions(allSessionsData);
+        if (badge && base.length) badge.textContent = `${base.length.toLocaleString()} 个历史会话`;
+        renderSessions(lastGoodSessions);
         return;
       }
-      const filtered = allSessionsData.filter(s => {
-        const text = `${s.prompt || ''} ${s.session_id || ''} ${s.workspace_name || ''} ${s.workspace_path || ''}`.toLowerCase();
+      const filtered = base.filter(s => {
+        const text = `${s.prompt || ''} ${s.title || ''} ${s.session_id || ''} ${s.id || ''} ${s.workspace_name || ''} ${s.workspace_path || ''} ${s.model || ''} ${s.model_name || ''}`.toLowerCase();
         return text.includes(q);
       });
-      renderSessions(filtered);
+      // the rows are drawn without the badge being reset behind our back
+      renderSessions(filtered, 'data');
+      if (badge) badge.textContent = `${filtered.length.toLocaleString()} / ${base.length.toLocaleString()} 个历史会话`;
     }
 
     // Number and cost formatting
@@ -1434,7 +1717,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (tokensEl) tokensEl.innerHTML = fmtN(totalTokens, true);
       if (tokensSubEl) tokensSubEl.textContent = `${fmtN(inputTokens)} in · ${fmtN(outputTokens)} out`;
       if (cacheEl) cacheEl.innerHTML = fmtN(cacheRead, true);
-      if (cacheSubEl) cacheSubEl.textContent = `hit rate ${cacheHitRate}%`;
+      if (cacheSubEl) cacheSubEl.textContent = `输入命中 ${cacheHitRate}%`;
+      if (cacheSubEl) cacheSubEl.title = `${fmtN(cacheRead)} 输入 Token 由上游缓存直接返回，未重新计算`;
       if (callsEl) callsEl.textContent = calls.toLocaleString();
       if (callsSubEl) callsSubEl.textContent = '跨多智能体累计会话';
 
@@ -1643,14 +1927,12 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const costStr = Object.prototype.hasOwnProperty.call(costMap, costKey)
           ? fmtCostUsd(costMap[costKey])
           : fmtCostFromTokens(item.totalTokens, item.name);
-        const callsTag = item.calls > 0 ? `<span>${item.calls} 次调用</span>` : '';
+        const callsText = item.calls > 0 ? `<span>${item.calls} 次调用</span>` : '';
 
-        return `
-          <div class="row stat">
-            <span class="ic">${getModelIcon(item.name, 20)}</span>
+        return `<div class="row stat">
             <div class="who">
-              <div class="name" title="${safeName}">${safeName}</div>
-              <div class="sub flow">${item.tags.join(' ')}${callsTag}</div>
+              <div class="name-line"><span class="ic">${getModelIcon(item.name, 18)}</span><span class="name" title="${safeName}">${safeName}</span></div>
+              <div class="sub flow">${callsText}${item.tags.join(' ')}</div>
             </div>
             <div class="share" title="${pct}% 调用占比">
               <i style="width: ${Math.max(item.totalTokens > 0 ? 2 : 0, pct)}%;"></i>
@@ -1660,12 +1942,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
               <small>${subText}</small>
             </div>
             <div class="cost">${costStr}</div>
-          </div>
-        `;
+          </div>`;
       }).join('');
     }
 
-    async function refreshModelsCatalog(event) {
+async function refreshModelsCatalog(event) {
       const btn = document.getElementById('btnRefreshModels');
       if (btn) btn.disabled = true;
       try {
@@ -1674,11 +1955,15 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           const data = await resp.json();
           if (data && data.data) {
             renderModels(data.data);
-            alert('已拉取最新上游模型列表 (' + data.data.length + ' 个可用模型)');
+            toast(`已同步上游模型列表，共 ${data.data.length} 个可用模型`);
+          } else {
+            toast('上游没有返回模型列表，请稍后再试', 'err');
           }
+        } else {
+          toast(`同步模型失败（HTTP ${resp.status}）`, 'err');
         }
       } catch (e) {
-        alert('刷新模型失败: ' + e.message);
+        toast('同步模型失败：' + e.message, 'err');
       } finally {
         if (btn) btn.disabled = false;
       }
@@ -1738,26 +2023,14 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         const gitBadge = ws.is_git ? `<span class="tag ok">Git</span>` : '';
         const count = ws.sessions_count || 0;
 
-        // Shorten the path for the subtext
-        let shortPath = safePath;
-        if (shortPath.length > 40) {
-          const parts = shortPath.split(/[\\/]/);
-          if (parts.length >= 2) {
-            shortPath = parts.slice(-2).join('/');
-          }
-        }
-
-        return `
-          <div class="row stat">
-            <span class="ic" style="color:var(--accent);">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            </span>
+        return `<div class="row stat" title="${safePath}">
+            <span class="ic"><span class="mono ws-ini">${escapeHtml(pathLeaf(ws.path).slice(0, 2).toUpperCase())}</span></span>
             <div class="who">
               <div class="name-line">
                 <span class="name" title="${safeName}">${safeName}</span>
                 ${gitBadge}
               </div>
-              <div class="sub mono" style="color:var(--faint);" title="${safePath}">${shortPath}</div>
+              <div class="sub mono ws-loc"><span class="ws-parent">${shortParent(ws.path)}</span><span class="ws-leaf">${escapeHtml(pathLeaf(ws.path))}</span></div>
             </div>
             <div class="share" title="${pct}% 活跃度">
               <i style="width: ${Math.max(tokens > 0 ? 2 : (count ? 5 : 0), pct)}%;"></i>
@@ -1767,14 +2040,33 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
               <small>${count} 会话</small>
             </div>
             <div class="cost">${relativeTime}</div>
-          </div>
-        `;
+          </div>`;
       }).join('');
     }
 
-    function renderGateway(gateway) {
+    function pathParts(p) {
+      return String(p || '').split(/[\\/]/).filter(Boolean);
+    }
+
+    function pathLeaf(p) {
+      const parts = pathParts(p);
+      return parts.length ? parts[parts.length - 1] : String(p || '');
+    }
+
+    // the folder a workspace lives in, trimmed from the front so the nearest
+    // parent survives: "...\Project\agenthub" reads better than "D:\Claude..."
+    function shortParent(p) {
+      const parts = pathParts(p);
+      if (parts.length < 2) return '';
+      const parent = parts.slice(0, -1);
+      const tail = parent.slice(-2).join('/');
+      return (parent.length > 2 ? '…/' : '') + tail + '/';
+    }
+
+function renderGateway(gateway) {
       if (!gateway) return;
       const baseUrl = gateway.base_url || 'http://127.0.0.1:3425';
+      const host = String(baseUrl).replace(/^https?:\/\//, '');
 
       const badge = document.getElementById('gatewayBadge');
       if (badge) {
@@ -1791,7 +2083,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const gwText = document.getElementById('sideGwText');
       if (gwBtn) gwBtn.classList.toggle('off', !gateway.detected);
       if (gwText) {
-        const host = String(baseUrl).replace(/^https?:\/\//, '');
         gwText.textContent = gateway.detected ? `网关 ${host}` : '网关未探测';
       }
 
@@ -1802,6 +2093,14 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const psElem = document.getElementById('psSnippet');
       if (psElem) {
         psElem.textContent = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"`;
+      }
+      const baseElem = document.getElementById('gwBaseUrl');
+      if (baseElem) baseElem.textContent = baseUrl;
+      const srcElem = document.getElementById('gwSource');
+      if (srcElem) {
+        srcElem.textContent = gateway.detected
+          ? (gateway.source || '上游网关')
+          : '未探测到上游网关，当前使用标准端点';
       }
     }
 
@@ -1833,6 +2132,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           statStatus.style.color = 'var(--green)';
         }
         if (statSub) statSub.textContent = gw;
+        setPairTile(false);
         if (pairedBox) {
           pairedBox.style.display = 'block';
           if (pairedInfo) {
@@ -1844,11 +2144,20 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         if (pairText) pairText.textContent = '未绑定 Web 控制台';
         if (statStatus) {
           statStatus.textContent = '未绑定';
-          statStatus.style.color = 'var(--fg)';
+          statStatus.style.color = '';
         }
         if (statSub) statSub.textContent = '点击关联 Web 控制台';
+        setPairTile(true);
         if (pairedBox) pairedBox.style.display = 'none';
       }
+    }
+
+    // the ledger's pairing tile is a call to action only while it is unpaired
+    function setPairTile(cta) {
+      const tile = document.getElementById('pairTile');
+      if (!tile) return;
+      tile.classList.toggle('cta', !!cta);
+      tile.title = cta ? '点击关联云端 Web 控制台' : '已关联云端 Web 控制台';
     }
 
     function toggleTheme() {
@@ -1903,20 +2212,33 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       }
     }
 
+    // One line of feedback, in the console's voice, where the action happened.
+    // A failed action reads in red; it is replaced by the next message.
+    let toastTimer = 0;
+    function toast(msg, kind) {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg;
+      el.classList.toggle('err', kind === 'err');
+      el.classList.add('on');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('on'), kind === 'err' ? 4200 : 2400);
+    }
+
     function copyGatewayConfig() {
       const baseUrl = (dashboardData && dashboardData.gateway && dashboardData.gateway.base_url)
         ? dashboardData.gateway.base_url
         : 'http://127.0.0.1:3425';
       const text = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"`;
       copyText(text);
-      alert('已复制网关环境变量到剪贴板！');
+      toast('已复制网关环境变量');
     }
 
     function copySnippet(id) {
       const elem = document.getElementById(id);
       if (elem) {
         copyText(elem.textContent);
-        alert('已成功复制到剪贴板！');
+        toast(id === 'psSnippet' ? '已复制 PowerShell 配置' : '已复制 Bash 配置');
       }
     }
 
@@ -1957,7 +2279,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const idElem = document.getElementById('modalDeviceId');
       if (idElem && idElem.textContent && idElem.textContent !== '-') {
         copyText(idElem.textContent);
-        alert('已成功复制 Device ID 到剪贴板！');
+        toast('已复制设备 ID');
       }
     }
 
@@ -1971,11 +2293,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const code = (codeInput ? codeInput.value : '').trim();
 
       if (!gateway) {
-        alert('请输入 AgentHub 网关地址');
+        toast('填写控制台地址，例如 https://agenthub.yourdomain.com', 'err');
         return;
       }
       if (!code) {
-        alert('请输入配对绑定码');
+        toast('填写 Web 控制台里生成的配对绑定码', 'err');
         return;
       }
 
@@ -1996,15 +2318,15 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
         const resData = await resp.json();
         if (resp.ok && (resData.ok === true || resData.status === 'ok')) {
-          alert('恭喜，设备成功与云端 AgentHub 完成配对绑定！');
           if (codeInput) codeInput.value = '';
           closePairModal();
           await refreshDashboard();
+          toast('已绑定到云端 AgentHub');
         } else {
-          alert('配对失败: ' + (resData.message || '网关拒绝绑定或绑定码无效'));
+          toast('配对失败：' + (resData.message || '网关拒绝绑定或绑定码无效'), 'err');
         }
       } catch (err) {
-        alert('配对网络异常: ' + err.message);
+        toast('配对失败：连不上网关（' + err.message + '）', 'err');
       } finally {
         submitBtn.disabled = false;
         submitBtn.innerHTML = origText;

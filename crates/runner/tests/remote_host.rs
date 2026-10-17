@@ -77,6 +77,20 @@ fn discovery_only_exports_authorized_metadata_and_never_grants_control() {
     assert!(!result.to_string().contains("private"));
     assert!(host.sessions().is_empty());
 }
+
+#[test]
+fn discovery_retries_a_malformed_first_page_instead_of_reporting_an_empty_history() {
+    let (dir, fake, mut host) = setup();
+    fake.expect("thread/list", json!({"error": "temporarily overloaded"}));
+    fake.expect("thread/list", json!({"error": "temporarily overloaded"}));
+    fake.expect(
+        "thread/list",
+        json!({"data":[{"id":"allowed","cwd":dir.path(),"name":"Example","status":{"type":"idle"}}],"nextCursor":null}),
+    );
+    let result = host.discover().unwrap();
+    assert_eq!(result["candidates"].as_array().unwrap().len(), 1);
+    assert_eq!(result["candidates"][0]["provider_session_id"], "allowed");
+}
 fn connect(dir: &tempfile::TempDir, hub: &str, generation: &str) -> RemoteCommand {
     let ws_id = agenthub_runner::privacy::workspace_id_for_path(&dir.path().to_string_lossy());
     RemoteCommand {

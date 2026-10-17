@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.4.82] - 2026-10-17
+
+### 内嵌控制台 UI/UX 精修与「0 个历史会话」空态修复 (Console UI/UX Pass & Empty-State Fix)
+
+用户反馈控制台偶发整页显示「0 个历史会话 / 暂无解析到历史会话记录」，同时要求按前端设计规范精修界面。两部分在同一版落地：
+
+- **扫描侧空洞修复 (Discovery)**：`crates/runner/src/remote_host.rs` 的 `discover()` 原先把“响应里没有 `data` 数组”当成“没有历史会话”，`thread/list` 偶发返回错误体时整条发现链路直接产出空候选，控制台于是整页归零。现在首页缺 `data` 会先重试（`LIST_ATTEMPTS = 3`，间隔 200ms），仍失败则返回 `thread_list_malformed` 错误而不是伪造一个空历史；新增集成测试 `discovery_retries_a_malformed_first_page_instead_of_reporting_an_empty_history` 覆盖该路径。
+- **前端空态加固 (Frontend)**：
+  - 新增 `lastGoodSessions` 保留上一次有效快照，零会话快照不再立刻清空列表；须连续 3 次为空或距上次成功写入超过 15s 才进入空态，期间显示「正在读取会话记录…」；
+  - 空态改为带原因说明与「重新读取」按钮的引导页；
+  - `refreshDashboard()` 增加在途请求守卫与 `renderSeq` 乱序丢弃；首屏失败或零会话时自动重试 2 次（1.5s 间隔）；
+  - 排查记录：对旧版二进制连续轮询 `/api/dashboard` 65 秒（70 次，单次最长 5.8s）未复现零快照，旧前端放置轮询 60 秒也未见空态，说明触发点多在启动 / 上游慢响应窗口，而非常态轮询。
+- **用量缓存命中率口径 (Cache Hit KPI)**：「缓存读取 Cache」卡片副标题由英文 `hit rate 76%` 改为「输入命中 76%」，hover 说明“由上游缓存直接返回、未重新计算的输入 Token 数”；与各模型行「缓存命中 N%」统一使用 `cache_read / prompt_tokens`，后端把 `min(100.0)` 改为 `clamp(0.0, 100.0)` 以明确截断意图。
+- **布局层精修 (Layout Pass)**：只重排既有 magpie 原语，不改结构语义 ——
+  - **会话视图**：会话行改为「图标 / 提示词 / 时间」三栏对齐，时间列固定 84px 右对齐；分组头可点击、可键盘展开（`role="button"`、`aria-expanded`），折叠状态存 `localStorage`（`agenthub_closed_groups`），计数显示 `本组 / 全部`；搜索框实时过滤提示词、标题、会话 ID、工作区与模型，徽标同步显示 `N / M 个历史会话`；
+  - **统计行**：会话 / 智能体 / 用量 / 模型 / 工作区共用一套 CSS Grid 列模板（图标、名称、占比条、数值、费用或时间），修掉原先模板里空白文本节点被当成匿名网格项导致的列错位；
+  - **工作区**：改用两字母首字母徽章（`CL` / `GA` / `AG`…）替代重复的文件夹图标，路径压缩为「…/上级/项目名」并以 `title` 保留完整路径；
+  - **网关视图**：重写为左右双栏 —— 左栏讲清“为什么需要会话亲和”（Prompt Cache 被打穿、`x-session-affinity` 的作用），并列出网关地址 / 亲和请求头 / 当前来源；右栏提供可一键复制的 Bash 与 PowerShell 环境变量片段；原 `alert` 全部换成底部 `role="status"` 轻提示 toast；
+  - **弹窗**：`.dialog` 改回不透明背景，毛玻璃只作用于背后的页面，表单字段不再叠在模糊层上发灰。
+- **响应式**：新增 `max-width: 720px` 断点 —— 网关双栏折成单栏、用量账本 2 列、统计行隐藏占比与费用列只留关键数值、会话行隐藏 Token、时间列限宽、工作区路径隐藏，375px 宽度下无横向溢出。
+- **验证 (Verification)**：以 `_scratch/ui/harness.mjs` 将编辑中的副本挂到运行中 daemon 的 `/api/dashboard` 快照上，经 CDP 在 940×720 托盘窗口尺寸下逐张截图核对六个视图（明 / 暗主题）、搜索过滤、无匹配、pending / 空态、配对弹窗与 375px 窄屏，全程 `no runtime errors`；`cargo test --workspace` 全部通过（runner 163 + 集成 26/17/7/5/3 项，0 失败）。
+
+### 交付产物：Windows 与 Android 同步至 2.4.82 (Deliverables Repack)
+
+- **Windows x64 Runner**：重新压制 `AgentHub-Runner-v2.4.82-windows-x64.zip`，按「打新包必删旧包」删除 2.4.80 / 2.4.81 的 zip 与哈希表；散装 `agenthub-runner.exe` 受 `.gitignore` 的 `*.exe` 约束不入库，仅 zip 与哈希表进版本库。
+- **内嵌控制台一致性**：源码 `crates/runner/resources/dashboard.html` 129123 字节，SHA-256 `106c4e2e…475b95b1`；打包 exe 内嵌的正是这份字节，运行中的 daemon `GET /` 返回同一哈希后才算交付完成。
+- **Android Debug APK**：`versionCode=82`、`versionName=2.4.82`，按 `apps/android/README.md` 执行 `testDebugUnitTest lintDebug assembleDebug` 后归档 `AgentHub-v2.4.82-android-debug.apk`，删除 2.4.80 的 APK。
+- **校验清单**：`AgentHub-v2.4.82-SHA256.txt` 收录 exe、zip 与 APK 三项哈希。
+
+## [2.4.81] - 2026-10-17
+
+> 未发布：版本号递增后在同一工作日内又补了扫描侧修复，直接并入 2.4.82 出包，仓库中不存在 2.4.81 的交付产物。
+
 ## [2.4.80] - 2026-10-17
 
 ### 网页端（Remote Console）契约对齐与全功能适配 (Web Remote Console Alignment & Enhancements)

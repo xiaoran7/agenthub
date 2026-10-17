@@ -26,6 +26,9 @@ use crate::domain::AgentType;
 /// first; a command whose id is gone from here is answered from the journal
 /// rather than re-executed.
 pub const MAX_COMMAND_LEDGER_ENTRIES: usize = 10_000;
+/// Retries for a first `thread/list` page that came back without a `data`
+/// array before the discovery call reports `thread_list_malformed`.
+const LIST_ATTEMPTS: u32 = 3;
 
 /// In-memory replay window for answered approval/question request ids.
 ///
@@ -2087,64 +2090,74 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         let mut candidates = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
         let mut cursor: Option<String> = None;
+        let mut attempts = 0u32;
         loop {
             let mut params = json!({"limit": 500});
             if let Some(c) = &cursor {
                 params["cursor"] = json!(c);
             }
             let response = self.transport.request("thread/list", params)?;
-            if let Some(items) = response["data"].as_array() {
-                for thread in items {
-                    let Some(id) = thread["id"].as_str() else {
-                        continue;
-                    };
-                    if !seen_ids.insert(id.to_string()) {
-                        continue;
-                    }
-                    let raw_cwd = thread["cwd"].as_str().unwrap_or(".");
-                    let cwd = dunce::canonicalize(PathBuf::from(raw_cwd))
-                        .unwrap_or_else(|_| PathBuf::from(raw_cwd));
-                    let ws_id = crate::privacy::workspace_id_for_path(&cwd.to_string_lossy());
-                    self.discovered_workspaces.insert(ws_id, cwd.clone());
-                    self.discovered_workspaces
-                        .insert(cwd.to_string_lossy().to_string(), cwd.clone());
-                    let clean = cwd
-                        .to_string_lossy()
-                        .trim_start_matches(r"\\?\")
-                        .to_string();
-                    self.discovered_workspaces.insert(clean, cwd.clone());
-                    let title = thread["name"]
-                        .as_str()
-                        .filter(|name| !name.trim().is_empty())
-                        .or_else(|| {
-                            thread["preview"]
-                                .as_str()
-                                .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
-                        })
-                        .map(|name| name.chars().take(160).collect::<String>());
-                    let pt = thread.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    let ct = thread.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    let tt = thread.get("total_tokens").and_then(Value::as_u64).unwrap_or(pt + ct);
-                    let cr = thread.get("cache_read_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    let last_ms = thread.get("last_activity_at_ms").and_then(Value::as_i64).unwrap_or(0);
-                    let model = thread.get("model").cloned().unwrap_or(Value::Null);
-
-                    candidates.push(json!({
-                        "provider_session_id": id,
-                        "provider": thread["provider"],
-                        "resumable": thread["resumable"],
-                        "workspace_path": cwd,
-                        "title": title,
-                        "execution_state": execution_state(&thread["status"]),
-                        "control_connected": false,
-                        "model": model,
-                        "prompt_tokens": pt,
-                        "completion_tokens": ct,
-                        "total_tokens": tt,
-                        "cache_read_tokens": cr,
-                        "last_activity_at_ms": last_ms
-                    }));
+            // A page without a `data` array is a failed page, not an empty
+            // history. Read as zero sessions it flattens the console, so the
+            // first page is retried before giving up.
+            let Some(items) = response.get("data").and_then(Value::as_array) else {
+                if cursor.is_none() && attempts < LIST_ATTEMPTS {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(200));
+                    continue;
                 }
+                return Err(NativeError::rejected("thread_list_malformed"));
+            };
+            for thread in items {
+                let Some(id) = thread["id"].as_str() else {
+                    continue;
+                };
+                if !seen_ids.insert(id.to_string()) {
+                    continue;
+                }
+                let raw_cwd = thread["cwd"].as_str().unwrap_or(".");
+                let cwd = dunce::canonicalize(PathBuf::from(raw_cwd))
+                    .unwrap_or_else(|_| PathBuf::from(raw_cwd));
+                let ws_id = crate::privacy::workspace_id_for_path(&cwd.to_string_lossy());
+                self.discovered_workspaces.insert(ws_id, cwd.clone());
+                self.discovered_workspaces
+                    .insert(cwd.to_string_lossy().to_string(), cwd.clone());
+                let clean = cwd
+                    .to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .to_string();
+                self.discovered_workspaces.insert(clean, cwd.clone());
+                let title = thread["name"]
+                    .as_str()
+                    .filter(|name| !name.trim().is_empty())
+                    .or_else(|| {
+                        thread["preview"]
+                            .as_str()
+                            .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
+                    })
+                    .map(|name| name.chars().take(160).collect::<String>());
+                let pt = thread.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
+                let ct = thread.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0);
+                let tt = thread.get("total_tokens").and_then(Value::as_u64).unwrap_or(pt + ct);
+                let cr = thread.get("cache_read_tokens").and_then(Value::as_u64).unwrap_or(0);
+                let last_ms = thread.get("last_activity_at_ms").and_then(Value::as_i64).unwrap_or(0);
+                let model = thread.get("model").cloned().unwrap_or(Value::Null);
+
+                candidates.push(json!({
+                    "provider_session_id": id,
+                    "provider": thread["provider"],
+                    "resumable": thread["resumable"],
+                    "workspace_path": cwd,
+                    "title": title,
+                    "execution_state": execution_state(&thread["status"]),
+                    "control_connected": false,
+                    "model": model,
+                    "prompt_tokens": pt,
+                    "completion_tokens": ct,
+                    "total_tokens": tt,
+                    "cache_read_tokens": cr,
+                    "last_activity_at_ms": last_ms
+                }));
             }
             if let Some(next) = response["nextCursor"].as_str() {
                 cursor = Some(next.to_string());
