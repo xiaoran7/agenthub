@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.4.83] - 2026-10-17
+
+### 侧边栏开关真正生效、顶栏改为 magpie 式分段切换、硬编码全面收口 (Sidebar Toggle, Header Track & Hardcoded Values)
+
+用户对比 magpie 截图后提出：侧边栏按钮点了没反应、顶栏不好看、字太小、卡片要更圆润现代、窗口尺寸想调整，并追问是否要用 Go 重写。逐项落地：
+
+- **侧边栏开关修复 (Sidebar Toggle)**：原先 `#sideToggle` 只翻转 `html.no-side`，但布局真正听的是 `body.side-nav`，且导航从未在两个插槽之间搬家。现在 bootstrap 统一以 `html.no-side` 为唯一真相、同步 `body.side-nav` 作为样式孪生；`layoutNav()` 在 `#navSideSlot` 与 `#navTopSlot` 之间搬移 `<nav id="nav">`，品牌区同步在 `#brandSide` / `#brandTop` 之间切换。实测 1000×740 点击开关后 `cls=win no-side body=window sideDisp=none navIn=navTopSlot`，侧边栏真正收起，导航进入顶栏。
+- **顶栏分段切换 (Header Track)**：侧边栏收起后，页面导航在顶栏呈现为 magpie 的 `.seg` 形态 —— 一条圆角底轨（`--seg-track`）+ 分组名 + 贴在当前页下的提升滑块 `#segThumb`。滑块绝对定位在 `#navTopSlot` 内，只写 `translate` 与 `width`，点击不触发顶栏重新布局；`scaleSegThumb()` 先量轨、再量按钮、最后移动，避免 transform 自身的偏移污染读数。
+- **按可用宽度取舍 (fitNavTrack)**：顶栏空间有限，新增 `fitNavTrack()` 按插槽实际宽度打包：先保证当前页可见，再往后塞，再往前补，放不下的页暂时移出视野（不做横向滚动），保证“看得见的名字都能点”。配套容器查询：槽宽 ≤ 860px 隐藏分组名，≤ 700px 隐藏图标。
+- **侧边栏改由容器查询驱动 (Container Query Rail)**：`#navSideSlot { container: nav-box / inline-size }`，`@container nav-box (width > 0)` 内定义竖排分组 / 图标 / 当前页 accent 底色的整套样式。导航放在哪就长什么样，同一份 `<nav>` 两套外观，不再靠重复规则与优先级抢胜负。
+- **响应式全部改为容器查询 (Container Queries)**：原先挂在 viewport 上的 `@media` 改为 `.view-slot { container: slot-q }` 与 `.view { container: view-q }`，侧边栏是否展开不再影响页面的断点判断。顺带修掉一个循环依赖：作为尺寸容器的 `.view` 原用百分比横向内边距，改为 px 的 `--inset`。
+- **字号 (Type Scale)**：导航、正文、卡片副标题统一抬到 `--fs-body` 级别；侧边栏行高 36px、14px 字号，顶栏按钮 30px 高、13px 字号，分组名用 `--fs-note - 1px`，整体比前一版明显易读。
+- **窗口尺寸 (Window)**：默认窗口 1240×820（最小 720×520），限制在屏幕工作区的 94%×90% 内并居中偏上。写入 profile 前先检查 Edge 的 `Preferences` 是否已存在 —— 有则交由 Edge 自己恢复上次大小，用户拖动过的窗口重启后保持不变；没有才用 `--window-size/--window-position` 给初值。
+- **布局参数下发 (AppLayout)**：窗口、侧栏宽度、内容最大宽、内边距、圆角、顶栏高度、轮询间隔等全部由 daemon 在页面加载前写入 `window.AppLayout`，页面只保留一份同值兜底，前后端不再各写一套数字。
+- **Go 重写结论**：不需要。magpie 是 Go + Wails 外壳，界面本身仍是 HTML/CSS/JS 跑在 WebView 里；本次问题全部出在这个 Web 层，重写语言不会改善观感。Runner 的 daemon、采集、IPC 层保持 Rust 不动。
+- **验证 (Verification)**：用 `_scratch/ui/` 的 CDP 夹具（serve / shot / eval / probe）与真实 2.4.83 daemon 交叉验证：`GET /` 返回 200、98375 字节、带 AppLayout、引用 `/dashboard.css?v=2.4.83`；侧边栏展开态与收起态截图核对；940 / 760 等槽宽下分组名与图标的取舍符合预期；暗色主题正常；`node --check` 通过；`cargo test --workspace` 全部通过；Android `testDebugUnitTest lintDebug assembleDebug` BUILD SUCCESSFUL，构建后已 `gradlew --stop`。
+
+### 交付产物：Windows 与 Android 同步至 2.4.83 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.83-windows-x64.zip`（4,462,663 字节），按「打新包必删旧包」删除 2.4.80 的 zip 与 APK。
+- **Android Debug APK**：`versionCode=83`、`versionName=2.4.83`，`AgentHub-v2.4.83-android-debug.apk`。
+- **校验清单**：`AgentHub-v2.4.83-SHA256.txt` 收录 exe `81d6da25…`、zip `2542541e…`、APK `5ef9fb1c…`，以及内嵌 `dashboard.html`（30100ff3…，30,100 字节）与 `dashboard.css`（01f02b04…）。
+
 ## [2.4.82] - 2026-10-17
 
 ### 内嵌控制台 UI/UX 精修与「0 个历史会话」空态修复 (Console UI/UX Pass & Empty-State Fix)

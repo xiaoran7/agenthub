@@ -3,598 +3,102 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#f4f4f6" id="themeColorMeta">
+  <meta name="theme-color" id="themeColorMeta">
   <meta name="color-scheme" content="light dark">
   <link rel="manifest" href="/manifest.json">
   <title>AgentHub Runner</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="alternate icon" href="/favicon.ico">
   <script>
-    (function () {
+    // ---- the console's layout tokens, declared once --------------------------
+    // The server stamps its own copy in before this one (AppLayout); these are
+    // what a plain browser — a phone, a second monitor, a `file://` preview —
+    // gets. Everything below reads them: the window's size sets the sidebar,
+    // the header, the cards' inset and the type scale; nothing measures itself
+    // against a literal.
+    window.AppLayout = Object.assign({
+      version: 'dev',
+      window: { width: 1240, height: 820, minWidth: 720, minHeight: 520, sideMinWidth: 168, sideWidth: 236, sideMaxWidth: 340 },
+      sidebarAt: 1024, sidebarNarrow: 212,
+      contentMax: 1280,
+      inset: 18, radius: 14, radiusSm: 10, topBar: 54,
+      dashboardPollMs: 4000, firstProbeRetries: 2, firstProbeRetryMs: 1500,
+      emptyGraceMs: 15000, emptyStrikes: 3,
+      gatewayPort: 3425,
+      themeBg: { light: '#f4f5f8', dark: '#1a1a1e' },
+      storage: {
+        theme: 'agenthub_theme', view: 'agenthub_view', layout: 'agenthub_layout', sideWidth: 'agenthub_side_w',
+        closedGroups: 'agenthub_closed_groups', customGateway: 'agenthub_custom_gateway', sideNav: 'agenthub_side_nav'
+      }
+    }, window.AppLayout || {});
+
+    (function bootstrap() {
+      // the glyphs are taller around the glyphs: the header, the cards and the
+      // figures all grow with the window instead of the window growing empty
+      function layoutTokens(a) {
+        var w = a.window || {};
+        var side = Math.round(Math.max(a.sidebarNarrow || 212, Math.min(w.sideWidth || 236, Math.round((window.innerWidth || 1280) * 0.24))));
+        var chrome = '--layout-side-w:' + side + 'px;'
+          + '--layout-inset:' + (a.inset || 18) + 'px;'
+          + '--layout-radius:' + (a.radius || 14) + 'px;'
+          + '--layout-radius-s:' + (a.radiusSm || 10) + 'px;'
+          + '--layout-top-h:' + (a.topBar || 54) + 'px;'
+          + '--layout-content-w:' + (a.contentMax || 1280) + 'px;';
+        var s = Math.max(0, Math.min(1, ((window.innerWidth || 1280) - 960) / 560));
+        document.documentElement.style.cssText = chrome
+          + '--fs-note:' + (12.5 + s * 1.5).toFixed(1) + 'px;'
+          + '--fs-body:' + (13.5 + s * 1.5).toFixed(1) + 'px;'
+          + '--fs-title:' + (15 + s * 2).toFixed(1) + 'px;'
+          + '--fs-figure:' + (26 + s * 6).toFixed(1) + 'px;';
+      }
+      var AppLayout = window.AppLayout;
+      var win = AppLayout.window || {};
+      window.__layoutTokens = layoutTokens;
+      layoutTokens(AppLayout);
+      var tokensTimer = 0;
+      window.addEventListener('resize', function () {
+        clearTimeout(tokensTimer);
+        tokensTimer = setTimeout(function () { layoutTokens(AppLayout); }, 120);
+      }, { passive: true });
+
       if (/^Win/i.test(navigator.platform) || /Windows/i.test(navigator.userAgent)) {
-        document.documentElement.classList.add("win");
+        document.documentElement.classList.add('win');
       }
-      var saved = localStorage.getItem('agenthub_theme');
-      if (saved === 'dark') {
-        document.documentElement.classList.add('dark');
-        var meta = document.getElementById('themeColorMeta');
-        if (meta) meta.setAttribute('content', '#1a1a1e');
-      }
-      if (localStorage.getItem('agenthub_side_nav') === '0') {
-        document.documentElement.classList.add('no-side');
-      }
-      var w = parseInt(localStorage.getItem('agenthub_side_w') || '', 10);
-      if (w >= 168 && w <= 420) {
-        document.documentElement.style.setProperty('--side-w-override', w + 'px');
+
+      // the theme, from the reader's own choice or the system's
+      var store = AppLayout.storage || {};
+      var savedTheme = localStorage.getItem(store.theme);
+      var dark = savedTheme === 'dark';
+      document.documentElement.classList.toggle('dark', dark);
+      var bg = (AppLayout.themeBg || {})[dark ? 'dark' : 'light'];
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta && bg) meta.setAttribute('content', bg);
+
+      // the pages beside the window or over it: the reader's own choice, kept
+      // for the window; none picked, the sidebar from AppLayout.sidebarAt
+      var layout = localStorage.getItem(store.layout);
+      var showSide = layout === 'side' ? true : layout === 'top' ? false : (window.innerWidth || 0) >= (AppLayout.sidebarAt || 1024);
+      document.documentElement.classList.toggle('no-side', !showSide);
+      document.documentElement.dataset.nav = showSide ? 'side' : 'top';
+
+      // a width the reader dragged to, inside what the page may take: the
+      // sidebar keeps a share of the window, never a slice of the text
+      var sideW = parseInt(localStorage.getItem(store.sideWidth) || '', 10);
+      var sideCap = Math.min(win.sideMaxWidth || 340, Math.floor((window.innerWidth || 1280) * 0.25));
+      if (sideW >= (win.sideMinWidth || 168) && sideW <= sideCap) {
+        document.documentElement.style.setProperty('--side-w-override', sideW + 'px');
       }
     })();
   </script>
-  <style>
-    /* ==========================================================================
-       AgentHub Runner — embedded web console.
-       Layered directly on magpie's design system and layout primitives.
-         magpie — https://github.com/yetone/magpie
-         MIT License, Copyright (c) 2026 yetone
-       Design tokens, the 46px header, the fixed sidebar with grouped nav labels,
-       the self-scrolling .view, .list/.row/.row.stat, .stats/.kpi, .led-strip,
-       .chips/.segs, .text/.icon buttons, .modal/.dialog and .editor come from
-       magpie's internal/gui/assets/app.css. Only app-specific composition is
-       added below, in the same idiom. See README.md § 开源引用与上游溯源.
-       ========================================================================== */
-    :root {
-      --bg: #f4f4f6;
-      --card: #ffffff;
-      --card-2: #f9f9fb;
-      --pill: #f1f1f4;
-      --pill-hover: #e9e9ee;
-      --seg-track: #e6e6eb;
-      --seg-thumb: var(--card);
-      --seg-edge: 0 1px 2px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .08);
-      --ctl-fg: #63636b;
-      --line: #e3e3e8;
-      --line-2: #ececf0;
-      --fg: #1c1c21;
-      --fg-2: #4b4b53;
-      --muted: #85858d;
-      --faint: #b9b9c2;
-      --accent: #4f46e5;
-      --accent-soft: #eeedfd;
-      --accent-fg: #ffffff;
-      --sel: #ecebfb;
-      --green: #189a58;
-      --green-soft: #e4f6ec;
-      --red: #d64545;
-      --red-soft: #fbe9e9;
-      --amber: #b45309;
-      --amber-soft: #fbf0df;
-      --drift: #ce2c31;
-      --drift-soft: #feebec;
-      --pop-bg: rgba(255, 255, 255, .94);
-      --shadow: 0 16px 44px rgba(20, 22, 30, .16), 0 2px 8px rgba(20, 22, 30, .06), 0 0 0 .5px rgba(20, 22, 30, .1);
-      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-      --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-      --logo-invert: 0;
-      --tk-s: #1a7f45; --tk-k: #7c3aed; --tk-f: #1d4ed8; --tk-n: #b45309; --tk-v: #0e7490; --tk-o: #a21caf; --tk-c: #85858d;
-      --c1: #4f46e5; --c2: #0ea5e9; --c3: #10b981; --c4: #f59e0b; --c5: #ec4899; --c6: #8b5cf6; --c7: #64748b;
-    }
-    html.dark {
-      --bg: #1a1a1e;
-      --card: #232327;
-      --card-2: #1f1f23;
-      --pill: #2d2d33;
-      --pill-hover: #36363d;
-      --seg-track: rgba(255, 255, 255, .035);
-      --seg-thumb: rgba(255, 255, 255, .15);
-      --seg-edge: inset 0 .5px 0 rgba(255, 255, 255, .08), 0 1px 2px rgba(0, 0, 0, .3);
-      --line: #333339;
-      --line-2: #2c2c32;
-      --fg: #ededf1;
-      --fg-2: #b9b9c1;
-      --muted: #8b8b94;
-      --faint: #56565f;
-      --ctl-fg: #a1a1aa;
-      --accent: #a5b4fc;
-      --accent-soft: #2b2c47;
-      --accent-fg: #14142a;
-      --sel: #33345a;
-      --green: #6fd99b;
-      --green-soft: #1e3a2b;
-      --red: #f28b82;
-      --red-soft: #45272a;
-      --amber: #f2b544;
-      --amber-soft: #3f3220;
-      --drift: #ff9592;
-      --drift-soft: #3b1219;
-      --pop-bg: rgba(38, 38, 43, .96);
-      --shadow: 0 16px 44px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(255, 255, 255, .1);
-      --logo-invert: 1;
-      --tk-s: #98d8a4; --tk-k: #c4b5fd; --tk-f: #93c5fd; --tk-n: #f2b544; --tk-v: #67e8f9; --tk-o: #f0abfc; --tk-c: #8b8b94;
-      --c1: #a5b4fc; --c2: #7dd3fc; --c3: #6ee7b7; --c4: #fcd34d; --c5: #f9a8d4; --c6: #c4b5fd; --c7: #94a3b8;
-    }
-    :root { --ease: cubic-bezier(.2, .8, .2, 1); }
-    /* the rhythm of the console: every block stands on the same half-pixel line,
-       the way the screen's own columns and dividers are drawn */
-    :root { --rule: .5px solid var(--line); --rule-2: .5px solid var(--line-2); --inset: 16px; --r: 10px; }
-    :root.win { --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
-    :root.win { --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace; }
-    /* data reads first: every figure is a column that lines up under the one above it */
-    :root { --num: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
-    :root.win { --num: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  <!-- the console's stylesheet: layout tokens, the type scale and every rule -->
+  <link rel="stylesheet" href="/dashboard.css?v=__ASSETS_VERSION__">
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; }
-    body {
-      font: normal 400 13px/1.4 var(--font);
-      color: var(--fg);
-      background: var(--bg);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      -webkit-font-smoothing: antialiased;
-      user-select: none;
-      -webkit-user-select: none;
-      cursor: default;
-    }
-    button { font: inherit; color: inherit; background: none; border: 0; cursor: default; appearance: none; -webkit-appearance: none; text-align: center; }
-    button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    input { font: inherit; color: var(--fg); }
-    .grow { flex: 1; }
-    [hidden] { display: none !important; }
-    code { font: normal 400 11.5px var(--code); }
-
-    /* ---- icons ------------------------------------------------------------- */
-    /* a box of its own: an inline brand svg has no size to fall back on */
-    .ic { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 16px; height: 16px; }
-    .ic > svg { width: 100%; height: 100%; display: block; }
-
-    /* ---- header ------------------------------------------------------------ */
-    .top { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; height: 46px; flex: none; position: relative; }
-    .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: .01em; }
-    .logo { color: var(--fg); display: inline-flex; }
-    .logo svg { display: block; }
-    .seg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: inline-flex; padding: 2px; border-radius: 8px; }
-    .seg > .thumb { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 6px; background: var(--seg-thumb); box-shadow: var(--seg-edge); pointer-events: none; transition: left .22s var(--ease), width .22s var(--ease); }
-    .seg button { position: relative; z-index: 1; white-space: nowrap; height: 24px; padding: 0 12px; border-radius: 6px; font-size: 12.5px; color: var(--ctl-fg); transition: color .18s var(--ease), transform .14s var(--ease); }
-    .seg button.on { color: var(--fg); }
-    .seg button:hover:not(.on) { color: var(--fg-2); }
-    .actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
-    .icon {
-      width: 26px; height: 26px; border-radius: 7px;
-      display: inline-flex; align-items: center; justify-content: center;
-      color: var(--muted);
-      transition: background .12s, color .12s;
-    }
-    .icon:hover, .icon.on { background: var(--pill); color: var(--fg); }
-    .icon svg { width: 16px; height: 16px; display: block; }
-    .icon.winclose { align-self: center; width: 22px; height: 22px; margin-left: 8px; border-radius: 50%; background: var(--pill); color: var(--fg-2); }
-    .icon.winclose:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
-
-    /* ---- the sidebar ------------------------------------------------------- */
-    /* the pages down the left in groups, the gateway and the pairing state at
-       the foot; the same #nav is the header's switch otherwise */
-    .nav-gl, .nav-ic, .side-l, .crumb { display: none; }
-    html.no-side body.side-nav { --side-w: 0px; padding-left: 0; }
-    html.no-side .sidebar { display: none; }
-    body.side-nav { --side-w: var(--side-w-override, 212px); padding-left: var(--side-w); }
-    @media (max-width: 859px) { body.side-nav { --side-w: var(--side-w-override, 184px); } }
-    .sidebar {
-      position: fixed; left: 0; top: 0; bottom: 0; z-index: 10; width: var(--side-w, 212px);
-      display: flex; flex-direction: column;
-      background: var(--bg); border-right: .5px solid var(--line);
-    }
-    .side-edge { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 1; cursor: col-resize; touch-action: none; }
-    .side-edge:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
-    body.side-drag, body.side-drag * { cursor: col-resize !important; }
-    .side-top { flex: none; display: flex; align-items: center; height: 46px; padding: 0 18px; }
-    .side-top .brand { font-size: 13.5px; }
-    .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; }
-    .side-foot { flex: none; max-height: 55%; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; border-top: .5px solid var(--line-2); }
-    :is(.side-scroll, .side-foot) { scrollbar-width: thin; }
-    :is(.side-scroll, .side-foot)::-webkit-scrollbar { width: 8px; }
-    :is(.side-scroll, .side-foot)::-webkit-scrollbar-thumb { background: transparent; border: 2px solid transparent; border-radius: 8px; background-clip: padding-box; }
-    :is(.side-scroll, .side-foot):hover::-webkit-scrollbar-thumb { background-color: var(--faint); }
-    body.side-nav #nav { position: static; transform: none; display: flex; flex-direction: column; gap: 1px; padding: 0; border-radius: 0; }
-    body.side-nav #nav > .thumb { display: none; }
-    body.side-nav .nav-gl { display: block; padding: 14px 8px 4px; font-size: 11px; font-weight: 500; letter-spacing: .04em; color: var(--muted); }
-    body.side-nav .nav-gl:first-child { padding-top: 2px; }
-    body.side-nav #nav button[data-view] {
-      display: flex; align-items: center; justify-content: flex-start; gap: 9px;
-      width: 100%; height: 30px; padding: 0 8px; border-radius: 7px;
-      font-size: 13px; color: var(--fg-2); text-align: left; white-space: nowrap;
-    }
-    body.side-nav #nav button[data-view] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-    body.side-nav #nav button[data-view]:hover:not(.on) { background: var(--pill); color: var(--fg); }
-    body.side-nav #nav button[data-view].on { background: var(--card); color: var(--fg); box-shadow: var(--seg-edge); font-weight: 500; }
-    body.side-nav .nav-ic { display: block; flex: none; color: var(--muted); }
-    body.side-nav #nav button.on .nav-ic { color: var(--fg); }
-    body.side-nav .side-l { display: inline; }
-    body.side-nav #nav button[data-view]:active:not(.on) { background: color-mix(in srgb, var(--fg) 10%, transparent); }
-    /* the gateway, under the pages: where it listens; a click opens its page */
-    .side-gw { display: flex; align-items: center; gap: 8px; height: 26px; margin-top: 2px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; color: var(--muted); text-align: left; white-space: nowrap; }
-    .side-gw:hover { background: var(--pill); color: var(--fg-2); }
-    .side-gw > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
-    .side-gw.off > i { background: var(--faint); box-shadow: none; }
-    .side-gw > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-    /* beside the sidebar the header says where the reader is and holds the icons */
-    body.side-nav .top { padding-left: 20px; }
-    body.side-nav .crumb { display: flex; align-items: baseline; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 13.5px; }
-    .crumb > span { color: var(--muted); }
-    .crumb > i { font-style: normal; color: var(--faint); }
-    .crumb > b { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
-    .side-toggle { flex: none; }
-    .side-toggle .st-pane { fill: currentColor; opacity: .32; transition: opacity .3s var(--ease); }
-    body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
-
-    /* ---- views ------------------------------------------------------------- */
-    .view { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 4px; display: none; flex-direction: column; animation: view-in .24s var(--ease); }
-    .view.active { display: flex; }
-    @keyframes view-in { from { opacity: 0; transform: translateY(5px); } }
-    body.window .view { padding: 2px 16px 8px; }
-    /* a width the eye can follow across, centred in a maximized window */
-    body.window .view { padding-left: max(16px, calc(50% - 600px)); padding-right: max(16px, calc(50% - 600px)); }
-    .view:focus { outline: none; }
-    @media (prefers-reduced-motion: reduce) { .view { animation-name: none; } }
-    .view > * { flex: none; }
-    /* Windows and Linux draw a classic scrollbar; a thin rounded thumb instead */
-    :where(body:not(.mac)) ::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
-    :where(body:not(.mac)) ::-webkit-scrollbar-thumb { background: var(--faint); border: 3px solid transparent; border-radius: 10px; background-clip: padding-box; }
-    :where(body:not(.mac)) ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
-    :where(body:not(.mac)) ::-webkit-scrollbar-button, :where(body:not(.mac)) ::-webkit-scrollbar-corner { display: none; background: transparent; }
-
-    /* ---- lists ------------------------------------------------------------- */
-    .list { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
-    .row { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 5px 9px 5px 11px; }
-    body.window .row { min-height: 48px; padding: 7px 12px 7px 14px; gap: 12px; }
-    .row + .row { border-top: 1px solid var(--line-2); }
-    .row .ic { width: 18px; height: 18px; }
-    body.window .row .ic { width: 22px; height: 22px; }
-    .row .name { font-weight: 500; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-    .row .who { min-width: 0; flex: 1 1 auto; }
-    .row .sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-    .row .sub, .group-head .gname { user-select: text; -webkit-user-select: text; }
-    .row .name-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
-    .empty-state { padding: 36px 20px; text-align: center; color: var(--muted); font-size: 12.5px; }
-    .empty-state b { display: block; color: var(--fg); font-weight: 500; margin-bottom: 4px; font-size: 13px; }
-
-    /* the stat row: who / share / num / cost, as in magpie's usage tables */
-    .row.stat .who { flex: 0 0 180px; }
-    .row.stat .share { flex: 1 1 auto; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; margin: 0 6px; }
-    .row.stat .share i { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .7; }
-    .row.stat .num { display: flex; flex-direction: column; align-items: flex-end; flex: none; min-width: 64px; font-variant-numeric: tabular-nums; }
-    .row.stat .num b { font-weight: 600; }
-    .row.stat .num small { font-size: 10.5px; color: var(--muted); }
-    .row.stat .cost { flex: none; min-width: 58px; text-align: right; color: var(--green); font-variant-numeric: tabular-nums; font-size: 12px; }
-    /* the catalog carries long display names, so give that column more room */
-    #modelsGrid .row.stat .who { flex: 0 0 230px; }
-
-    .row-head { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 14px; background: var(--card-2); }
-    .label { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-    .row-head .label { margin-right: auto; }
-
-    /* ---- buttons ----------------------------------------------------------- */
-    .text { font-size: 12px; color: var(--ctl-fg); padding: 3px 7px; border-radius: 6px; white-space: nowrap; transition: background .12s, color .12s; }
-    .text:hover { color: var(--fg); background: var(--pill); }
-    .text.action { height: 27px; padding: 0 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg-2); box-shadow: 0 1px 1px rgba(0, 0, 0, .04); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-    .text.action:hover { border-color: var(--muted); background: var(--card-2); color: var(--fg); }
-    .text.action:disabled { opacity: .6; }
-    .text.primary { color: var(--accent-fg); background: var(--accent); font-weight: 500; border-color: transparent; }
-    .text.primary:hover { background: var(--accent); color: var(--accent-fg); filter: brightness(1.08); }
-    .text.accent { color: var(--accent); }
-    .text.accent:hover { background: var(--accent-soft); color: var(--accent); }
-
-    /* ---- chips, tags, inputs ----------------------------------------------- */
-    .tag { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; color: var(--muted); background: var(--pill); white-space: nowrap; }
-    .tag.ok { color: var(--green); background: var(--green-soft); }
-    .tag.accent { color: var(--accent); background: var(--accent-soft); }
-    .tag.warn { color: var(--amber); background: var(--amber-soft); }
-    .tag.err { color: var(--red); background: var(--red-soft); }
-    .tag.mono { font-family: var(--code); font-size: 10.5px; letter-spacing: 0; }
-    .tag.cap { max-width: 170px; }
-    .tag.cap > .tt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tag.cap-long { display: inline-block; max-width: 360px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
-    .row .sub .tag { height: 17px; padding: 0 6px; font-size: 10.5px; }
-    .row .sub.flow { display: flex; align-items: center; gap: 5px; min-width: 0; }
-    /* a long binary path has to give way rather than push the row past the card.
-       tags keep their natural width: they are already capped by .tag.cap */
-    .row .sub.flow > span:not(.tag) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .mono { font-family: var(--code); font-size: 11px; }
-    .inp { height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; outline: none; min-width: 0; user-select: text; -webkit-user-select: text; }
-    .inp:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); outline: none; }
-    .inp::placeholder { color: var(--faint); }
-
-    /* ---- app composition --------------------------------------------------- */
-    .tools { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; flex: none; }
-    .tools .inp { width: 280px; }
-    .stack { display: flex; flex-direction: column; gap: 10px; }
-    .mt { margin-top: 12px; }
-    .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
-    .status#runnerStatusBadge { display: inline-flex; align-items: center; gap: 7px; }
-
-    .group-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 14px; background: var(--card-2); cursor: default; }
-    .group-head:hover { background: var(--pill); }
-    .group-head .gname { font-weight: 500; font-size: 12.5px; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .group-head .gpath { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 10.5px; color: var(--faint); }
-    .group-head .chev { flex: none; margin-left: auto; color: var(--faint); display: inline-flex; transition: transform .2s var(--ease); }
-    .group-head .chev svg { width: 14px; height: 14px; display: block; }
-    .group-head.closed .chev { transform: rotate(-90deg); }
-
-    .snippet { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2); }
-    .snippet pre { flex: 1; min-width: 0; overflow-x: auto; font: normal 400 11.5px var(--code); color: var(--fg-2); white-space: pre; user-select: text; -webkit-user-select: text; }
-    .prose { font-size: 12.5px; line-height: 1.7; color: var(--fg-2); }
-    .prose + .prose { margin-top: 8px; }
-    .prose b { color: var(--fg); font-weight: 600; }
-    .prose code { padding: 1px 5px; border-radius: 5px; background: var(--pill); color: var(--accent); }
-
-    /* ---- the ledger strip -------------------------------------------------- */
-    .led-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
-    .led-strip .blk { min-width: 0; padding: 11px 15px 10px; text-align: left; }
-    .led-strip .blk + .blk { border-left: 1px solid var(--line-2); }
-    .led-strip .blk.clickable:hover { background: var(--card-2); }
-    .led-strip .k { display: block; font-size: 11px; color: var(--muted); }
-    .led-strip .v { display: block; margin-top: 2px; font-size: 22px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .led-strip .sub { display: block; margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--muted); }
-
-    /* ---- the KPI grid ------------------------------------------------------ */
-    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
-    .kpi { background: var(--card); padding: 12px 14px 11px; display: flex; flex-direction: column; min-width: 0; }
-    .kpi b { font-size: 20px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .kpi b .u { font-style: normal; font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--muted); margin: 0 3px 0 2px; }
-    .kpi span { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-top: 3px; }
-    .kpi small { font-size: 11px; color: var(--muted); margin-top: 3px; }
-
-    /* ---- footer ------------------------------------------------------------ */
-    .foot { display: flex; align-items: center; gap: 10px; padding: 0 14px 6px; min-height: 28px; flex: none; }
-    .status { font-size: 11.5px; color: var(--muted); }
-    .status.ok { color: var(--green); }
-    .status.err { color: var(--red); }
-    .status.warn { color: var(--amber); }
-
-    /* ---- modal ------------------------------------------------------------- */
-    .modal { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; padding: 28px 24px; background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur(8px) saturate(1.1); backdrop-filter: blur(8px) saturate(1.1); }
-    body.window .modal { padding: 16px 24px 24px; }
-    .modal .dialog { width: min(600px, 100%); min-width: 0; max-height: 100%; overflow-y: auto; border-radius: 14px; background: var(--card); box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .12); display: flex; flex-direction: column; animation: dialog-in .2s var(--ease); }
-    @keyframes dialog-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
-    @media (prefers-reduced-motion: reduce) { .modal .dialog { animation: none; } }
-    /* the blur belongs to the page behind the dialog, not to the paper itself:
-       the card stays opaque and the form fields stay crisp */
-    .modal .dialog { background: var(--bg); }
-
-    /* ---- editor / form grid ------------------------------------------------ */
-    .editor { padding: 16px 18px 14px; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px 14px; align-items: start; }
-    .editor .ehead { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line-2); }
-    .editor .ehead b { font-weight: 600; }
-    .editor .ehead .note { font-size: 12px; color: var(--muted); }
-    .editor label { font-size: 12px; color: var(--fg-2); text-align: right; padding-top: 5px; }
-    .editor .hint { font-size: 11px; color: var(--fg-2); margin-top: 4px; }
-    .editor .full { grid-column: 1 / -1; }
-    .editor .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line-2); margin-top: 2px; }
-    .editor .pair { display: flex; gap: 8px; align-items: center; }
-    .editor .pair > .inp, .editor .pair > .code-box { flex: 1; min-width: 0; }
-    .editor .side { display: flex; gap: 4px; align-items: center; flex: none; }
-    .editor form.grid { grid-column: 1 / -1; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px 14px; align-items: start; }
-    .editor form.grid > .bar { grid-column: 1 / -1; }
-    .editor input[type="text"], .editor input[type="password"] { height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; outline: none; width: 100%; min-width: 0; user-select: text; -webkit-user-select: text; }
-    .editor input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); outline: none; }
-    .editor input::placeholder { color: var(--faint); }
-    .code-box { display: block; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card-2); font-family: var(--code); font-size: 11.5px; color: var(--fg-2); word-break: break-all; user-select: text; -webkit-user-select: text; }
-    .code-box.accent { color: var(--accent); }
-    .ok-box { grid-column: 1 / -1; padding: 9px 11px; border-radius: 9px; background: var(--green-soft); color: var(--green); }
-    .ok-box b { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
-    .ok-box b svg { width: 14px; height: 14px; }
-    .ok-box .sub { font-size: 11px; color: var(--fg-2); margin-top: 3px; }
-    .round { width: 38px; height: 38px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--red-soft); color: var(--red); }
-    .round svg { width: 19px; height: 19px; }
-    .center-note { grid-column: 1 / -1; text-align: center; font-size: 12px; color: var(--muted); }
-    .center-title { grid-column: 1 / -1; text-align: center; font-size: 14.5px; font-weight: 600; }
-
-    /* ==========================================================================
-       Layout pass: the same primitives, drawn on a half-pixel grid.
-       magpie's 1px borders and 12px cards were tuned for its full window; a
-       940px tray window wants quieter seams, tighter columns and data that
-       lines up. Everything below only restyles the rules above.
-       ========================================================================== */
-    /* hairline rules everywhere, so no divider outweighs the text it separates */
-    .list, .led-strip, .stats, .top, .sidebar, .foot { border-width: 0; }
-    .list { border: var(--rule); border-radius: var(--r); }
-    .led-strip { border: var(--rule); border-radius: var(--r); }
-    .stats { border: var(--rule); border-radius: var(--r); }
-    .sidebar { border-right: var(--rule); }
-    .row + .row { border-top: var(--rule-2); }
-    .led-strip .blk + .blk { border-left: var(--rule-2); }
-
-    /* ---- header ------------------------------------------------------------ */
-    /* brand · where you are · what is live. the strip is the console's only
-       ambient signal: green when sessions are flowing in, red when they are not */
-    .top { border-bottom: var(--rule); background: var(--card); }
-    .top .brand { font-size: 13.5px; letter-spacing: .005em; }
-    .live {
-      display: inline-flex; align-items: center; gap: 7px; flex: none;
-      height: 24px; padding: 0 9px 0 8px; border-radius: 999px;
-      border: var(--rule); background: var(--card-2);
-      font-size: 11.5px; color: var(--ctl-fg); white-space: nowrap;
-      font-variant-numeric: tabular-nums;
-    }
-    .live > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
-    .live > b { font-weight: 600; color: var(--fg); }
-    .live > span { color: var(--muted); }
-    .live.stale > i { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
-    .live.off > i { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
-    .live.off { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
-
-    /* ---- the ledger --------------------------------------------------------- */
-    /* the four facts that answer "what is this machine doing right now" */
-    .led-strip { grid-template-columns: 1fr 1fr 1fr 1fr; background: var(--card); }
-    .led-strip .blk { padding: 12px var(--inset) 11px; }
-    .led-strip .k { font-size: 11px; letter-spacing: .02em; color: var(--muted); }
-    .led-strip .v { margin-top: 4px; font: 600 22px/1.15 var(--num); letter-spacing: -.025em; }
-    .led-strip .sub { margin-top: 3px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .led-strip .blk.clickable { position: relative; cursor: default; }
-    .led-strip .blk.clickable:hover { background: var(--card-2); }
-    /* a call to action, not a badge: the unpaired tile is the one thing to do */
-    .led-strip .blk.cta .v { color: var(--accent); }
-    .led-strip .blk.cta .sub { color: var(--accent); opacity: .75; }
-    .led-strip .blk.cta::after {
-      content: "›"; position: absolute; right: 12px; top: 13px;
-      font-size: 15px; line-height: 1; color: var(--accent); opacity: .5;
-      transition: transform .16s var(--ease), opacity .16s var(--ease);
-    }
-    .led-strip .blk.cta:hover::after { transform: translateX(2px); opacity: 1; }
-
-    /* ---- filter bar --------------------------------------------------------- */
-    .tools { margin: 12px 0 8px; gap: 6px; }
-    .tools .inp { width: 260px; height: 28px; }
-    .tools .tag { background: transparent; border: var(--rule); height: 22px; }
-
-    /* ---- session groups ----------------------------------------------------- */
-    .stack { gap: 8px; }
-    .group-head { min-height: 36px; padding: 0 var(--inset); background: var(--card); border-bottom: var(--rule-2); transition: background .14s; }
-    .group-head:hover { background: var(--card-2); }
-    .group-head .gname { font-weight: 600; font-size: 12.5px; letter-spacing: -.005em; }
-    .group-head > .ic { color: var(--muted); }
-    .group-head .gpath { color: var(--faint); font-size: 10.5px; }
-    .group-head.closed { border-bottom-color: transparent; }
-    .group-head .chev { color: var(--muted); }
-
-    // a session is a title and one line of facts; the provider is a leading
-       hairline glyph, not a pill, so the titles carry the whole width */
-    #sessionsContainer .row { gap: 10px; padding-top: 7px; padding-bottom: 7px; }
-    #sessionsContainer .row .who { min-width: 0; }
-    #sessionsContainer .row .name { font-weight: 400; font-size: 13px; color: var(--fg); }
-    #sessionsContainer .row .who .when {
-      flex: none; align-self: center; width: 84px; margin-left: auto; margin-right: 13px;
-      text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
-    }
-    #sessionsContainer .session-facts { gap: 6px; }
-    #sessionsContainer .session-facts .tokens { color: var(--faint); font-size: 10.5px; }
-    #sessionsContainer .session-facts .tag.cap { padding: 1px 5px; font-family: var(--code); font-size: 10px; color: var(--fg-2); background: var(--card-2); border: var(--rule-2); }
-    #sessionsContainer .group-head { cursor: default; }
-    #sessionsContainer .group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 0; }
-    #sessionsContainer .group-body[hidden] { display: none; }
-    #sessionsContainer .gpath { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #sessionsContainer .gcount { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-
-    /* ---- stat rows: shared column grid ------------------------------------- */
-    /* who | share | number | (extra). the columns are explicit so every list in
-       the console puts its figures under the same edges */
-    .row.stat { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(96px, 1.4fr) 92px; align-items: center; gap: 14px; }
-    .row.stat > .ic { grid-column: 1; align-self: center; }
-    .row.stat .who { flex: none; grid-column: 2; }
-    .row.stat .share { grid-column: 3; flex: none; height: 3px; margin: 0; background: var(--pill); }
-    .row.stat .share i { background: var(--accent); opacity: 1; }
-    .row.stat .num { grid-column: 4; align-items: flex-end; min-width: 0; }
-    .row.stat .num b { font: 600 12.5px/1.3 var(--num); letter-spacing: -.01em; }
-    .row.stat .num small { font-size: 10.5px; }
-    /* the ledger's second figure shares the number column, above the figure */
-    .row.stat .cost { grid-column: 4; grid-row: 1; align-self: start; justify-self: end; margin-top: -1px; min-width: 0; color: var(--muted); font-size: 10.5px; }
-    .row.stat.has-cost { grid-template-rows: auto auto; }
-    #modelsGrid .row.stat,
-    #usageModels .row.stat,
-    #usageAgents .row.stat { grid-template-columns: 20px minmax(0, 1fr) minmax(80px, 1.2fr) 84px auto; }
-    #workspacesList .row.stat { grid-template-columns: 20px minmax(0, 1fr) minmax(80px, 1.2fr) 84px auto; }
-    /* the .who column carries the model's own icon, so there is no extra cell */
-    #modelsGrid .row.stat { grid-template-columns: minmax(0, 1fr) minmax(80px, 1.2fr) 84px auto; }
-    #modelsGrid .row.stat .who .name-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    #modelsGrid .row.stat .who .name-line .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #modelsGrid .row.stat .who .ic { width: 18px; height: 18px; margin-left: -20px; }
-    #modelsGrid .row.stat .who { grid-column: 1; grid-row: 1; flex: none; }
-    #modelsGrid .row.stat .cost,
-    #usageModels .row.stat .cost,
-    #usageAgents .row.stat .cost,
-    #workspacesList .row.stat .cost { grid-column: 5; grid-row: 1; align-self: center; justify-self: end; margin: 0; color: var(--green); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    #workspacesList .row.stat .cost { color: var(--muted); font-size: 11.5px; }
-    /* the folder reads as one line: the parent is context, the leaf is the name */
-    .ws-loc { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--code); font-size: 10.5px; color: var(--faint); margin-top: 1px; }
-    .ws-loc .ws-leaf { color: var(--fg-2); }
-    /* a workspace's leading mark is its own initials, not a repeated folder icon */
-    .ws-ini {
-      width: 20px; height: 20px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;
-      background: var(--card-2); border: var(--rule); color: var(--muted); font-size: 9.5px; letter-spacing: .02em;
-    }
-    .row .name-line .tag.ok { height: 17px; font-size: 10px; padding: 0 5px; }
-
-    /* ---- section heads ------------------------------------------------------ */
-    .row-head { min-height: 34px; padding: 0 var(--inset); background: var(--card); border-bottom: var(--rule-2); }
-    .label { font-size: 11px; letter-spacing: .03em; text-transform: none; color: var(--muted); font-weight: 500; }
-    .row-head .tag { background: transparent; border: var(--rule); height: 20px; }
-
-    /* ---- KPIs --------------------------------------------------------------- */
-    .stats { grid-template-columns: repeat(4, 1fr); background: var(--line-2); }
-    .kpi { padding: 12px var(--inset) 11px; background: var(--card); }
-    .kpi b { font: 600 21px/1.15 var(--num); letter-spacing: -.025em; }
-    .kpi span { font-size: 11px; letter-spacing: .02em; text-transform: none; font-weight: 500; }
-    .kpi small { font-variant-numeric: tabular-nums; }
-
-    /* ---- gateway view: a two-column editor, the ops desk ------------------- */
-    #view-gateway .tools .tag.ok { background: var(--green-soft); border-color: transparent; color: var(--green); }
-    /* a credential file's name is an identifier, not a sentence: let it shrink */
-    #view-gateway .tools .tag { flex: 0 1 auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 10.5px; }
-    #view-gateway .row-head .label { flex: none; }
-    .gw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: start; }
-    .gw-grid .list { margin: 0; }
-    .gw-card { padding: var(--inset); }
-    .gw-card p { font-size: 12.5px; line-height: 1.72; color: var(--fg-2); }
-    .gw-card p + p { margin-top: 6px; }
-    .gw-facts { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 7px 12px; margin-top: 14px; padding-top: 14px; border-top: var(--rule-2); font-size: 12px; }
-    .gw-facts dt { color: var(--muted); }
-    .gw-facts dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 11.5px; color: var(--fg-2); user-select: text; -webkit-user-select: text; }
-    .snippet { margin-top: 6px; padding: 11px 12px; border: var(--rule); border-radius: 8px; background: var(--card-2); display: block; }
-    .snippet pre { padding: 0; font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-
-    /* ---- empty states are invitations, not placeholders -------------------- */
-    .empty-state { padding: 34px 20px 30px; text-align: left; max-width: 460px; margin: 0 auto; }
-    .empty-state b { display: block; font: 600 13px/1.4 var(--font); color: var(--fg); margin-bottom: 4px; }
-    .empty-state span.why { display: block; font-size: 12px; line-height: 1.65; color: var(--muted); }
-    .empty-state .retry { margin-top: 12px; display: inline-flex; }
-
-    /* ---- toast: one line of feedback where the action happened -------------- */
-    .toast {
-      position: fixed; left: 50%; bottom: 34px; z-index: 40;
-      transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
-      display: flex; align-items: center; gap: 8px; max-width: min(520px, calc(100vw - 40px));
-      padding: 8px 12px; border-radius: 8px;
-      border: var(--rule); background: var(--card); color: var(--fg);
-      font-size: 12px; line-height: 1.5;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, .12), 0 1px 3px rgba(0, 0, 0, .06);
-      transition: opacity .18s var(--ease), transform .18s var(--ease);
-    }
-    .toast.on { opacity: 1; transform: translate(-50%, 0); }
-    .toast::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
-    .toast.err::before { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
-
-    /* ---- focus and reduced motion ------------------------------------------ */
-    button:focus-visible, input:focus-visible, .group-head:focus-visible {
-      outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 7px;
-    }
-    .group-head { cursor: default; }
-    @media (prefers-reduced-motion: reduce) {
-      .led-strip .blk.cta::after, .group-head .chev, .live > i, .toast { transition: none; }
-    }
-    @media (max-width: 720px) {
-      .gw-grid { grid-template-columns: minmax(0, 1fr); }
-      .live { display: none; }
-      .led-strip { grid-template-columns: 1fr 1fr; }
-      .tools .inp { width: auto; flex: 1 1 auto; min-width: 0; }
-      #sessionsContainer .row .sub .tokens { display: none; }
-      #sessionsContainer .row .who .when { width: auto; max-width: 72px; }
-      #sessionsContainer .group-head .gpath { display: none; }
-      .stats { grid-template-columns: 1fr 1fr; }
-      .row.stat,
-      #modelsGrid .row.stat,
-      #usageModels .row.stat,
-      #usageAgents .row.stat,
-      #workspacesList .row.stat { grid-template-columns: 20px minmax(0, 1fr) auto; }
-      .row.stat .share { display: none; }
-      .row.stat .num { grid-column: 3; }
-      .row.stat .cost { display: none; }
-    }
-  </style>
 </head>
 <body class="window side-nav">
   <!-- the pages, in groups; the gateway and the pairing state at the foot -->
   <aside class="sidebar" id="side">
     <div class="side-top">
-      <span class="brand">
+      <span class="brand" id="brandSide">
         <span class="logo">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.8"/>
@@ -608,35 +112,10 @@
         <span>AgentHub</span>
       </span>
     </div>
-    <div class="side-scroll" id="sideScroll">
-      <!-- #nav lives here while the sidebar shows, in the header otherwise -->
-    </div>
-    <div class="side-foot">
-      <button class="side-gw off" id="headerPairBtn" onclick="openPairModal()" title="云端 Web 控制台设备配对与绑定状态">
-        <i></i>
-        <span id="headerPairText">未绑定 Web 控制台</span>
-      </button>
-      <button class="side-gw off" id="sideGwBtn" onclick="switchView('gateway')" title="上游网关探测状态与 Session Affinity 配置">
-        <i></i>
-        <span id="sideGwText">网关未探测</span>
-      </button>
-    </div>
-    <div class="side-edge" id="sideEdge" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整侧栏宽度"></div>
-  </aside>
-
-  <header class="top">
-    <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="显示 / 隐藏侧边栏" aria-label="显示或隐藏侧边栏">
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect class="st-pane" x="3" y="4.5" width="7.5" height="15" rx="1.8" stroke="none"/>
-        <rect x="13.5" y="4.5" width="7.5" height="15" rx="1.8" stroke="currentColor" stroke-width="1.6"/>
-      </svg>
-    </button>
-    <div class="crumb"><span>AgentHub</span><i>/</i><b id="crumbNow">会话</b></div>
-    <span class="live" id="liveStrip" title="历史会话与后台自动刷新的状态">
-      <i></i><b id="liveCount">—</b><span>个会话</span>
-    </span>
-    <nav class="seg" id="nav" aria-label="主导航">
-      <span class="thumb" id="segThumb"></span>
+    <!-- the brand sits above and the pages take the whole rail, as magpie's
+         sidebar does; state lives at the foot -->
+    <div class="nav-slot side-slot" id="navSideSlot">
+          <nav id="nav" aria-label="主导航">
       <span class="nav-gl">工作台</span>
       <button data-view="sessions" class="on" onclick="switchView('sessions')" title="会话 Sessions">
         <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h12v8H9l-4 3v-3H4z"/></g></svg>
@@ -665,6 +144,34 @@
         <span>网关</span>
       </button>
     </nav>
+    </div>
+    <div class="side-foot">
+      <button class="side-gw off" id="headerPairBtn" onclick="openPairModal()" title="云端 Web 控制台设备配对与绑定状态">
+        <i></i>
+        <span id="headerPairText">未绑定 Web 控制台</span>
+      </button>
+      <button class="side-gw off" id="sideGwBtn" onclick="switchView('gateway')" title="上游网关探测状态与 Session Affinity 配置">
+        <i></i>
+        <span id="sideGwText">网关未探测</span>
+      </button>
+    </div>
+    <div class="side-edge" id="sideEdge" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整侧栏宽度"></div>
+  </aside>
+
+  <header class="top">
+    <span class="brand" id="brandTop" aria-hidden="true"></span>
+    <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="显示 / 隐藏侧边栏" aria-label="显示或隐藏侧边栏">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect class="st-pane" x="3" y="4.5" width="7.5" height="15" rx="1.8" stroke="none"/>
+        <rect x="13.5" y="4.5" width="7.5" height="15" rx="1.8" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+    </button>
+    <div class="crumb"><span>AgentHub</span><i>/</i><b id="crumbNow">会话</b></div>
+    <div class="nav-slot top-slot" id="navTopSlot"><span class="thumb" id="segThumb"></span></div>
+    <!-- the live link: a quiet dot here, the count itself is in the ledger below -->
+    <span class="live" id="liveStrip" title="历史会话与后台自动刷新的状态">
+      <i></i><b id="liveCount">—</b><span>个会话</span>
+    </span>
     <div class="actions">
       <button class="icon" onclick="openPairModal()" title="设备配对与身份标识" id="pairBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -684,6 +191,9 @@
     </div>
   </header>
 
+  <!-- every page scrolls in its own column, beside the rail or under the
+       header; the column is what the rail's width leaves it -->
+  <div class="view-slot">
   <!-- View 1: the sessions tree, the landing page -->
   <main class="view active" id="view-sessions" tabindex="-1">
     <div class="led-strip">
@@ -834,24 +344,23 @@
         </div>
         <div class="gw-card">
           <span class="label">Bash / Zsh</span>
-          <div class="snippet" style="margin-top:6px;">
-            <pre id="envSnippet">export ANTHROPIC_BASE_URL="http://127.0.0.1:3425"
-export ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"</pre>
+          <div class="snippet" >
+            <pre id="envSnippet"></pre>
           </div>
-          <span class="label" style="display:block;margin-top:14px;">PowerShell (Windows)</span>
-          <div class="snippet" style="margin-top:6px;">
-            <pre id="psSnippet">$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:3425"
-$env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
+          <span class="label" >PowerShell (Windows)</span>
+          <div class="snippet">
+            <pre id="psSnippet"></pre>
           </div>
         </div>
       </div>
     </div>
   </main>
+  </div>
 
   <footer class="foot">
     <span class="grow"></span>
-    <span class="status" id="footPort">端口 4200</span>
-    <span class="status mono" id="footEndpoint">127.0.0.1:4200</span>
+    <span class="status" id="footPort"></span>
+    <span class="status mono" id="footEndpoint"></span>
   </footer>
 
   <!-- device pairing -->
@@ -859,12 +368,12 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     <div class="dialog">
       <div class="editor">
         <div class="ehead">
-          <span class="ic" style="color:var(--accent);">
+          <span class="ic accent">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           </span>
           <b>设备身份与 AgentHub 配对</b>
           <span class="note">本机 Ed25519 身份 · 主动出站绑定</span>
-          <button class="icon" style="margin-left:auto;" onclick="closePairModal()" title="关闭">
+          <button class="icon push" onclick="closePairModal()" title="关闭">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
           </button>
         </div>
@@ -878,7 +387,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         <label>硬件公钥</label>
         <div><span class="code-box" id="modalDeviceKey">-</span></div>
 
-        <div class="ok-box" id="pairedStatusBox" style="display:none;">
+        <div class="ok-box" id="pairedStatusBox" hidden>
           <b>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
             <span>已成功配对到云端 AgentHub</span>
@@ -905,14 +414,14 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
   <!-- shutdown -->
   <div id="shutdownModal" class="modal">
-    <div class="dialog" style="width:min(380px,100%);">
-      <div class="editor" style="grid-template-columns:minmax(0,1fr);justify-items:center;gap:8px;">
+    <div class="dialog narrow">
+      <div class="editor center">
         <span class="round">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M14.8 9.2 9.2 14.8M9.2 9.2l5.6 5.6"/></svg>
         </span>
         <span class="center-title">正在退出 AgentHub Runner</span>
         <p class="center-note" id="shutdownModalMsg">托盘图标与后台监听服务正在安全释放…</p>
-        <p class="center-note" style="color:var(--faint);font-size:11px;">服务终止后,您可以安全关闭此桌面窗口。</p>
+        <p class="center-note dim">服务终止后,您可以安全关闭此桌面窗口。</p>
       </div>
     </div>
   </div>
@@ -947,8 +456,6 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       gateway: '网关'
     };
 
-    const PORT = location.port || '4200';
-
     const PROVIDER_LABELS = {
       claude_code: 'Claude Code',
       claude: 'Claude',
@@ -969,70 +476,122 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       return PROVIDER_LABELS[key] || String(id || '');
     }
 
-    // Theme initialization - defaults to the light theme
-    (function initTheme() {
-      const saved = localStorage.getItem('agenthub_theme');
-      if (saved === 'dark') {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-      if (localStorage.getItem('agenthub_side_nav') === '0') {
-        document.body.classList.remove('side-nav');
-      }
-      const w = parseInt(localStorage.getItem('agenthub_side_w') || '', 10);
-      if (w >= 168 && w <= 420) {
-        document.documentElement.style.setProperty('--side-w-override', w + 'px');
-      }
+    const LAYOUT = window.AppLayout || {};
+    const STORE = Object.assign({}, LAYOUT.storage);
+    const PORT = String(location.port || LAYOUT.webPort || 4200);
+    // where the upstream gateway listens, when nothing on this machine says otherwise
+    const GATEWAY_URL = `http://127.0.0.1:${LAYOUT.gatewayPort}`;
+    const AFFINITY_HEADER = 'x-session-affinity';
+    // how often the console says it polls; the cadence itself is AppLayout's
+    const POLL_HINT = `每 ${Math.round((LAYOUT.dashboardPollMs || 4000) / 1000)} 秒自动探测一次`;
+    const TOAST_MS = { ok: 2400, err: 4200 };
+
+    // The theme the bootstrap script already applied; the button only redraws
+    function initTheme() {
       updateThemeButtonUI();
-    })();
+    }
 
     async function init() {
       layoutNav();
       initSideEdge();
       const endpoint = document.getElementById('footEndpoint');
       if (endpoint) endpoint.textContent = `${location.hostname || '127.0.0.1'}:${PORT}`;
-      const savedView = localStorage.getItem('agenthub_view');
+      const footPort = document.getElementById('footPort');
+      if (footPort) footPort.textContent = `端口 ${PORT}`;
+      const savedView = localStorage.getItem(STORE.view);
       switchView(VIEW_LABELS[savedView] ? savedView : 'sessions', true);
       // the first probe can land while the daemon is still scanning its
       // transcripts; ask again before telling anyone there are no sessions
       const ok = await refreshDashboard();
       if (!ok || (dashboardData && (dashboardData.sessions || []).length === 0)) {
-        for (let i = 0; i < 2 && !(dashboardData && (dashboardData.sessions || []).length > 0); i++) {
-          await new Promise((r) => setTimeout(r, 1500));
+        for (let i = 0; i < (LAYOUT.firstProbeRetries || 0) && !(dashboardData && (dashboardData.sessions || []).length > 0); i++) {
+          await new Promise((r) => setTimeout(r, LAYOUT.firstProbeRetryMs || 1500));
           await refreshDashboard();
         }
       }
-      setInterval(refreshDashboard, 4000);
+      setInterval(refreshDashboard, LAYOUT.dashboardPollMs || 4000);
+      // the reader's own choice of layout or width; the default follows the window
+      window.addEventListener('resize', () => {
+        if (layoutPicked()) layoutNav();
+      }, { passive: true });
     }
 
-    // The sidebar's #nav is the header's switch when the sidebar is away.
+    // The sidebar's #nav is the header's switch when the sidebar is away. It is
+    // the same #nav with its buttons and handlers, moved between the two, as
+    // magpie does: a Mac sidebar turning into a tab bar (app.js layoutNav).
+    function layoutPicked() {
+      const pick = localStorage.getItem(STORE.layout);
+      return pick === 'side' || pick === 'top';
+    }
+
+    // beside the sidebar the header says where the reader is; without it, #nav
+    // takes the centre and the brand goes back into the header
     function layoutNav() {
       const nav = document.getElementById('nav');
-      const sideScroll = document.getElementById('sideScroll');
-      const actions = document.querySelector('.top .actions');
-      if (!nav || !sideScroll || !actions) return;
-      if (document.body.classList.contains('side-nav')) {
-        sideScroll.appendChild(nav);
+      const sideSlot = document.getElementById('navSideSlot');
+      const topSlot = document.getElementById('navTopSlot');
+      const top = document.querySelector('.top');
+      const on = !document.documentElement.classList.contains('no-side') && document.body.classList.contains('side-nav');
+      // the brand has one home per arrangement: the rail's head beside it, the
+      // header's first slot over it
+      const brand = document.getElementById(on ? 'brandSide' : 'brandTop');
+      const crumb = document.querySelector('.top .crumb');
+      if (!nav || !sideSlot || !topSlot || !top) return;
+      if (on) {
+        sideSlot.appendChild(nav);
+        const head = sideSlot.parentElement.previousElementSibling;
+        if (brand && head) head.insertBefore(brand, head.firstChild);
+        if (crumb) crumb.hidden = false;
       } else {
-        actions.parentNode.insertBefore(nav, actions);
+        topSlot.appendChild(nav);
+        if (brand) top.insertBefore(brand, top.firstChild);
+        if (crumb) crumb.hidden = true;
       }
-      moveSegThumb(false);
+      // beside the rail the names are the rail's own rows, not the header's
+      // rounded track; over the page they go back to being that track
+      nav.classList.toggle('seg', !on);
+      const toggle = document.getElementById('sideToggle');
+      if (toggle) {
+        const label = on ? '隐藏侧边栏' : '显示侧边栏';
+        toggle.title = `${label} (Ctrl+Shift+S)`;
+        toggle.setAttribute('aria-label', label);
+        toggle.setAttribute('aria-pressed', String(on));
+      }
+      const strip = document.getElementById('liveStrip');
+      if (strip) strip.classList.toggle('quiet', on);
+      fitNavTrack();
+      scaleSegThumb(false);
+      // the rail's state is html.no-side (the bootstrap key); body.side-nav is
+      // its helper twin, so a scoped rule can say "beside the rail"
+      document.body.classList.toggle('side-nav', on);
+      return on;
     }
 
-    function toggleSideNav() {
-      const on = !document.body.classList.contains('side-nav');
+    function setSideNav(on, remember) {
       document.body.classList.toggle('side-nav', on);
-      try { localStorage.setItem('agenthub_side_nav', on ? '1' : '0'); } catch (e) {}
+      document.documentElement.classList.toggle('no-side', !on);
+      document.documentElement.dataset.nav = on ? 'side' : 'top';
+      if (remember) {
+        try { localStorage.setItem(STORE.layout, on ? 'side' : 'top'); } catch (e) {}
+      }
       layoutNav();
     }
 
-    // The sidebar's edge drags it wider or narrower.
+    function toggleSideNav() {
+      setSideNav(document.documentElement.classList.contains('no-side'), true);
+    }
+
+    // the sidebar's edge drags it wider or narrower; double-click gives it back
+    // to the window's own width, and a narrower window takes it no wider than
+    // a quarter of itself so the page keeps the room
     function initSideEdge() {
       const edge = document.getElementById('sideEdge');
       if (!edge) return;
+      const win = LAYOUT.window || {};
+      const lo = win.sideMinWidth || 168;
+      const hi = win.sideMaxWidth || 340;
+      const fit = (w) => Math.round(Math.max(lo, Math.min(w, hi, window.innerWidth * 0.25)));
       let dragging = false;
-      const width = () => Math.round(edge.getBoundingClientRect().left) + 4;
 
       edge.addEventListener('pointerdown', (e) => {
         dragging = true;
@@ -1042,34 +601,85 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       });
       edge.addEventListener('pointermove', (e) => {
         if (!dragging) return;
-        const w = Math.max(168, Math.min(420, Math.round(e.clientX)));
-        document.documentElement.style.setProperty('--side-w-override', w + 'px');
+        document.documentElement.style.setProperty('--side-w-override', fit(e.clientX) + 'px');
       });
       const end = () => {
         if (!dragging) return;
         dragging = false;
         document.body.classList.remove('side-drag');
-        try { localStorage.setItem('agenthub_side_w', String(width())); } catch (e) {}
+        const w = Math.round(edge.getBoundingClientRect().left);
+        try { localStorage.setItem(STORE.sideWidth, String(w)); } catch (e) {}
       };
       edge.addEventListener('pointerup', end);
       edge.addEventListener('pointercancel', end);
+      edge.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const cur = Math.round(edge.getBoundingClientRect().left);
+        document.documentElement.style.setProperty('--side-w-override', fit(cur + (e.key === 'ArrowRight' ? 12 : -12)) + 'px');
+        try { localStorage.setItem(STORE.sideWidth, String(Math.round(edge.getBoundingClientRect().left))); } catch (err) {}
+        e.preventDefault();
+      });
       edge.addEventListener('dblclick', () => {
         document.documentElement.style.removeProperty('--side-w-override');
-        try { localStorage.removeItem('agenthub_side_w'); } catch (e) {}
+        try { localStorage.removeItem(STORE.sideWidth); } catch (e) {}
       });
     }
 
-    // The thumb under the open tab, in the header's switch only.
-    function moveSegThumb(animate) {
+    // Ctrl+Shift+S toggles the sidebar, as magpie's title-bar button has it
+    window.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.shiftKey && !e.altKey && (e.key === 'S' || e.key === 's')) {
+        e.preventDefault();
+        toggleSideNav();
+      }
+    });
+
+    // The thumb under the open tab, in the header's switch only. It is written
+    // straight into the track and moved by transform alone, so a click never
+    // makes the header lay itself out a second time.
+    function scaleSegThumb(animate) {
       const nav = document.getElementById('nav');
       const thumb = document.getElementById('segThumb');
-      if (!nav || !thumb) return;
+      // the thumb belongs to the header's page switch; the rail shows the
+      // open page as a tinted row instead
+      if (!nav || !thumb || nav.closest('#navSideSlot')) return;
       const btn = nav.querySelector('button.on');
       if (!btn) return;
-      if (!animate) thumb.style.transition = 'none';
-      thumb.style.left = btn.offsetLeft + 'px';
-      thumb.style.width = btn.offsetWidth + 'px';
-      if (!animate) { void thumb.offsetWidth; thumb.style.transition = ''; }
+      // a transform moves the box without changing what it measures, so where
+      // the track sits is read first, before this thumb moves at all
+      const track = nav.getBoundingClientRect();
+      const at = btn.getBoundingClientRect();
+      const x = Math.round(at.left - track.left - nav.clientLeft - (parseFloat(getComputedStyle(thumb).translate) || 0));
+      thumb.style.transition = animate === false ? 'none' : '';
+      thumb.style.width = Math.round(at.width) + 'px';
+      thumb.style.translate = Math.max(0, x) + 'px 0';
+      if (animate === false) { void thumb.offsetWidth; thumb.style.transition = ''; }
+    }
+
+    // in the header the track shows no more than the header has room for; the
+    // open page is always one of what it shows
+    function fitNavTrack() {
+      const slot = document.getElementById('navTopSlot');
+      const nav = document.getElementById('nav');
+      if (!slot || !nav) return;
+      const lim = slot.clientWidth;
+      if (!lim) return;
+      const gap = parseFloat(getComputedStyle(nav).columnGap) || 0;
+      const items = [...nav.children];
+      const widths = items.map((el) => el.getBoundingClientRect().width);
+      const total = widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, widths.length - 1);
+      if (total <= lim) { items.forEach((el) => { el.style.display = ''; }); return; }
+      let i = 0;
+      while (i < items.length - 1 && !items[i].classList.contains('on')) i++;
+      let from = 0;
+      let room = 0;
+      for (let j = i; j < items.length; j++) {
+        const need = widths[j] + (j > i ? gap : 0);
+        if (room + need > lim && j > i) break;
+        room += need;
+      }
+      for (let j = 0; j < i; j++) room += widths[j] + gap;
+      while (from < i && room > lim) { room -= widths[from] + gap; from++; }
+      items.forEach((el, j) => { el.style.display = j < from ? 'none' : ''; });
     }
 
     // Switch between the views
@@ -1092,9 +702,10 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (crumb) crumb.textContent = VIEW_LABELS[viewId];
 
       if (!silent) {
-        try { localStorage.setItem('agenthub_view', viewId); } catch (e) {}
+        try { localStorage.setItem(STORE.view, viewId); } catch (e) {}
       }
-      moveSegThumb(!silent);
+      fitNavTrack();
+      scaleSegThumb(!silent);
     }
 
     async function refreshDashboard() {
@@ -1159,7 +770,8 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
           // an empty answer only earns the empty state once it has held for a
           // while; a single zero snapshot is a probe, not a verdict
           consecutiveEmptyResponses++;
-          const settled = consecutiveEmptyResponses >= 3 || Date.now() - sessionsRenderedAt > 15000;
+          const settled = consecutiveEmptyResponses >= (LAYOUT.emptyStrikes || 3)
+            || Date.now() - sessionsRenderedAt > (LAYOUT.emptyGraceMs || 15000);
           if (lastGoodSessions.length === 0 || settled) {
             allSessionsData = [];
             renderSessions([], settled ? 'empty' : 'pending');
@@ -1198,8 +810,11 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       if (strip) {
         strip.classList.toggle('off', !online);
         strip.classList.remove('stale');
+        // the dot alone carries the state in the header; the words wait for the
+        // page switch to be away, where there is room for them
+        strip.classList.toggle('quiet', document.body.classList.contains('side-nav'));
         strip.title = online
-          ? '历史会话 · 每 4 秒自动探测一次'
+          ? `历史会话 · ${POLL_HINT}`
           : '与 Runner 的连接中断，正在重连…';
       }
       if (!online) {
@@ -1241,42 +856,42 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       const k = String(id || '').toLowerCase().trim();
       // Claude Code / Claude Desktop: the Claude mark, which stays legible at 18px
       if (k === 'claude_code' || k === 'claude' || k.includes('claude-code') || k.includes('claudecode') || k.includes('claude_desktop') || k.includes('desktop')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Claude</title><path d="M9.6 3.2 11 8.6l-4.4-3.3-1.2 1.7 4.7 3.1-5.5 1.3.5 2 5.4-1.9-3.4 4.5 1.7 1.2 3.2-4.7 1.4 5.4 2-.5-1.9-5.4 4.6 3.4 1.2-1.7-4.8-3.2 5.5-1.3-.5-2-5.5 1.9 3.5-4.6-1.7-1.2L12.9 10 11.6 4.6l-2 .5z" fill="#D97757"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Claude</title><path d="M9.6 3.2 11 8.6l-4.4-3.3-1.2 1.7 4.7 3.1-5.5 1.3.5 2 5.4-1.9-3.4 4.5 1.7 1.2 3.2-4.7 1.4 5.4 2-.5-1.9-5.4 4.6 3.4 1.2-1.7-4.8-3.2 5.5-1.3-.5-2-5.5 1.9 3.5-4.6-1.7-1.2L12.9 10 11.6 4.6l-2 .5z" fill="#D97757"/></svg>`;
       }
       // Codex
       if (k.includes('codex')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Codex</title><path d="M19.503 0H4.496A4.496 4.496 0 000 4.496v15.007A4.496 4.496 0 004.496 24h15.007A4.496 4.496 0 0024 19.503V4.496A4.496 4.496 0 0019.503 0z" fill="#3941FF"/><path d="M9.064 3.344a4.578 4.578 0 012.285-.312c1 .115 1.891.54 2.673 1.275.01.01.024.017.037.021a.09.09 0 00.043 0 4.55 4.55 0 013.046.275l.047.022.116.057a4.581 4.581 0 012.188 2.399c.209.51.313 1.041.315 1.595a4.24 4.24 0 01-.134 1.223.123.123 0 00.03.115c.594.607.988 1.33 1.183 2.17.289 1.425-.007 2.71-.887 3.854l-.136.166a4.548 4.548 0 01-2.201 1.388.123.123 0 00-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838-1.187-.006-2.239-.44-3.157-1.302a.107.107 0 00-.105-.024c-.388.125-.78.143-1.204.138a4.441 4.441 0 01-1.945-.466 4.544 4.544 0 01-1.61-1.335c-.152-.202-.303-.392-.414-.617a5.81 5.81 0 01-.37-.961 4.582 4.582 0 01-.014-2.298.124.124 0 00.006-.056.085.085 0 00-.027-.048 4.467 4.467 0 01-1.034-1.651 3.896 3.896 0 01-.251-1.192 5.189 5.189 0 01.141-1.6c.337-1.112.982-1.985 1.933-2.618.212-.141.413-.251.601-.33.215-.089.43-.164.646-.227a.098.098 0 00.065-.066 4.51 4.51 0 01.829-1.615 4.535 4.535 0 011.837-1.388zm3.482 10.565a.637.637 0 000 1.272h3.636a.637.637 0 100-1.272h-3.636zM8.462 9.23a.637.637 0 00-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 101.095.649l1.454-2.455a.636.636 0 00.005-.64L8.462 9.23z" fill="#FFFFFF"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Codex</title><path d="M19.503 0H4.496A4.496 4.496 0 000 4.496v15.007A4.496 4.496 0 004.496 24h15.007A4.496 4.496 0 0024 19.503V4.496A4.496 4.496 0 0019.503 0z" fill="#3941FF"/><path d="M9.064 3.344a4.578 4.578 0 012.285-.312c1 .115 1.891.54 2.673 1.275.01.01.024.017.037.021a.09.09 0 00.043 0 4.55 4.55 0 013.046.275l.047.022.116.057a4.581 4.581 0 012.188 2.399c.209.51.313 1.041.315 1.595a4.24 4.24 0 01-.134 1.223.123.123 0 00.03.115c.594.607.988 1.33 1.183 2.17.289 1.425-.007 2.71-.887 3.854l-.136.166a4.548 4.548 0 01-2.201 1.388.123.123 0 00-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838-1.187-.006-2.239-.44-3.157-1.302a.107.107 0 00-.105-.024c-.388.125-.78.143-1.204.138a4.441 4.441 0 01-1.945-.466 4.544 4.544 0 01-1.61-1.335c-.152-.202-.303-.392-.414-.617a5.81 5.81 0 01-.37-.961 4.582 4.582 0 01-.014-2.298.124.124 0 00.006-.056.085.085 0 00-.027-.048 4.467 4.467 0 01-1.034-1.651 3.896 3.896 0 01-.251-1.192 5.189 5.189 0 01.141-1.6c.337-1.112.982-1.985 1.933-2.618.212-.141.413-.251.601-.33.215-.089.43-.164.646-.227a.098.098 0 00.065-.066 4.51 4.51 0 01.829-1.615 4.535 4.535 0 011.837-1.388zm3.482 10.565a.637.637 0 000 1.272h3.636a.637.637 0 100-1.272h-3.636zM8.462 9.23a.637.637 0 00-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 101.095.649l1.454-2.455a.636.636 0 00.005-.64L8.462 9.23z" fill="#FFFFFF"/></svg>`;
       }
       // ZCode (dark badge with a white Z)
       if (k.includes('zcode') || k.startsWith('sess_')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>ZCode</title><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M6.2 6.5h11.6v2.6l-6.8 6.5h6.8v2.6H6.2v-2.6l6.8-6.5H6.2V6.5z" fill="#ffffff"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>ZCode</title><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M6.2 6.5h11.6v2.6l-6.8 6.5h6.8v2.6H6.2v-2.6l6.8-6.5H6.2V6.5z" fill="#ffffff"/></svg>`;
       }
       // Gemini CLI
       if (k.includes('gemini')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" style="flex:none;" fill="none"><title>Gemini CLI</title><defs><radialGradient id="gemini-sparkle-agent-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#paint0_radial_gemini_agent_${size})"/><defs><radialGradient id="paint0_radial_gemini_agent_${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" fill="none"><title>Gemini CLI</title><defs><radialGradient id="gemini-sparkle-agent-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#paint0_radial_gemini_agent_${size})"/><defs><radialGradient id="paint0_radial_gemini_agent_${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs></svg>`;
       }
       // Grok
       if (k.includes('grok')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Grok</title><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" fill="#111113"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Grok</title><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" fill="#111113"/></svg>`;
       }
       // Antigravity
       if (k.includes('antigravity')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Antigravity</title><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z" fill="#00B95C"/><path d="M15.269 7.747c1.058 4.557 5.691 7.374 10.348 6.293 4.657-1.082 7.575-5.653 6.516-10.21-1.058-4.556-5.691-7.374-10.348-6.292-4.657 1.082-7.575 5.653-6.516 10.21z" fill="#FC413D"/><path d="M9.932 27.617c1.04 4.482 5.384 7.303 9.7 6.3 4.316-1.002 6.971-5.448 5.93-9.93-1.04-4.483-5.384-7.304-9.7-6.301-4.316 1.002-6.971 5.448-5.93 9.93z" fill="#3186FF"/><path d="M2.572-8.185C.392-3.329 2.778 2.472 7.9 4.771c5.122 2.3 11.042.227 13.222-4.63 2.18-4.855-.205-10.656-5.327-12.955-5.122-2.3-11.042-.227-13.222 4.63z" fill="#FBBC04"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Antigravity</title><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z" fill="#00B95C"/><path d="M15.269 7.747c1.058 4.557 5.691 7.374 10.348 6.293 4.657-1.082 7.575-5.653 6.516-10.21-1.058-4.556-5.691-7.374-10.348-6.292-4.657 1.082-7.575 5.653-6.516 10.21z" fill="#FC413D"/><path d="M9.932 27.617c1.04 4.482 5.384 7.303 9.7 6.3 4.316-1.002 6.971-5.448 5.93-9.93-1.04-4.483-5.384-7.304-9.7-6.301-4.316 1.002-6.971 5.448-5.93 9.93z" fill="#3186FF"/><path d="M2.572-8.185C.392-3.329 2.778 2.472 7.9 4.771c5.122 2.3 11.042.227 13.222-4.63 2.18-4.855-.205-10.656-5.327-12.955-5.122-2.3-11.042-.227-13.222 4.63z" fill="#FBBC04"/></svg>`;
       }
       // Cursor
       if (k.includes('cursor')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Cursor</title><path d="M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z" fill="#000000"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Cursor</title><path d="M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z" fill="#000000"/></svg>`;
       }
       // Cline
       if (k.includes('cline')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>Cline</title><path d="M17.035 3.991c2.75 0 4.98 2.24 4.98 5.003v1.667l1.45 2.896a1.01 1.01 0 01-.002.909l-1.448 2.864v1.668c0 2.762-2.23 5.002-4.98 5.002H7.074c-2.751 0-4.98-2.24-4.98-5.002V17.33l-1.48-2.855a1.01 1.01 0 01-.003-.927l1.482-2.887V8.994c0-2.763 2.23-5.003 4.98-5.003h9.962zM8.265 9.6a2.274 2.274 0 00-2.274 2.274v4.042a2.274 2.274 0 004.547 0v-4.042A2.274 2.274 0 008.265 9.6zm7.326 0a2.274 2.274 0 00-2.274 2.274v4.042a2.274 2.274 0 104.548 0v-4.042A2.274 2.274 0 0015.59 9.6z" fill="#0EA5E9"/><path d="M12.054 5.558a2.779 2.779 0 100-5.558 2.779 2.779 0 000 5.558z" fill="#0EA5E9"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Cline</title><path d="M17.035 3.991c2.75 0 4.98 2.24 4.98 5.003v1.667l1.45 2.896a1.01 1.01 0 01-.002.909l-1.448 2.864v1.668c0 2.762-2.23 5.002-4.98 5.002H7.074c-2.751 0-4.98-2.24-4.98-5.002V17.33l-1.48-2.855a1.01 1.01 0 01-.003-.927l1.482-2.887V8.994c0-2.763 2.23-5.003 4.98-5.003h9.962zM8.265 9.6a2.274 2.274 0 00-2.274 2.274v4.042a2.274 2.274 0 004.547 0v-4.042A2.274 2.274 0 008.265 9.6zm7.326 0a2.274 2.274 0 00-2.274 2.274v4.042a2.274 2.274 0 104.548 0v-4.042A2.274 2.274 0 0015.59 9.6z" fill="#0EA5E9"/><path d="M12.054 5.558a2.779 2.779 0 100-5.558 2.779 2.779 0 000 5.558z" fill="#0EA5E9"/></svg>`;
       }
       // OpenCode
       if (k.includes('opencode')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><title>OpenCode</title><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z" fill="#10A37F"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>OpenCode</title><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z" fill="#10A37F"/></svg>`;
       }
       // Default neutral terminal badge
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>`;
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>`;
     }
 
     function renderAgents(agents) {
@@ -1308,7 +923,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
               </div>
               <div class="sub flow">
                 <span>${escapeHtml(agent.description || '')}</span>
-                <span class="mono" style="color:var(--faint);">${pathText}</span>
+                <span class="mono faint">${pathText}</span>
               </div>
             </div>
             <span class="tag">${agent.sessions_count || 0} 个会话</span>
@@ -1436,7 +1051,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
         return `
           <div class="list" data-group="${escapeHtml(k)}">
             <div class="group-head${closed ? ' closed' : ''}" role="button" tabindex="0" aria-expanded="${!closed}" onclick="toggleSessionGroup(this)">
-              <span class="ic" style="color:var(--accent);width:15px;height:15px;">
+              <span class="ic accent sm">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
               </span>
               <span class="gname" title="${safeName}">${safeName}</span>
@@ -1479,7 +1094,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
 
     // a group folds from its head; the fold survives re-renders and reloads
     const collapsedGroups = new Set(
-      (() => { try { return JSON.parse(localStorage.getItem('agenthub_closed_groups') || '[]'); } catch (e) { return []; } })()
+      (() => { try { return JSON.parse(localStorage.getItem(STORE.closedGroups) || '[]'); } catch (e) { return []; } })()
     );
 
     function toggleSessionGroup(head) {
@@ -1492,7 +1107,7 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
       head.setAttribute('aria-expanded', String(!closing));
       body.hidden = closing;
       if (closing) collapsedGroups.add(key); else collapsedGroups.delete(key);
-      try { localStorage.setItem('agenthub_closed_groups', JSON.stringify([...collapsedGroups])); } catch (e) {}
+      try { localStorage.setItem(STORE.closedGroups, JSON.stringify([...collapsedGroups])); } catch (e) {}
     }
 
     function filterSessionsList() {
@@ -1545,36 +1160,36 @@ $env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"</pre>
     function getModelIcon(name, size = 18) {
       const k = String(name || '').toLowerCase().trim();
       if (k.includes('claude') || k.includes('sonnet') || k.includes('opus') || k.includes('haiku') || k.includes('fable') || k.includes('mythos')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#FAF3EF"/><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill="#D97757" fill-rule="nonzero"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#FAF3EF"/><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill="#D97757" fill-rule="nonzero"/></svg>`;
       }
       if (k.includes('gpt') || k.includes('codex') || k.includes('o1') || k.includes('o3') || k.includes('o4')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#3941FF"/><circle cx="12" cy="12" r="5" fill="#FFFFFF"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#3941FF"/><circle cx="12" cy="12" r="5" fill="#FFFFFF"/></svg>`;
       }
       if (k.includes('deepseek')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#0066FF"/><path d="M6 14c2-4 6-6 10-4-3 5-7 6-10 4z" fill="#FFFFFF"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#0066FF"/><path d="M6 14c2-4 6-6 10-4-3 5-7 6-10 4z" fill="#FFFFFF"/></svg>`;
       }
       if (k.includes('gemini')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" style="flex:none;" fill="none"><defs><radialGradient id="m-gemini-sparkle-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#m-gemini-sparkle-${size})"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" fill="none"><defs><radialGradient id="m-gemini-sparkle-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#m-gemini-sparkle-${size})"/></svg>`;
       }
       if (k.includes('qwen')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#615CED"/><path d="M12 5.5l5.5 3.5v6l-5.5 3.5L6.5 15V9L12 5.5z" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#615CED"/><path d="M12 5.5l5.5 3.5v6l-5.5 3.5L6.5 15V9L12 5.5z" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/></svg>`;
       }
       if (k.includes('minimax') || k.includes('abab')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#FF4D4F"/><path d="M6 15V9l4 4 4-4v6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#FF4D4F"/><path d="M6 15V9l4 4 4-4v6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
       }
       if (k.includes('glm') || k.includes('zhipu')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#0F62FE"/><circle cx="12" cy="12" r="5" stroke="#FFFFFF" stroke-width="2.2"/><circle cx="12" cy="12" r="1.8" fill="#FFFFFF"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#0F62FE"/><circle cx="12" cy="12" r="5" stroke="#FFFFFF" stroke-width="2.2"/><circle cx="12" cy="12" r="1.8" fill="#FFFFFF"/></svg>`;
       }
       if (k.includes('grok')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M7 17l10-10M17 17L7 7" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M7 17l10-10M17 17L7 7" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/></svg>`;
       }
       if (k.includes('step')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#2563EB"/><path d="M6 18h4v-4h4v-4h4V6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#2563EB"/><path d="M6 18h4v-4h4v-4h4V6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
       }
       if (k.includes('stealth') || k.includes('bunny')) {
-        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none"><rect width="24" height="24" rx="4.5" fill="#7C3AED"/><path d="M12 4l3 6-3 4-3-4 3-6zm0 10l4 6H8l4-6z" fill="#FFFFFF"/></svg>`;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#7C3AED"/><path d="M12 4l3 6-3 4-3-4 3-6zm0 10l4 6H8l4-6z" fill="#FFFFFF"/></svg>`;
       }
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" style="flex:none;" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>`;
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>`;
     }
 
     function fmtCostUsd(cost) {
@@ -2065,7 +1680,7 @@ async function refreshModelsCatalog(event) {
 
 function renderGateway(gateway) {
       if (!gateway) return;
-      const baseUrl = gateway.base_url || 'http://127.0.0.1:3425';
+      const baseUrl = gateway.base_url || GATEWAY_URL;
       const host = String(baseUrl).replace(/^https?:\/\//, '');
 
       const badge = document.getElementById('gatewayBadge');
@@ -2088,11 +1703,11 @@ function renderGateway(gateway) {
 
       const envElem = document.getElementById('envSnippet');
       if (envElem) {
-        envElem.textContent = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"`;
+        envElem.textContent = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
       }
       const psElem = document.getElementById('psSnippet');
       if (psElem) {
-        psElem.textContent = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "x-session-affinity=agenthub-session-1"`;
+        psElem.textContent = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "${AFFINITY_HEADER}=agenthub-session-1"`;
       }
       const baseElem = document.getElementById('gwBaseUrl');
       if (baseElem) baseElem.textContent = baseUrl;
@@ -2166,12 +1781,12 @@ function renderGateway(gateway) {
       const themeMeta = document.getElementById('themeColorMeta');
       if (isDark) {
         html.classList.remove('dark');
-        localStorage.setItem('agenthub_theme', 'light');
-        if (themeMeta) themeMeta.setAttribute('content', '#f4f4f6');
+        localStorage.setItem(STORE.theme, 'light');
+        if (themeMeta) themeMeta.setAttribute('content', LAYOUT.themeBg.light);
       } else {
         html.classList.add('dark');
-        localStorage.setItem('agenthub_theme', 'dark');
-        if (themeMeta) themeMeta.setAttribute('content', '#1a1a1e');
+        localStorage.setItem(STORE.theme, 'dark');
+        if (themeMeta) themeMeta.setAttribute('content', LAYOUT.themeBg.dark);
       }
       updateThemeButtonUI();
     }
@@ -2182,7 +1797,7 @@ function renderGateway(gateway) {
       const themeMeta = document.getElementById('themeColorMeta');
 
       if (themeMeta) {
-        themeMeta.setAttribute('content', isDark ? '#1a1a1e' : '#f4f4f6');
+        themeMeta.setAttribute('content', isDark ? LAYOUT.themeBg.dark : LAYOUT.themeBg.light);
       }
 
       if (!iconSpan) return;
@@ -2222,14 +1837,14 @@ function renderGateway(gateway) {
       el.classList.toggle('err', kind === 'err');
       el.classList.add('on');
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => el.classList.remove('on'), kind === 'err' ? 4200 : 2400);
+      toastTimer = setTimeout(() => el.classList.remove('on'), TOAST_MS[kind === 'err' ? 'err' : 'ok']);
     }
 
     function copyGatewayConfig() {
       const baseUrl = (dashboardData && dashboardData.gateway && dashboardData.gateway.base_url)
         ? dashboardData.gateway.base_url
-        : 'http://127.0.0.1:3425';
-      const text = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="x-session-affinity=agenthub-session-1"`;
+        : GATEWAY_URL;
+      const text = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
       copyText(text);
       toast('已复制网关环境变量');
     }
@@ -2260,7 +1875,7 @@ function renderGateway(gateway) {
       if (modal) modal.style.display = 'flex';
       const gatewayInput = document.getElementById('gatewayInput');
       if (gatewayInput && !gatewayInput.value) {
-        const savedGateway = localStorage.getItem('agenthub_custom_gateway') ||
+        const savedGateway = localStorage.getItem(STORE.customGateway) ||
                              (dashboardData && dashboardData.device && dashboardData.device.gateway_url) ||
                              (dashboardData && dashboardData.gateway && dashboardData.gateway.url) || '';
         if (savedGateway) gatewayInput.value = savedGateway;
@@ -2302,7 +1917,7 @@ function renderGateway(gateway) {
       }
 
       try {
-        localStorage.setItem('agenthub_custom_gateway', gateway);
+        localStorage.setItem(STORE.customGateway, gateway);
       } catch (e) {}
 
       const origText = submitBtn.innerHTML;
@@ -2343,7 +1958,8 @@ function renderGateway(gateway) {
     }
 
     window.addEventListener('DOMContentLoaded', init);
-    window.addEventListener('resize', () => moveSegThumb(false));
+    // a wider or narrower window: the header's track takes what now fits
+    window.addEventListener('resize', () => { fitNavTrack(); scaleSegThumb(false); });
   </script>
 </body>
 </html>

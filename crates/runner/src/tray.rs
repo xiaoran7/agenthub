@@ -8,11 +8,13 @@ mod windows_tray {
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    };
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Shell::{
@@ -20,9 +22,9 @@ mod windows_tray {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, PostMessageW, PostQuitMessage,
-        RegisterClassW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, MF_SEPARATOR,
-        MF_STRING, MSG, TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+        DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, MF_SEPARATOR, MF_STRING, MSG,
+        PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, TPM_RIGHTBUTTON,
+        TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
         WM_NULL, WM_RBUTTONUP, WM_USER, WNDCLASSW,
     };
 
@@ -170,13 +172,18 @@ mod windows_tray {
                         let show_app_text: Vec<u16> = "Show App\0".encode_utf16().collect();
                         let exit_text: Vec<u16> = "Exit\0".encode_utf16().collect();
 
-                        AppendMenuW(hmenu, MF_STRING, ID_TRAY_OPEN_DESKTOP, show_app_text.as_ptr());
+                        AppendMenuW(
+                            hmenu,
+                            MF_STRING,
+                            ID_TRAY_OPEN_DESKTOP,
+                            show_app_text.as_ptr(),
+                        );
                         AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
                         AppendMenuW(hmenu, MF_STRING, ID_TRAY_EXIT, exit_text.as_ptr());
 
                         TrackPopupMenu(
                             hmenu,
-                            TPM_RIGHTBUTTON | 0x0020 /* TPM_BOTTOMALIGN */ | 0x0000 /* TPM_LEFTALIGN */,
+                            TPM_RIGHTBUTTON | 0x0020 /* TPM_BOTTOMALIGN */ | 0x0000, /* TPM_LEFTALIGN */
                             pt.x,
                             pt.y,
                             0,
@@ -217,6 +224,42 @@ mod windows_tray {
         }
     }
 
+    /// The console window's size, in one place with the page's own tokens: the
+    /// daemon decides how big the frame opens, the page adapts to whatever it gets.
+    const WINDOW_DEFAULT: (u32, u32) = (1240, 820);
+    const WINDOW_MIN: (u32, u32) = (720, 520);
+
+    fn read_window_size(dir: &std::path::Path) -> Option<(u32, u32)> {
+        let text = std::fs::read_to_string(dir.join("app_window.txt")).ok()?;
+        let mut parts = text.lines().next()?.trim().split(',');
+        let w: u32 = parts.next()?.trim().parse().ok()?;
+        let h: u32 = parts.next()?.trim().parse().ok()?;
+        (w > 0 && h > 0).then_some((w, h))
+    }
+
+    /// Where this machine leaves the app window: remembered size (clamped to the
+    /// screen's work area and the console's minimum), centred on the primary screen.
+    fn remember_window_rect(dir: &std::path::Path) -> (i32, i32, u32, u32) {
+        let (aw, ah) = unsafe {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
+            };
+            (
+                GetSystemMetrics(SM_CXSCREEN).max(1) as u32,
+                GetSystemMetrics(SM_CYSCREEN).max(1) as u32,
+            )
+        };
+        // leave the taskbar and window chrome room; never bigger than the screen
+        let cap_w = (aw as f32 * 0.94) as u32;
+        let cap_h = (ah as f32 * 0.90) as u32;
+        let (req_w, req_h) = read_window_size(dir).unwrap_or(WINDOW_DEFAULT);
+        let win_w = req_w.clamp(WINDOW_MIN.0.min(cap_w), cap_w);
+        let win_h = req_h.clamp(WINDOW_MIN.1.min(cap_h), cap_h);
+        let x = ((aw.saturating_sub(win_w)) / 2) as i32;
+        let y = ((ah.saturating_sub(win_h)) / 3) as i32;
+        (x, y, win_w, win_h)
+    }
+
     pub fn open_desktop_window(url: &str) {
         use std::os::windows::process::CommandExt;
         use std::path::PathBuf;
@@ -243,29 +286,24 @@ mod windows_tray {
                 .unwrap_or_else(|| PathBuf::from("."));
             let profile_dir = home.join(".agenthub").join("app_profile");
 
-            // 计算屏幕中心坐标，像 Magpie 一样舒适居中显示 (940x720)
-            let (pos_x, pos_y, win_w, win_h) = unsafe {
-                use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
-                };
-                let sw = GetSystemMetrics(SM_CXSCREEN);
-                let sh = GetSystemMetrics(SM_CYSCREEN);
-                let w = 940;
-                let h = 720;
-                let x = ((sw - w) / 2).max(0);
-                let y = ((sh - h) / 2).max(0);
-                (x, y, w, h)
-            };
+            let (pos_x, pos_y, win_w, win_h) = remember_window_rect(&home.join(".agenthub"));
 
+            // a reader who resizes the window (and the runner is stopped while it
+            // sits at that size) gets it back the same: Edge keeps its last
+            // window in the profile's Preferences, which outlives the window
+            let kept = profile_dir.join("Default").join("Preferences").is_file();
+            let mut args = vec![
+                format!("--app={}", url),
+                format!("--user-data-dir={}", profile_dir.display()),
+                "--no-first-run".to_string(),
+                "--no-default-browser-check".to_string(),
+            ];
+            if !kept {
+                args.push(format!("--window-size={},{}", win_w, win_h));
+                args.push(format!("--window-position={},{}", pos_x, pos_y));
+            }
             let mut cmd = std::process::Command::new(edge);
-            cmd.args([
-                &format!("--app={}", url),
-                &format!("--window-size={},{}", win_w, win_h),
-                &format!("--window-position={},{}", pos_x, pos_y),
-                &format!("--user-data-dir={}", profile_dir.display()),
-                "--no-first-run",
-                "--no-default-browser-check",
-            ]);
+            cmd.args(&args);
             cmd.creation_flags(CREATE_NO_WINDOW);
             if let Ok(child) = cmd.spawn() {
                 // 将 Edge 子进程绑定至 Windows Job Object，当 Runner 进程终止时系统自动强杀，杜绝孤儿白屏
@@ -350,8 +388,8 @@ mod windows_tray {
 
 #[cfg(not(target_os = "windows"))]
 mod non_windows_tray {
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     pub fn start_tray(_web_url: String, _running: Arc<AtomicBool>) {}
 

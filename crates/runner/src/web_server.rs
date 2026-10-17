@@ -151,7 +151,15 @@ fn handle_connection(
 
     // CORS preflight
     if method == "OPTIONS" {
-        send_response(&mut stream, 204, "No Content", "text/plain", b"", true, None)?;
+        send_response(
+            &mut stream,
+            204,
+            "No Content",
+            "text/plain",
+            b"",
+            true,
+            None,
+        )?;
         return Ok(());
     }
 
@@ -196,19 +204,51 @@ fn handle_connection(
         return Ok(());
     }
 
-    // REST API endpoints
-    if path.starts_with("/api/") {
-        handle_api(&mut stream, method, path, &query, &body, handler, stopped, port)?;
+    if path == "/dashboard.css" {
+        // the sheet carries no build stamp itself; the page asks for a versioned
+        // URL, so a release can never pair a new page with an old sheet
+        let cache = match query.get("v") {
+            Some(v) if v == ASSETS_VERSION => "public, max-age=31536000, immutable",
+            _ => "no-cache",
+        };
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "text/css; charset=utf-8",
+            DASHBOARD_CSS.as_bytes(),
+            false,
+            Some(cache),
+        )?;
         return Ok(());
     }
 
-    // 默认提供嵌入式 CDS Web 界面
+    // REST API endpoints
+    if path.starts_with("/api/") {
+        let req = ApiRequest {
+            stream: &mut stream,
+            method,
+            path,
+            query: &query,
+            body: &body,
+            handler,
+            stopped,
+            port,
+        };
+        req.route()?;
+        return Ok(());
+    }
+
+    // 默认提供嵌入式 CDS Web 界面: the page gets the layout tokens, the
+    // versioned asset URL and the port it is actually served on stamped in, so
+    // the console never carries a copy of a number the daemon already knows
+    let page = render_index_html(port);
     send_response(
         &mut stream,
         200,
         "OK",
         "text/html; charset=utf-8",
-        INDEX_HTML.as_bytes(),
+        page.as_bytes(),
         false,
         Some("no-cache"),
     )?;
@@ -232,198 +272,220 @@ fn parse_path_and_query(full_path: &str) -> (&str, HashMap<String, String>) {
     (path, query)
 }
 
-fn handle_api(
-    stream: &mut TcpStream,
-    method: &str,
-    path: &str,
-    query: &HashMap<String, String>,
-    body: &[u8],
+/// One REST call as it arrived: the socket to answer on, what was asked, and
+/// the daemon and port that answer it.
+struct ApiRequest<'a> {
+    stream: &'a mut TcpStream,
+    method: &'a str,
+    path: &'a str,
+    query: &'a HashMap<String, String>,
+    body: &'a [u8],
     handler: Arc<dyn DaemonRequestHandler>,
     stopped: Arc<AtomicBool>,
     port: u16,
-) -> anyhow::Result<()> {
-    match (method, path) {
-        ("GET", "/api/dashboard") => {
-            let data = build_dashboard_summary(&handler, port);
-            send_json_response(stream, 200, &data)?;
-        }
-        ("POST", "/api/shutdown") => {
-            let resp = json!({
-                "status": "shutting_down",
-                "message": "AgentHub Runner 正在退出，托盘图标与服务已安全终止。"
-            });
-            send_json_response(stream, 200, &resp)?;
-            stopped.store(true, Ordering::SeqCst);
-            thread::spawn(|| {
-                thread::sleep(Duration::from_millis(250));
-                std::process::exit(0);
-            });
-        }
-        ("GET", "/api/status") => {
-            let resp = handler.handle(DaemonRequest::GetStatus);
-            send_json_response(stream, 200, &resp)?;
-        }
-        ("GET", "/api/snapshot") => {
-            let resp = handler.handle(DaemonRequest::GetSnapshot);
-            send_json_response(stream, 200, &resp)?;
-        }
-        ("GET", "/api/events") => {
-            let after_cursor = query
-                .get("after")
-                .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or(0);
-            let limit = query
-                .get("limit")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(100);
-            let resp = handler.handle(DaemonRequest::GetEvents {
-                after_cursor,
-                limit,
-            });
-            send_json_response(stream, 200, &resp)?;
-        }
-        ("GET", "/api/models") => {
-            let catalog_models = crate::model_catalog::fetch_catalog_models(false);
-            if !catalog_models.is_empty() {
+}
+
+impl ApiRequest<'_> {
+    fn route(self) -> anyhow::Result<()> {
+        let ApiRequest {
+            stream,
+            method,
+            path,
+            query,
+            body,
+            handler,
+            stopped,
+            port,
+        } = self;
+        let _ = body;
+        match (method, path) {
+            ("GET", "/api/dashboard") => {
+                let data = build_dashboard_summary(&handler, port);
+                send_json_response(stream, 200, &data)?;
+            }
+            ("POST", "/api/shutdown") => {
+                let resp = json!({
+                    "status": "shutting_down",
+                    "message": "AgentHub Runner 正在退出，托盘图标与服务已安全终止。"
+                });
+                send_json_response(stream, 200, &resp)?;
+                stopped.store(true, Ordering::SeqCst);
+                thread::spawn(|| {
+                    thread::sleep(Duration::from_millis(250));
+                    std::process::exit(0);
+                });
+            }
+            ("GET", "/api/status") => {
+                let resp = handler.handle(DaemonRequest::GetStatus);
+                send_json_response(stream, 200, &resp)?;
+            }
+            ("GET", "/api/snapshot") => {
+                let resp = handler.handle(DaemonRequest::GetSnapshot);
+                send_json_response(stream, 200, &resp)?;
+            }
+            ("GET", "/api/events") => {
+                let after_cursor = query
+                    .get("after")
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0);
+                let limit = query
+                    .get("limit")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(100);
+                let resp = handler.handle(DaemonRequest::GetEvents {
+                    after_cursor,
+                    limit,
+                });
+                send_json_response(stream, 200, &resp)?;
+            }
+            ("GET", "/api/models") => {
+                let catalog_models = crate::model_catalog::fetch_catalog_models(false);
+                if !catalog_models.is_empty() {
+                    let resp = crate::model_catalog::catalog_models_to_json(&catalog_models);
+                    send_json_response(stream, 200, &resp)?;
+                } else {
+                    let resp = handler.handle(DaemonRequest::GetModels);
+                    send_json_response(stream, 200, &resp)?;
+                }
+            }
+            ("POST", "/api/models/refresh") => {
+                let catalog_models = crate::model_catalog::fetch_catalog_models(true);
                 let resp = crate::model_catalog::catalog_models_to_json(&catalog_models);
                 send_json_response(stream, 200, &resp)?;
-            } else {
-                let resp = handler.handle(DaemonRequest::GetModels);
+            }
+            ("GET", "/api/workspaces") => {
+                let ws = crate::collectors::workspace::discover_all_workspaces();
+                send_json_response(stream, 200, &json!({ "workspaces": ws }))?;
+            }
+            ("GET", "/api/discover") => {
+                let resp = handler.handle(DaemonRequest::Discover);
                 send_json_response(stream, 200, &resp)?;
             }
-        }
-        ("POST", "/api/models/refresh") => {
-            let catalog_models = crate::model_catalog::fetch_catalog_models(true);
-            let resp = crate::model_catalog::catalog_models_to_json(&catalog_models);
-            send_json_response(stream, 200, &resp)?;
-        }
-        ("GET", "/api/workspaces") => {
-            let ws = crate::collectors::workspace::discover_all_workspaces();
-            send_json_response(stream, 200, &json!({ "workspaces": ws }))?;
-        }
-        ("GET", "/api/discover") => {
-            let resp = handler.handle(DaemonRequest::Discover);
-            send_json_response(stream, 200, &resp)?;
-        }
-        ("GET", "/api/conversation") => {
-            let session_id = query.get("session_id").cloned().unwrap_or_default();
-            let agent_str = query.get("agent").map(String::as_str).unwrap_or("claude");
-            let agent_type = match agent_str {
-                "codex" => AgentType::Codex,
-                "antigravity" => AgentType::Antigravity,
-                "grok" => AgentType::GrokBuild,
-                "zcode" => AgentType::ZCode,
-                _ => AgentType::ClaudeCode,
-            };
-            let resp = handler.handle(DaemonRequest::GetSessionConversation {
-                agent_type,
-                session_id,
-            });
-            send_json_response(stream, 200, &resp)?;
-        }
-        ("POST", "/api/execute") => match serde_json::from_slice::<RemoteCommand>(body) {
-            Ok(command) => {
-                let resp = handler.handle(DaemonRequest::Execute { command });
+            ("GET", "/api/conversation") => {
+                let session_id = query.get("session_id").cloned().unwrap_or_default();
+                let agent_str = query.get("agent").map(String::as_str).unwrap_or("claude");
+                let agent_type = match agent_str {
+                    "codex" => AgentType::Codex,
+                    "antigravity" => AgentType::Antigravity,
+                    "grok" => AgentType::GrokBuild,
+                    "zcode" => AgentType::ZCode,
+                    _ => AgentType::ClaudeCode,
+                };
+                let resp = handler.handle(DaemonRequest::GetSessionConversation {
+                    agent_type,
+                    session_id,
+                });
                 send_json_response(stream, 200, &resp)?;
             }
-            Err(err) => {
-                let err_json = json!({ "error": format!("invalid_command_payload: {}", err) });
-                send_json_response(stream, 400, &err_json)?;
-            }
-        },
-        ("POST", "/api/authorize-workspace") => {
-            #[derive(Deserialize)]
-            struct AuthWorkspaceReq {
-                workspace: PathBuf,
-            }
-            match serde_json::from_slice::<AuthWorkspaceReq>(body) {
-                Ok(req) => {
-                    let resp = handler.handle(DaemonRequest::AuthorizeWorkspace {
-                        workspace: req.workspace,
-                    });
+            ("POST", "/api/execute") => match serde_json::from_slice::<RemoteCommand>(body) {
+                Ok(command) => {
+                    let resp = handler.handle(DaemonRequest::Execute { command });
                     send_json_response(stream, 200, &resp)?;
                 }
                 Err(err) => {
-                    let err_json =
-                        json!({ "error": format!("invalid_workspace_payload: {}", err) });
+                    let err_json = json!({ "error": format!("invalid_command_payload: {}", err) });
                     send_json_response(stream, 400, &err_json)?;
                 }
-            }
-        }
-        ("POST", "/api/device/bind") => {
-            #[derive(Deserialize)]
-            struct BindReq {
-                gateway: String,
-                binding_code: String,
-            }
-            match serde_json::from_slice::<BindReq>(body) {
-                Ok(req) => {
-                    let home = std::env::var_os("USERPROFILE")
-                        .or_else(|| std::env::var_os("HOME"))
-                        .map(PathBuf::from);
-                    let Some(home) = home else {
-                        let err_json = json!({ "error": "home_dir_unavailable" });
-                        send_json_response(stream, 500, &err_json)?;
-                        return Ok(());
-                    };
-                    let identity_path = home.join(".agenthub").join("identity.json");
-                    let identity = match crate::device::DeviceIdentity::load(&identity_path) {
-                        Ok(id) => id,
-                        Err(err) => {
-                            let err_json = json!({ "error": format!("load_identity_failed: {}", err) });
-                            send_json_response(stream, 500, &err_json)?;
-                            return Ok(());
-                        }
-                    };
-
-                    let gateway_url = req.gateway.trim().trim_end_matches('/');
-                    let client = match crate::gateway::GatewayClient::new(
-                        gateway_url,
-                        Duration::from_secs(10),
-                    ) {
-                        Ok(c) => c,
-                        Err(err) => {
-                            let err_json = json!({ "error": format!("invalid_gateway_url: {}", err) });
-                            send_json_response(stream, 400, &err_json)?;
-                            return Ok(());
-                        }
-                    };
-
-                    match client.bind(&identity, req.binding_code.trim()) {
-                        Ok(binding) => {
-                            let binding_info = json!({
-                                "device_id": binding.device_id,
-                                "registered": binding.registered,
-                                "gateway": gateway_url,
-                                "paired_at": chrono::Utc::now().to_rfc3339()
-                            });
-                            let binding_path = home.join(".agenthub").join("binding.json");
-                            let _ = std::fs::write(&binding_path, serde_json::to_string_pretty(&binding_info).unwrap_or_default());
-                            let resp = json!({
-                                "ok": true,
-                                "message": "设备已成功完成配对与网关注册！",
-                                "binding": binding_info
-                            });
-                            send_json_response(stream, 200, &resp)?;
-                        }
-                        Err(err) => {
-                            let err_json = json!({ "error": format!("bind_failed: {}", err) });
-                            send_json_response(stream, 400, &err_json)?;
-                        }
+            },
+            ("POST", "/api/authorize-workspace") => {
+                #[derive(Deserialize)]
+                struct AuthWorkspaceReq {
+                    workspace: PathBuf,
+                }
+                match serde_json::from_slice::<AuthWorkspaceReq>(body) {
+                    Ok(req) => {
+                        let resp = handler.handle(DaemonRequest::AuthorizeWorkspace {
+                            workspace: req.workspace,
+                        });
+                        send_json_response(stream, 200, &resp)?;
+                    }
+                    Err(err) => {
+                        let err_json =
+                            json!({ "error": format!("invalid_workspace_payload: {}", err) });
+                        send_json_response(stream, 400, &err_json)?;
                     }
                 }
-                Err(err) => {
-                    let err_json = json!({ "error": format!("invalid_bind_payload: {}", err) });
-                    send_json_response(stream, 400, &err_json)?;
+            }
+            ("POST", "/api/device/bind") => {
+                #[derive(Deserialize)]
+                struct BindReq {
+                    gateway: String,
+                    binding_code: String,
+                }
+                match serde_json::from_slice::<BindReq>(body) {
+                    Ok(req) => {
+                        let home = std::env::var_os("USERPROFILE")
+                            .or_else(|| std::env::var_os("HOME"))
+                            .map(PathBuf::from);
+                        let Some(home) = home else {
+                            let err_json = json!({ "error": "home_dir_unavailable" });
+                            send_json_response(stream, 500, &err_json)?;
+                            return Ok(());
+                        };
+                        let identity_path = home.join(".agenthub").join("identity.json");
+                        let identity = match crate::device::DeviceIdentity::load(&identity_path) {
+                            Ok(id) => id,
+                            Err(err) => {
+                                let err_json =
+                                    json!({ "error": format!("load_identity_failed: {}", err) });
+                                send_json_response(stream, 500, &err_json)?;
+                                return Ok(());
+                            }
+                        };
+
+                        let gateway_url = req.gateway.trim().trim_end_matches('/');
+                        let client = match crate::gateway::GatewayClient::new(
+                            gateway_url,
+                            Duration::from_secs(10),
+                        ) {
+                            Ok(c) => c,
+                            Err(err) => {
+                                let err_json =
+                                    json!({ "error": format!("invalid_gateway_url: {}", err) });
+                                send_json_response(stream, 400, &err_json)?;
+                                return Ok(());
+                            }
+                        };
+
+                        match client.bind(&identity, req.binding_code.trim()) {
+                            Ok(binding) => {
+                                let binding_info = json!({
+                                    "device_id": binding.device_id,
+                                    "registered": binding.registered,
+                                    "gateway": gateway_url,
+                                    "paired_at": chrono::Utc::now().to_rfc3339()
+                                });
+                                let binding_path = home.join(".agenthub").join("binding.json");
+                                let _ = std::fs::write(
+                                    &binding_path,
+                                    serde_json::to_string_pretty(&binding_info).unwrap_or_default(),
+                                );
+                                let resp = json!({
+                                    "ok": true,
+                                    "message": "设备已成功完成配对与网关注册！",
+                                    "binding": binding_info
+                                });
+                                send_json_response(stream, 200, &resp)?;
+                            }
+                            Err(err) => {
+                                let err_json = json!({ "error": format!("bind_failed: {}", err) });
+                                send_json_response(stream, 400, &err_json)?;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let err_json = json!({ "error": format!("invalid_bind_payload: {}", err) });
+                        send_json_response(stream, 400, &err_json)?;
+                    }
                 }
             }
+            _ => {
+                let err_json = json!({ "error": "not_found" });
+                send_json_response(stream, 404, &err_json)?;
+            }
         }
-        _ => {
-            let err_json = json!({ "error": "not_found" });
-            send_json_response(stream, 404, &err_json)?;
-        }
+        Ok(())
     }
-    Ok(())
 }
 
 fn dashboard_summary_cache() -> &'static RwLock<Option<(Instant, serde_json::Value)>> {
@@ -524,17 +586,36 @@ fn build_dashboard_summary(
                     continue;
                 }
                 discovered_sessions.push(c.clone());
-                let provider = c.get("provider").and_then(serde_json::Value::as_str).unwrap_or("");
-                let pt = c.get("prompt_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                let ct = c.get("completion_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                let cr = c.get("cache_read_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                let tt = c.get("total_tokens").and_then(serde_json::Value::as_u64).unwrap_or(pt + ct);
+                let provider = c
+                    .get("provider")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let pt = c
+                    .get("prompt_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let ct = c
+                    .get("completion_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let cr = c
+                    .get("cache_read_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let tt = c
+                    .get("total_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(pt + ct);
 
                 total_prompt_tokens = total_prompt_tokens.saturating_add(pt);
                 total_completion_tokens = total_completion_tokens.saturating_add(ct);
                 total_cache_read_tokens = total_cache_read_tokens.saturating_add(cr);
 
-                let raw_model = c.get("model").and_then(serde_json::Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+                let raw_model = c
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
                 let model_name = match raw_model {
                     Some(m) => m.to_string(),
                     None => match provider {
@@ -551,16 +632,19 @@ fn build_dashboard_summary(
                 total_cost_usd += cost;
 
                 // Model aggregation
-                let model_entry = model_aggs.entry(model_name.clone()).or_insert_with(|| ModelAgg {
-                    name: model_name.clone(),
-                    provider: provider.to_string(),
-                    calls: 0,
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    cache_read_tokens: 0,
-                    total_tokens: 0,
-                    cost_usd: 0.0,
-                });
+                let model_entry =
+                    model_aggs
+                        .entry(model_name.clone())
+                        .or_insert_with(|| ModelAgg {
+                            name: model_name.clone(),
+                            provider: provider.to_string(),
+                            calls: 0,
+                            prompt_tokens: 0,
+                            completion_tokens: 0,
+                            cache_read_tokens: 0,
+                            total_tokens: 0,
+                            cost_usd: 0.0,
+                        });
                 model_entry.calls += 1;
                 model_entry.prompt_tokens = model_entry.prompt_tokens.saturating_add(pt);
                 model_entry.completion_tokens = model_entry.completion_tokens.saturating_add(ct);
@@ -577,16 +661,19 @@ fn build_dashboard_summary(
                     "zcode" => ("zcode", "ZCode Agent"),
                     _ => ("other", "Other Agent"),
                 };
-                let agent_entry = agent_aggs.entry(agent_id.to_string()).or_insert_with(|| AgentAgg {
-                    id: agent_id.to_string(),
-                    name: agent_display_name.to_string(),
-                    calls: 0,
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    cache_read_tokens: 0,
-                    total_tokens: 0,
-                    cost_usd: 0.0,
-                });
+                let agent_entry =
+                    agent_aggs
+                        .entry(agent_id.to_string())
+                        .or_insert_with(|| AgentAgg {
+                            id: agent_id.to_string(),
+                            name: agent_display_name.to_string(),
+                            calls: 0,
+                            prompt_tokens: 0,
+                            completion_tokens: 0,
+                            cache_read_tokens: 0,
+                            total_tokens: 0,
+                            cost_usd: 0.0,
+                        });
                 agent_entry.calls += 1;
                 agent_entry.prompt_tokens = agent_entry.prompt_tokens.saturating_add(pt);
                 agent_entry.completion_tokens = agent_entry.completion_tokens.saturating_add(ct);
@@ -612,23 +699,29 @@ fn build_dashboard_summary(
 
     let overall_tokens = total_prompt_tokens.saturating_add(total_completion_tokens);
     let overall_cache_hit_rate = if total_prompt_tokens > 0 {
-        ((total_cache_read_tokens as f64 / total_prompt_tokens as f64) * 100.0).round().clamp(0.0, 100.0) as u32
+        ((total_cache_read_tokens as f64 / total_prompt_tokens as f64) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u32
     } else {
         0
     };
 
     let mut models_breakdown_vec: Vec<ModelAgg> = model_aggs.into_values().collect();
-    models_breakdown_vec.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    models_breakdown_vec.sort_by_key(|m| std::cmp::Reverse(m.total_tokens));
     let models_breakdown: Vec<serde_json::Value> = models_breakdown_vec
         .into_iter()
         .map(|m| {
             let share_pct = if overall_tokens > 0 {
-                ((m.total_tokens as f64 / overall_tokens as f64) * 100.0).round().min(100.0) as u32
+                ((m.total_tokens as f64 / overall_tokens as f64) * 100.0)
+                    .round()
+                    .min(100.0) as u32
             } else {
                 0
             };
             let hit_rate = if m.prompt_tokens > 0 {
-                ((m.cache_read_tokens as f64 / m.prompt_tokens as f64) * 100.0).round().min(100.0) as u32
+                ((m.cache_read_tokens as f64 / m.prompt_tokens as f64) * 100.0)
+                    .round()
+                    .min(100.0) as u32
             } else {
                 0
             };
@@ -649,17 +742,21 @@ fn build_dashboard_summary(
         .collect();
 
     let mut agents_breakdown_vec: Vec<AgentAgg> = agent_aggs.into_values().collect();
-    agents_breakdown_vec.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    agents_breakdown_vec.sort_by_key(|a| std::cmp::Reverse(a.total_tokens));
     let agents_breakdown: Vec<serde_json::Value> = agents_breakdown_vec
         .into_iter()
         .map(|a| {
             let share_pct = if overall_tokens > 0 {
-                ((a.total_tokens as f64 / overall_tokens as f64) * 100.0).round().min(100.0) as u32
+                ((a.total_tokens as f64 / overall_tokens as f64) * 100.0)
+                    .round()
+                    .min(100.0) as u32
             } else {
                 0
             };
             let hit_rate = if a.prompt_tokens > 0 {
-                ((a.cache_read_tokens as f64 / a.prompt_tokens as f64) * 100.0).round().min(100.0) as u32
+                ((a.cache_read_tokens as f64 / a.prompt_tokens as f64) * 100.0)
+                    .round()
+                    .min(100.0) as u32
             } else {
                 0
             };
@@ -1007,9 +1104,20 @@ fn get_device_info() -> serde_json::Value {
     let mut paired_at = String::new();
     if let Ok(binding_content) = std::fs::read_to_string(&binding_path) {
         if let Ok(binding_val) = serde_json::from_str::<serde_json::Value>(&binding_content) {
-            paired = binding_val.get("registered").and_then(|v| v.as_bool()).unwrap_or(false);
-            gateway_url = binding_val.get("gateway").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            paired_at = binding_val.get("paired_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            paired = binding_val
+                .get("registered")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            gateway_url = binding_val
+                .get("gateway")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            paired_at = binding_val
+                .get("paired_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
         }
     }
 
@@ -1028,7 +1136,8 @@ fn get_device_info() -> serde_json::Value {
 }
 
 fn executable_cache() -> &'static RwLock<HashMap<String, (Instant, (bool, Option<String>))>> {
-    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> = OnceLock::new();
+    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> =
+        OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -1083,7 +1192,8 @@ fn find_executable(name: &str, relative_hints: &[&str]) -> (bool, Option<String>
 }
 
 fn agent_dir_cache() -> &'static RwLock<HashMap<String, (Instant, (bool, Option<String>))>> {
-    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> = OnceLock::new();
+    static CACHE: OnceLock<RwLock<HashMap<String, (Instant, (bool, Option<String>))>>> =
+        OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -1165,6 +1275,58 @@ const ICON_SVG: &str = include_str!("../resources/icon.svg");
 
 /// 嵌入式自包含 CDS (Claude Design System) 单页前端
 const INDEX_HTML: &str = include_str!("../resources/dashboard.html");
+const DASHBOARD_CSS: &str = include_str!("../resources/dashboard.css");
+
+/// Bumped with every release; the page links the sheet under this name.
+const ASSETS_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The console's layout tokens, one place for both sides of the wire: the page
+/// keeps the same numbers as its fallback, and the daemon stamps this object in
+/// front of them so the window size, the poll cadence and the gateway port are
+/// declared once.
+fn app_layout_json(port: u16) -> String {
+    let layout = json!({
+        "version": ASSETS_VERSION,
+        "webPort": port,
+        "gatewayPort": 3425,
+        "window": {
+            "width": 1240, "height": 820, "minWidth": 720, "minHeight": 520,
+            "sideMinWidth": 168, "sideWidth": 236, "sideMaxWidth": 340
+        },
+        "sidebarAt": 1024, "sidebarNarrow": 212, "contentMax": 1280,
+        "inset": 18, "radius": 14, "radiusSm": 10, "topBar": 54,
+        "dashboardPollMs": 4000, "firstProbeRetries": 2, "firstProbeRetryMs": 1500,
+        "emptyGraceMs": 15000, "emptyStrikes": 3,
+        "themeBg": { "light": "#f4f5f8", "dark": "#1a1a1e" },
+        "storage": {
+            "theme": "agenthub_theme", "view": "agenthub_view",
+            "layout": "agenthub_layout", "sideWidth": "agenthub_side_w",
+            "closedGroups": "agenthub_closed_groups",
+            "customGateway": "agenthub_custom_gateway", "sideNav": "agenthub_side_nav"
+        }
+    });
+    layout.to_string()
+}
+
+/// The page as served: the layout object first, then the stylesheet and script
+/// URLs at this build's version.
+fn render_index_html(port: u16) -> String {
+    let layout = format!(
+        r#"<script>window.AppLayout = {};</script>"#,
+        app_layout_json(port)
+    );
+    // the page's fallback object opens its own script; the daemon's goes just
+    // before it. The page ships with CRLF line endings, so anchor on text only.
+    let marker = "// ---- the console's layout tokens";
+    let at = INDEX_HTML.find(marker).unwrap_or(0);
+    let head = INDEX_HTML[..at].rfind("<script>").unwrap_or(at);
+    let html = format!(
+        "{}  {layout}\n  {}",
+        &INDEX_HTML[..head],
+        &INDEX_HTML[head..]
+    );
+    html.replace("__ASSETS_VERSION__", ASSETS_VERSION)
+}
 
 /// 嵌入式 PWA Web App Manifest，用于驱动 Edge 桌面应用模式的主题色与窗口特征
 const MANIFEST_JSON: &str = r##"{
@@ -1204,6 +1366,36 @@ mod tests {
                 },
             }
         }
+    }
+
+    #[test]
+    fn index_html_stamps_layout_once_and_versions_assets() {
+        let html = render_index_html(4321);
+        let stamped = html
+            .find("window.AppLayout = {")
+            .filter(|&i| {
+                // the daemon's object is JSON, keys unordered: any quoted key will do
+                html[i + "window.AppLayout = {".len()..].starts_with('"')
+            })
+            .expect("stamped layout");
+        let fallback = html
+            .find("window.AppLayout = Object.assign(")
+            .expect("fallback");
+        assert!(stamped < fallback);
+        assert!(html.contains(r#""webPort":4321"#));
+        assert!(!html.contains("__ASSETS_VERSION__"));
+        assert!(html.contains(&format!("/dashboard.css?v={ASSETS_VERSION}")));
+        // a real JSON object, not a fragment the page has to repair
+        let json = app_layout_json(4321);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("layout json");
+        assert_eq!(parsed["webPort"], 4321);
+        assert_eq!(parsed["window"]["width"], 1240);
+    }
+
+    #[test]
+    fn dashboard_css_is_served_from_the_embedded_sheet() {
+        assert!(DASHBOARD_CSS.contains("--fs-body"));
+        assert!(!DASHBOARD_CSS.contains("</style>"));
     }
 
     #[test]
