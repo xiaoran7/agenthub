@@ -43,13 +43,19 @@ const byLabel = (a: { label: string }, b: { label: string }): number =>
 const PROVIDER_BY_NAME: Record<string, ProviderDescriptor> = {
   codex: { type: "codex", name: "Codex", badgeClass: "codex" },
   zcode: { type: "zcode", name: "ZCode", badgeClass: "zcode" },
+  gemini: { type: "zcode", name: "Gemini CLI", badgeClass: "zcode" },
+  gemini_cli: { type: "zcode", name: "Gemini CLI", badgeClass: "zcode" },
   claude_code: { type: "claude", name: "Claude Code", badgeClass: "claude" },
+  claude: { type: "claude", name: "Claude Code", badgeClass: "claude" },
   antigravity: {
     type: "other",
     name: "Antigravity",
     badgeClass: "other",
   },
   grok_build: { type: "other", name: "Grok", badgeClass: "other" },
+  grok: { type: "other", name: "Grok", badgeClass: "other" },
+  cursor: { type: "other", name: "Cursor", badgeClass: "other" },
+  cline: { type: "other", name: "Cline", badgeClass: "other" },
 };
 
 /**
@@ -70,6 +76,9 @@ export function getProviderInfo(
   }
   if (providerSessionId.startsWith("sess_")) {
     return { type: "zcode", name: "ZCode", badgeClass: "zcode" };
+  }
+  if (providerSessionId.startsWith("gemini_")) {
+    return { type: "zcode", name: "Gemini CLI", badgeClass: "zcode" };
   }
   if (providerSessionId.startsWith("claude_")) {
     return { type: "claude", name: "Claude Code", badgeClass: "claude" };
@@ -166,6 +175,9 @@ export interface TreeSessionBase {
   providerSessionId: string;
   workspaceId: string;
   title: string;
+  model?: string | null | undefined;
+  totalTokens?: number | null | undefined;
+  lastActivityAtMs?: number | null | undefined;
 }
 
 export type TreeSessionItem =
@@ -216,7 +228,15 @@ export interface DeviceGroup {
 
 export interface TreeInput {
   /** Session id -> provider metadata, keyed `${runnerId}/${providerSessionId}`. */
-  discovered: Map<string, { provider?: string | undefined }>;
+  discovered: Map<
+    string,
+    {
+      provider?: string | undefined;
+      model?: string | null | undefined;
+      total_tokens?: number | null | undefined;
+      last_activity_at_ms?: number | null | undefined;
+    }
+  >;
   /** Devices seen by the Gateway, including those with no sessions. */
   devices: Array<{
     runner_id: string;
@@ -242,6 +262,9 @@ export interface TreeInput {
     title?: string | null | undefined;
     provider?: string | undefined;
     resumable?: boolean | undefined;
+    model?: string | null | undefined;
+    total_tokens?: number | null | undefined;
+    last_activity_at_ms?: number | null | undefined;
   }>;
   /** Restrict to one agent folder; "all" shows every agent. */
   providerFilter: ProviderKind | "all";
@@ -263,13 +286,14 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
   for (const session of input.activeSessions) {
     const providerKey = `${session.runner_id}/${session.provider_session_id}`;
     activeProviderIds.add(providerKey);
+    const disc = discovered.get(providerKey);
     const provider = getProviderInfo(
       session.provider_session_id,
-      discovered.get(providerKey)?.provider,
+      disc?.provider,
     );
     if (providerFilter !== "all" && providerFilter !== provider.type) continue;
     const shortId = session.provider_session_id.replace(
-      /^(sess_|claude_)/u,
+      /^(sess_|claude_|gemini_)/u,
       "",
     );
     items.push({
@@ -281,6 +305,9 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
       // The agent folder above already names the Provider, so an untitled
       // session falls back to its short id rather than repeating it.
       title: session.title ?? shortId.slice(0, 8),
+      model: disc?.model,
+      totalTokens: disc?.total_tokens,
+      lastActivityAtMs: disc?.last_activity_at_ms,
       provider,
       sessionKey: `${session.runner_id}/${session.hub_session_id}`,
       session: {
@@ -294,13 +321,14 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
   for (const candidate of input.candidates) {
     const providerKey = `${candidate.runner_id}/${candidate.provider_session_id}`;
     if (activeProviderIds.has(providerKey)) continue;
+    const disc = discovered.get(providerKey);
     const provider = getProviderInfo(
       candidate.provider_session_id,
-      candidate.provider,
+      candidate.provider ?? disc?.provider,
     );
     if (providerFilter !== "all" && providerFilter !== provider.type) continue;
     const shortId = candidate.provider_session_id.replace(
-      /^(sess_|claude_)/u,
+      /^(sess_|claude_|gemini_)/u,
       "",
     );
     items.push({
@@ -310,6 +338,9 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
       providerSessionId: candidate.provider_session_id,
       workspaceId: candidate.workspace_path,
       title: candidate.title ?? shortId.slice(0, 8),
+      model: candidate.model ?? disc?.model,
+      totalTokens: candidate.total_tokens ?? disc?.total_tokens,
+      lastActivityAtMs: candidate.last_activity_at_ms ?? disc?.last_activity_at_ms,
       provider,
       candidate: { resumable: candidate.resumable ?? true },
     });

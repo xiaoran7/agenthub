@@ -266,8 +266,57 @@ test("an active item exposes the hub session key the console selects by", () => 
 
 test("provider detection covers each managed engine", () => {
   assert.equal(getProviderInfo("sess_1").type, "zcode");
+  assert.equal(getProviderInfo("gemini_1").type, "zcode");
+  assert.equal(getProviderInfo("any", "gemini_cli").name, "Gemini CLI");
   assert.equal(getProviderInfo("claude_1").type, "claude");
   assert.equal(getProviderInfo("antigravity_1").type, "other");
   assert.equal(getProviderInfo("grok_1").type, "other");
+  assert.equal(getProviderInfo("any", "cursor").name, "Cursor");
+  assert.equal(getProviderInfo("any", "cline").name, "Cline");
   assert.equal(getProviderInfo("anything-else").type, "codex");
+});
+
+test("session tree items preserve token counts, model and activity timestamps", () => {
+  const tree = buildSessionTree({
+    discovered: new Map([
+      [
+        "dev_a/sess-1",
+        {
+          provider: "zcode",
+          model: "gemini-2.5-flash",
+          total_tokens: 14200,
+          last_activity_at_ms: 1700000000000,
+        },
+      ],
+    ]),
+    devices: [host("dev_a", true)],
+    activeSessions: [
+      active("dev_a", "sess-1", "D:\\Work", { hub_session_id: "hub-1" }),
+    ],
+    candidates: [
+      {
+        runner_id: "dev_a",
+        provider_session_id: "cand-2",
+        workspace_path: "D:\\Work",
+        title: "Discovered Session",
+        model: "claude-3-7-sonnet",
+        total_tokens: 5800,
+        last_activity_at_ms: 1700000005000,
+      },
+    ],
+    providerFilter: "all",
+  });
+
+  const allItems = tree[0]!.workspaces.flatMap((agent) =>
+    agent.workspaces.flatMap((ws) => ws.items),
+  );
+  const activeItem = allItems.find((i) => i.kind === "active")!;
+  assert.equal(activeItem.model, "gemini-2.5-flash");
+  assert.equal(activeItem.totalTokens, 14200);
+  assert.equal(activeItem.lastActivityAtMs, 1700000000000);
+
+  const candItem = allItems.find((i) => i.kind === "candidate")!;
+  assert.equal(candItem.model, "claude-3-7-sonnet");
+  assert.equal(candItem.totalTokens, 5800);
+  assert.equal(candItem.lastActivityAtMs, 1700000005000);
 });

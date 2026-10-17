@@ -71,6 +71,13 @@ const states: Record<string, string> = {
 const key = (session: RemoteSession) =>
   `${session.runner_id}/${session.binding.hub_session_id}`;
 
+function formatSessionTokens(tokens?: number | null): string | null {
+  if (tokens === null || tokens === undefined || tokens <= 0) return null;
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tok`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k tok`;
+  return `${tokens} tok`;
+}
+
 /**
  * Extracts <thinking> or <thought> blocks from message content for CDS ThinkingAccordion.
  */
@@ -764,9 +771,9 @@ export function RemoteConsole({
   );
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
-  const [agentType, setAgentType] = useState<"zcode" | "codex" | "claude_code">(
-    "zcode",
-  );
+  const [agentType, setAgentType] = useState<
+    "zcode" | "codex" | "claude_code" | "antigravity" | "grok_build"
+  >("zcode");
   const [model, setModel] = useState("");
   const [sandbox, setSandbox] = useState<"read-only" | "workspace-write">(
     "read-only",
@@ -1192,6 +1199,9 @@ export function RemoteConsole({
             title: candidate.title,
             provider: candidate.provider,
             resumable: candidate.resumable,
+            model: candidate.model,
+            total_tokens: candidate.total_tokens,
+            last_activity_at_ms: candidate.last_activity_at_ms,
           })),
         ),
         providerFilter,
@@ -1809,6 +1819,22 @@ export function RemoteConsole({
                                                           .execution_state
                                                       ] ?? "状态待确认"}
                                                     </span>
+                                                    {item.model && (
+                                                      <span
+                                                        className="remote-session-pill-tag"
+                                                        title={`模型: ${item.model}`}
+                                                      >
+                                                        {item.model.replace(/^models\//u, "")}
+                                                      </span>
+                                                    )}
+                                                    {formatSessionTokens(item.totalTokens) && (
+                                                      <span
+                                                        className="remote-session-tokens"
+                                                        title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
+                                                      >
+                                                        {formatSessionTokens(item.totalTokens)}
+                                                      </span>
+                                                    )}
                                                   </span>
                                                 </button>
                                               );
@@ -1852,6 +1878,22 @@ export function RemoteConsole({
                                                       ? "仅发现"
                                                       : "点击恢复"}
                                                   </span>
+                                                  {item.model && (
+                                                    <span
+                                                      className="remote-session-pill-tag"
+                                                      title={`模型: ${item.model}`}
+                                                    >
+                                                      {item.model.replace(/^models\//u, "")}
+                                                    </span>
+                                                  )}
+                                                  {formatSessionTokens(item.totalTokens) && (
+                                                    <span
+                                                      className="remote-session-tokens"
+                                                      title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
+                                                    >
+                                                      {formatSessionTokens(item.totalTokens)}
+                                                    </span>
+                                                  )}
                                                 </span>
                                               </button>
                                             );
@@ -2874,6 +2916,8 @@ export function RemoteConsole({
                 <option value="zcode">ZCode (Gemini 3.8 / 全功能)</option>
                 <option value="codex">Codex</option>
                 <option value="claude_code">Claude Code</option>
+                <option value="antigravity">Antigravity</option>
+                <option value="grok_build">Grok Build</option>
               </select>
             </label>
           )}
@@ -2886,7 +2930,7 @@ export function RemoteConsole({
               <option value="">沿用原生设置</option>
               {runnerInfo?.hello?.models?.data.map((item) => (
                 <option key={item.id} value={item.model ?? item.id}>
-                  {item.displayName}
+                  {item.displayName || item.display_name || item.name || item.id}
                 </option>
               ))}
             </select>

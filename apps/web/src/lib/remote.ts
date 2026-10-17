@@ -11,6 +11,13 @@ export interface DiscoveryCandidate {
   title: string | null;
   provider?: string;
   resumable?: boolean;
+  model?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  last_activity_at_ms?: number | null;
+  execution_state?: string | null;
 }
 export interface RemoteRunner {
   runner_id: string;
@@ -21,7 +28,13 @@ export interface RemoteRunner {
     pending_approvals?: RemotePendingApproval[];
     workspaces: string[];
     models?: {
-      data: Array<{ id: string; model?: string; displayName: string }>;
+      data: Array<{
+        id: string;
+        model?: string;
+        displayName?: string;
+        display_name?: string;
+        name?: string;
+      }>;
     };
     discovery?: {
       candidates: DiscoveryCandidate[];

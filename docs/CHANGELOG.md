@@ -2,6 +2,23 @@
 
 ## [2.4.80] - 2026-10-17
 
+### 网页端（Remote Console）契约对齐与全功能适配 (Web Remote Console Alignment & Enhancements)
+
+针对近期 `agenthub-runner`（本地 Daemon）的大量核心升级（模型真实目录探测、多 Provider 发现与分页、Token 与模型用量聚合），对远程主线控制台 `apps/web` 进行了轻量且完整的协议契约对齐与体验适配：
+
+- **新建会话模型名称显示缺陷修复 (Model Name Display Fix)**：
+  - 修复 `RemoteConsole.tsx` 模态框中仅读取驼峰字段 `item.displayName` 的 BUG；引入多层回退兼容 `item.displayName || item.display_name || item.name || item.id`，彻底解决 Daemon 上报下划线原生模型目录时下拉框文字为空的问题。
+- **新建会话引擎选项扩展 (Agent Engine Options Extension)**：
+  - 新建会话弹窗的 Agent 引擎下拉列表中放开 `Antigravity` 与 `Grok Build` 选项，与底层 Daemon 的 `AgentType` 调度能力完全对齐。
+- **候选与活跃会话卡片丰富元数据呈现 (Session Card Metadata)**：
+  - 在 `remote.ts` 的 `DiscoveryCandidate` 及 `session-tree.ts` 的 `TreeSessionBase` 中补齐 `model`、`total_tokens`、`last_activity_at_ms` 字段；
+  - 会话卡片左下侧新增精炼的模型小标签（`.remote-session-pill-tag`）与格式化 Token 用量显示（`.remote-session-tokens`，如 `14.2k tok`），遵循 CDS / 青空 UI 规范，不抢主视觉且信息一目了然。
+- **多 Provider 分类映射补全与树形目录扩展 (Provider Tree & Classification)**：
+  - `session-tree.ts` 中补充 `gemini`、`gemini_cli`、`cursor`、`cline` 的显式映射与前缀判断，保证多引擎发现的会话归入正确的 Agent 分组。
+- **验证与测试覆盖 (Verification & Test Coverage)**：
+  - `apps/web/test/session-tree.test.ts` 补充针对 Provider 分类扩展与会话 Token/模型透传的完整单元测试；
+  - `npm run typecheck` 严格类型检查与 `apps/web` 全量 74 项单元测试全部通过。
+
 ### 内嵌控制台 Magpie 结构重写后的正确性修复与上游溯源 (Console Correctness Fixes & Upstream Attribution)
 
 根据用户指示（“真的 daemon 前端要不然直接照抄 magpie 的 UI 吧，感觉 magpie 用着舒心，现在的 UI 太丑了”），`crates/runner/resources/dashboard.html` 不再做令牌级微调，而是把 magpie 的设计系统与布局原语整层移植过来。**结构重写本身已随 2.4.79 一线的提交落地并压进该版二进制**（当时未单独留痕，见文末「重写内容归档」）；本次为紧随其后的正确性修复、行级细节与上游归属留痕：
