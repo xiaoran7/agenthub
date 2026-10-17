@@ -406,6 +406,15 @@ mod windows_tray {
                 "--no-first-run".to_string(),
                 "--no-default-browser-check".to_string(),
             ];
+            // the caption takes the page's colour: written before the window
+            // opens, since Chromium reads a theme as it starts
+            let agenthub_dir = home.join(".agenthub");
+            if let Some(shell) =
+                super::write_shell_extension(&agenthub_dir, super::remembered_theme(&agenthub_dir))
+            {
+                args.push(format!("--load-extension={}", shell.display()));
+                args.push(format!("--disable-extensions-except={}", shell.display()));
+            }
             if prefs.is_file() {
                 fit_kept_window(&prefs);
             }
@@ -523,3 +532,111 @@ pub use windows_tray::{cleanup_desktop_window, open_desktop_window, start_tray};
 
 #[cfg(not(target_os = "windows"))]
 pub use non_windows_tray::{cleanup_desktop_window, open_desktop_window, start_tray};
+
+/// The window's caption, painted the page's own colour. magpie does this on
+/// Windows with DWM (`internal/gui/titletint_windows.go`: "Windows' grey bar
+/// sat above the page as a strip of its own", so the page tints it); Edge draws
+/// its own caption into the client area and refuses DWM's caption colour, so
+/// the same surface comes from a theme extension instead. Chromium reads a
+/// theme as it starts, so the manifest is written before the window opens, in
+/// the theme the page was last left in.
+const SHELL_DIR: &str = "window_shell";
+const SHELL_LIGHT: (&str, &str) = ("#f4f5f8", "#1c1c21");
+const SHELL_DARK: (&str, &str) = ("#1a1a1e", "#ededf1");
+
+/// The theme the reader last left the page in. The console writes
+/// `agenthub_theme` to Local Storage, which Chromium keeps in the profile's
+/// `Local Storage/leveldb` — not readable as JSON — so the console leaves a
+/// copy here through `/api/window-theme` as well; no copy is light.
+fn remembered_theme(dir: &std::path::Path) -> &'static str {
+    match std::fs::read_to_string(dir.join(SHELL_DIR).join("theme.txt")) {
+        Ok(text) if text.trim() == "dark" => "dark",
+        _ => "light",
+    }
+}
+
+/// Writes the theme the reader picked for the window's caption; the next
+/// window opens in it.
+pub fn remember_window_theme(dark: bool) -> Option<()> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)?;
+    let dir = home.join(".agenthub").join(SHELL_DIR);
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::write(dir.join("theme.txt"), if dark { "dark" } else { "light" }).ok()?;
+    Some(())
+}
+
+/// Writes the theme extension the window is launched with: a caption in the
+/// page's `--bg`, its text in the page's `--fg`, so the two read as one
+/// surface. An `[r, g, b]` triple of 0–255, as Chromium's theme manifest takes
+/// colours. Returns the directory to load.
+fn write_shell_extension(dir: &std::path::Path, theme: &str) -> Option<std::path::PathBuf> {
+    let (bg, fg) = if theme == "dark" {
+        SHELL_DARK
+    } else {
+        SHELL_LIGHT
+    };
+    let rgb = |hex: &str| -> Option<[u8; 3]> {
+        let hex = hex.strip_prefix('#')?;
+        Some([
+            u8::from_str_radix(hex.get(0..2)?, 16).ok()?,
+            u8::from_str_radix(hex.get(2..4)?, 16).ok()?,
+            u8::from_str_radix(hex.get(4..6)?, 16).ok()?,
+        ])
+    };
+    let (bg, fg) = (rgb(bg)?, rgb(fg)?);
+    let shell = dir.join(SHELL_DIR);
+    std::fs::create_dir_all(&shell).ok()?;
+    let manifest = serde_json::json!({
+        "manifest_version": 3,
+        "name": "AgentHub Window",
+        "version": "1.0",
+        "theme": { "colors": {
+            "frame": bg, "frame_inactive": bg,
+            "frame_incognito": bg, "frame_incognito_inactive": bg,
+            "toolbar": bg, "tab_text": fg, "bookmark_text": fg
+        } }
+    });
+    std::fs::write(shell.join("manifest.json"), manifest.to_string()).ok()?;
+    Some(shell)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The caption takes the page's `--bg` and its text the page's `--fg`, in
+    /// the `[r, g, b]` triples Chromium's theme manifest takes; the manifest
+    /// is a manifest Chromium will load, and it lands in `window_shell/`.
+    #[test]
+    fn the_window_shell_paints_the_caption_in_the_page_colour() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for (theme, bg, fg) in [
+            ("light", [0xf4, 0xf5, 0xf8], [0x1c, 0x1c, 0x21]),
+            ("dark", [0x1a, 0x1a, 0x1e], [0xed, 0xed, 0xf1]),
+        ] {
+            let shell = write_shell_extension(dir.path(), theme).expect("shell written");
+            assert_eq!(shell, dir.path().join(SHELL_DIR));
+            let written = std::fs::read_to_string(shell.join("manifest.json")).expect("read");
+            let parsed: serde_json::Value = serde_json::from_str(&written).expect("json");
+            assert_eq!(parsed["manifest_version"], 3);
+            assert_eq!(parsed["theme"]["colors"]["frame"], serde_json::json!(bg));
+            assert_eq!(parsed["theme"]["colors"]["toolbar"], serde_json::json!(bg));
+            assert_eq!(parsed["theme"]["colors"]["tab_text"], serde_json::json!(fg));
+        }
+    }
+
+    /// A window opened before the reader ever picked a theme is light, and one
+    /// whose copy says dark opens dark.
+    #[test]
+    fn a_window_opens_in_the_theme_the_page_was_left_in() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert_eq!(remembered_theme(dir.path()), "light");
+        std::fs::create_dir_all(dir.path().join(SHELL_DIR)).expect("shell dir");
+        std::fs::write(dir.path().join(SHELL_DIR).join("theme.txt"), "dark\n").expect("theme");
+        assert_eq!(remembered_theme(dir.path()), "dark");
+        std::fs::write(dir.path().join(SHELL_DIR).join("theme.txt"), "light").expect("theme");
+        assert_eq!(remembered_theme(dir.path()), "light");
+    }
+}

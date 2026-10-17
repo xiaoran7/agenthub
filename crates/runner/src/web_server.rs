@@ -315,6 +315,21 @@ impl ApiRequest<'_> {
                     std::process::exit(0);
                 });
             }
+            // the window's caption is painted the page's colour by the theme
+            // extension the desktop window opens with; Edge reads that theme as
+            // it starts, so the page leaves its choice here for the next window
+            ("POST", "/api/window-theme") => {
+                let dark = serde_json::from_slice::<serde_json::Value>(body)
+                    .ok()
+                    .and_then(|v| v.get("dark").and_then(|d| d.as_bool()));
+                let saved = dark.and_then(crate::tray::remember_window_theme);
+                let resp = match (dark, saved) {
+                    (None, _) => json!({ "ok": false, "error": "dark_must_be_a_boolean" }),
+                    (Some(dark), Some(())) => json!({ "ok": true, "dark": dark }),
+                    (Some(_), None) => json!({ "ok": false, "error": "home_dir_unavailable" }),
+                };
+                send_json_response(stream, 200, &resp)?;
+            }
             ("GET", "/api/status") => {
                 let resp = handler.handle(DaemonRequest::GetStatus);
                 send_json_response(stream, 200, &resp)?;

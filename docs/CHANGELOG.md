@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.88] - 2026-10-17
+
+### 标题栏跟着页面走色，不再是一条灰带 (The Caption Takes the Page's Colour)
+
+用户截图圈出整条带「最小化 / 最大化 / 关闭」的顶部，说「最违和的是那个有关闭和最小化的顶部跟其他不统一」，要求照 magpie 的方案处理。这一条确实是窗口里最刺眼的地方：页面是浅蓝白，上面却压着一条系统灰 `#e3e3e3` 的标题栏，中间还夹着 Edge 自己画的地址栏式空白。
+
+- **先看 magpie 怎么做的 (What magpie Does)**：magpie 的 Windows 主窗口**不是无边框**，它保留系统标题栏，只是把标题栏涂成页面自己的颜色——`internal/gui/titletint_windows.go` 里写得很直白：「Windows' grey bar sat above the page as a strip of its own」，所以 `SetTheme` + `SetTitleBarColour` 用 DWM 把 caption 染成页面底色；窗口创建时经 `WindowsWindow{Theme, CustomTheme: ThemeSettings{TitleBarColour}}` 传入。真正无边框的只有托盘小面板。照搬这个思路：保留系统标题栏和三个按钮，只让它跟页面同色。
+- **为什么 DWM 在 AgentHub 上不管用 (Why DWM Fails Here)**：AgentHub 的窗口是 Edge `--app=<url>`，Chromium 把 caption 画在**客户区**里，不走 DWM 那套非客户区绘制。逐项实测：`DwmSetWindowAttribute` 的 caption 颜色属性（35）写入返回 `S_OK`，读回却是 `E_INVALIDARG (-2147024809)`；20 / 34 / 35 / 36 / 38 全部试过，边框始终是系统灰 `[227,227,227]`；用 `SetWindowLongPtr` 摘掉 `WS_CAPTION` 也没有任何可见变化；`--force-dark-mode` 能把 caption 变黑，证明这块颜色归 Chromium 主题系统管。PWA 的 Window Controls Overlay 在 `--app` 模式下也不可用（`navigator.windowControlsOverlay.visible === false`，`display_override` 与 `--enable-features=WebAppWindowControlsOverlay` 均无效）。
+- **用 Chromium 主题扩展接管 (A Theme Extension Paints It)**：既然 caption 归 Chromium 主题系统，就用主题去染它。Runner 在开窗前写一个只含 `"theme".colors` 的 manifest-v3 扩展——`frame` / `frame_inactive` / `frame_incognito*` 取页面 `--bg`，`toolbar` 同色，`tab_text` / `bookmark_text` 取页面 `--fg`——再用 `--load-extension=<dir> --disable-extensions-except=<dir>` 载入。实测浅色 `[244,245,248]`、深色 `[26,26,30]`、橙 `[255,136,0]`、绿 `[0,128,0]`、青 `[0,180,90]` 五种颜色都能精确染上，标题栏与页面之间不再有断层。
+- **颜色从哪来 (Where the Colour Comes From)**：Chromium 只在**启动时**读一次主题（`chrome.theme` API 在 MV3 / MV2 里都不可用，运行时改色做不到），所以 manifest 必须在开窗**之前**写好。页面把当前主题经新增的 `POST /api/window-theme {"dark": bool}` 存到 `~/.agenthub/window_shell/theme.txt`，`open_desktop_window()` 每次开窗都按这份记录重写 manifest 再拉起 Edge；页面初始化时也会同步一次，第一次在这个配置里开窗、或记录过期时都能自己纠正。代价是**切换主题要等下一次开窗才反映到标题栏**，这是 Chromium 的启动期读取决定的，不是遗漏。
+- **验证 (Verification)**：调试版与发布版各起一次真实窗口（独立 `USERPROFILE`、4221 端口），按 Edge 进程命令行过滤 PID、用 `PrintWindow` 抓窗口（避免误抓读者正在跑的 4200 窗口）：发布版 caption 取色 `[244,245,248]`，与页面 `--bg` 完全一致；`theme.txt` 为 `light`；Edge 命令行确认带上 `--load-extension` 与 `--disable-extensions-except`。深色路径：`POST /api/window-theme {"dark":true}` 后重开窗，caption 为 `[26,26,30]`。`cargo test --workspace` 167 项通过（新增 `the_window_shell_paints_the_caption_in_the_page_colour`、`a_window_opens_in_the_theme_the_page_was_left_in` 两项）。
+- **已知边界 (Known Limit)**：标题栏右侧的最小化 / 最大化 / 关闭仍是 Edge 画的原生按钮，只能跟着主题变深浅，不能改形状或换位置；要做到完全统一只能整窗无边框、三个按钮自绘，那会丢掉系统的窗口贴边、Aero Snap 与多显示器行为，本版没有走这条路。
+
+### 交付产物：Windows 与 Android 同步至 2.4.88 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.88-windows-x64.zip`，按「打新包必删旧包」删除 2.4.87 的 zip 与 APK；本机安装目录 `Deliverables/AgentHub/` 同步替换 `agenthub-runner.exe`，保留 `agenthub-runner.exe.2.4.82.bak` 回滚。
+- **Android Debug APK**：`versionCode=88`、`versionName=2.4.88`。
+- **校验清单**：`AgentHub-v2.4.88-SHA256.txt` 收录 exe、zip、APK 与内嵌 `dashboard.html` / `dashboard.css`。
+
 ## [2.4.87] - 2026-10-17
 
 ### 删掉导航分组标签、顶栏统一为一套配色 (No Group Labels, One Header Palette)

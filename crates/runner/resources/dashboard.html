@@ -495,11 +495,26 @@
     // The theme the bootstrap script already applied; the button only redraws
     function initTheme() {
       updateThemeButtonUI();
+      // the window's caption is painted before the page is up, from the copy
+      // the console left last time; a first window in this profile, or one
+      // whose copy went stale, brings that copy up to the page's theme
+      syncWindowTheme();
+    }
+
+    // the caption's theme, kept where the next window reads it as it opens
+    function syncWindowTheme() {
+      const dark = document.documentElement.classList.contains('dark');
+      fetch('/api/window-theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dark })
+      }).catch(() => {});
     }
 
     async function init() {
       layoutNav();
       initSideEdge();
+      initTheme();
       const endpoint = document.getElementById('footEndpoint');
       if (endpoint) endpoint.textContent = `${location.hostname || '127.0.0.1'}:${PORT}`;
       const footPort = document.getElementById('footPort');
@@ -1831,6 +1846,9 @@ function renderGateway(gateway) {
         if (themeMeta) themeMeta.setAttribute('content', LAYOUT.themeBg.dark);
       }
       updateThemeButtonUI();
+      // the window's own caption is the page's colour too, and is painted by
+      // the shell the next window opens with: leave the choice where it reads it
+      syncWindowTheme();
     }
 
     function updateThemeButtonUI() {
