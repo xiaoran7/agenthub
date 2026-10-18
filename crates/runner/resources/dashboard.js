@@ -1101,13 +1101,13 @@ function getModelIcon(name, size = 18) {
 }
 
 function fmtCostUsd(cost) {
-  if (!(cost > 0)) return "";
   if (cost >= 100) return "≈$" + Math.round(cost);
-  return "≈$" + cost.toFixed(2);
+  return "≈$" + Number(cost).toFixed(2);
 }
 
 // a row the daemon has not priced shows a dash, never a locally derived
-// number: an unpriced model must not read as free
+// number: an unpriced model must not read as free. A model the daemon did
+// price at zero is a different fact and keeps its ≈$0.00.
 function costCell(cost) {
   if (cost === null || cost === undefined) return "—";
   return fmtCostUsd(cost);
@@ -1117,14 +1117,19 @@ function costCell(cost) {
 // input, output and cache reads separately (web_server.rs calc_cost). The
 // page reads those figures back and never derives one of its own, so the
 // 模型 and 用量 views cannot report two different numbers for one model.
-// A model the daemon has not priced gets a blank, not a local guess.
+// A model the daemon has not priced reads as a dash, not a local guess.
 function backendModelCosts() {
   const models =
     (dashboardData && dashboardData.usage && dashboardData.usage.models) || [];
   const map = {};
   models.forEach((m) => {
-    if (m && m.name)
-      map[String(m.name).toLowerCase()] = Number(m.estimated_cost_usd) || 0;
+    if (!m || !m.name) return;
+    // keep "no price" distinguishable from "priced at zero": only a real
+    // number goes into the map
+    const cost = m.estimated_cost_usd;
+    if (cost === null || cost === undefined) return;
+    const n = Number(cost);
+    if (Number.isFinite(n)) map[String(m.name).toLowerCase()] = n;
   });
   return map;
 }
@@ -1147,8 +1152,15 @@ function renderUsageAnalytics(usage, sessions, stats) {
       usage.calls ||
       (usage.models && usage.models.length > 0))
   ) {
-    // Authoritative backend aggregated metrics
-    costUsd = Number(usage.cost_usd) || 0.0;
+    // Authoritative backend aggregated metrics. A missing or non-numeric cost
+    // stays null so the tile can tell "not priced" from "priced at zero".
+    const rawCost = usage.cost_usd;
+    costUsd =
+      rawCost === null || rawCost === undefined
+        ? null
+        : Number.isFinite(Number(rawCost))
+          ? Number(rawCost)
+          : null;
     totalTokens = Number(usage.total_tokens) || 0;
     inputTokens = Number(usage.input) || 0;
     outputTokens = Number(usage.output) || 0;
@@ -1496,10 +1508,11 @@ function renderModels(models) {
           ? `${fmtN(item.inTokens)} in · ${fmtN(item.outTokens)} out`
           : "就绪";
       const costKey = String(item.name).toLowerCase();
-      // only the daemon's figure; a model it has not priced stays blank
+      // only the daemon's figure; a model it has not priced reads as a dash,
+      // the same as in the usage view
       const costStr = Object.prototype.hasOwnProperty.call(costMap, costKey)
-        ? fmtCostUsd(costMap[costKey])
-        : "";
+        ? costCell(costMap[costKey])
+        : "—";
       const callsText =
         item.calls > 0 ? `<span>${item.calls} 次调用</span>` : "";
 

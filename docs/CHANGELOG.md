@@ -14,11 +14,11 @@
 - **费用只由守护进程计算 (One Place Turns Tokens into Money)**：
   - 删除页面里的两处本地费率表（`fmtCostFromTokens` 与 `renderUsageAnalytics` 兜底分支里的 `calcCost`）。它们的单价与 Rust 端 `calc_cost` 本来就不一致：Rust 按输入 / 输出 / 缓存读取分别计价，JS 用的是混合单价，且其中一份漏了 `mini` 分支。此前靠"后端有值优先用后端"压住，但只要某个模型不在 `usage.models` 里，页面就会自己算出一个不同口径的数字。
   - 现在页面只读 `usage.models[].estimated_cost_usd` 与 `usage.cost_usd`。守护进程未定价的模型在"模型"与"用量"两个视图都显示 `—`，兜底聚合路径的 KPI 同样显示 `—`——**未定价不等于免费**，宁可留空也不编造金额。
-  - 顺带修正：KPI 卡片此前把空字符串与 `$0.00` 混在一起渲染成 `≈$0.00`，现在区分"没有价格"与"价格为零"。
+  - 三态区分：**未定价**（字段缺失或非数字）显示 `—`；**定价为零**（守护进程确实算出 0，如免费模型或四舍五入到 0）显示 `≈$0.00`；其余按金额显示。`backendModelCosts` 只收真实数字，不再用 `|| 0` 把缺失值折成零。
 - **验证 (Verification)**：
   - `cargo test --workspace`：168 单元 + 26 / 17 / 7 / 5 / 3 集成全部通过；`cargo fmt --check` 与 clippy 的报错全部落在本次未触碰的既有文件（`build.rs`、`collectors/*`、`remote_host.rs`、`tray.rs`、`conversation.rs`、`model_catalog.rs`、`main.rs`），本次改动的 `web_server.rs` 无新增告警。
   - 真实 2.4.92 debug daemon（独立数据库与工作区，4313 端口）+ headless Edge（820×600，CDP）实测：`GET /` 返回 `/dashboard.js?v=2.4.92` 与 `/dashboard.css?v=2.4.92`，`/dashboard.js` 返回 200 `text/javascript`，版本匹配时 `Cache-Control: immutable`、不匹配时 `no-cache`；脚本加载后 `renderUsageAnalytics` 为函数，六个视图逐一切换正常，控制台零异常。
-  - 费用口径用合成快照验证：一个已定价模型显示 `≈$10.50`、一个未定价模型显示 `—`、KPI 显示 `≈$12.34`；强制走兜底聚合路径时 KPI 与模型行均为 `—`，不再出现本地估算。
+  - 费用口径用合成快照验证：已定价模型显示 `≈$10.50`、定价为零的模型显示 `≈$0.00`、未定价模型显示 `—`、KPI 显示 `≈$10.50`；守护进程回 `cost_usd: null` 时 KPI 显示 `—`；强制走兜底聚合路径时 KPI 与模型行均为 `—`，不再出现本地估算。`costCell` 的边界（0 / 0.004 / 99.999 / 100 / 123.4 / null / undefined）另有独立断言，全部通过。
   - 交付产物未重新打包（本版只改控制台资源与文档），`Deliverables/` 保持 2.4.91。
 
 ## [2.4.91] - 2026-10-18
