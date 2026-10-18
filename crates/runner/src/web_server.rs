@@ -1322,8 +1322,8 @@ fn app_layout_json(port: u16) -> String {
         // the rail opens with the window beside at least a 560px column of
         // text; the button in its head folds it into the header, and the choice
         // outlives the window. On a first visit a narrow window starts folded
-        "sidebarAt": 820, "sidebarNarrow": 200, "contentMax": 1100,
-        "inset": 16, "radius": 14, "radiusSm": 10, "topBar": 48,
+        "sidebarAt": 768, "sidebarNarrow": 200, "contentMax": 1100,
+        "inset": 16, "radius": 14, "radiusSm": 10, "topBar": 38,
         "dashboardPollMs": 4000, "firstProbeRetries": 2, "firstProbeRetryMs": 1500,
         "emptyGraceMs": 15000, "emptyStrikes": 3,
         "themeBg": { "light": "#f4f5f8", "dark": "#1a1a1e" },

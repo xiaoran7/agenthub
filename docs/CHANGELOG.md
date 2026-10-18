@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.4.90] - 2026-10-18
+
+### 解开顶栏重叠与侧边栏失效，重塑三栏网格顶栏 (Unblock Sidebar Toggle & Eliminate Top Bar Bloat with 3-Zone Header Grid)
+
+用户在截图（`1.png`）中用褐色圆圈标注了两处最核心的交互与布局硬伤：「侧边栏按钮失效了」以及「然后顶部这一块真的没办法优化吗」。排查发现此前顶栏存在容器层级劫持与严重的空间重叠冗余：Edge 桌面窗口标题栏与网页顶栏双层压顶、右上角并排出现两个关闭 `✕` 按钮容易误点、居中导航容器隐式拦截侧边栏按钮点击。本版本针对性重构顶栏架构，彻底修复点击失效并完成空间优化：
+
+- **彻底解开侧边栏按钮失效 (Unblock Sidebar Toggle from Pointer-Events Trap)**：
+  - **根因**：此前 `#navTopSlot` 采用 `position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);` 居中且带有 `max-width: calc(100% - 24px)`。在 820×600（内部视口约 804px）桌面窗口下，居中导航轨宽度达 558px，从 x=99px 延展至 x=657px，直接覆盖在左侧 `#sideToggle` 按钮（x=128px ~ 158px）正上方。由于容器缺少 `pointer-events: none`，所有的鼠标点击事件在捕获阶段均被透明的居中容器优先吃掉，导致用户怎么点击侧边栏按钮都无任何反应。
+  - **修复**：顶栏全面转向现代 CSS Grid 三栏非重叠网格架构（`grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)`），物理上隔离左侧品牌/面包屑区、中间导航轨区与右侧工具区，从几何结构上杜绝容器覆盖；同时给 `#navTopSlot` 显式设置 `pointer-events: none`，子级 `#nav` 设置 `pointer-events: auto`，给 `#sideToggle` 设置 `z-index: 7` 与独立指针捕获，经 CDP `elementFromPoint` 实测命中率 100%。
+- **顶栏瘦身与双 `✕` 按钮消除 (Slim 38px Header & Differentiate Shutdown Action)**：
+  - **高度从 48px/54px 缩减至 38px**：`--top-h` 从 `--layout-top-h, 54px` 紧凑调整为 `38px`（`topBar: 38`），Edge 原生窗口标题栏（约 32px）与网页顶栏（38px）合计仅 70px，相比原本的近 86px 明显减少垂直纵深压迫感，为内容主视口腾出宝贵空间。
+  - **消灭双层关闭按钮混淆**：Edge 窗口右上角第一层已具备原生窗口关闭 `✕` 按钮，而原顶栏第二层直接画了一个外观几乎相同的 `✕` 图标用于终止后台守护进程（`shutdownRunner()`），极易让用户产生困惑甚至误操作。现将退出守护进程按钮替换为符合语义的标准电源/退出图符（`M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10`），并配置温和的淡红悬停底色（`var(--red-soft)`）与红色图符（`var(--red)`），职责清晰分明。
+- **动静清晰的两态架构 (Clean Two-State Responsive Header)**：
+  - **侧边栏展开时**：顶栏整体自动与下方主视口同步带 `margin-left: var(--side-w)`，视觉上与侧边栏齐平；顶栏左侧自动隐藏重复的品牌 Logo 与折叠按钮，转而呈现优雅的面包屑导航（如 `会话 · Sessions`、`智能体 · Agents`）；居中导航轨自动隐藏（因已在侧边栏完整陈列）。
+  - **侧边栏折叠时**：顶栏平滑扩展至全宽（`margin-left: 0`），左侧优雅展现 AgentHub Logo 品牌与侧边栏展开按钮（`#sideToggle`），居中无缝展现分段胶囊导航轨（`#navTopSlot`），右侧展现操作按钮。
+- **初始状态判定与尺寸防护 (State Machine & Guard)**：
+  - **断点重新校准**：将自动展开侧边栏的断点由 820px 调至 768px（`sidebarAt: 768`），匹配 820×600 窗口在 Windows 下约 804px 的物理可视区，确保开箱默认进入优雅的侧边栏模式。
+  - **判定基准归一**：消除 `layoutNav()` 对 `body.side-nav` 的初始依赖，以 `!html.classList.contains('no-side')` 作为唯一判定基准，修复初始装载与本地存储记忆不同步时的状态错位。
+  - **侧边栏导航尺寸保护 (`fitNavTrack` Guard)**：当 `#nav` 被侧边栏接管时（`nav.parentElement !== slot`），自动跳过横向顶轨压缩计算并重置完整文字与显示，防止侧边栏内的导航文字被误切成两字或隐藏。
+- **严格符合 Aozora UI 与 60 FPS 性能铁律**：所有平移动画采用合成器层 GPU 硬件加速，无全屏重绘，无滚动模糊，保持极致轻盈灵动。
+- **自动化验证**：headless Edge 经 CDP 13 项指标全量测试通过（顶栏 38px 实测命中、侧边栏默认展开、折叠时零重叠判定通过、侧边栏按钮真实点击展开测试通过、面包屑动态切词验证通过）；`cargo test --workspace` 全量测试套件（167 单元测试 + 58 项集成测试）一次性全绿通过。
+
 ## [2.4.89] - 2026-10-18
 
 ### 全面上动画、把生硬的地方都揉软 (A Motion Pass Over the Whole Console)

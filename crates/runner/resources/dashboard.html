@@ -19,9 +19,9 @@
     window.AppLayout = Object.assign({
       version: 'dev',
       window: { width: 820, height: 600, minWidth: 640, minHeight: 460, sideMinWidth: 168, sideWidth: 212, sideMaxWidth: 300 },
-      sidebarAt: 820, sidebarNarrow: 200,
+      sidebarAt: 768, sidebarNarrow: 200,
       contentMax: 1100,
-      inset: 16, radius: 14, radiusSm: 10, topBar: 48,
+      inset: 16, radius: 14, radiusSm: 10, topBar: 38,
       dashboardPollMs: 4000, firstProbeRetries: 2, firstProbeRetryMs: 1500,
       emptyGraceMs: 15000, emptyStrikes: 3,
       gatewayPort: 3425,
@@ -43,7 +43,7 @@
           + '--layout-inset:' + (a.inset || 18) + 'px;'
           + '--layout-radius:' + (a.radius || 14) + 'px;'
           + '--layout-radius-s:' + (a.radiusSm || 10) + 'px;'
-          + '--layout-top-h:' + (a.topBar || 54) + 'px;'
+          + '--layout-top-h:' + (a.topBar || 38) + 'px;'
           + '--layout-content-w:' + (a.contentMax || 1280) + 'px;';
         var s = Math.max(0, Math.min(1, ((window.innerWidth || 1280) - 960) / 560));
         document.documentElement.style.cssText = chrome
@@ -79,7 +79,7 @@
       // the rail open until a click says otherwise. The window's width
       // (AppLayout.sidebarAt) sets the default only on a first visit
       var sidePref = localStorage.getItem(store.sideNav);
-      var showSide = sidePref ? sidePref === 'on' : (window.innerWidth || 0) >= (AppLayout.sidebarAt || 1200);
+      var showSide = sidePref ? sidePref === 'on' : (window.innerWidth || 0) >= (AppLayout.sidebarAt || 768);
       document.documentElement.classList.toggle('no-side', !showSide);
       document.documentElement.dataset.nav = showSide ? 'side' : 'top';
 
@@ -165,25 +165,30 @@
   </aside>
 
   <header class="top">
-    <span class="brand" id="brandTop" aria-hidden="true">
-      <span class="logo">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.8"/>
-          <circle cx="5" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-          <circle cx="19" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-          <circle cx="5" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-          <circle cx="19" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M9.8 9.8 6.4 6.4M14.2 9.8l3.4-3.4M9.8 14.2l-3.4 3.4M14.2 14.2l3.4 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-        </svg>
+    <div class="top-left">
+      <span class="brand" id="brandTop" aria-hidden="true">
+        <span class="logo">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.8"/>
+            <circle cx="5" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="19" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="5" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="19" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M9.8 9.8 6.4 6.4M14.2 9.8l3.4-3.4M9.8 14.2l-3.4 3.4M14.2 14.2l3.4 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span>AgentHub</span>
       </span>
-      <span>AgentHub</span>
-    </span>
-    <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="显示 / 隐藏侧边栏" aria-label="显示或隐藏侧边栏">
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect class="st-pane" x="2.5" y="3.5" width="19" height="17" rx="2.4" stroke="currentColor" stroke-width="1.6"/>
-        <path class="st-pane" d="M9 3.5v17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-    </button>
+      <button class="icon side-toggle" id="sideToggle" onclick="toggleSideNav()" title="展开侧边栏 (Ctrl+Shift+S)" aria-label="展开侧边栏">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect class="st-pane" x="2.5" y="3.5" width="19" height="17" rx="2.4" stroke="currentColor" stroke-width="1.6"/>
+          <path class="st-pane" d="M9 3.5v17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <div class="crumb" id="topCrumb">
+        <b id="topCrumbTitle">会话</b><i>·</i><span id="topCrumbSub">Sessions</span>
+      </div>
+    </div>
     <div class="nav-slot top-slot" id="navTopSlot"><span class="thumb" id="segThumb"></span></div>
     <div class="actions">
       <button class="icon" onclick="refreshDashboard(true)" title="重新探测系统状态与会话" id="refreshBtn">
@@ -192,8 +197,8 @@
       <button class="icon" onclick="toggleTheme()" title="切换亮暗主题外观" id="themeBtn">
         <span id="themeIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span>
       </button>
-      <button class="icon winclose" onclick="shutdownRunner()" title="退出 AgentHub Runner">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
+      <button class="icon shutdown-btn" onclick="shutdownRunner()" title="停止 Runner 守护进程" aria-label="停止 Runner 守护进程">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg>
       </button>
     </div>
   </header>
@@ -463,6 +468,22 @@
       gateway: '网关'
     };
 
+    const VIEW_EN_LABELS = {
+      sessions: 'Sessions',
+      agents: 'Agents',
+      usage: 'Usage',
+      models: 'Models',
+      workspaces: 'Workspaces',
+      gateway: 'Gateway'
+    };
+
+    function updateCrumb(viewId) {
+      const title = document.getElementById('topCrumbTitle');
+      const sub = document.getElementById('topCrumbSub');
+      if (title) title.textContent = VIEW_LABELS[viewId] || viewId;
+      if (sub) sub.textContent = VIEW_EN_LABELS[viewId] || viewId;
+    }
+
     const PROVIDER_LABELS = {
       claude_code: 'Claude Code',
       claude: 'Claude',
@@ -568,7 +589,7 @@
       const sideSlot = document.getElementById('navSideSlot');
       const topSlot = document.getElementById('navTopSlot');
       const top = document.querySelector('.top');
-      const on = !document.documentElement.classList.contains('no-side') && document.body.classList.contains('side-nav');
+      const on = !document.documentElement.classList.contains('no-side');
       if (!nav || !sideSlot || !topSlot || !top) return;
       // the brand never moves: the rail's head carries it beside the rail, the
       // header carries its own copy; what moves with the switch is #nav alone
@@ -579,17 +600,15 @@
       nav.classList.toggle('seg', !on);
       const toggle = document.getElementById('sideToggle');
       if (toggle) {
-        const label = on ? '隐藏侧边栏' : '显示侧边栏';
+        const label = on ? '隐藏侧边栏' : '展开侧边栏';
         toggle.title = `${label} (Ctrl+Shift+S)`;
         toggle.setAttribute('aria-label', label);
         toggle.setAttribute('aria-pressed', String(on));
       }
+      document.body.classList.toggle('side-nav', on);
       fitNavTrack();
       scaleSegThumb(false);
       scaleRailHl(false);
-      // the rail's state is html.no-side (the bootstrap key); body.side-nav is
-      // its helper twin, so a scoped rule can say "beside the rail"
-      document.body.classList.toggle('side-nav', on);
       return on;
     }
 
@@ -601,7 +620,7 @@
     clampSideWidth();
 
     function sidebarFits() {
-      return (window.innerWidth || 0) >= (LAYOUT.sidebarAt || 1200);
+      return (window.innerWidth || 0) >= (LAYOUT.sidebarAt || 768);
     }
 
     function setSideNav(on, remember) {
@@ -736,6 +755,18 @@
       if (!slot || !nav || !top) return;
       const buttons = [...nav.querySelectorAll('button[data-view]')];
       if (!buttons.length) return;
+
+      // When the rail holds the nav, restore buttons to full names and skip track slicing
+      if (nav.parentElement !== slot) {
+        buttons.forEach((b) => {
+          b.style.display = '';
+          const span = b.querySelector('span');
+          if (span && span.dataset.full) span.textContent = span.dataset.full;
+        });
+        nav.classList.remove('tight');
+        return;
+      }
+
       const gap = parseFloat(getComputedStyle(nav).columnGap) || 0;
       const pad = parseFloat(getComputedStyle(nav).paddingLeft) * 2 || 0;
       // a clone of the track, out of the flow, says how wide each page is at
@@ -815,6 +846,7 @@
         if (!silent) {
           try { localStorage.setItem(STORE.view, viewId); } catch (e) {}
         }
+        updateCrumb(viewId);
         // the clone the track measures itself with follows the page
         const seen = document.getElementById('navMeasure');
         if (seen) seen.querySelectorAll('button[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === viewId));

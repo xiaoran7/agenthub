@@ -118,7 +118,7 @@
           --inset: var(--layout-inset, 18px);
           --r: var(--layout-radius, 14px);
           --r-s: var(--layout-radius-s, 10px);
-          --top-h: var(--layout-top-h, 54px);
+          --top-h: var(--layout-top-h, 38px);
         }
         :root.win { --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
         :root.win { --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace; }
@@ -190,8 +190,13 @@
     .icon svg { width: 17px; height: 17px; display: block; transition: transform .35s var(--ease-spring); }
     .icon.spin svg { animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .icon.winclose { align-self: center; width: 22px; height: 22px; margin-left: 8px; border-radius: 50%; background: var(--pill); color: var(--fg-2); }
-    .icon.winclose:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+    .icon.shutdown-btn {
+      align-self: center; width: 26px; height: 26px; margin-left: 4px;
+      color: var(--muted);
+      transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease), transform var(--dur-2) var(--ease-spring);
+    }
+    .icon.shutdown-btn:hover { background: var(--red-soft); color: var(--red); }
+    .icon.shutdown-btn:active { transform: scale(.92); }
 
     /* ---- the sidebar ------------------------------------------------------- */
     /* the pages down the left in groups, the gateway and the pairing state at
@@ -268,16 +273,11 @@
     .side-gw > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
     .side-gw.off > i { background: var(--faint); box-shadow: none; }
     .side-gw > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-    /* beside the sidebar the header says where the reader is and holds the icons */
-    .top { padding-left: 20px; }
-    /* over the page the header starts at its inset, so the brand, the toggle
-       and the view below all stand on one line */
-    :root.no-side .top { padding-left: var(--inset); }
     .crumb { display: flex; align-items: baseline; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: var(--fs-title); }
     .crumb > span { color: var(--muted); }
     .crumb > i { font-style: normal; color: var(--faint); }
     .crumb > b { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
-    .side-toggle { flex: none; }
+    .side-toggle { flex: none; position: relative; z-index: 7; pointer-events: auto; cursor: pointer; }
     .side-toggle .st-pane { opacity: .28; transition: opacity .3s var(--ease); }
     .side-toggle:hover .st-pane { opacity: .55; }
     :root.no-side .side-toggle .st-pane { opacity: .28; }
@@ -494,45 +494,64 @@
         /* the sidebar's button, where you are, and what is live; the header is a
            card of its own that lifts off the page as the content scrolls under it */
         .top {
-          height: var(--top-h); gap: 10px; padding: 0 12px 0 12px;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+          align-items: center;
+          height: var(--top-h); gap: 8px; padding: 0 12px;
           background: var(--bg); border-bottom: var(--rule);
+          position: relative; flex: none;
+          transition: margin-left var(--dur-2) var(--ease);
+        }
+        .top-left {
+          display: flex; align-items: center; gap: 8px; min-width: 0; justify-self: start;
         }
         .top .brand { font-size: var(--fs-title); font-weight: 650; letter-spacing: -.01em; }
-        .top .brand .logo svg { width: 20px; height: 20px; }
-        .crumb { gap: 8px; font-size: var(--fs-body); }
+        .top .brand .logo svg { width: 18px; height: 18px; }
+        .crumb { gap: 6px; font-size: var(--fs-body); }
+        .crumb > b { font-weight: 600; color: var(--fg); font-size: var(--fs-body); }
+        .crumb > i { font-style: normal; color: var(--faint); font-size: var(--fs-note); padding: 0 1px; }
+        .crumb > span { color: var(--muted); font-size: var(--fs-note); }
         .live {
           display: inline-flex; align-items: center; gap: 7px; flex: none;
-          height: 28px; padding: 0 11px 0 10px; border-radius: 999px;
+          height: 24px; padding: 0 9px 0 8px; border-radius: 999px;
           background: var(--card-2); border: var(--rule);
           font-size: var(--fs-note); color: var(--ctl-fg); white-space: nowrap;
           font-variant-numeric: tabular-nums;
         }
-        .live > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
-        .live > b { font-weight: 650; color: var(--fg); font-size: var(--fs-body); }
-        .live > span { color: var(--muted); }
+        .live > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2.5px var(--green-soft); }
+        .live > b { font-weight: 650; color: var(--fg); font-size: var(--fs-note); }
+        .live > span { color: var(--muted); font-size: calc(var(--fs-note) - 1px); }
         /* beside the sidebar the ledger already carries the count and the header
            states whether the link is alive */
-        .live.quiet { padding: 0 9px; gap: 0; }
+        .live.quiet { padding: 0 8px; gap: 0; }
         .live.quiet > b, .live.quiet > span { display: none; }
-        .live.stale > i { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
-        .live.off > i { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+        .live.stale > i { background: var(--amber); box-shadow: 0 0 0 2.5px var(--amber-soft); }
+        .live.off > i { background: var(--red); box-shadow: 0 0 0 2.5px var(--red-soft); }
         .live.off { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
         :root.link-off .side-gw i { background: var(--red); }
 
         /* the header's page switch, when the sidebar is away: one rounded track,
            grouped names over it, the open page on a lifted thumb — magpie's .seg */
+        .top .top-slot {
+          justify-self: center;
+          position: relative; left: auto; top: auto; transform: none;
+          display: flex; align-items: center; justify-content: center;
+          height: 100%; min-width: 0;
+          pointer-events: none;
+        }
         .top .top-slot > #nav,
         #navTopSlot > .thumb { position: relative; }
         .top .top-slot > #nav {
+          pointer-events: auto;
           left: auto; top: auto; transform: none;
-          align-self: center; display: flex; flex-direction: row; flex: none; height: 36px;
+          align-self: center; display: flex; flex-direction: row; flex: none; height: 30px;
           max-width: 100%;
-          padding: 2px; border-radius: 10px; gap: 0; background: color-mix(in srgb, var(--fg) 5%, transparent);
+          padding: 2px; border-radius: 8px; gap: 0; background: color-mix(in srgb, var(--fg) 5%, transparent);
         }
-        #navTopSlot > .thumb { top: 2px; bottom: 2px; left: 0; border-radius: 8px; background: var(--accent-soft); box-shadow: none; }
+        #navTopSlot > .thumb { top: 2px; bottom: 2px; left: 0; border-radius: 6px; background: var(--accent-soft); box-shadow: none; }
         .top .top-slot > #nav button[data-view] {
-          display: inline-flex; width: auto; height: 32px; padding: 0 12px; border-radius: 8px;
-          font-size: var(--fs-body); gap: 6px; align-items: center; justify-content: center;
+          display: inline-flex; width: auto; height: 26px; padding: 0 10px; border-radius: 6px;
+          font-size: var(--fs-note); gap: 5px; align-items: center; justify-content: center;
           text-align: center; color: var(--fg-2); font-weight: 500;
         }
         /* more specific than the rail's own row rule, which would show the name
@@ -540,14 +559,14 @@
            beside their icons; when the header is short of space (fitNavTrack)
            the icons give way, then the names fold to two characters */
         .top .top-slot > #nav button[data-view] > span { display: inline; white-space: nowrap; text-overflow: clip; }
-        #navTopSlot > #nav:not(.tight) .nav-ic { display: inline-block; }
+        #navTopSlot > #nav:not(.tight) .nav-ic { display: inline-block; width: 14px; height: 14px; }
         #navTopSlot > #nav.tight .nav-ic { display: none; }
-        #navTopSlot > #nav.tight button[data-view] { padding: 0 10px; }
+        #navTopSlot > #nav.tight button[data-view] { padding: 0 8px; }
         .top .top-slot > #nav button[data-view]:hover:not(.on) { background: transparent; color: var(--fg); }
         .top .top-slot > #nav button[data-view].on { background: transparent; box-shadow: none; font-weight: 600; color: var(--accent); }
         .top .top-slot > #nav .nav-ic { flex: none; opacity: .55; }
         .top .top-slot > #nav button.on .nav-ic { opacity: 1; }
-        .actions { gap: 3px; }
+        .actions { justify-self: end; display: flex; align-items: center; gap: 3px; }
 
         /* ---- the sidebar ------------------------------------------------------- */
         /* a width the reader dragged to wins over the window's own share */
@@ -556,8 +575,8 @@
            itself; no window breakpoint has to guess the same width twice */
         body { position: relative; }
         .sidebar { position: absolute; }
-        .view-slot, .foot { margin-left: var(--side-w); }
-        :root.no-side .view-slot, :root.no-side .foot { margin-left: 0; }
+        .top, .view-slot, .foot { margin-left: var(--side-w); }
+        :root.no-side .top, :root.no-side .view-slot, :root.no-side .foot { margin-left: 0; }
         .sidebar { width: var(--side-w); background: var(--card); }
         /* a centre column is a place to sit in, not to read across: the page
            spans it and keeps only its own inset */
@@ -810,12 +829,16 @@
    ========================================================================== */
 .sidebar { display: none; }
 body.side-nav .sidebar { display: flex; }
-body:not(.side-nav) .top .side-toggle,
-body:not(.side-nav) .top .crumb,
+
+body.side-nav .top #brandTop { display: none; }
+body.side-nav .top #sideToggle { display: none; }
+body.side-nav .top #topCrumb { display: flex; }
+body.side-nav .top .top-slot { display: none; }
+
+body:not(.side-nav) .top #brandTop { display: flex; }
+body:not(.side-nav) .top #sideToggle { display: inline-flex; }
+body:not(.side-nav) .top #topCrumb { display: none; }
 body:not(.side-nav) .top .top-slot { display: flex; }
-body.side-nav .top .side-toggle { display: none; }
-/* the track sits in the middle of the header whatever is either side of it */
-.top .top-slot { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center; height: auto; min-width: 0; max-width: calc(100% - 24px); }
 
 /* ============================================================================
    Motion pass: the console answers the hand. Every rule here is a transition
