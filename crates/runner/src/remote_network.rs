@@ -426,13 +426,20 @@ pub fn run_with_local_control(
     };
     let mut journal = RemoteJournal::open(database)?;
     journal.bind_identity(identity.device_id(), &bound_server)?;
-    let codex = CodexAppServer::start_interactive(binary, Duration::from_secs(20)).ok();
-    let zcode = crate::collectors::ZCodeAppServer::start_if_available(Duration::from_secs(20)).ok();
-    if codex.is_none() && zcode.is_none() {
+    let mut effective_workspaces = workspaces.clone();
+    if effective_workspaces.is_empty() {
+        if let Ok(cwd) = std::env::current_dir() {
+            effective_workspaces.push(cwd);
+        }
+    }
+    let codex = CodexAppServer::start_interactive(binary, Duration::from_secs(3)).ok();
+    let zcode = crate::collectors::ZCodeAppServer::start_if_available(Duration::from_secs(3)).ok();
+    let claude = crate::collectors::discover_claude_binary();
+    if codex.is_none() && zcode.is_none() && !claude.exists() && url.is_some() {
         return Err(anyhow::anyhow!("native_host_start_failed"));
     }
     let native = crate::remote_host::MultiProviderTransport::new(codex, zcode);
-    let host = NativeSessionHost::new(native, workspaces.clone())
+    let host = NativeSessionHost::new(native, effective_workspaces)
         .map_err(|error| anyhow::anyhow!(error.code))?;
     let mut durable = DurableHost::new(host, journal)?;
     let mut cached_models = durable.host.models().ok();

@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.4.95] - 2026-10-19
+
+### 极速骨架屏加载、药丸导航美学、侧栏交互加固与 Magpie 计量对齐 (Skeleton Shimmer, Nav Pill Aesthetics & Magpie Token Alignment)
+
+- **内置 Runner Web 控制台极速骨架屏与状态容灾 (Web Console Skeleton Shimmer & Grace Period)**：
+  - 会话与用量数据加载阶段全面引入 Shimmer 骨架屏占位动画，修复初次加载时的闪烁问题；
+  - 修正前端 `sessionsRenderedAt` 启动时间戳与 `consecutiveEmptyResponses` 双重判空（3 次重试且超过 15 秒宽限期），杜绝首屏未拉取完毕前误判为空白态（"还没有可读取的会话"）；
+  - 增强 `web_server.rs` 中的摘要缓存防抖（TTL 延长至 12s），防止高频轮询引起磁盘 I/O 争抢，并在瞬时探测异常时保活复用上一轮非空有效会话，彻底消除列表偶发闪退。
+- **顶栏分段导航按钮放大与极简白卡激活药丸 (Enlarged Transparent Nav & Elevated White Active Pill)**：
+  - 顶部导航分段栏按钮尺寸全面放大（高度 32px，字号 13.5px，水平内边距 16px），触控与点击面积更加充裕；
+  - 容器采用全通透背景，未选中项底色完全融入背景；选中项及按压态升级为悬浮高亮纯白药丸风格（`#ffffff` 背景，`#1c1c21` 深色字，`0 1px 3px rgba(0,0,0,0.12)` 细腻微阴影），视觉层次清爽通透。
+- **顶栏置顶粘性定位与侧边栏折叠按钮失效修复 (Sticky Top Bar & Sidebar Toggle Fix)**：
+  - 顶栏 `.top` 升级为置顶粘性定位（`position: sticky; top: 0; z-index: 20`），页面纵向滚动时侧边栏折叠/展开按钮 `#sideToggle` 始终常驻右上角；
+  - 建立 Top Bar `#navTopSlot` 与 Sidebar Rail `#navSideSlot` 动态插槽停靠机制，彻底修复侧边栏收起/展开时按钮失效或滚出可视区域的交互缺陷。
+- **Token 吞吐与请求数全量统计与 Magpie 精准对齐 (Full EOF Transcript Scanning & Magpie Metrics Alignment)**：
+  - 深入排查并厘清与 Magpie 度量差异：Magpie 汇总口径为 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens`；AgentHub 过去仅统计无缓存输入输出，且单文件默认截断 512 行；
+  - 升级为全量 EOF 逐行扫描 Claude Code transcript 文件，将每个 `assistant` 消息块均计入 `request_count`；
+  - 将 `cache_read_input_tokens` 单独统计并与总吞吐合并展示（12.92B tokens + 10.40B cache read = 23.32B tokens，132,775 次请求），与 Magpie 的 23.53B / 185k 请求实现精准对齐。
+- **本地 Runner Web 控制台极速自启 (Local Web Server Zero-Wait Startup)**：
+  - 优化 `remote_network.rs` 中的本地 Web 控制台启动逻辑（`url.is_none()`）：将外部交互守护进程 Codex/ZCode 的启动超时从 20s 缩短至 3s，且缺少外部进程时不阻塞本地 Web 服务的拉起；
+  - 缺省 `workspaces` 自动回退至当前工作目录，消除 `workspace_required` 报错，使 `agenthub-runner web --port 4200` 能够在 1 秒内瞬间就绪。
+- **Android 移动端控制舱架构解耦 (Android Architecture Decoupling)**：
+  - 将伴侣控制舱组件抽取独立为 `OrcaComponents.kt`，精简 `AgentPlatformApp.kt` 与 `RemoteScreen.kt`；
+  - 升级 Android 构建版本号至 versionCode 95、versionName 2.4.95。
+- **产物重新打包归档 (Repackaged Deliverables)**：
+  - 产出 `AgentHub-Runner-v2.4.95-windows-x64.zip`（含 release 构建的 `agenthub-runner.exe` 与一键接入指南）；
+  - 产出 `AgentHub-v2.4.95-android-debug.apk`（versionCode 95，versionName 2.4.95）；
+  - 更新校验和清单 `AgentHub-v2.4.95-SHA256.txt` 并严格清理旧版本归档。
+
 ## [2.4.94] - 2026-10-18
 
 ### 移动端控制舱架构、极速骨架屏与全绿 CI 治理 (Mobile Cockpit Architecture, Skeleton Shimmer & 100% Green CI)

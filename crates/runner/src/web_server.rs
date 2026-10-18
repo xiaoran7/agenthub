@@ -533,7 +533,7 @@ fn build_dashboard_summary(
 ) -> serde_json::Value {
     if let Ok(guard) = dashboard_summary_cache().read() {
         if let Some((cached_at, ref val)) = *guard {
-            if cached_at.elapsed() < Duration::from_secs(2) {
+            if cached_at.elapsed() < Duration::from_secs(12) {
                 let mut v = val.clone();
                 v["port"] = json!(port);
                 return v;
@@ -1098,6 +1098,23 @@ fn build_dashboard_summary(
         "usage": usage_summary,
         "device": get_device_info()
     });
+
+    if total_sessions == 0 {
+        if let Ok(guard) = dashboard_summary_cache().read() {
+            if let Some((_, ref prev_val)) = *guard {
+                if let Some(prev_sessions) = prev_val
+                    .get("sessions")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    if !prev_sessions.is_empty() {
+                        let mut v = prev_val.clone();
+                        v["port"] = json!(port);
+                        return v;
+                    }
+                }
+            }
+        }
+    }
 
     if let Ok(mut guard) = dashboard_summary_cache().write() {
         *guard = Some((Instant::now(), summary.clone()));

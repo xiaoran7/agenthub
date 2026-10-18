@@ -12,133 +12,201 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 // =========================================================================
-// Aozora UI & Orca Mission Control Design System Palette
-// 70% Pro Cloud Architecture + 20% Modern Clean + 10% Precision Console
+// Orca Mobile Design Tokens
+//
+// Ported from stablyai/orca `mobile/src/theme/mobile-theme.ts`.
+// Upstream: https://github.com/stablyai/orca (MIT / Apache-2.0)
+// Token values below intentionally mirror upstream so the AgentHub companion
+// stays visually interchangeable with the Orca mobile app.
 // =========================================================================
 
-// Light theme: crisp cool-white, subtle slate lines, Sky Blue accent
-val LightBgPrimary = Color(0xFFF8FAFC)
-val LightBgSurface = Color(0xFFFFFFFF)
-val LightBgSurfaceVariant = Color(0xFFF1F5F9)
-val LightTextPrimary = Color(0xFF0F172A)
-val LightTextSecondary = Color(0xFF334155)
-val LightTextMuted = Color(0xFF64748B)
-val LightBorderSubtle = Color(0xFFE2E8F0)
-val LightBorderContrast = Color(0xFFCBD5E1)
-val LightBrandAccent = Color(0xFF0284C7)
+object OrcaColors {
+    // Dark surfaces (upstream `colors.bg*`)
+    val bgBase = Color(0xFF111111)
+    val bgPanel = Color(0xFF1A1A1A)
+    val bgRaised = Color(0xFF242424)
+    val bgOverlay = Color(0xFF2A2A2A)
+    val bgInset = Color(0xFF1E1E1E)
 
-// Dark theme: deep mission-control void, subtle borders, Cyan accent
-val DarkBgPrimary = Color(0xFF090D16)
-val DarkBgSurface = Color(0xFF111827)
-val DarkBgSurfaceVariant = Color(0xFF0F172A)
-val DarkTextPrimary = Color(0xFFF8FAFC)
-val DarkTextSecondary = Color(0xFFCBD5E1)
-val DarkTextMuted = Color(0xFF94A3B8)
-val DarkBorderSubtle = Color(0xFF1E293B)
-val DarkBorderContrast = Color(0xFF334155)
-val DarkBrandAccent = Color(0xFF38BDF8)
+    // Text (upstream `colors.text*`)
+    val textPrimary = Color(0xFFE0E0E0)
+    val textSecondary = Color(0xFFA1A1A1)
+    val textMuted = Color(0xFF8C8C8C)
+    val textFaint = Color(0xFF555555)
 
-// Semantic status colors across themes
-val StatusBlue = Color(0xFF0284C7)
-val StatusAmber = Color(0xFFF59E0B)
-val StatusGreen = Color(0xFF059669)
-val StatusGreenBright = Color(0xFF10B981)
-val StatusRed = Color(0xFFDC2626)
-val StatusRedBright = Color(0xFFEF4444)
+    // Borders
+    val borderSubtle = Color(0xFF2A2A2A)
+    val borderStrong = Color(0xFF3A3A3A)
 
-// Legacy color aliases for backwards compatibility
-val Paper = LightBgPrimary
-val Surface = LightBgSurface
-val Ink = LightTextPrimary
-val Muted = LightTextMuted
-val Line = LightBorderSubtle
-val PinkSignal = LightBrandAccent
-val SoftPink = Color(0xFFF0F9FF)
-val WorkingBlue = StatusBlue
-val WaitingAmber = StatusAmber
-val SuccessGreen = StatusGreen
-val DangerRed = StatusRed
+    // Accents (upstream `colors.accent*` / status)
+    val accentBlue = Color(0xFF3B82F6)
+    val accentGreen = Color(0xFF22C55E)
+    val accentAmber = Color(0xFFF59E0B)
+    val accentRed = Color(0xFFEF4444)
+    val accentMerge = Color(0xFF16A34A)
+    val accentPurple = Color(0xFFA78BFA)
+    val accentOrange = Color(0xFFF97316)
+
+    // Bright surface (used for primary CTA fill in dark mode)
+    val surfaceBright = Color(0xFFF5F5F5)
+    val onBrightPrimary = Color(0xFF111111)
+    val onBrightSecondary = Color(0xFF4A4A4A)
+
+    // Git / diff (upstream)
+    val diffAdded = Color(0xFF81B88B)
+    val diffDeleted = Color(0xFFC74E39)
+    val chatDiffAdded = Color(0xFFA5CCAC)
+    val chatDiffRemoved = Color(0xFFD68273)
+
+    // Terminal
+    val terminalBg = Color(0xFF1A1B26)
+
+    // Provider identity dots (Orca agent icons)
+    val providerClaude = Color(0xFFC86646)
+    val providerCodex = Color(0xFF3B82F6)
+    val providerAntigravity = Color(0xFF22C55E)
+    val providerGrok = Color(0xFFA78BFA)
+    val providerUnknown = Color(0xFF8C8C8C)
+
+    // Light surfaces: Orca ships dark-first, but AgentHub honors the system theme.
+    val lightBgBase = Color(0xFFF7F7F7)
+    val lightBgPanel = Color(0xFFFFFFFF)
+    val lightBgRaised = Color(0xFFEFEFEF)
+    val lightBgInset = Color(0xFFE8E8E8)
+    val lightTextPrimary = Color(0xFF141414)
+    val lightTextSecondary = Color(0xFF4A4A4A)
+    val lightTextMuted = Color(0xFF6B6B6B)
+    val lightTextFaint = Color(0xFF9A9A9A)
+    val lightBorderSubtle = Color(0xFFE2E2E2)
+    val lightBorderStrong = Color(0xFFCACACA)
+    val lightAccentBlue = Color(0xFF2563EB)
+}
+
+object OrcaSpacing {
+    val xs = 4
+    val sm = 8
+    val md = 12
+    val lg = 16
+    val xl = 24
+}
+
+object OrcaRadii {
+    val row = 6
+    val card = 14
+    val button = 6
+    val input = 6
+}
+
+// Legacy aliases kept so the rest of the app (and tests) still compile.
+val LightBgPrimary = OrcaColors.lightBgBase
+val LightBgSurface = OrcaColors.lightBgPanel
+val LightBgSurfaceVariant = OrcaColors.lightBgRaised
+val LightTextPrimary = OrcaColors.lightTextPrimary
+val LightTextSecondary = OrcaColors.lightTextSecondary
+val LightTextMuted = OrcaColors.lightTextMuted
+val LightBorderSubtle = OrcaColors.lightBorderSubtle
+val LightBorderContrast = OrcaColors.lightBorderStrong
+val LightBrandAccent = OrcaColors.lightAccentBlue
+
+val DarkBgPrimary = OrcaColors.bgBase
+val DarkBgSurface = OrcaColors.bgPanel
+val DarkBgSurfaceVariant = OrcaColors.bgRaised
+val DarkTextPrimary = OrcaColors.textPrimary
+val DarkTextSecondary = OrcaColors.textSecondary
+val DarkTextMuted = OrcaColors.textMuted
+val DarkBorderSubtle = OrcaColors.borderSubtle
+val DarkBorderContrast = OrcaColors.borderStrong
+val DarkBrandAccent = OrcaColors.accentBlue
+
+val StatusBlue = OrcaColors.accentBlue
+val StatusAmber = OrcaColors.accentAmber
+val StatusGreen = OrcaColors.accentMerge
+val StatusGreenBright = OrcaColors.accentGreen
+val StatusRed = OrcaColors.accentRed
+val StatusRedBright = OrcaColors.accentRed
+val StatusPurple = OrcaColors.accentPurple
 
 private val LightColors =
     lightColorScheme(
-        primary = LightBrandAccent,
+        primary = OrcaColors.lightAccentBlue,
         onPrimary = Color.White,
-        primaryContainer = Color(0xFFE0F2FE),
-        onPrimaryContainer = Color(0xFF0369A1),
-        secondary = LightTextSecondary,
+        primaryContainer = Color(0xFFE4EDFD),
+        onPrimaryContainer = Color(0xFF1D4ED8),
+        secondary = OrcaColors.lightTextSecondary,
         onSecondary = Color.White,
-        background = LightBgPrimary,
-        onBackground = LightTextPrimary,
-        surface = LightBgSurface,
-        onSurface = LightTextPrimary,
-        surfaceVariant = LightBgSurfaceVariant,
-        onSurfaceVariant = LightTextMuted,
-        outline = LightBorderSubtle,
-        outlineVariant = LightBorderContrast,
-        error = StatusRed,
+        background = OrcaColors.lightBgBase,
+        onBackground = OrcaColors.lightTextPrimary,
+        surface = OrcaColors.lightBgPanel,
+        onSurface = OrcaColors.lightTextPrimary,
+        surfaceVariant = OrcaColors.lightBgRaised,
+        onSurfaceVariant = OrcaColors.lightTextSecondary,
+        outline = OrcaColors.lightBorderSubtle,
+        outlineVariant = OrcaColors.lightBorderStrong,
+        error = OrcaColors.accentRed,
         onError = Color.White,
     )
 
 private val DarkColors =
     darkColorScheme(
-        primary = DarkBrandAccent,
-        onPrimary = Color(0xFF090D16),
-        primaryContainer = Color(0xFF0C4A6E),
-        onPrimaryContainer = Color(0xFFBAE6FD),
-        secondary = DarkTextSecondary,
-        onSecondary = Color(0xFF090D16),
-        background = DarkBgPrimary,
-        onBackground = DarkTextPrimary,
-        surface = DarkBgSurface,
-        onSurface = DarkTextPrimary,
-        surfaceVariant = DarkBgSurfaceVariant,
-        onSurfaceVariant = DarkTextMuted,
-        outline = DarkBorderSubtle,
-        outlineVariant = DarkBorderContrast,
-        error = StatusRedBright,
+        primary = OrcaColors.accentBlue,
+        onPrimary = Color.White,
+        primaryContainer = Color(0xFF1E3A5F),
+        onPrimaryContainer = Color(0xFFBFDBFE),
+        secondary = OrcaColors.textSecondary,
+        onSecondary = OrcaColors.bgBase,
+        background = OrcaColors.bgBase,
+        onBackground = OrcaColors.textPrimary,
+        surface = OrcaColors.bgPanel,
+        onSurface = OrcaColors.textPrimary,
+        surfaceVariant = OrcaColors.bgRaised,
+        onSurfaceVariant = OrcaColors.textSecondary,
+        outline = OrcaColors.borderSubtle,
+        outlineVariant = OrcaColors.borderStrong,
+        error = OrcaColors.accentRed,
         onError = Color.White,
     )
 
+// Upstream tokens: title 18, body 14, meta 12, mono family.
 private val Typography =
     androidx.compose.material3.Typography(
         displayLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.ExtraBold,
                 fontSize = 32.sp,
-                lineHeight = 38.sp,
+                lineHeight = 36.sp,
                 letterSpacing = (-0.8).sp,
             ),
         headlineLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.ExtraBold,
                 fontSize = 24.sp,
-                lineHeight = 30.sp,
-                letterSpacing = (-0.5).sp,
+                lineHeight = 28.sp,
+                letterSpacing = (-0.6).sp,
             ),
         headlineMedium =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 fontSize = 20.sp,
-                lineHeight = 26.sp,
+                lineHeight = 25.sp,
                 letterSpacing = (-0.3).sp,
             ),
         titleLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp,
                 lineHeight = 23.sp,
                 letterSpacing = (-0.2).sp,
             ),
         titleMedium =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp,
-                lineHeight = 21.sp,
+                lineHeight = 20.sp,
             ),
         titleSmall =
             TextStyle(
@@ -151,15 +219,15 @@ private val Typography =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Normal,
-                fontSize = 15.sp,
-                lineHeight = 22.sp,
+                fontSize = 14.sp,
+                lineHeight = 21.sp,
             ),
         bodyMedium =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Normal,
-                fontSize = 13.sp,
-                lineHeight = 19.sp,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
             ),
         bodySmall =
             TextStyle(
@@ -184,11 +252,11 @@ private val Typography =
             ),
         labelSmall =
             TextStyle(
-                fontFamily = FontFamily.SansSerif,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
-                fontSize = 10.5.sp,
+                fontSize = 11.sp,
                 lineHeight = 14.sp,
-                letterSpacing = 0.5.sp,
+                letterSpacing = 0.6.sp,
             ),
     )
 

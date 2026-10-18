@@ -14,7 +14,7 @@ let allSessionsData = []; // what the renders rank and search
 let lastGoodSessions = []; // the last snapshot that had sessions
 let refreshing = false;
 let renderSeq = 0;
-let sessionsRenderedAt = 0;
+let sessionsRenderedAt = Date.now();
 
 const VIEW_LABELS = {
   sessions: "会话",
@@ -582,10 +582,9 @@ async function refreshDashboard(manual) {
       // while; a single zero snapshot is a probe, not a verdict
       consecutiveEmptyResponses++;
       const settled =
-        consecutiveEmptyResponses >= (LAYOUT.emptyStrikes || 3) ||
+        consecutiveEmptyResponses >= (LAYOUT.emptyStrikes || 3) &&
         Date.now() - sessionsRenderedAt > (LAYOUT.emptyGraceMs || 15000);
-      if (lastGoodSessions.length === 0 || settled) {
-        allSessionsData = [];
+      if (lastGoodSessions.length === 0) {
         renderSessions([], settled ? "empty" : "pending");
       }
     }
