@@ -13,7 +13,8 @@
   - 优化顶部导航分段栏高度至 46px 并固定置顶（sticky），大屏全量展示图标与文字，触控高亮更舒适；
   - 强化多轮对话请求计数统计（`request_count` 与 `calls`），精准匹配官方会话度量模型。
 - **全绿 CI 治理与工程质量加固 (100% Passing CI Pipeline)**：
-  - 修复 `build.rs`、`tray.rs`、`remote_host.rs` 中的 Clippy 告警，开启 workspace 级严格校验；
+  - 修复 `build.rs`、`tray.rs`、`remote_host.rs`、`conversation.rs` 中的 Clippy 与 Linux 下平台死代码告警，开启 workspace 级严格校验；
+  - 补充 Linux 环境下的 `libdbus-1-dev` 与 `pkg-config` 依赖，解决 `keyring` 系统层链接需求；
   - 格式化前端与 Rust 全量代码，保证 `npm run format:check` 与 `cargo fmt --all --check` 零报错；
   - 适配 CI 无本地会话环境下的会话加载回归测试，杜绝假阳性构建失败。
 - **多平台交付产物重新打包归档 (Repackaged Deliverables)**：

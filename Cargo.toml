@@ -32,6 +32,9 @@ ureq = { version = "3.3.0", default-features = false, features = ["json", "rustl
 url = "2.5.8"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
+[workspace.lints.rust]
+dead_code = "allow"
+
 [workspace.lints.clippy]
 collapsible_if = "allow"
 type_complexity = "allow"

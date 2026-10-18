@@ -697,6 +697,8 @@ fn collect_transcript_files(
 
 /// Shared local text decoder (UTF-8/UTF-16 with BOM sniffing). Also used by
 /// the desktop attachment reader for user-picked text files.
+#[allow(unknown_lints)]
+#[allow(clippy::chunks_exact_to_as_chunks)]
 pub fn decode_local_text(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xff, 0xfe]) {
         let units = bytes[2..]

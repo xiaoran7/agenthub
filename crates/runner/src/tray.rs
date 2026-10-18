@@ -540,14 +540,18 @@ pub use non_windows_tray::{cleanup_desktop_window, open_desktop_window, start_tr
 /// the same surface comes from a theme extension instead. Chromium reads a
 /// theme as it starts, so the manifest is written before the window opens, in
 /// the theme the page was last left in.
+#[allow(dead_code)]
 const SHELL_DIR: &str = "window_shell";
+#[allow(dead_code)]
 const SHELL_LIGHT: (&str, &str) = ("#f4f5f8", "#1c1c21");
+#[allow(dead_code)]
 const SHELL_DARK: (&str, &str) = ("#1a1a1e", "#ededf1");
 
 /// The theme the reader last left the page in. The console writes
 /// `agenthub_theme` to Local Storage, which Chromium keeps in the profile's
 /// `Local Storage/leveldb` — not readable as JSON — so the console leaves a
 /// copy here through `/api/window-theme` as well; no copy is light.
+#[allow(dead_code)]
 fn remembered_theme(dir: &std::path::Path) -> &'static str {
     match std::fs::read_to_string(dir.join(SHELL_DIR).join("theme.txt")) {
         Ok(text) if text.trim() == "dark" => "dark",
@@ -571,6 +575,7 @@ pub fn remember_window_theme(dark: bool) -> Option<()> {
 /// page's `--bg`, its text in the page's `--fg`, so the two read as one
 /// surface. An `[r, g, b]` triple of 0–255, as Chromium's theme manifest takes
 /// colours. Returns the directory to load.
+#[allow(dead_code)]
 fn write_shell_extension(dir: &std::path::Path, theme: &str) -> Option<std::path::PathBuf> {
     let (bg, fg) = if theme == "dark" {
         SHELL_DARK
