@@ -20,10 +20,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -61,7 +63,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -71,6 +72,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -96,10 +98,10 @@ import kotlinx.coroutines.delay
 
 private enum class AppSection(val label: String) {
     REMOTE("工作台"),
-    SESSIONS("会话"),
-    WAITING("待处理"),
-    DEVICES("设备"),
-    SETTINGS("设置"),
+    SESSIONS("会话机队"),
+    WAITING("待审批"),
+    DEVICES("主机拓扑"),
+    SETTINGS("网关设置"),
 }
 
 @Composable
@@ -188,8 +190,16 @@ fun AgentPlatformApp(controller: AppController) {
             label = "app-section",
         ) { targetSection ->
             when (targetSection) {
-                AppSection.REMOTE -> state.config?.let { config ->
-                    RemoteScreen(config, Modifier.padding(innerPadding))
+                AppSection.REMOTE -> {
+                    val cfg = state.config
+                    if (cfg != null) {
+                        RemoteScreen(cfg, Modifier.padding(innerPadding))
+                    } else {
+                        UnconfiguredGatewayPrompt(
+                            onGoToSettings = { section = AppSection.SETTINGS },
+                            modifier = Modifier.padding(innerPadding),
+                        )
+                    }
                 }
                 AppSection.SESSIONS,
                 AppSection.WAITING ->
@@ -205,6 +215,7 @@ fun AgentPlatformApp(controller: AppController) {
                         onSelectedDevice = { selectedDevice = it },
                         onRefresh = controller::refresh,
                         onSelectSession = controller::selectSession,
+                        onNavigateToRemote = { section = AppSection.REMOTE },
                         modifier = Modifier.padding(innerPadding),
                     )
                 AppSection.DEVICES ->
@@ -234,7 +245,69 @@ fun AgentPlatformApp(controller: AppController) {
 }
 
 // =========================================================================
-// Sessions Feed Screen (Claude Aesthetic: Clean Cards, Live Dots, Hierarchy)
+// Unconfigured Gateway Prompt (Orca Cold-Start Guide)
+// =========================================================================
+
+@Composable
+private fun UnconfiguredGatewayPrompt(
+    onGoToSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.8f)),
+            shadowElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    NavIconRemote(tint = MaterialTheme.colorScheme.primary)
+                }
+
+                Text(
+                    "进入 Agent 移动控制舱",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                Text(
+                    "连接你的私有 Gateway 端点，即可在手机端实时流式观测正在运行的 Claude Code / OpenAI Codex 任务并随时进行权限放行。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp,
+                )
+
+                Button(
+                    onClick = onGoToSettings,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                ) {
+                    Text("前往设置 Gateway 端点 →", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Sessions Screen (Orca High-Density Fleet Overview)
 // =========================================================================
 
 @Composable
@@ -245,6 +318,7 @@ private fun SessionsScreen(
     onSelectedDevice: (String?) -> Unit,
     onRefresh: () -> Unit,
     onSelectSession: (SessionRecord) -> Unit,
+    onNavigateToRemote: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var localFilter by rememberSaveable { mutableStateOf(SessionFilter.ALL) }
@@ -260,12 +334,13 @@ private fun SessionsScreen(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = 14.dp, top = 8.dp, end = 14.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
             AgentTopBar(
-                title = if (forcedFilter == SessionFilter.WAITING) "待处理" else "全部会话",
+                title = if (forcedFilter == SessionFilter.WAITING) "待审批拦截" else "智能体会话机队",
+                subtitle = state.config?.gatewayBase ?: "未连接",
                 loading = state.loading,
                 onRefresh = onRefresh,
             )
@@ -275,7 +350,7 @@ private fun SessionsScreen(
             item { ErrorBanner(message = error, onRetry = onRefresh) }
         }
 
-        // Active Session Spotlight
+        // Active Session Spotlight Card (High Attention)
         if (hero != null) {
             item {
                 ActiveSpotlightCard(
@@ -286,12 +361,12 @@ private fun SessionsScreen(
             }
         }
 
-        // Summary Stats Strip (Replaces clunky 4-card square grid)
+        // Fleet Metric Strip (3-Cell Telemetry)
         item {
             WorkspaceSummaryStrip(state = state)
         }
 
-        // Filter Pills
+        // Filter Pills Row
         if (forcedFilter == null) {
             item {
                 SessionFilterRow(
@@ -321,6 +396,7 @@ private fun SessionsScreen(
                     text = "${filter.label} (${sessions.size})",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
                 )
             }
         }
@@ -328,17 +404,17 @@ private fun SessionsScreen(
         if (state.config == null) {
             item {
                 EmptyStateCard(
-                    title = "未连接 Gateway",
-                    body = "请在“设置”中配置部署端点与安全令牌，即可实时接管与观测会话。",
+                    title = "未连接 Gateway 网关",
+                    body = "请在“网关设置”中配置部署端点与安全令牌，即可实时接管与观测会话。",
                 )
             }
         } else if (state.loading && state.sessions.isEmpty()) {
-            item { LoadingCard("正在同步会话元数据…") }
+            item { LoadingCard("正在同步智能体机队元数据…") }
         } else if (sessions.isEmpty()) {
             item {
                 EmptyStateCard(
                     title = "暂无${filter.label}会话",
-                    body = "后台每 5 秒自动同步会话状态，也可点击右上角手动刷新。",
+                    body = "宿主机运行 Agent 时将实时呈现，后台每 5 秒自动同步状态。",
                 )
             }
         } else {
@@ -355,30 +431,47 @@ private fun SessionsScreen(
 }
 
 // =========================================================================
-// Top Bar & Connection Indicators
+// Top Bar with Host Pulse Indicator
 // =========================================================================
 
 @Composable
 private fun AgentTopBar(
     title: String,
+    subtitle: String = "",
     loading: Boolean,
     onRefresh: (() -> Unit)?,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = "AgentHub",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
-                Spacer(Modifier.width(8.dp))
                 LiveStatusPulse(isActive = !loading)
+                if (subtitle.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Text(
+                            text = subtitle.removePrefix("http://").removePrefix("https://"),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
             }
             Text(
                 text = title,
@@ -389,29 +482,29 @@ private fun AgentTopBar(
 
         if (onRefresh != null) {
             Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                 border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
+                    0.5.dp,
                     MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                 ),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = !loading, onClick = onRefresh),
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     if (loading) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(13.dp),
-                            strokeWidth = 1.8.dp,
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.6.dp,
                             color = MaterialTheme.colorScheme.primary,
                         )
                         Text(
-                            "同步中",
+                            "同步",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -433,10 +526,10 @@ private fun AgentTopBar(
 private fun LiveStatusPulse(isActive: Boolean) {
     val transition = rememberInfiniteTransition(label = "pulse")
     val alpha by transition.animateFloat(
-        initialValue = 0.4f,
+        initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1200),
+            animation = tween(1100),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "dot-alpha",
@@ -450,7 +543,7 @@ private fun LiveStatusPulse(isActive: Boolean) {
 }
 
 // =========================================================================
-// Active Spotlight Card (Replaces clunky CurrentSessionHero)
+// Active Spotlight Card (Orca Attention Hero)
 // =========================================================================
 
 @Composable
@@ -466,19 +559,19 @@ private fun ActiveSpotlightCard(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .border(
                 1.dp,
-                accentColor.copy(alpha = 0.35f),
-                RoundedCornerShape(16.dp),
+                accentColor.copy(alpha = 0.4f),
+                RoundedCornerShape(12.dp),
             ),
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 1.dp,
+        shadowElevation = 1.5.dp,
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -491,19 +584,20 @@ private fun ActiveSpotlightCard(
                 ) {
                     Box(
                         Modifier
-                            .size(8.dp)
+                            .size(7.dp)
                             .background(accentColor, CircleShape),
                     )
                     Text(
-                        text = if (isWaiting) "需要处理审批" else if (isWorking) "Agent 正在执行" else "活跃会话",
+                        text = if (isWaiting) "需要人类介入审批" else if (isWorking) "Agent 正在工作流中" else "活跃任务",
                         style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Bold,
                         color = accentColor,
                     )
                 }
                 Text(
                     text = relativeTime(session.observedAt),
                     style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -532,9 +626,9 @@ private fun ActiveSpotlightCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = if (isWaiting && waitingCount > 1) "查看 ($waitingCount 条待处理) →" else "查看详情 →",
+                    text = if (isWaiting && waitingCount > 1) "查看 ($waitingCount 条审批) →" else "进入控制台 →",
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
@@ -543,7 +637,7 @@ private fun ActiveSpotlightCard(
 }
 
 // =========================================================================
-// Summary Strip (Replaces crude 4-square grid)
+// Summary Telemetry Strip
 // =========================================================================
 
 @Composable
@@ -557,19 +651,19 @@ private fun WorkspaceSummaryStrip(state: AppUiState) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         CompactStatBadge(
-            label = "在线设备",
+            label = "在线主机",
             value = "$onlineDevices / $activeDevices",
             active = onlineDevices > 0,
             modifier = Modifier.weight(1f),
         )
         CompactStatBadge(
-            label = "活跃会话",
+            label = "活跃智能体",
             value = "${counts.live}",
             active = counts.live > 0,
             modifier = Modifier.weight(1f),
         )
         CompactStatBadge(
-            label = "等待审批",
+            label = "待处理审批",
             value = "${counts.waiting}",
             active = counts.waiting > 0,
             highlight = counts.waiting > 0,
@@ -586,27 +680,29 @@ private fun CompactStatBadge(
     modifier: Modifier = Modifier,
     highlight: Boolean = false,
 ) {
-    val borderColor = if (highlight) StatusAmber.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-    val bgColor = if (highlight) StatusAmber.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+    val borderColor = if (highlight) StatusAmber.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+    val bgColor = if (highlight) StatusAmber.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
 
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(8.dp),
         color = bgColor,
         border = androidx.compose.foundation.BorderStroke(0.5.dp, borderColor),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
                 color = if (highlight) StatusAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
             )
             Text(
                 text = value,
                 style = MaterialTheme.typography.titleSmall,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 color = if (highlight) StatusAmber else if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -615,7 +711,7 @@ private fun CompactStatBadge(
 }
 
 // =========================================================================
-// Filter Chips Row
+// Filter Pills Row
 // =========================================================================
 
 @Composable
@@ -648,7 +744,7 @@ private fun SessionFilterRow(
                     .clickable { onSelect(filter) },
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
@@ -661,6 +757,7 @@ private fun SessionFilterRow(
                     Text(
                         text = "$count",
                         style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
                         color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     )
                 }
@@ -670,73 +767,91 @@ private fun SessionFilterRow(
 }
 
 // =========================================================================
-// Session Card (High Density, Crisp Borders, Claude Aesthetic)
+// Session Card (Industrial High-Precision Card with Left Color Indicator)
 // =========================================================================
 
 @Composable
 private fun SessionCard(session: SessionRecord, onClick: () -> Unit) {
     val status = session.state.activityStatus
-    val isRunning = status == ActivityStatus.WORKING
     val color = statusColor(status)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
+            .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(10.dp)),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 0.5.dp,
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AgentBadge(session.agentType)
-                Text(
-                    text = relativeTime(session.observedAt),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            Text(
-                text = session.project.displayName,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            // Left Status Indicator Bar (Orca style)
+            Box(
+                modifier = Modifier
+                    .width(3.5.dp)
+                    .fillMaxHeight()
+                    .background(color),
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier
-                            .size(7.dp)
-                            .background(color, CircleShape),
-                    )
-                    Spacer(Modifier.width(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AgentBadge(session.agentType)
                     Text(
-                        text = status.label,
-                        color = color,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
+                        text = relativeTime(session.observedAt),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
                     )
                 }
+
                 Text(
-                    text = "设备 ${shortId(session.deviceId)}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall,
+                    text = session.project.displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .background(color, CircleShape),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = status.label,
+                            color = color,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Text(
+                        text = "主机 ${shortId(session.deviceId)}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
         }
     }
@@ -746,33 +861,34 @@ private fun SessionCard(session: SessionRecord, onClick: () -> Unit) {
 private fun AgentBadge(type: AgentType) {
     val dotColor = when (type) {
         AgentType.CLAUDE_CODE -> Color(0xFFC86646)
-        AgentType.CODEX -> Color(0xFF4C78C8)
-        AgentType.ANTIGRAVITY -> Color(0xFF2E9188)
-        AgentType.GROK_BUILD -> Color(0xFF8063A8)
-        AgentType.UNKNOWN -> Color(0xFF78716C)
+        AgentType.CODEX -> Color(0xFF0284C7)
+        AgentType.ANTIGRAVITY -> Color(0xFF10B981)
+        AgentType.GROK_BUILD -> Color(0xFF8B5CF6)
+        AgentType.UNKNOWN -> Color(0xFF64748B)
     }
 
     Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(4.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Box(Modifier.size(6.dp).background(dotColor, CircleShape))
+            Box(Modifier.size(5.dp).background(dotColor, CircleShape))
             Text(
                 type.label,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Medium,
+                fontSize = 11.sp,
             )
         }
     }
 }
 
 // =========================================================================
-// Modern Bottom Navigation Bar (Vector Icons, Refined Selection Pill)
+// Modern Bottom Navigation Bar (Vector Icons, Minimal Pill)
 // =========================================================================
 
 @Composable
@@ -785,7 +901,7 @@ private fun AgentBottomNavBar(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
         border = androidx.compose.foundation.BorderStroke(
             0.5.dp,
             MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
@@ -795,7 +911,7 @@ private fun AgentBottomNavBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 6.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -806,11 +922,11 @@ private fun AgentBottomNavBar(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .clickable { onSelect(section) }
                         .padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         when (section) {
@@ -825,7 +941,7 @@ private fun AgentBottomNavBar(
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .padding(start = 14.dp, bottom = 10.dp)
+                                    .padding(start = 12.dp, bottom = 8.dp)
                                     .size(7.dp)
                                     .background(StatusAmber, CircleShape),
                             )
@@ -837,7 +953,7 @@ private fun AgentBottomNavBar(
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                         color = tint,
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                     )
                 }
             }
@@ -845,13 +961,10 @@ private fun AgentBottomNavBar(
     }
 }
 
-// =========================================================================
-// Clean Vector Navigation Icons
-// =========================================================================
-
+// Vector Navigation Icons
 @Composable
 private fun NavIconRemote(tint: Color) {
-    Canvas(modifier = Modifier.size(20.dp)) {
+    Canvas(modifier = Modifier.size(19.dp)) {
         val stroke = 1.8.dp.toPx()
         val path = Path().apply {
             moveTo(size.width * 0.22f, size.height * 0.30f)
@@ -871,7 +984,7 @@ private fun NavIconRemote(tint: Color) {
 
 @Composable
 private fun NavIconSessions(tint: Color) {
-    Canvas(modifier = Modifier.size(20.dp)) {
+    Canvas(modifier = Modifier.size(19.dp)) {
         val stroke = 1.8.dp.toPx()
         val w = size.width
         val h = size.height
@@ -879,7 +992,7 @@ private fun NavIconSessions(tint: Color) {
             color = tint,
             topLeft = Offset(w * 0.15f, h * 0.18f),
             size = Size(w * 0.70f, h * 0.56f),
-            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+            cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
             style = Stroke(width = stroke),
         )
         drawLine(
@@ -901,7 +1014,7 @@ private fun NavIconSessions(tint: Color) {
 
 @Composable
 private fun NavIconWaiting(tint: Color) {
-    Canvas(modifier = Modifier.size(20.dp)) {
+    Canvas(modifier = Modifier.size(19.dp)) {
         val stroke = 1.8.dp.toPx()
         val center = Offset(size.width * 0.5f, size.height * 0.5f)
         val radius = size.width * 0.38f
@@ -930,7 +1043,7 @@ private fun NavIconWaiting(tint: Color) {
 
 @Composable
 private fun NavIconDevices(tint: Color) {
-    Canvas(modifier = Modifier.size(20.dp)) {
+    Canvas(modifier = Modifier.size(19.dp)) {
         val stroke = 1.8.dp.toPx()
         val w = size.width
         val h = size.height
@@ -953,7 +1066,7 @@ private fun NavIconDevices(tint: Color) {
 
 @Composable
 private fun NavIconSettings(tint: Color) {
-    Canvas(modifier = Modifier.size(20.dp)) {
+    Canvas(modifier = Modifier.size(19.dp)) {
         val stroke = 1.8.dp.toPx()
         val w = size.width
         val h = size.height
@@ -966,7 +1079,7 @@ private fun NavIconSettings(tint: Color) {
         )
         drawCircle(
             color = tint,
-            radius = 2.6.dp.toPx(),
+            radius = 2.4.dp.toPx(),
             center = Offset(w * 0.38f, h * 0.36f),
         )
         drawLine(
@@ -978,7 +1091,7 @@ private fun NavIconSettings(tint: Color) {
         )
         drawCircle(
             color = tint,
-            radius = 2.6.dp.toPx(),
+            radius = 2.4.dp.toPx(),
             center = Offset(w * 0.62f, h * 0.64f),
         )
     }
@@ -986,7 +1099,7 @@ private fun NavIconSettings(tint: Color) {
 
 @Composable
 private fun RefreshIcon(tint: Color) {
-    Canvas(modifier = Modifier.size(13.dp)) {
+    Canvas(modifier = Modifier.size(12.dp)) {
         val stroke = 1.5.dp.toPx()
         drawArc(
             color = tint,
@@ -1011,12 +1124,13 @@ private fun DevicesScreen(
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(14.dp, 8.dp, 14.dp, 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
             AgentTopBar(
-                title = "已绑定电脑设备与已观测 Agent",
+                title = "已接入宿主机与 Runner 拓扑",
+                subtitle = state.config?.gatewayBase ?: "",
                 loading = state.loading,
                 onRefresh = onRefresh,
             )
@@ -1027,8 +1141,8 @@ private fun DevicesScreen(
         if (devices.isEmpty()) {
             item {
                 EmptyStateCard(
-                    "暂未发现设备",
-                    "在你的电脑上运行 AgentHub Runner 并完成授权后，设备会出现在这里。",
+                    "暂未发现活动主机",
+                    "在你的电脑上运行 agenthub-runner daemon，设备将自动接入拓扑网格。",
                 )
             }
         } else {
@@ -1061,9 +1175,9 @@ private fun DeviceCard(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
+            .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(10.dp)),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 0.5.dp,
     ) {
@@ -1083,20 +1197,21 @@ private fun DeviceCard(
                             .background(if (isOnline) StatusGreenBright else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), CircleShape),
                     )
                     Text(
-                        text = "设备 ${shortId(device.deviceId)}",
+                        text = "宿主机 ${shortId(device.deviceId)}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
                 }
                 Surface(
-                    shape = RoundedCornerShape(6.dp),
+                    shape = RoundedCornerShape(4.dp),
                     color = if (isOnline) StatusGreenBright.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant,
                 ) {
                     Text(
-                        text = if (isOnline) "在线" else "离线",
+                        text = if (isOnline) "在线接入" else "离线",
                         color = if (isOnline) StatusGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                     )
                 }
             }
@@ -1104,6 +1219,7 @@ private fun DeviceCard(
             Text(
                 text = "ID: ${shortId(device.deviceId)} · ${if (agents.isNotBlank()) agents else "未启动 Agent"}",
                 style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
@@ -1118,14 +1234,14 @@ private fun DeviceCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "${sessions.size} 个历史会话",
+                    text = "${sessions.size} 个活动会话",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "筛选此设备 →",
+                    text = "查看此机队 →",
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
@@ -1157,8 +1273,8 @@ private fun SettingsScreen(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(14.dp, 8.dp, 14.dp, 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             AgentTopBar(
@@ -1180,7 +1296,7 @@ private fun SettingsScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(
                         "连接凭证与网关",
@@ -1193,11 +1309,52 @@ private fun SettingsScreen(
                         onValueChange = { gatewayBase = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Gateway 端点") },
-                        placeholder = { Text("http://192.168.1.100:3000") },
+                        placeholder = { Text("http://127.0.0.1:3001") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(8.dp),
                     )
+
+                    // Quick-fill address pills for faster developer workflow
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Surface(
+                            onClick = {
+                                gatewayBase = "http://127.0.0.1:3001"
+                                developmentUserId = "local-developer"
+                                error = null
+                            },
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                        ) {
+                            Text(
+                                "127.0.0.1:3001",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                        Surface(
+                            onClick = {
+                                gatewayBase = "http://10.0.2.2:3001"
+                                developmentUserId = "local-developer"
+                                error = null
+                            },
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                        ) {
+                            Text(
+                                "10.0.2.2 (模拟器)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
 
                     OutlinedTextField(
                         value = accessToken,
@@ -1207,7 +1364,7 @@ private fun SettingsScreen(
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(8.dp),
                     )
 
                     OutlinedTextField(
@@ -1217,7 +1374,7 @@ private fun SettingsScreen(
                         label = { Text("开发用户 ID（仅回环地址有效，选填）") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(8.dp),
                     )
 
                     error?.let {
@@ -1234,12 +1391,12 @@ private fun SettingsScreen(
                                 ),
                             )
                         },
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
-                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     ) {
                         Text(
-                            text = if (config == null) "保存并连接" else "更新连接配置",
+                            text = if (config == null) "保存并连网关" else "更新连接配置",
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
@@ -1263,10 +1420,11 @@ private fun SettingsScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             ) {
                 Text(
-                    text = "提示：手机端通过安全的 Gateway 只读连接或交互式远程代理接入电脑，电脑运行 Runner 即可跨网络无缝协同。",
+                    text = "提示：手机端通过安全的 Gateway 只读连接或交互式远程代理接入电脑，凭据存储受 Android Keystore 安全硬件保护，不写日志，不参与备份。",
                     modifier = Modifier.padding(14.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp,
                 )
             }
         }
@@ -1293,8 +1451,8 @@ private fun SessionDetailScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding(),
-        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 32.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(14.dp, 8.dp, 14.dp, 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             Row(
@@ -1319,15 +1477,16 @@ private fun SessionDetailScreen(
         }
 
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     session.project.displayName,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "${session.agentType.label} · 设备 ${shortId(session.deviceId)}",
+                    "${session.agentType.label} · 宿主机 ${shortId(session.deviceId)}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1337,13 +1496,13 @@ private fun SessionDetailScreen(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(14.dp)),
-                shape = RoundedCornerShape(14.dp),
+                    .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
+                shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1386,6 +1545,7 @@ private fun DetailFactRow(label: String, value: String) {
         Text(
             value,
             style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1395,27 +1555,30 @@ private fun DetailFactRow(label: String, value: String) {
 }
 
 // =========================================================================
-// Helpers and Fallbacks
+// Helpers and Common Cards
 // =========================================================================
 
 @Composable
-private fun ActiveDeviceFilter(deviceId: String, onClear: () -> Unit) {
+private fun ErrorBanner(message: String, onRetry: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "已筛选设备: ${shortId(deviceId)}",
-                style = MaterialTheme.typography.labelSmall,
+                message,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = onClear) {
-                Text("清除筛选", style = MaterialTheme.typography.labelSmall)
+            TextButton(onClick = onRetry) {
+                Text("重试", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -1424,18 +1587,27 @@ private fun ActiveDeviceFilter(deviceId: String, onClear: () -> Unit) {
 @Composable
 private fun EmptyStateCard(title: String, body: String) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp,
+            )
         }
     }
 }
@@ -1443,77 +1615,89 @@ private fun EmptyStateCard(title: String, body: String) {
 @Composable
 private fun LoadingCard(message: String) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(12.dp))
-            Text(message, style = MaterialTheme.typography.bodyMedium)
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
-private fun ErrorBanner(message: String, onRetry: () -> Unit) {
+private fun ActiveDeviceFilter(deviceId: String, onClear: () -> Unit) {
     Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f),
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f)),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(message, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = onRetry) { Text("重试", color = MaterialTheme.colorScheme.error) }
+            Text(
+                text = "过滤设备: ${shortId(deviceId)}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+            )
+            Text(
+                text = "清除 ✕",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable(onClick = onClear),
+            )
         }
     }
 }
 
-@Composable
-private fun statusColor(status: ActivityStatus): Color =
-    when (status) {
-        ActivityStatus.WORKING -> StatusBlue
-        ActivityStatus.WAITING_INPUT,
-        ActivityStatus.WAITING_PERMISSION -> StatusAmber
-        ActivityStatus.COMPLETED -> StatusGreenBright
-        ActivityStatus.FAILED -> MaterialTheme.colorScheme.error
-        ActivityStatus.IDLE,
-        ActivityStatus.STOPPED,
-        ActivityStatus.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+private fun shortId(id: String): String = id.takeLast(8)
 
-private fun shortId(deviceId: String): String =
-    if (deviceId.length <= 12) deviceId else "${deviceId.take(6)}…${deviceId.takeLast(4)}"
+private fun statusColor(status: ActivityStatus): Color = when (status) {
+    ActivityStatus.WAITING_PERMISSION,
+    ActivityStatus.WAITING_INPUT -> StatusAmber
+    ActivityStatus.WORKING -> StatusBlue
+    ActivityStatus.COMPLETED -> StatusGreen
+    ActivityStatus.FAILED -> StatusRed
+    ActivityStatus.STOPPED,
+    ActivityStatus.IDLE,
+    ActivityStatus.UNKNOWN -> Color(0xFF64748B)
+}
+
+private fun presenceLabel(presence: Presence): String = when (presence) {
+    Presence.LIVE -> "实时在线"
+    Presence.PERSISTED -> "离线历史"
+    Presence.UNKNOWN -> "未知状态"
+}
 
 private fun relativeTime(instant: Instant): String {
-    val seconds = Duration.between(instant, Instant.now()).seconds.coerceAtLeast(0)
+    val duration = Duration.between(instant, Instant.now())
     return when {
-        seconds < 10 -> "刚刚"
-        seconds < 60 -> "${seconds}秒前"
-        seconds < 3_600 -> "${seconds / 60}分钟前"
-        seconds < 86_400 -> "${seconds / 3_600}小时前"
-        else -> "${seconds / 86_400}天前"
+        duration.isNegative -> "刚刚"
+        duration.toMinutes() < 1 -> "刚刚"
+        duration.toHours() < 1 -> "${duration.toMinutes()} 分钟前"
+        duration.toDays() < 1 -> "${duration.toHours()} 小时前"
+        else -> "${duration.toDays()} 天前"
     }
 }
 
-private val absoluteFormatter =
-    DateTimeFormatter.ofPattern("M月d日 HH:mm").withZone(ZoneId.systemDefault())
-
-private fun absoluteTime(instant: Instant): String = absoluteFormatter.format(instant)
-
-private fun presenceLabel(presence: Presence): String =
-    when (presence) {
-        Presence.LIVE -> "实时"
-        Presence.PERSISTED -> "历史记录"
-        Presence.UNKNOWN -> "未知"
-    }
+private fun absoluteTime(instant: Instant): String =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        .withZone(ZoneId.systemDefault())
+        .format(instant)

@@ -554,6 +554,7 @@ fn build_dashboard_summary(
     let mut workspace_map: HashMap<String, usize> = HashMap::new();
     let mut discovered_sessions: Vec<serde_json::Value> = Vec::new();
 
+    let mut total_requests: u64 = 0;
     let mut total_prompt_tokens: u64 = 0;
     let mut total_completion_tokens: u64 = 0;
     let mut total_cache_read_tokens: u64 = 0;
@@ -640,7 +641,13 @@ fn build_dashboard_summary(
                     .get("total_tokens")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(pt + ct);
+                let req_count = c
+                    .get("request_count")
+                    .and_then(serde_json::Value::as_u64)
+                    .or_else(|| c.get("calls").and_then(serde_json::Value::as_u64))
+                    .unwrap_or(1);
 
+                total_requests = total_requests.saturating_add(req_count);
                 total_prompt_tokens = total_prompt_tokens.saturating_add(pt);
                 total_completion_tokens = total_completion_tokens.saturating_add(ct);
                 total_cache_read_tokens = total_cache_read_tokens.saturating_add(cr);
@@ -679,7 +686,7 @@ fn build_dashboard_summary(
                             total_tokens: 0,
                             cost_usd: 0.0,
                         });
-                model_entry.calls += 1;
+                model_entry.calls += req_count as usize;
                 model_entry.prompt_tokens = model_entry.prompt_tokens.saturating_add(pt);
                 model_entry.completion_tokens = model_entry.completion_tokens.saturating_add(ct);
                 model_entry.cache_read_tokens = model_entry.cache_read_tokens.saturating_add(cr);
@@ -708,7 +715,7 @@ fn build_dashboard_summary(
                             total_tokens: 0,
                             cost_usd: 0.0,
                         });
-                agent_entry.calls += 1;
+                agent_entry.calls += req_count as usize;
                 agent_entry.prompt_tokens = agent_entry.prompt_tokens.saturating_add(pt);
                 agent_entry.completion_tokens = agent_entry.completion_tokens.saturating_add(ct);
                 agent_entry.cache_read_tokens = agent_entry.cache_read_tokens.saturating_add(cr);
@@ -821,7 +828,8 @@ fn build_dashboard_summary(
         .collect();
 
     let usage_summary = json!({
-        "calls": total_sessions,
+        "calls": total_requests,
+        "sessions": total_sessions,
         "input": total_prompt_tokens,
         "output": total_completion_tokens,
         "cache_read": total_cache_read_tokens,
@@ -1346,7 +1354,7 @@ fn app_layout_json(port: u16) -> String {
         // text; the button in its head folds it into the header, and the choice
         // outlives the window. On a first visit a narrow window starts folded
         "sidebarAt": 768, "sidebarNarrow": 200, "contentMax": 1100,
-        "inset": 16, "radius": 14, "radiusSm": 10, "topBar": 38,
+        "inset": 16, "radius": 14, "radiusSm": 10, "topBar": 46,
         "dashboardPollMs": 4000, "firstProbeRetries": 2, "firstProbeRetryMs": 1500,
         "emptyGraceMs": 15000, "emptyStrikes": 3,
         "themeBg": { "light": "#f4f5f8", "dark": "#1a1a1e" },

@@ -12,37 +12,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 // =========================================================================
-// Claude/Anthropic Design System Palette (Warm Neutrals & Refined Accents)
+// Aozora UI & Orca Mission Control Design System Palette
+// 70% Pro Cloud Architecture + 20% Modern Clean + 10% Precision Console
 // =========================================================================
 
-// Light theme warm cream/terracotta tokens
-val LightBgPrimary = Color(0xFFFAF9F5)
+// Light theme: crisp cool-white, subtle slate lines, Sky Blue accent
+val LightBgPrimary = Color(0xFFF8FAFC)
 val LightBgSurface = Color(0xFFFFFFFF)
-val LightBgSurfaceVariant = Color(0xFFF0EEE6)
-val LightTextPrimary = Color(0xFF1F1E1B)
-val LightTextSecondary = Color(0xFF383530)
-val LightTextMuted = Color(0xFF6B6860)
-val LightBorderSubtle = Color(0xFFE5E3DC)
-val LightBorderContrast = Color(0xFFD0CDC3)
-val LightBrandAccent = Color(0xFFC2410C)
+val LightBgSurfaceVariant = Color(0xFFF1F5F9)
+val LightTextPrimary = Color(0xFF0F172A)
+val LightTextSecondary = Color(0xFF334155)
+val LightTextMuted = Color(0xFF64748B)
+val LightBorderSubtle = Color(0xFFE2E8F0)
+val LightBorderContrast = Color(0xFFCBD5E1)
+val LightBrandAccent = Color(0xFF0284C7)
 
-// Dark theme charcoal/amber tokens
-val DarkBgPrimary = Color(0xFF1F1E1D)
-val DarkBgSurface = Color(0xFF262523)
-val DarkBgSurfaceVariant = Color(0xFF181716)
-val DarkTextPrimary = Color(0xFFF5F4EF)
-val DarkTextSecondary = Color(0xFFD6D4CC)
-val DarkTextMuted = Color(0xFFA8A69E)
-val DarkBorderSubtle = Color(0xFF3D3B37)
-val DarkBorderContrast = Color(0xFF605C55)
-val DarkBrandAccent = Color(0xFFD97706)
+// Dark theme: deep mission-control void, subtle borders, Cyan accent
+val DarkBgPrimary = Color(0xFF090D16)
+val DarkBgSurface = Color(0xFF111827)
+val DarkBgSurfaceVariant = Color(0xFF0F172A)
+val DarkTextPrimary = Color(0xFFF8FAFC)
+val DarkTextSecondary = Color(0xFFCBD5E1)
+val DarkTextMuted = Color(0xFF94A3B8)
+val DarkBorderSubtle = Color(0xFF1E293B)
+val DarkBorderContrast = Color(0xFF334155)
+val DarkBrandAccent = Color(0xFF38BDF8)
 
 // Semantic status colors across themes
-val StatusBlue = Color(0xFF2563EB)
-val StatusAmber = Color(0xFFD97706)
-val StatusGreen = Color(0xFF17683D)
+val StatusBlue = Color(0xFF0284C7)
+val StatusAmber = Color(0xFFF59E0B)
+val StatusGreen = Color(0xFF059669)
 val StatusGreenBright = Color(0xFF10B981)
-val StatusRed = Color(0xFFB42318)
+val StatusRed = Color(0xFFDC2626)
 val StatusRedBright = Color(0xFFEF4444)
 
 // Legacy color aliases for backwards compatibility
@@ -52,7 +53,7 @@ val Ink = LightTextPrimary
 val Muted = LightTextMuted
 val Line = LightBorderSubtle
 val PinkSignal = LightBrandAccent
-val SoftPink = Color(0xFFFFF7ED)
+val SoftPink = Color(0xFFF0F9FF)
 val WorkingBlue = StatusBlue
 val WaitingAmber = StatusAmber
 val SuccessGreen = StatusGreen
@@ -62,8 +63,8 @@ private val LightColors =
     lightColorScheme(
         primary = LightBrandAccent,
         onPrimary = Color.White,
-        primaryContainer = Color(0xFFFFEDE5),
-        onPrimaryContainer = Color(0xFF7C2D12),
+        primaryContainer = Color(0xFFE0F2FE),
+        onPrimaryContainer = Color(0xFF0369A1),
         secondary = LightTextSecondary,
         onSecondary = Color.White,
         background = LightBgPrimary,
@@ -81,11 +82,11 @@ private val LightColors =
 private val DarkColors =
     darkColorScheme(
         primary = DarkBrandAccent,
-        onPrimary = Color(0xFF151514),
-        primaryContainer = Color(0xFF452405),
-        onPrimaryContainer = Color(0xFFFFDDBA),
+        onPrimary = Color(0xFF090D16),
+        primaryContainer = Color(0xFF0C4A6E),
+        onPrimaryContainer = Color(0xFFBAE6FD),
         secondary = DarkTextSecondary,
-        onSecondary = Color(0xFF151514),
+        onSecondary = Color(0xFF090D16),
         background = DarkBgPrimary,
         onBackground = DarkTextPrimary,
         surface = DarkBgSurface,

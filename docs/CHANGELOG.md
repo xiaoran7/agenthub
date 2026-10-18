@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.4.94] - 2026-10-18
+
+### 移动端控制舱架构、极速骨架屏与全绿 CI 治理 (Mobile Cockpit Architecture, Skeleton Shimmer & 100% Green CI)
+
+- **Android 移动端控制舱 UI 与终端配件按键行 (Mobile Mission Control & Accessory Bar)**：
+  - 借鉴 [stablyai/orca](https://github.com/stablyai/orca) 的 Companion 设计哲学与布局原语，在 `apps/android` 落地高密度沉浸式会话控制舱（Cockpit）；
+  - 引入专为触控打造的虚拟终端配件按键行（Esc、Tab、Ctrl-C 等），彻底解决手机端输入与审批痛点；
+  - 遵循开源溯源纪律，在中英文 README 中完整补齐 `stablyai/orca` 的开源项目引用与模块职责声明。
+- **内置 Runner Web 控制台极速骨架屏与导航优化 (Web Console Skeleton Shimmer & Nav Insets)**：
+  - 会话列表、模型用量与智能体面板引入 Shimmer 骨架屏占位，消除首屏白屏等待；
+  - 优化顶部导航分段栏高度至 46px 并固定置顶（sticky），大屏全量展示图标与文字，触控高亮更舒适；
+  - 强化多轮对话请求计数统计（`request_count` 与 `calls`），精准匹配官方会话度量模型。
+- **全绿 CI 治理与工程质量加固 (100% Passing CI Pipeline)**：
+  - 修复 `build.rs`、`tray.rs`、`remote_host.rs` 中的 Clippy 告警，开启 workspace 级严格校验；
+  - 格式化前端与 Rust 全量代码，保证 `npm run format:check` 与 `cargo fmt --all --check` 零报错；
+  - 适配 CI 无本地会话环境下的会话加载回归测试，杜绝假阳性构建失败。
+- **多平台交付产物重新打包归档 (Repackaged Deliverables)**：
+  - 产出 `AgentHub-Runner-v2.4.94-windows-x64.zip`（含 release 构建的 `agenthub-runner.exe` 与一键接入指南）；
+  - 产出 `AgentHub-v2.4.94-android-debug.apk`（versionCode 94，versionName 2.4.94）；
+  - 更新校验和清单 `AgentHub-v2.4.94-SHA256.txt` 并严格清理旧版本归档。
+
 ## [2.4.93] - 2026-10-18
 
 ### 开源发布、AI 检索生态 (GEO) 与冷启动工程全量落地 (Open-Setup Standard Implementation)

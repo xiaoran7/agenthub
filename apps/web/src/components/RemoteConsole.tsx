@@ -1824,15 +1824,22 @@ export function RemoteConsole({
                                                         className="remote-session-pill-tag"
                                                         title={`模型: ${item.model}`}
                                                       >
-                                                        {item.model.replace(/^models\//u, "")}
+                                                        {item.model.replace(
+                                                          /^models\//u,
+                                                          "",
+                                                        )}
                                                       </span>
                                                     )}
-                                                    {formatSessionTokens(item.totalTokens) && (
+                                                    {formatSessionTokens(
+                                                      item.totalTokens,
+                                                    ) && (
                                                       <span
                                                         className="remote-session-tokens"
                                                         title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
                                                       >
-                                                        {formatSessionTokens(item.totalTokens)}
+                                                        {formatSessionTokens(
+                                                          item.totalTokens,
+                                                        )}
                                                       </span>
                                                     )}
                                                   </span>
@@ -1883,15 +1890,22 @@ export function RemoteConsole({
                                                       className="remote-session-pill-tag"
                                                       title={`模型: ${item.model}`}
                                                     >
-                                                      {item.model.replace(/^models\//u, "")}
+                                                      {item.model.replace(
+                                                        /^models\//u,
+                                                        "",
+                                                      )}
                                                     </span>
                                                   )}
-                                                  {formatSessionTokens(item.totalTokens) && (
+                                                  {formatSessionTokens(
+                                                    item.totalTokens,
+                                                  ) && (
                                                     <span
                                                       className="remote-session-tokens"
                                                       title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
                                                     >
-                                                      {formatSessionTokens(item.totalTokens)}
+                                                      {formatSessionTokens(
+                                                        item.totalTokens,
+                                                      )}
                                                     </span>
                                                   )}
                                                 </span>
@@ -2930,7 +2944,10 @@ export function RemoteConsole({
               <option value="">沿用原生设置</option>
               {runnerInfo?.hello?.models?.data.map((item) => (
                 <option key={item.id} value={item.model ?? item.id}>
-                  {item.displayName || item.display_name || item.name || item.id}
+                  {item.displayName ||
+                    item.display_name ||
+                    item.name ||
+                    item.id}
                 </option>
               ))}
             </select>

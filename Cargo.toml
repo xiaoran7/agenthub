@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "2.4.93"
+version = "2.4.94"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -31,3 +31,8 @@ thiserror = "2.0"
 ureq = { version = "3.3.0", default-features = false, features = ["json", "rustls", "win-system-proxy"] }
 url = "2.5.8"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+
+[workspace.lints.clippy]
+collapsible_if = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"

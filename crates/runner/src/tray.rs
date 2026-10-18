@@ -183,7 +183,7 @@ mod windows_tray {
 
                         TrackPopupMenu(
                             hmenu,
-                            TPM_RIGHTBUTTON | 0x0020 /* TPM_BOTTOMALIGN */ | 0x0000, /* TPM_LEFTALIGN */
+                            TPM_RIGHTBUTTON | 0x0020, /* TPM_BOTTOMALIGN */
                             pt.x,
                             pt.y,
                             0,
@@ -196,7 +196,7 @@ mod windows_tray {
                     0
                 }
                 WM_COMMAND => {
-                    let id = wparam as usize;
+                    let id = wparam;
                     if id == ID_TRAY_OPEN_DESKTOP {
                         if let Some(state) = TRAY_STATE.get() {
                             if let Ok(url) = state.web_url.lock() {

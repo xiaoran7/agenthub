@@ -36,10 +36,6 @@ const MAX_CONFIG_VALUE_CHARS: usize = 96;
 /// Upper bound on a single `--version` probe. Discovery runs on the daemon
 /// startup path, so a wedged binary must cost one short timeout, not a hang.
 const BINARY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Transcript lines scanned per session while reading discovery metadata. Must
-/// stay well under a live session's length: the scan is what tells an abandoned
-/// session (no assistant reply yet) apart from a real one.
-const TRANSCRIPT_METADATA_SCAN_LINES: usize = 512;
 
 #[derive(Debug, Error)]
 pub enum CollectorError {
@@ -242,6 +238,7 @@ pub struct ClaudeTranscriptEntry {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cache_read_tokens: u64,
+    pub request_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +251,7 @@ pub struct ClaudeRemoteSessionEntry {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cache_read_tokens: u64,
+    pub request_count: u64,
 }
 
 /// Enumerates Claude Code's documented local transcript store without invoking
@@ -549,12 +547,28 @@ fn apply_claude_context_line(line: &str, context: &mut LocalSessionContext) {
                 let cache_read = usage_u64(usage, "cache_read_input_tokens");
                 let cache_write = usage_u64(usage, "cache_creation_input_tokens");
                 let total_input = input.saturating_add(cache_write).saturating_add(cache_read);
-                if total_input > 0 {
+                if total_input > 0 || output > 0 {
                     context.context_used_tokens = Some(total_input);
-                    context.input_tokens = Some(total_input);
-                    context.output_tokens = Some(output);
-                    context.cache_read_tokens = Some(cache_read);
-                    context.cache_write_tokens = Some(cache_write);
+                    context.input_tokens = Some(
+                        context
+                            .input_tokens
+                            .unwrap_or(0)
+                            .saturating_add(total_input),
+                    );
+                    context.output_tokens =
+                        Some(context.output_tokens.unwrap_or(0).saturating_add(output));
+                    context.cache_read_tokens = Some(
+                        context
+                            .cache_read_tokens
+                            .unwrap_or(0)
+                            .saturating_add(cache_read),
+                    );
+                    context.cache_write_tokens = Some(
+                        context
+                            .cache_write_tokens
+                            .unwrap_or(0)
+                            .saturating_add(cache_write),
+                    );
                 }
             }
         }
@@ -952,13 +966,11 @@ fn read_claude_transcript_metadata(
     let mut prompt_tokens: u64 = 0;
     let mut completion_tokens: u64 = 0;
     let mut cache_read_tokens: u64 = 0;
+    let mut request_count: u64 = 0;
 
-    // Metadata is repeated on transcript entries. Bound the scan so a damaged
-    // or adversarial transcript cannot make background collection unbounded.
-    // The scan cannot stop at the first complete metadata set: `has_output` is
-    // only knowable from the whole file, and a live session appends its first
-    // assistant reply long after the title was already known.
-    for _ in 0..TRANSCRIPT_METADATA_SCAN_LINES {
+    // Scan all lines until EOF to accurately aggregate all assistant turns and token usage,
+    // matching Magpie's comprehensive session accounting model.
+    loop {
         let line = match read_bounded_line(&mut reader) {
             BoundedLine::Line(line) => line,
             BoundedLine::Eof => break,
@@ -975,6 +987,7 @@ fn read_claude_transcript_metadata(
         };
         if value.get("type").and_then(Value::as_str) == Some("assistant") {
             has_output = true;
+            request_count = request_count.saturating_add(1);
             if model.is_none() {
                 model = value
                     .pointer("/message/model")
@@ -987,7 +1000,10 @@ fn read_claude_transcript_metadata(
                 let output = usage_u64(usage, "output_tokens");
                 let cache_read = usage_u64(usage, "cache_read_input_tokens");
                 let cache_write = usage_u64(usage, "cache_creation_input_tokens");
-                prompt_tokens = prompt_tokens.saturating_add(input).saturating_add(cache_read).saturating_add(cache_write);
+                prompt_tokens = prompt_tokens
+                    .saturating_add(input)
+                    .saturating_add(cache_read)
+                    .saturating_add(cache_write);
                 completion_tokens = completion_tokens.saturating_add(output);
                 cache_read_tokens = cache_read_tokens.saturating_add(cache_read);
             }
@@ -1018,8 +1034,6 @@ fn read_claude_transcript_metadata(
                 (current, None) => current,
             };
         }
-        // Continue scanning up to TRANSCRIPT_METADATA_SCAN_LINES to aggregate
-        // all assistant token usage across turns, matching Magpie's session accounting.
     }
 
     let session_id = session_id
@@ -1040,6 +1054,7 @@ fn read_claude_transcript_metadata(
         prompt_tokens,
         completion_tokens,
         cache_read_tokens,
+        request_count,
     }))
 }
 
@@ -1260,10 +1275,20 @@ pub fn find_grok_session_info(
     Ok(None)
 }
 
-fn grok_remote_sessions_cache()
--> &'static RwLock<Option<(Instant, Vec<(String, String, Option<String>, Option<String>, i64)>)>> {
-    static CACHE: OnceLock<RwLock<Option<(Instant, Vec<(String, String, Option<String>, Option<String>, i64)>)>>> =
-        OnceLock::new();
+fn grok_remote_sessions_cache() -> &'static RwLock<
+    Option<(
+        Instant,
+        Vec<(String, String, Option<String>, Option<String>, i64)>,
+    )>,
+> {
+    static CACHE: OnceLock<
+        RwLock<
+            Option<(
+                Instant,
+                Vec<(String, String, Option<String>, Option<String>, i64)>,
+            )>,
+        >,
+    > = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
@@ -1361,8 +1386,8 @@ fn claude_remote_sessions_cache()
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
-pub fn collect_claude_sessions_for_remote()
--> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError> {
+pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError>
+{
     if let Ok(guard) = claude_remote_sessions_cache().read() {
         if let Some((cached_at, ref entries)) = *guard {
             if cached_at.elapsed() < Duration::from_secs(5) {
@@ -1423,6 +1448,7 @@ pub fn collect_claude_sessions_for_remote()
                     prompt_tokens: entry.prompt_tokens,
                     completion_tokens: entry.completion_tokens,
                     cache_read_tokens: entry.cache_read_tokens,
+                    request_count: entry.request_count,
                 });
             }
         }
@@ -1541,9 +1567,16 @@ pub fn collect_codex_local_threads_from(
             let created_at = row.get::<_, Option<i64>>(2)?.unwrap_or_default();
             let updated_at = row.get::<_, Option<i64>>(3)?.unwrap_or_default();
             let recency_at = row.get::<_, Option<i64>>(4)?.unwrap_or_default();
-            let source = row.get::<_, String>(5).unwrap_or_else(|_| "localStore".to_owned());
+            let source = row
+                .get::<_, String>(5)
+                .unwrap_or_else(|_| "localStore".to_owned());
             let model = row.get::<_, Option<String>>(6).ok().flatten();
-            let tokens_used = row.get::<_, Option<i64>>(7).ok().flatten().unwrap_or(0).max(0) as u64;
+            let tokens_used = row
+                .get::<_, Option<i64>>(7)
+                .ok()
+                .flatten()
+                .unwrap_or(0)
+                .max(0) as u64;
             let last_activity_at_ms = recency_at.max(updated_at).max(created_at);
 
             let mut item = json!({
@@ -3027,7 +3060,8 @@ pub fn collect_zcode_sessions_from(
             source,
         })?;
 
-    let payload = serde_json::to_string(&rows).map_err(|source| CollectorError::InvalidJson { program, source })?;
+    let payload = serde_json::to_string(&rows)
+        .map_err(|source| CollectorError::InvalidJson { program, source })?;
     if let Ok(mut guard) = zcode_sessions_cache().write() {
         *guard = Some(ZCodeSessionsCache {
             db_path: database.to_path_buf(),

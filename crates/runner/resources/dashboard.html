@@ -21,7 +21,7 @@
       window: { width: 820, height: 600, minWidth: 640, minHeight: 460, sideMinWidth: 168, sideWidth: 212, sideMaxWidth: 300 },
       sidebarAt: 768, sidebarNarrow: 200,
       contentMax: 1100,
-      inset: 16, radius: 14, radiusSm: 10, topBar: 38,
+      inset: 16, radius: 14, radiusSm: 10, topBar: 46,
       dashboardPollMs: 4000, firstProbeRetries: 2, firstProbeRetryMs: 1500,
       emptyGraceMs: 15000, emptyStrikes: 3,
       gatewayPort: 3425,
@@ -222,7 +222,14 @@
       </button>
     </div>
     <div class="stack" id="sessionsContainer">
-      <!-- dynamic workspace groups -->
+      <!-- skeleton loading placeholder matching user specification -->
+      <div class="skeleton-card" aria-busy="true" aria-label="正在加载会话…">
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 100%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 85%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 92%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 76%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 60%;"></div></div>
+      </div>
     </div>
   </main>
 
@@ -274,7 +281,13 @@
         <span class="tag" id="usageModelsCount">0 种模型</span>
       </div>
       <div id="usageModels">
-        <!-- dynamic model stat rows -->
+        <!-- skeleton loading placeholder matching user specification -->
+        <div class="skeleton-card" aria-busy="true" aria-label="正在加载模型用量…">
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 100%;"></div></div>
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 85%;"></div></div>
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 90%;"></div></div>
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 70%;"></div></div>
+        </div>
       </div>
     </div>
 
@@ -284,7 +297,13 @@
         <span class="tag" id="usageAgentsCount">0 个智能体</span>
       </div>
       <div id="usageAgents">
-        <!-- dynamic agent stat rows -->
+        <!-- skeleton loading placeholder matching user specification -->
+        <div class="skeleton-card" aria-busy="true" aria-label="正在加载智能体用量…">
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 100%;"></div></div>
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 80%;"></div></div>
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 88%;"></div></div>
+          <div class="skeleton-row"><div class="skeleton-bar" style="width: 65%;"></div></div>
+        </div>
       </div>
     </div>
   </main>

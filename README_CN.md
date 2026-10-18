@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.4.93-0284c7.svg?style=flat-square" alt="Version" /></a>
+  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.4.94-0284c7.svg?style=flat-square" alt="Version" /></a>
   <a href="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml"><img src="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI Status" /></a>
   <a href="https://github.com/xiaoran7/agenthub"><img src="https://img.shields.io/badge/tests-226%20passed-10b981.svg?style=flat-square" alt="Tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b.svg?style=flat-square" alt="License" /></a>
@@ -142,6 +142,7 @@ npm.cmd run format:check
 | 上游项目 | 开源协议 | 在本项目中负责的模块 |
 | :--- | :--- | :--- |
 | [magpie](https://github.com/yetone/magpie) | MIT License, Copyright (c) 2026 yetone | 本机 Runner 内嵌 Web 控制台（`crates/runner/resources/dashboard.html` / `dashboard.css` / `dashboard.js`）的设计系统与布局原语 |
+| [stablyai/orca](https://github.com/stablyai/orca) | Apache 2.0 / MIT | 移动端 Companion 的控制舱（Mission Control）设计哲学、终端虚拟按键配件行与高密度机队布局（`apps/android`） |
 
 > **说明**：Runner 控制台的视觉与布局规范由 magpie 移植而来。双主题令牌（浅色/深色）、顶栏分段器、网格系统与表单控件均沿用上游规范，上游许可证声明完整保留在文件头部。若出现布局或样式问题，优先核对并拉取上游最新修复。
 

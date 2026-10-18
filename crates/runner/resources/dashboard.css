@@ -118,7 +118,7 @@
           --inset: var(--layout-inset, 18px);
           --r: var(--layout-radius, 14px);
           --r-s: var(--layout-radius-s, 10px);
-          --top-h: var(--layout-top-h, 38px);
+          --top-h: var(--layout-top-h, 46px);
         }
         :root.win { --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
         :root.win { --code: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace; }
@@ -499,7 +499,7 @@
           align-items: center;
           height: var(--top-h); gap: 8px; padding: 0 var(--inset);
           background: var(--bg); border-bottom: var(--rule);
-          position: relative; flex: none;
+          position: sticky; top: 0; z-index: 20; flex: none;
           transition: margin-left var(--dur-2) var(--ease);
         }
         .top-left {
@@ -530,8 +530,8 @@
         .live.off { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
         :root.link-off .side-gw i { background: var(--red); }
 
-        /* the header's page switch, when the sidebar is away: one rounded track,
-           grouped names over it, the open page on a lifted thumb — magpie's .seg */
+        /* the header's page switch, when the sidebar is away: transparent track,
+           elevated white card buttons on active/hover, larger and more touchable */
         .top .top-slot {
           justify-self: center;
           position: relative; left: auto; top: auto; transform: none;
@@ -541,31 +541,63 @@
         }
         .top .top-slot > #nav,
         #navTopSlot > .thumb { position: relative; }
-        .top .top-slot > #nav {
+        .top .top-slot > #nav,
+        #navTopSlot > #nav {
           pointer-events: auto;
           left: auto; top: auto; transform: none;
-          align-self: center; display: flex; flex-direction: row; flex: none; height: 30px;
+          align-self: center; display: flex; flex-direction: row; flex: none; height: 36px;
           max-width: 100%;
-          padding: 2px; border-radius: 8px; gap: 0; background: color-mix(in srgb, var(--fg) 5%, transparent);
+          padding: 2px; border-radius: 9px; gap: 4px; background: transparent;
         }
-        #navTopSlot > .thumb { top: 2px; bottom: 2px; left: 0; border-radius: 6px; background: var(--accent-soft); box-shadow: none; }
-        .top .top-slot > #nav button[data-view] {
-          display: inline-flex; width: auto; height: 26px; padding: 0 10px; border-radius: 6px;
-          font-size: var(--fs-note); gap: 5px; align-items: center; justify-content: center;
+        #navTopSlot > .thumb { display: none; }
+        .top .top-slot > #nav button[data-view],
+        #navTopSlot > #nav button[data-view] {
+          display: inline-flex; width: auto; height: 32px; padding: 0 16px; border-radius: 8px;
+          font-size: 13.5px; gap: 6px; align-items: center; justify-content: center;
           text-align: center; color: var(--fg-2); font-weight: 500;
+          background: transparent; cursor: pointer;
+          transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
         }
-        /* more specific than the rail's own row rule, which would show the name
-           and hide the icons the track keeps. With room the names stand whole
-           beside their icons; when the header is short of space (fitNavTrack)
-           the icons give way, then the names fold to two characters */
-        .top .top-slot > #nav button[data-view] > span { display: inline; white-space: nowrap; text-overflow: clip; }
-        #navTopSlot > #nav:not(.tight) .nav-ic { display: inline-block; width: 14px; height: 14px; }
+        .top .top-slot > #nav button[data-view] > span,
+        #navTopSlot > #nav button[data-view] > span { display: inline; white-space: nowrap; text-overflow: clip; transform: none !important; }
+        #navTopSlot > #nav:not(.tight) .nav-ic { display: inline-block; width: 15px; height: 15px; }
         #navTopSlot > #nav.tight .nav-ic { display: none; }
-        #navTopSlot > #nav.tight button[data-view] { padding: 0 8px; }
-        .top .top-slot > #nav button[data-view]:hover:not(.on) { background: transparent; color: var(--fg); }
-        .top .top-slot > #nav button[data-view].on { background: transparent; box-shadow: none; font-weight: 600; color: var(--accent); }
-        .top .top-slot > #nav .nav-ic { flex: none; opacity: .55; }
-        .top .top-slot > #nav button.on .nav-ic { opacity: 1; }
+        #navTopSlot > #nav.tight button[data-view] { padding: 0 10px; }
+        .top .top-slot > #nav button[data-view]:hover:not(.on),
+        #navTopSlot > #nav button[data-view]:hover:not(.on) {
+          background: rgba(255, 255, 255, 0.65);
+          color: var(--fg);
+        }
+        .top .top-slot > #nav button[data-view]:hover > span,
+        #navTopSlot > #nav button[data-view]:hover > span { transform: none !important; }
+        .top .top-slot > #nav button[data-view]:hover .nav-ic,
+        #navTopSlot > #nav button[data-view]:hover .nav-ic { transform: none !important; }
+        :root.dark .top .top-slot > #nav button[data-view]:hover:not(.on),
+        :root.dark #navTopSlot > #nav button[data-view]:hover:not(.on) {
+          background: rgba(255, 255, 255, 0.08);
+          color: var(--fg);
+        }
+        .top .top-slot > #nav button[data-view].on,
+        .top .top-slot > #nav button[data-view]:active,
+        #navTopSlot > #nav button[data-view].on,
+        #navTopSlot > #nav button[data-view]:active {
+          background: #ffffff !important;
+          color: #1c1c21 !important;
+          font-weight: 600;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.06);
+        }
+        :root.dark .top .top-slot > #nav button[data-view].on,
+        :root.dark .top .top-slot > #nav button[data-view]:active,
+        :root.dark #navTopSlot > #nav button[data-view].on,
+        :root.dark #navTopSlot > #nav button[data-view]:active {
+          background: rgba(255, 255, 255, 0.16) !important;
+          color: #ffffff !important;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+        }
+        .top .top-slot > #nav .nav-ic,
+        #navTopSlot > #nav .nav-ic { flex: none; opacity: .65; }
+        .top .top-slot > #nav button.on .nav-ic,
+        #navTopSlot > #nav button.on .nav-ic { opacity: 1; }
         .actions { justify-self: end; display: flex; align-items: center; gap: 3px; }
 
         /* ---- the sidebar ------------------------------------------------------- */
@@ -574,10 +606,11 @@
         /* the page's column starts where the rail ends, so it follows the rail
            itself; no window breakpoint has to guess the same width twice */
         body { position: relative; }
-        .sidebar { position: absolute; }
+        .sidebar { position: fixed; left: 0; top: 0; bottom: 0; height: 100vh; z-index: 30; }
         .top, .view-slot, .foot { margin-left: var(--side-w); }
         :root.no-side .top, :root.no-side .view-slot, :root.no-side .foot { margin-left: 0; }
         .sidebar { width: var(--side-w); background: var(--card); }
+        .view-slot { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
         /* a centre column is a place to sit in, not to read across: the page
            spans it and keeps only its own inset */
         :root { --view-pad: var(--inset); }
@@ -590,6 +623,50 @@
         .side-scroll { padding: 4px 12px 12px; }
         .side-slot { padding: 6px 12px 12px; }
         .side-foot { padding: 10px 12px 12px; }
+
+        /* ---- skeleton shimmer loading placeholders ----------------------------- */
+        .skeleton {
+          display: block;
+          border-radius: 6px;
+          background: linear-gradient(90deg, rgba(160, 168, 185, 0.14) 25%, rgba(160, 168, 185, 0.35) 50%, rgba(160, 168, 185, 0.14) 75%);
+          background-size: 200% 100%;
+          animation: skeleton-shift 1.6s ease-in-out infinite;
+        }
+        :root.dark .skeleton {
+          background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.05) 75%);
+          background-size: 200% 100%;
+        }
+        @keyframes skeleton-shift {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+        .skeleton-card {
+          padding: 18px 22px;
+          border-radius: var(--r);
+          background: var(--card);
+          border: var(--rule);
+          display: flex;
+          flex-direction: column;
+          gap: 13px;
+          box-shadow: 0 1px 2px rgba(20, 22, 30, .03);
+        }
+        .skeleton-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          height: 20px;
+        }
+        .skeleton-bar {
+          height: 14px;
+          border-radius: 6px;
+          background: linear-gradient(90deg, rgba(160, 168, 185, 0.14) 25%, rgba(160, 168, 185, 0.35) 50%, rgba(160, 168, 185, 0.14) 75%);
+          background-size: 200% 100%;
+          animation: skeleton-shift 1.6s ease-in-out infinite;
+        }
+        :root.dark .skeleton-bar {
+          background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.05) 75%);
+          background-size: 200% 100%;
+        }
         .side-gw { height: 32px; padding: 0 10px; border-radius: var(--r-s); font-size: var(--fs-note); gap: 9px; }
 
         /* ---- views ------------------------------------------------------------- */

@@ -379,31 +379,29 @@ function fitNavTrack() {
     return;
   }
 
-  const gap = parseFloat(getComputedStyle(nav).columnGap) || 0;
-  const pad = parseFloat(getComputedStyle(nav).paddingLeft) * 2 || 0;
-  // a clone of the track, out of the flow, says how wide each page is at
-  // the header's current type size
-  let measure = document.getElementById("navMeasure");
-  if (!measure) {
-    measure = nav.cloneNode(true);
-    measure.id = "navMeasure";
-    measure.style.cssText = "";
-    measure.setAttribute("aria-hidden", "true");
-    measure.style.cssText =
-      "position:absolute;visibility:hidden;pointer-events:none;left:-9999px;height:auto;width:max-content";
-    document.body.appendChild(measure);
-  }
-  measure.querySelectorAll("button[data-view]").forEach((b) => {
-    b.style.display = "";
+  // Ensure every button's dataset.full is memorized
+  buttons.forEach((b) => {
     const span = b.querySelector("span");
-    if (span) span.textContent = span.dataset.full || span.textContent.trim();
+    if (span && !span.dataset.full) span.dataset.full = span.textContent.trim();
   });
-  const widths = [...measure.querySelectorAll("button[data-view]")].map(
-    (b) => b.getBoundingClientRect().width,
-  );
-  // the header's own padding and gaps are the same with the track in the
-  // flow or out of it; the icons beside the slot are what the track must
-  // leave room for
+
+  // On standard desktop and tablet displays (>= 640px or unmeasured), keep all navigation buttons
+  // cleanly visible with their icons and full labels
+  const viewWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  if (viewWidth >= 640 || viewWidth === 0) {
+    buttons.forEach((b) => {
+      b.style.display = "";
+      const span = b.querySelector("span");
+      if (span && span.dataset.full) span.textContent = span.dataset.full;
+    });
+    nav.classList.remove("tight");
+    return;
+  }
+
+  const gap = parseFloat(getComputedStyle(nav).columnGap) || 4;
+  const pad = parseFloat(getComputedStyle(nav).paddingLeft) * 2 || 4;
+  const widths = buttons.map((b) => b.getBoundingClientRect().width || 60);
+
   const topStyle = getComputedStyle(top);
   const inner =
     top.clientWidth -
@@ -411,10 +409,17 @@ function fitNavTrack() {
     parseFloat(topStyle.paddingRight);
   const gaps =
     (top.children.length - 1) * (parseFloat(topStyle.columnGap) || 0);
+
+  // Measure content width of non-slot elements rather than their expanded 1fr grid columns
   const others = [...top.children]
     .filter((el) => el !== slot && el !== nav && el.offsetParent !== null)
-    .reduce((sum, el) => sum + el.getBoundingClientRect().width, 0);
+    .reduce((sum, el) => {
+      let contentW = 0;
+      for (const child of el.children) contentW += child.getBoundingClientRect().width;
+      return sum + Math.max(contentW, 120);
+    }, 0);
   const free = Math.max(0, inner - others - gaps);
+
   let open = buttons.findIndex((b) => b.classList.contains("on"));
   if (open < 0) open = 0;
   const pick = (r) => {
@@ -440,8 +445,7 @@ function fitNavTrack() {
   nav.classList.toggle("tight", pick(best.to - best.from).wid > free);
   buttons.forEach((b) => {
     const span = b.querySelector("span");
-    if (span && !span.dataset.full) span.dataset.full = span.textContent.trim();
-    if (span)
+    if (span && span.dataset.full)
       span.textContent = nav.classList.contains("tight")
         ? span.dataset.full.slice(0, 2)
         : span.dataset.full;
@@ -509,6 +513,12 @@ async function refreshDashboard(manual) {
   refreshing = true;
   const refreshBtn = document.getElementById("refreshBtn");
   if (manual && refreshBtn) refreshBtn.classList.add("busy");
+  if (manual && lastGoodSessions.length === 0) {
+    const container = document.getElementById("sessionsContainer");
+    if (container && !container.querySelector(".skeleton-card")) {
+      container.innerHTML = renderSkeletonCard(5);
+    }
+  }
   const seq = ++renderSeq;
   try {
     const resp = await fetch("/api/dashboard", { cache: "no-store" });
@@ -774,6 +784,21 @@ function renderAgents(agents) {
     .join("");
 }
 
+// Shimmer skeleton loading placeholder matching user specifications
+function renderSkeletonCard(bars = 5) {
+  const widths = ["100%", "85%", "92%", "76%", "60%", "80%"];
+  const rows = [];
+  for (let i = 0; i < bars; i++) {
+    const w = widths[i % widths.length];
+    rows.push(`<div class="skeleton-row"><div class="skeleton-bar" style="width: ${w};"></div></div>`);
+  }
+  return `
+    <div class="skeleton-card" aria-busy="true" aria-label="正在加载内容…">
+      ${rows.join("")}
+    </div>
+  `;
+}
+
 // The sessions tree, grouped by workspace.
 //   mode 'data'    a snapshot with sessions;
 //   mode 'pending' a zero snapshot that has not held long enough to trust;
@@ -788,14 +813,9 @@ function renderSessions(sessions, mode = "data") {
   const dedupedSessions = dedupeSessions(sessions || []);
 
   if (dedupedSessions.length === 0) {
-    if (mode === "pending") {
-      container.innerHTML = `
-        <div class="empty-state">
-          <b>正在读取会话记录…</b>
-          <span class="why">第一次探测还在扫描本机的会话数据，结果很快就会补上。</span>
-        </div>
-      `;
-      if (badge) badge.textContent = "正在读取…";
+    if (mode === "pending" || mode === "loading") {
+      container.innerHTML = renderSkeletonCard(5);
+      if (badge) badge.textContent = "正在加载…";
       return;
     }
     container.innerHTML = `
@@ -1185,11 +1205,12 @@ function renderUsageAnalytics(usage, sessions, stats) {
       const ct = Number(s.completion_tokens) || 0;
       const tt = Number(s.total_tokens) || pt + ct;
       const cr = Number(s.cache_read_tokens) || 0;
+      const reqCount = Number(s.request_count || s.calls) || 1;
       inputTokens += pt;
       outputTokens += ct;
       totalTokens += tt;
       cacheRead += cr;
-      calls++;
+      calls += reqCount;
 
       let m = (s.model || s.model_name || "").trim() || "default";
       if (!modelMap[m])
@@ -1200,7 +1221,7 @@ function renderUsageAnalytics(usage, sessions, stats) {
           prompt_tokens: 0,
           cache_read_tokens: 0,
         };
-      modelMap[m].calls++;
+      modelMap[m].calls += reqCount;
       modelMap[m].total_tokens += tt;
       modelMap[m].prompt_tokens += pt;
       modelMap[m].cache_read_tokens += cr;
@@ -1215,7 +1236,7 @@ function renderUsageAnalytics(usage, sessions, stats) {
           prompt_tokens: 0,
           cache_read_tokens: 0,
         };
-      agentMap[a].calls++;
+      agentMap[a].calls += reqCount;
       agentMap[a].total_tokens += tt;
       agentMap[a].prompt_tokens += pt;
       agentMap[a].cache_read_tokens += cr;
@@ -1285,15 +1306,26 @@ function renderUsageAnalytics(usage, sessions, stats) {
   if (cacheSubEl)
     cacheSubEl.title = `${fmtN(cacheRead)} 输入 Token 由上游缓存直接返回，未重新计算`;
   if (callsEl) callsEl.textContent = calls.toLocaleString();
-  if (callsSubEl) callsSubEl.textContent = "跨多智能体累计会话";
+  const sessionsCount = Number((usage && usage.sessions) ?? (sessions ? sessions.length : 0));
+  if (callsSubEl) {
+    if (sessionsCount > 0 && calls > sessionsCount) {
+      callsSubEl.textContent = `${sessionsCount.toLocaleString()} 个会话 · ${calls.toLocaleString()} 次请求`;
+    } else {
+      callsSubEl.textContent = "跨多智能体累计请求";
+    }
+  }
 
   // Render the models breakdown
   const modelsContainer = document.getElementById("usageModels");
   const modelsCountEl = document.getElementById("usageModelsCount");
   if (modelsCountEl) modelsCountEl.textContent = `${modelsList.length} 种模型`;
 
+  const isUsageLoading = !dashboardData || (!dashboardData.usage && (!sessions || sessions.length === 0));
+
   if (modelsContainer) {
-    if (modelsList.length === 0) {
+    if (isUsageLoading) {
+      modelsContainer.innerHTML = renderSkeletonCard(4);
+    } else if (modelsList.length === 0) {
       modelsContainer.innerHTML = `
         <div class="empty-state">
           <b>暂无模型调用数据</b>
@@ -1336,7 +1368,9 @@ function renderUsageAnalytics(usage, sessions, stats) {
     agentsCountEl.textContent = `${agentsList.length} 个智能体`;
 
   if (agentsContainer) {
-    if (agentsList.length === 0) {
+    if (isUsageLoading) {
+      agentsContainer.innerHTML = renderSkeletonCard(4);
+    } else if (agentsList.length === 0) {
       agentsContainer.innerHTML = `
         <div class="empty-state">
           <b>暂无智能体调用数据</b>

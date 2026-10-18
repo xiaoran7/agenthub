@@ -311,7 +311,10 @@ fn scan_claude_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
 
         // Fallback: decode directory name if cwd not found in sample lines
         let final_path = extracted_cwd.unwrap_or_else(|| {
-            if dir_name.len() >= 3 && dir_name.as_bytes()[1] == b'-' && dir_name.as_bytes()[2] == b'-' {
+            if dir_name.len() >= 3
+                && dir_name.as_bytes()[1] == b'-'
+                && dir_name.as_bytes()[2] == b'-'
+            {
                 let drive = dir_name.chars().next().unwrap().to_ascii_uppercase();
                 let rest = &dir_name[3..];
                 format!("{}:\\{}", drive, rest.replace('-', "\\"))
@@ -320,7 +323,13 @@ fn scan_claude_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
             }
         });
 
-        add_workspace_record(map, &final_path, total_sessions, latest_mtime, "Claude Code");
+        add_workspace_record(
+            map,
+            &final_path,
+            total_sessions,
+            latest_mtime,
+            "Claude Code",
+        );
     }
 }
 
@@ -492,7 +501,8 @@ fn scan_grok_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
 
             if let Ok(content) = fs::read_to_string(&summary_path) {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(cwd) = val.pointer("/info/cwd").and_then(serde_json::Value::as_str) {
+                    if let Some(cwd) = val.pointer("/info/cwd").and_then(serde_json::Value::as_str)
+                    {
                         if !cwd.trim().is_empty() {
                             add_workspace_record(map, cwd, 1, mtime, "Grok Build");
                         }

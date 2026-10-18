@@ -478,7 +478,7 @@ enum SyncCommand {
 fn main() -> Result<()> {
     #[cfg(target_os = "windows")]
     unsafe {
-        use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+        use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
         // If launched from an existing terminal/command prompt, attach to parent console so CLI output works.
         // If double-clicked in Explorer, AttachConsole returns false, and with windows_subsystem = "windows"
         // no console window is created at all.
@@ -1243,14 +1243,13 @@ fn normalize(
         InputFormat::CodexHook => Ok(vec![codex::normalize_hook(input, meta, redactor)?]),
         InputFormat::AntigravityBrain => {
             let steps = agenthub_runner::adapters::antigravity::parse_transcript_lines(input)?;
-            let meta_session =
-                agenthub_runner::adapters::antigravity::AntigravitySessionMetadata {
-                    session_id: "preview-session".into(),
-                    cwd: ".".into(),
-                    is_process_alive: true,
-                    started_at: None,
-                    last_activity_at: None,
-                };
+            let meta_session = agenthub_runner::adapters::antigravity::AntigravitySessionMetadata {
+                session_id: "preview-session".into(),
+                cwd: ".".into(),
+                is_process_alive: true,
+                started_at: None,
+                last_activity_at: None,
+            };
             Ok(
                 agenthub_runner::adapters::antigravity::normalize_transcript_steps(
                     &steps,
@@ -1343,7 +1342,7 @@ fn hide_windows_console() {
     #[cfg(target_os = "windows")]
     unsafe {
         use windows_sys::Win32::System::Console::GetConsoleWindow;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
 
         let hwnd = GetConsoleWindow();
         if hwnd != 0 as _ {
@@ -1351,5 +1350,3 @@ fn hide_windows_console() {
         }
     }
 }
-
-

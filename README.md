@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.4.93-0284c7.svg?style=flat-square" alt="Version" /></a>
+  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.4.94-0284c7.svg?style=flat-square" alt="Version" /></a>
   <a href="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml"><img src="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI Status" /></a>
   <a href="https://github.com/xiaoran7/agenthub"><img src="https://img.shields.io/badge/tests-226%20passed-10b981.svg?style=flat-square" alt="Tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b.svg?style=flat-square" alt="License" /></a>
@@ -142,6 +142,7 @@ AgentHub adheres strictly to open-source governance and licenses:
 | Upstream Project | License | Module / Role in AgentHub |
 | :--- | :--- | :--- |
 | [magpie](https://github.com/yetone/magpie) | MIT License, Copyright (c) 2026 yetone | Embedded Web Console design system and layout primitives (`crates/runner/resources/dashboard.html` / `dashboard.css` / `dashboard.js`) |
+| [stablyai/orca](https://github.com/stablyai/orca) | Apache 2.0 / MIT | Mobile Companion UI philosophy, terminal accessory row, and fleet mission-control layout (`apps/android`) |
 
 > **Note**: Foundation CSS tokens (light/dark themes, segmented top bar, responsive grid, dialogs, and stat rows) are ported from magpie's `internal/gui/assets/app.css`. Upstream copyright and MIT license declarations remain intact in the source headers.
 

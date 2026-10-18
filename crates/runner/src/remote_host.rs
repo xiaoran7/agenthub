@@ -1035,7 +1035,7 @@ impl NativeTransport for MultiProviderTransport {
             "thread/list" => {
                 let is_first_page = params
                     .get("cursor")
-                    .map_or(true, |c| c.is_null() || c.as_str().map_or(true, |s| s.is_empty()));
+                    .is_none_or(|c| c.is_null() || c.as_str().is_none_or(|s| s.is_empty()));
                 let mut response = if let Some(ref mut codex) = self.codex {
                     codex
                         .request("thread/list", params)
@@ -1093,7 +1093,8 @@ impl NativeTransport for MultiProviderTransport {
                             }));
                         }
                     }
-                    if let Ok(claude_entries) = crate::collectors::collect_claude_sessions_for_remote()
+                    if let Ok(claude_entries) =
+                        crate::collectors::collect_claude_sessions_for_remote()
                         && let Some(items) = response["data"].as_array_mut()
                     {
                         for entry in claude_entries {
@@ -1111,6 +1112,8 @@ impl NativeTransport for MultiProviderTransport {
                                 "completion_tokens": entry.completion_tokens,
                                 "total_tokens": entry.prompt_tokens + entry.completion_tokens,
                                 "cache_read_tokens": entry.cache_read_tokens,
+                                "request_count": entry.request_count,
+                                "calls": entry.request_count.max(1),
                                 "last_activity_at_ms": entry.last_activity_at_ms,
                                 "status": { "type": "idle" }
                             }));
@@ -1157,7 +1160,8 @@ impl NativeTransport for MultiProviderTransport {
                 }
                 if let Some(items) = response["data"].as_array_mut() {
                     items.sort_by_key(|item| {
-                        let ms = item.get("last_activity_at_ms")
+                        let ms = item
+                            .get("last_activity_at_ms")
                             .and_then(Value::as_i64)
                             .or_else(|| item.get("updatedAt").and_then(Value::as_i64))
                             .or_else(|| item.get("time_updated").and_then(Value::as_i64))
@@ -2078,7 +2082,12 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     /// Actual provider model/list response, with no invented availability or fallback catalog.
     pub fn models(&mut self) -> Result<Value, NativeError> {
         if let Ok(resp) = self.transport.request("model/list", json!({"limit": 100})) {
-            if resp.get("data").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false) {
+            if resp
+                .get("data")
+                .and_then(Value::as_array)
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+            {
                 return Ok(resp);
             }
         }
@@ -2136,12 +2145,32 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                             .and_then(|p| p.lines().find(|l| !l.trim().is_empty()))
                     })
                     .map(|name| name.chars().take(160).collect::<String>());
-                let pt = thread.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
-                let ct = thread.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0);
-                let tt = thread.get("total_tokens").and_then(Value::as_u64).unwrap_or(pt + ct);
-                let cr = thread.get("cache_read_tokens").and_then(Value::as_u64).unwrap_or(0);
-                let last_ms = thread.get("last_activity_at_ms").and_then(Value::as_i64).unwrap_or(0);
+                let pt = thread
+                    .get("prompt_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let ct = thread
+                    .get("completion_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let tt = thread
+                    .get("total_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(pt + ct);
+                let cr = thread
+                    .get("cache_read_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let last_ms = thread
+                    .get("last_activity_at_ms")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let model = thread.get("model").cloned().unwrap_or(Value::Null);
+                let req_count = thread
+                    .get("request_count")
+                    .and_then(Value::as_u64)
+                    .or_else(|| thread.get("calls").and_then(Value::as_u64))
+                    .unwrap_or(1);
 
                 candidates.push(json!({
                     "provider_session_id": id,
@@ -2156,6 +2185,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     "completion_tokens": ct,
                     "total_tokens": tt,
                     "cache_read_tokens": cr,
+                    "request_count": req_count,
+                    "calls": req_count,
                     "last_activity_at_ms": last_ms
                 }));
             }

@@ -340,7 +340,8 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
       title: candidate.title ?? shortId.slice(0, 8),
       model: candidate.model ?? disc?.model,
       totalTokens: candidate.total_tokens ?? disc?.total_tokens,
-      lastActivityAtMs: candidate.last_activity_at_ms ?? disc?.last_activity_at_ms,
+      lastActivityAtMs:
+        candidate.last_activity_at_ms ?? disc?.last_activity_at_ms,
       provider,
       candidate: { resumable: candidate.resumable ?? true },
     });

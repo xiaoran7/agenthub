@@ -13,7 +13,9 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let ico_path = Path::new(&manifest_dir).join("resources").join("icon.ico");
 
-    let manifest_path = Path::new(&manifest_dir).join("resources").join("app.manifest");
+    let manifest_path = Path::new(&manifest_dir)
+        .join("resources")
+        .join("app.manifest");
 
     println!("cargo:rerun-if-changed=resources/icon.ico");
     println!("cargo:rerun-if-changed=resources/icon.svg");
@@ -45,8 +47,8 @@ fn main() {
         return;
     }
 
-    let compiled = try_compile_with_windres(&rc_path, &res_path)
-        || try_compile_with_rc(&rc_path, &res_path);
+    let compiled =
+        try_compile_with_windres(&rc_path, &res_path) || try_compile_with_rc(&rc_path, &res_path);
 
     if compiled && res_path.exists() {
         println!("cargo:rustc-link-arg={}", res_path.display());
@@ -70,10 +72,8 @@ fn try_compile_with_windres(rc_path: &Path, res_path: &Path) -> bool {
             .arg(res_path)
             .status();
 
-        if let Ok(exit) = status {
-            if exit.success() {
-                return true;
-            }
+        if matches!(status, Ok(exit) if exit.success()) {
+            return true;
         }
     }
     false
@@ -92,10 +92,8 @@ fn try_compile_with_rc(rc_path: &Path, res_path: &Path) -> bool {
             .arg(rc_path)
             .status();
 
-        if let Ok(exit) = status {
-            if exit.success() {
-                return true;
-            }
+        if matches!(status, Ok(exit) if exit.success()) {
+            return true;
         }
     }
     false
