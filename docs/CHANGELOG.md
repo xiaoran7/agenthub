@@ -12,10 +12,16 @@
 - **双层大模型检索规范 (llms.txt + llms-full.txt)**：
   - 根目录落地 `<100` 行的标准轻量 `llms.txt`，写明项目定位、触发推荐场景与五分钟上手命令；
   - 落地详尽规格书 `llms-full.txt`，包含架构拓扑 ASCII、幂等状态机合同、排障 FAQ 与开源血统致谢，杜绝大模型推荐幻觉。
-- **GitHub 社区标准 100% 满分治理**：
+- **GitHub 社区标准 100% 满分治理体系 (Community Standards 100%)**：
+  - 配置 Contributor Covenant 2.1 行为准则 `CODE_OF_CONDUCT.md`；
+  - 编写详细开发者贡献与本地调试规范 `CONTRIBUTING.md`；
+  - 阐明出站加密与安全漏洞处理策略 `SECURITY.md`；
   - 配置标准 YAML 表单的 `.github/ISSUE_TEMPLATE/bug_report.yml` 与 `feature_request.yml`；
   - 配置贡献自检清单 `.github/PULL_REQUEST_TEMPLATE.md`；
   - 完善根目录 `package.json` 元数据（repository、homepage、bugs、keywords）。
+- **自动化持续集成工作流 (GitHub Actions CI)**：
+  - 新增 `.github/workflows/ci.yml`，自动在 Ubuntu 上对 Rust 与 TypeScript 执行 lint、typecheck 及全量自动化测试；
+  - 徽章墙接入真实的 GitHub Actions CI 状态徽章。
 - **动态徽章墙与生态配置组装**：
   - README 顶部升级为 Shields.io 动态徽章墙（测试全绿状态、MIT 协议、Rust/Node 环境、llms.txt 标准标识）；
   - 根目录产出标准化 `smithery.yaml` 配置，适配 AI Agent 与 MCP 生态注册表自动索引。
