@@ -26,4 +26,4 @@
 * Mobile companion UI & accessory row philosophy from [stablyai/orca](https://github.com/stablyai/orca) (Apache 2.0 / MIT).
 
 ---
-**Full Changelog**: https://github.com/xiaoran7/agenthub/compare/b60364a...a455951
+**Full Changelog**: https://github.com/xiaoran7/agenthub/compare/b60364a...af18586
