@@ -223,6 +223,25 @@ fn handle_connection(
         return Ok(());
     }
 
+    if path == "/dashboard.js" {
+        // the script is versioned the same way as the sheet: the page and the
+        // code it runs are always from one build
+        let cache = match query.get("v") {
+            Some(v) if v == ASSETS_VERSION => "public, max-age=31536000, immutable",
+            _ => "no-cache",
+        };
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "text/javascript; charset=utf-8",
+            DASHBOARD_JS.as_bytes(),
+            false,
+            Some(cache),
+        )?;
+        return Ok(());
+    }
+
     // REST API endpoints
     if path.starts_with("/api/") {
         let req = ApiRequest {
@@ -1302,8 +1321,12 @@ const ICON_SVG: &str = include_str!("../resources/icon.svg");
 /// 嵌入式自包含 CDS (Claude Design System) 单页前端
 const INDEX_HTML: &str = include_str!("../resources/dashboard.html");
 const DASHBOARD_CSS: &str = include_str!("../resources/dashboard.css");
+/// the console's behaviour, kept in its own file so `node --check` and any
+/// formatter can read it without parsing the page
+const DASHBOARD_JS: &str = include_str!("../resources/dashboard.js");
 
-/// Bumped with every release; the page links the sheet under this name.
+/// Bumped with every release; the page links the sheet and script under this
+/// name.
 const ASSETS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The console's layout tokens, one place for both sides of the wire: the page
@@ -1414,6 +1437,7 @@ mod tests {
         assert!(html.contains(r#""webPort":4321"#));
         assert!(!html.contains("__ASSETS_VERSION__"));
         assert!(html.contains(&format!("/dashboard.css?v={ASSETS_VERSION}")));
+        assert!(html.contains(&format!("/dashboard.js?v={ASSETS_VERSION}")));
         // a real JSON object, not a fragment the page has to repair
         let json = app_layout_json(4321);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("layout json");
@@ -1435,6 +1459,18 @@ mod tests {
     fn dashboard_css_is_served_from_the_embedded_sheet() {
         assert!(DASHBOARD_CSS.contains("--fs-body"));
         assert!(!DASHBOARD_CSS.contains("</style>"));
+    }
+
+    #[test]
+    fn dashboard_js_is_its_own_embedded_file() {
+        // the page loads it, never inlines it: a `</script>` in the source
+        // would end the tag early if the two were ever put back together
+        assert!(!INDEX_HTML.contains("function renderSessions"));
+        assert!(DASHBOARD_JS.contains("function renderSessions"));
+        assert!(!DASHBOARD_JS.contains("</script>"));
+        // one pricing authority: the daemon. The page must not carry rates.
+        assert!(!DASHBOARD_JS.contains("per 1M tokens"));
+        assert!(!DASHBOARD_JS.contains("fmtCostFromTokens"));
     }
 
     #[test]

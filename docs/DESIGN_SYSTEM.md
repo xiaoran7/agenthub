@@ -60,7 +60,7 @@ AgentHub 的 Workspace-First（工作区优先）会话组织、多 Agent 远程
 
 ## 6. 本机 Runner 内嵌控制台（独立表面）
 
-`crates/runner/resources/dashboard.html`（`agenthub-runner web`，默认 `http://127.0.0.1:4200`）是单文件内嵌控制台，**不套用第 2 节的跨端令牌**，而是直接采用上游 magpie 的设计系统（见 [README 开源引用与上游溯源](../README.md#开源引用与上游溯源)）：
+`crates/runner/resources/dashboard.html`（结构）、`dashboard.css`（样式）与 `dashboard.js`（行为）（`agenthub-runner web`，默认 `http://127.0.0.1:4200`）构成内嵌控制台，三者都由二进制内嵌、无构建步骤，**不套用第 2 节的跨端令牌**，而是直接采用上游 magpie 的设计系统（见 [README 开源引用与上游溯源](../README.md#开源引用与上游溯源)）：
 
 - 令牌、46px 顶栏、带分组标签的固定侧栏、自滚动视图、`.list` / `.row` / `.row.stat` 行模型、`.stats` / `.kpi` 指标卡与 `.editor` 表单网格均来自 magpie 的 `internal/gui/assets/app.css`，上游归属与维护边界归该仓库；
 - 该界面只服务本机单窗口（托盘窗口 940×720），不承担跨端一致性；跨端 Web 与 Android 仍以第 2 节为准；

@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.4.92] - 2026-10-18
+
+### 拆出控制台脚本，费用只认守护进程一个口径 (Extract the Console Script, One Pricing Authority)
+
+两处解耦，动机来自对 `dashboard.html` 的一次结构性复查：1700 行内联脚本没有任何 lint 或语法检查覆盖，同一笔钱又被三套费率表各算一遍。
+
+- **脚本独立成文件 (The Script Leaves the Page)**：
+  - `crates/runner/resources/dashboard.js` 承接原 `dashboard.html` 里的全部行为代码，经 `include_str!` 编入二进制，以 `/dashboard.js?v=<版本>` 提供，缓存策略与样式表一致——版本号等于 `CARGO_PKG_VERSION` 才回 `immutable`，否则 `no-cache`，保证页面与它运行的代码永远出自同一次构建。
+  - 页面只剩结构与一段内联的布局令牌引导脚本；`onclick="..."` 的内联处理器依赖全局函数，脚本以 `defer` 加载不改变语义。
+  - 收益：`node --check`、Prettier 等工具可以直接读这个文件，不必从 HTML 里抠脚本；多 agent 并行时不再挤在同一个 2000 行 HTML 里冲突。
+  - 新增测试 `dashboard_js_is_its_own_embedded_file`：确认脚本不在页面里、不含 `</script>`（防止哪天被塞回去时提前闭合标签），并确认费率启发式没有被重新引入。
+- **费用只由守护进程计算 (One Place Turns Tokens into Money)**：
+  - 删除页面里的两处本地费率表（`fmtCostFromTokens` 与 `renderUsageAnalytics` 兜底分支里的 `calcCost`）。它们的单价与 Rust 端 `calc_cost` 本来就不一致：Rust 按输入 / 输出 / 缓存读取分别计价，JS 用的是混合单价，且其中一份漏了 `mini` 分支。此前靠"后端有值优先用后端"压住，但只要某个模型不在 `usage.models` 里，页面就会自己算出一个不同口径的数字。
+  - 现在页面只读 `usage.models[].estimated_cost_usd` 与 `usage.cost_usd`。守护进程未定价的模型在"模型"与"用量"两个视图都显示 `—`，兜底聚合路径的 KPI 同样显示 `—`——**未定价不等于免费**，宁可留空也不编造金额。
+  - 顺带修正：KPI 卡片此前把空字符串与 `$0.00` 混在一起渲染成 `≈$0.00`，现在区分"没有价格"与"价格为零"。
+- **验证 (Verification)**：
+  - `cargo test --workspace`：168 单元 + 26 / 17 / 7 / 5 / 3 集成全部通过；`cargo fmt --check` 与 clippy 的报错全部落在本次未触碰的既有文件（`build.rs`、`collectors/*`、`remote_host.rs`、`tray.rs`、`conversation.rs`、`model_catalog.rs`、`main.rs`），本次改动的 `web_server.rs` 无新增告警。
+  - 真实 2.4.92 debug daemon（独立数据库与工作区，4313 端口）+ headless Edge（820×600，CDP）实测：`GET /` 返回 `/dashboard.js?v=2.4.92` 与 `/dashboard.css?v=2.4.92`，`/dashboard.js` 返回 200 `text/javascript`，版本匹配时 `Cache-Control: immutable`、不匹配时 `no-cache`；脚本加载后 `renderUsageAnalytics` 为函数，六个视图逐一切换正常，控制台零异常。
+  - 费用口径用合成快照验证：一个已定价模型显示 `≈$10.50`、一个未定价模型显示 `—`、KPI 显示 `≈$12.34`；强制走兜底聚合路径时 KPI 与模型行均为 `—`，不再出现本地估算。
+  - 交付产物未重新打包（本版只改控制台资源与文档），`Deliverables/` 保持 2.4.91。
+
 ## [2.4.91] - 2026-10-18
 
 ### 彻底对齐 magpie 极简桌面美学，剔除冗余图标与大白框 (Align with magpie Minimalist Desktop Aesthetics: Eliminate Redundant Icons, Emojis & Stat Card Banner)
