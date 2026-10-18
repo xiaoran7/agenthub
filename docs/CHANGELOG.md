@@ -24,6 +24,17 @@
 - **Android 移动端控制舱架构解耦 (Android Architecture Decoupling)**：
   - 将伴侣控制舱组件抽取独立为 `OrcaComponents.kt`，精简 `AgentPlatformApp.kt` 与 `RemoteScreen.kt`；
   - 升级 Android 构建版本号至 versionCode 95、versionName 2.4.95。
+- **Android 端按 Orca 移动端 1:1 重写 (Full Orca Mobile Rewrite & AgentHub Backend Wiring)**：
+  - 按用户要求“照抄 Orca 前端、后端继续用 AgentHub”，整体重做 `apps/android` 的信息架构与视觉：
+    - **主题令牌**（`Theme.kt`）：直接移植 Orca `mobile/src/theme/mobile-theme.ts` 的真实数值 —— 底色 `#111111`、面板 `#1a1a1a`、抬升面 `#242424`、边框 `#2a2a2a`、文字 `#e0e0e0/#a1a1a1/#8c8c8c`、蓝色 `#3b82f6`、绿色 `#22c55e`、琥珀 `#f59e0b`、红色 `#ef4444`；间距 4/8/12/16/24，圆角 row 6 / card 14，字号 title 18 / body 14 / meta 12；
+    - **共享原语**（新增 `OrcaComponents.kt`）：Orca 式 Logo、状态点、大写小节标题、面板卡片、药丸 chip、亮色主按钮、46dp 圆角图标砖、主机状态环、全套矢量图标；
+    - **三级栈式导航**（`AgentPlatformApp.kt` 重写）：从原来的五 Tab 底栏改为 Orca 的 `Home → Host → Session` 栈式路由，带左右滑入转场与系统返回键接管；
+    - **Home**：品牌栏 + “欢迎回来” + 在线主机/活跃智能体/待审批三宫格统计 + 主机列表（状态环、工作区数、运行中数量）+ “接入另一台主机” + 最近会话 + 底部设置入口；未配置时展示 Orca 式三步接入引导；
+    - **Host**：标题栏（返回、在线状态、刷新、设置）+ 状态 chip 行 + 活动会话列表（执行状态、provider 会话号、离线标记）+ 工作区列表（一键发起任务）+ 发现的已有会话（一键接管）；
+    - **Session**（`RemoteScreen.kt` 重写）：Orca 会话头（返回、实时状态、停止按钮）→ 审批/提问横幅（水平滑卡，批准/拒绝、选项作答）→ 实时转录流（思考折叠、工具命令行、Markdown 代码块）→ 终端配件键行（Esc / Tab / Ctrl+C + 继续 / git status / 运行测试 / git diff 宏）→ 底部输入胶囊；
+  - **后端完全沿用 AgentHub 自有 `/v3/remote` 数据面**：`/sessions` 快照、`/events` 事件游标、`/sessions/:runner/:hub` 命令回执、`/runners/:runner/commands` 下发；支持 `connect(create/resume)`、`send_prompt`、`resolve_approval`、`answer_question`、`interrupt` 全部动作，未接触或依赖任何 Orca 服务端；
+  - 新增 `tests` 全部通过（`testDebugUnitTest`），`assembleDebug` 编译通过。
+
 - **产物重新打包归档 (Repackaged Deliverables)**：
   - 产出 `AgentHub-Runner-v2.4.95-windows-x64.zip`（含 release 构建的 `agenthub-runner.exe` 与一键接入指南）；
   - 产出 `AgentHub-v2.4.95-android-debug.apk`（versionCode 95，versionName 2.4.95）；
