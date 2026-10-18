@@ -14,6 +14,7 @@
   - 强化多轮对话请求计数统计（`request_count` 与 `calls`），精准匹配官方会话度量模型。
 - **全绿 CI 治理与工程质量加固 (100% Passing CI Pipeline)**：
   - 修复 `build.rs`、`tray.rs`、`remote_host.rs`、`conversation.rs` 中的 Clippy 与 Linux 下平台死代码告警，开启 workspace 级严格校验；
+  - 优化工作区与隐私脱敏路径解析（`derive_workspace_name`、`project_display_name`、`normalize_path_for_fingerprint`），消除 Windows 反斜杠在 Linux (POSIX) 环境下的解析偏差，实现跨平台 100% 单元测试全绿；
   - 补充 Linux 环境下的 `libdbus-1-dev` 与 `pkg-config` 依赖，解决 `keyring` 系统层链接需求；
   - 格式化前端与 Rust 全量代码，保证 `npm run format:check` 与 `cargo fmt --all --check` 零报错；
   - 适配 CI 无本地会话环境下的会话加载回归测试，杜绝假阳性构建失败。

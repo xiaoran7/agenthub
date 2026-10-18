@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -73,14 +71,15 @@ fn normalize_path_for_fingerprint(raw_cwd: &str) -> String {
     if normalized.starts_with("//?/") {
         normalized = normalized[4..].to_string();
     }
-    #[cfg(windows)]
-    {
-        normalized.to_lowercase()
+    if normalized.len() >= 2 && normalized.as_bytes()[1] == b':' {
+        normalized = normalized.to_lowercase();
+    } else {
+        #[cfg(windows)]
+        {
+            normalized = normalized.to_lowercase();
+        }
     }
-    #[cfg(not(windows))]
-    {
-        normalized
-    }
+    normalized
 }
 
 pub fn project_display_name(raw_cwd: &str) -> String {
@@ -94,17 +93,10 @@ pub fn project_display_name(raw_cwd: &str) -> String {
         return "home".into();
     }
 
-    Path::new(trimmed)
-        .file_name()
-        .and_then(|part| part.to_str())
-        .filter(|part| !part.is_empty())
+    trimmed
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
         .map(str::to_owned)
-        .or_else(|| {
-            trimmed
-                .rsplit(['/', '\\'])
-                .find(|part| !part.is_empty())
-                .map(str::to_owned)
-        })
         .unwrap_or_else(|| "unknown-project".into())
 }
 

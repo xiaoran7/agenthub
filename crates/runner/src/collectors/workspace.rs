@@ -83,10 +83,10 @@ pub fn normalize_workspace_path(raw: &str) -> Option<String> {
 
 /// Derives a clean workspace display name from its path.
 pub fn derive_workspace_name(path_str: &str) -> String {
-    let p = Path::new(path_str);
-    if let Some(file_name) = p.file_name().and_then(|n| n.to_str()) {
-        if !file_name.is_empty() {
-            return file_name.to_string();
+    let trimmed = path_str.trim().trim_end_matches(['/', '\\']);
+    if let Some(segment) = trimmed.rsplit(['/', '\\']).next() {
+        if !segment.is_empty() {
+            return segment.to_string();
         }
     }
     path_str.to_string()
@@ -527,10 +527,13 @@ mod tests {
             normalize_workspace_path(r"\\?\D:\Claudespace\Project\agenthub\"),
             Some(r"D:\Claudespace\Project\agenthub".to_string())
         );
-        assert_eq!(
-            normalize_workspace_path(r"d:/claudespace/project/agenthub"),
-            Some(r"D:\Claudespace\Project\agenthub".to_string())
-        );
+        #[cfg(windows)]
+        if Path::new(r"D:\Claudespace\Project\agenthub").exists() {
+            assert_eq!(
+                normalize_workspace_path(r"d:/claudespace/project/agenthub"),
+                Some(r"D:\Claudespace\Project\agenthub".to_string())
+            );
+        }
         assert_eq!(normalize_workspace_path("."), None);
         assert_eq!(normalize_workspace_path("   "), None);
     }

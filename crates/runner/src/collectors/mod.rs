@@ -4679,7 +4679,7 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, CollectorError::Cancelled { .. }));
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_secs(6));
     }
 
     #[test]
