@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.4.91] - 2026-10-18
+
+### 彻底对齐 magpie 极简桌面美学，剔除冗余图标与大白框 (Align with magpie Minimalist Desktop Aesthetics: Eliminate Redundant Icons, Emojis & Stat Card Banner)
+
+用户反馈「能不能模仿一下magpie 把这个图标删掉，然后emoji都删掉 然后不要有这个大白框，模仿magpie」。排查与比对 `Project/magpie` 官方设计规范后确认：在桌面宿主环境下（尤其是 Windows 原生标题栏已自带应用图标与标题），界面的过度装饰（内层顶栏重复 Logo、导航按钮图标、会话列表前缀彩标、顶层统计大卡片）会严重侵占垂直屏效并造成视觉杂乱。本版本彻底贯彻极简专注原则，全方位对齐 magpie 极简质感：
+
+- **移除顶栏左侧重复图标与应用名 (Eliminate Windows Header Brand Redundancy)**：
+  - 参考 `magpie` 核心规范（`body.window:not(.mac):not(.linux):not(.web) .brand { display: none; }`），在 Windows 桌面宿主窗口下，系统原生标题栏已完整呈现应用名与图标，页面内部顶栏再次堆砌 AgentHub Logo 与文字属于双重冗余。
+  - 从顶栏 HTML 结构中彻底剥离 `#brandTop`，侧边栏折叠时顶栏左侧仅保留极简优雅的展开按钮 `#sideToggle`，展开时仅保留平滑切换的面包屑导航，彻底摆脱双层标题视觉冗余。
+- **纯文字极简分段导航 (Iconless Text Navigation Tabs)**：
+  - 移除主导航轨（`#nav`）中所有按钮的前置 SVG 图标（会话、智能体、用量、模型、工作区、网关），全面对齐 magpie 纯文本导航栏（`Agent 供应商 路由 网关 用量 插件`）的排版质感。
+  - 配合既有平滑滑块（`#segThumb` 与 `.rail-hl`），让导航重心回归功能文字本身，彻底消除小尺寸下图标与文字拥挤、像 emoji 的视觉杂乱感。
+- **会话列表消除彩色图标干扰 (Eliminate Colorful Agent Icons in Session Rows)**：
+  - 会话行渲染（`renderSessions`）全面剔除前置的多彩星号与方形提供商标志（`getAgentIcon`），会话标题左对齐直接起排。
+  - 视觉层次完全参照 magpie 的 `sm-sess` 模式：主视觉呈现用户会话提示词（`who > name`），副信息在右侧呈现模型名称、相对时间与 Token 用量，信息聚焦且极为清爽干净。
+- **消灭大白框横幅，直达搜索与内容 (Remove Large Stat Card Banner & Elevate Content)**：
+  - 隐藏会话视图（`#view-sessions`）顶部的四宫格数据卡片（`.led-strip`，历史会话、云端 Web 绑定、上游模型、工作区）。
+  - 会话页面顶部即为搜索框与会话数标签（`.tools`，去除原本多余的顶部 margin），用户打开窗口即刻聚焦会话检索与开发上下文，再无多余的 120px+ 高度大白框遮挡视线。
+- **全量回归验证与双端交付 (Verification & Deliverables)**：
+  - `cargo test -p agenthub-runner` 全量 218 项测试套件 100% 全绿通过；
+  - 交付产物按工程铁律归档更新至 `Deliverables/AgentHub/`（`agenthub-runner.exe`、`AgentHub-Runner-v2.4.91-windows-x64.zip`、`AgentHub-v2.4.91-android-debug.apk` 及 SHA-256 清单），历史 2.4.90 旧产物彻底清理；
+  - Android 构建完成立即执行 `./gradlew.bat --stop` 释放 Daemon 与编译内存。
+
 ## [2.4.90] - 2026-10-18
 
 ### 解开顶栏重叠与侧边栏失效，重塑三栏网格顶栏 (Unblock Sidebar Toggle & Eliminate Top Bar Bloat with 3-Zone Header Grid)

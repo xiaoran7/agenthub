@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-runner"
-version = "2.4.90"
+version = "2.4.91"
 dependencies = [
  "aes-gcm",
  "anyhow",

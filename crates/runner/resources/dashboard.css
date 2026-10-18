@@ -621,7 +621,7 @@
         .led-strip .blk.cta:hover::after { transform: translateX(2px); opacity: 1; }
 
         /* ---- the bar above a list: search, count, actions ----------------------- */
-        .tools { margin: 16px 0 10px; gap: 8px; min-height: 34px; }
+        .tools { margin: 0 0 10px; gap: 8px; min-height: 34px; }
         .tools .inp { width: 300px; height: 34px; border-radius: var(--r-s); font-size: var(--fs-body); padding: 0 12px; }
         .tools .tag { background: var(--card); border: var(--rule); height: 26px; font-size: var(--fs-note); padding: 0 10px; }
         .tools > .label { font-size: var(--fs-note); font-weight: 600; color: var(--fg-2); }
