@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.4.89] - 2026-10-18
+
+### 全面上动画、把生硬的地方都揉软 (A Motion Pass Over the Whole Console)
+
+用户的原话是「全面引入动画感和交互感，现在太生硬了，然后提升一些高级感」。上一版把配色和排版收拾干净了，但**界面本身还是一跳一跳的**：切页面是瞬间替换，展开分组是 `display:none` 硬切，弹窗是一下子蹦出来，数字换值没有过渡，鼠标划过几乎没有回应。这一版不换布局、不加装饰，只把「动」这件事从头到尾补齐，让每一处状态变化都有来处和去处。
+
+- **先定一套运动语汇 (One Motion Vocabulary)**：照 magpie 的做法，先把曲线和时长收成令牌再动手，避免每个地方各写各的缓动。三条曲线——`--ease-out: cubic-bezier(.22,1,.36,1)` 负责进场与淡出，`--ease-spring: cubic-bezier(.32,.72,0,1)` 负责位移与回弹（magpie 的 `.agent-fold` 用的就是这类前快后缓的弹簧感），`--ease-tap: cubic-bezier(.4,0,.2,1)` 负责按压；四档时长 `--dur-1` 至 `--dur-4`（120 / 200 / 320 / 480ms）。后文所有动画都从这七个令牌取值，读者看到的是一套统一的节奏，而不是七拼八凑。
+- **切页面像翻页 (The Page Turns)**：用 Chromium 的 View Transition 包住视图切换——`.view-slot` 声明 `view-transition-name: page`，旧页 `.16s` 淡出并轻微上移，新页 `.34s` 淡入并落位。`switchView()` 里 `document.startViewTransition(turn)` 包住原有的 DOM 变更，`finished` 后撤掉 `page-turn` 类。侧边栏重排、静默切换（初始化）不走转场，避免刚打开就闪一下。
+  - **踩到的坑写在这里 (The Trap, Documented)**：一开始想用 `::view-transition-new(root)` 做主题的圆形扩散，实测发现**只要页面上有任何元素带自己的 `view-transition-name`，Chromium 就整块丢弃根伪元素**——给 `<html>` 命名、给 `<body>` 命名都试过，要么吞掉页面快照、要么根本不产生 old/new 伪元素。所以主题切换最终没有走 View Transition，改成下面的 CSS 交叉淡入（见「换主题」一条）。
+  - **页面自己不能再有进场动画 (No Entrance Animation on the Incoming View)**：转场的第一帧会被拍成快照，如果新页此时正跑着 `translateY` 进场，快照拍到的就是偏移后甚至透明的样子，翻页会变成「白一下再出现」。所以 `.view` 的入场动画从切换路径里移走，只保留在首次启动的 `html.booting` 阶段。
+- **侧边栏当前项会滑过去 (The Rail Slides)**：导航里塞了一个绝对定位的 `.rail-hl` 高亮块，`switchView()` / `layoutNav()` / 窗口缩放时量出当前按钮的 `offsetTop` 与高度，用 `translateY` + `height` 过渡（`--dur-3` + `--ease-spring`）滑到新位置。`will-change: transform` 让合成器接管，不触发布局。初始化时加 `.still` 一次性关掉过渡，避免刚打开就看到它从顶上滑下来；`#navTopSlot` 里的顶栏导航隐藏这个块（那里用的是滑块，不需要两层高亮）。
+- **分组展开有层次 (Groups Fold Open)**：折叠从 `display:none` 硬切改成 `grid-template-rows: 1fr ↔ 0fr`（内层 `.group-rows` 带 `min-height:0; overflow:hidden`），高度随内容自然过渡 `--dur-4`。行本身按 `--i` / `--n` 做错峰：展开时逐行落下（每行延后 22ms），收起时按反序（每行延后 14ms），合起来是一次有方向的开合，而不是一整块忽然出现。
+- **弹窗与提示 (Dialog and Toast)**：`.modal` 从 `display` 开关改成 `opacity` + `visibility` 过渡（`visibility` 用 `transition-delay` 延后到淡出结束，保住可访问性），内层 `.dialog` 从 `translateY(8px) scale(.985)` 归位到 `none`。分享条用 `share-in` 从 0 宽长到目标宽度，并带 `transform-origin: 0 50%`，读起来像「条子在长出来」。
+- **数字会走 (Figures Count Up)**：总会话、总模型、总工作区三个大数字改成 rAF 插值（420ms，三次方缓出），并用 `shownFigures` 记住上一次显示的值——**值没变就不重播**，否则每 4 秒轮询一次会一直闪。第一次出现时从 0 走到真实值。
+- **鼠标划过有回应 (Hover Has a Reply)**：会话行悬停时底色染上强调色淡调、标题转强调色、图标轻微放大；账本与 KPI 卡悬停整体上浮 1px 并加深阴影；导航按钮悬停时图标轻轻前倾；状态点的 `link-breathe` 做缓慢呼吸。按钮在忙碌时转出一个小 spinner（`#refreshBtn` 只**手动**刷新时转，自动轮询不转，免得每 4 秒闪一次；`refreshModelsCatalog` 同时加 `busy` 类）。
+- **首屏编排 (First Paint Choreography)**：`init()` 给 `<html>` 加 `booting`，各区块按序轻微上浮出现，700ms 后移除——只在冷启动时演一次，之后切页面靠翻页转场，不重复演。
+- **顶栏跟着滚动 (The Header Answers Scrolling)**：在 `.view-slot` 上装捕获阶段滚动监听，滚动时给 `<html>` 加 `scrolled`，顶栏阴影随之加深；回到顶部就撤掉。只改一个类，不读布局、不写布局。
+- **换主题是淡过去的 (The Theme Fades)**：`toggleTheme` 改成给 `<html>` 加 `theme-fade`，用一条统一规则把所有元素的 `background-color / color / border-color / box-shadow / fill / stroke` 设成 `.42s` 过渡，再翻转主题类。这里有两个必须踩对的点：
+  - **先让浏览器算出旧值**：类和主题如果在同一帧翻转，浏览器没有「旧颜色」可插值，结果是直接跳变。所以先 `void getComputedStyle(document.body).backgroundColor` 强制样式计算，再在 `requestAnimationFrame` 里执行翻转。
+  - **规则写法**：最初写成 `html.theme-fade *::before`，被解析成后代选择器；并且把 `transition: A !important, B` 这种简写列表整条丢掉（解析出来的规则是空的 `{}`）。最终用 `:where(*)` / `:where(*)::before` / `:where(*)::after`，并把 `transition-property`、`transition-duration`、`transition-timing-function` 拆成三条独立声明，才真正生效。
+- **轮询不再抽动列表 (Polls Stop Reshuffling)**：每 4 秒拉一次快照时，模型榜、Agent 榜、工作区榜会因为 Rust `HashMap::into_values()` 的顺序每次都不同而在同分项之间来回换位，读者看到的是列表自己在抖。三处排序都补了确定的次级键——模型按名字、Agent 按 id、工作区按路径——同分项的顺序从此固定。
+- **60 FPS 红线核对 (The 60 FPS Line)**：`backdrop-filter` 全仓只剩弹窗遮罩一处（不在滚动列表里）；没有 `background-attachment: fixed`；没有低于 500ms 的定时刷新；所有动画元素带 `will-change: transform` / `transform: translateZ(0)`。实测：程序驱动 `.view-slot` 在 0–400 之间滚动 40 次，采样 `requestAnimationFrame` 间隔，**120 帧平均 16.5ms、p95 16.8ms、最大 16.8ms、掉帧 0**。
+- **无障碍 (Reduced Motion)**：整段动画都收在一条 `@media (prefers-reduced-motion: reduce)` 契约下——关掉过渡与动画、`scroll-behavior: auto`、视图转场退化为直接切换。`calmMotion()` 在 JS 侧做同样的判断，读者若在系统里关了动画，页面不会硬演。
+- **验证 (Verification)**：headless Edge 经 CDP（820×600，独立 `USERPROFILE` 与数据库）逐项量取，不靠肉眼判断——侧边栏高亮块位置随当前项变化；分组折叠高度实测 980 → 311 → 0 与 545 → 980；弹窗 `opacity` / `transform` 有中间值；`::view-transition-group(page)` 上确实挂着 `page-in` / `page-out` 动画；主题淡入采样为 `rgb(143,143,147) → rgb(43,43,47) → rgb(27,27,31) → rgb(26,26,30)`；数字走位为 `491 → 893 → 1115 → 1199 → 1232 → 1234` 且值不变时不重播；资源以 `immutable` + `?v=` 提供，所有复核都用 `Network.setCacheDisabled` + `ignoreCache` 硬重载。`cargo test --workspace` 全部通过（167 单元 + 26 / 17 / 7 / 5 / 3 集成）；`node --check` 页面脚本通过；clippy 与 `cargo fmt --check` 的报错全部落在本次未触碰的既有文件（`build.rs`、`collectors/mod.rs`、`remote_host.rs`、`tray.rs`、`main.rs`），本次改动的 `web_server.rs` 与 `collectors/workspace.rs` 无告警、格式无差异。
+
+### 交付产物：Windows 与 Android 同步至 2.4.89 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.89-windows-x64.zip`，按「打新包必删旧包」删除 2.4.88 的 zip 与 APK；本机安装目录 `Deliverables/AgentHub/` 同步替换 `agenthub-runner.exe`，保留 `agenthub-runner.exe.2.4.82.bak` 回滚。
+- **Android Debug APK**：`versionCode=89`、`versionName=2.4.89`。
+- **校验清单**：`AgentHub-v2.4.89-SHA256.txt` 收录 exe、zip、APK 与内嵌 `dashboard.html` / `dashboard.css`。
+
 ## [2.4.88] - 2026-10-17
 
 ### 标题栏跟着页面走色，不再是一条灰带 (The Caption Takes the Page's Colour)

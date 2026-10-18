@@ -124,6 +124,7 @@
          sidebar does; state lives at the foot -->
     <div class="nav-slot side-slot" id="navSideSlot">
           <nav id="nav" aria-label="主导航">
+      <span class="rail-hl" id="railHl" aria-hidden="true"></span>
       <button data-view="sessions" class="on" onclick="switchView('sessions')" title="会话 Sessions">
         <svg class="nav-ic ic" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h12v8H9l-4 3v-3H4z"/></g></svg>
         <span>会话</span>
@@ -185,10 +186,10 @@
     </button>
     <div class="nav-slot top-slot" id="navTopSlot"><span class="thumb" id="segThumb"></span></div>
     <div class="actions">
-      <button class="icon" onclick="refreshDashboard()" title="重新探测系统状态与会话" id="refreshBtn">
+      <button class="icon" onclick="refreshDashboard(true)" title="重新探测系统状态与会话" id="refreshBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
       </button>
-      <button class="icon" onclick="toggleTheme()" title="切换亮暗主题外观">
+      <button class="icon" onclick="toggleTheme()" title="切换亮暗主题外观" id="themeBtn">
         <span id="themeIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span>
       </button>
       <button class="icon winclose" onclick="shutdownRunner()" title="退出 AgentHub Runner">
@@ -229,7 +230,7 @@
       <input type="search" id="sessionSearchInput" class="inp" placeholder="搜索提示词、会话 ID 或工作区…" oninput="filterSessionsList()">
       <span class="tag" id="sessionCountBadge">0 个历史会话</span>
       <span class="grow"></span>
-      <button class="text action" onclick="refreshDashboard()" title="立即重新探测">
+      <button class="text action" onclick="refreshDashboard(true)" title="立即重新探测">
         <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
         <span>刷新</span>
       </button>
@@ -492,6 +493,10 @@
     const POLL_HINT = `每 ${Math.round((LAYOUT.dashboardPollMs || 4000) / 1000)} 秒自动探测一次`;
     const TOAST_MS = { ok: 2400, err: 4200 };
 
+    // whether the reader asked the system for less motion; every scripted
+    // animation checks this once, the way magpie's navCalm() does
+    const calmMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     // The theme the bootstrap script already applied; the button only redraws
     function initTheme() {
       updateThemeButtonUI();
@@ -512,6 +517,9 @@
     }
 
     async function init() {
+      // the first paint is drawn once, in order; the class comes off on the
+      // next frame so a poll or a switch never replays it
+      document.documentElement.classList.add('booting');
       layoutNav();
       initSideEdge();
       initTheme();
@@ -534,6 +542,20 @@
       // the page follows the window it is drawn in; a turn tucked away or
       // opened with the button only holds until the next resize
       window.addEventListener('resize', clampSideWidth, { passive: true });
+      // the header takes a hairline shadow once the open page has scrolled;
+      // one listener on the slot catches every page's own scroll
+      const slot = document.querySelector('.view-slot');
+      if (slot) {
+        slot.addEventListener('scroll', () => {
+          const scrolled = slot.scrollTop > 4;
+          if (scrolled !== document.documentElement.classList.contains('scrolled')) {
+            document.documentElement.classList.toggle('scrolled', scrolled);
+          }
+        }, { passive: true, capture: true });
+      }
+      // the opening animation has played; from here the console moves only
+      // when the reader does something
+      setTimeout(() => document.documentElement.classList.remove('booting'), 700);
     }
 
     // The sidebar's #nav is the header's switch when the sidebar is away. It is
@@ -564,6 +586,7 @@
       }
       fitNavTrack();
       scaleSegThumb(false);
+      scaleRailHl(false);
       // the rail's state is html.no-side (the bootstrap key); body.side-nav is
       // its helper twin, so a scoped rule can say "beside the rail"
       document.body.classList.toggle('side-nav', on);
@@ -685,6 +708,22 @@
       if (animate === false) { void thumb.offsetWidth; thumb.style.transition = ''; }
     }
 
+    // In the rail the open page is one shape that slides from row to row, as
+    // magpie's .nav-hl does. It is placed on the button the page has just
+    // opened; a click glides, a fresh layout lands still.
+    function scaleRailHl(animate) {
+      const nav = document.getElementById('nav');
+      const hl = document.getElementById('railHl');
+      // the shape belongs to the rail; the header's track has its own thumb
+      if (!nav || !hl || !nav.closest('#navSideSlot')) return;
+      const btn = nav.querySelector('button.on');
+      hl.classList.toggle('still', animate === false);
+      if (!btn) { hl.style.height = '0px'; return; }
+      hl.style.transform = `translateY(${btn.offsetTop}px)`;
+      hl.style.height = btn.offsetHeight + 'px';
+      if (animate === false) requestAnimationFrame(() => hl.classList.remove('still'));
+    }
+
     // In the header the track sits centred and shows the open page and what is
     // either side of it — the switch is for turning the page, not for listing
     // every page twice. What fits is worked out from the header's free space,
@@ -756,34 +795,48 @@
     // Switch between the views
     function switchView(viewId, silent) {
       if (!VIEW_LABELS[viewId]) return;
-      document.querySelectorAll('#nav button[data-view]').forEach(b => b.classList.remove('on'));
-      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      // a click turns the page as one motion (view-transition in dashboard.css,
+      // the way magpie's pages turn); the first paint, a restored page and a
+      // reader who asked for less motion get the page at once
+      const turn = () => {
+        document.querySelectorAll('#nav button[data-view]').forEach(b => b.classList.remove('on'));
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
 
-      const btn = document.getElementById('nav-' + viewId) ||
-        document.querySelector(`#nav button[data-view="${viewId}"]`);
-      if (btn) btn.classList.add('on');
+        const btn = document.getElementById('nav-' + viewId) ||
+          document.querySelector(`#nav button[data-view="${viewId}"]`);
+        if (btn) btn.classList.add('on');
 
-      const view = document.getElementById('view-' + viewId);
-      if (view) {
-        view.classList.add('active');
-        if (!silent) view.scrollTop = 0;
-      }
+        const view = document.getElementById('view-' + viewId);
+        if (view) {
+          view.classList.add('active');
+          if (!silent) view.scrollTop = 0;
+        }
 
-
-      if (!silent) {
-        try { localStorage.setItem(STORE.view, viewId); } catch (e) {}
-      }
-      // the clone the track measures itself with follows the page
-      const seen = document.getElementById('navMeasure');
-      if (seen) seen.querySelectorAll('button[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === viewId));
-      fitNavTrack();
-      scaleSegThumb(!silent);
+        if (!silent) {
+          try { localStorage.setItem(STORE.view, viewId); } catch (e) {}
+        }
+        // the clone the track measures itself with follows the page
+        const seen = document.getElementById('navMeasure');
+        if (seen) seen.querySelectorAll('button[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === viewId));
+        fitNavTrack();
+        scaleSegThumb(!silent);
+        scaleRailHl(!silent);
+      };
+      if (silent || calmMotion() || !document.startViewTransition) { turn(); return; }
+      document.documentElement.classList.add('page-turn');
+      const vt = document.startViewTransition(turn);
+      vt.finished.finally(() => document.documentElement.classList.remove('page-turn'));
     }
 
-    async function refreshDashboard() {
+    // manual: the reader asked for this probe, so the button that asked turns
+    // while it is out. The four-second poll stays quiet — a button that is
+    // always spinning says nothing about whether anything is happening.
+    async function refreshDashboard(manual) {
       // a probe can take over a second; never let two snapshots render out of order
       if (refreshing) return false;
       refreshing = true;
+      const refreshBtn = document.getElementById('refreshBtn');
+      if (manual && refreshBtn) refreshBtn.classList.add('busy');
       const seq = ++renderSeq;
       try {
         const resp = await fetch('/api/dashboard', { cache: 'no-store' });
@@ -867,6 +920,7 @@
         return false;
       } finally {
         refreshing = false;
+        if (refreshBtn) refreshBtn.classList.remove('busy');
       }
     }
 
@@ -884,16 +938,41 @@
       }
     }
 
+    // A figure that changes climbs to its new value instead of being stamped
+    // there; one that has not changed is left alone, so a poll that finds the
+    // same number never makes the ledger twitch. Only the first value on a
+    // fresh page animates from zero — after that every change counts from
+    // where the reader last saw it.
+    const shownFigures = new Map();
+    function countTo(el, value) {
+      if (!el) return;
+      const to = Number(value) || 0;
+      const from = shownFigures.has(el) ? shownFigures.get(el) : 0;
+      shownFigures.set(el, to);
+      if (from === to) { el.textContent = String(to); return; }
+      if (calmMotion()) { el.textContent = String(to); return; }
+      cancelAnimationFrame(el._countRaf);
+      const start = performance.now();
+      const step = (now) => {
+        const t = Math.min(1, (now - start) / 420);
+        // the same ease-out the page moves on, so the figures settle with it
+        const eased = 1 - Math.pow(1 - t, 3);
+        el.textContent = String(Math.round(from + (to - from) * eased));
+        if (t < 1) el._countRaf = requestAnimationFrame(step);
+      };
+      el._countRaf = requestAnimationFrame(step);
+    }
+
     function renderStats(stats, gateway) {
       if (!stats) return;
       const totalSessions = stats.total_sessions || 0;
-      document.getElementById('statTotalSessions').textContent = totalSessions;
+      countTo(document.getElementById('statTotalSessions'), totalSessions);
       const breakdown = document.getElementById('statSessionsBreakdown');
       breakdown.textContent =
         `Coding Assistant ${stats.claude_sessions || 0} · Codex ${stats.codex_sessions || 0} · 其他 ${(stats.antigravity_sessions || 0) + (stats.grok_sessions || 0) + (stats.zcode_sessions || 0)}`;
       breakdown.title = breakdown.textContent;
 
-      document.getElementById('statTotalModels').textContent = stats.total_models || 0;
+      countTo(document.getElementById('statTotalModels'), stats.total_models || 0);
       if (gateway && gateway.detected) {
         let src = String(gateway.source || '').trim();
         if (src.includes('host-creds') || src.includes('.json')) {
@@ -904,7 +983,7 @@
         document.getElementById('statGatewaySource').textContent = '多模型自动路由';
       }
 
-      document.getElementById('statTotalWorkspaces').textContent = stats.total_workspaces || 0;
+      countTo(document.getElementById('statTotalWorkspaces'), stats.total_workspaces || 0);
       const wsSub = document.getElementById('statWorkspacesSub');
       if (wsSub) {
         const agents = stats.active_agents || 0;
@@ -1020,7 +1099,7 @@
           <div class="empty-state">
             <b>还没有可读取的会话</b>
             <span class="why">在任意目录下运行一次 Coding Assistant、Codex 或 ZCode，对话结束后会话就会出现在这里。如果刚结束的会话还没出现，稍等几秒再看。</span>
-            <button class="text action retry" onclick="refreshDashboard()">
+            <button class="text action retry" onclick="refreshDashboard(true)">
               <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
               <span>重新读取</span>
             </button>
@@ -1064,7 +1143,7 @@
         const count = grp.items.length;
         const closed = collapsedGroups.has(k);
 
-        const itemsHtml = grp.items.map(item => {
+        const itemsHtml = grp.items.map((item, index) => {
           const rawId = item.session_id || item.id || '';
           const hasId = !!rawId && rawId !== 'unknown';
           const prompt = escapeHtml(item.prompt || item.title || item.first_prompt || item.name || '无标题会话');
@@ -1094,7 +1173,7 @@
           const fullId = hasId ? escapeHtml(rawId) : '';
 
           return `
-            <div class="row" title="${providerLabel(rawProvider)}${fullId ? ' · ' + fullId : ''}${modelName ? ' · ' + modelName : ''}${rawTokens > 0 ? ' · ' + fmtN(rawTokens) + ' Tokens' : ''}">
+            <div class="row" style="--i:${index};--n:${grp.items.length}" title="${providerLabel(rawProvider)}${fullId ? ' · ' + fullId : ''}${modelName ? ' · ' + modelName : ''}${rawTokens > 0 ? ' · ' + fmtN(rawTokens) + ' Tokens' : ''}">
               <span class="ic">${getAgentIcon(rawProvider, 18)}</span>
               <div class="who">
                 <div class="name" title="${prompt}">${prompt}</div>
@@ -1118,8 +1197,8 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
               </span>
             </div>
-            <div class="group-body"${closed ? ' hidden' : ''}>
-              ${itemsHtml}
+            <div class="group-body${closed ? ' folded' : ''}" data-group-body>
+              <div class="group-rows">${itemsHtml}</div>
             </div>
           </div>
         `;
@@ -1149,7 +1228,10 @@
       return out;
     }
 
-    // a group folds from its head; the fold survives re-renders and reloads
+    // a group folds from its head; the fold survives re-renders and reloads.
+    // The body is a grid whose rows go 1fr → 0fr, so the fold is the same
+    // motion whether the group opens or shuts (dashboard.css .group-body);
+    // the rows' own staggered arrival is CSS's, from --i / --n.
     const collapsedGroups = new Set(
       (() => { try { return JSON.parse(localStorage.getItem(STORE.closedGroups) || '[]'); } catch (e) { return []; } })()
     );
@@ -1162,7 +1244,7 @@
       const closing = !head.classList.contains('closed');
       head.classList.toggle('closed', closing);
       head.setAttribute('aria-expanded', String(!closing));
-      body.hidden = closing;
+      body.classList.toggle('folded', closing);
       if (closing) collapsedGroups.add(key); else collapsedGroups.delete(key);
       try { localStorage.setItem(STORE.closedGroups, JSON.stringify([...collapsedGroups])); } catch (e) {}
     }
@@ -1620,7 +1702,7 @@
 
 async function refreshModelsCatalog(event) {
       const btn = document.getElementById('btnRefreshModels');
-      if (btn) btn.disabled = true;
+      if (btn) { btn.disabled = true; btn.classList.add('busy'); }
       try {
         const resp = await fetch('/api/models/refresh', { method: 'POST' });
         if (resp.ok) {
@@ -1637,7 +1719,7 @@ async function refreshModelsCatalog(event) {
       } catch (e) {
         toast('同步模型失败：' + e.message, 'err');
       } finally {
-        if (btn) btn.disabled = false;
+        if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
       }
     }
 
@@ -1836,19 +1918,32 @@ function renderGateway(gateway) {
       const html = document.documentElement;
       const isDark = html.classList.contains('dark');
       const themeMeta = document.getElementById('themeColorMeta');
-      if (isDark) {
-        html.classList.remove('dark');
-        localStorage.setItem(STORE.theme, 'light');
-        if (themeMeta) themeMeta.setAttribute('content', LAYOUT.themeBg.light);
-      } else {
-        html.classList.add('dark');
-        localStorage.setItem(STORE.theme, 'dark');
-        if (themeMeta) themeMeta.setAttribute('content', LAYOUT.themeBg.dark);
-      }
-      updateThemeButtonUI();
-      // the window's own caption is the page's colour too, and is painted by
-      // the shell the next window opens with: leave the choice where it reads it
-      syncWindowTheme();
+      const apply = () => {
+        if (isDark) {
+          html.classList.remove('dark');
+          localStorage.setItem(STORE.theme, 'light');
+          if (themeMeta) themeMeta.setAttribute('content', LAYOUT.themeBg.light);
+        } else {
+          html.classList.add('dark');
+          localStorage.setItem(STORE.theme, 'dark');
+          if (themeMeta) themeMeta.setAttribute('content', LAYOUT.themeBg.dark);
+        }
+        updateThemeButtonUI();
+        // the window's own caption is the page's colour too, and is painted by
+        // the shell the next window opens with: leave the choice where it reads it
+        syncWindowTheme();
+      };
+      // the new theme fades in as one sheet: every surface is given the same
+      // colour transition for the length of the switch, then the rule goes
+      // away so hover states keep their own quick timings. The old colours
+      // have to be computed once after the class lands — a class and a theme
+      // changed in the same frame leave the browser nothing to fade from.
+      if (calmMotion()) { apply(); return; }
+      html.classList.add('theme-fade');
+      void getComputedStyle(document.body).backgroundColor;
+      requestAnimationFrame(apply);
+      clearTimeout(toggleTheme._timer);
+      toggleTheme._timer = setTimeout(() => html.classList.remove('theme-fade'), 520);
     }
 
     function updateThemeButtonUI() {
@@ -1873,7 +1968,7 @@ function renderGateway(gateway) {
         return;
       }
       const modal = document.getElementById('shutdownModal');
-      if (modal) modal.style.display = 'flex';
+      if (modal) modal.classList.add('open');
 
       try {
         await fetch('/api/shutdown', { method: 'POST' });
@@ -1932,7 +2027,7 @@ function renderGateway(gateway) {
 
     function openPairModal() {
       const modal = document.getElementById('pairModal');
-      if (modal) modal.style.display = 'flex';
+      if (modal) modal.classList.add('open');
       const gatewayInput = document.getElementById('gatewayInput');
       if (gatewayInput && !gatewayInput.value) {
         const savedGateway = localStorage.getItem(STORE.customGateway) ||
@@ -1947,7 +2042,7 @@ function renderGateway(gateway) {
 
     function closePairModal() {
       const modal = document.getElementById('pairModal');
-      if (modal) modal.style.display = 'none';
+      if (modal) modal.classList.remove('open');
     }
 
     function copyDeviceId() {
@@ -2019,7 +2114,7 @@ function renderGateway(gateway) {
 
     window.addEventListener('DOMContentLoaded', init);
     // a wider or narrower window: the header's track takes what now fits
-    window.addEventListener('resize', () => { fitNavTrack(); scaleSegThumb(false); });
+    window.addEventListener('resize', () => { fitNavTrack(); scaleSegThumb(false); scaleRailHl(false); });
   </script>
 </body>
 </html>

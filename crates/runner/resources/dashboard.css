@@ -100,6 +100,15 @@
           --c1: #a5b4fc; --c2: #7dd3fc; --c3: #6ee7b7; --c4: #fcd34d; --c5: #f9a8d4; --c6: #c4b5fd; --c7: #94a3b8;
         }
         :root { --ease: cubic-bezier(.2, .8, .2, 1); }
+        /* the motion vocabulary: one spring for things that arrive and settle,
+           one quick ease for things the hand touches. Every transition below
+           reads these, so the console moves as one surface. */
+        :root {
+          --ease-out: cubic-bezier(.22, 1, .36, 1);
+          --ease-spring: cubic-bezier(.32, .72, 0, 1);
+          --ease-tap: cubic-bezier(.4, 0, .2, 1);
+          --dur-1: .12s; --dur-2: .2s; --dur-3: .32s; --dur-4: .48s;
+        }
         /* the rhythm of the console: every block stands on the same line, and
            the window's size sets how much of it fits (the layout tokens below,
            written by layoutTokens() from AppLayout) */
@@ -164,8 +173,9 @@
     .logo { color: var(--fg); display: inline-flex; }
     .logo svg { display: block; }
     .seg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: inline-flex; padding: 2px; border-radius: 8px; }
-    .seg > .thumb, #navTopSlot > .thumb { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 6px; background: var(--seg-thumb); box-shadow: var(--seg-edge); pointer-events: none; transition: translate .22s var(--ease), width .22s var(--ease); }
-    .seg button { position: relative; z-index: 1; height: 24px; padding: 0 12px; border-radius: 6px; font-size: var(--fs-body); color: var(--ctl-fg); transition: color .18s var(--ease), transform .14s var(--ease); }
+    .seg > .thumb, #navTopSlot > .thumb { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 6px; background: var(--seg-thumb); box-shadow: var(--seg-edge); pointer-events: none; transition: translate var(--dur-3) var(--ease-spring), width var(--dur-3) var(--ease-spring); }
+    .seg button { position: relative; z-index: 1; height: 24px; padding: 0 12px; border-radius: 6px; font-size: var(--fs-body); color: var(--ctl-fg); transition: color .18s var(--ease), transform var(--dur-2) var(--ease-spring); }
+    .seg button:active { transform: scale(.96); }
     .seg button.on { color: var(--fg); }
     .seg button:hover:not(.on) { color: var(--fg-2); }
     .actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
@@ -173,10 +183,13 @@
       width: 26px; height: 26px; border-radius: 7px;
       display: inline-flex; align-items: center; justify-content: center;
       color: var(--muted);
-      transition: background .12s, color .12s;
+      transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease), transform var(--dur-2) var(--ease-spring);
     }
     .icon:hover, .icon.on { background: var(--pill); color: var(--fg); }
-    .icon svg { width: 17px; height: 17px; display: block; }
+    .icon:active { transform: scale(.9); }
+    .icon svg { width: 17px; height: 17px; display: block; transition: transform .35s var(--ease-spring); }
+    .icon.spin svg { animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .icon.winclose { align-self: center; width: 22px; height: 22px; margin-left: 8px; border-radius: 50%; background: var(--pill); color: var(--fg-2); }
     .icon.winclose:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
 
@@ -209,22 +222,44 @@
     .top-slot { flex: none; display: flex; }
     .side-slot { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
     #nav button[data-view] > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    /* the rail's sliding shape is the rail's alone: in the header's track the
+       thumb (scaleSegThumb) says the same thing, so this one stays out. The
+       container query below matches the rail's empty slot too, so this rule
+       has to outweigh it. */
+    #navTopSlot #nav > .rail-hl { display: none; }
     /* the rail: names down the column, in groups, the open page tinted on the
        accent. The rail is its own box (container nav-box), so these hold only
        while #nav stands inside it; in the header the track below takes over */
     #navSideSlot { container: nav-box / inline-size; }
     @container nav-box (width > 0) {
-      #nav { display: flex; position: static; transform: none; flex-direction: column; gap: 2px; padding: 0; border-radius: 0; width: 100%; min-height: 0; }
+      #nav { display: flex; position: relative; transform: none; flex-direction: column; gap: 2px; padding: 0; border-radius: 0; width: 100%; min-height: 0; }
+      /* the open page is one shape that slides down the rail, as magpie's
+         .nav-hl does; the row's own tint is left to the pointer */
+      #nav .rail-hl {
+        display: block;
+        position: absolute; left: 0; right: 0; top: 0; height: 0; z-index: 0;
+        border-radius: var(--r-s); background: var(--accent-soft); pointer-events: none;
+        will-change: transform;
+        transition: transform var(--dur-3) var(--ease-spring), height var(--dur-3) var(--ease-spring);
+      }
+      /* the rail's shape is the rail's alone; in the header's track the thumb
+         (scaleSegThumb) says the same thing. The rail's slot is a container of
+         width 0 once the rail is away, which matches this query too, so the
+         rule outside the query is the one that must win. */
+      #nav .rail-hl.still { transition: none; }
+      #nav button[data-view] { position: relative; z-index: 1; }
+      #nav button[data-view].on, #nav button[data-view].on:hover { background: transparent; }
       #nav button[data-view] {
         display: flex; align-items: center; justify-content: flex-start; gap: 11px;
         width: 100%; height: 36px; padding: 0 11px; border-radius: var(--r-s);
         font-size: var(--fs-body); font-weight: 480; color: var(--fg-2); text-align: left; white-space: nowrap;
       }
       #nav button[data-view]:hover:not(.on) { background: var(--pill); color: var(--fg); }
-      #nav button[data-view].on, #nav button[data-view].on:hover { background: var(--accent-soft); color: var(--accent); box-shadow: none; font-weight: 600; }
+      #nav button[data-view].on, #nav button[data-view].on:hover { color: var(--accent); box-shadow: none; font-weight: 600; }
       #nav button[data-view]:active:not(.on) { background: color-mix(in srgb, var(--fg) 10%, transparent); }
-      .nav-ic { display: block; flex: none; width: 18px; height: 18px; color: var(--muted); }
+      .nav-ic { display: block; flex: none; width: 18px; height: 18px; color: var(--muted); transition: color var(--dur-2) var(--ease), transform var(--dur-3) var(--ease-spring); }
       #nav button.on .nav-ic { color: var(--accent); }
+      #nav button[data-view]:hover .nav-ic { transform: translateX(1px) scale(1.06); }
       .side-l { display: inline; }
     }
     /* the gateway, under the pages: where it listens; a click opens its page */
@@ -248,9 +283,12 @@
     :root.no-side .side-toggle .st-pane { opacity: .28; }
 
     /* ---- views ------------------------------------------------------------- */
-    .view { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 16px 8px; display: none; flex-direction: column; animation: view-in .24s var(--ease); }
+    .view { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 16px 8px; display: none; flex-direction: column; }
     .view.active { display: flex; }
-    @keyframes view-in { from { opacity: 0; transform: translateY(5px); } }
+    /* a switch is a view transition (switchView), so nothing here animates on
+       its own: an animation on the arriving page would be caught at its first
+       frame by the transition's snapshot and the page would turn blank. The
+       first paint is html.booting's job, further down. */
     /* a width the eye can follow across, centred in a maximized window */
     .view:focus { outline: none; }
     @media (prefers-reduced-motion: reduce) { .view { animation-name: none; } }
@@ -265,6 +303,12 @@
     .list { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
     .row { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 5px 9px 5px 11px; }
     .row + .row { border-top: 1px solid var(--line-2); }
+    /* a row answers the pointer: the tint comes in under it, and the leading
+       mark leans a hair toward the title, so the row reads as one object */
+    .row { transition: background var(--dur-1) var(--ease); }
+    .row:hover { background: color-mix(in srgb, var(--fg) 2.4%, transparent); }
+    .row .ic { transition: transform var(--dur-3) var(--ease-spring); }
+    .row:hover .ic { transform: scale(1.08); }
     .row .ic { width: 18px; height: 18px; }
     .row .name { font-weight: 500; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .row .who { min-width: 0; flex: 1 1 auto; }
@@ -277,7 +321,10 @@
     /* the stat row: who / share / num / cost, as in magpie's usage tables */
     .row.stat .who { flex: 0 0 180px; }
     .row.stat .share { flex: 1 1 auto; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; margin: 0 6px; }
-    .row.stat .share i { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .7; }
+    /* the bar fills from its own left edge as the row is drawn, and glides to
+       a new width when the figure behind it changes */
+    .row.stat .share i { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .7; transform-origin: 0 50%; animation: share-in var(--dur-4) var(--ease-out) backwards; transition: width var(--dur-4) var(--ease-spring); }
+    @keyframes share-in { from { transform: scaleX(0); } }
     .row.stat .num { display: flex; flex-direction: column; align-items: flex-end; flex: none; min-width: 64px; font-variant-numeric: tabular-nums; }
     .row.stat .num b { font-weight: 600; }
     .row.stat .num small { font-size: calc(var(--fs-note) - 1.5px); color: var(--muted); }
@@ -290,8 +337,9 @@
     .row-head .label { margin-right: auto; }
 
     /* ---- buttons ----------------------------------------------------------- */
-    .text { font-size: var(--fs-note); color: var(--ctl-fg); padding: 3px 7px; border-radius: 6px; white-space: nowrap; transition: background .12s, color .12s; }
+    .text { font-size: var(--fs-note); color: var(--ctl-fg); padding: 3px 7px; border-radius: 6px; white-space: nowrap; transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease), transform var(--dur-2) var(--ease-spring); }
     .text:hover { color: var(--fg); background: var(--pill); }
+    .text:active { transform: scale(.96); }
     .text.action { height: 27px; padding: 0 10px; border: 1px solid var(--line); background: var(--card); color: var(--fg-2); box-shadow: 0 1px 1px rgba(0, 0, 0, .04); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
     .text.action:hover { border-color: var(--muted); background: var(--card-2); color: var(--fg); }
     .text.action:disabled { opacity: .6; }
@@ -316,7 +364,7 @@
        tags keep their natural width: they are already capped by .tag.cap */
     .row .sub.flow > span:not(.tag) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .mono { font-family: var(--code); font-size: var(--fs-note); }
-    .inp { height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: var(--fs-body); outline: none; min-width: 0; user-select: text; -webkit-user-select: text; }
+    .inp { height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: var(--fs-body); outline: none; min-width: 0; user-select: text; -webkit-user-select: text; transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-3) var(--ease-spring), background var(--dur-2) var(--ease); }
     .inp:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); outline: none; }
     .inp::placeholder { color: var(--faint); }
 
@@ -328,13 +376,32 @@
     .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
     .status#runnerStatusBadge { display: inline-flex; align-items: center; gap: 7px; }
 
-    .group-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 14px; background: var(--card-2); cursor: default; }
+    .group-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 14px; background: var(--card-2); cursor: default; transition: background var(--dur-2) var(--ease); }
     .group-head:hover { background: var(--pill); }
+    .group-head:active { background: color-mix(in srgb, var(--fg) 8%, var(--card-2)); }
     .group-head .gname { font-weight: 500; font-size: var(--fs-body); color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .group-head .gpath { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: calc(var(--fs-note) - 1.5px); color: var(--faint); }
-    .group-head .chev { flex: none; margin-left: auto; color: var(--faint); display: inline-flex; transition: transform .2s var(--ease); }
+    .group-head .chev { flex: none; margin-left: auto; color: var(--faint); display: inline-flex; transition: transform var(--dur-3) var(--ease-spring), color var(--dur-2) var(--ease); }
+    .group-head:hover .chev { color: var(--muted); }
     .group-head .chev svg { width: 14px; height: 14px; display: block; }
     .group-head.closed .chev { transform: rotate(-90deg); }
+    /* a group folds open and shut as a scroll unrolls: the height opens on a
+       long ease-out and the rows settle in one after another (magpie's
+       .agent-fold), so a long list arrives instead of appearing. The fold is
+       a class, not [hidden]: the attribute's display:none would cut the
+       height transition the fold is made of. */
+    .group-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--dur-4) var(--ease-spring); }
+    .group-body > .group-rows { min-height: 0; overflow: hidden; }
+    .group-body.folded { grid-template-rows: 0fr; }
+    .group-body > .group-rows > .row {
+      opacity: 1; transform: none;
+      transition: opacity var(--dur-2) var(--ease), transform var(--dur-3) var(--ease-spring);
+      transition-delay: calc(var(--i, 0) * 22ms);
+    }
+    .group-body.folded > .group-rows > .row {
+      opacity: 0; transform: translateY(-6px);
+      transition-delay: calc((var(--n, 1) - 1 - var(--i, 0)) * 14ms);
+    }
 
     .snippet { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2); }
     .snippet pre { flex: 1; min-width: 0; overflow-x: auto; font: normal 400 11.5px var(--code); color: var(--fg-2); white-space: pre; user-select: text; -webkit-user-select: text; }
@@ -368,11 +435,12 @@
     .status.warn { color: var(--amber); }
 
     /* ---- modal ------------------------------------------------------------- */
-    .modal { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; padding: 28px 24px; background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur(8px) saturate(1.1); backdrop-filter: blur(8px) saturate(1.1); }
+    .modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 28px 24px; background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur(8px) saturate(1.1); backdrop-filter: blur(8px) saturate(1.1); opacity: 0; visibility: hidden; transition: opacity var(--dur-2) var(--ease), visibility 0s linear var(--dur-2); }
+    .modal.open { opacity: 1; visibility: visible; transition: opacity var(--dur-2) var(--ease), visibility 0s; }
     .modal { padding: 16px 24px 24px; }
-    .modal .dialog { width: min(600px, 100%); min-width: 0; max-height: 100%; overflow-y: auto; border-radius: 14px; background: var(--card); box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .12); display: flex; flex-direction: column; animation: dialog-in .2s var(--ease); }
-    @keyframes dialog-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
-    @media (prefers-reduced-motion: reduce) { .modal .dialog { animation: none; } }
+    .modal .dialog { width: min(600px, 100%); min-width: 0; max-height: 100%; overflow-y: auto; border-radius: 14px; background: var(--card); box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .12); display: flex; flex-direction: column; transform: translateY(8px) scale(.985); transition: transform var(--dur-3) var(--ease-spring); }
+    .modal.open .dialog { transform: none; }
+    @media (prefers-reduced-motion: reduce) { .modal, .modal .dialog { transition: none; } }
     /* the blur belongs to the page behind the dialog, not to the paper itself:
        the card stays opaque and the form fields stay crisp */
     .modal .dialog { background: var(--bg); }
@@ -659,17 +727,17 @@
         /* ---- toast: one line of feedback where the action happened -------------- */
         .toast {
           position: fixed; left: 50%; bottom: 40px; z-index: 40;
-          transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
+          transform: translate(-50%, 10px) scale(.97); opacity: 0; pointer-events: none;
           display: flex; align-items: center; gap: 9px; max-width: min(560px, calc(100vw - 40px));
           padding: 11px 15px; border-radius: var(--r-s);
           border: var(--rule); background: var(--card); color: var(--fg);
           font-size: var(--fs-body); line-height: 1.5;
           box-shadow: 0 10px 30px rgba(0, 0, 0, .14), 0 1px 3px rgba(0, 0, 0, .06);
-          transition: opacity .18s var(--ease), transform .18s var(--ease);
+          transition: opacity var(--dur-2) var(--ease), transform var(--dur-3) var(--ease-spring);
           will-change: transform;
         }
-        .toast.on { opacity: 1; transform: translate(-50%, 0); }
-        .toast::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+        .toast.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
+        .toast::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); transition: background var(--dur-2), box-shadow var(--dur-2); }
         .toast.err::before { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
 
         /* ---- footer ------------------------------------------------------------ */
@@ -748,3 +816,162 @@ body:not(.side-nav) .top .top-slot { display: flex; }
 body.side-nav .top .side-toggle { display: none; }
 /* the track sits in the middle of the header whatever is either side of it */
 .top .top-slot { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center; height: auto; min-width: 0; max-width: calc(100% - 24px); }
+
+/* ============================================================================
+   Motion pass: the console answers the hand. Every rule here is a transition
+   or a first-paint animation on something the reader already uses — nothing
+   new is drawn, and nothing moves on its own while the page sits still. The
+   vocabulary is the three curves declared with the tokens (--ease-out for
+   things that settle, --ease-spring for things that travel, --ease-tap for
+   things pressed); a reader who asked for less motion gets the end state at
+   once.
+   ========================================================================== */
+/* ---- the page turns as one sheet (switchView's view transition) ----------- */
+/* only the page column is named, so the header, the rail and the footer are
+   not part of the motion: they stay exactly where they are while the page
+   turns under them. The old page leaves quickly and a little upward; the new
+   one arrives from below on the long ease-out. */
+.view-slot { view-transition-name: page; }
+::view-transition-group(root) { animation: none; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+::view-transition-group(page) { animation-duration: .36s; animation-timing-function: var(--ease-spring); }
+::view-transition-old(page) { animation: page-out .16s var(--ease-tap) both; }
+::view-transition-new(page) { animation: page-in .34s var(--ease-out) both; }
+@keyframes page-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(page), ::view-transition-old(page), ::view-transition-new(page) { animation: none !important; }
+}
+
+/* ---- the rail ------------------------------------------------------------ */
+/* the page rows answer the pointer: the name leans in, the glyph lifts */
+#nav button[data-view] { transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease); }
+#nav button[data-view] > span { transition: transform var(--dur-3) var(--ease-spring); }
+#nav button[data-view]:hover > span { transform: translateX(2px); }
+.side-gw { transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease); }
+.side-gw:active { transform: scale(.985); }
+/* the link dot breathes while the link is up, and stops the moment it is not */
+.side-gw > i, .live > i { transition: background var(--dur-3) var(--ease), box-shadow var(--dur-3) var(--ease); }
+:root:not(.link-off) .side-gw:not(.off) > i { animation: link-breathe 2.6s var(--ease) infinite; }
+.live:not(.off):not(.stale) > i { animation: link-breathe 2.6s var(--ease) infinite; }
+@keyframes link-breathe {
+  0%, 100% { box-shadow: 0 0 0 3px var(--green-soft); }
+  50% { box-shadow: 0 0 0 4.5px color-mix(in srgb, var(--green-soft) 55%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.link-off) .side-gw:not(.off) > i, .live:not(.off):not(.stale) > i { animation: none; }
+}
+
+/* ---- the ledger and the KPI tiles ---------------------------------------- */
+/* a tile is a surface the pointer can land on: it lifts a hair and its
+   figures warm up; the unpaired tile's arrow steps toward the page it opens */
+.led-strip .blk { transition: background var(--dur-2) var(--ease); }
+.led-strip .blk.clickable { transition: background var(--dur-2) var(--ease), transform var(--dur-3) var(--ease-spring); }
+.led-strip .blk.clickable:hover { transform: translateY(-1px); }
+.led-strip .blk.clickable:active { transform: translateY(0) scale(.995); }
+.led-strip .v { transition: color var(--dur-3) var(--ease); }
+.led-strip .blk.clickable:hover .v { color: var(--accent); }
+.kpi { transition: background var(--dur-2) var(--ease); }
+.kpi:hover { background: var(--card-2); }
+.kpi b { transition: color var(--dur-3) var(--ease); }
+.kpi:hover b { color: var(--accent); }
+
+/* ---- rows, tags and section heads ---------------------------------------- */
+/* a session row is a place the reader can land: the title takes the accent's
+   ink and the time column comes out of the faint, without moving the row */
+#sessionsContainer .row { transition: background var(--dur-2) var(--ease); }
+#sessionsContainer .row:hover { background: color-mix(in srgb, var(--accent) 4.5%, transparent); }
+#sessionsContainer .row .name { transition: color var(--dur-2) var(--ease); }
+#sessionsContainer .row:hover .name { color: var(--accent); }
+#sessionsContainer .row .who .when, #sessionsContainer .row .model { transition: color var(--dur-2) var(--ease); }
+#sessionsContainer .row:hover .who .when, #sessionsContainer .row:hover .model { color: var(--muted); }
+#sessionsContainer .row .ic > svg { transition: transform var(--dur-3) var(--ease-spring); }
+#sessionsContainer .row:hover .ic > svg { transform: scale(1.1); }
+/* the folder mark of a group lifts with its head */
+.group-head > .ic { transition: transform var(--dur-3) var(--ease-spring); }
+.group-head:hover > .ic { transform: translateY(-1px); }
+/* the catalog rows: the icon leans with the row, the figures stay put */
+#modelsGrid .row .ic, #agentsGrid .row .ic { transition: transform var(--dur-3) var(--ease-spring); }
+#modelsGrid .row:hover .ic, #agentsGrid .row:hover .ic { transform: scale(1.1) rotate(-2deg); }
+
+/* ---- buttons and the fields they sit beside ------------------------------ */
+.text.action { transition: background var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease), color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease), transform var(--dur-2) var(--ease-spring); }
+.text.action:hover { box-shadow: 0 2px 6px rgba(20, 22, 30, .07); }
+.text.action:active:not(:disabled) { transform: scale(.965); }
+.text.action.primary { box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.text.action.primary:hover { box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 28%, transparent); }
+.text.action:disabled { transform: none; }
+/* a button that is working says so: its glyph turns while the request is out */
+.icon.busy svg { animation: spin .8s linear infinite; }
+.text.action.busy .ic svg { animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .icon.busy svg, .text.action.busy .ic svg, .icon.spin svg { animation: none; opacity: .6; }
+}
+
+/* ---- the modal, its fields and the toast --------------------------------- */
+/* the sheet behind the dialog dims in with it, and the dialog settles onto
+   the page rather than being stamped there (dashboard.css .modal.open) */
+.modal .dialog { will-change: transform; }
+.editor .ok-box { animation: rise-in var(--dur-3) var(--ease-out) both; }
+.editor input:focus { transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-3) var(--ease-spring); }
+/* the shutdown sheet's mark keeps a slow turn while the runner lets go —
+   and only then: a sheet that is not on screen costs nothing */
+#shutdownModal.open .round svg { animation: spin 3.2s linear infinite; }
+@media (prefers-reduced-motion: reduce) { #shutdownModal.open .round svg { animation: none; } }
+
+/* ---- the first paint ----------------------------------------------------- */
+/* the console is drawn once on open: the rail's rows and the page's blocks
+   arrive in order. This runs on load only — the class is taken off after the
+   first frame, so a poll never re-plays it. */
+html.booting .sidebar { animation: side-in var(--dur-4) var(--ease-spring) both; }
+html.booting .view.active > * { animation: rise-in var(--dur-4) var(--ease-out) both; }
+@keyframes rise-in { from { opacity: 0; transform: translateY(9px); } }
+html.booting .view.active > *:nth-child(1) { animation-delay: 40ms; }
+html.booting .view.active > *:nth-child(2) { animation-delay: 90ms; }
+html.booting .view.active > *:nth-child(3) { animation-delay: 140ms; }
+html.booting .view.active > *:nth-child(4) { animation-delay: 190ms; }
+html.booting #nav button[data-view] { animation: row-in var(--dur-3) var(--ease-out) both; }
+html.booting #nav button[data-view]:nth-of-type(1) { animation-delay: 60ms; }
+html.booting #nav button[data-view]:nth-of-type(2) { animation-delay: 90ms; }
+html.booting #nav button[data-view]:nth-of-type(3) { animation-delay: 120ms; }
+html.booting #nav button[data-view]:nth-of-type(4) { animation-delay: 150ms; }
+html.booting #nav button[data-view]:nth-of-type(5) { animation-delay: 180ms; }
+html.booting #nav button[data-view]:nth-of-type(6) { animation-delay: 210ms; }
+@keyframes side-in { from { opacity: 0; transform: translateX(-10px); } }
+@keyframes row-in { from { opacity: 0; transform: translateX(-6px); } }
+@media (prefers-reduced-motion: reduce) {
+  html.booting .sidebar, html.booting .view.active > *, html.booting #nav button[data-view] { animation: none; }
+}
+
+/* ---- the reduced-motion contract, in one place --------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .view, .view.active > *, .toast, .modal, .modal .dialog, .row, .row.stat .share i,
+  .text, .text.action, .icon, .icon svg, .group-body, .group-body > .group-rows > .row,
+  .inp, .led-strip .blk, .kpi, #nav button[data-view], #nav button[data-view] > span,
+  #nav .rail-hl, .seg > .thumb, #navTopSlot > .thumb { transition: none !important; }
+  .view.active > *, .row.stat .share i, .editor .ok-box { animation: none !important; }
+  .row:hover, .led-strip .blk.clickable:hover { transform: none !important; }
+}
+
+/* ---- the theme changes as one cross-fade --------------------------------- */
+/* A switch repaints every surface at once; without help that reads as a
+   flash. For the length of the switch only, every element is given the same
+   colour transition, so the page fades from one theme into the other as one
+   sheet — then the rule is gone again, and hover states keep their own
+   timings. This is deliberately not a view transition: Chromium drops the
+   root snapshot as soon as the page column carries a name of its own
+   (switchView's `page`), so the fade is done with plain CSS.
+   `:where()` keeps the selectors at zero specificity, so the rule never has
+   to out-rank anything — it only has to be the one that declares the
+   transition while the class is on. */
+html.theme-fade,
+html.theme-fade :where(*),
+html.theme-fade :where(*)::before,
+html.theme-fade :where(*)::after {
+  transition-property: background-color, color, border-color, box-shadow, fill, stroke !important;
+  transition-duration: .42s !important;
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html.theme-fade, html.theme-fade :where(*), html.theme-fade :where(*)::before, html.theme-fade :where(*)::after { transition: none !important; }
+}

@@ -186,8 +186,14 @@ pub fn discover_all_workspaces() -> Vec<DiscoveredWorkspace> {
         })
         .collect();
 
-    // Sort by latest active activity descending
-    results.sort_by_key(|w| std::cmp::Reverse(w.last_active_at_ms));
+    // Sort by latest active activity descending; workspaces last touched in
+    // the same second keep a stable order by path, so the ranking does not
+    // reshuffle between snapshots (the map hands its values out unordered)
+    results.sort_by(|a, b| {
+        b.last_active_at_ms
+            .cmp(&a.last_active_at_ms)
+            .then_with(|| a.path.cmp(&b.path))
+    });
 
     if let Ok(mut guard) = workspace_cache().write() {
         *guard = Some((Instant::now(), results.clone()));

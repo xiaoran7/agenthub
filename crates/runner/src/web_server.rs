@@ -722,7 +722,14 @@ fn build_dashboard_summary(
     };
 
     let mut models_breakdown_vec: Vec<ModelAgg> = model_aggs.into_values().collect();
-    models_breakdown_vec.sort_by_key(|m| std::cmp::Reverse(m.total_tokens));
+    // ties keep the name's order: a hash map hands its values out in an order
+    // that changes between snapshots, and a list that reshuffles under the
+    // reader every four seconds reads as noise, not as a live figure
+    models_breakdown_vec.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     let models_breakdown: Vec<serde_json::Value> = models_breakdown_vec
         .into_iter()
         .map(|m| {
@@ -757,7 +764,11 @@ fn build_dashboard_summary(
         .collect();
 
     let mut agents_breakdown_vec: Vec<AgentAgg> = agent_aggs.into_values().collect();
-    agents_breakdown_vec.sort_by_key(|a| std::cmp::Reverse(a.total_tokens));
+    agents_breakdown_vec.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     let agents_breakdown: Vec<serde_json::Value> = agents_breakdown_vec
         .into_iter()
         .map(|a| {
