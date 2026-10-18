@@ -2,6 +2,24 @@
 
 ## [2.4.93] - 2026-10-18
 
+### 开源发现性与全网 SEO 体系化重构 (Open Source Discoverability & SEO Enhancement)
+
+为大幅提升项目在 GitHub 站内、Google / 百度及全球开源技术社区中的检索可见度与转化率，完成全链路文档与资产优化：
+
+- **根目录默认 README 英文重构 (Global English-First Showcase)**：
+  - 将根目录 `README.md` 重构为专业英文版，面向全球开发者搜索 `claude code remote control`、`codex web ui`、`ai agent session manager` 等核心热词；
+  - 补充官方版本、MIT 许可、语言与支持平台等标准 Badge；
+  - 提炼清晰的“痛点 vs 方案”对比、极简 Quick Start 指南、架构图，首屏 3 秒传达产品价值；
+  - 严格保留对上游 `magpie` 的开源溯源与 MIT 声明。
+- **新增规范中文版说明 (README_CN.md)**：
+  - 新增 `README_CN.md` 并与英文版建立顶部双向导航链接（`English | 简体中文`），保留原生亲和力与本土技术社区友好度。
+- **补齐根目录标准 MIT 许可证 (Standard MIT LICENSE)**：
+  - 补充标准的 `LICENSE` 文件（Copyright 2026 WANGUI TANG），消除 GitHub 仓库未识别开源协议导致的检索降权与企业合规顾虑。
+- **新增开源实战推广指南 (docs/OPEN_SOURCE_GUIDE.md)**：
+  - 梳理包含 15 个高权重 Topics 标签组、About 简介模版与 Social Preview 卡片设计指引；
+  - 产出即抄即投的国内推广模版（HelloGitHub、阮一峰《科技爱好者周刊》、V2EX“分享创造”）；
+  - 产出海外顶级渠道投放模版（Awesome Lists PR 申请、Reddit 各大板块发帖、X/Twitter 宣发文案）。
+
 ### 控制台全视图像素级视觉对齐 (Comprehensive Visual Alignment Across All Views)
 
 在对齐 magpie 极简美学（移除冗余 Logo、导航纯文本化、去 Emoji、隐藏大白框）后，对 Runner 控制台整体进行像素级视觉对齐与布局韵律规范：

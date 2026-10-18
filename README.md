@@ -1,79 +1,163 @@
 # AgentHub
 
-AgentHub 是**官方 Agent 会话的统一远程继续入口（Remote-only）**。
+> **The Unified Remote Continuation & Control Plane for Official AI Agents**  
+> Seamless Web & mobile management for **Claude Code** and **OpenAI Codex** sessions anywhere, anytime.
 
-它不实现自己的 Agent 推理循环，而是调用 Codex、Claude Code 等官方 Runtime。会话由本机 `agenthubd`（Runner）经官方协议托管；在任意设备通过自部署的 **Gateway + Web** 看到同一 Session 的实时过程，继续对话、处理审批或急停。读取历史只有一个目的：判断并执行“继续”。
+<p align="center">
+  <a href="README.md"><b>English</b></a> •
+  <a href="README_CN.md">简体中文</a> •
+  <a href="docs/README.md">Documentation</a> •
+  <a href="docs/ARCHITECTURE.md">Architecture</a> •
+  <a href="docs/CHANGELOG.md">Changelog</a>
+</p>
 
-> **架构演进（2026-10）**：彻底移除重型 Desktop 桌面客户端（Tauri），收敛为双端闭环：
-> 1. **本机 Runner（内置轻量自包含 Web 控制台）**：单二进制文件秒级启动，自带 CDS 设计系统内嵌 Web 界面（`agenthub-runner web`），无需安装任何桌面运行库；
-> 2. **远程 Web 控制台（`apps/web`）**：承担桌面浏览器与移动设备（响应式 PWA）的跨设备远程全功能控制。
+<p align="center">
+  <img src="https://img.shields.io/badge/version-2.4.93-blue.svg?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/badge/Rust-2024-orange.svg?style=flat-square" alt="Rust 2024" />
+  <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen.svg?style=flat-square" alt="Node" />
+  <img src="https://img.shields.io/badge/platforms-Windows%20|%20Linux%20|%20macOS%20|%20Android-lightgrey.svg?style=flat-square" alt="Platforms" />
+</p>
 
-## 产品结构
+---
+
+## Why AgentHub?
+
+Running CLI-based AI agents like Claude Code or OpenAI Codex transforms developer productivity, but introduces familiar real-world friction:
+
+- ☕ **Tethered to your desk**: You trigger a long-running execution and step away for lunch, a meeting, or a commute, leaving you completely blind to progress.
+- 🛑 **Blocked on permission prompts**: The agent requires a shell confirmation or tool permission approval. Without you at the terminal, the entire session halts indefinitely.
+- 📱 **Clumsy mobile access**: Connecting via mobile SSH is painful, fragile, and prone to accidental termination and keystroke errors.
+- 🔒 **Security vulnerabilities of open ports**: Port-forwarding or exposing raw developer ports to the public internet presents major security risks.
+
+**AgentHub eliminates these pains:**  
+AgentHub does not reinvent another agent inference loop. Instead, it hooks directly into official runtimes (Claude Code & Codex). Through a lightweight local daemon (`agenthubd` / `agenthub-runner`) establishing secure outbound-only WebSockets to a self-hosted Gateway, you can inspect live output streams, approve tool permissions, continue multi-turn conversations, or trigger emergency stops from any browser or smartphone PWA.
+
+---
+
+## Key Features
+
+- ⚡ **Single-Binary Instant Launch**: The local Runner (`agenthub-runner`) is written in pure Rust with an embedded, zero-dependency Web Console. Starts in milliseconds with minimal RAM overhead—no Electron or desktop runtime bloat.
+- 🌐 **Two-Tier Experience & Seamless Roaming**:
+  - **Local Console**: Instant local web management at `http://127.0.0.1:4200` to manage sessions, models, usage, and workspaces.
+  - **Remote Web Console (PWA)**：Self-hosted Gateway + Web single-page app with full responsive support across desktop browsers, tablets, and phones.
+- 🛡️ **Zero Inbound Port Exposure (Outbound-Only TLS)**: The runner connects outwards to your private Gateway over TLS/WSS. **Zero public inbound ports required, zero NAT holes needed**, keeping your host immune to external port scanners.
+- 🎯 **Native Official Protocol Alignment**: Full native support for official Claude Code & OpenAI Codex lifecycle semantics: session creation (`create`), resumption (`resume`), and detection (`discover`).
+- 📊 **Unified Usage & Model Observability**: Multi-provider metrics dashboard that distinguishes unpriced/free models from billed models, providing complete transparency into tokens and session costs.
+
+---
+
+## Architecture
 
 ```text
-本机 agenthubd (Runner) ──官方协议──► Codex / Claude Code Runtime
-      │                     └────► 内置轻量 Web 控制台 (http://127.0.0.1:4200)
-      │
-      └──主动出站 (WebSocket/TLS)──► Gateway ◄── 远程 Web 控制端 (PC / 手机浏览器)
+┌──────────────────────────────────────────────┐
+│             Local Workstation                │
+│                                              │
+│   Codex / Claude Code CLI Official Runtime   │
+│                     ▲                        │
+│             (Official Protocol)              │
+│                     ▼                        │
+│             agenthub-runner                  │
+│     (Single binary, pure Rust daemon)        │
+│          │                      │            │
+│  (Embedded Local Web)    (Outbound TLS/WSS)  │
+│          ▼                      ▼            │
+│  http://127.0.0.1:4200          │            │
+└─────────────────────────────────┼────────────┘
+                                  │
+                                  ▼
+                    ┌───────────────────────────┐
+                    │    Self-Hosted Gateway    │
+                    │ (Auth, Ledger, Routing)   │
+                    └─────────────┬─────────────┘
+                                  │
+                                  ▼ (WebSocket / HTTPS)
+                    ┌───────────────────────────┐
+                    │      Remote Web Client    │
+                    │  (Desktop Browser / PWA)  │
+                    └───────────────────────────┘
 ```
 
-- **agenthubd (Runner)**：本机唯一会话控制面。管理官方 Runtime、Session 所有权、事件流、命令幂等，并主动向 Gateway 建立出站连接；内置 CDS 轻量 Web 控制台，可由 `agenthub-runner web` 或 `agenthub-runner daemon` 启动。
-- **Gateway**：自部署控制中枢。负责设备与用户身份、命令账本、状态路由、事件持久化与重放，不运行 Agent，也不是 Session 真相源。
-- **Web**：核心远程控制端（自部署单页应用，支持桌面与移动端响应式）。用于跨设备查看实时执行、续聊、处理权限审批与紧急中断。
+---
 
-官方协议不支持第三方 attach 正在运行的 CLI 进程，因此“远程继续”要求 Session 由 `agenthubd` 托管：**create / resume** 是托管的正式能力；**discover** 只产生恢复候选的只读元数据，不等于取得控制权，三种语义不能互相冒充。
+## Quick Start
 
-## 当前能力
+### 1. Run Precompiled Runner Locally (Fastest)
 
-当前实现、目标架构和未完成差距只在 [文档索引](docs/README.md#当前实现与目标差距) 维护；本入口不复制阶段状态。验收记录只能证明其明确列出的环境，不能由 UI、模拟测试或旧版本数字推定。
+Download the precompiled single-file binary for your OS and launch:
 
-## 开发与运行 (Gateway + Web 主线)
+```bash
+# Launch the built-in lightweight Web Console (serves at http://127.0.0.1:4200)
+agenthub-runner web
 
+# Or run as a resident background daemon
+agenthub-runner daemon
+```
+
+Open `http://127.0.0.1:4200` in your browser to manage local sessions immediately.
+
+### 2. Full Stack from Source (Gateway + Web + Runner)
+
+#### Prerequisites
+- Node.js >= 22
+- Rust >= 1.80 (2024 edition)
+
+#### Launching Services
 ```powershell
-# 依赖安装
+# 1. Install workspace dependencies
 npm.cmd ci
 
-# 启动 Gateway (默认监听 http://127.0.0.1:3001)
+# 2. Start self-hosted Gateway (default: http://127.0.0.1:3001)
 npm.cmd run dev --workspace @agent-pulse/server
 
-# 启动 Web 前端 (默认连接 Gateway)
+# 3. Start remote Web client (connects to Gateway)
 npm.cmd run dev --workspace @agent-pulse/web
 
-# 启动本机 Runner daemon
+# 4. Start local Rust Runner
 cargo run -p agenthub-runner -- daemon
 ```
 
-完整验证命令：
-
+#### Run Full Test & Lint Suites
 ```powershell
+# Rust checks
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
+
+# Web & Gateway checks
 npm.cmd test
 npm.cmd run typecheck
 npm.cmd run format:check
 ```
 
-仅文档变更不运行语言构建。
+---
 
-## 开源引用与上游溯源
+## Upstream Attribution & Open Source Traceability
 
-| 上游项目                               | 许可证                              | 在本项目中负责的模块                                                                                        |
-| -------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [magpie](https://github.com/yetone/magpie) | MIT License, Copyright (c) 2026 yetone | 本机 Runner 内嵌 Web 控制台（`crates/runner/resources/dashboard.html` / `dashboard.css` / `dashboard.js`）的设计系统与布局原语 |
+AgentHub adheres strictly to open-source governance and licenses:
 
-Runner 控制台的视觉与布局不再自行发明。`dashboard.css`（由页面以 `/dashboard.css?v=<版本>` 引入）的 Foundation 层逐条移植自 magpie 的 `internal/gui/assets/app.css`：双主题设计令牌（background、card、text、muted、line、accent 与 `--ease` 缓动）、顶栏、带分组标签的侧栏及其顶栏 `.seg` 分段形态（一条圆角底轨、滑块托起当前页）、可自滚动的 `.view`、`.list` / `.row` / `.row.stat` 行模型、`.stats` / `.kpi` 指标卡、`.chips` / `.segs` 分段控件、`.text` / `.icon` 按钮、`.modal` / `.dialog` 与 `.editor` 表单网格。AgentHub 只在其上追加业务组合（会话、智能体、用量、模型、工作区、网关六个视图）与数据绑定。
+| Upstream Project | License | Module / Role in AgentHub |
+| :--- | :--- | :--- |
+| [magpie](https://github.com/yetone/magpie) | MIT License, Copyright (c) 2026 yetone | Embedded Web Console design system and layout primitives (`crates/runner/resources/dashboard.html` / `dashboard.css` / `dashboard.js`) |
 
-上游文件头注释与 MIT 版权声明原文保留在 `dashboard.css` 起始处。该模块的主权与维护边界属于上游仓库：出现视觉或布局缺陷时，先核对 magpie 上游的 Release / Commit / Issue / PR，确认上游未修复后再考虑本地补丁。
+> **Note**: Foundation CSS tokens (light/dark themes, segmented top bar, responsive grid, dialogs, and stat rows) are ported from magpie's `internal/gui/assets/app.css`. Upstream copyright and MIT license declarations remain intact in the source headers.
 
-## 文档
+---
 
-| 内容                     | 入口                                                                                                                                       |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 工程约束                 | [AGENTS.md](AGENTS.md)                                                                                                                     |
-| 产品方向                 | [PRD](docs/PRD.md)                                                                                                                         |
-| 目标架构与 Provider 接入 | [ARCHITECTURE](docs/ARCHITECTURE.md)                                                                                                       |
-| Remote 可靠性合同        | [SYNC_PROTOCOL](docs/SYNC_PROTOCOL.md)                                                                                                     |
-| 组件开发                 | [Runner](crates/runner/README.md)、[Gateway](services/api/README.md)、[Desktop](apps/desktop/README.md)、[Android](apps/android/README.md) |
-| 运行维护                 | [DEPLOYMENT](docs/DEPLOYMENT.md)、[PITFALLS](docs/PITFALLS.md)                                                                             |
-| 验收与历史               | [M4](docs/M4_VALIDATION.md)、[Android](docs/ANDROID_VALIDATION.md)、[CHANGELOG](docs/CHANGELOG.md)                                         |
+## Documentation Index
+
+| Topic | Link | Description |
+| :--- | :--- | :--- |
+| **Project Rules** | [AGENTS.md](AGENTS.md) | Engineering boundaries, security rules & commit discipline |
+| **Product Requirements** | [PRD](docs/PRD.md) | Problem analysis, target users & scope |
+| **System Architecture** | [ARCHITECTURE](docs/ARCHITECTURE.md) | Domain models, state machines & provider adapters |
+| **Reliability Protocol** | [SYNC_PROTOCOL](docs/SYNC_PROTOCOL.md) | Idempotent commands, distributed alignment & event envelopes |
+| **Deployment** | [DEPLOYMENT](docs/DEPLOYMENT.md) | Docker orchestration, reverse proxy & TLS setup |
+| **Known Pitfalls** | [PITFALLS](docs/PITFALLS.md) | Edge cases, debugging checklist & common mistakes |
+| **Changelog** | [CHANGELOG](docs/CHANGELOG.md) | Version history and technical progression |
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE). Contributions, bug reports, and pull requests are warmly welcomed!
