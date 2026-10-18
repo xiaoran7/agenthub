@@ -23,6 +23,13 @@
 - **验证 (Verification)**：
   - `cargo test --workspace`：全部 168 个单元测试与 39 个集成测试 100% 通过。
 
+### 交付产物：Windows 与 Android 同步打包至 2.4.93 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.93-windows-x64.zip`，内含 release 优化的 `agenthub-runner.exe` 与 Windows 一键接入说明；`Deliverables/AgentHub/agenthub-runner.exe` 与 `deploy/windows/agenthub-runner.exe` 同步更新。
+- **Android Debug APK**：`AgentHub-v2.4.93-android-debug.apk`（`versionCode=93`、`versionName=2.4.93`）。构建完成后严格执行 `./gradlew --stop` 释放常驻编译守护。
+- **校验清单**：`AgentHub-v2.4.93-SHA256.txt` 收录 exe、zip、APK 与内嵌静态资源（`dashboard.html` / `dashboard.css` / `dashboard.js`）的 SHA-256 哈希与字节大小。
+- **清理规则**：严格遵循「打新包必删旧包」铁律，删除 2.4.92 历史安装包与校验清单，确保交付产物目录唯一最新。
+
 ## [2.4.92] - 2026-10-18
 
 ### 拆出控制台脚本，费用只认守护进程一个口径 (Extract the Console Script, One Pricing Authority)
