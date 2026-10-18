@@ -497,7 +497,7 @@
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
           align-items: center;
-          height: var(--top-h); gap: 8px; padding: 0 12px;
+          height: var(--top-h); gap: 8px; padding: 0 var(--inset);
           background: var(--bg); border-bottom: var(--rule);
           position: relative; flex: none;
           transition: margin-left var(--dur-2) var(--ease);
@@ -621,7 +621,7 @@
         .led-strip .blk.cta:hover::after { transform: translateX(2px); opacity: 1; }
 
         /* ---- the bar above a list: search, count, actions ----------------------- */
-        .tools { margin: 0 0 10px; gap: 8px; min-height: 34px; }
+        .tools { margin: 0 0 12px; gap: 8px; min-height: 34px; }
         .tools .inp { width: 300px; height: 34px; border-radius: var(--r-s); font-size: var(--fs-body); padding: 0 12px; }
         .tools .tag { background: var(--card); border: var(--rule); height: 26px; font-size: var(--fs-note); padding: 0 10px; }
         .tools > .label { font-size: var(--fs-note); font-weight: 600; color: var(--fg-2); }
@@ -632,7 +632,7 @@
         /* ---- cards and rows ----------------------------------------------------- */
         .stack { gap: 12px; }
         .list { box-shadow: 0 1px 2px rgba(20, 22, 30, .03); }
-        .row { min-height: 56px; padding: 9px 16px; gap: 13px; }
+        .row { min-height: 56px; padding: 9px var(--inset); gap: 13px; }
         .row .name { font-weight: 550; font-size: var(--fs-body); }
         .row .sub { font-size: var(--fs-note); margin-top: 2px; }
         .group-head { min-height: 42px; padding: 0 var(--inset); background: var(--card); border-bottom: var(--rule-2); transition: background .14s; }
@@ -649,23 +649,25 @@
         #sessionsContainer .row { gap: 12px; padding-top: 10px; padding-bottom: 10px; }
         #sessionsContainer .row .who { min-width: 0; }
         #sessionsContainer .row .name { font-weight: 480; font-size: var(--fs-body); }
+        #sessionsContainer .row .when,
         #sessionsContainer .row .who .when {
-          flex: none; align-self: center; width: auto; min-width: 92px; margin-left: auto; margin-right: 0;
+          flex: none; align-self: center; width: auto; min-width: 96px; margin-left: auto; margin-right: 0;
           text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
           font-size: var(--fs-note); color: var(--faint); font-variant-numeric: tabular-nums;
         }
         #sessionsContainer .row .model {
           flex: none; max-width: 180px; margin-left: auto; min-width: 0; flex-shrink: 1;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-          font-family: var(--code); font-size: var(--fs-note); color: var(--faint);
+          font-family: var(--code); font-size: var(--fs-note); color: var(--faint); text-align: right;
         }
-        #sessionsContainer .row .model + .when { margin-left: 10px; }
+        #sessionsContainer .row .model + .when { margin-left: 12px; }
         #sessionsContainer .session-facts { gap: 7px; }
         #sessionsContainer .session-facts .tokens { color: var(--faint); font-size: calc(var(--fs-note) - 1px); }
         /* when the rail leaves the page narrow, the model note goes first and the
            clock keeps its line whole */
         @container view-q (max-width: 640px) {
           #sessionsContainer .row .model { display: none; }
+          #sessionsContainer .row .when,
           #sessionsContainer .row .who .when { width: auto; max-width: 140px; }
         }
         #sessionsContainer .session-facts .tag.cap { padding: 1px 6px; font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--fg-2); background: var(--card-2); border: var(--rule-2); height: 19px; }
@@ -673,7 +675,7 @@
         /* ---- stat rows: shared column grid ------------------------------------- */
         /* who | share | number | (extra). the columns are explicit so every list in
            the console puts its figures under the same edges */
-        .row.stat { display: grid; grid-template-columns: 22px minmax(0, 1fr) minmax(110px, 1.6fr) 104px auto; align-items: center; gap: 16px; }
+        .row.stat { display: grid; grid-template-columns: 22px minmax(0, 1fr) minmax(110px, 1.4fr) 104px minmax(72px, auto); align-items: center; gap: 16px; min-height: 54px; }
         .row.stat > .ic { grid-column: 1; align-self: center; width: 20px; height: 20px; }
         .row.stat .who { flex: none; grid-column: 2; }
         .row.stat .share { grid-column: 3; flex: none; height: 4px; margin: 0; background: var(--pill); border-radius: 3px; }
@@ -683,12 +685,6 @@
         .row.stat .num small { font-size: calc(var(--fs-note) - 1px); }
         .row.stat .cost { grid-column: 5; align-self: center; justify-self: end; margin: 0; min-width: 0; color: var(--green); font-size: var(--fs-note); font-variant-numeric: tabular-nums; white-space: nowrap; }
         #workspacesList .row.stat .cost { color: var(--muted); }
-        #modelsGrid .row.stat { grid-template-columns: minmax(0, 1fr) minmax(110px, 1.6fr) 104px auto; }
-        #modelsGrid .row.stat .who { grid-column: 1; flex: none; }
-        #modelsGrid .row.stat .share { grid-column: 2; }
-        #modelsGrid .row.stat .num { grid-column: 3; }
-        #modelsGrid .row.stat .cost { grid-column: 4; }
-        #workspacesList .row.stat { grid-template-columns: 22px minmax(0, 1fr) minmax(110px, 1.6fr) 104px auto; }
         /* the folder reads as one line: the parent is context, the leaf is the name */
         .ws-loc { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--faint); margin-top: 2px; }
         .ws-loc .ws-leaf { color: var(--fg-2); }
@@ -725,12 +721,13 @@
         /* a credential file's name is an identifier, not a sentence: let it shrink */
         #view-gateway .tools .tag { flex: 0 1 auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: calc(var(--fs-note) - 1px); }
         #view-gateway .row-head .label { flex: none; }
-        .gw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; margin-top: 16px; }
+        .gw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; margin-top: 0; }
         .gw-grid .list { margin: 0; }
         .gw-card { padding: calc(var(--inset) + 2px) var(--inset); }
         .gw-card p { font-size: var(--fs-body); line-height: 1.75; color: var(--fg-2); }
         .gw-card p + p { margin-top: 8px; }
         .gw-card > .label { display: block; margin-bottom: 8px; }
+        .gw-card > .label:not(:first-child) { margin-top: 16px; }
         .gw-facts { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px 14px; margin-top: 18px; padding-top: 18px; border-top: var(--rule-2); font-size: var(--fs-body); }
         .gw-facts dt { color: var(--muted); }
         .gw-facts dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: calc(var(--fs-body) - 1px); color: var(--fg-2); user-select: text; -webkit-user-select: text; }
@@ -793,6 +790,7 @@
           .led-strip .blk:nth-child(4) { border-top: var(--rule-2); }
           .tools .inp { width: auto; flex: 1 1 auto; min-width: 0; }
           #sessionsContainer .row .sub .tokens { display: none; }
+          #sessionsContainer .row .when,
           #sessionsContainer .row .who .when { width: auto; max-width: 140px; }
           #sessionsContainer .group-head .gpath { display: none; }
           .stats { grid-template-columns: 1fr 1fr; }
@@ -804,9 +802,6 @@
           .row.stat .share { display: none; }
           .row.stat .num { grid-column: 3; }
           .row.stat .cost { grid-column: 4; }
-          #modelsGrid .row.stat { grid-template-columns: minmax(0, 1fr) 104px auto; }
-          #modelsGrid .row.stat .num { grid-column: 2; }
-          #modelsGrid .row.stat .cost { grid-column: 3; }
         }
     /* ---- small marks the markup asks for by name, never by inline style --- */
     .ic.accent { color: var(--accent); }

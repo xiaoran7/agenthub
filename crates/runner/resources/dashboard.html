@@ -228,7 +228,11 @@
 
   <!-- View 2: the agents matrix -->
   <main class="view" id="view-agents" tabindex="-1">
-    <div class="tools"><span class="label">官方运行时探测矩阵</span></div>
+    <div class="tools">
+      <span class="label">官方运行时探测矩阵</span>
+      <span class="grow"></span>
+      <span class="tag" id="agentsCountBadge">0 个智能体</span>
+    </div>
     <div class="list" id="agentsGrid">
       <!-- dynamic agents list -->
     </div>
@@ -236,6 +240,11 @@
 
   <!-- View 3: usage analytics -->
   <main class="view" id="view-usage" tabindex="-1">
+    <div class="tools">
+      <span class="label">Token 消耗与成本分析</span>
+      <span class="grow"></span>
+      <span class="tag" id="usagePeriodBadge">全部历史</span>
+    </div>
     <div class="stats" id="usageKpiStats">
       <div class="kpi">
         <b id="kpiCost">—</b>
@@ -285,6 +294,7 @@
     <div class="tools">
       <span class="label">动态捕获模型可用状态与调用量排行</span>
       <span class="grow"></span>
+      <span class="tag" id="modelsCountBadge">0 种模型</span>
       <button class="text action" onclick="refreshModelsCatalog(event)" id="btnRefreshModels">
         <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
         <span>同步上游最新模型</span>
@@ -297,7 +307,11 @@
 
   <!-- View 5: workspaces -->
   <main class="view" id="view-workspaces" tabindex="-1">
-    <div class="tools"><span class="label">项目工作区会话活动与 Token 消耗排行</span></div>
+    <div class="tools">
+      <span class="label">项目工作区会话活动与 Token 消耗排行</span>
+      <span class="grow"></span>
+      <span class="tag" id="workspacesCountBadge">0 个工作区</span>
+    </div>
     <div class="list" id="workspacesList">
       <!-- dynamic workspaces list -->
     </div>

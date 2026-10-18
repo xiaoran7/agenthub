@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.4.93] - 2026-10-18
+
+### 控制台全视图像素级视觉对齐 (Comprehensive Visual Alignment Across All Views)
+
+在对齐 magpie 极简美学（移除冗余 Logo、导航纯文本化、去 Emoji、隐藏大白框）后，对 Runner 控制台整体进行像素级视觉对齐与布局韵律规范：
+
+- **页面边距与顶栏对齐 (Standardized Inset Alignment)**：
+  - 顶栏 `.top` 左右内边距由固定 `12px` 改为全局响应式布局变量 `var(--inset)`（18px），使顶栏左侧面包屑与右侧快捷按钮与下方卡片内容、列表左边缘实现像素级垂直基准线对齐。
+  - 列表行 `.row` 内边距统一为 `9px var(--inset)`，使行内图标与文字同 `.group-head`、`.row-head` 的标题前缀完全垂直对齐，彻底消除 2px 视觉锯齿。
+- **视图工具栏统一韵律 (Unified Toolbar Rhythm & Zero Layout Shift)**：
+  - 全局规范 `.tools` 为 `min-height: 34px`、下外边距 `12px`。
+  - 为用量视图（View 3）补齐标准化 `.tools` 栏，消除切换至用量标签时卡片向上跳跃 44px 的垂直抖动问题。
+  - 在智能体、模型、工作区视图工具栏右侧增加状态徽标（`#agentsCountBadge`、`#modelsCountBadge`、`#workspacesCountBadge`），在所有六个视图建立统一的右侧徽标视觉平衡。
+  - 去除网关视图 `.gw-grid` 冗余的 `margin-top: 16px`，保持与其他视图相同的 12px 间距，并在卡片内多代码片段间加入 `16px` 间距。
+- **会话时间戳对齐与右边缘防抖 (Session Timestamp Alignment & Right Edge Stability)**：
+  - 修复 CSS 选择器层级缺陷（原 `.row .who .when` 无法匹配 HTML 中作为 `.row` 直接子元素的 `<time class="when">`），正确声明 `#sessionsContainer .row .when, #sessionsContainer .row .who .when`。
+  - 为时间戳分配固定的 `min-width: 96px`、右对齐与 `tabular-nums`，右侧外边距归零，彻底消除了不同长度时间字符串（如“刚刚”、“25 分钟前”、“10月18日 14:30”）导致的会话卡片右侧文字参差不齐。
+- **统计列表统一 5 列 Grid 布局 (Unified 5-Column Stat Grid)**：
+  - 规范 `.row.stat` 为 `22px minmax(0, 1fr) minmax(110px, 1.4fr) 104px minmax(72px, auto)` 5 列 CSS Grid。
+  - 重构模型列表（`modelsGrid`）DOM 结构，将模型图标移至第一列，与用量视图中的模型统计、智能体统计以及工作区列表彻底统一步调，剔除多余的 4 列 Grid CSS 覆盖规则。
+- **验证 (Verification)**：
+  - `cargo test --workspace`：全部 168 个单元测试与 39 个集成测试 100% 通过。
+
 ## [2.4.92] - 2026-10-18
 
 ### 拆出控制台脚本，费用只认守护进程一个口径 (Extract the Console Script, One Pricing Authority)

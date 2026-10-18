@@ -731,6 +731,11 @@ function getAgentIcon(id, size = 18) {
 
 function renderAgents(agents) {
   const container = document.getElementById("agentsGrid");
+  const countBadge = document.getElementById("agentsCountBadge");
+  if (countBadge) {
+    const count = agents ? agents.length : 0;
+    countBadge.textContent = `${count} 个智能体`;
+  }
   if (!container) return;
 
   if (!agents || agents.length === 0) {
@@ -1370,6 +1375,7 @@ function renderUsageAnalytics(usage, sessions, stats) {
 
 function renderModels(models) {
   const container = document.getElementById("modelsGrid");
+  const countBadge = document.getElementById("modelsCountBadge");
   if (!container) return;
 
   let list = Array.isArray(models) && models.length > 0 ? [...models] : [];
@@ -1409,6 +1415,7 @@ function renderModels(models) {
   }
 
   if (list.length === 0) {
+    if (countBadge) countBadge.textContent = "0 种模型";
     container.innerHTML = `
       <div class="empty-state">
         <b>暂无模型记录</b>
@@ -1491,6 +1498,10 @@ function renderModels(models) {
     (a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name),
   );
 
+  if (countBadge) {
+    countBadge.textContent = `${items.length} 种模型`;
+  }
+
   const maxTokens = Math.max(1, items[0]?.totalTokens || totalTokensAll || 1);
 
   const costMap = backendModelCosts();
@@ -1517,8 +1528,9 @@ function renderModels(models) {
         item.calls > 0 ? `<span>${item.calls} 次调用</span>` : "";
 
       return `<div class="row stat">
+        <span class="ic">${getModelIcon(item.name, 20)}</span>
         <div class="who">
-          <div class="name-line"><span class="ic">${getModelIcon(item.name, 18)}</span><span class="name" title="${safeName}">${safeName}</span></div>
+          <div class="name-line"><span class="name" title="${safeName}">${safeName}</span></div>
           <div class="sub flow">${callsText}${item.tags.join(" ")}</div>
         </div>
         <div class="share" title="${pct}% 调用占比">
@@ -1565,6 +1577,11 @@ async function refreshModelsCatalog(event) {
 
 function renderWorkspaces(workspaces) {
   const container = document.getElementById("workspacesList");
+  const countBadge = document.getElementById("workspacesCountBadge");
+  if (countBadge) {
+    const count = workspaces ? workspaces.length : 0;
+    countBadge.textContent = `${count} 个工作区`;
+  }
   if (!container) return;
 
   if (!workspaces || workspaces.length === 0) {
