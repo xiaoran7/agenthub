@@ -19,7 +19,14 @@
   - `cargo test --workspace`：168 单元 + 26 / 17 / 7 / 5 / 3 集成全部通过；`cargo fmt --check` 与 clippy 的报错全部落在本次未触碰的既有文件（`build.rs`、`collectors/*`、`remote_host.rs`、`tray.rs`、`conversation.rs`、`model_catalog.rs`、`main.rs`），本次改动的 `web_server.rs` 无新增告警。
   - 真实 2.4.92 debug daemon（独立数据库与工作区，4313 端口）+ headless Edge（820×600，CDP）实测：`GET /` 返回 `/dashboard.js?v=2.4.92` 与 `/dashboard.css?v=2.4.92`，`/dashboard.js` 返回 200 `text/javascript`，版本匹配时 `Cache-Control: immutable`、不匹配时 `no-cache`；脚本加载后 `renderUsageAnalytics` 为函数，六个视图逐一切换正常，控制台零异常。
   - 费用口径用合成快照验证：已定价模型显示 `≈$10.50`、定价为零的模型显示 `≈$0.00`、未定价模型显示 `—`、KPI 显示 `≈$10.50`；守护进程回 `cost_usd: null` 时 KPI 显示 `—`；强制走兜底聚合路径时 KPI 与模型行均为 `—`，不再出现本地估算。`costCell` 的边界（0 / 0.004 / 99.999 / 100 / 123.4 / null / undefined）另有独立断言，全部通过。
-  - 交付产物未重新打包（本版只改控制台资源与文档），`Deliverables/` 保持 2.4.91。
+  - 交付产物打包至 `Deliverables/AgentHub/`（`agenthub-runner.exe`、`AgentHub-Runner-v2.4.92-windows-x64.zip`、`AgentHub-v2.4.92-android-debug.apk` 及 SHA-256 清单），按「打新包必删旧包」删除 2.4.88 旧产物；打包 exe 实测内嵌的 `dashboard.js` 与源码逐字节一致（`87a5f037…`），运行中的控制台返回 `/dashboard.js?v=2.4.92`。
+
+### 交付产物：Windows 与 Android 同步至 2.4.92 (Deliverables Repack)
+
+- **Windows x64 Runner**：`AgentHub-Runner-v2.4.92-windows-x64.zip`，内含 `agenthub-runner.exe` 与接入说明；本机 `Deliverables/AgentHub/agenthub-runner.exe` 同步替换。实测启动后 `GET /` 返回 200，引用 `/dashboard.js?v=2.4.92`，内嵌脚本 SHA-256 与源码一致，六个视图切换正常、零异常。
+- **Android Debug APK**：`versionCode=92`、`versionName=2.4.92`。
+- **校验清单**：`AgentHub-v2.4.92-SHA256.txt` 收录 exe、zip、APK 与内嵌 `dashboard.html` / `dashboard.css` / `dashboard.js`。
+- **补齐说明**：2.4.89 / 2.4.90 / 2.4.91 三期只改本机 Runner 与控制台资源，`Deliverables/` 实际停留在 2.4.88；本次一次性补齐到 2.4.92。
 
 ## [2.4.91] - 2026-10-18
 
