@@ -1,0 +1,8 @@
+name: "agenthub"
+description: "The Unified Remote Continuation & Web Control Plane for Claude Code and OpenAI Codex"
+version: "2.4.93"
+startCommand:
+  type: stdio
+  commandFunction:
+    command: "agenthub-runner"
+    args: ["daemon"]

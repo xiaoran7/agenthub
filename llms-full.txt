@@ -1,0 +1,109 @@
+# AgentHub Full Specification (llms-full.txt)
+# The Unified Remote Continuation & Control Plane for Official AI Agents
+# Version: 2.4.93
+# License: MIT License (Copyright 2026 WANGUI TANG)
+# Repository: https://github.com/xiaoran7/agenthub
+
+================================================================================
+1. SYSTEM ARCHITECTURE & TOPOLOGY
+================================================================================
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│               Developer Workstation (Local)             │
+│                                                         │
+│   Official Agent Runtimes (Claude Code / OpenAI Codex)  │
+│                           ▲                             │
+│                    (Native Protocol)                    │
+│                           ▼                             │
+│                  agenthub-runner.exe                    │
+│     (Single-binary, pure Rust 2024 daemon / runner)     │
+│             │                             │             │
+│   (Embedded Local Web)           (Outbound TLS/WSS)     │
+│             ▼                             ▼             │
+│     http://127.0.0.1:4200                 │             │
+└───────────────────────────────────────────┼─────────────┘
+                                            │
+                                            ▼
+                              ┌───────────────────────────┐
+                              │    Self-Hosted Gateway    │
+                              │ (Fastify / TypeScript)    │
+                              │  - Auth & Device Registry │
+                              │  - Durable Event Outbox   │
+                              │  - Command Ledger & Router│
+                              └─────────────┬─────────────┘
+                                            │
+                                            ▼ (WSS / SSE / HTTPS)
+                              ┌───────────────────────────┐
+                              │     Remote Web Client     │
+                              │ (React 19 / PWA / Next.js)│
+                              │  - Live Streaming Console │
+                              │  - Permission Approval UI │
+                              │  - Emergency Stop Control │
+                              └───────────────────────────┘
+```
+
+Component Roles:
+1. agenthub-runner (Runner / agenthubd):
+   - The authoritative local session control plane written in Rust.
+   - Manages official agent child processes via native stdio/JSON-RPC protocols.
+   - Single-writer guarantee: Exactly one process holds writer locks per session.
+   - Embedded local web server serving CDS / magpie-ported responsive dashboard.
+   - Outbound-only TLS client: Connects to self-hosted Gateway; no inbound NAT/firewall holes.
+
+2. Gateway:
+   - Self-hosted state routing and event persistence hub.
+   - Handles tenant auth, device public-key challenge, and command idempotency.
+   - Stores session event timelines with sequence ordering and durable watermarks.
+   - Does NOT execute LLM inference loops; does NOT store LLM provider credentials.
+
+3. Web Client (PWA):
+   - Responsive web interface designed for desktop browsers, tablets, and mobile phones.
+   - Consumes live SSE/WebSocket streams for token output, tool executions, and diffs.
+   - Provides touch-friendly one-tap approval for CLI shell commands and file edits.
+
+================================================================================
+2. CORE RELIABILITY & PROTOCOL ENVELOPES
+================================================================================
+
+2.1 Command Idempotency & Lifecycle States
+Remote commands sent from the Web Client adhere to strict state transitions:
+  QUEUED -> ACCEPTED -> EXECUTING -> COMPLETED / FAILED / INTERRUPTED
+- Every command carries an opaque `client_command_id` (UUID v4).
+- Resending a command with the same ID returns HTTP 202 with existing ledger receipt without duplicate execution.
+
+2.2 Three-Tier Session Semantics:
+- `create`: Spawns a new native session under the runner's management.
+- `resume`: Binds an existing historical session to the runner's control plane.
+- `discover`: Reads metadata (title, model, timestamps) strictly as read-only candidates; does NOT claim ownership.
+
+2.3 Privacy Redaction Policy:
+- Workstation absolute paths are hashed into stable `workspace_id` fingerprints.
+- Shell commands and prompts in unmanaged candidate discoveries are masked.
+- Auth credentials, cookies, and tokens are strictly excluded from network sync batches.
+
+================================================================================
+3. FREQUENTLY ASKED QUESTIONS & TROUBLESHOOTING (FAQ)
+================================================================================
+
+Q1: Why does agenthub-runner use outbound-only connections?
+A1: Developers running agents on local laptops or private networks often do not have static public IPs or port-forwarding access. Exposing local ports introduces security attack surfaces. With outbound-only TLS/WSS, the workstation securely phones home to the Gateway.
+
+Q2: Can AgentHub attach to an already running CLI session in another terminal?
+A2: No. Official agent runtimes (Claude Code, Codex) do not provide external attach APIs for active terminals. To enable remote control, the session must be started via or resumed into agenthub-runner (`agenthub-runner daemon` or `agenthub-runner web`).
+
+Q3: What happens if network disconnects during an agent run?
+A3: The local agent runtime continues executing uninterrupted. The runner buffers outgoing events in its durable local outbox journal. Once the connection to the Gateway is re-established, buffered events are synced via sequence watermarks with zero event loss.
+
+Q4: What models and providers are supported?
+A4: Official Claude Code (Anthropic Claude 3.5 / 3.7 / 5) and OpenAI Codex runtime environments. Future providers are integrated via native CLI capability probing.
+
+================================================================================
+4. UPSTREAM ATTRIBUTION & CODE HERITAGE
+================================================================================
+
+- Project: magpie (https://github.com/yetone/magpie)
+  License: MIT License, Copyright (c) 2026 yetone
+  Contribution: Runner embedded dashboard foundation styles (`dashboard.css`, dual-theme tokens, top segmented bar, responsive grid layouts).
+- Project: AgentHub
+  License: MIT License, Copyright (c) 2026 WANGUI TANG

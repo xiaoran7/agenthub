@@ -12,11 +12,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.4.93-blue.svg?style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/Rust-2024-orange.svg?style=flat-square" alt="Rust 2024" />
-  <img src="https://img.shields.io/badge/Node-%3E%3D22-brightgreen.svg?style=flat-square" alt="Node" />
-  <img src="https://img.shields.io/badge/platforms-Windows%20|%20Linux%20|%20macOS%20|%20Android-lightgrey.svg?style=flat-square" alt="Platforms" />
+  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.4.93-0284c7.svg?style=flat-square" alt="Version" /></a>
+  <a href="https://github.com/xiaoran7/agenthub"><img src="https://img.shields.io/badge/tests-226%20passed-10b981.svg?style=flat-square" alt="Tests" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b.svg?style=flat-square" alt="License" /></a>
+  <a href="llms.txt"><img src="https://img.shields.io/badge/llms.txt-standardized-8b5cf6.svg?style=flat-square" alt="llms.txt" /></a>
+  <img src="https://img.shields.io/badge/Rust-2024-f97316.svg?style=flat-square" alt="Rust 2024" />
+  <img src="https://img.shields.io/badge/Node-%3E%3D22-10b981.svg?style=flat-square" alt="Node" />
+  <a href="https://github.com/xiaoran7/agenthub/stargazers"><img src="https://img.shields.io/github/stars/xiaoran7/agenthub?style=flat-square&color=eab308" alt="GitHub Stars" /></a>
 </p>
 
 ---

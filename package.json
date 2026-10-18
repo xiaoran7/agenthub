@@ -2,6 +2,33 @@
   "name": "agenthub",
   "private": true,
   "version": "2.4.93",
+  "description": "Remote Web console & session manager for Claude Code and OpenAI Codex. Continue sessions anywhere via browser or mobile PWA.",
+  "author": "WANGUI TANG",
+  "license": "MIT",
+  "homepage": "https://github.com/xiaoran7/agenthub#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiaoran7/agenthub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xiaoran7/agenthub/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "openai-codex",
+    "ai-agent",
+    "agent-runner",
+    "session-manager",
+    "remote-control",
+    "web-ui",
+    "dashboard",
+    "self-hosted",
+    "pwa",
+    "developer-tools",
+    "rust",
+    "typescript"
+  ],
   "workspaces": [
     "packages/*",
     "services/*",
