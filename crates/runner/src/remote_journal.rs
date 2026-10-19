@@ -708,7 +708,32 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
         "history/snapshot" => params
             .get("items")
             .and_then(Value::as_array)
-            .map(|items| json!({"params":{"items":items}})),
+            .map(|items| {
+                // `conversation::load_session_conversation` stores message text
+                // under `content`, while every client reads `text` (the same
+                // key the live item events use). Project one canonical shape so
+                // a resumed session shows its history instead of an empty
+                // transcript, and drop fields no client understands.
+                let normalized: Vec<Value> = items
+                    .iter()
+                    .map(|item| {
+                        let mut out = serde_json::Map::new();
+                        for key in ["role", "kind", "label", "status"] {
+                            if let Some(value) = item.get(key).and_then(Value::as_str) {
+                                out.insert(key.into(), json!(value));
+                            }
+                        }
+                        let text = item
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .or_else(|| item.get("content").and_then(Value::as_str))
+                            .unwrap_or_default();
+                        out.insert("text".into(), json!(text));
+                        Value::Object(out)
+                    })
+                    .collect();
+                json!({"params":{"items": normalized}})
+            }),
         "turn/started" | "turn/completed" => params
             .pointer("/turn/id")
             .and_then(Value::as_str)
@@ -778,6 +803,28 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
             Some(json!({"params": Value::Object(projected_params)}))
         }
 
+        // A tool that has started but has no result yet. Without this the
+        // remote console cannot show a live "执行中" row; it only learns about
+        // the operation once it finishes. Only the fields a client renders
+        // are projected, and no provider payload is copied wholesale.
+        "item/started" => {
+            let item = params.get("item")?;
+            let id = item.get("id").and_then(Value::as_str)?;
+            let item_type = item.get("type").and_then(Value::as_str)?;
+            if !matches!(
+                item_type,
+                "commandExecution" | "fileChange" | "reasoning" | "thinking"
+            ) {
+                return None;
+            }
+            let mut started = json!({"id": id, "type": item_type});
+            for key in ["command", "commandLine", "toolName", "name", "path", "status", "text"] {
+                if let Some(value) = item.get(key).and_then(Value::as_str) {
+                    started[key] = json!(value);
+                }
+            }
+            Some(json!({"params":{"item": started}}))
+        }
         "item/completed" => {
             let item = params.get("item")?;
             let id = item.get("id").and_then(Value::as_str)?;
@@ -951,6 +998,66 @@ fn history_snapshot_projects_normalized_items_without_raw_paths() {
     let encoded = projected.to_string();
     assert!(!encoded.contains("alice"));
     assert!(!encoded.contains("do-not-send"));
+}
+
+#[cfg(test)]
+#[test]
+fn history_snapshot_projects_conversation_content_as_text() {
+    // `load_session_conversation` writes the body under `content`; clients read
+    // `text`. The projection is the one place allowed to bridge the two.
+    let event = crate::remote_host::HostEvent {
+        event_id: "history-two".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("sess-one".into()),
+        kind: "history/snapshot".into(),
+        raw: json!({"method":"history/snapshot","params":{
+            "items":[
+                {"role":"user","kind":"message","label":"","status":"completed","content":"开始"},
+                {"role":"assistant","kind":"tool","label":"Bash · 结果","status":"completed","content":"ok"}
+            ]
+        }}),
+        binding: None,
+        approval_id: None,
+        approval: None,
+        question_id: None,
+        question: None,
+    };
+    let projected = projected_remote_event(&event).unwrap();
+    let items = projected["event"]["raw"]["params"]["items"]
+        .as_array()
+        .unwrap();
+    assert_eq!(items[0]["text"], "开始");
+    assert_eq!(items[1]["text"], "ok");
+    assert_eq!(items[1]["label"], "Bash · 结果");
+    assert!(items[0].get("content").is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn started_tool_items_project_only_render_fields() {
+    let event = crate::remote_host::HostEvent {
+        event_id: "started-one".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("native-one".into()),
+        kind: "item/started".into(),
+        raw: json!({"method":"item/started","params":{"item":{
+            "id":"tool-one","type":"commandExecution","command":"cargo test",
+            "input":{"secret":"do-not-send"}
+        }}}),
+        binding: None,
+        approval_id: None,
+        approval: None,
+        question_id: None,
+        question: None,
+    };
+    let projected = projected_remote_event(&event).unwrap();
+    assert_eq!(
+        projected["event"]["raw"]["params"]["item"],
+        json!({"id":"tool-one","type":"commandExecution","command":"cargo test"})
+    );
+    assert!(!projected.to_string().contains("do-not-send"));
 }
 
 #[cfg(test)]

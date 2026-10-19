@@ -8,6 +8,9 @@
   <link rel="manifest" href="/manifest.json">
   <title>AgentHub Runner</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="alternate icon" href="/favicon.ico">
   <script>
     // ---- the console's layout tokens, declared once --------------------------
@@ -178,8 +181,11 @@
       <button class="icon" onclick="toggleTheme()" title="切换亮暗主题外观" id="themeBtn">
         <span id="themeIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span>
       </button>
-      <button class="icon shutdown-btn" onclick="shutdownRunner()" title="停止 Runner 守护进程" aria-label="停止 Runner 守护进程">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg>
+      <button class="icon settings-btn" id="btnSettings" onclick="openSettingsModal()" title="系统设置与偏好 (Ctrl+,)" aria-label="系统设置与偏好">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
       </button>
     </div>
   </header>
@@ -339,45 +345,219 @@
   <!-- View 6: gateway & session affinity -->
   <main class="view" id="view-gateway" tabindex="-1">
     <div class="tools">
-      <span class="label">网关与会话亲和</span>
+      <span class="label">智能体网关路由与会话亲和拓扑</span>
       <span class="grow"></span>
-      <span class="tag ok" id="gatewayBadge">已激活</span>
+      <span class="tag ok" id="gatewayBadge">已激活 · 标准端点就绪</span>
     </div>
-    <div class="gw-grid">
-      <div class="list">
-        <div class="row-head"><span class="label">为什么需要会话亲和</span></div>
-        <div class="gw-card">
-          <p>
-            智能体一轮对话里会连续发出很多次请求。请求若落到不同上游节点，服务端的
-            <b>Prompt Cache</b> 就会被反复打穿，命中率从 90% 掉到接近 0，延迟和 Token 一起涨。
-          </p>
-          <p>
-            AgentHub 在请求头里带上 <code>x-session-affinity</code>，让上游把同一个会话固定在同一个节点上，缓存才留得住。
-          </p>
-          <dl class="gw-facts">
-            <dt>网关地址</dt><dd id="gwBaseUrl">-</dd>
-            <dt>亲和请求头</dt><dd>x-session-affinity</dd>
-            <dt>当前来源</dt><dd id="gwSource">-</dd>
-          </dl>
+
+    <!-- 1. 网关概览指标看板 (4 组指标卡片) -->
+    <div class="stats gw-stats">
+      <div class="kpi gw-kpi">
+        <div class="gw-kpi-head">
+          <span class="gw-kpi-icon accent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+          </span>
+          <span class="gw-kpi-badge ok" id="gwStatusPill">在线</span>
+        </div>
+        <b id="gwCardStatus">就绪</b>
+        <span>网关服务探测</span>
+        <small id="gwCardSource">自适应标准端点</small>
+      </div>
+
+      <div class="kpi gw-kpi">
+        <div class="gw-kpi-head">
+          <span class="gw-kpi-icon green">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </span>
+          <span class="gw-kpi-badge green">锁定</span>
+        </div>
+        <b>已激活</b>
+        <span>会话亲和保护</span>
+        <small>固定单节点粘滞调度</small>
+      </div>
+
+      <div class="kpi gw-kpi">
+        <div class="gw-kpi-head">
+          <span class="gw-kpi-icon amber">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </span>
+          <span class="gw-kpi-badge amber">90%+</span>
+        </div>
+        <b id="gwCacheHitRate">~90%</b>
+        <span>缓存命中预期</span>
+        <small>Prompt Cache 延迟降 70%</small>
+      </div>
+
+      <div class="kpi gw-kpi">
+        <div class="gw-kpi-head">
+          <span class="gw-kpi-icon blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
+          <span class="gw-kpi-badge blue">标头</span>
+        </div>
+        <b class="mono" style="font-size: calc(var(--fs-body) + 0.5px);">x-session-affinity</b>
+        <span>亲和调度协议键</span>
+        <small>自动关联 Session 上下文</small>
+      </div>
+    </div>
+
+    <!-- 2. 会话亲和与缓存演进拓扑图示组件 (核心流程可视化卡片) -->
+    <div class="list mt">
+      <div class="row-head">
+        <span class="label">会话亲和 (Session Affinity) 路由拓扑与 Prompt Cache 演进机制</span>
+        <span class="grow"></span>
+        <span class="tag ok">高吞吐优化</span>
+      </div>
+      <div class="gw-topo-card">
+        <div class="topo-split">
+          <!-- Flow A: 无亲和打穿 -->
+          <div class="topo-flow bad">
+            <div class="topo-flow-head">
+              <span class="topo-dot bad"></span>
+              <b>无亲和随机调度 (打穿缓存)</b>
+              <span class="topo-tag bad">Cache Miss 高达 80%+</span>
+            </div>
+            <div class="topo-diagram">
+              <div class="topo-node agent">
+                <div class="t-title">Agent Client</div>
+                <div class="t-sub">连续多轮思考提问</div>
+              </div>
+              <div class="topo-arrows bad">
+                <div class="arrow-line"><span>Req 1 ➔</span></div>
+                <div class="arrow-line"><span>Req 2 ➔</span></div>
+                <div class="arrow-line"><span>Req 3 ➔</span></div>
+              </div>
+              <div class="topo-nodes-cluster">
+                <div class="node-box miss">Node A <i>(冷启动/写缓存)</i></div>
+                <div class="node-box miss">Node B <i>(未命中 ❌ 重建 KV)</i></div>
+                <div class="node-box miss">Node C <i>(未命中 ❌ 重建 KV)</i></div>
+              </div>
+            </div>
+            <div class="topo-summary bad">
+              <span>⚠️ 缺陷后果</span>：请求分散落入不同网关节点，服务端 Prompt Cache 无法复用，首字等待延迟成倍增加，Token 计费全额征收。
+            </div>
+          </div>
+
+          <!-- Flow B: 有亲和锁定 -->
+          <div class="topo-flow good">
+            <div class="topo-flow-head">
+              <span class="topo-dot good"></span>
+              <b>AgentHub 会话亲和粘滞 (锁定节点)</b>
+              <span class="topo-tag good">Cache Hit 90%+ ⚡</span>
+            </div>
+            <div class="topo-diagram">
+              <div class="topo-node agent good">
+                <div class="t-title">AgentHub 纳管智能体</div>
+                <div class="t-sub">透传 x-session-affinity</div>
+              </div>
+              <div class="topo-arrows good">
+                <div class="arrow-line"><span>Req 1, 2, 3... ➔</span></div>
+                <div class="arrow-badge">全量固定路由</div>
+              </div>
+              <div class="topo-nodes-cluster">
+                <div class="node-box hit">
+                  <div class="hit-title">Node A (已粘滞锁定)</div>
+                  <div class="hit-sub">⚡ 首次写入 ➔ 后续 100% 毫秒级复用</div>
+                </div>
+                <div class="node-box idle">Node B (负载均衡其他会话)</div>
+                <div class="node-box idle">Node C (负载均衡其他会话)</div>
+              </div>
+            </div>
+            <div class="topo-summary good">
+              <span>🚀 核心收益</span>：整个多轮对话稳定路由到同一物理计算节点，KV 缓存持续命中累进，流式响应提速 70%，Token 账单大幅缩减。
+            </div>
+          </div>
         </div>
       </div>
-      <div class="list">
-        <div class="row-head">
-          <span class="label">让一个智能体走网关</span>
-          <span class="grow"></span>
-          <button class="text accent" onclick="copySnippet('envSnippet')">复制 Bash</button>
-          <button class="text accent" onclick="copySnippet('psSnippet')">复制 PowerShell</button>
-        </div>
-        <div class="gw-card">
-          <span class="label">Bash / Zsh</span>
-          <div class="snippet" >
-            <pre id="envSnippet"></pre>
+    </div>
+
+    <!-- 3. 参数快速复制与多环境代码切换器 -->
+    <div class="list mt">
+      <div class="row-head">
+        <span class="label">客户端多语言快速接入代码</span>
+        <span class="grow"></span>
+        <button class="text accent" onclick="copyCurrentSnippet()" id="btnCopySnippet">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;margin-right:4px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span id="copySnippetBtnText">复制当前配置</span>
+        </button>
+      </div>
+      <div class="gw-card">
+        <!-- 核心参数胶囊条 -->
+        <div class="gw-capsules">
+          <div class="capsule" onclick="copyValue('gwBaseUrl', '网关地址')">
+            <span class="c-label">网关 BASE URL</span>
+            <span class="c-val mono" id="gwBaseUrl">-</span>
+            <span class="c-copy" title="复制">📋</span>
           </div>
-          <span class="label" >PowerShell (Windows)</span>
-          <div class="snippet">
-            <pre id="psSnippet"></pre>
+          <div class="capsule" onclick="copyValue('gwAffinityKey', '亲和标头')">
+            <span class="c-label">亲和 HEADER</span>
+            <span class="c-val mono" id="gwAffinityKey">x-session-affinity</span>
+            <span class="c-copy" title="复制">📋</span>
+          </div>
+          <div class="capsule" onclick="copyValue('gwSource', '探测来源')">
+            <span class="c-label">探测来源</span>
+            <span class="c-val" id="gwSource">-</span>
+            <span class="c-copy" title="复制">📋</span>
           </div>
         </div>
+
+        <!-- 语言环境选项卡 -->
+        <div class="gw-code-tabs">
+          <div class="segs" id="gwEnvTabs">
+            <button type="button" class="seg-btn on" data-env="bash" onclick="switchSnippetEnv('bash')"><span>Bash / Zsh (Linux & macOS)</span></button>
+            <button type="button" class="seg-btn" data-env="powershell" onclick="switchSnippetEnv('powershell')"><span>PowerShell (Windows)</span></button>
+            <button type="button" class="seg-btn" data-env="node" onclick="switchSnippetEnv('node')"><span>Node.js / TS</span></button>
+            <button type="button" class="seg-btn" data-env="python" onclick="switchSnippetEnv('python')"><span>Python (Anthropic SDK)</span></button>
+          </div>
+        </div>
+
+        <div class="snippet mt-s">
+          <pre id="gwCodeBlock"></pre>
+          <!-- hidden legacy elements kept for js compat -->
+          <pre id="envSnippet" style="display:none;"></pre>
+          <pre id="psSnippet" style="display:none;"></pre>
+          <pre id="nodeSnippet" style="display:none;"></pre>
+          <pre id="pySnippet" style="display:none;"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. 三大常见场景接入卡片 (组件卡片结合) -->
+    <div class="gw-scenarios-grid mt">
+      <div class="gw-scenario-card">
+        <div class="sc-head">
+          <span class="sc-icon">💻</span>
+          <div>
+            <b>Claude Code 官方 CLI</b>
+            <span>零修改透明生效</span>
+          </div>
+        </div>
+        <p>在终端启动 Claude Code 前导出 <code>ANTHROPIC_BASE_URL</code> 环境变量即可自动挂载会话亲和保护层。</p>
+        <div class="sc-cmd"><code>export ANTHROPIC_BASE_URL="http://127.0.0.1:4200"</code></div>
+      </div>
+
+      <div class="gw-scenario-card">
+        <div class="sc-head">
+          <span class="sc-icon">⚡</span>
+          <div>
+            <b>Codex / OpenCode</b>
+            <span>自定义请求头透传</span>
+          </div>
+        </div>
+        <p>在客户端网络设置或 <code>config.json</code> 中注入自定义标头 <code>x-session-affinity: &lt;session_id&gt;</code>，保障会话独立。</p>
+        <div class="sc-cmd"><code>"headers": { "x-session-affinity": "sess-xyz" }</code></div>
+      </div>
+
+      <div class="gw-scenario-card">
+        <div class="sc-head">
+          <span class="sc-icon">🤖</span>
+          <div>
+            <b>多智能体协同集群 (Subagents)</b>
+            <span>群组亲和树传递</span>
+          </div>
+        </div>
+        <p>子智能体派生时继承父会话的 Affinity Tag，所有 Agent 并发或流式步骤共享一份高命中 Prompt Cache。</p>
+        <div class="sc-cmd"><code>client.headers["x-session-affinity"] = rootSessionId</code></div>
       </div>
     </div>
   </main>
@@ -388,6 +568,76 @@
     <span class="status" id="footPort"></span>
     <span class="status mono" id="footEndpoint"></span>
   </footer>
+
+  <!-- settings modal -->
+  <div id="settingsModal" class="modal">
+    <div class="dialog">
+      <div class="editor">
+        <div class="ehead">
+          <span class="ic accent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </span>
+          <b>AgentHub Runner 运行设置</b>
+          <span class="note">偏好设置 · 运行环境 · 守护状态</span>
+          <button class="icon push" onclick="closeSettingsModal()" title="关闭 (Esc)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
+          </button>
+        </div>
+
+        <label>核心版本</label>
+        <div>
+          <span class="code-box accent" id="settingsVersion">AgentHub Runner v2.4.98 (Windows x64)</span>
+        </div>
+
+        <label>服务监听</label>
+        <div>
+          <span class="code-box" id="settingsEndpoint">http://127.0.0.1:4200 (内嵌高性能 HTTP / SSE)</span>
+        </div>
+
+        <label>数据存储</label>
+        <div class="pair">
+          <span class="code-box" id="settingsDataDir">~/.agenthub</span>
+          <span class="side">
+            <button type="button" class="text action" onclick="openDataDirectory()" title="在本地文件资源管理器中打开数据目录">
+              <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+              <span>打开目录</span>
+            </button>
+          </span>
+        </div>
+
+        <label>界面外观</label>
+        <div class="pair">
+          <div class="segs theme-segs">
+            <button type="button" class="seg-btn" id="themeOptLight" onclick="setAppTheme('light')"><span>明亮</span></button>
+            <button type="button" class="seg-btn" id="themeOptDark" onclick="setAppTheme('dark')"><span>暗黑</span></button>
+          </div>
+          <span class="hint" style="margin-left: 8px;">根据环境自适应高分屏渲染</span>
+        </div>
+
+        <label>守护进程</label>
+        <div class="full" style="grid-column: 2 / -1;">
+          <div style="display:flex; align-items:center; justify-content:space-between; padding: 12px 14px; border: var(--rule); border-radius: var(--r-s); background: var(--card-2);">
+            <div>
+              <b style="display:block; font-size:var(--fs-body); color:var(--fg);">退出守护进程</b>
+              <span style="font-size:var(--fs-note); color:var(--muted);">注销 Windows 系统托盘并安全释放 4200 端口</span>
+            </div>
+            <button type="button" class="text action" style="color:var(--red); border-color:var(--red-soft); background:var(--red-soft);" onclick="closeSettingsModal(); shutdownRunner();">
+              <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg></span>
+              <span>停止并退出</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="bar">
+          <span class="grow"></span>
+          <button type="button" class="text action primary" onclick="closeSettingsModal()">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- device pairing -->
   <div id="pairModal" class="modal">

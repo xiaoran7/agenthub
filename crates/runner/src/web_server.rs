@@ -191,6 +191,45 @@ fn handle_connection(
         return Ok(());
     }
 
+    if path == "/icon.png" {
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "image/png",
+            ICON_PNG,
+            false,
+            Some("public, max-age=86400"),
+        )?;
+        return Ok(());
+    }
+
+    if path == "/icon-192.png" {
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "image/png",
+            ICON_192_PNG,
+            false,
+            Some("public, max-age=86400"),
+        )?;
+        return Ok(());
+    }
+
+    if path == "/icon-512.png" {
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "image/png",
+            ICON_512_PNG,
+            false,
+            Some("public, max-age=86400"),
+        )?;
+        return Ok(());
+    }
+
     if path == "/manifest.json" {
         send_response(
             &mut stream,
@@ -333,6 +372,14 @@ impl ApiRequest<'_> {
                     thread::sleep(Duration::from_millis(250));
                     std::process::exit(0);
                 });
+            }
+            ("POST", "/api/open-data-dir") => {
+                crate::tray::open_data_dir();
+                let resp = json!({
+                    "status": "ok",
+                    "message": "已在系统文件管理器中打开本地数据存储目录"
+                });
+                send_json_response(stream, 200, &resp)?;
             }
             // the window's caption is painted the page's colour by the theme
             // extension the desktop window opens with; Edge reads that theme as
@@ -1344,9 +1391,12 @@ fn send_response(
     Ok(())
 }
 
-/// 嵌入式自包含静态图标资源
+/// 嵌入式自包含静态图标资源（包含全尺寸 ICO 与高清晰度 PNG 簇）
 const FAVICON_ICO: &[u8] = include_bytes!("../resources/icon.ico");
 const ICON_SVG: &str = include_str!("../resources/icon.svg");
+const ICON_PNG: &[u8] = include_bytes!("../resources/icon.png");
+const ICON_192_PNG: &[u8] = include_bytes!("../resources/icon-192.png");
+const ICON_512_PNG: &[u8] = include_bytes!("../resources/icon-512.png");
 
 /// 嵌入式自包含 CDS (Claude Design System) 单页前端
 const INDEX_HTML: &str = include_str!("../resources/dashboard.html");
@@ -1419,6 +1469,21 @@ const MANIFEST_JSON: &str = r##"{
   "background_color": "#f4f4f6",
   "theme_color": "#f4f4f6",
   "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
     {
       "src": "/icon.svg",
       "sizes": "any",

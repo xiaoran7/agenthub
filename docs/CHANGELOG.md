@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.4.98] - 2026-10-19
+
+### 网关交互青空化重构、系统设置弹窗、高 DPI 托盘图标与 Agent-Nexus 现代菜单 (Gateway Modernization, Settings Modal & High-DPI Icons)
+
+- **青空组件化网关重构 (Aozora Gateway View Modernization)**：
+  - 彻底淘汰大段纯文字说明，将其重构成符合青空规范的组件化交互看板；
+  - 顶部设立 4 组带有状态徽章与多色图标的看板卡片（网关服务探测、会话亲和保护、缓存命中预期、亲和调度协议键）；
+  - 新增会话亲和与缓存演进拓扑图示组件 (Visual Topology Comparison)，直观呈现“无亲和随机调度打穿 Prompt Cache (Cache Miss 80%+)”与“AgentHub 亲和粘滞 90%+ 缓存命中 (Cache Hit 90%+ ⚡)”在延迟与 Token 成本上的巨大差异；
+  - 设立参数快速复制胶囊条（网关 BASE URL、亲和 HEADER、探测来源），并引入多环境代码切换器（Bash、PowerShell、Node.js、Python SDK）与一键复制代码功能；
+  - 增加 Claude Code CLI、Codex / OpenCode、多智能体协同集群三大场景接入卡片。
+- **顶栏设置齿轮按钮与系统设置弹窗 (Top Bar Settings Gear & Drawer)**：
+  - 将顶栏关机按钮（⏻）替换为现代化设置齿轮按钮（⚙，快捷键 `Ctrl+,`）；
+  - 新增系统偏好设置弹窗：展示核心版本信息、HTTP/SSE 监听端点、本地数据目录 (`~/.agenthub`) 展示与一键唤起系统文件资源管理器 (`/api/open-data-dir`)、明暗外观切换药丸、以及安全优雅的退出守护进程入口。
+- **全尺寸高清晰原生系统托盘与任务栏图标 (Crisp Multi-Resolution High-DPI Icons)**：
+  - 生成覆盖 16×16 至 256×256（共 9 组分辨率）的标准多帧 `icon.ico`，针对暗色托盘优化高对比度无底透明电光蓝 Spoke；
+  - Win32 托盘注册升级为 `LoadImageW` + `SM_CXSMICON` / `SM_CXICON`，解决 Windows 100%~200% 高分屏托盘与任务栏图标模糊拉伸与近邻插值变形缺陷；
+  - Web PWA 清单与 `<head>` 注入 192×192 和 512×512 高清 PNG 图标支持。
+- **现代 Fluent 原生上下文菜单 (Agent-Nexus Modern Context Menu)**：
+  - 对齐现代上下文菜单风格：顶部只读状态头展示当前版本与监听端口；
+  - 控制台入口设为系统原生加粗默认项；新增拓扑直达、在系统浏览器中打开、数据目录快速唤起等菜单。
+
 ## [2.4.97] - 2026-10-19
 
 ### Android 移动端视觉对齐、间距栅格统一与功能入口分区 (Visual Alignment, Spacing Grid & Action Grouping)

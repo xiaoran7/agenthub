@@ -806,6 +806,43 @@ function validateRemoteEventRaw(
     }
     return;
   }
+  if (kind === "item/started") {
+    // An item that announces itself before it has any output. Only the fields
+    // a client renders are accepted, so a live "执行中" row is possible without
+    // letting an arbitrary provider object ride along.
+    const item = params.item;
+    if (
+      !only(["item"]) ||
+      !item ||
+      typeof item !== "object" ||
+      Array.isArray(item)
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    const typed = item as Record<string, unknown>;
+    const itemKeys = Object.keys(typed);
+    if (
+      typeof typed.id !== "string" ||
+      itemKeys.some(
+        (key) =>
+          ![
+            "id",
+            "type",
+            "command",
+            "commandLine",
+            "toolName",
+            "name",
+            "path",
+            "status",
+            "text",
+          ].includes(key),
+      ) ||
+      !["commandExecution", "fileChange", "reasoning", "thinking"].includes(
+        typed.type as string,
+      )
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    return;
+  }
   if (kind === "item/completed") {
     const item = params.item;
     if (

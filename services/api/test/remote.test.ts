@@ -274,6 +274,26 @@ test("approval snapshots replace state and unsafe approval events never persist"
         }),
       /unsafe_provider_event/u,
     );
+    // A started tool row may carry the command it is about to run, but only
+    // the render fields the console understands.
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 3, {
+          type: "event",
+          event: hostEvent("item/started", {
+            raw: {
+              params: {
+                item: {
+                  id: "tool-two",
+                  type: "commandExecution",
+                  input: { secret: "usable-secret" },
+                },
+              },
+            },
+          }),
+        }),
+      /unsafe_provider_event/u,
+    );
     for (const extra of [
       { command: "private command" },
       { diff: "private diff" },

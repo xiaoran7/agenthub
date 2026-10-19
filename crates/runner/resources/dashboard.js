@@ -292,7 +292,7 @@ function initSideEdge() {
   });
 }
 
-// Ctrl+Shift+S toggles the sidebar, as magpie's title-bar button has it
+// Keyboard shortcuts: Ctrl+Shift+S (sidebar), Ctrl+, (settings), Esc (close modals)
 window.addEventListener("keydown", (e) => {
   if (
     e.ctrlKey &&
@@ -302,6 +302,12 @@ window.addEventListener("keydown", (e) => {
   ) {
     e.preventDefault();
     toggleSideNav();
+  } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
+    e.preventDefault();
+    openSettingsModal();
+  } else if (e.key === "Escape") {
+    closeSettingsModal();
+    closePairModal();
   }
 });
 
@@ -1714,6 +1720,8 @@ function shortParent(p) {
   return (parent.length > 2 ? "…/" : "") + tail + "/";
 }
 
+let currentSnippetEnv = "bash";
+
 function renderGateway(gateway) {
   if (!gateway) return;
   const baseUrl = gateway.base_url || GATEWAY_URL;
@@ -1724,8 +1732,6 @@ function renderGateway(gateway) {
     const source = gateway.source || "gateway";
     const text = gateway.detected ? `已连接 · ${source}` : "标准端点就绪";
     badge.textContent = text;
-    // the detected source can carry a full credential file name; keep the row
-    // from stretching and let the title hold the whole value
     badge.title = text;
     badge.className = gateway.detected ? "tag ok cap-long" : "tag cap-long";
   }
@@ -1737,21 +1743,94 @@ function renderGateway(gateway) {
     gwText.textContent = gateway.detected ? `网关 ${host}` : "网关未探测";
   }
 
-  const envElem = document.getElementById("envSnippet");
-  if (envElem) {
-    envElem.textContent = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
+  // KPI card updates
+  const gwCardStatus = document.getElementById("gwCardStatus");
+  if (gwCardStatus) gwCardStatus.textContent = gateway.detected ? "已连接" : "就绪";
+  const gwStatusPill = document.getElementById("gwStatusPill");
+  if (gwStatusPill) {
+    gwStatusPill.textContent = gateway.detected ? "ONLINE" : "READY";
+    gwStatusPill.className = gateway.detected ? "gw-kpi-badge ok" : "gw-kpi-badge blue";
   }
-  const psElem = document.getElementById("psSnippet");
-  if (psElem) {
-    psElem.textContent = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "${AFFINITY_HEADER}=agenthub-session-1"`;
+  const gwCardSource = document.getElementById("gwCardSource");
+  if (gwCardSource) {
+    gwCardSource.textContent = gateway.detected
+      ? gateway.source || "上游网关"
+      : "自适应标准端点";
   }
+
+  // Parameter capsules
   const baseElem = document.getElementById("gwBaseUrl");
   if (baseElem) baseElem.textContent = baseUrl;
   const srcElem = document.getElementById("gwSource");
   if (srcElem) {
     srcElem.textContent = gateway.detected
       ? gateway.source || "上游网关"
-      : "未探测到上游网关，当前使用标准端点";
+      : "自适应标准端点";
+  }
+
+  // Generate snippets for all 4 environments
+  const bashCode = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
+  const psCode = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "${AFFINITY_HEADER}=agenthub-session-1"`;
+  const nodeCode = `import Anthropic from '@anthropic-ai/sdk';\n\nconst client = new Anthropic({\n  baseURL: '${baseUrl}',\n  defaultHeaders: {\n    '${AFFINITY_HEADER}': 'agenthub-session-1',\n  },\n});`;
+  const pyCode = `from anthropic import Anthropic\n\nclient = Anthropic(\n    base_url="${baseUrl}",\n    default_headers={\n        "${AFFINITY_HEADER}": "agenthub-session-1",\n    },\n)`;
+
+  const envElem = document.getElementById("envSnippet");
+  if (envElem) envElem.textContent = bashCode;
+  const psElem = document.getElementById("psSnippet");
+  if (psElem) psElem.textContent = psCode;
+  const nodeElem = document.getElementById("nodeSnippet");
+  if (nodeElem) nodeElem.textContent = nodeCode;
+  const pyElem = document.getElementById("pySnippet");
+  if (pyElem) pyElem.textContent = pyCode;
+
+  updateActiveSnippet();
+}
+
+function updateActiveSnippet() {
+  const codeBlock = document.getElementById("gwCodeBlock");
+  if (!codeBlock) return;
+  const baseUrl =
+    (dashboardData && dashboardData.gateway && dashboardData.gateway.base_url) ||
+    GATEWAY_URL;
+  if (currentSnippetEnv === "bash") {
+    codeBlock.textContent = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
+  } else if (currentSnippetEnv === "powershell") {
+    codeBlock.textContent = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "${AFFINITY_HEADER}=agenthub-session-1"`;
+  } else if (currentSnippetEnv === "node") {
+    codeBlock.textContent = `import Anthropic from '@anthropic-ai/sdk';\n\nconst client = new Anthropic({\n  baseURL: '${baseUrl}',\n  defaultHeaders: {\n    '${AFFINITY_HEADER}': 'agenthub-session-1',\n  },\n});`;
+  } else if (currentSnippetEnv === "python") {
+    codeBlock.textContent = `from anthropic import Anthropic\n\nclient = Anthropic(\n    base_url="${baseUrl}",\n    default_headers={\n        "${AFFINITY_HEADER}": "agenthub-session-1",\n    },\n)`;
+  }
+}
+
+function switchSnippetEnv(env) {
+  currentSnippetEnv = env;
+  const tabs = document.querySelectorAll("#gwEnvTabs .seg-btn");
+  tabs.forEach((btn) => {
+    btn.classList.toggle("on", btn.getAttribute("data-env") === env);
+  });
+  updateActiveSnippet();
+}
+
+function copyCurrentSnippet() {
+  const codeBlock = document.getElementById("gwCodeBlock");
+  if (codeBlock && codeBlock.textContent) {
+    copyText(codeBlock.textContent);
+    const envNames = {
+      bash: "Bash",
+      powershell: "PowerShell",
+      node: "Node.js",
+      python: "Python",
+    };
+    toast(`已复制 ${envNames[currentSnippetEnv] || "当前"} 配置`);
+  }
+}
+
+function copyValue(elementId, label) {
+  const el = document.getElementById(elementId);
+  if (el && el.textContent && el.textContent !== "-") {
+    copyText(el.textContent);
+    toast(`已复制 ${label}`);
   }
 }
 
@@ -1941,6 +2020,58 @@ function copyText(text) {
     ta.select();
     document.execCommand("copy");
     document.body.removeChild(ta);
+  }
+}
+
+function openSettingsModal() {
+  const modal = document.getElementById("settingsModal");
+  if (!modal) return;
+  modal.classList.add("open");
+  const isDark = document.documentElement.classList.contains("dark");
+  const optLight = document.getElementById("themeOptLight");
+  const optDark = document.getElementById("themeOptDark");
+  if (optLight && optDark) {
+    optLight.classList.toggle("on", !isDark);
+    optDark.classList.toggle("on", isDark);
+  }
+  const ep = document.getElementById("settingsEndpoint");
+  if (ep) {
+    ep.textContent = `http://${location.hostname || "127.0.0.1"}:${PORT} (内嵌高性能 HTTP / SSE)`;
+  }
+}
+
+function closeSettingsModal() {
+  const modal = document.getElementById("settingsModal");
+  if (modal) modal.classList.remove("open");
+}
+
+function setAppTheme(theme) {
+  const dark = theme === "dark";
+  document.documentElement.classList.toggle("dark", dark);
+  try {
+    localStorage.setItem(STORE.theme, dark ? "dark" : "light");
+  } catch (e) {}
+  updateThemeIcon(dark);
+  syncWindowTheme();
+  const optLight = document.getElementById("themeOptLight");
+  const optDark = document.getElementById("themeOptDark");
+  if (optLight && optDark) {
+    optLight.classList.toggle("on", !dark);
+    optDark.classList.toggle("on", dark);
+  }
+  toast(`已切换至${dark ? "暗黑" : "明亮"}外观`);
+}
+
+async function openDataDirectory() {
+  try {
+    const res = await fetch("/api/open-data-dir", { method: "POST" });
+    if (res.ok) {
+      toast("已在系统文件资源管理器中打开数据目录");
+    } else {
+      toast("唤起资源管理器失败", "err");
+    }
+  } catch (e) {
+    toast("无法连接本地 Runner 服务", "err");
   }
 }
 

@@ -1,7 +1,11 @@
 package com.agentplatform.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -43,12 +47,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,7 +73,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
+private fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
 private fun encoded(value: String): String = URLEncoder.encode(value, "UTF-8")
 
 private fun workspaceLabel(workspaceId: String): String =
@@ -91,20 +96,42 @@ private fun sessionError(error: Exception): String =
             }
     }
 
-data class UiMessage(
-    val id: String,
-    val role: MessageRole,
-    val text: String,
-    val isStreaming: Boolean = false,
-    val toolTitle: String? = null,
-)
+/** The runner redacts local paths before they leave the machine. */
+private fun readableText(value: String): String = value.replace("[local_path_redacted]", "（本机路径已隐藏）")
 
 // =========================================================================
 // Session screen
 //
-// Header -> approval / question banners -> transcript -> accessory keys ->
-// composer. Polling pauses whenever the app leaves the foreground.
+// Header -> turn failure -> approval / question banners -> transcript ->
+// accessory keys -> composer. Polling pauses whenever the app leaves the
+// foreground.
 // =========================================================================
+
+private sealed interface ConversationBlock {
+    data class Single(val item: TranscriptItem) : ConversationBlock
+
+    data class Tools(val items: List<TranscriptItem>) : ConversationBlock
+}
+
+private fun groupTranscript(items: List<TranscriptItem>): List<ConversationBlock> {
+    val blocks = mutableListOf<ConversationBlock>()
+    val tools = mutableListOf<TranscriptItem>()
+    fun flush() {
+        if (tools.size == 1) blocks.add(ConversationBlock.Single(tools.first()))
+        if (tools.size > 1) blocks.add(ConversationBlock.Tools(tools.toList()))
+        tools.clear()
+    }
+    for (item in items) {
+        if (item.kind == TranscriptKind.TOOL) {
+            tools.add(item)
+        } else {
+            flush()
+            blocks.add(ConversationBlock.Single(item))
+        }
+    }
+    flush()
+    return blocks
+}
 
 @Composable
 fun RemoteScreen(
@@ -121,6 +148,7 @@ fun RemoteScreen(
     var draft by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var dismissedFailure by remember { mutableStateOf<String?>(null) }
     val attempts = remember { mutableMapOf<String, JSONObject>() }
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
@@ -179,18 +207,24 @@ fun RemoteScreen(
         }
     }
 
-    val conversation = remember(events, commands) { parseStructuredConversation(events, commands) }
+    val live = connected && executionState == "running"
+    val conversation =
+        remember(events, commands, hubId, live) {
+            buildTranscript(events, commands, hubId, live)
+        }
+    val blocks = remember(conversation) { groupTranscript(conversation) }
     val approvals = remember(events, hubId) { remoteApprovals(events, hubId) }
     val questions = remember(events, hubId) { remoteQuestions(events, hubId) }
+    val turnFailure = remember(events, hubId) { latestTurnFailure(events, hubId) }
 
     // Follow new output only while the reader is already at the bottom, so
     // scrolling back through history is never yanked away.
     val lastMessageLength = conversation.lastOrNull()?.text?.length ?: 0
-    LaunchedEffect(conversation.size, lastMessageLength) {
-        if (conversation.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(blocks.size, lastMessageLength) {
+        if (blocks.isEmpty()) return@LaunchedEffect
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (lastVisible >= conversation.lastIndex - 1) {
-            listState.scrollToItem(conversation.lastIndex)
+        if (lastVisible >= blocks.lastIndex - 1) {
+            listState.scrollToItem(blocks.lastIndex)
         }
     }
 
@@ -308,6 +342,14 @@ fun RemoteScreen(
             OrcaInlineError(error, Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs))
         }
 
+        if (turnFailure != null && !turnFailure.retrying && turnFailure.message != dismissedFailure) {
+            TurnFailureCard(
+                failure = turnFailure,
+                onDismiss = { dismissedFailure = turnFailure.message },
+                modifier = Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
+            )
+        }
+
         if (approvals.isNotEmpty() || questions.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
@@ -357,27 +399,36 @@ fun RemoteScreen(
             state = listState,
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
-            verticalArrangement = Arrangement.spacedBy(OrcaSpace.md),
+            verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
         ) {
-            if (conversation.isEmpty()) {
+            if (blocks.isEmpty()) {
                 item {
                     OrcaCard {
                         OrcaNoticeCard(
                             title = if (connected) "等待 Agent 输出" else "等待电脑连线",
                             body =
-                                if (connected) "会话建立后，消息、思考过程与工具调用会实时出现在这里。"
+                                if (connected) "消息、思考过程与工具执行会实时出现在这里；历史对话在恢复会话时载入。"
                                 else "保持 Runner 在线，手机端会自动恢复这条会话的控制权。",
                             icon = { OrcaTerminalIcon(MaterialTheme.colorScheme.onSurfaceVariant, 22.dp) },
                         )
                     }
                 }
             }
-            items(conversation, key = { it.id }) { message ->
-                when (message.role) {
-                    MessageRole.USER -> UserBubble(message.text)
-                    MessageRole.ASSISTANT -> AssistantMessage(message)
-                    MessageRole.TOOL -> ToolLine(message.toolTitle ?: "工具调用")
-                    MessageRole.SYSTEM -> SystemLine(message.text)
+            items(blocks, key = { block ->
+                when (block) {
+                    is ConversationBlock.Single -> block.item.id
+                    is ConversationBlock.Tools -> "group:" + block.items.first().id
+                }
+            }) { block ->
+                when (block) {
+                    is ConversationBlock.Single ->
+                        when (block.item.kind) {
+                            TranscriptKind.USER -> UserBubble(block.item.text)
+                            TranscriptKind.ASSISTANT -> AssistantMessage(block.item)
+                            TranscriptKind.TOOL -> ToolCard(block.item)
+                            TranscriptKind.SYSTEM -> SystemLine(block.item)
+                        }
+                    is ConversationBlock.Tools -> ToolGroup(block.items)
                 }
             }
         }
@@ -469,6 +520,49 @@ fun RemoteScreen(
 // =========================================================================
 
 @Composable
+private fun TurnFailureCard(
+    failure: TurnFailure,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(OrcaRadius.card),
+        color = OrcaColors.accentRed.copy(alpha = 0.08f),
+        border = BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.45f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
+            verticalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+                ) {
+                    OrcaStatusDot(OrcaColors.accentRed, 6.dp)
+                    Text(
+                        text = "这一轮没有完成",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrcaColors.accentRed,
+                    )
+                }
+                OrcaTextAction(label = "关闭", onClick = onDismiss)
+            }
+            Text(
+                text = readableText(failure.message),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
 private fun ApprovalCard(
     approval: JSONObject,
     enabled: Boolean,
@@ -517,7 +611,7 @@ private fun ApprovalCard(
                 )
             }
             Text(
-                text = body,
+                text = readableText(body),
                 style = OrcaType.mono,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = if (expanded) Int.MAX_VALUE else 3,
@@ -679,53 +773,283 @@ private fun UserBubble(text: String) {
     }
 }
 
+private val THINK_BLOCK = Regex("<(?:think|thinking|thought)>([\\s\\S]*?)(?:</(?:think|thinking|thought)>|$)", RegexOption.IGNORE_CASE)
+
+/**
+ * Splits a `<think>` block out of a message. An unterminated block is a
+ * reasoning item that is still streaming, so the accordion stays live.
+ */
+private fun splitThinking(text: String, streaming: Boolean): Triple<String?, String, Boolean> {
+    val match = THINK_BLOCK.find(text)
+        ?: return Triple(null, text, false)
+    val block = match.groupValues[1].trim()
+    val closed = match.value.contains("</think", ignoreCase = true) ||
+        match.value.contains("</thinking", ignoreCase = true) ||
+        match.value.contains("</thought", ignoreCase = true)
+    val clean = text.removeRange(match.range).trim()
+    return Triple(block.takeIf { it.isNotEmpty() }, clean, streaming && !closed)
+}
+
 @Composable
-private fun AssistantMessage(message: UiMessage) {
+private fun AssistantMessage(item: TranscriptItem) {
+    val (thinking, body, thinkingLive) = remember(item.text, item.streaming) { splitThinking(item.text, item.streaming) }
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (message.text.contains("<think>") && message.text.contains("</think>")) {
-            val start = message.text.indexOf("<think>") + 7
-            val end = message.text.indexOf("</think>")
-            if (end > start) {
-                ThinkingAccordion(
-                    thought = message.text.substring(start, end),
-                    isGenerating = message.isStreaming,
+        if (thinking != null) {
+            ThinkingAccordion(thought = thinking, isGenerating = thinkingLive)
+        }
+        if (body.isNotEmpty() || thinking == null) {
+            RenderMarkdownContent(content = body)
+        }
+        if (item.streaming) StreamingCaret()
+    }
+}
+
+/** A caret that behaves like a live cursor instead of a spinner. */
+@Composable
+private fun StreamingCaret() {
+    val transition = rememberInfiniteTransition(label = "streaming-caret")
+    val alpha by
+        transition.animateFloat(
+            initialValue = 0.25f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+            label = "streaming-caret-alpha",
+        )
+    Row(
+        modifier = Modifier.padding(top = OrcaSpace.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+    ) {
+        Box(
+            Modifier
+                .alpha(alpha)
+                .size(width = 7.dp, height = 14.dp)
+                .background(OrcaColors.accentBlue, RoundedCornerShape(1.dp)),
+        )
+        Text(
+            text = "生成中",
+            style = OrcaType.mono,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun toolStateColor(state: ToolState?): Color =
+    when (state) {
+        ToolState.RUNNING -> OrcaColors.accentAmber
+        ToolState.FAILED -> OrcaColors.accentRed
+        else -> OrcaColors.textMuted
+    }
+
+private fun toolStateLabel(state: ToolState?): String =
+    when (state) {
+        ToolState.RUNNING -> "执行中…"
+        ToolState.FAILED -> "执行失败"
+        else -> "已完成"
+    }
+
+private fun readableOutput(value: String): String {
+    val lines = value.lineSequence().take(120).toList()
+    val joined = lines.joinToString("\n")
+    return if (value.lineSequence().count() > 120) "$joined\n…（输出过长，已截断）" else joined
+}
+
+@Composable
+private fun ToolCard(item: TranscriptItem) {
+    val clipboard = LocalClipboardManager.current
+    var expanded by remember(item.id) { mutableStateOf(false) }
+    val title = item.title ?: "工具调用"
+    val output = item.output
+    val command = item.command
+    val hasDetail = !command.isNullOrBlank() || !output.isNullOrBlank()
+    val diff = command?.takeIf { it.contains("\n+") || it.startsWith("---") || it.startsWith("@@") }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(OrcaRadius.card),
+        color = OrcaColors.bgInset,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Column {
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
+                        .padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+            ) {
+                OrcaStatusDot(toolStateColor(item.state), 5.dp)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        text = title,
+                        style = OrcaType.mono,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    command?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = it.lineSequence().first().take(140),
+                            style = OrcaType.mono,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Text(
+                    text = toolStateLabel(item.state),
+                    style = OrcaType.mono,
+                    color = toolStateColor(item.state),
                 )
-                RenderMarkdownContent(
-                    content = message.text.substring(end + 8),
-                )
-                return@Column
+                if (hasDetail) {
+                    OrcaChevronDown(
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        size = 10.dp,
+                        expanded = expanded,
+                    )
+                }
+            }
+            AnimatedVisibility(visible = expanded && hasDetail) {
+                Column(
+                    modifier = Modifier.padding(start = OrcaSpace.md, end = OrcaSpace.md, bottom = OrcaSpace.md),
+                    verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+                ) {
+                    if (diff != null) {
+                        DiffPreview(diff)
+                    } else if (!command.isNullOrBlank()) {
+                        ToolSection(label = "命令 / 参数", text = readableOutput(command), onCopy = {
+                            clipboard.setText(AnnotatedString(command))
+                        })
+                    }
+                    output?.takeIf { it.isNotBlank() && !it.contains("[local_path_redacted]") }?.let {
+                        ToolSection(label = "执行输出", text = readableOutput(readableText(it)), onCopy = {
+                            clipboard.setText(AnnotatedString(it))
+                        })
+                    }
+                }
             }
         }
-        RenderMarkdownContent(content = message.text)
     }
 }
 
 @Composable
-private fun ToolLine(title: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-    ) {
-        OrcaStatusDot(OrcaColors.accentPurple, 5.dp)
+private fun ToolSection(label: String, text: String, onCopy: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                style = OrcaType.mono,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OrcaTextAction(label = "复制", onClick = onCopy)
+        }
         Text(
-            text = title,
-            style = OrcaType.mono,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+            text = text,
+            style = OrcaType.code,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(OrcaRadius.button))
+                    .background(OrcaColors.bgRaised.copy(alpha = 0.5f))
+                    .padding(OrcaSpace.sm),
         )
     }
 }
 
 @Composable
-private fun SystemLine(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+private fun SystemLine(item: TranscriptItem) {
+    Row(
         modifier = Modifier.fillMaxWidth(),
-    )
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(1.dp)
+                .height(14.dp)
+                .background(OrcaColors.accentPurple.copy(alpha = 0.7f)),
+        )
+        Text(
+            text = listOfNotNull(item.title, readableText(item.text)).joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ToolGroup(items: List<TranscriptItem>) {
+    var expanded by remember(items.first().id) { mutableStateOf(false) }
+    val running = items.any { it.state == ToolState.RUNNING }
+    val failed = items.any { it.state == ToolState.FAILED }
+    val color =
+        when {
+            failed -> OrcaColors.accentRed
+            running -> OrcaColors.accentAmber
+            else -> OrcaColors.textMuted
+        }
+    val label = when {
+        failed -> "异常"
+        running -> "执行中"
+        else -> "完成"
+    }
+    val preview =
+        items.take(3).joinToString(" · ") {
+            (it.title ?: "工具调用") + (it.command?.lineSequence()?.firstOrNull()?.takeIf { cmd -> cmd.isNotBlank() }?.let { cmd -> " “$cmd”" } ?: "")
+        }
+
+    Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
+        Surface(
+            onClick = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(OrcaRadius.card),
+            color = OrcaColors.bgInset,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+            ) {
+                OrcaStatusDot(color, 5.dp)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        text = "已执行 ${items.size} 个工具与操作",
+                        style = OrcaType.rowTitle,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                    Text(
+                        text = preview,
+                        style = OrcaType.mono,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(text = label, style = OrcaType.mono, color = color)
+                OrcaChevronDown(
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    size = 10.dp,
+                    expanded = expanded,
+                )
+            }
+        }
+        AnimatedVisibility(visible = expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
+                items.forEach { ToolCard(it) }
+            }
+        }
+    }
 }
 
 // =========================================================================
@@ -833,161 +1157,8 @@ fun RenderMarkdownContent(content: String) {
 }
 
 // =========================================================================
-// Event parsing
+// Approval / question state
 // =========================================================================
-
-private fun parseStructuredConversation(
-    events: List<JSONObject>,
-    commands: List<JSONObject>,
-): List<UiMessage> {
-    val result = linkedMapOf<String, UiMessage>()
-    val prompts =
-        commands
-            .mapNotNull { command ->
-                val receipt = command.optJSONObject("receipt") ?: return@mapNotNull null
-                if (receipt.optString("status") != "accepted") return@mapNotNull null
-                val turn = receipt.optJSONObject("result")?.optJSONObject("turn")?.optString("id") ?: return@mapNotNull null
-                val text = command.optJSONObject("command")?.optJSONObject("command")?.optString("text").orEmpty()
-                turn to text
-            }
-            .toMap()
-
-    for (envelope in events) {
-        val payload = envelope.optJSONObject("payload") ?: continue
-        if (payload.optString("type") != "event") continue
-        val event = payload.optJSONObject("event") ?: continue
-        val p = event.optJSONObject("raw")?.optJSONObject("params") ?: continue
-        val item = p.optJSONObject("item")
-        val id = p.optString("itemId").ifBlank { item?.optString("id").orEmpty() }
-
-        when (event.optString("kind")) {
-            "turn/started" -> {
-                val turn = p.optJSONObject("turn")?.optString("id").orEmpty()
-                prompts[turn]?.takeIf { it.isNotBlank() }?.let {
-                    result["user:$turn"] = UiMessage(id = "user:$turn", role = MessageRole.USER, text = it)
-                }
-            }
-            "item/agentMessage/delta" -> {
-                if (id.isNotEmpty()) {
-                    val prev = result[id]?.text.orEmpty()
-                    result[id] =
-                        UiMessage(
-                            id = id,
-                            role = MessageRole.ASSISTANT,
-                            text = prev + p.optString("delta"),
-                            isStreaming = true,
-                        )
-                }
-            }
-            "item/started" -> {
-                if (id.isNotEmpty()) {
-                    when (item?.optString("type")) {
-                        "reasoning" -> {
-                            val summary = reasoningText(item)
-                            if (summary.isNotBlank()) {
-                                result[id] =
-                                    UiMessage(
-                                        id = id,
-                                        role = MessageRole.ASSISTANT,
-                                        text = "<think>$summary</think>",
-                                        isStreaming = true,
-                                    )
-                            }
-                        }
-                        "commandExecution" -> {
-                            val command = item.optString("command").trim()
-                            if (command.isNotBlank()) {
-                                result["tool:$id"] =
-                                    UiMessage(
-                                        id = "tool:$id",
-                                        role = MessageRole.TOOL,
-                                        text = "",
-                                        toolTitle = "$ ${command.take(96)}",
-                                    )
-                            }
-                        }
-                    }
-                }
-            }
-            "item/completed" -> {
-                if (id.isNotEmpty()) {
-                    when (item?.optString("type")) {
-                        "userMessage" -> {
-                            val content = item.optJSONArray("content")
-                            val text =
-                                if (content != null) {
-                                    (0 until content.length())
-                                        .mapNotNull { content.optJSONObject(it) }
-                                        .filter { it.optString("type") == "text" }
-                                        .map { it.optString("text") }
-                                        .joinToString("\n")
-                                } else {
-                                    item.optString("text")
-                                }
-                            if (text.isNotBlank()) {
-                                result[id] = UiMessage(id = id, role = MessageRole.USER, text = text)
-                            }
-                        }
-                        "agentMessage" -> {
-                            result[id] =
-                                UiMessage(
-                                    id = id,
-                                    role = MessageRole.ASSISTANT,
-                                    text = item.optString("text"),
-                                    isStreaming = false,
-                                )
-                        }
-                        "reasoning" -> {
-                            val summary = reasoningText(item)
-                            if (summary.isNotBlank()) {
-                                result[id] =
-                                    UiMessage(
-                                        id = id,
-                                        role = MessageRole.ASSISTANT,
-                                        text = "<think>$summary</think>",
-                                    )
-                            }
-                        }
-                        "commandExecution" -> {
-                            val command = item.optString("command").trim()
-                            val exit = item.optInt("exitCode", Int.MIN_VALUE)
-                            val title =
-                                if (command.isNotBlank()) {
-                                    "$ ${command.take(96)}" + if (exit != Int.MIN_VALUE) "  ·  exit $exit" else ""
-                                } else {
-                                    "命令执行完成"
-                                }
-                            result["tool:$id"] =
-                                UiMessage(id = "tool:$id", role = MessageRole.TOOL, text = "", toolTitle = title)
-                        }
-                        "fileChange", "fileChangeStart" -> {
-                            result["tool:$id"] =
-                                UiMessage(
-                                    id = "tool:$id",
-                                    role = MessageRole.TOOL,
-                                    text = "",
-                                    toolTitle = "文件变更 · " + item.optString("path").ifBlank { id.take(8) },
-                                )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return result.values.toList()
-}
-
-private fun reasoningText(item: JSONObject): String {
-    val summary = item.optJSONArray("summary")
-    if (summary != null && summary.length() > 0) {
-        return (0 until summary.length())
-            .mapNotNull { summary.optJSONObject(it) }
-            .joinToString("\n") { it.optString("text") }
-            .trim()
-    }
-    return item.optString("text").trim()
-}
 
 internal fun remoteApprovals(events: List<JSONObject>, hubSessionId: String): Map<String, JSONObject> {
     val pending = linkedMapOf<String, JSONObject>()

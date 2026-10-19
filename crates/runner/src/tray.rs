@@ -22,16 +22,20 @@ mod windows_tray {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, MF_SEPARATOR, MF_STRING, MSG,
-        PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, TPM_RIGHTBUTTON,
-        TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
-        WM_NULL, WM_RBUTTONUP, WM_USER, WNDCLASSW,
+        DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadIconW, LoadImageW,
+        IMAGE_ICON, LR_DEFAULTCOLOR, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
+        PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetMenuDefaultItem,
+        SM_CXICON, SM_CYICON, SM_CXSMICON, SM_CYSMICON, TPM_RIGHTBUTTON, TrackPopupMenu,
+        TranslateMessage, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL,
+        WM_RBUTTONUP, WM_USER, WNDCLASSW,
     };
 
     const WM_TRAY_CALLBACK: u32 = WM_USER + 101;
     const ID_TRAY_OPEN_DESKTOP: usize = 2001;
-    const ID_TRAY_OPEN_DATA_DIR: usize = 2002;
-    const ID_TRAY_EXIT: usize = 2003;
+    const ID_TRAY_OPEN_GATEWAY: usize = 2002;
+    const ID_TRAY_OPEN_BROWSER: usize = 2003;
+    const ID_TRAY_OPEN_DATA_DIR: usize = 2004;
+    const ID_TRAY_EXIT: usize = 2005;
 
     static TRAY_STATE: OnceLock<TrayState> = OnceLock::new();
 
@@ -88,13 +92,46 @@ mod windows_tray {
             let hinstance: HINSTANCE = GetModuleHandleW(null());
             let class_name: Vec<u16> = "AgentHubRunnerTrayClass\0".encode_utf16().collect();
 
+            // 为窗口类与托盘按系统 DPI 指标分别提取原生精准位图，杜绝 Windows 强制插值导致的锯齿拉伸
+            let cx_big = GetSystemMetrics(SM_CXICON);
+            let cy_big = GetSystemMetrics(SM_CYICON);
+            let hicon_big = LoadImageW(
+                hinstance,
+                1 as _,
+                IMAGE_ICON,
+                cx_big,
+                cy_big,
+                LR_DEFAULTCOLOR,
+            );
+            let hicon_big = if hicon_big != 0 as _ {
+                hicon_big as _
+            } else {
+                LoadIconW(hinstance, 1 as _)
+            };
+
+            let cx_sm = GetSystemMetrics(SM_CXSMICON);
+            let cy_sm = GetSystemMetrics(SM_CYSMICON);
+            let hicon_sm = LoadImageW(
+                hinstance,
+                1 as _,
+                IMAGE_ICON,
+                cx_sm,
+                cy_sm,
+                LR_DEFAULTCOLOR,
+            );
+            let hicon_sm = if hicon_sm != 0 as _ {
+                hicon_sm as _
+            } else {
+                LoadIconW(hinstance, 1 as _)
+            };
+
             let wnd_class = WNDCLASSW {
                 style: 0,
                 lpfnWndProc: Some(tray_wnd_proc),
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 hInstance: hinstance,
-                hIcon: LoadIconW(hinstance, 1 as _),
+                hIcon: hicon_big,
                 hCursor: 0 as _,
                 hbrBackground: 0 as _,
                 lpszMenuName: null(),
@@ -128,7 +165,7 @@ mod windows_tray {
             nid.uID = 1;
             nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             nid.uCallbackMessage = WM_TRAY_CALLBACK;
-            nid.hIcon = LoadIconW(hinstance, 1 as _);
+            nid.hIcon = hicon_sm;
 
             let tip_text = format!("AgentHub Runner ({})\0", web_url);
             let tip_u16: Vec<u16> = tip_text.encode_utf16().collect();
@@ -169,8 +206,34 @@ mod windows_tray {
                         SetForegroundWindow(hwnd);
 
                         let hmenu = CreatePopupMenu();
-                        let show_app_text: Vec<u16> = "Show App\0".encode_utf16().collect();
-                        let exit_text: Vec<u16> = "Exit\0".encode_utf16().collect();
+                        let version = env!("CARGO_PKG_VERSION");
+                        let current_url = TRAY_STATE
+                            .get()
+                            .and_then(|s| s.web_url.lock().ok())
+                            .map(|u| u.clone())
+                            .unwrap_or_else(|| "127.0.0.1:4200".to_string());
+                        let display_host = current_url
+                            .trim_start_matches("http://")
+                            .trim_start_matches("https://")
+                            .trim_end_matches('/');
+
+                        // 1. 顶部状态标题头（禁用态/浅灰）：对齐现代系统托盘规范
+                        let title_text = format!("AgentHub v{} (运行中: {})\0", version, display_host);
+                        let title_u16: Vec<u16> = title_text.encode_utf16().collect();
+                        AppendMenuW(
+                            hmenu,
+                            MF_STRING | MF_DISABLED | MF_GRAYED,
+                            0,
+                            title_u16.as_ptr(),
+                        );
+                        AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
+
+                        // 2. 核心功能入口
+                        let show_app_text: Vec<u16> = "打开协同控制台\0".encode_utf16().collect();
+                        let show_gw_text: Vec<u16> = "查看演进拓扑 (网关)\0".encode_utf16().collect();
+                        let open_browser_text: Vec<u16> = "在系统浏览器中打开\0".encode_utf16().collect();
+                        let open_dir_text: Vec<u16> = "打开数据存储目录\0".encode_utf16().collect();
+                        let exit_text: Vec<u16> = "退出 AgentHub\0".encode_utf16().collect();
 
                         AppendMenuW(
                             hmenu,
@@ -178,8 +241,34 @@ mod windows_tray {
                             ID_TRAY_OPEN_DESKTOP,
                             show_app_text.as_ptr(),
                         );
+                        AppendMenuW(
+                            hmenu,
+                            MF_STRING,
+                            ID_TRAY_OPEN_GATEWAY,
+                            show_gw_text.as_ptr(),
+                        );
+                        AppendMenuW(
+                            hmenu,
+                            MF_STRING,
+                            ID_TRAY_OPEN_BROWSER,
+                            open_browser_text.as_ptr(),
+                        );
                         AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
+
+                        // 3. 存储与配置
+                        AppendMenuW(
+                            hmenu,
+                            MF_STRING,
+                            ID_TRAY_OPEN_DATA_DIR,
+                            open_dir_text.as_ptr(),
+                        );
+                        AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
+
+                        // 4. 退出
                         AppendMenuW(hmenu, MF_STRING, ID_TRAY_EXIT, exit_text.as_ptr());
+
+                        // 将“打开协同控制台”设为默认高亮粗体项
+                        SetMenuDefaultItem(hmenu, ID_TRAY_OPEN_DESKTOP as u32, 0);
 
                         TrackPopupMenu(
                             hmenu,
@@ -201,6 +290,19 @@ mod windows_tray {
                         if let Some(state) = TRAY_STATE.get() {
                             if let Ok(url) = state.web_url.lock() {
                                 open_desktop_window(&url);
+                            }
+                        }
+                    } else if id == ID_TRAY_OPEN_GATEWAY {
+                        if let Some(state) = TRAY_STATE.get() {
+                            if let Ok(url) = state.web_url.lock() {
+                                let gw_url = format!("{}#gateway", url.trim_end_matches('/'));
+                                open_desktop_window(&gw_url);
+                            }
+                        }
+                    } else if id == ID_TRAY_OPEN_BROWSER {
+                        if let Some(state) = TRAY_STATE.get() {
+                            if let Ok(url) = state.web_url.lock() {
+                                open_system_browser(&url);
                             }
                         }
                     } else if id == ID_TRAY_OPEN_DATA_DIR {
@@ -446,6 +548,10 @@ mod windows_tray {
         }
 
         // Fallback: 使用原生 ShellExecuteW 打开，绝不唤醒 cmd.exe，完全无黑框
+        open_system_browser(url);
+    }
+
+    pub fn open_system_browser(url: &str) {
         unsafe {
             use windows_sys::Win32::UI::Shell::ShellExecuteW;
             use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -462,7 +568,7 @@ mod windows_tray {
         }
     }
 
-    fn open_data_dir() {
+    pub fn open_data_dir() {
         let home = std::env::var_os("USERPROFILE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -524,14 +630,30 @@ mod non_windows_tray {
         }
     }
 
+    pub fn open_system_browser(url: &str) {
+        open_desktop_window(url);
+    }
+
+    pub fn open_data_dir() {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let dir = home.join(".agenthub");
+        let _ = std::fs::create_dir_all(&dir);
+    }
+
     pub fn cleanup_desktop_window() {}
 }
 
 #[cfg(target_os = "windows")]
-pub use windows_tray::{cleanup_desktop_window, open_desktop_window, start_tray};
+pub use windows_tray::{
+    cleanup_desktop_window, open_data_dir, open_desktop_window, open_system_browser, start_tray,
+};
 
 #[cfg(not(target_os = "windows"))]
-pub use non_windows_tray::{cleanup_desktop_window, open_desktop_window, start_tray};
+pub use non_windows_tray::{
+    cleanup_desktop_window, open_data_dir, open_desktop_window, open_system_browser, start_tray,
+};
 
 /// The window's caption, painted the page's own colour. magpie does this on
 /// Windows with DWM (`internal/gui/titletint_windows.go`: "Windows' grey bar
