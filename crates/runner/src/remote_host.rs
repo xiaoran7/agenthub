@@ -601,10 +601,8 @@ impl NativeTransport for MultiProviderTransport {
                                 completed_params["realSessionId"] =
                                     json!(format!("claude_{}", real_id));
                             }
-                            if let Some(usage) = res.usage
-                                && let Ok(mut events) = events_queue.lock()
-                            {
-                                events.push_back(json!({
+                            if let Some(usage) = res.usage {
+                                q.push_back(json!({
                                     "method": "thread/tokenUsage/updated",
                                     "params": {
                                         "threadId": session_id_clone,

@@ -79,4 +79,20 @@ class MarkdownSegmentTest {
         assertEquals(1, segments.size)
         assertEquals("最终答案 `inline`", segments[0].text)
     }
+
+    @Test
+    fun `multiple deltas after a closed code block extend incrementally`() {
+        val cache = MarkdownSegmentCache()
+        cache.update("前置文本\n```ts\nconst a = 1\n```")
+        val step1 = cache.update("前置文本\n```ts\nconst a = 1\n```\n第一段解释")
+        val step2 = cache.update("前置文本\n```ts\nconst a = 1\n```\n第一段解释，继续补充")
+
+        assertEquals(3, step1.size)
+        assertEquals(3, step2.size)
+        assertFalse(step2[0].isCodeBlock)
+        assertTrue(step2[1].isCodeBlock)
+        assertFalse(step2[2].isCodeBlock)
+        assertEquals("\n第一段解释，继续补充", step2[2].text)
+        assertEquals(parseMarkdownSegments("前置文本\n```ts\nconst a = 1\n```\n第一段解释，继续补充"), step2)
+    }
 }

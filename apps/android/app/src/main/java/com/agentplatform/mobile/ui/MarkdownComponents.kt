@@ -91,14 +91,19 @@ class MarkdownSegmentCache {
         val appended =
             if (source.isNotEmpty() && content.startsWith(source)) content.substring(source.length)
             else null
-        // A fence can be split across two deltas ("``" then "`python"), so a
-        // backtick on either side of the seam also forces a full parse.
+        // A fence can be split across two deltas ("``" then "`python"), so an
+        // incomplete backtick sequence on either side of the seam forces a full parse.
+        // A closed fence ending with "```" is complete, so appending text after it
+        // should extend incrementally rather than forcing a full regex scan.
         val fenceMayBeSplit =
-            appended != null && (source.endsWith("`") || appended.startsWith("`"))
+            appended != null && (
+                (source.endsWith("`") && !source.endsWith("```")) ||
+                appended.startsWith("`")
+            )
         segments =
             if (appended != null && !fenceMayBeSplit && !appended.contains("```")) {
-                val last = segments.last()
-                if (last.isCodeBlock) {
+                val last = segments.lastOrNull()
+                if (last == null || last.isCodeBlock) {
                     segments + FormattedSegment(text = appended)
                 } else {
                     segments.dropLast(1) + last.copy(text = last.text + appended)

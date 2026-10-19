@@ -2,6 +2,25 @@
 
 ## [2.4.99] - 2026-10-19
 
+### 代码审查缺陷修复与并发稳定性加固 (Code Review Fixes & Concurrency Hardening)
+
+- **Rust 运行器并发死锁修复 (Mutex Re-entrancy Deadlock Fix)**：
+  - `crates/runner/src/remote_host.rs` 中在持有 `events_queue.lock()` 锁守卫时二次调用 `events_queue.lock()` 造成标准库互斥锁永久死锁；改为直接复用已有守卫 `q.push_back(...)`，彻底解决 Claude Code 回合完成且携带用量时线程无响应挂死的问题。
+- **ACP 用量事件规范化 (ACP Usage Update Normalization)**：
+  - `crates/runner/src/collectors/acp_app_server.rs` 中规范化 `usage_update`，仅在提取到正整数已用 tokens（`used > 0`）时派发 `thread/tokenUsage/updated`，杜绝仅有 `size` 时生成 `last: null` 被下游 Journal 投影整条丢弃；
+  - 增加 ACP 用量归一化单元测试，覆盖有效用量与纯容量边界情况。
+- **Android 增量 Markdown 缓存修复与死代码消除 (Incremental Markdown Cache Fix)**：
+  - `MarkdownSegmentCache` 中 `source.endsWith("`")` 会命中以 ```` ``` ```` 结尾的已闭合代码块，导致后续增量无条件触发全量正则重扫并使 `last.isCodeBlock` 分支退化为死代码；修复为仅对未闭合的反引号边界判定，并在 `MarkdownSegmentTest` 中增加闭合后连续增量追加测试，确保增量路径与全量解析 100% 等价；
+  - `segments.last()` 改为 `segments.lastOrNull()` 预防空段列表异常。
+- **Android 区域设置隔离与 UI 健壮性 (Locale Isolation & UI Completeness)**：
+  - `compactTokens` 与 `ContextCapacityStrip` 显式传入 `Locale.US`，防止德法等非英语系统语言中小数点变逗号（如 `1,2M`）；
+  - 新增 `OrcaComponentsTest` 模拟欧洲区域设置断言；清理未使用的 Compose 导入；
+  - `QuestionCard` 移除硬编码 `options.take(6)` 截断，支持完整选项展示与多选提交；更正代码块按 index 与语言 keying 的注释说明。
+- **全栈回归测试闭环 (Full-Stack Regression Verification)**：
+  - 185 个 Rust 单元测试与 28 个集成测试全部通过；
+  - 26 个 Android 单元测试全部通过（Gradle Daemon 随测即止）；
+  - 145 个 Node/Contracts/API/Web 测试全部通过。
+
 ### 智能体生态能力纳管架构与青空能力控制台 (Federated Skill / MCP / Hook Library & Aozora Capabilities View)
 
 - **上游 Magpie 统一资料库体系 (Federated Multi-Agent Library Architecture)**：

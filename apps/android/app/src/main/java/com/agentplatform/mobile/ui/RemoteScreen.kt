@@ -748,7 +748,7 @@ private fun QuestionCard(
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
-                    options.take(6).forEach { option ->
+                    options.forEach { option ->
                         val label = option.optString("label")
                         val selected = label in picked
                         Surface(
@@ -1233,8 +1233,8 @@ fun RenderMarkdownContent(content: String) {
     Column(Modifier.fillMaxWidth()) {
         segments.forEachIndexed { index, seg ->
             if (seg.isCodeBlock) {
-                // Only an unfinished code block can still change; a closed one
-                // is keyed by its text so it is not rebuilt on every delta.
+                // Keyed by index and language so Compose preserves block identity
+                // across streaming deltas without remounting the surface.
                 key("block-" + index + "-" + seg.language) {
                     CodeBlockSurface(code = seg.text, language = seg.language)
                 }

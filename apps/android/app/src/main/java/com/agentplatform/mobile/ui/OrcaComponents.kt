@@ -1,5 +1,6 @@
 package com.agentplatform.mobile.ui
 
+import java.util.Locale
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -24,10 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -843,7 +840,7 @@ internal fun compactTokens(tokens: Long): String =
     when {
         tokens >= 1_000_000 -> {
             val millions = tokens / 1_000_000.0
-            if (millions >= 10) "${millions.toLong()}M" else String.format("%.1f", millions) + "M"
+            if (millions >= 10) "${millions.toLong()}M" else String.format(Locale.US, "%.1f", millions) + "M"
         }
         tokens >= 1_000 -> "${tokens / 1_000}k"
         else -> tokens.toString()
@@ -951,7 +948,7 @@ internal fun ContextCapacityStrip(usage: ContextUsage, modifier: Modifier = Modi
             text =
                 compactTokens(usage.used) +
                     if (window != null) " / " + compactTokens(window) + " · " +
-                        String.format("%.0f", fraction * 100f) + "%"
+                        String.format(Locale.US, "%.0f", fraction * 100f) + "%"
                     else " tokens · 容量未上报",
             style = OrcaType.mono,
             color = if (window != null) tint else MaterialTheme.colorScheme.onSurfaceVariant,

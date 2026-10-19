@@ -608,18 +608,31 @@ pub fn normalize_acp_message(
                     // ACP states window consumption directly; forward it in the
                     // same shape Codex uses so clients need one reader.
                     "usage_update" => {
-                        let used = update.get("used").and_then(Value::as_u64);
-                        let size = update.get("size").and_then(Value::as_u64);
-                        if used.is_some() || size.is_some() {
+                        let used = update
+                            .get("used")
+                            .or_else(|| update.get("inputTokens"))
+                            .or_else(|| update.get("input_tokens"))
+                            .and_then(Value::as_u64)
+                            .filter(|n| *n > 0);
+                        let size = update
+                            .get("size")
+                            .or_else(|| update.get("modelContextWindow"))
+                            .or_else(|| update.get("window"))
+                            .and_then(Value::as_u64)
+                            .filter(|n| *n > 0);
+                        if let Some(used) = used {
+                            let mut usage_obj = json!({
+                                "last": {"inputTokens": used}
+                            });
+                            if let Some(size) = size {
+                                usage_obj["modelContextWindow"] = json!(size);
+                            }
                             normalized.push(json!({
                                 "method": "thread/tokenUsage/updated",
                                 "params": {
                                     "threadId": session_id,
                                     "turnId": active_turn_id,
-                                    "tokenUsage": {
-                                        "last": used.map(|used| json!({"inputTokens": used})),
-                                        "modelContextWindow": size
-                                    }
+                                    "tokenUsage": usage_obj
                                 }
                             }));
                         }
@@ -914,5 +927,47 @@ mod tests {
         assert_eq!(events[0]["params"]["turn"]["status"]["type"], "completed");
         assert!(turns.is_empty());
         assert!(prompts.is_empty());
+    }
+
+    #[test]
+    fn normalizes_usage_update_with_valid_tokens_and_ignores_empty() {
+        let mut prompts = HashMap::new();
+        let mut permissions = HashMap::new();
+        let mut turns = HashMap::new();
+        turns.insert("s-1".to_string(), "t-1".to_string());
+
+        let valid_usage = json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "s-1",
+                "update": {
+                    "sessionUpdate": "usage_update",
+                    "used": 15000,
+                    "size": 200000
+                }
+            }
+        });
+
+        let events = normalize_acp_message(valid_usage, &mut prompts, &mut permissions, &mut turns);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "thread/tokenUsage/updated");
+        assert_eq!(events[0]["params"]["tokenUsage"]["last"]["inputTokens"], 15000);
+        assert_eq!(events[0]["params"]["tokenUsage"]["modelContextWindow"], 200000);
+
+        // Size only without used tokens must not emit an invalid event with null last
+        let size_only = json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "s-1",
+                "update": {
+                    "sessionUpdate": "usage_update",
+                    "size": 200000
+                }
+            }
+        });
+        let empty_events = normalize_acp_message(size_only, &mut prompts, &mut permissions, &mut turns);
+        assert_eq!(empty_events.len(), 0);
     }
 }
