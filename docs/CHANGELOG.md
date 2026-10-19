@@ -28,7 +28,7 @@
 - 编译并打包 `AgentHub-Runner-v2.5.0-windows-x64.zip`（`cargo build --release -p agenthub-runner`，单可执行文件 + 连接向导）；
 - 编译并打包 `AgentHub-v2.5.0-android-debug.apk`（versionCode 100 / versionName 2.5.0，`./gradlew testDebugUnitTest assembleDebug` 通过）；
 - 计算生成 `AgentHub-v2.5.0-SHA256.txt` 校验和清单，按工程铁律删除同平台旧包 2.4.99 与 2.4.98，产物目录只保留最新一版；
-- 工作区版本同步递增：`Cargo.toml` 与 `Cargo.lock` 2.4.99 → 2.5.0，Android `versionCode` 99 → 100、`versionName` → 2.5.0，README 版本徽章与测试徽章（245）同步更新。
+- 工作区版本同步递增：`Cargo.toml` 与 `Cargo.lock` 2.4.99 → 2.5.0，Android `versionCode` 99 → 100、`versionName` → 2.5.0，README 版本徽章与测试徽章（245）同步更新；Node 工作区清单 `package.json`、`apps/web`、`services/api`、`packages/contracts` 一并从各自的 2.4.x 统一到 2.5.0，`package-lock.json` 由 `npm install --package-lock-only` 重算，依赖树无变化。
 
 ## [2.4.99] - 2026-10-19
 
