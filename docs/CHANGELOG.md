@@ -2,94 +2,394 @@
 
 ## [Unreleased]
 
-### 2026-10-19 — Web 控制台 UI/UX 全面重构（遵循 `/ui-design` 设计指南）
+- **Web 控制台 UI/UX 重构（`/ui-design`）**：全站移除 Emoji，改用 2.2px 线宽内联 SVG 图标；拔除 `.remote-session-tree` 顶部渐变遮罩与 `.settings-page` 硬编码暗色变量，恢复浅/暗主题自然继承；输入框 42~46px、按钮 38~48px，补齐 GPU 加速微动效与 WCAG AA 对比度，统一 Claude Terracotta 品牌色。
+- **文档无损精简与事实对齐**：精简 `AGENTS.md`、`README*.md`、`llms*.txt` 与 `docs/*.md`（含验收记录、宣发模板与 `RELEASE_NOTES_*.md` 原位瘦身），`docs/CHANGELOG.md` 100% 保留全部历史版本头；统一 UTF-8 无 BOM 与纯 LF，清理过期测试计数、旧入口命令与相对时间词。
 
-- **全面去 Emoji 与纯矢量图标系统**：全站移除原生 Emoji 与伪字符符号，统一使用 2.2px 圆角几何线宽的内联 SVG 图标（`PaletteIcon`、`ShieldIcon`、`AuditIcon`、`ConnectionIcon`、`DevicesIcon`、`NotificationIcon`、`InstallIcon`、`ArrowLeftIcon`、`SunIcon`、`MoonIcon`、`MonitorIcon`、`ChevronDownIcon`、`CheckIcon`、`CopyIcon` 等）。
-- **根治图一字体模糊发虚与主题污染**：拔除 `.remote-session-tree` 顶部渐变遮罩，使设备列表与顶部节点清晰可辨；消除 `.settings-page` 强行覆盖暗色变量的硬编码缺陷，完整支持 Warm Paper 浅色与 Obsidian Charcoal 暗色主题自然继承；修复浅色模式下问题卡片、引用块与启动项的深底黑块问题。
-- **排版尺寸与组件呼吸感升级**：表单标签提升至 13.5px 加粗，导航与元信息统一至 12~13px，输入框高度扩充至 42~46px（圆角 10px），操作按钮与提交纽扩大至 38~48px；拉开卡片、侧边栏检索框与弹窗的留白间距。
-- **60 FPS 流畅微动效与视觉对齐**：为核心按钮、导航项、气泡弹窗与折叠手风琴注入平滑 GPU 硬件加速过渡（悬停微浮 `translateY(-1.5px)`、弹性按压 `scale(0.98)`、平滑入场微动效与旋转）；强化文字前景色阶与 WCAG AA 对比度，统一 Claude Terracotta 陶土品牌色。
+## [2.5.2] - 2026-10-19
 
-### 2026-10-19 — 项目文档精简与单一事实源对齐
-
-- 清理 `docs/` 下重复的 8 份单版本 `RELEASE_NOTES_*.md` 及 4 份宣发模板文件（`COMMUNITY_SUBMISSIONS.md`、`DISCUSSIONS_QA_SEEDS.md`、`LAUNCH_COPYWRITING.md`、`OPEN_SOURCE_GUIDE.md`）；
-- 将 `M4_VALIDATION.md` 与 `ANDROID_VALIDATION.md` 的按日期验收证据与边界合并至 `docs/README.md`，消除跨文件重复；
-- 精简 `AGENTS.md`、`README.md`、`README_CN.md`、`llms.txt`、`llms-full.txt`、`docs/{PRD,ARCHITECTURE,SYNC_PROTOCOL,PITFALLS,DEPLOYMENT,DESIGN_SYSTEM,CHANGELOG}.md` 及各子包 `README.md`，移除已废弃 `apps/desktop` 的过时描述，修正 `@agent-pulse/api` 启动命令，统一 `2.5.1` 版本与 `magpie`/`orca` 开源溯源声明。
+- **托盘图标回到可辨识的浅色六边形（`crates/runner/resources/icon.svg`）**：撤回 2.4.98 的深蓝渐变底白线版本（16px 下糊成一团），恢复 `#f8fafc` 圆角白底 + `#0284c7` 六边形与辐条的原始构图，并另做 16/20/24px 加粗变体（线宽与节点放大一档）；`icon.ico` 重建为 16/20/24/32/40/48/64/128/256 九帧（135,162 字节），`icon.png`、`icon-192.png`、`icon-512.png` 与 `apps/web/public/` 下同名资源同步重渲染且 MD5 一一对应。
+- **右键菜单改为自绘亮色卡片（`crates/runner/src/tray_menu.rs`）**：
+  - 移除 `TrackPopupMenu` 原生菜单与 `SetPreferredAppMode(2)` 调用（ordinal 135 的 `2` 实为 ForceDark，正是菜单发暗的根因，原注释误标为 AllowDark）；
+  - 新增分层窗口菜单：`WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST` + `UpdateLayeredWindow` 预乘 BGRA，纯 Rust 圆角 SDF 抗锯齿与两遍盒式模糊投影，白卡 `#ffffff`、`#dcdce4` 细边框、`#eeeef2` 发丝分隔线；
+  - 按 "控制间距、字体更大更圆润" 重排版式：卡宽 292、行高 43、左右内边距 15、圆角 17、投影留白 16；菜单项 `Microsoft YaHei UI` 16px，标题 15.5px 半粗，版本/状态 12.5px，行距与分隔留白拉开后不再拥挤；
+  - 头部固定展示品牌标、版本、绿点运行状态与本机地址；五项动作分三组（打开协同控制台 / 查看演进拓扑（网关）/ 在系统浏览器中打开 ‖ 打开数据存储目录 ‖ 退出 AgentHub 红字），悬停按亮色 `#f2f2f7` 高亮；
+  - 关闭与焦点：托盘浮出层在按下图标后会抢前台，故设 400ms `SETTLE` 窗口忽略早期 `WA_INACTIVE`，并挂 120ms 线程定时器 `hide_if_clicked_away()` 按光标位置收起；`closed_within(250ms)` 让"点图标收起菜单"不会顺带弹出控制台窗口；
+  - 按 DPI 缩放（`GetDpiForMonitor`）并把卡片夹进光标所在显示器工作区，放不下时翻到光标下方。
+- **网关入口直达设置分区（`tray.rs` / `resources/dashboard.js`）**：菜单项改为打开 `#settings/gateway`；控制台新增 `applySettingsHash()` 与 `hashchange` 监听，取走 hash 后以 `replaceState` 清除，刷新仍回到读者上次停留的页面。
+- **开发工具与依赖**：新增 `crates/runner/examples/tray_menu_preview.rs`，`cargo run -p agenthub-runner --example tray_menu_preview` 直接在光标处画出菜单，便于脱离托盘单独验收版式；`windows-sys` 增开 `Win32_UI_Controls`、`Win32_UI_HiDpi`、`Win32_UI_Input_KeyboardAndMouse`。
+- **构建与发版**：全工作区版本递增至 `2.5.2`，归档 `AgentHub-Runner-v2.5.2-windows-x64.zip` 与 `AgentHub-v2.5.2-SHA256.txt`，按"打新包必删旧包"移除 2.5.1 的 zip 与校验清单。
 
 ## [2.5.1] - 2026-10-19
 
-- **内嵌控制台导航收敛 (Four Pages, One Settings)**：
-  - 主界面收敛为 **会话 / 智能体 / 用量 / 工作区** 四页；移除"模型"与"网关"独立视图（路由与拓扑归上游 CPA 管理）及页脚常驻端口显示；
-  - "能力"并入设置页 **能力生态** 分区（全部/技能/MCP/钩子筛选、跨分区搜索、注册 MCP 与重探测）；"设备与配对"并入设置页 **设备与网关** 分区；设置页固定为 **通用 / 外观 / 设备与网关 / 能力生态 / 关于** 五个标签。
-- **逐请求用量账本 (`crates/runner/src/usage_ledger.rs`)**：
-  - 解析本地会话转录，按 `message.id + requestId` 去重并以末行写入为准，严格区分 `claude_code`（Coding Assistant）与 `claude_desktop`；
-  - 识别合成 API 错误行（`isApiErrorMessage` / `<synthetic>`），将同会话 10 分钟窗口内的失败后成功配对为 `retried/recovered`，按消息首尾时间戳测算输出速度；
-  - 新增 `GET /api/usage/ledger?period=today|7d|30d|all`（5 秒缓存），驱动用量页四段标签（概览 / 请求 / 会话 / 上下文）、五格 KPI、堆叠柱状趋势图、三套排行、53 周（周一起）热力图与 UTF-8 BOM CSV 导出。
-- **原版厂商图标与智能体收敛 (`crates/runner/src/console_icons.rs`)**：
-  - `include_bytes!` 内嵌 `crates/runner/resources/icons/` 下 20 个逐字节取自上游 `magpie` 的 SVG/PNG 图标，经 `/icons/<name>` 提供并按模型前缀匹配；
-  - 智能体视图收敛为 Coding Assistant、Claude Desktop、Codex、Grok、Gemini CLI 五款产品（其余仅计入会话来源）。
-- **构建与发版**：全工作区版本递增至 `2.5.1`（258 项 Rust 测试通过），归档 `AgentHub-Runner-v2.5.1-windows-x64.zip` 与 `AgentHub-v2.5.1-SHA256.txt` 并清理旧包。
+- **内嵌控制台主视图收敛（4 页 + 统一设置视图）**：删除 `#view-models` 与 `#view-gateway`（上游路由与拓扑统一交由 CPA 管理），主导航收敛为 **会话 / 智能体 / 用量 / 工作区**；原能力视图与设备配对分别并入设置页 **能力生态** 与 **设备与网关**（`setPage-gateway`）分区，移除页脚冗余端口显示。
+- **逐请求用量账本与对标 magpie 的用量页（`GET /api/usage/ledger`）**：在 `crates/runner/src/usage_ledger.rs` 按 `message.id` + `requestId` 聚合 Claude、Codex 与 ZCode 逐次调用，10 分钟窗口内自动配对失败后重试成功并计算输出速度（tokens/s）；前端提供概览/请求/会话/上下文四段标签、5 格 KPI、堆叠趋势图、53 周热力图与 UTF-8 BOM CSV 导出。
+- **magpie 厂商图标与五款官方智能体卡片**：从上游 `magpie/internal/gui/assets/icons/` 逐字节引入 19 个 SVG 与 1 个 PNG 至 `crates/runner/resources/icons/`（`/icons/<name>.<ext>`）；智能体卡片严格限定为 `claude_code`、`claude_desktop`、`codex`、`grok`、`gemini` 五款产品（258 项 Rust 测试全绿）。
 
 ## [2.5.0] - 2026-10-19
 
-- **设置页独立视图化 (`#view-settings`)**：移除设置与配对弹窗，改为五分区独立页面，支持 `#setQ` 跨分区实时检索、`Ctrl+,` / `Esc` 切换及 `switchView()` 序号防竞态保护。
-- **开发构建热重载 (`web_server.rs`)**：debug 构建直读 `resources/` 磁盘文件并提供 `GET /api/dev/wait` 长轮询自动刷新，release 构建保持 `include_str!` 单文件内嵌。
-- **构建与发版**：全工作区版本升至 `2.5.0`（Android `versionCode = 100`），归档 Windows Runner 与 Android Debug APK 基线。
+- **设置弹窗重构为独立视图（`#view-settings`）**：对齐上游 magpie 页面模型，点击顶栏齿轮（`Ctrl+,` / `Esc`）原位切换 `.view-slot` 为五分区设置页（通用 / 外观 / 设备与配对 / 网关 / 关于），采用 `.list.prefs` + `.row.pref` 结构并支持跨分区关键词实时过滤，收拢顶栏裸露的刷新、主题与轮询控件。
+- **开发构建静态资源热重载（Debug Hot Reload）**：`cfg!(debug_assertions)` 下每次请求直接读取 `crates/runner/resources/` 磁盘文件并以文件 mtime 注入 `?v=2.5.0-<nanos>` 防缓存查询串，配合 `GET /api/dev/wait?since=<stamp>` 长轮询实现保存即刷新；Release 与测试仍走单文件内嵌资源。
+- **视图切换竞态与后台挂起修复**：为 `startViewTransition` 引入单调递增序号防止快速连点旧回调覆写新视图，并在隐藏窗口或 300ms 超时未就绪时直接完成 DOM 切换；修复 `AppLayout.storage` 缺失 `motion: agenthub_motion` 键与 `#refreshBtn` 旋转态问题。
 
-## [2.4.96 – 2.4.99] - 2026-10-19
+## [2.4.99] - 2026-10-19
 
-- **并发与协议加固 (v2.4.99)**：修复 `remote_host.rs` 中 `events_queue.lock()` 重入死锁；规范化 ACP `usage_update`（仅 `used > 0` 时派发）；修复 Android `MarkdownSegmentCache` 闭合代码块尾部反引号判定与 `Locale.US` 数字格式化。
-- **联邦能力生态与上下文容量管线 (v2.4.99)**：
-  - 新增 `crates/runner/src/collectors/capabilities.rs`：跨 Claude Code、Codex、工作区与 `~/.agenthub/mcp.json` 集中扫描 Skill、MCP Server 与 Hook，支持多源去重与 `POST /api/capabilities/sync`；
-  - 打通 Claude `result`、Codex `thread/tokenUsage/updated` 与 ACP `usage_update` 的 `{used, window}` 上下文容量远端白名单投影，并在客户端渲染会话容量环与多选问答卡片（`multi_select`）。
-- **流式转录、工具卡片与高 DPI 托盘图标 (v2.4.98)**：
-  - 统一 Web 与 Android 会话转录解析（`item/agentMessage/delta` 增量聚合与 `item/completed` 原位替换、`history/snapshot` 最新快照回放、`item/started` 白名单窄投影、`<think>` 折叠手风琴）；
-  - 重绘 16×16 至 256×256 多帧 `icon.ico`，升级 Win32 `LoadImageW` 高分屏托盘渲染与现代右键菜单。
-- **移动端 Orca 令牌对齐与全机 Token 聚合修正 (v2.4.97)**：
-  - `apps/android` 统一 `OrcaSpace`/`OrcaRadius`/`OrcaType` 深色令牌与 `OrcaRow`/`OrcaListGroup` 组件，轮询绑定 `repeatOnLifecycle(RESUMED)`；
-  - 修复 ZCode 历史消息 `LIMIT 1` 截断与子代理折叠漏计，联动 Codex 本地缓存读取，全机吞吐统计与 `magpie` 基准对齐。
-- **审批 Diff 预览与通用 ACP 适配器 (v2.4.96)**：
-  - 对文件修改审批提取结构化 Diff（≤64 KiB，本地路径脱敏为 `[local_path_redacted]`），Web 与移动端支持 `+add -del` 折叠预览；
-  - 新增 `crates/runner/src/collectors/acp_app_server.rs` 标准 JSON-RPC 2.0 stdio ACP 适配器，支持 `acp_` 会话路由与 `ChildJob` 进程树隔离。
+- **Runner 事件队列可重入死锁根治（`crates/runner/src/remote_host.rs`）**：修复 `events_queue.lock()` 持有期间二次加锁导致的守护进程挂起，确保高频流式输出与历史快照并发入队零阻塞。
+- **多智能体扩展生态纳管（`crates/runner/src/library.rs`）**：扫描纳管 Skills（`~/.claude/skills`、`.claude/skills`、Codex 技能目录及 YAML Frontmatter）、MCP Servers（`~/.claude.json`、`~/.codex/config.toml`、`.mcp.json`、`~/.agenthub/mcp.json`，内置零依赖 `parse_mcp_from_codex_toml`）与 Hooks（`PreToolUse`/`PostToolUse`/`SessionStart`/`PermissionRequest`），支持跨智能体去重、注册（`POST /api/capabilities/mcp`）与热重扫（`POST /api/capabilities/rescan`）。
+- **上下文容量环、多选问答与增量 Markdown 解析**：Runner 将 Claude `result`、Codex `thread/tokenUsage/updated` 与 ACP `usage_update` 归一化为 `{used, window}` 并在移动端渲染容量环；支持 `multi_select` 问答卡片数组提交（`string[]`）与流式增量 Markdown 尾部缓存。
 
-## [2.4.77 – 2.4.95] - 2026-10-15 ~ 2026-10-19
+## [2.4.98] - 2026-10-19
 
-- **移除 Tauri Desktop，落地 Runner 内嵌 Web 控制台 (v2.4.77 – v2.4.95)**：
-  - 删除 `apps/desktop`（Tauri），Rust 工作区收敛为单一 `crates/runner`（`agenthub-runner`）；
-  - 新增 `crates/runner/src/web_server.rs` 与内嵌静态资源 `dashboard.{html,css,js}`（默认 `127.0.0.1:4200`，支持 Win32 系统托盘与 Edge `--app` 独立窗口染色）；
-  - 完整移植上游 `yetone/magpie` 设计系统与布局原语；脚本拆分为独立 `/dashboard.js?v=<version>`，Token 计价唯一权威收口至守护进程后端，未定价模型显示 `—`；
-  - 引入各收集器内存 TTL / SQLite mtime 指纹缓存、工作区深度聚合（`collectors/workspace.rs`）、上游模型目录探测（`model_catalog.rs`）与 Claude 会话亲和标头注入（保护 Prompt Cache）。
-- **开源合规、CI 与 AI 检索规范 (v2.4.93 – v2.4.95)**：
-  - 补齐 `LICENSE`（MIT）、英文 `README.md`、中文 `README_CN.md`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`、`.github/workflows/ci.yml` 及 `llms.txt` / `llms-full.txt`；
-  - `apps/android` 按 `stablyai/orca` 移动端控制舱重构 `Home -> Host -> Session` 三级栈式导航与终端虚拟按键行。
+- **内嵌控制台网关看板与顶栏设置入口**：网关视图重构为 4 组状态卡片、会话亲和缓存命中对比拓扑、快捷参数复制胶囊与 4 语言（Bash / PowerShell / Node.js / Python）接入代码切换器；顶栏关机键替换为设置齿轮（`Ctrl+,`）并新增 `/api/open-data-dir` 一键打开数据目录。
+- **Win32 多分辨率高清托盘与现代上下文菜单**：内置 16×16 至 256×256 共 9 帧 ICO 图标，使用 `LoadImageW` 按 `SM_CXSMICON` / `SM_CXICON` 1:1 像素加载，新增 PWA 高清图标（`icon-192.png`/`icon-512.png`）与原生 Win32 托盘菜单。
+- **移动端流式转录、历史快照与工具卡片归一化**：`history/snapshot` 的 `content` 在投影层归一化为 `text`，为 `item/started` 开放窄字段白名单；合并 `item/started` 与 `item/completed` 为可展开工具卡片并支持补丁着色、连续工具折叠与 `<think>` 思考过程手风琴。
 
-## [2.4.67 – 2.4.76] - 2026-10-06 ~ 2026-10-14
+## [2.4.97] - 2026-10-19
 
-- **自部署单管理员化与 SQLite 持久化 (v2.4.76)**：
-  - Gateway 新增基于 `node:sqlite` 的 `SqliteAccountStore` 与 `SqliteGatewayStore`（`gateway.db` 与 `remote.db` 分离），支持首次启动 `/v1/auth/setup` 单管理员初始化锁定，移除 Telegram OAuth、多租户团队与商业化计费页面遺留；
-  - `crates/runner` 优化 Claude 转录解析：过滤 `tool_result` 假用户 Prompt、支持超大单行首尾流式切片（防 Base64 撑爆内存）、识别 `stop_reason` 生命周期并按 `uuid` 去重 resume 重放。
-- **AOCI 本地认知脱敏治理 (v2.4.73)**：`aoci.*`、`.aoci/`、`.mcp.json`、`AGENTS.local.md` 全部纳入 `.gitignore` 并解除 Git 追踪，测试代码清除真实 Tailnet IP。
-- **远端失败可见性、60 FPS 流式渲染与双向审批闭环 (v2.4.68 – v2.4.72)**：
-  - `remote_journal.rs` 白名单放行脱敏后的 `error` 事件与 `codexErrorInfo`，Web 端渲染会话隔离的失败原因横幅；
-  - `apps/web` 重构为 Claude Design System 暖纸浅色 / 暖炭深色双主题，工具 Shimmer 改用 GPU `translate3d` 合成，新增时间轴滚底跟随状态机、安全 UUID 降级与同源容器代理放行；
-  - 新增 `claude_app_server.rs`（`ClaudeProcessSession` 长驻双向 stdio 进程），打通 Claude Code `can_use_tool` / `AskUserQuestion` 实时审批、多选问答与每轮 `effort` 推理强度控制；
-  - 清理 Web 端 17 个已废弃的旧监控工作台组件及无用 `gsap` 依赖。
+- **多智能体 Token 与缓存吞吐量对齐 magpie**：修复 ZCode SQLite `LIMIT 1` 子查询漏计缺陷，通过 `parent_map` 递归汇总 `sess_subagent_...` 子会话，并使用 `WHERE data LIKE '%"role":"assistant"%'` 与 5s 内存缓存将 9.8 万行聚合耗时从 5.13s 降至 0.39s；接入 `~/.cache/magpie/sessions.json` 与 `thread_history_1.sqlite` 补齐 Codex 缓存读取与调用次数。
+- **控制台骨架屏与粘性顶栏优化**：新增 5 行 Shimmer 骨架屏占位消除首屏空白闪烁，顶栏导航药丸增至 32px 高并固定 `position: sticky; top: 0; z-index: 20` 保证 `#sideToggle` 随时可达。
+- **Android Orca 视觉令牌与列表收敛**：统一 `OrcaSpace`/`OrcaRadius`/`OrcaSize`/`OrcaType` 石墨深色单主题令牌，使用 `OrcaRow`/`OrcaListGroup`/`OrcaStatStrip` 替代碎片化卡片栈并实现 60 FPS 生命周期感知轮询。
 
-## [2.4.1 – 2.4.66] - 2026-09-15 ~ 2026-10-05
+## [2.4.96] - 2026-10-19
 
-- **会话流与工具体验演进 (v2.4.44 – v2.4.66)**：
-  - 过滤 Claude 合成 429 占位消息（`isApiErrorMessage`）与自动压缩摘要（`isCompactSummary`），将其转为独立系统状态条；过滤无有效 assistant 输出的空会话；
-  - 新增 `agent_binary.rs` 三段式 CLI 发现（候选枚举 → 带超时 `--version` 探测 → 版本择优 + `session_unreadable` 窄匹配回退与亲和记录），根治旧版 CLI 无法 resume 新版 transcript 的问题；
-  - 新增 `claude_gateway.rs` 自动探测本地网关配置与模型映射；
-  - `NativeSessionHost` 命令回执账本与已应答请求集合改为有界 FIFO 淘汰（上限 10,000），`remote-store.ts` 新增 `(runner, hub, seq)` 索引加速命令历史查询。
-- **多 Provider 路由与早期迭代 (v2.4.1 – v2.4.43)**：
-  - `MultiProviderTransport` 支持按会话前缀与 `agentType` 分流 Codex、Claude Code 与其他发现源；过滤 `agenthub-native-*` 测试临时工作区残留。
+- **审批卡片可折叠 Diff 预览与本机路径脱敏**：自动提取 Claude Code `Edit`/`Write`、Codex 与 ACP `item/fileChange/requestApproval` 的结构化代码变更，本机绝对路径脱敏为 `[local_path_redacted]` 并执行 64 KiB 帧上限，前端渲染 `+add -del` 统计徽章与双栏着色对比块。
+- **通用 ACP（Agent Client Protocol）stdio 适配器（`crates/runner/src/collectors/acp_app_server.rs`）**：实现标准 JSON-RPC 2.0 stdio 客户端（兼容 `claude-agent-acp`、`codex-acp`），通过 `ChildJob`（Windows Job Object `KILL_ON_JOB_CLOSE` / Unix 进程组）隔离进程树，异步桥接长耗时 `session/prompt` 与非阻塞 `turn/start`，并在 `MultiProviderTransport` 支持 `acp_` 前缀与 `agentType == "acp"` 动态路由。
 
-## [2.2.0 – 2.3.6] - 2026-09-02 ~ 2026-09-14
+## [2.4.95] - 2026-10-19
 
-- **Remote-only 定位与进程外 `agenthubd` 收口 (v2.3.4 – v2.3.6)**：
-  - 确立"官方 Agent 会话的统一远程继续入口（Remote-only）"定位，transcript 解析单点收敛至 `crates/runner/src/conversation.rs`（`GetSessionConversation` IPC 有界预算）；
-  - 将 `NativeSessionHost` 提升为进程外常驻 daemon，落地本地 IPC v2（1 MiB 长度前缀 JSON frame、Windows Named Pipe 当前用户 ACL / Unix `0600` Socket、`snapshot + cursor` 重放）；
-  - 落地 Remote v3：Ed25519 设备签名 WSS、Generation Fencing、`ws-{display}-{hash16}` 不可逆工作区标识、opaque `approval_id`、按事件种类严格白名单 DTO 投影及单实例 SQLite 内容库；
-  - 清理早期自建任务代执行系统（`tasks.rs`、`/v1/tasks`）与废弃 v2 内存原型路由。
-- **基础采集、加密同步与 M1–M4 基线 (v2.2.0 及更早)**：
-  - 建立 Rust Runner、SQLite Outbox、Ed25519 设备身份与签名批次协议（`@agent-pulse/contracts`）、Fastify Gateway（PostgreSQL 迁移与行锁事务、SSE `/v1/stream`、RFC 8291/8292 Web Push）及 Next.js 响应式 Web 端。
+- 内嵌 Web 控制台引入 Shimmer 骨架屏、3 次轮询/15s 空状态宽限期与 12s 摘要缓存；Claude 转录改为全文件扫描并计入 `cache_read_input_tokens`，本地模式启动超时缩至 3s；Android 抽离 `OrcaComponents.kt`。
+
+## [2.4.94] - 2026-10-18
+
+- Android 引入对标 `stablyai/orca` 的多设备控制舱与虚拟终端按键行（`Esc`/`Tab`/`Ctrl-C`/方向键）；内嵌控制台补齐 `request_count`/`calls` 统计；完善 GitHub Actions CI、社区健康文件与 `llms.txt` / `llms-full.txt`。
+
+## [2.4.93] - 2026-10-18
+
+- 完成开源工程治理、仓库社区标准文件、大模型检索索引（`llms.txt` / `llms-full.txt`）与宣发文档体系建设，全工作区自动化测试通过。
+
+## [2.4.92] - 2026-10-18
+
+- 将 `crates/runner/resources/dashboard.html` 内联的 1700 行脚本拆分为独立 `app.js` 并纳入语法检查，统一模型费率计算表消除三处重复计费逻辑。
+
+## [2.4.91] - 2026-10-18
+
+- 对标 magpie 桌面极简规范，移除内嵌控制台顶栏冗余应用图标、装饰性 Emoji 与外层大白框容器，统一页面呼吸感与留白。
+
+## [2.4.90] - 2026-10-18
+
+- 修复内嵌控制台 `#sideToggle` 侧边栏开关被外层容器遮挡失效的问题，合并双层顶栏并移除右上角重复关闭按钮。
+
+## [2.4.89] - 2026-10-18
+
+- 为内嵌控制台引入 View Transitions 页面切换、分组折叠缓动、弹窗进出场过渡、数字插值滚动与悬停微交互，同时支持 `prefers-reduced-motion` 降级。
+
+## [2.4.88] - 2026-10-17
+
+- 移除 Edge App 模式下的异色系统标题栏割裂感，统一内嵌控制台顶栏与主画布背景色，对齐 magpie 原生窗口视觉一体性。
+
+## [2.4.87] - 2026-10-17
+
+- 删除内嵌控制台顶栏与侧栏冗余分组小标题（工作台/洞察/系统），统一顶栏与内容区底色。
+
+## [2.4.86] - 2026-10-17
+
+- 内嵌控制台默认窗口尺寸收敛至 820×600（最小 640×460），修复侧边栏展开后切换按钮消失与图标方向错误，精简顶栏元素并放大字号。
+
+## [2.4.85] - 2026-10-17
+
+- 内嵌控制台默认窗口尺寸由 1240×820 收敛至 980×720（最小 720×520），并确保窗口首次启动时在屏幕正中央居中呈现。
+
+## [2.4.84] - 2026-10-17
+
+- 修复内嵌控制台侧边栏拖拽宽度（`--side-w-override`）与响应式断点冲突导致的分界线错位问题，实现主内容区自适应伸缩。
+
+## [2.4.83] - 2026-10-17
+
+- 修复内嵌控制台 `#sideToggle` 窄屏切换失效，优化顶栏排版、全局字号、卡片圆角与窗口默认尺寸调节。
+
+## [2.4.82] - 2026-10-17
+
+- 修复 `crates/runner/src/remote_host.rs` `discover()` 扫描超时或瞬态空结果覆盖既有非空会话缓存导致偶发显示 0 条历史会话的缺陷，并精修控制台界面排版。
+
+## [2.4.81] - 2026-10-17
+
+- 内部过渡版本号，扫描侧空洞修复直接并入 v2.4.82 发布。
+
+## [2.4.80] - 2026-10-17
+
+- `apps/web` 对齐 `agenthub-runner` 最新模型目录探测、多 Provider 分页与 Token 用量聚合契约，优化新建会话模型名称展示。
+
+## [2.4.79] - 2026-10-17
+
+- 修复 `crates/runner/src/remote_host.rs` `thread/list` 跨 Provider 分页边界截断与重复问题，确保多智能体会话合流排序与游标分页稳定。
+
+## [2.4.78] - 2026-10-16
+
+- 根治桌面工作目录残留 `agenthub.db` 与启动控制台黑框闪烁；将本机控制台重构为对标 magpie 的独立桌面窗口体验，统一顶栏底色与居中尺寸。
+
+## [2.4.77] - 2026-10-15
+
+- 对标 `yetone/magpie` 重构 `crates/runner/src/collectors/workspace.rs` 全局工作区深度发现、路径还原与模型真实用量聚合引擎。
+
+## [2.4.76] - 2026-10-14
+
+- 移除多租户商业化遗留组件（Telegram OAuth / 设备码流 / 团队账单），在 `services/api/src/sqlite-account-store.ts` 实现单机 SQLite 账户与会话持久化闭环。
+
+## [2.4.73] - 2026-10-12
+
+- 收敛本地开发辅助资产与 `.gitignore` 规则，解除本地索引与私有网络配置追踪，确保远端开源仓库零本地环境残留。
+
+## [2.4.72] - 2026-10-10
+
+- 跑通 Gateway + Web + Runner + Codex 真实自部署全链路（注册、绑定码、Ed25519 绑定、同源反代 `connect`/`create`/`send_input`/`interrupt`），修复联调发现的边界问题。
+
+## [2.4.71] - 2026-10-10
+
+- 重构 `apps/web/src/components/remote.css` 运行中工具卡片 Shimmer 与滚动容器，全面迁移至 `transform`/`opacity` GPU 合成层以保障 60 FPS 渲染。
+
+## [2.4.70] - 2026-10-10
+
+- 增强 `apps/web/src/server/gateway-proxy.ts` `isLoopbackOrContainerHost` 判定以放行 Docker Compose 容器内网反代，补齐 `deploy/` 容器化编排与健康检查。
+
+## [2.4.69] - 2026-10-10
+
+- 战略重心收敛至 Runner + Gateway + Web 自部署核心链路，移除重型 `apps/desktop`（Tauri）客户端并由 Runner 内嵌轻量控制台与 Web 端承接。
+
+## [2.4.68] - 2026-10-08
+
+- 根目录 `package.json`、`package-lock.json` 与部署编排配置统一由 `agent-pulse` 规范命名为 `agenthub`。
+
+## [2.4.68] - 2026-10-07
+
+- 新增 `ClaudeProcessSession` 将 Claude Code 驱动方式由单次 `--resume` 拉起升级为本地常驻 stdin/stdout 流式双向进程控制。
+
+## [2.4.67] - 2026-10-06
+
+- 清理 Web 端废弃的 17 个旧版监控工作台组件与冗余动画库依赖（`gsap`），收敛未引用导出并完成全端按钮交互审查。
+
+## [2.4.66] - 2026-10-05
+
+- 实现对话轮次中间思考与工具执行过程统一折叠收敛（Turn Process Grouping），突出展示每轮最终回复结论。
+
+## [2.4.65] - 2026-10-05
+
+- 实现连续工具调用分组折叠与分段展开（默认展示首屏 6 条，支持增量展开与一键回缩），防止海量工具调用撑爆会话视图。
+
+## [2.4.64] - 2026-10-04
+
+- 在 Rust 转录解析层过滤 `isApiErrorMessage` 与 `<synthetic>` 合成 429 报错气泡，修复连续用户重试输入被吞缺陷并优化系统错误警示条样式。
+
+## [2.4.63] - 2026-10-04
+
+- 补全 Claude Code 深度思考与上下文压缩流式状态遥测，实现发送期间输入框全生命周期锁定与回合碰撞/网络异常时的乐观消息自动回滚。
+
+## [2.4.62] - 2026-10-04
+
+- 实现同工作区会话状态吸收合并与 `realSessionId` 动态更新，修复侧边栏幽灵执行中会话分身及上游 429 配额耗尽导致的回合死锁。
+
+## [2.4.61] - 2026-10-04
+
+- 规范化 `NativeSessionHost` 会话内部前缀（`claude_` / `antigravity_` / `grok_` / `sess_`），根治宿主内存状态与磁盘观测前缀失配导致的同名会话分身。
+
+## [2.4.60] - 2026-10-04
+
+- 打通 CC Switch 活跃数据库路由与上游 `/v1/models` 实时模型探测，消除静态模型缓存阻断并在下拉展开或窗口切回时自动刷新。
+
+## [2.4.59] - 2026-10-04
+
+- 实现会话首条指令自适应智能命名、前缀规范化交叉索引、无转储残留僵尸会话淘汰与 LocalStorage 孤儿缓存自动清洗。
+
+## [2.4.58] - 2026-10-02
+
+- 修复已有会话续聊模型参数丢失与第三方网关 429 递归重试风暴，支持流式重试与配额耗尽状态在 UI 透明反馈。
+
+## [2.4.57] - 2026-10-01
+
+- 修复新建会话异步拉起瞬态路由假死、成功回合静默退出误报失败与多 Provider 绑定识别偏差，整合官方真实模型动态目录。
+
+## [2.4.56] - 2026-10-01
+
+- 新建会话跳过磁盘探测实现零延迟启动；补齐 ACP 工具特化渲染（提问交互、Web 搜索/抓取卡片、超长输出折叠）与通透白底品牌图标重绘。
+
+## [2.4.55] - 2026-10-01
+
+- 修复新建 Claude 会话误带未初始化随机 UUID 执行 `--resume` 导致的报错，支持无效参数自愈回退与侧边栏精简。
+
+## [2.4.54] - 2026-09-29
+
+- 新增 `WindowControls.tsx` 优化无边框窗口拖拽与标题栏控件，打通 Codex 动态模型发现并重构 Remote 工作区管理。
+
+## [2.4.53] - 2026-09-29
+
+- 移动端 UI 全面去 Demo 化并迁移至暖中性色视觉体系，完成多底色对比度排查与无障碍触控修复。
+
+## [2.4.52] - 2026-09-28
+
+- 对标 Claude Desktop 重构顶栏工具条（应用主菜单 `≡`、侧边栏折叠 `◫`、前进/后退导航）并升级进行中会话实时状态反馈。
+
+## [2.4.51] - 2026-09-28
+
+- 优化 `services/api/src/remote-store.ts` `commandHistory` 按会话列走复合索引查询，消除长时运行后的全表扫描放大点。
+
+## [2.4.50] - 2026-09-28
+
+- 过滤 `~/.claude/projects/**/*.jsonl` 中无实质消息的空会话文件，完成投产前性能优化与真实会话恢复边界修复。
+
+## [2.4.49] - 2026-09-28
+
+- 修正 `turn_state` 与 `execution_state` 对字符串与 JSON 状态对象的双格式解析，根治误报回合正在运行导致无法继续输入的问题。
+
+## [2.4.48] - 2026-09-28
+
+- 新增 `crates/runner/src/claude_gateway.rs` 自动探测 CC Switch / Claude-3p 本地网关配置与路由模型映射，支持开启路由时无缝接管会话。
+
+## [2.4.47] - 2026-09-27
+
+- 新增 `classifyTool` 多维工具分类（`terminal`/`file_edit`/`file_read`/`interactive`）、差异比对展示、交互式提问卡片与富上下文审批卡片。
+
+## [2.4.46] - 2026-09-27
+
+- 重构 `discover_claude_binary()` 为候选收集、版本探测与择优回退机制，避免使用旧版 CLI 恢复新版创建的会话。
+
+## [2.4.45] - 2026-09-26
+
+- 重写 `ContextCapacityPopover` 仅展示 Provider 实测上报的分类 Token 计数，新增思考强度控制与认证失败错误归类。
+
+## [2.4.44] - 2026-09-26
+
+- 移除 `sessionDisplayTitle` 将缺失标题回退为工作区目录名的冗余逻辑（统一回退为短 ID），并支持会话自定义重命名。
+
+## [2.4.43] - 2026-09-26
+
+- 修正远程连接状态指示灯逻辑：当 `snapshot.realtime_connected` 为真时正常亮绿灯（`online`），仅在降级轮询或断连时提示警告。
+
+## [2.4.42] - 2026-09-26
+
+- 侧边栏工作区目录优先按所含有效会话数降序排列（`b.totalCount - a.totalCount`），同数量按字母序平局决胜。
+
+## [2.4.41] - 2026-09-26
+
+- 自动过滤集成测试通过 `os.tmpdir()` 产生的临时工作区（`agenthub-native-*`、`agenthub-remote-*`），防止测试目录污染侧边栏。
+
+## [2.4.40] - 2026-09-26
+
+- 侧边栏工作区目录默认保持折叠（`collapsed`）并记忆展开状态（搜索时自动展开命中项），修复启动加载光圈样式缺陷。
+
+## [2.4.39] - 2026-09-26
+
+- 默认主题统一对齐为清爽亮色模式（`[data-theme="light"]`），修复读取中与会话空状态在浅色背景下的对比度问题。
+
+## [2.4.38] - 2026-09-26
+
+- 树状侧边栏引入会话级（默认前 8 条，单次增量 +16 条）与工作区级渐进分页加载，避免海量历史会话一次性渲染卡顿。
+
+## [2.4.37] - 2026-09-26
+
+- 清理测试遗留伪造设备名并将本机历史碎片设备 ID 统一归集至唯一本机节点，静默隐藏无会话空设备。
+
+## [2.4.36] - 2026-09-26
+
+- 侧边栏重构为设备 -> Agent -> 工作区 -> 会话 4 级文件夹层级树，支持各层级折叠记忆与设备在线状态指示。
+
+## [2.4.35] - 2026-09-25
+
+- 抽离纯函数 `session-tree.ts`（含 12 项单测）构建四层会话树与顶部面包屑导航，支持按发现元数据判定 Provider 与工作区分组。
+
+## [2.4.34] - 2026-09-25
+
+- Web 端在 Host 换代（`host_generation` 变更）后自动按新代次重连已选会话并触发有界历史回放。
+
+## [2.4.33] - 2026-09-25
+
+- Daemon 为缺少原生历史回放的 Provider 生成有界会话快照并沿远程事件链路下发，修复受控会话恢复后网页空白问题。
+
+## [2.4.32] - 2026-09-25
+
+- 加宽 Web 远程会话阅读区与输入框，输入框新增实测上下文容量入口，连续工具事件按组折叠展示并强化本机路径脱敏提示。
+
+## [2.4.31] - 2026-09-25
+
+- Web 登录页与远程续聊界面视觉对齐，侧栏采用设备/工作区/会话层级；修复账户测试固定过期日期断言失败问题。
+
+## [2.4.30] - 2026-09-25
+
+- 完成 Web Console 响应式抽屉与 Android Jetpack Compose 原生对话界面双端移动端 UI 重构与全端版本同步。
+
+## [2.4.19] - 2026-09-19
+
+- 修复 `load_session_conversation` 传入前缀化会话 ID（如 `claude_<uuid>`）未剥离前缀导致 Claude Code 历史会话解析为空的缺陷。
+
+## [2.4.18] - 2026-09-19
+
+- 将 Google Antigravity 与 xAI Grok Build 接入后端统一 Remote 控制流，支持真实全双工远程接管与流式事件同步。
+
+## [2.4.17] - 2026-09-18
+
+- 设置面板新增插件商城（Plugin Marketplace），将实验性 Agent 驱动收敛至插件中心按需启用。
+
+## [2.4.16] - 2026-09-18
+
+- 修复 ZCode app-server 无头模式启动时内存模型目录为空导致自定义模型历史会话恢复报错本机会话不可用的缺陷。
+
+## [2.4.15] - 2026-09-17
+
+- 完成三套主题语义化配色重构（37 个语义令牌 × 3 主题），消除侧边栏徽章、表格与代码块二重边框对比度问题。
+
+## [2.4.1] - 2026-09-15
+
+- 新增 `ZCodeAppServer`（`crates/runner/src/collectors.rs`）直驱 `zcode.cjs app-server`，实现 ZCode 全双工远程控制与流式输出。
+
+## [2.3.6] - 2026-09-14
+
+- Web 端根路径 `/` 移除旧版 `LegacyPanelPage` 监控大屏，默认直出 Remote Console 并接入 Runner 在线指示灯与设备绑定入口。
+
+## [2.3.5] - 2026-09-12
+
+- Web/Android 对齐 Remote 创建状态机（HTTP 202 `queued` 显示为等待绑定，待真实 binding 或 receipt 终态后再收敛），统一将 `ws-*` 作为不透明工作区 ID 展示。
+
+## [2.3.4] - 2026-09-10
+
+- 对齐 Web/Android v3 Remote 创建、恢复、续聊、审批与中断契约文档，明确 `queued -> accepted -> session-bound` 状态流转与 `ws-*` 隐私边界。
+
+## [2.2.0] - 2026-09-02
+
+- 新增 `list_agent_models` 从本机 Agent 实测会话聚合可用模型列表（去硬编码），并在会话 Composer 支持模型、权限与上下文附件配置。
+
+## [2.1.0] - 2026-09-01
+
+- 支持多 Agent 模型动态切换与记忆持久化，新增暗色 `SelectDropdown` 组件与会话右键快捷菜单。
+
+## [2.0.8] - 2026-09-01
+
+- 发布 AgentHub 2.0.8 Windows x64 安装包（MSI 与 NSIS Setup）。
+
+## [2.0.7] - 2026-09-01
+
+- 发布 AgentHub 2.0.7 Windows x64 安装包（MSI 与 NSIS Setup）。
+
+## [2.0.6] - 2026-09-01
+
+- 重构双栏低噪音工作台 UI，引入暖纸色主舞台、深色导航与 Provider 信号色体系，并发布 2.0.6 Windows x64 安装包。
+
+## [2.0.5] - 2026-09-01
+
+- 侧边栏按 Provider 供应商分组组织会话，支持快捷搜索、前后导航与工作台模式切换。
+
+## [2.0.4] - 2026-09-01
+
+- 登录界面新增重新打开授权网页与取消重登控制面板，解决误关浏览器授权页后客户端阻塞问题。
+
+## [2.0.3] - 2026-09-01
+
+- Windows 端改用原生 `ShellExecuteW` API（`shell32.dll`）直调默认浏览器，消除 `cmd`/`powershell` 子进程黑框闪烁。
+
+## [2.0.2] - 2026-09-01
+
+- 修复 Windows 下 `cmd /c start` 调起浏览器时 `&` 字符截断 OAuth URL 查询参数的缺陷。
+
+## [2.0.1] - 2026-09-01
+
+- 桌面端 Rust 实现 RFC 8252 §7.3 本地临时回环端口（`http://127.0.0.1:<port>/callback`）PKCE 静默登录，修复 `TgOAuthClient` 空环境变量回退。
+
+## [2.0.0] - 2026-09-01
+
+- 落地 AgentHub v2.0 统一多 Agent 远程控制平面全栈基线，在 `packages/contracts` 实现 v2 Frame Envelope（`seq`/`ack_seq`/`hub_session_id`/`cmd_id`/`is_replay`）与端到端同步链路。
