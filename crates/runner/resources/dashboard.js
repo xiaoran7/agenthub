@@ -105,6 +105,9 @@ async function init() {
   switchView(VIEW_LABELS[savedView] ? savedView : "sessions", true);
   initSettingsPage();
   initUsage();
+  // the tray's "gateway" row opens `#settings/gateway`; a saved page would
+  // otherwise win over it
+  applySettingsHash();
   // the first probe can land while the daemon is still scanning its
   // transcripts; ask again before telling anyone there are no sessions
   const ok = await refreshDashboard();
@@ -301,6 +304,7 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     openSettings();
   } else if (e.key === "Escape") {
+    closeDeleteSessions();
     closeRegisterMcpModal();
     leaveSettings();
   } else if (
@@ -604,6 +608,18 @@ function leaveSettings() {
   if (!isSettingsOpen()) return;
   switchView(lastNavView || "sessions");
 }
+
+// `#settings/<tab>` is how the tray menu opens a settings part: the runner's
+// own window has no other way to be told which page to show. The hash is
+// cleared once it is taken, so a reload keeps the reader's saved page.
+function applySettingsHash() {
+  const m = /^#settings(?:\/([a-z]+))?$/.exec(location.hash || "");
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  openSettings(SET_TABS.includes(m[1]) ? m[1] : "general");
+}
+
+window.addEventListener("hashchange", applySettingsHash);
 
 // manual: the reader asked for this probe, so the button that asked turns
 // while it is out. The four-second poll stays quiet — a button that is
@@ -1026,15 +1042,37 @@ function renderSessions(sessions, mode = "data") {
               (Number(item.completion_tokens) || 0);
           const modelName = escapeHtml(item.model || item.model_name || "");
           const fullId = hasId ? escapeHtml(rawId) : "";
+          // a Coding Assistant session's subagents are listed under the
+          // conversation that spawned them, never as conversations of their
+          // own: their lines carry the parent's session id
+          const subs = Array.isArray(item.subagents) ? item.subagents : [];
+          const deletable = rawProvider === "claude_code" || rawProvider === "claude_desktop" || rawProvider === "claude";
+          const picked = pickedSessions.has(rawId);
+          const subHtml = subs.length ? renderSubagents(subs) : "";
+          const subCount = subs.length
+            ? `<span class="tag sub-count" title="这个会话派生出的子代理">${subs.length} 个子代理</span>`
+            : "";
+          const deleteBtn = deletable
+            ? `<button type="button" class="text icon sm-del" title="删除这个会话" aria-label="删除这个会话" onclick="event.stopPropagation();askDeleteSessions(this.closest('.row.sess').dataset.id)">
+                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
+               </button>`
+            : "";
+          const check = deletable
+            ? `<input type="checkbox" class="sm-check" ${picked ? "checked" : ""} aria-label="选择这个会话" onclick="event.stopPropagation()" onchange="pickSession(this.closest('.row.sess').dataset.id, this.checked)">`
+            : `<span class="sm-check-space"></span>`;
 
           return `
-        <div class="row" style="--i:${index};--n:${grp.items.length}" title="${providerLabel(rawProvider)}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}">
+        <div class="row sess${subs.length ? " has-subs" : ""}" data-id="${fullId}" style="--i:${index};--n:${grp.items.length}" title="${providerLabel(rawProvider)}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}">
+          ${check}
           <div class="who">
             <div class="name" title="${prompt}">${prompt}</div>
+            <div class="sub">${providerLabel(rawProvider)}${subCount}${rawTokens > 0 ? ` · ${fmtN(rawTokens)} Tokens` : ""}</div>
           </div>
           ${modelName ? `<span class="model" title="${modelName}">${modelName}</span>` : ""}
           <time class="when">${escapeHtml(timeStr)}</time>
+          ${deleteBtn}
         </div>
+        ${subHtml}
       `;
         })
         .join("");
@@ -1060,6 +1098,7 @@ function renderSessions(sessions, mode = "data") {
     })
     .join("");
   sessionsRenderedAt = Date.now();
+  syncSessionPickUi();
 }
 
 function sessionRecencyValue(s) {
@@ -1071,6 +1110,190 @@ function sessionRecencyValue(s) {
     s.createdAt ||
     0
   );
+}
+
+// ---- the sessions view: subagents under their conversation, and delete ----
+
+// the sessions the reader ticked; a delete takes every one of them
+const pickedSessions = new Set();
+
+// one subagent a line, under its conversation: what it was for, which model
+// wrote it, and what it spent. A subagent another subagent started is indented
+// under that one, the way its meta file says it was spawned.
+function renderSubagents(subs) {
+  const byId = new Map(subs.map((s) => [s.id, s]));
+  const order = [];
+  const depthOf = (s) => {
+    let depth = 0;
+    let cur = s;
+    const seen = new Set();
+    while (cur && cur.parent && byId.has(cur.parent) && !seen.has(cur.parent) && depth < 8) {
+      seen.add(cur.parent);
+      cur = byId.get(cur.parent);
+      depth += 1;
+    }
+    return depth;
+  };
+  const sorted = [...subs].sort((a, b) => {
+    const da = depthOf(a);
+    const db = depthOf(b);
+    if (da !== db) return da - db;
+    return (b.last_activity_at_ms || 0) - (a.last_activity_at_ms || 0);
+  });
+  return `<div class="subs">${sorted
+    .map((s) => {
+      const depth = Math.min(3, depthOf(s));
+      const kind = escapeHtml(s.kind || "子代理");
+      const desc = escapeHtml(s.description || "");
+      const model = escapeHtml(s.model || "");
+      const tokens =
+        (Number(s.prompt_tokens) || 0) + (Number(s.completion_tokens) || 0);
+      const calls = Number(s.request_count) || 0;
+      const facts = [
+        model,
+        calls ? `${calls} 次请求` : "",
+        tokens ? `${fmtN(tokens)} Tokens` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="sub-row" style="--d:${depth}" title="${kind}${desc ? " · " + desc : ""}${facts ? " · " + facts : ""}">
+        <span class="sub-kind">${kind}</span>
+        <span class="sub-desc">${desc || "（没有留下任务说明）"}</span>
+        <span class="sub-facts">${facts}</span>
+      </div>`;
+    })
+    .join("")}</div>`;
+}
+
+function pickSession(id, on) {
+  if (!id) return;
+  if (on) pickedSessions.add(id);
+  else pickedSessions.delete(id);
+  syncSessionPickUi();
+}
+
+function syncSessionPickUi() {
+  const count = document.getElementById("sessionPickedCount");
+  const del = document.getElementById("sessionDeleteBtn");
+  const all = document.getElementById("sessionPickAll");
+  const wrap = document.getElementById("sessionPickAllWrap");
+  const boxes = [...document.querySelectorAll("#sessionsContainer .sm-check")];
+  if (count) {
+    count.hidden = pickedSessions.size === 0;
+    count.textContent = `${pickedSessions.size} 个已选`;
+  }
+  if (del) del.disabled = pickedSessions.size === 0;
+  if (wrap) wrap.hidden = boxes.length === 0;
+  if (all) {
+    const n = boxes.filter((b) => b.checked).length;
+    all.checked = boxes.length > 0 && n === boxes.length;
+    all.indeterminate = n > 0 && n < boxes.length;
+  }
+}
+
+function togglePickAllSessions(on) {
+  document.querySelectorAll("#sessionsContainer .sm-check").forEach((box) => {
+    const row = box.closest(".row.sess");
+    const id = row && row.dataset.id;
+    box.checked = on;
+    if (id) {
+      if (on) pickedSessions.add(id);
+      else pickedSessions.delete(id);
+    }
+  });
+  syncSessionPickUi();
+}
+
+function askDeleteSessions(one) {
+  const ids = one ? [one] : [...pickedSessions];
+  if (!ids.length) return;
+  const byId = new Map(
+    dedupeSessions(lastGoodSessions).map((s) => [
+      s.session_id || s.id || "",
+      s,
+    ]),
+  );
+  const list = document.getElementById("deleteSessionsList");
+  if (list) {
+    list.replaceChildren(
+      ...ids.slice(0, 5).map((id) => {
+        const s = byId.get(id) || {};
+        const li = document.createElement("li");
+        li.textContent =
+          s.prompt || s.title || s.name || String(id).replace(/^claude_/, "");
+        return li;
+      }),
+    );
+    if (ids.length > 5) {
+      const li = document.createElement("li");
+      li.className = "more";
+      li.textContent = `还有 ${ids.length - 5} 个`;
+      list.append(li);
+    }
+  }
+  const title = document.getElementById("deleteSessionsTitle");
+  if (title) {
+    title.textContent =
+      ids.length === 1 ? "删除这个会话？" : `删除这 ${ids.length} 个会话？`;
+  }
+  const note = document.getElementById("deleteSessionsNote");
+  if (note) {
+    note.textContent =
+      "会话的对话文件、子代理记录与文件历史会移入 Runner 的回收目录，不会直接抹掉；Usage 页的用量统计保留。最近一分钟内还在写入的会话会被跳过。";
+  }
+  const modal = document.getElementById("deleteSessionsModal");
+  if (modal) modal.classList.add("open");
+  pendingDeleteSessions = ids;
+}
+
+let pendingDeleteSessions = [];
+
+function closeDeleteSessions() {
+  const modal = document.getElementById("deleteSessionsModal");
+  if (modal) modal.classList.remove("open");
+  pendingDeleteSessions = [];
+}
+
+async function confirmDeleteSessions() {
+  const ids = pendingDeleteSessions.slice();
+  if (!ids.length) return;
+  const btn = document.getElementById("btnDeleteSessions");
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("busy");
+  }
+  try {
+    const resp = await fetch("/api/sessions/delete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    const data = resp.ok ? await resp.json() : { deleted: [], refused: [] };
+    for (const id of data.deleted || []) pickedSessions.delete(id);
+    closeDeleteSessions();
+    if ((data.deleted || []).length) {
+      toast(
+        data.deleted.length === 1
+          ? "会话已移入回收目录"
+          : `${data.deleted.length} 个会话已移入回收目录`,
+      );
+    }
+    if ((data.refused || []).length) {
+      const first = data.refused[0];
+      toast(
+        `有 ${data.refused.length} 个会话没有删除：${first.error || "正在使用中"}`,
+        "err",
+      );
+    }
+    refreshDashboard(true);
+  } catch (e) {
+    toast("删除失败：" + e.message, "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove("busy");
+    }
+  }
 }
 
 function sessionRecency(a, b) {
@@ -1960,6 +2183,7 @@ function initUsage() {
       if (!b || b.dataset.metric === ledMetric) return;
       ledMetric = b.dataset.metric;
       remember("ledMetric", ledMetric);
+      pickUsageSegs();
       drawLedgerTrend();
     });
   const split = document.getElementById("ledSplit");
@@ -1969,6 +2193,7 @@ function initUsage() {
       if (!b || b.dataset.split === ledSplit) return;
       ledSplit = b.dataset.split;
       remember("ledSplit", ledSplit);
+      pickUsageSegs();
       drawLedgerTrend();
     });
   const heat = document.getElementById("ledHeatMetric");
@@ -1978,6 +2203,7 @@ function initUsage() {
       if (!b || b.dataset.heat === ledHeatMetric) return;
       ledHeatMetric = b.dataset.heat;
       remember("ledHeat", ledHeatMetric);
+      pickUsageSegs();
       drawLedgerHeat();
     });
   window.addEventListener("resize", () => {
@@ -2184,24 +2410,60 @@ function drawUsageKpis(d) {
   set("ukCacheSub", `${fmtN(d.cache_read || 0)} 个输入 Token 由缓存返回`);
   const meter = document.getElementById("ukCacheMeter");
   if (meter) meter.style.width = Math.min(100, hit).toFixed(1) + "%";
-  set("ukSpeed", d.speed > 0 ? `${Math.round(d.speed)} tok/s` : "—");
-  set(
-    "ukSpeedSub",
-    d.timed
-      ? `${d.timed.toLocaleString()} 个有写入时长的回复`
-      : "本周期没有可测写入时长的回复",
-  );
+  const gs = ledGroupSpeed(d);
+  set("ukSpeed", gs ? gs.main : "—");
+  set("ukSpeedSub", gs ? gs.sub : "本周期没有可测写入速度的回复");
+}
+
+// How fast a group of replies wrote, by magpie's two figures.
+//
+// A speed is summed, not averaged: the group's output over the time it was
+// seen writing. An average of per-reply rates lets one short burst stand for
+// a long reply, which is how a page came to claim 3,000 tok/s. Replies timed
+// from their first line are `decode_*`; a reply the transcript wrote in one
+// line has no writing window at all, so the least it can be said to have
+// written at is its output over the whole turn (`floor_*`), said as "≥".
+function ledSpeed(x) {
+  return x && x.decode_ms > 0 ? (1000 * (x.decode_out || 0)) / x.decode_ms : 0;
+}
+function ledFloor(x) {
+  return x && x.floor_ms > 0 ? (1000 * (x.floor_out || 0)) / x.floor_ms : 0;
+}
+function ledGroupSpeed(x) {
+  const v = ledSpeed(x);
+  const f = ledFloor(x);
+  const kv = (x && x.decode_n) || 0;
+  const kf = (x && x.floor_n) || 0;
+  if (!v && !f) return null;
+  const timed = v ? { s: v, head: `${Math.round(v)} tok/s`, n: kv, tail: `${kv.toLocaleString()} 个有写入时长的回复` } : null;
+  const floor = f ? { s: f, head: `≥${Math.round(f)} tok/s`, n: kf, tail: `${kf.toLocaleString()} 个整轮计时的回复` } : null;
+  // the larger sample first; a tie keeps the measured one first
+  const [a, b] = timed && floor && kf > kv ? [floor, timed] : [timed || floor, timed && floor];
+  return {
+    main: a.head,
+    sub: b ? `${a.tail} · ${b.head}（${b.tail}）` : a.tail,
+    value: a.s,
+  };
 }
 
 // the metric a chart counts for one point or one share
 function ledValue(metric, x) {
-  if (metric === "speed") return Number(x.speed) || 0;
+  if (metric === "speed") return ledSpeed(x);
   if (metric === "cost") return Number(x.cost) || 0;
   if (metric === "calls") return Number(x.calls) || 0;
   return Number(x.tokens) || 0;
 }
 
+// a ranking row's speed: what its own row says first, the figure of more
+// replies (magpie's ledRankValue)
+function ledRankValue(metric, x) {
+  if (metric !== "speed") return ledValue(metric, x);
+  const gs = ledGroupSpeed(x);
+  return gs ? gs.value : 0;
+}
+
 function ledPartValue(metric, part) {
+  if (metric === "speed") return ledSpeed(part);
   if (metric === "cost") return Number(part.cost) || 0;
   if (metric === "calls") return Number(part.calls) || 0;
   return Number(part.tokens) || 0;
@@ -2212,6 +2474,13 @@ function ledFormat(metric, v) {
   if (metric === "calls") return Math.round(v).toLocaleString();
   if (metric === "speed") return Math.round(v) + " tok/s";
   return fmtN(Math.round(v));
+}
+
+// an axis writes its numbers alone: five "300 tok/s" labels push the plot
+// aside and say the unit five times; the card's title says it once
+function ledAxisFormat(metric, v) {
+  if (metric === "speed" || metric === "calls") return Math.round(v).toLocaleString();
+  return ledFormat(metric, v);
 }
 
 // an axis's top with four steps under it: round numbers, at least the largest
@@ -2229,7 +2498,8 @@ function ledCategories(split, metric) {
   const rows = ((usageDigest && usageDigest.by && usageDigest.by[split]) || []).slice();
   rows.sort(
     (a, b) =>
-      ledValue(metric, b) - ledValue(metric, a) || (b.tokens || 0) - (a.tokens || 0),
+      ledRankValue(metric, b) - ledRankValue(metric, a) ||
+      (b.tokens || 0) - (a.tokens || 0),
   );
   const top = rows.slice(0, LED_SHOWN).map((x, i) => ({
     ...x,
@@ -2305,20 +2575,17 @@ function drawLedgerTrend() {
   const max = Math.max(
     0,
     ...totals,
-    ...(speed
-      ? pts.flatMap((p) =>
-          top.map((c) => {
-            const part = partOf(p, c.id);
-            return part.timed ? part.output / (part.duration_ms / 1000) : 0;
-          }),
-        )
-      : []),
+    ...(speed ? pts.flatMap((p) => top.map((c) => ledSpeed(partOf(p, c.id)))) : []),
   );
   if (!(max > 0)) {
     const none = document.createElement("div");
     none.className = "none";
     none.textContent =
-      ledMetric === "cost" ? "本周期没有已知价格的请求" : "本周期没有请求";
+      ledMetric === "cost"
+        ? "本周期没有已知价格的请求"
+        : speed
+          ? "本周期没有可测写入速度的回复"
+          : "本周期没有请求";
     plot.append(none);
     drawLedgerRank(d, bucket);
     return;
@@ -2329,7 +2596,7 @@ function drawLedgerTrend() {
   plot.append(g);
   const labels = [0, 1, 2, 3, 4].map((i) => {
     const lab = sv("text", { "text-anchor": "end", class: "axis" });
-    lab.textContent = ledFormat(ledMetric, topV * (1 - i / 4));
+    lab.textContent = ledAxisFormat(ledMetric, topV * (1 - i / 4));
     g.append(lab);
     return lab;
   });
@@ -2406,8 +2673,7 @@ function drawLedgerTrend() {
         segs[segs.length - 1].classList.add("all");
       }
       for (const c of top) {
-        const part = partOf(p, c.id);
-        const v = part.timed ? part.output / (part.duration_ms / 1000) : 0;
+        const v = ledSpeed(partOf(p, c.id));
         if (!(v > 0)) continue;
         if (v > totals[i]) {
           const topY = Y(totals[i]);
@@ -2478,12 +2744,7 @@ function drawLedgerTrend() {
     tip.append(head);
     const rows = top.map((c) => {
       const part = partOf(p, c.id);
-      const v = speed
-        ? part.timed
-          ? part.output / (part.duration_ms / 1000)
-          : 0
-        : ledPartValue(ledMetric, part);
-      return [nameOf(c), c.color, v];
+      return [nameOf(c), c.color, ledPartValue(ledMetric, part)];
     });
     if (!speed) {
       rows.push([
@@ -2542,12 +2803,13 @@ function drawLedgerRank(d, bucket) {
   const { top, rest, list } = ledCategories(ledSplit, ledMetric);
   if (!list.length) return;
   const total = list.reduce((a, x) => a + ledValue(ledMetric, x), 0) || 1;
-  const leader = Math.max(1, ledValue(ledMetric, top[0]));
+  const leader = Math.max(1, ledRankValue(ledMetric, top[0]));
   const one = (x, color, plain) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "rk" + (plain ? " plain" : "");
-    const v = ledValue(ledMetric, x);
+    const v = ledRankValue(ledMetric, x);
+    const gs = ledGroupSpeed(x);
     const head = document.createElement("div");
     head.className = "rk-a";
     const sw = document.createElement("i");
@@ -2560,12 +2822,8 @@ function drawLedgerRank(d, bucket) {
     name.title = name.textContent;
     const val = document.createElement("span");
     val.className = "rk-val";
-    val.textContent =
-      ledMetric === "speed"
-        ? x.timed
-          ? Math.round(x.output / (x.duration_ms / 1000)) + " tok/s"
-          : "—"
-        : ledFormat(ledMetric, v);
+    val.textContent = ledMetric === "speed" ? (gs ? gs.main : "—") : ledFormat(ledMetric, v);
+    if (ledMetric === "speed" && gs) val.title = gs.sub;
     head.append(name, val);
     const bar = document.createElement("div");
     bar.className = "rk-bar";
@@ -2580,7 +2838,9 @@ function drawLedgerRank(d, bucket) {
     if (ledMetric !== "tokens") facts.push(`${fmtN(x.tokens || 0)} Token`);
     if (ledMetric !== "cost") facts.push(fmtMoney(x.cost));
     if (x.errors) facts.push(`${x.errors} 次失败`);
-    more.textContent = facts.join(" · ") + ` · ${Math.round((100 * v) / total)}%`;
+    // a speed is no one's share of all the tokens
+    if (ledMetric !== "speed") facts.push(`${Math.round((100 * v) / total)}%`);
+    more.textContent = facts.join(" · ");
     b.append(head, bar, more);
     if (!plain) {
       b.onpointerenter = () => box.parentElement?.querySelector(".led-chart")?.emphasize?.(x.id);
@@ -2592,7 +2852,11 @@ function drawLedgerRank(d, bucket) {
   if (rest.length) {
     const other = rest.reduce(
       (acc, x) => {
-        for (const k of ["calls", "tokens", "cost", "errors", "output", "duration_ms", "timed"])
+        for (const k of [
+          "calls", "tokens", "cost", "errors", "output",
+          "decode_out", "decode_ms", "decode_n",
+          "floor_out", "floor_ms", "floor_n",
+        ])
           acc[k] = (acc[k] || 0) + (x[k] || 0);
         return acc;
       },

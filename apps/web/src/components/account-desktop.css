@@ -19,11 +19,23 @@
   width: min(100%, 440px);
   max-width: none;
   margin: 0 auto;
-  padding: 32px;
+  padding: 36px 32px;
   background: var(--remote-surface);
   border: 1px solid var(--remote-line);
   border-radius: var(--radius-xl, 20px);
   box-shadow: var(--remote-modal-shadow, 0 18px 52px rgba(0, 0, 0, 0.1));
+  animation: account-fade-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes account-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .account-brand {
@@ -126,17 +138,20 @@
 }
 
 .account-form label > span {
-  color: var(--remote-secondary);
+  color: var(--remote-ink);
   font-weight: 600;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .account-form input {
-  min-height: 45px;
+  min-height: 46px;
   background: var(--remote-raised);
   border: 1px solid var(--remote-line);
-  border-radius: var(--radius-sm, 8px);
+  border-radius: var(--radius-md, 10px);
   color: var(--remote-ink);
+  font-size: 14.5px;
+  padding: 0 14px;
+  transition: all 0.16s ease;
 }
 
 .account-form input::placeholder {
@@ -145,24 +160,33 @@
 
 .account-form input:focus {
   border-color: var(--remote-terracotta);
-  box-shadow: 0 0 0 2px var(--remote-terracotta-soft);
+  box-shadow: 0 0 0 3px var(--remote-terracotta-soft);
   outline: none;
 }
 
 .account-submit {
-  min-height: 46px;
-  margin-top: 3px;
+  min-height: 48px;
+  margin-top: 6px;
   background: var(--remote-terracotta);
   border: 1px solid var(--remote-terracotta);
   border-radius: var(--radius-md, 10px);
   color: #ffffff;
   font-weight: 650;
-  box-shadow: 0 1px 3px rgba(217, 119, 87, 0.25);
+  font-size: 15px;
+  box-shadow: 0 2px 8px rgba(217, 119, 87, 0.28);
+  cursor: pointer;
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .account-submit:hover:not(:disabled) {
   background: var(--remote-terracotta-hover);
   border-color: var(--remote-terracotta-hover);
+  transform: translateY(-1.5px);
+  box-shadow: 0 4px 14px rgba(217, 119, 87, 0.38);
+}
+
+.account-submit:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .account-text-action {

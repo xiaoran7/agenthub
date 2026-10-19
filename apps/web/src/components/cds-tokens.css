@@ -71,9 +71,9 @@
   --cds-fill-secondary: var(--cds-alpha-2);
   --cds-fill-secondary-hover: rgba(21, 21, 21, 0.14);
 
-  --cds-text-primary: #151515;
-  --cds-text-secondary: #525252;
-  --cds-text-muted: #8a8a8a;
+  --cds-text-primary: #111827;
+  --cds-text-secondary: #374151;
+  --cds-text-muted: #64666d;
   --cds-bg-tint-blue: #f0f4f8;
   --cds-segmented-track: rgba(0, 0, 0, 0.06);
   --cds-segmented-thumb: #ffffff;
@@ -175,9 +175,9 @@
   --cds-fill-secondary: var(--cds-alpha-2);
   --cds-fill-secondary-hover: rgba(255, 255, 255, 0.14);
 
-  --cds-text-primary: #f5f5f5;
-  --cds-text-secondary: #a3a3a3;
-  --cds-text-muted: #666666;
+  --cds-text-primary: #f9fafb;
+  --cds-text-secondary: #d1d5db;
+  --cds-text-muted: #9ca3af;
   --cds-bg-tint-blue: rgba(255, 255, 255, 0.06);
   --cds-segmented-track: rgba(255, 255, 255, 0.08);
   --cds-segmented-thumb: #2c2c2a;
@@ -235,44 +235,20 @@
   }
 }
 
-/* 4. 7 档渐隐非线性 Alpha 遮罩类 */
+/* 4. 底部微弱防切断渐隐遮罩类 (彻底杜绝顶部关键文字发虚被遮挡) */
 .cds-scroll-fade-mask {
   mask-image: linear-gradient(
     to bottom,
-    transparent,
-    #0000000d calc(var(--cds-scroll-fade-top) * 0.15),
-    #00000026 calc(var(--cds-scroll-fade-top) * 0.3),
-    #0000004d calc(var(--cds-scroll-fade-top) * 0.45),
-    #00000080 calc(var(--cds-scroll-fade-top) * 0.6),
-    #000000b3 calc(var(--cds-scroll-fade-top) * 0.75),
-    #000000d9 calc(var(--cds-scroll-fade-top) * 0.87),
-    #000 var(--cds-scroll-fade-top),
-    #000 calc(100% - var(--cds-scroll-fade-bottom)),
-    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * 0.87),
-    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * 0.75),
-    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * 0.6),
-    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * 0.45),
-    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * 0.3),
-    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * 0.15),
-    transparent
+    #000 0%,
+    #000 calc(100% - 16px),
+    rgba(0, 0, 0, 0.2) 98%,
+    transparent 100%
   );
   -webkit-mask-image: linear-gradient(
     to bottom,
-    transparent,
-    #0000000d calc(var(--cds-scroll-fade-top) * 0.15),
-    #00000026 calc(var(--cds-scroll-fade-top) * 0.3),
-    #0000004d calc(var(--cds-scroll-fade-top) * 0.45),
-    #00000080 calc(var(--cds-scroll-fade-top) * 0.6),
-    #000000b3 calc(var(--cds-scroll-fade-top) * 0.75),
-    #000000d9 calc(var(--cds-scroll-fade-top) * 0.87),
-    #000 var(--cds-scroll-fade-top),
-    #000 calc(100% - var(--cds-scroll-fade-bottom)),
-    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * 0.87),
-    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * 0.75),
-    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * 0.6),
-    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * 0.45),
-    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * 0.3),
-    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * 0.15),
-    transparent
+    #000 0%,
+    #000 calc(100% - 16px),
+    rgba(0, 0, 0, 0.2) 98%,
+    transparent 100%
   );
 }

@@ -236,6 +236,139 @@ function ToolIcon({ kind }: { kind: ToolKind }) {
   );
 }
 
+function SunIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+    </svg>
+  );
+}
+
+function MoonIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+    </svg>
+  );
+}
+
+function MonitorIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect width="20" height="14" x="2" y="3" rx="2" />
+      <line x1="8" x2="16" y1="21" y2="21" />
+      <line x1="12" x2="12" y1="17" y2="21" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({
+  size = 12,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+function CheckIcon({
+  size = 12,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+function CopyIcon({
+  size = 12,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </svg>
+  );
+}
+
 interface DiffStats {
   additions: number;
   deletions: number;
@@ -490,7 +623,17 @@ const RemoteToolCard = memo(function RemoteToolCard({
                         handleCopy("diff-del", diffStats.oldText!, e)
                       }
                     >
-                      {copiedSection === "diff-del" ? "✓ 已复制" : "复制"}
+                      {copiedSection === "diff-del" ? (
+                        <span className="remote-copied-badge">
+                          <CheckIcon size={12} />
+                          <span>已复制</span>
+                        </span>
+                      ) : (
+                        <span className="remote-copy-badge">
+                          <CopyIcon size={12} />
+                          <span>复制</span>
+                        </span>
+                      )}
                     </button>
                   </div>
                   <pre className="remote-diff-pre">{diffStats.oldText}</pre>
@@ -507,7 +650,17 @@ const RemoteToolCard = memo(function RemoteToolCard({
                         handleCopy("diff-add", diffStats.newText!, e)
                       }
                     >
-                      {copiedSection === "diff-add" ? "✓ 已复制" : "复制"}
+                      {copiedSection === "diff-add" ? (
+                        <span className="remote-copied-badge">
+                          <CheckIcon size={12} />
+                          <span>已复制</span>
+                        </span>
+                      ) : (
+                        <span className="remote-copy-badge">
+                          <CopyIcon size={12} />
+                          <span>复制</span>
+                        </span>
+                      )}
                     </button>
                   </div>
                   <pre className="remote-diff-pre">{diffStats.newText}</pre>
@@ -523,7 +676,17 @@ const RemoteToolCard = memo(function RemoteToolCard({
                   className="remote-card-mini-copy"
                   onClick={(e) => handleCopy("cmd", item.command!, e)}
                 >
-                  {copiedSection === "cmd" ? "✓ 已复制" : "复制"}
+                  {copiedSection === "cmd" ? (
+                    <span className="remote-copied-badge">
+                      <CheckIcon size={12} />
+                      <span>已复制</span>
+                    </span>
+                  ) : (
+                    <span className="remote-copy-badge">
+                      <CopyIcon size={12} />
+                      <span>复制</span>
+                    </span>
+                  )}
                 </button>
               </div>
               <pre className="remote-tool-cmd">
@@ -540,7 +703,17 @@ const RemoteToolCard = memo(function RemoteToolCard({
                   className="remote-card-mini-copy"
                   onClick={(e) => handleCopy("output", item.output!, e)}
                 >
-                  {copiedSection === "output" ? "✓ 已复制" : "复制"}
+                  {copiedSection === "output" ? (
+                    <span className="remote-copied-badge">
+                      <CheckIcon size={12} />
+                      <span>已复制</span>
+                    </span>
+                  ) : (
+                    <span className="remote-copy-badge">
+                      <CopyIcon size={12} />
+                      <span>复制</span>
+                    </span>
+                  )}
                 </button>
               </div>
               <pre className="remote-tool-output">
@@ -1572,7 +1745,7 @@ export function RemoteConsole({
           ))}
         </div>
         <div className="remote-nav-label">设备 / Agent / 工作区</div>
-        <div className="remote-session-tree cds-scroll-fade-mask">
+        <div className="remote-session-tree">
           {filteredDeviceGroups.map((dev) => {
             const isDevCollapsed =
               !sessionSearchQuery && collapsedDevices[dev.runnerId] === true;
@@ -1591,7 +1764,7 @@ export function RemoteConsole({
                     }`}
                     aria-hidden="true"
                   >
-                    ▾
+                    <ChevronDownIcon size={12} />
                   </span>
                   <span className="remote-device-title">{dev.label}</span>
                   <span
@@ -1631,7 +1804,7 @@ export function RemoteConsole({
                                 }`}
                                 aria-hidden="true"
                               >
-                                ▾
+                                <ChevronDownIcon size={12} />
                               </span>
                               <span
                                 className={`remote-agent-badge ${agentGroup.badgeClass}`}
@@ -1678,7 +1851,7 @@ export function RemoteConsole({
                                           }`}
                                           aria-hidden="true"
                                         >
-                                          ▾
+                                          <ChevronDownIcon size={12} />
                                         </span>
                                         <svg
                                           className="remote-workspace-icon"
@@ -1800,26 +1973,12 @@ export function RemoteConsole({
                                                       >
                                                         {copiedSessionId ===
                                                         item.sessionKey ? (
-                                                          "✓"
+                                                          <CheckIcon
+                                                            size={12}
+                                                            className="text-emerald-600 dark:text-emerald-400"
+                                                          />
                                                         ) : (
-                                                          <svg
-                                                            width="11"
-                                                            height="11"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            strokeWidth="2"
-                                                          >
-                                                            <rect
-                                                              x="9"
-                                                              y="9"
-                                                              width="13"
-                                                              height="13"
-                                                              rx="2"
-                                                              ry="2"
-                                                            />
-                                                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                                                          </svg>
+                                                          <CopyIcon size={12} />
                                                         )}
                                                       </span>
                                                     </div>
@@ -1973,28 +2132,26 @@ export function RemoteConsole({
               role="radiogroup"
               aria-label="外观主题切换"
             >
-              {(
-                [
-                  {
-                    mode: "light",
-                    label: "浅色",
-                    icon: "☀️",
-                    title: "温润纸张 (Warm Paper)",
-                  },
-                  {
-                    mode: "dark",
-                    label: "深色",
-                    icon: "🌙",
-                    title: "黑曜石暖炭 (Obsidian Charcoal)",
-                  },
-                  {
-                    mode: "system",
-                    label: "系统",
-                    icon: "🖥️",
-                    title: "跟随系统设置",
-                  },
-                ] as const
-              ).map((t) => (
+              {[
+                {
+                  mode: "light" as const,
+                  label: "浅色",
+                  icon: <SunIcon size={14} />,
+                  title: "温润纸张 (Warm Paper)",
+                },
+                {
+                  mode: "dark" as const,
+                  label: "深色",
+                  icon: <MoonIcon size={14} />,
+                  title: "黑曜石暖炭 (Obsidian Charcoal)",
+                },
+                {
+                  mode: "system" as const,
+                  label: "系统",
+                  icon: <MonitorIcon size={14} />,
+                  title: "跟随系统设置",
+                },
+              ].map((t) => (
                 <button
                   key={t.mode}
                   type="button"
@@ -2404,7 +2561,17 @@ export function RemoteConsole({
                             }
                             title="复制完整命令"
                           >
-                            {isCopied ? "✓ 已复制" : "复制命令"}
+                            {isCopied ? (
+                              <span className="remote-copied-badge">
+                                <CheckIcon size={12} />
+                                <span>已复制</span>
+                              </span>
+                            ) : (
+                              <span className="remote-copy-action">
+                                <CopyIcon size={12} />
+                                <span>复制命令</span>
+                              </span>
+                            )}
                           </button>
                         </div>
                         <div className="remote-approval-command-box">
@@ -2429,7 +2596,17 @@ export function RemoteConsole({
                             }
                             title="复制文件路径"
                           >
-                            {isCopied ? "✓ 已复制" : "复制路径"}
+                            {isCopied ? (
+                              <span className="remote-copied-badge">
+                                <CheckIcon size={12} />
+                                <span>已复制</span>
+                              </span>
+                            ) : (
+                              <span className="remote-copy-action">
+                                <CopyIcon size={12} />
+                                <span>复制路径</span>
+                              </span>
+                            )}
                           </button>
                         </div>
                         <div className="remote-approval-command-box">
@@ -2437,133 +2614,166 @@ export function RemoteConsole({
                         </div>
                       </div>
                     )}
-                    {approval.diff && (() => {
-                      const diffStats = parseDiffStats(approval.diff);
-                      const isCollapsed =
-                        collapsedApprovalDiffs[approval.approval_id] ?? false;
-                      const isDiffCopied =
-                        copiedApprovalId === `${approval.approval_id}-diff`;
-                      return (
-                        <div className="remote-approval-diff-section">
-                          <div className="remote-approval-diff-header">
-                            <div className="remote-approval-diff-title-wrap">
-                              <span className="remote-approval-box-label">
-                                拟修改代码变更 (Diff)
-                              </span>
-                              {(diffStats.additions > 0 ||
-                                diffStats.deletions > 0) && (
-                                <span className="remote-approval-diff-badge">
-                                  {diffStats.additions > 0 && (
-                                    <span className="remote-diff-stat-add">
-                                      +{diffStats.additions}
-                                    </span>
-                                  )}
-                                  {diffStats.deletions > 0 && (
-                                    <span className="remote-diff-stat-del">
-                                      -{diffStats.deletions}
-                                    </span>
-                                  )}
+                    {approval.diff &&
+                      (() => {
+                        const diffStats = parseDiffStats(approval.diff);
+                        const isCollapsed =
+                          collapsedApprovalDiffs[approval.approval_id] ?? false;
+                        const isDiffCopied =
+                          copiedApprovalId === `${approval.approval_id}-diff`;
+                        return (
+                          <div className="remote-approval-diff-section">
+                            <div className="remote-approval-diff-header">
+                              <div className="remote-approval-diff-title-wrap">
+                                <span className="remote-approval-box-label">
+                                  拟修改代码变更 (Diff)
                                 </span>
-                              )}
+                                {(diffStats.additions > 0 ||
+                                  diffStats.deletions > 0) && (
+                                  <span className="remote-approval-diff-badge">
+                                    {diffStats.additions > 0 && (
+                                      <span className="remote-diff-stat-add">
+                                        +{diffStats.additions}
+                                      </span>
+                                    )}
+                                    {diffStats.deletions > 0 && (
+                                      <span className="remote-diff-stat-del">
+                                        -{diffStats.deletions}
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="remote-approval-diff-actions">
+                                <button
+                                  type="button"
+                                  className="remote-card-mini-copy"
+                                  onClick={() =>
+                                    handleCopyText(
+                                      `${approval.approval_id}-diff`,
+                                      approval.diff!,
+                                    )
+                                  }
+                                  title="复制完整 Diff 内容"
+                                >
+                                  {isDiffCopied ? (
+                                    <span className="remote-copied-badge">
+                                      <CheckIcon size={12} />
+                                      <span>已复制</span>
+                                    </span>
+                                  ) : (
+                                    <span className="remote-copy-action">
+                                      <CopyIcon size={12} />
+                                      <span>复制变更</span>
+                                    </span>
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="remote-approval-diff-toggle-btn"
+                                  onClick={() =>
+                                    setCollapsedApprovalDiffs((prev) => ({
+                                      ...prev,
+                                      [approval.approval_id]: !isCollapsed,
+                                    }))
+                                  }
+                                  title={isCollapsed ? "展开比对" : "折叠比对"}
+                                >
+                                  <span>
+                                    {isCollapsed ? "展开比对" : "折叠比对"}
+                                  </span>
+                                  <ChevronDownIcon
+                                    size={12}
+                                    className={`remote-diff-chevron ${isCollapsed ? "" : "open"}`}
+                                  />
+                                </button>
+                              </div>
                             </div>
-                            <div className="remote-approval-diff-actions">
-                              <button
-                                type="button"
-                                className="remote-card-mini-copy"
-                                onClick={() =>
-                                  handleCopyText(
-                                    `${approval.approval_id}-diff`,
-                                    approval.diff!,
-                                  )
-                                }
-                                title="复制完整 Diff 内容"
-                              >
-                                {isDiffCopied ? "✓ 已复制" : "复制变更"}
-                              </button>
-                              <button
-                                type="button"
-                                className="remote-approval-diff-toggle-btn"
-                                onClick={() =>
-                                  setCollapsedApprovalDiffs((prev) => ({
-                                    ...prev,
-                                    [approval.approval_id]: !isCollapsed,
-                                  }))
-                                }
-                                title={isCollapsed ? "展开比对" : "折叠比对"}
-                              >
-                                {isCollapsed ? "展开比对 ▼" : "折叠比对 ▲"}
-                              </button>
-                            </div>
+                            {!isCollapsed && (
+                              <div className="remote-approval-diff-body">
+                                {diffStats.oldText || diffStats.newText ? (
+                                  <div className="remote-diff-viewer">
+                                    {diffStats.oldText && (
+                                      <div className="remote-diff-chunk del">
+                                        <div className="remote-diff-bar">
+                                          <span className="remote-diff-tag">
+                                            - 变更前代码
+                                          </span>
+                                          <button
+                                            type="button"
+                                            className="remote-card-mini-copy"
+                                            onClick={() =>
+                                              handleCopyText(
+                                                `${approval.approval_id}-diff-del`,
+                                                diffStats.oldText!,
+                                              )
+                                            }
+                                          >
+                                            {copiedApprovalId ===
+                                            `${approval.approval_id}-diff-del` ? (
+                                              <span className="remote-copied-badge">
+                                                <CheckIcon size={12} />
+                                                <span>已复制</span>
+                                              </span>
+                                            ) : (
+                                              <span className="remote-copy-action">
+                                                <CopyIcon size={12} />
+                                                <span>复制</span>
+                                              </span>
+                                            )}
+                                          </button>
+                                        </div>
+                                        <pre className="remote-diff-pre">
+                                          {diffStats.oldText}
+                                        </pre>
+                                      </div>
+                                    )}
+                                    {diffStats.newText && (
+                                      <div className="remote-diff-chunk add">
+                                        <div className="remote-diff-bar">
+                                          <span className="remote-diff-tag">
+                                            + 变更后代码
+                                          </span>
+                                          <button
+                                            type="button"
+                                            className="remote-card-mini-copy"
+                                            onClick={() =>
+                                              handleCopyText(
+                                                `${approval.approval_id}-diff-add`,
+                                                diffStats.newText!,
+                                              )
+                                            }
+                                          >
+                                            {copiedApprovalId ===
+                                            `${approval.approval_id}-diff-add` ? (
+                                              <span className="remote-copied-badge">
+                                                <CheckIcon size={12} />
+                                                <span>已复制</span>
+                                              </span>
+                                            ) : (
+                                              <span className="remote-copy-action">
+                                                <CopyIcon size={12} />
+                                                <span>复制</span>
+                                              </span>
+                                            )}
+                                          </button>
+                                        </div>
+                                        <pre className="remote-diff-pre">
+                                          {diffStats.newText}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <pre className="remote-diff-pre remote-approval-raw-diff">
+                                    {approval.diff}
+                                  </pre>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          {!isCollapsed && (
-                            <div className="remote-approval-diff-body">
-                              {diffStats.oldText || diffStats.newText ? (
-                                <div className="remote-diff-viewer">
-                                  {diffStats.oldText && (
-                                    <div className="remote-diff-chunk del">
-                                      <div className="remote-diff-bar">
-                                        <span className="remote-diff-tag">
-                                          - 变更前代码
-                                        </span>
-                                        <button
-                                          type="button"
-                                          className="remote-card-mini-copy"
-                                          onClick={() =>
-                                            handleCopyText(
-                                              `${approval.approval_id}-diff-del`,
-                                              diffStats.oldText!,
-                                            )
-                                          }
-                                        >
-                                          {copiedApprovalId ===
-                                          `${approval.approval_id}-diff-del`
-                                            ? "✓ 已复制"
-                                            : "复制"}
-                                        </button>
-                                      </div>
-                                      <pre className="remote-diff-pre">
-                                        {diffStats.oldText}
-                                      </pre>
-                                    </div>
-                                  )}
-                                  {diffStats.newText && (
-                                    <div className="remote-diff-chunk add">
-                                      <div className="remote-diff-bar">
-                                        <span className="remote-diff-tag">
-                                          + 变更后代码
-                                        </span>
-                                        <button
-                                          type="button"
-                                          className="remote-card-mini-copy"
-                                          onClick={() =>
-                                            handleCopyText(
-                                              `${approval.approval_id}-diff-add`,
-                                              diffStats.newText!,
-                                            )
-                                          }
-                                        >
-                                          {copiedApprovalId ===
-                                          `${approval.approval_id}-diff-add`
-                                            ? "✓ 已复制"
-                                            : "复制"}
-                                        </button>
-                                      </div>
-                                      <pre className="remote-diff-pre">
-                                        {diffStats.newText}
-                                      </pre>
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <pre className="remote-diff-pre remote-approval-raw-diff">
-                                  {approval.diff}
-                                </pre>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
+                        );
+                      })()}
                     <div className="remote-approval-actions">
                       <button
                         type="button"
@@ -2688,7 +2898,9 @@ export function RemoteConsole({
                                     }`}
                                     aria-hidden="true"
                                   >
-                                    {isOptionSelected ? "✓" : ""}
+                                    {isOptionSelected ? (
+                                      <CheckIcon size={12} />
+                                    ) : null}
                                   </span>
                                 )}
                                 <strong>{opt.label}</strong>

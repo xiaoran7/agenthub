@@ -12,8 +12,10 @@ runner-identity.json
 local-identity.json
 # Local git bundles produced for offline transfer.
 pulse.bundle
-# Local UI review screenshots and scratch output.
+# Local UI review screenshots, scratch output, and local archives.
 _scratch/
+_local/
+.creative-design/
 .env
 deploy/docker.env
 *.exe

@@ -207,6 +207,15 @@
       <input type="search" id="sessionSearchInput" class="inp" placeholder="搜索提示词、会话 ID 或工作区…" oninput="filterSessionsList()">
       <span class="tag" id="sessionCountBadge">0 个历史会话</span>
       <span class="grow"></span>
+      <label class="pick-all" id="sessionPickAllWrap" hidden>
+        <input type="checkbox" id="sessionPickAll" onchange="togglePickAllSessions(this.checked)">
+        <span>全选</span>
+      </label>
+      <span class="tag" id="sessionPickedCount" hidden>0 个已选</span>
+      <button class="text action danger" id="sessionDeleteBtn" onclick="askDeleteSessions()" disabled>
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></span>
+        <span>删除</span>
+      </button>
       <button class="text action" onclick="refreshDashboard(true)" id="refreshBtn" title="立即重新探测">
         <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
         <span>刷新</span>
@@ -699,6 +708,24 @@
         <span class="center-title">正在退出 AgentHub Runner</span>
         <p class="center-note" id="shutdownModalMsg">托盘图标与后台监听服务正在安全释放…</p>
         <p class="center-note dim">服务终止后,您可以安全关闭此桌面窗口。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- a session's delete asks once, and says where its files go -->
+  <div id="deleteSessionsModal" class="modal">
+    <div class="dialog narrow">
+      <div class="editor center">
+        <span class="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
+        </span>
+        <span class="center-title" id="deleteSessionsTitle">删除这个会话？</span>
+        <p class="center-note" id="deleteSessionsNote">会话的文件会移入 Runner 的回收目录，不会直接抹掉。</p>
+        <ul class="sm-ask-list" id="deleteSessionsList"></ul>
+        <div class="bar center-bar">
+          <button type="button" class="text action" onclick="closeDeleteSessions()">取消</button>
+          <button type="button" class="text action danger" id="btnDeleteSessions" onclick="confirmDeleteSessions()">删除</button>
+        </div>
       </div>
     </div>
   </div>

@@ -9,7 +9,7 @@ mod windows_tray {
     use std::thread;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+        CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -21,16 +21,15 @@ mod windows_tray {
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, IMAGE_ICON, LR_DEFAULTCOLOR,
-        LoadIconW, LoadImageW, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
-        PostQuitMessage, RegisterClassW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON,
-        SetForegroundWindow, SetMenuDefaultItem, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-        WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_USER,
-        WNDCLASSW,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
+        IMAGE_ICON, KillTimer, LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MSG, PostQuitMessage,
+        RegisterClassW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SetTimer, TranslateMessage,
+        WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW,
     };
 
     const WM_TRAY_CALLBACK: u32 = WM_USER + 101;
+    /// The thread timer that watches the open menu for a click outside it.
+    const MENU_WATCH: usize = 0x4148;
     const ID_TRAY_OPEN_DESKTOP: usize = 2001;
     const ID_TRAY_OPEN_GATEWAY: usize = 2002;
     const ID_TRAY_OPEN_BROWSER: usize = 2003;
@@ -87,8 +86,6 @@ mod windows_tray {
         });
 
         thread::spawn(move || unsafe {
-            enable_modern_menu_theme();
-
             let hinstance: HINSTANCE = GetModuleHandleW(null());
             let class_name: Vec<u16> = "AgentHubRunnerTrayClass\0".encode_utf16().collect();
 
@@ -167,11 +164,20 @@ mod windows_tray {
 
             Shell_NotifyIconW(NIM_ADD, &nid);
 
+            // while the menu is up, a slow beat watches whether the reader
+            // has clicked outside it; the menu itself is a window of its own
+            // and would otherwise never hear about a click that leaves
+            SetTimer(0 as _, MENU_WATCH, 120, None);
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, 0 as _, 0, 0) > 0 {
+                if msg.hwnd == 0 as _ && msg.message == WM_TIMER && msg.wParam == MENU_WATCH {
+                    crate::tray_menu::hide_if_clicked_away();
+                    continue;
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+            KillTimer(0 as _, MENU_WATCH);
 
             Shell_NotifyIconW(NIM_DELETE, &nid);
         });
@@ -188,18 +194,16 @@ mod windows_tray {
                 WM_TRAY_CALLBACK => {
                     let event = lparam as u32;
                     if event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK {
-                        if let Some(state) = TRAY_STATE.get() {
+                        // the menu closes itself when the click leaves it, and
+                        // the press that got here is that same click
+                        if crate::tray_menu::closed_within(std::time::Duration::from_millis(250)) {
+                            crate::tray_menu::hide();
+                        } else if let Some(state) = TRAY_STATE.get() {
                             if let Ok(url) = state.web_url.lock() {
                                 open_desktop_window(&url);
                             }
                         }
                     } else if event == WM_RBUTTONUP {
-                        let mut pt: POINT = std::mem::zeroed();
-                        GetCursorPos(&mut pt);
-                        SetForegroundWindow(hwnd);
-
-                        let hmenu = CreatePopupMenu();
-                        let version = env!("CARGO_PKG_VERSION");
                         let current_url = TRAY_STATE
                             .get()
                             .and_then(|s| s.web_url.lock().ok())
@@ -208,108 +212,48 @@ mod windows_tray {
                         let display_host = current_url
                             .trim_start_matches("http://")
                             .trim_start_matches("https://")
-                            .trim_end_matches('/');
-
-                        // 1. 顶部状态标题头（禁用态/浅灰）：对齐现代系统托盘规范
-                        let title_text =
-                            format!("AgentHub v{} (运行中: {})\0", version, display_host);
-                        let title_u16: Vec<u16> = title_text.encode_utf16().collect();
-                        AppendMenuW(
-                            hmenu,
-                            MF_STRING | MF_DISABLED | MF_GRAYED,
-                            0,
-                            title_u16.as_ptr(),
+                            .trim_end_matches('/')
+                            .to_string();
+                        crate::tray_menu::show(
+                            GetModuleHandleW(null()),
+                            crate::tray_menu::Menu {
+                                version: env!("CARGO_PKG_VERSION").to_string(),
+                                host: display_host,
+                                items: vec![
+                                    crate::tray_menu::Item {
+                                        id: ID_TRAY_OPEN_DESKTOP,
+                                        label: "打开协同控制台",
+                                        danger: false,
+                                        separator_before: false,
+                                    },
+                                    crate::tray_menu::Item {
+                                        id: ID_TRAY_OPEN_GATEWAY,
+                                        label: "查看演进拓扑（网关）",
+                                        danger: false,
+                                        separator_before: false,
+                                    },
+                                    crate::tray_menu::Item {
+                                        id: ID_TRAY_OPEN_BROWSER,
+                                        label: "在系统浏览器中打开",
+                                        danger: false,
+                                        separator_before: false,
+                                    },
+                                    crate::tray_menu::Item {
+                                        id: ID_TRAY_OPEN_DATA_DIR,
+                                        label: "打开数据存储目录",
+                                        danger: false,
+                                        separator_before: true,
+                                    },
+                                    crate::tray_menu::Item {
+                                        id: ID_TRAY_EXIT,
+                                        label: "退出 AgentHub",
+                                        danger: true,
+                                        separator_before: true,
+                                    },
+                                ],
+                            },
+                            tray_choice,
                         );
-                        AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
-
-                        // 2. 核心功能入口
-                        let show_app_text: Vec<u16> = "打开协同控制台\0".encode_utf16().collect();
-                        let show_gw_text: Vec<u16> =
-                            "查看演进拓扑 (网关)\0".encode_utf16().collect();
-                        let open_browser_text: Vec<u16> =
-                            "在系统浏览器中打开\0".encode_utf16().collect();
-                        let open_dir_text: Vec<u16> = "打开数据存储目录\0".encode_utf16().collect();
-                        let exit_text: Vec<u16> = "退出 AgentHub\0".encode_utf16().collect();
-
-                        AppendMenuW(
-                            hmenu,
-                            MF_STRING,
-                            ID_TRAY_OPEN_DESKTOP,
-                            show_app_text.as_ptr(),
-                        );
-                        AppendMenuW(
-                            hmenu,
-                            MF_STRING,
-                            ID_TRAY_OPEN_GATEWAY,
-                            show_gw_text.as_ptr(),
-                        );
-                        AppendMenuW(
-                            hmenu,
-                            MF_STRING,
-                            ID_TRAY_OPEN_BROWSER,
-                            open_browser_text.as_ptr(),
-                        );
-                        AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
-
-                        // 3. 存储与配置
-                        AppendMenuW(
-                            hmenu,
-                            MF_STRING,
-                            ID_TRAY_OPEN_DATA_DIR,
-                            open_dir_text.as_ptr(),
-                        );
-                        AppendMenuW(hmenu, MF_SEPARATOR, 0, null());
-
-                        // 4. 退出
-                        AppendMenuW(hmenu, MF_STRING, ID_TRAY_EXIT, exit_text.as_ptr());
-
-                        // 将“打开协同控制台”设为默认高亮粗体项
-                        SetMenuDefaultItem(hmenu, ID_TRAY_OPEN_DESKTOP as u32, 0);
-
-                        TrackPopupMenu(
-                            hmenu,
-                            TPM_RIGHTBUTTON | 0x0020, /* TPM_BOTTOMALIGN */
-                            pt.x,
-                            pt.y,
-                            0,
-                            hwnd,
-                            null(),
-                        );
-                        PostMessageW(hwnd, WM_NULL, 0, 0);
-                        DestroyMenu(hmenu);
-                    }
-                    0
-                }
-                WM_COMMAND => {
-                    let id = wparam;
-                    if id == ID_TRAY_OPEN_DESKTOP {
-                        if let Some(state) = TRAY_STATE.get() {
-                            if let Ok(url) = state.web_url.lock() {
-                                open_desktop_window(&url);
-                            }
-                        }
-                    } else if id == ID_TRAY_OPEN_GATEWAY {
-                        if let Some(state) = TRAY_STATE.get() {
-                            if let Ok(url) = state.web_url.lock() {
-                                let gw_url = format!("{}#gateway", url.trim_end_matches('/'));
-                                open_desktop_window(&gw_url);
-                            }
-                        }
-                    } else if id == ID_TRAY_OPEN_BROWSER {
-                        if let Some(state) = TRAY_STATE.get() {
-                            if let Ok(url) = state.web_url.lock() {
-                                open_system_browser(&url);
-                            }
-                        }
-                    } else if id == ID_TRAY_OPEN_DATA_DIR {
-                        open_data_dir();
-                    } else if id == ID_TRAY_EXIT {
-                        cleanup_desktop_window();
-                        if let Some(state) = TRAY_STATE.get() {
-                            state.running.store(false, Ordering::SeqCst);
-                        }
-                        DestroyWindow(hwnd);
-                        std::process::exit(0);
                     }
                     0
                 }
@@ -319,6 +263,39 @@ mod windows_tray {
                 }
                 _ => DefWindowProcW(hwnd, msg, wparam, lparam),
             }
+        }
+    }
+
+    /// Runs the row the menu offered; the menu itself is already closed.
+    fn tray_choice(id: usize) {
+        if id == ID_TRAY_OPEN_DESKTOP {
+            if let Some(state) = TRAY_STATE.get() {
+                if let Ok(url) = state.web_url.lock() {
+                    open_desktop_window(&url);
+                }
+            }
+        } else if id == ID_TRAY_OPEN_GATEWAY {
+            // the console's gateway route lives on its settings page
+            if let Some(state) = TRAY_STATE.get() {
+                if let Ok(url) = state.web_url.lock() {
+                    let settings_url = format!("{}#settings/gateway", url.trim_end_matches('/'));
+                    open_desktop_window(&settings_url);
+                }
+            }
+        } else if id == ID_TRAY_OPEN_BROWSER {
+            if let Some(state) = TRAY_STATE.get() {
+                if let Ok(url) = state.web_url.lock() {
+                    open_system_browser(&url);
+                }
+            }
+        } else if id == ID_TRAY_OPEN_DATA_DIR {
+            open_data_dir();
+        } else if id == ID_TRAY_EXIT {
+            cleanup_desktop_window();
+            if let Some(state) = TRAY_STATE.get() {
+                state.running.store(false, Ordering::SeqCst);
+            }
+            std::process::exit(0);
         }
     }
 
@@ -585,25 +562,6 @@ mod windows_tray {
                 null(),
                 SW_SHOWNORMAL,
             );
-        }
-    }
-
-    #[allow(non_snake_case)]
-    fn enable_modern_menu_theme() {
-        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-        unsafe {
-            let uxtheme: Vec<u16> = "uxtheme.dll\0".encode_utf16().collect();
-            let module = LoadLibraryW(uxtheme.as_ptr());
-            if module != 0 as _ {
-                // Ordinal 135 is SetPreferredAppMode (Windows 10 1903+ / Windows 11)
-                let set_preferred_app_mode = GetProcAddress(module, 135 as _);
-                if let Some(func) = set_preferred_app_mode {
-                    type FnSetPreferredAppMode = unsafe extern "system" fn(i32) -> i32;
-                    let func: FnSetPreferredAppMode = std::mem::transmute(func);
-                    // 2 = AllowDark (Windows modern theme for menus, native rounded borders and Fluent style)
-                    func(2);
-                }
-            }
         }
     }
 }

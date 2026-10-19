@@ -439,6 +439,33 @@ impl ApiRequest<'_> {
                 let digest = crate::usage_ledger::digest(&records, period, limit);
                 send_json_response(stream, 200, &digest)?;
             }
+            // Deleting a session moves its files to the runner's trash: the
+            // conversation's transcript, its subagents' folder and what
+            // Coding Assistant keeps by its id. A session written to in the
+            // last minute is refused, as its agent may still be running it.
+            ("POST", "/api/sessions/delete") => {
+                let ids = serde_json::from_slice::<serde_json::Value>(body)
+                    .ok()
+                    .and_then(|v| v.get("ids").and_then(|ids| ids.as_array().cloned()))
+                    .unwrap_or_default();
+                let mut deleted: Vec<String> = Vec::new();
+                let mut refused: Vec<serde_json::Value> = Vec::new();
+                for id in ids.iter().filter_map(|id| id.as_str()).take(200) {
+                    let id = id.strip_prefix("claude_").unwrap_or(id);
+                    match crate::collectors::delete_claude_session(id) {
+                        Ok(_trash) => deleted.push(format!("claude_{id}")),
+                        Err(error) => refused.push(json!({
+                            "id": format!("claude_{id}"),
+                            "error": error.to_string(),
+                        })),
+                    }
+                }
+                send_json_response(
+                    stream,
+                    200,
+                    &json!({ "deleted": deleted, "refused": refused }),
+                )?;
+            }
             ("POST", "/api/shutdown") => {
                 let resp = json!({
                     "status": "shutting_down",

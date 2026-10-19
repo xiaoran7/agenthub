@@ -61,26 +61,259 @@ type SettingsSectionKey =
   | "notifications"
   | "install";
 
+function ArrowLeftIcon({
+  size = 14,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
+    </svg>
+  );
+}
+
+function PaletteIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 2a10 10 0 0 1 0 20" fill="currentColor" fillOpacity="0.25" />
+    </svg>
+  );
+}
+
+function ShieldIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  );
+}
+
+function AuditIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+    </svg>
+  );
+}
+
+function ConnectionIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
+
+function DevicesIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  );
+}
+
+function NotificationIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+  );
+}
+
+function InstallIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect x="2" y="3" width="20" height="18" rx="3" />
+      <line x1="2" y1="9" x2="22" y2="9" />
+      <circle cx="6" cy="6" r="1" fill="currentColor" />
+      <circle cx="10" cy="6" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 interface SettingsSectionEntry {
   key: SettingsSectionKey;
   label: string;
-  icon: string;
+  icon: (props: { size?: number; className?: string }) => React.JSX.Element;
   requiresAccount: boolean;
 }
 
 const SETTINGS_SECTIONS: readonly SettingsSectionEntry[] = [
-  { key: "appearance", label: "外观主题", icon: "◐", requiresAccount: false },
-  { key: "account", label: "账户安全", icon: "◎", requiresAccount: true },
-  { key: "audit", label: "审计记录", icon: "◌", requiresAccount: true },
-  { key: "connection", label: "连接", icon: "↗", requiresAccount: false },
-  { key: "devices", label: "设备", icon: "◫", requiresAccount: false },
+  {
+    key: "appearance",
+    label: "外观主题",
+    icon: PaletteIcon,
+    requiresAccount: false,
+  },
+  {
+    key: "account",
+    label: "账户安全",
+    icon: ShieldIcon,
+    requiresAccount: true,
+  },
+  { key: "audit", label: "审计记录", icon: AuditIcon, requiresAccount: true },
+  {
+    key: "connection",
+    label: "连接",
+    icon: ConnectionIcon,
+    requiresAccount: false,
+  },
+  { key: "devices", label: "设备", icon: DevicesIcon, requiresAccount: false },
   {
     key: "notifications",
     label: "等待提醒",
-    icon: "◉",
+    icon: NotificationIcon,
     requiresAccount: false,
   },
-  { key: "install", label: "安装到设备", icon: "⌂", requiresAccount: false },
+  {
+    key: "install",
+    label: "安装到设备",
+    icon: InstallIcon,
+    requiresAccount: false,
+  },
 ];
 
 const NOTIFICATION_HINTS: Record<NotificationState, string> = {
@@ -515,28 +748,32 @@ export function SettingsPage({
           aria-label="返回控制台"
           onClick={onClose}
         >
-          ← 返回
+          <ArrowLeftIcon size={14} />
+          <span>返回控制台</span>
         </button>
       </header>
 
       <div className="settings-page-body">
         <nav className="settings-page-nav" aria-label="设置分区">
-          {sections.map((section) => (
-            <button
-              key={section.key}
-              type="button"
-              data-active={section.key === activeEntry.key}
-              aria-current={
-                section.key === activeEntry.key ? "page" : undefined
-              }
-              onClick={() => setActiveSection(section.key)}
-            >
-              <span className="settings-section-icon" aria-hidden="true">
-                {section.icon}
-              </span>
-              {section.label}
-            </button>
-          ))}
+          {sections.map((section) => {
+            const SectionIcon = section.icon;
+            return (
+              <button
+                key={section.key}
+                type="button"
+                data-active={section.key === activeEntry.key}
+                aria-current={
+                  section.key === activeEntry.key ? "page" : undefined
+                }
+                onClick={() => setActiveSection(section.key)}
+              >
+                <span className="settings-section-icon" aria-hidden="true">
+                  <SectionIcon size={16} />
+                </span>
+                <span>{section.label}</span>
+              </button>
+            );
+          })}
         </nav>
 
         <form
@@ -551,7 +788,7 @@ export function SettingsPage({
             >
               <div className="settings-section-heading">
                 <span className="settings-section-icon" aria-hidden="true">
-                  ◐
+                  <PaletteIcon size={18} />
                 </span>
                 <div>
                   <h3 id="appearance-settings">外观与主题</h3>
@@ -579,7 +816,7 @@ export function SettingsPage({
                     {
                       mode: "light",
                       title: "温润纸张",
-                      desc: "天然天然柔和米白（Warm Paper），极度舒适的阅读质感",
+                      desc: "天然柔和米白（Warm Paper），极度舒适的阅读质感",
                       badge: "Warm Paper",
                       border: "#E8E4DD",
                     },
@@ -683,7 +920,7 @@ export function SettingsPage({
             >
               <div className="settings-section-heading">
                 <span className="settings-section-icon" aria-hidden="true">
-                  ◎
+                  <ShieldIcon size={18} />
                 </span>
                 <div>
                   <h3 id="account-settings">账户安全</h3>
@@ -833,7 +1070,7 @@ export function SettingsPage({
             >
               <div className="settings-section-heading audit-section-heading">
                 <span className="settings-section-icon" aria-hidden="true">
-                  ◌
+                  <AuditIcon size={18} />
                 </span>
                 <div>
                   <h3 id="audit-settings">审计记录</h3>
@@ -906,7 +1143,7 @@ export function SettingsPage({
             >
               <div className="settings-section-heading">
                 <span className="settings-section-icon" aria-hidden="true">
-                  ↗
+                  <ConnectionIcon size={18} />
                 </span>
                 <div>
                   <h3 id="connection-settings">连接</h3>
@@ -953,7 +1190,7 @@ export function SettingsPage({
             >
               <div className="settings-section-heading">
                 <span className="settings-section-icon" aria-hidden="true">
-                  ◫
+                  <DevicesIcon size={18} />
                 </span>
                 <div>
                   <h3 id="device-settings">设备</h3>
@@ -1054,7 +1291,7 @@ export function SettingsPage({
             >
               <div className="settings-section-heading">
                 <span className="settings-section-icon" aria-hidden="true">
-                  ◉
+                  <NotificationIcon size={18} />
                 </span>
                 <div>
                   <h3 id="notification-settings">等待提醒</h3>
@@ -1115,7 +1352,7 @@ export function SettingsPage({
             >
               <div className="settings-section-heading">
                 <span className="settings-section-icon" aria-hidden="true">
-                  ⌂
+                  <InstallIcon size={18} />
                 </span>
                 <div>
                   <h3 id="install-settings">安装到设备</h3>

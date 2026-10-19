@@ -1311,6 +1311,10 @@ impl NativeTransport for MultiProviderTransport {
                                 "request_count": entry.request_count,
                                 "calls": entry.request_count.max(1),
                                 "last_activity_at_ms": entry.last_activity_at_ms,
+                                // the conversation's subagents, folded into it:
+                                // the console lists the conversation once and
+                                // shows them under it, as magpie does
+                                "subagents": entry.subagents,
                                 "status": { "type": "idle" }
                             }));
                         }
@@ -2525,7 +2529,11 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     "cache_read_tokens": cr,
                     "request_count": req_count,
                     "calls": req_count,
-                    "last_activity_at_ms": last_ms
+                    "last_activity_at_ms": last_ms,
+                    "subagents": thread
+                        .get("subagents")
+                        .cloned()
+                        .unwrap_or_else(|| json!([]))
                 }));
             }
             if let Some(next) = response["nextCursor"].as_str() {

@@ -18,6 +18,49 @@ export interface ThinkingAccordionProps {
   className?: string;
 }
 
+function CheckIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({
+  size = 12,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
 export function ThinkingAccordion({
   thoughtText,
   isThinking = false,
@@ -102,8 +145,9 @@ export function ThinkingAccordion({
               title="复制为引用格式"
             >
               {didCopy ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                  ✓ 已复制
+                <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                  <CheckIcon size={12} />
+                  <span>已复制</span>
                 </span>
               ) : (
                 <span>复制思考</span>
@@ -112,13 +156,12 @@ export function ThinkingAccordion({
           )}
 
           {!isThinking && (
-            <span
-              className={`text-xs text-[var(--cds-text-muted)] transition-transform duration-200 ${
+            <ChevronDownIcon
+              size={13}
+              className={`text-[var(--cds-text-muted)] transition-transform duration-200 ${
                 isOpen ? "rotate-180" : ""
               }`}
-            >
-              ▾
-            </span>
+            />
           )}
         </div>
       </div>

@@ -1,64 +1,58 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
-    <linearGradient id="hubBgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0284c7"/>
-      <stop offset="45%" stop-color="#0369a1"/>
-      <stop offset="100%" stop-color="#075985"/>
-    </linearGradient>
-    <radialGradient id="hubCoreGlow" cx="50%" cy="50%" r="50%">
+    <radialGradient id="hubBg" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="35%" stop-color="#38bdf8"/>
-      <stop offset="75%" stop-color="#0284c7"/>
-      <stop offset="100%" stop-color="#0284c7" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#f8fafc"/>
     </radialGradient>
-    <linearGradient id="rimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.8"/>
-      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.3"/>
-    </linearGradient>
+    <radialGradient id="centerOrb" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="45%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </radialGradient>
   </defs>
 
-  <!-- Squircle container with deep azure gradient -->
-  <rect width="476" height="476" x="18" y="18" rx="108" fill="url(#hubBgGrad)"/>
-  <rect width="474" height="474" x="19" y="19" rx="107" fill="none" stroke="url(#rimGrad)" stroke-width="2.5"/>
+  <!-- Crisp White Squircle Background (Tight margin for maximum content scale) -->
+  <rect width="504" height="504" x="4" y="4" rx="116" fill="url(#hubBg)" stroke="#e2e8f0" stroke-width="2.5"/>
 
-  <!-- Subtle ambient inner glow behind center -->
-  <circle cx="256" cy="256" r="144" fill="#38bdf8" opacity="0.22"/>
+  <!-- Subtle Central Ambient Glow -->
+  <circle cx="256" cy="256" r="120" fill="#0ea5e9" opacity="0.20" />
+  <circle cx="256" cy="256" r="65" fill="#38bdf8" opacity="0.28" />
 
-  <!-- Radial spokes & Hexagon perimeter (bold & crisp) -->
-  <g stroke="#f0f9ff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" opacity="0.96">
-    <line x1="256" y1="256" x2="256" y2="68" />
-    <line x1="256" y1="256" x2="418" y2="162" />
-    <line x1="256" y1="256" x2="418" y2="350" />
-    <line x1="256" y1="256" x2="256" y2="444" />
-    <line x1="256" y1="256" x2="94" y2="350" />
-    <line x1="256" y1="256" x2="94" y2="162" />
+  <!-- Radial spokes & Hexagon perimeter (Maximized Cube R=205, center (256, 256)) -->
+  <g stroke="#0284c7" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="256" y1="256" x2="256" y2="51" />
+    <line x1="256" y1="256" x2="434" y2="153" />
+    <line x1="256" y1="256" x2="434" y2="359" />
+    <line x1="256" y1="256" x2="256" y2="461" />
+    <line x1="256" y1="256" x2="78" y2="359" />
+    <line x1="256" y1="256" x2="78" y2="153" />
 
     <!-- Hexagon perimeter -->
-    <polygon points="256,68 418,162 418,350 256,444 94,350 94,162" fill="none"/>
+    <polygon points="256,51 434,153 434,359 256,461 78,359 78,153" fill="none"/>
   </g>
 
-  <!-- Outer Vertex Ring Nodes -->
-  <g stroke="#bae6fd" stroke-width="10" fill="#0284c7">
-    <circle cx="256" cy="68" r="28"/>
-    <circle cx="418" cy="162" r="28"/>
-    <circle cx="418" cy="350" r="28"/>
-    <circle cx="256" cy="444" r="28"/>
-    <circle cx="94" cy="350" r="28"/>
-    <circle cx="94" cy="162" r="28"/>
+  <!-- Outer Vertex Ring Nodes (Larger & thicker for high-DPI and 16x16 tray visibility) -->
+  <g stroke="#0284c7" stroke-width="10" fill="#ffffff">
+    <circle cx="256" cy="51" r="25"/>
+    <circle cx="434" cy="153" r="25"/>
+    <circle cx="434" cy="359" r="25"/>
+    <circle cx="256" cy="461" r="25"/>
+    <circle cx="78" cy="359" r="25"/>
+    <circle cx="78" cy="153" r="25"/>
   </g>
 
-  <!-- Outer Vertex Core White Accents -->
-  <g fill="#ffffff">
-    <circle cx="256" cy="68" r="10"/>
-    <circle cx="418" cy="162" r="10"/>
-    <circle cx="418" cy="350" r="10"/>
-    <circle cx="256" cy="444" r="10"/>
-    <circle cx="94" cy="350" r="10"/>
-    <circle cx="94" cy="162" r="10"/>
+  <!-- Node Inner Accents -->
+  <g fill="#0ea5e9">
+    <circle cx="256" cy="51" r="7"/>
+    <circle cx="434" cy="153" r="7"/>
+    <circle cx="434" cy="359" r="7"/>
+    <circle cx="256" cy="461" r="7"/>
+    <circle cx="78" cy="359" r="7"/>
+    <circle cx="78" cy="153" r="7"/>
   </g>
 
-  <!-- Glowing Central Core Orb -->
-  <circle cx="256" cy="256" r="60" fill="#0284c7" opacity="0.55" />
-  <circle cx="256" cy="256" r="42" fill="url(#hubCoreGlow)" />
-  <circle cx="256" cy="256" r="16" fill="#ffffff" />
+  <!-- Glowing Central Core Orb (Enlarged Core) -->
+  <circle cx="256" cy="256" r="48" fill="#0ea5e9" opacity="0.45" />
+  <circle cx="256" cy="256" r="32" fill="url(#centerOrb)" />
+  <circle cx="256" cy="256" r="11" fill="#ffffff" />
 </svg>

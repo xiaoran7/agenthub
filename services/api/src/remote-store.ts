@@ -803,9 +803,7 @@ function validateRemoteEventRaw(
     const typed = usage as Record<string, unknown>;
     const isCount = (value: unknown) =>
       value === undefined ||
-      (typeof value === "number" &&
-        Number.isSafeInteger(value) &&
-        value >= 0);
+      (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
     if (
       Object.keys(typed).some((key) => !["used", "window"].includes(key)) ||
       typeof typed.used !== "number" ||

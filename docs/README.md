@@ -1,39 +1,41 @@
 # AgentHub 文档索引
 
-实现描述按源码核对；设备与生产结论只引用带日期的验收证据。
+实现描述以源码为准；设备与生产结论只引用带日期的实测证据。
 
 ## 权威文档
 
-| 文档                              | 解决的问题                                          |
-| --------------------------------- | --------------------------------------------------- |
-| [PRD](PRD.md)                     | AgentHub 是什么、三端职责、范围和验收标准           |
-| [ARCHITECTURE](ARCHITECTURE.md)   | `agenthubd`、官方 Runtime、Gateway 与客户端如何协作 |
-| [SYNC_PROTOCOL](SYNC_PROTOCOL.md) | Remote 身份、幂等、事件、ACK、重连与多端一致性      |
-| [DESIGN_SYSTEM](DESIGN_SYSTEM.md) | 跨端视觉与交互规则                                  |
-| [DEPLOYMENT](DEPLOYMENT.md)       | Gateway 单机部署与生产边界                          |
-| [PITFALLS](PITFALLS.md)           | 实现与验收前必须检查的已知问题                      |
-| [CHANGELOG](CHANGELOG.md)         | 历史变更，不作为当前能力说明                        |
+| 文档                              | 职责                                                                |
+| :-------------------------------- | :------------------------------------------------------------------ |
+| [PRD](PRD.md)                     | 产品定义、组件职责、Session 语义与验收标准                          |
+| [ARCHITECTURE](ARCHITECTURE.md)   | `agenthubd`、内嵌控制台、Provider Adapter、Gateway 与客户端协作边界 |
+| [SYNC_PROTOCOL](SYNC_PROTOCOL.md) | 本地 IPC v2、Remote 身份、幂等命令、事件 DTO、水位 ACK 与重连对齐   |
+| [DESIGN_SYSTEM](DESIGN_SYSTEM.md) | 跨端视觉令牌、动效约束与本机内嵌控制台（magpie）边界                |
+| [DEPLOYMENT](DEPLOYMENT.md)       | Gateway + Web 单机/Docker/1Panel 部署与安全边界                     |
+| [PITFALLS](PITFALLS.md)                     | 实现与验收前必查的已知问题清单                                      |
+| [M4_VALIDATION](M4_VALIDATION.md)           | Milestone 4 安全、脱敏、断网重放与稳定性验收矩阵                    |
+| [ANDROID_VALIDATION](ANDROID_VALIDATION.md) | 原生 Android 客户端（冻结基线）历史实测与自动化验收记录             |
+| [OPEN_SOURCE_GUIDE](OPEN_SOURCE_GUIDE.md)   | 开源仓库元数据、社区收录（[PR 指南](COMMUNITY_SUBMISSIONS.md)）与宣发索引 |
+| [CHANGELOG](CHANGELOG.md)                   | 历史版本变更记录（不作为当前能力说明）                              |
 
-[M4 验收](M4_VALIDATION.md) 与 [Android 验收](ANDROID_VALIDATION.md) 是按日期保存的证据。它们只证明记录中明确执行过的环境，不自动代表真机、生产或其他 Provider 已通过。
+## 当前实现与目标差距（2026-10）
 
-## 当前实现与目标差距
+> **战略主线**：聚焦 **Runner + Gateway + Web** 自部署闭环；`apps/desktop`（Tauri）已移除并由 Runner 内嵌 Web 控制台（`127.0.0.1:4200`）承接，原生 Android 暂时冻结。
 
-> **当前战略重点（2026-10）**：集中精力打穿 **Gateway + Web** 自部署链路；Desktop（Tauri）与原生 Android 暂时冻结。
+| 模块                         | 当前事实                                                                                           | 下一步                                    |
+| :--------------------------- | :------------------------------------------------------------------------------------------------- | :---------------------------------------- |
+| **Runner (`agenthubd`)**     | 单二进制常驻控制面，内嵌本机 Web 控制台（会话/智能体/用量账本/工作区/设置）与本地 IPC v2           | 升级为可安装、可诊断的用户级 OS 服务      |
+| **Gateway**                  | v3 单实例 SQLite 内容库、Ed25519 设备验签、命令账本、水位回放与 PostgreSQL 元数据存储              | 强化多实例横向扩展与长连接稳定性          |
+| **Web（主力端）**            | v3 Remote：工作区/会话管理、流式输出、Diff 审批、多选问答、中断、移动端响应式 PWA                  | 持续打磨手机端 PWA 与通知体验             |
+| **Codex / Claude / ACP**     | Codex 常驻 app-server、Claude Code 流式续聊、通用 ACP stdio 适配器可用；其他 Provider 保持只读发现 | 持续对齐新版 CLI 协议、审批与异常恢复     |
+| **Android (`apps/android`)** | Kotlin + Compose 原生客户端（v2.5.0 基线）                                                         | **暂时冻结**（移动端由 Web PWA 主力承接） |
 
-| 范围          | 当前事实                                                                 | 下一步                                      |
-| ------------- | ------------------------------------------------------------------------ | ------------------------------------------- |
-| Gateway       | v3 单实例 SQLite 内容库、设备签名、命令账本、回放                       | 强化直连出站通道管理、命令路由与稳定性      |
-| Web (主力端)  | v3 Remote：Session 列表、Workspace 选择、创建/恢复/续聊、审批与中断；移动端响应式支持 | 完善全功能 Web 控制面板与手机端 PWA 交互体验 |
-| Codex Host    | 进程外 daemon + 常驻 app-server；创建、恢复、多轮、审批、中断可用       | 强化状态对齐和版本兼容                      |
-| Claude Code   | 源码已包含 Claude 流式续聊分支及取消/事件队列；已升级双向会话驱动        | 核验真实 CLI 协议、审批、取消与多轮继续     |
-| Desktop       | 本机宿主客户端（Tauri），经当前用户 IPC 使用 daemon                      | **暂时冻结**：暂停新功能开发，保留代码资产 |
-| Android       | 原生移动端应用（Kotlin）                                                 | **暂时冻结**：由 Web 响应式与 PWA 承接     |
-| 其他 Provider | 发现仅作恢复候选；不声称可写 attach                                      | 仅在 Provider 提供可靠所有权/订阅机制后开放 |
+## 历史验收证据与边界摘要
 
-`agenthub-runner` 是当前可执行文件名与 Crate 名，`agenthubd` 是已经落地的进程职责；旧 v1 元数据同步仍保留，但不得承载新的会话正文或被当成 Remote 完成证据。
-
-## 文档规则
-
-- PRD 只写稳定产品决定；架构写目标结构并明确当前差距；组件 README 写真实命令和接口；验收记录写证据。
-- 不再维护重复的能力清单、可行性摘要和逐轮设计日记。Provider 能力证据统一放在架构文档，变化历史留在 Git 与 CHANGELOG。
-- 新入口只有在真实官方 Runtime 返回原生 ID/事件后，才能标记为可用。
+- **本机与自动化基线（2026-07 ~ 2026-10）**：
+  - 隐私与字段泄漏：Claude/Codex/ACP 含路径与敏感标记的 Fixture 经 Outbox/DTO 白名单过滤，0 物理路径或未授权字段外泄；
+  - 断网重放与存储：磁盘 SQLite Outbox 跨进程重启保留序列、ACK 后清零；PostgreSQL 18.4 通过 12 设备 / 3000 Session 并发隔离与重放测试；
+  - 本机 TLS 与认证：rustls 自签 CA 严格校验、Bearer/Cookie 同源代理注入、一次性绑定码 SHA-256 摘要与设备软撤销均通过验证。
+- **原生 Remote 与移动端实测（2026-09 ~ 2026-10）**：
+  - 真实 Runner + Codex / Claude / ACP 跑通创建、恢复、连续多轮、Diff 审批、多选问答、中断及 Gateway 重启后 SQLite 回放；
+  - Android 模拟器（`Medium_Phone` 1080×2400）与 Chrome 移动视口（390×844 / 320×568）实测通过流式转录、增量 Markdown、上下文容量环与 1.3× 字体缩放。
+- **未覆盖边界**：Android 实体真机与商店正式签名、公网多实例 Gateway 容量压测、Windows 系统级 Web Push 弹窗呈现仍需在实际环境中独立验收。

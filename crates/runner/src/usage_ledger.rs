@@ -111,6 +111,12 @@ pub struct LedgerRecord {
     /// several blocks spans this, which is the only timing a transcript keeps:
     /// it bounds how long the model took to write the reply.
     pub t_start: i64,
+    /// The moment the reply was asked for: the last prompt or tool result
+    /// before its first line, or the end of the previous reply. It is what
+    /// [`LedgerRecord::floor_ms`] measures a whole turn from, so it never
+    /// enters the wire — the page reads the floor the daemon computed.
+    #[serde(skip)]
+    pub asked: i64,
     /// `claude_code`, `claude_desktop`, `codex`, `grok_build`, `zcode`,
     /// `gemini_cli`.
     pub agent: &'static str,
@@ -161,14 +167,62 @@ impl LedgerRecord {
             .saturating_add(self.cache_write)
     }
 
-    /// How long the reply took to write, when the transcript wrote it as more
-    /// than one line. A single-line reply has no measured time and is left out
-    /// of a speed rather than counted as instant.
+    /// The ms the reply was seen writing, from its first line to its last,
+    /// when that window can time a speed at all.
+    ///
+    /// magpie's rule (usage.MinDecodeMs, usage.MaxDecodeSpeed): a window
+    /// shorter than 100 ms, or one over which the tokens would have come
+    /// faster than 10,000 a second, did not time the writing — the reply
+    /// arrived in one burst at its end, already written before the window
+    /// opened. Such a reply tells no speed and is left out rather than
+    /// counted as instant, which is what turned a burst into thousands of
+    /// tok/s.
     pub fn write_ms(&self) -> Option<u64> {
         let ms = self.t.saturating_sub(self.t_start);
-        (ms >= 50 && self.output > 0).then_some(ms as u64)
+        decode_window(self.output, ms.try_into().ok()?)
+    }
+
+    /// The whole turn a reply read from a transcript file can be timed over:
+    /// from the moment it was asked for to its last line, the wait for the
+    /// first token included.
+    ///
+    /// A transcript file has no first-token time, so this is the least the
+    /// reply wrote at, not its speed: magpie's `Row.Floor`. It is told only
+    /// for a reply of 1,000 tokens or more over a second or more (a shorter
+    /// one is mostly wait, and would read far under its real speed) and no
+    /// faster than 10,000 tok/s.
+    pub fn floor_ms(&self) -> Option<u64> {
+        if self.asked <= 0 || self.asked >= self.t_start {
+            return None;
+        }
+        let ms: u64 = self.t.saturating_sub(self.asked).try_into().ok()?;
+        (self.output >= FLOOR_MIN_OUTPUT && ms >= FLOOR_MIN_MS).then_some(ms)
     }
 }
+
+/// A window that timed writing, per magpie's `usage.DecodeWindow`: 0 for one
+/// too short to tell anything by, or too fast to be a stream.
+fn decode_window(output: u64, ms: u64) -> Option<u64> {
+    if output == 0 || ms < MIN_DECODE_MS {
+        return None;
+    }
+    // output * 1000 <= 10_000 * ms, without overflowing on a huge reply
+    if output.saturating_mul(1000) > MAX_DECODE_SPEED.saturating_mul(ms) {
+        return None;
+    }
+    Some(ms)
+}
+
+/// The least a decode window can be and still time anything: a tenth of a
+/// second (magpie's `usage.MinDecodeMs`).
+const MIN_DECODE_MS: u64 = 100;
+/// The fastest a real stream writes: 10,000 tokens a second (magpie's
+/// `usage.MaxDecodeSpeed`). Anything above is one burst, not writing.
+const MAX_DECODE_SPEED: u64 = 10_000;
+/// The least a whole-turn floor is told for: a shorter reply is mostly the
+/// wait for its first token (magpie's `Row.Floor`).
+const FLOOR_MIN_OUTPUT: u64 = 1_000;
+const FLOOR_MIN_MS: u64 = 1_000;
 
 /// The per-model rate card, one place for both the summary and the ledger.
 /// Values are US dollars per million tokens.
@@ -346,6 +400,13 @@ fn claude_config_dir() -> Option<PathBuf> {
 }
 
 /// Every `*.jsonl` under `projects/`, newest first, bounded.
+///
+/// A session's own file sits in its project's folder; its subagents' files
+/// sit beside it under `<session>/subagents/agent-*.jsonl`, and a workflow's
+/// agents under `<session>/subagents/workflows/<run>/agent-*.jsonl` (the
+/// run's `journal.jsonl` is not a transcript and is left out). Those calls
+/// are real model calls with usage of their own, and the session they belong
+/// to is the conversation that spawned them.
 fn transcript_files(config_dir: &Path) -> Option<Vec<PathBuf>> {
     let projects = config_dir.join("projects");
     if !projects.is_dir() {
@@ -357,30 +418,78 @@ fn transcript_files(config_dir: &Path) -> Option<Vec<PathBuf>> {
         if !project.file_type().ok().is_some_and(|k| k.is_dir()) {
             continue;
         }
-        let Ok(entries) = fs::read_dir(project.path()) else {
+        let root = project.path();
+        let Ok(entries) = fs::read_dir(&root) else {
             continue;
         };
         for file in entries.flatten() {
             let path = file.path();
+            if file.file_type().is_ok_and(|k| k.is_dir()) {
+                collect_subagent_files(&path, &mut files);
+                continue;
+            }
             if path.extension().and_then(|v| v.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Ok(meta) = file.metadata() else { continue };
-            if !meta.is_file() {
-                continue;
-            }
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            files.push((modified, path));
+            push_transcript(&path, &mut files);
         }
     }
     files.sort_by_key(|(m, _)| std::cmp::Reverse(*m));
     files.truncate(LEDGER_FILE_LIMIT);
     Some(files.into_iter().map(|(_, path)| path).collect())
+}
+
+/// The subagent transcripts under one session's folder, if it has any.
+fn collect_subagent_files(session_dir: &Path, files: &mut Vec<(i64, PathBuf)>) {
+    let subagents = session_dir.join("subagents");
+    if !subagents.is_dir() {
+        return;
+    }
+    if let Ok(entries) = fs::read_dir(&subagents) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|v| v.to_str()) == Some("jsonl") {
+                push_transcript(&path, files);
+            }
+        }
+    }
+    let workflows = subagents.join("workflows");
+    let Ok(runs) = fs::read_dir(&workflows) else {
+        return;
+    };
+    for run in runs.flatten() {
+        if !run.file_type().is_ok_and(|k| k.is_dir()) {
+            continue;
+        }
+        let Ok(agents) = fs::read_dir(run.path()) else {
+            continue;
+        };
+        for agent in agents.flatten() {
+            let path = agent.path();
+            let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+            if name.starts_with("agent-")
+                && path.extension().and_then(|v| v.to_str()) == Some("jsonl")
+            {
+                push_transcript(&path, files);
+            }
+        }
+    }
+}
+
+fn push_transcript(path: &Path, files: &mut Vec<(i64, PathBuf)>) {
+    let Ok(meta) = fs::metadata(path) else {
+        return;
+    };
+    if !meta.is_file() {
+        return;
+    }
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    files.push((modified, path.to_path_buf()));
 }
 
 /// A transcript line's assistant record, reduced to what the ledger keeps.
@@ -403,6 +512,12 @@ struct AssistantLine {
     /// The error kind of a failed call (`rate_limit`, `server_error`, …).
     #[serde(default)]
     error: Option<String>,
+    /// True on a subagent's lines: its own transcript, not the conversation's.
+    #[serde(default, rename = "isSidechain")]
+    sidechain: bool,
+    /// The subagent a line belongs to, when it is one.
+    #[serde(default, rename = "agentId")]
+    agent_id: Option<String>,
     #[serde(default)]
     message: Option<AssistantMessage>,
 }
@@ -448,6 +563,12 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_owned();
+    // What a reply is asked by, and when the reply before it ended: the two
+    // moments a whole turn can be timed from (magpie's `state.LastUser` and
+    // `state.LastAsst`). The transcript records no first-token time, so this
+    // is the only way to time a reply that was written in one line.
+    let mut last_user_ms: i64 = 0;
+    let mut last_assistant_ms: i64 = 0;
 
     loop {
         line.clear();
@@ -460,8 +581,15 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
             continue;
         }
         // The cheap prefilter keeps the JSON parser away from the many
-        // user/tool/lifecycle lines a transcript also holds.
+        // lifecycle lines a transcript also holds; prompts are read only for
+        // their moment, which the whole-turn floor is measured from.
         if !contains(&line, b"\"type\":\"assistant\"") {
+            if contains(&line, b"\"type\":\"user\"")
+                && let Ok(prompt) = serde_json::from_slice::<PromptLine>(&line)
+                && let Some(ms) = prompt.ms()
+            {
+                last_user_ms = last_user_ms.max(ms);
+            }
             continue;
         }
         let Ok(parsed) = serde_json::from_slice::<AssistantLine>(&line) else {
@@ -524,9 +652,13 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
         } else {
             None
         };
+        // The moment the reply was asked for: the last prompt or tool result
+        // before it, or, with none since, the end of the reply before it.
+        let asked = last_user_ms.max(last_assistant_ms).min(time);
         let record = LedgerRecord {
             t: time,
             t_start: time,
+            asked,
             agent,
             model: if failed { String::new() } else { model.clone() },
             session,
@@ -554,18 +686,44 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
         };
         match index.get(&key) {
             Some(&at) => {
-                // the message's first line keeps the moment the reply began
+                // the message's first line keeps the moment the reply began,
+                // and the ask it answers
                 let started = calls[at].t_start;
+                let asked = calls[at].asked;
                 calls[at] = record;
                 calls[at].t_start = started;
+                calls[at].asked = asked;
             }
             None => {
                 index.insert(key, calls.len());
                 calls.push(record);
             }
         }
+        last_assistant_ms = last_assistant_ms.max(time);
     }
     Ok(calls)
+}
+
+/// A prompt or tool result as the whole-turn floor reads it: only its
+/// moment matters, never its text.
+#[derive(Debug, Deserialize)]
+struct PromptLine {
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default)]
+    timestamp: Option<String>,
+}
+
+impl PromptLine {
+    fn ms(&self) -> Option<i64> {
+        if self.kind != "user" {
+            return None;
+        }
+        self.timestamp
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.timestamp_millis())
+    }
 }
 
 /// Does the line hold this byte sequence? A small memchr so a scan of the
@@ -630,10 +788,10 @@ pub struct LedgerDigest {
     pub recovered: u64,
     /// Calls that answered an earlier failure.
     pub retried: u64,
-    /// Output tokens per second, over the replies whose write time the
-    /// transcript records (see [`LedgerRecord::t_start`]).
-    pub speed: f64,
-    pub timed: u64,
+    /// The period's measured speed and whole-turn floor, summed over every
+    /// reply the same way the rankings are (see [`Timing`]).
+    #[serde(flatten)]
+    pub timing: Timing,
     /// Calls grouped into the period's buckets: hours for a day, days for a
     /// week, weeks for longer spans.
     pub series: Vec<SeriesPoint>,
@@ -659,6 +817,11 @@ pub struct SeriesPoint {
     pub tokens: u64,
     pub cost: f64,
     pub errors: u64,
+    /// The bucket's own speed and floor, over every reply in it (see
+    /// [`Timing`]). A speed is not a share of anything, so the chart draws it
+    /// as a track with each model's mark on it.
+    #[serde(flatten)]
+    pub timing: Timing,
     /// The bucket's calls by each ranking dimension, so the chart can stack
     /// them in the ranking's colours. Only the ids that were active in the
     /// bucket are here; the chart fills the rest with zero.
@@ -678,9 +841,59 @@ pub struct Part {
     pub tokens: u64,
     pub output: u64,
     pub cost: f64,
-    /// The write time of the timed replies, in milliseconds.
-    pub duration_ms: u64,
-    pub timed: u64,
+    /// The speed the timed replies of this part wrote at: their output over
+    /// the ms they were seen writing (see [`Timing`]).
+    #[serde(flatten)]
+    pub timing: Timing,
+}
+
+/// The speed a group of replies reads at, in magpie's two figures.
+///
+/// A speed is summed, not averaged: the group's output over the group's
+/// writing time. An average of per-reply rates lets one short, fast reply
+/// stand for a long, slow one. Replies the transcript timed only from their
+/// first line are `decode_*`; the longer ones a whole turn can time are
+/// `floor_*`, a least rather than a speed.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct Timing {
+    pub decode_out: u64,
+    pub decode_ms: u64,
+    pub decode_n: u64,
+    pub floor_out: u64,
+    pub floor_ms: u64,
+    pub floor_n: u64,
+}
+
+impl Timing {
+    fn observe(&mut self, record: &LedgerRecord) {
+        if let Some(ms) = record.write_ms() {
+            self.decode_out = self.decode_out.saturating_add(record.output);
+            self.decode_ms = self.decode_ms.saturating_add(ms);
+            self.decode_n = self.decode_n.saturating_add(1);
+        } else if let Some(ms) = record.floor_ms() {
+            self.floor_out = self.floor_out.saturating_add(record.output);
+            self.floor_ms = self.floor_ms.saturating_add(ms);
+            self.floor_n = self.floor_n.saturating_add(1);
+        }
+    }
+
+    /// The measured speed, in tokens a second; 0 for none timed.
+    pub fn speed(&self) -> f64 {
+        if self.decode_ms == 0 {
+            0.0
+        } else {
+            self.decode_out as f64 / (self.decode_ms as f64 / 1000.0)
+        }
+    }
+
+    /// The least the untimed replies wrote at, in tokens a second; 0 for none.
+    pub fn floor(&self) -> f64 {
+        if self.floor_ms == 0 {
+            0.0
+        } else {
+            self.floor_out as f64 / (self.floor_ms as f64 / 1000.0)
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -705,8 +918,9 @@ pub struct RankRow {
     pub tokens: u64,
     pub cost: f64,
     pub errors: u64,
-    pub duration_ms: u64,
-    pub timed: u64,
+    /// The row's speed and floor (see [`Timing`]).
+    #[serde(flatten)]
+    pub timing: Timing,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -789,10 +1003,7 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
         if record.retried {
             digest.retried = digest.retried.saturating_add(1);
         }
-        if let Some(ms) = record.write_ms() {
-            digest.speed += record.output as f64 / (ms as f64 / 1000.0);
-            digest.timed = digest.timed.saturating_add(1);
-        }
+        digest.timing.observe(record);
 
         let at = bucket_start(record.t, bucket);
         let point = points.entry(at).or_insert_with(|| SeriesPoint {
@@ -865,11 +1076,6 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
         .saturating_add(digest.cache_read)
         .saturating_add(digest.cache_write);
     digest.cost = round_money(digest.cost);
-    digest.speed = if digest.timed > 0 {
-        digest.speed / digest.timed as f64
-    } else {
-        0.0
-    };
     // the trend reads left to right: a HashMap's order would scatter the
     // buckets across the chart
     digest.series = points.into_values().collect();
@@ -997,6 +1203,7 @@ fn accumulate(point: &mut SeriesPoint, record: &LedgerRecord) {
     if record.error.is_some() && !record.recovered {
         point.errors = point.errors.saturating_add(1);
     }
+    point.timing.observe(record);
     if record.error.is_none() {
         part(
             point.by.model.entry(record.model.clone()).or_default(),
@@ -1022,10 +1229,7 @@ fn part(p: &mut Part, record: &LedgerRecord) {
     p.tokens = p.tokens.saturating_add(record.total_tokens());
     p.output = p.output.saturating_add(record.output);
     p.cost += record.cost;
-    if let Some(ms) = record.write_ms() {
-        p.duration_ms = p.duration_ms.saturating_add(ms);
-        p.timed = p.timed.saturating_add(1);
-    }
+    p.timing.observe(record);
 }
 
 fn rank(row: &mut RankRow, record: &LedgerRecord) {
@@ -1039,10 +1243,7 @@ fn rank(row: &mut RankRow, record: &LedgerRecord) {
     if record.error.is_some() && !record.recovered {
         row.errors = row.errors.saturating_add(1);
     }
-    if let Some(ms) = record.write_ms() {
-        row.duration_ms = row.duration_ms.saturating_add(ms);
-        row.timed = row.timed.saturating_add(1);
-    }
+    row.timing.observe(record);
 }
 
 fn round_money(v: f64) -> f64 {
@@ -1127,6 +1328,7 @@ mod tests {
         LedgerRecord {
             t,
             t_start: t,
+            asked: 0,
             agent,
             model: model.to_owned(),
             session: "s".to_owned(),
@@ -1272,6 +1474,125 @@ mod tests {
         assert_eq!(calls[0].output, 7, "the last line carries the final usage");
         assert_eq!(calls[0].agent, "claude_code");
         assert!(calls[0].cost > 0.0);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_burst_is_no_speed_but_a_stream_is() {
+        let mut burst = record(10_000, "claude_code", "claude-sonnet-5", 0, 17_145);
+        burst.t_start = 10_000 - 77; // 17k tokens in 77 ms: one burst
+        assert_eq!(
+            burst.write_ms(),
+            None,
+            "a window under 100 ms times nothing"
+        );
+
+        let mut too_fast = record(10_000, "claude_code", "claude-sonnet-5", 0, 5_000);
+        too_fast.t_start = 10_000 - 200; // 25,000 tok/s: past any real stream
+        assert_eq!(too_fast.write_ms(), None);
+
+        let mut stream = record(10_000, "claude_code", "claude-sonnet-5", 0, 400);
+        stream.t_start = 10_000 - 1_000; // 400 tok/s over a second
+        assert_eq!(stream.write_ms(), Some(1_000));
+    }
+
+    #[test]
+    fn a_whole_turn_is_a_floor_only_for_a_long_reply() {
+        let mut long = record(20_000, "claude_code", "claude-sonnet-5", 0, 1_500);
+        long.t_start = 20_000;
+        long.asked = 15_000; // asked 5 s before its last line
+        assert_eq!(long.floor_ms(), Some(5_000));
+
+        let mut short = record(20_000, "claude_code", "claude-sonnet-5", 0, 999);
+        short.t_start = 20_000;
+        short.asked = 15_000;
+        assert_eq!(short.floor_ms(), None, "a short reply is mostly wait");
+
+        let mut unasked = record(20_000, "claude_code", "claude-sonnet-5", 0, 2_000);
+        unasked.t_start = 20_000;
+        assert_eq!(unasked.floor_ms(), None, "no ask, no whole turn");
+    }
+
+    #[test]
+    fn speeds_are_summed_not_averaged() {
+        // A fast short reply and a slow long one: the group's speed is its
+        // tokens over its time, not the mean of two rates.
+        let now = chrono::Local::now().timestamp_millis();
+        let mut fast = record(now, "claude_code", "claude-sonnet-5", 0, 100);
+        fast.t_start = now - 100; // 1,000 tok/s
+        let mut slow = record(now, "claude_code", "claude-sonnet-5", 0, 1_000);
+        slow.t_start = now - 10_000; // 100 tok/s
+        let d = digest(&[fast, slow], Period::Today, 10);
+        assert_eq!(d.timing.decode_n, 2);
+        assert!(
+            (d.timing.speed() - 108.9).abs() < 0.5,
+            "1,100 tokens in 10.1 s"
+        );
+    }
+
+    #[test]
+    fn a_replys_ask_is_the_prompt_before_it() {
+        let dir = tempdir();
+        let file = dir.join("s3.jsonl");
+        fs::write(
+            &file,
+            [
+                r#"{"type":"user","timestamp":"2026-10-01T10:00:00.000Z"}"#,
+                r#"{"type":"assistant","timestamp":"2026-10-01T10:00:02.000Z","sessionId":"s3","entrypoint":"sdk-cli","message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1,"output_tokens":2000}}}"#,
+                r#"{"type":"user","timestamp":"2026-10-01T10:00:05.000Z"}"#,
+                r#"{"type":"assistant","timestamp":"2026-10-01T10:00:08.000Z","sessionId":"s3","entrypoint":"sdk-cli","message":{"id":"m2","model":"claude-sonnet-5","usage":{"input_tokens":1,"output_tokens":3000}}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let calls = read_transcript(&file).unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].asked, 1_790_848_800_000, "asked by the prompt");
+        assert_eq!(
+            calls[0].floor_ms(),
+            Some(2_000),
+            "two seconds from ask to last line"
+        );
+        assert_eq!(
+            calls[1].asked, 1_790_848_805_000,
+            "asked by the next prompt"
+        );
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn subagent_transcripts_are_read() {
+        let dir = tempdir();
+        let project = dir.join("projects").join("-p");
+        let session = project.join("s1");
+        let subs = session.join("subagents");
+        let run = subs.join("workflows").join("wf_1");
+        fs::create_dir_all(&run).unwrap();
+        let line = |session: &str, agent: &str, out: u64| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"2026-10-01T10:00:00.000Z","sessionId":"{session}","isSidechain":true,"agentId":"{agent}","entrypoint":"sdk-cli","message":{{"id":"msg_{agent}","model":"claude-haiku-5","usage":{{"input_tokens":10,"output_tokens":{out}}}}}}}"#
+            )
+        };
+        fs::write(project.join("s1.jsonl"), "").unwrap();
+        fs::write(subs.join("agent-a1.jsonl"), line("s1", "a1", 7)).unwrap();
+        fs::write(subs.join("agent-a1.meta.json"), "{}").unwrap();
+        fs::write(run.join("agent-a2.jsonl"), line("s1", "a2", 9)).unwrap();
+        fs::write(run.join("journal.jsonl"), "").unwrap();
+
+        let files = transcript_files(&dir).unwrap();
+        assert_eq!(files.len(), 3, "the session and two of its subagents");
+        assert!(
+            files
+                .iter()
+                .all(|p| p.file_name().and_then(|n| n.to_str()) != Some("journal.jsonl")),
+            "a workflow's journal is not a transcript"
+        );
+        let calls: Vec<LedgerRecord> = files
+            .iter()
+            .flat_map(|p| read_transcript(p).unwrap())
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|c| c.session == "s1"));
         fs::remove_dir_all(dir).ok();
     }
 

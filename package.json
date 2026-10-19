@@ -1,7 +1,7 @@
 {
   "name": "agenthub",
   "private": true,
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "Remote Web console & session manager for Claude Code and OpenAI Codex. Continue sessions anywhere via browser or mobile PWA.",
   "author": "WANGUI TANG",
   "license": "MIT",

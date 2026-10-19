@@ -23,5 +23,7 @@ pub mod runtime;
 pub mod sync;
 pub mod sync_worker;
 pub mod tray;
+#[cfg(target_os = "windows")]
+pub mod tray_menu;
 pub mod usage_ledger;
 pub mod web_server;

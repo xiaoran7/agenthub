@@ -312,6 +312,39 @@ pub struct ClaudeRemoteSessionEntry {
     /// Written by Claude Desktop, not the Coding Assistant CLI.
     #[serde(default)]
     pub desktop: bool,
+    /// The subagents the conversation spawned: their own transcripts beside
+    /// its file. A session is listed once, its subagents folded into it, the
+    /// way magpie groups a session's files under the conversation that asked
+    /// for them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<ClaudeSubagentEntry>,
+}
+
+/// One subagent of a conversation: what its transcript says it was, how much
+/// it spent, and which one started it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeSubagentEntry {
+    /// The `agentId` its lines carry and its file is named by.
+    pub id: String,
+    /// What it was for: the `agentType` of its meta file (`Explore`,
+    /// `general-purpose`, …), else empty.
+    #[serde(default)]
+    pub kind: String,
+    /// The task it was given, in its meta file's own words.
+    #[serde(default)]
+    pub description: String,
+    /// The subagent that started it, empty for one the conversation did.
+    #[serde(default)]
+    pub parent: String,
+    /// 1 for one the conversation started, 2 for one a subagent did.
+    #[serde(default)]
+    pub depth: u32,
+    pub last_activity_at_ms: i64,
+    pub model: Option<String>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub request_count: u64,
 }
 
 /// Enumerates Claude Code's documented local transcript store without invoking
@@ -1532,6 +1565,7 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
             if let Some(entry) = read_claude_transcript_metadata(&path, &program)?
                 && entry.has_output
             {
+                let subagents = collect_claude_subagents(&path);
                 entries.push(ClaudeRemoteSessionEntry {
                     session_id: entry.session_id,
                     cwd: entry.cwd,
@@ -1543,6 +1577,7 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
                     cache_read_tokens: entry.cache_read_tokens,
                     request_count: entry.request_count,
                     desktop: entry.desktop,
+                    subagents,
                 });
             }
         }
@@ -1553,6 +1588,311 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
         *guard = Some((Instant::now(), entries.clone()));
     }
     Ok(entries)
+}
+
+/// The subagents a conversation spawned, from the folder beside its own
+/// transcript: `<session>/subagents/agent-<id>.jsonl`, and a workflow's agents
+/// at `<session>/subagents/workflows/<run>/agent-*.jsonl` (the run's
+/// `journal.jsonl` is not a transcript). Each one's `.meta.json` says what it
+/// was for; its own lines carry the usage, and `sessionId` stays the parent's,
+/// so it is never listed as a conversation of its own.
+fn collect_claude_subagents(session_file: &Path) -> Vec<ClaudeSubagentEntry> {
+    let Some(stem) = session_file.file_stem().and_then(|value| value.to_str()) else {
+        return Vec::new();
+    };
+    let Some(project) = session_file.parent() else {
+        return Vec::new();
+    };
+    let subagents = project.join(stem).join("subagents");
+    if !subagents.is_dir() {
+        return Vec::new();
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&subagents) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+            if name.starts_with("agent-")
+                && path.extension().and_then(|v| v.to_str()) == Some("jsonl")
+            {
+                files.push(path);
+            }
+        }
+    }
+    if let Ok(runs) = fs::read_dir(subagents.join("workflows")) {
+        for run in runs.flatten() {
+            let Ok(agents) = fs::read_dir(run.path()) else {
+                continue;
+            };
+            for agent in agents.flatten() {
+                let path = agent.path();
+                let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+                if name.starts_with("agent-")
+                    && path.extension().and_then(|v| v.to_str()) == Some("jsonl")
+                {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    files.sort();
+    files.truncate(500);
+    files
+        .into_iter()
+        .filter_map(|path| read_claude_subagent(&path))
+        .collect()
+}
+
+/// One subagent's transcript: its meta file's own words, and the usage of
+/// its calls, which a sidechain line still records.
+fn read_claude_subagent(path: &Path) -> Option<ClaudeSubagentEntry> {
+    let id = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .and_then(|name| name.strip_prefix("agent-"))
+        .filter(|id| !id.is_empty())?
+        .to_owned();
+    let meta = path.with_file_name(format!("agent-{id}.meta.json"));
+    let meta_value = fs::read_to_string(&meta)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or(Value::Null);
+    let meta_str = |key: &str| {
+        meta_value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS))
+            .unwrap_or_default()
+    };
+    let depth = meta_value
+        .get("spawnDepth")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .clamp(1, 16) as u32;
+    let parent = meta_str("parentAgentId");
+
+    let file = fs::File::open(path).ok()?;
+    let last_activity_at_ms = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0);
+    let mut reader = BufReader::new(file);
+    let mut model: Option<String> = None;
+    let mut prompt_tokens = 0u64;
+    let mut completion_tokens = 0u64;
+    let mut cache_read_tokens = 0u64;
+    // a reply repeats its usage on every content block; its last line has
+    // the final figures, so each message counts once
+    let mut messages: HashMap<String, (u64, u64, u64)> = HashMap::new();
+    loop {
+        let line = match read_bounded_line(&mut reader) {
+            BoundedLine::Line(line) => line,
+            BoundedLine::Eof => break,
+            BoundedLine::TooLarge => continue,
+            BoundedLine::Io(_) => break,
+        };
+        if !line.contains("\"usage\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(usage) = value.pointer("/message/usage") else {
+            continue;
+        };
+        let input = usage_u64(usage, "input_tokens");
+        let output = usage_u64(usage, "output_tokens");
+        let cache_read = usage_u64(usage, "cache_read_input_tokens");
+        let cache_write = usage_u64(usage, "cache_creation_input_tokens");
+        let key = value
+            .pointer("/message/id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("line-{}", messages.len()));
+        messages.insert(
+            key,
+            (
+                input.saturating_add(cache_read).saturating_add(cache_write),
+                output,
+                cache_read,
+            ),
+        );
+        if model.is_none() {
+            model = value
+                .pointer("/message/model")
+                .and_then(Value::as_str)
+                .filter(|m| !m.is_empty() && *m != "<synthetic>")
+                .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS));
+        }
+    }
+    if messages.is_empty() {
+        return None;
+    }
+    for (prompt, output, cache_read) in messages.values() {
+        prompt_tokens = prompt_tokens.saturating_add(*prompt);
+        completion_tokens = completion_tokens.saturating_add(*output);
+        cache_read_tokens = cache_read_tokens.saturating_add(*cache_read);
+    }
+    Some(ClaudeSubagentEntry {
+        id,
+        kind: meta_str("agentType"),
+        description: meta_str("description"),
+        parent,
+        depth,
+        last_activity_at_ms,
+        model,
+        prompt_tokens,
+        completion_tokens,
+        cache_read_tokens,
+        request_count: messages.len() as u64,
+    })
+}
+
+/// Moves a Coding Assistant session's files to the runner's trash: the
+/// conversation's own transcript, the folder beside it (its subagents and tool
+/// results), and what Coding Assistant keeps by the session's id. A session
+/// any file of which was written in the last minute is refused — its agent may
+/// still be running it.
+///
+/// Returns the folder the files were moved into, or the reason they were not.
+pub fn delete_claude_session(session_id: &str) -> Result<PathBuf, CollectorError> {
+    let program = "Claude transcript store";
+    let io = |source: std::io::Error| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    };
+    let valid = !session_id.is_empty()
+        && session_id.len() <= 128
+        && session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid {
+        return Err(io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a session id",
+        )));
+    }
+    let config_dir = discover_claude_config_dir()?;
+    let projects = config_dir.join("projects");
+    let mut main: Option<PathBuf> = None;
+    if let Ok(entries) = fs::read_dir(&projects) {
+        for project in entries.flatten() {
+            let candidate = project.path().join(format!("{session_id}.jsonl"));
+            if candidate.is_file() {
+                main = Some(candidate);
+                break;
+            }
+        }
+    }
+    let Some(main) = main else {
+        return Err(io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such session",
+        )));
+    };
+    let mut paths: Vec<PathBuf> = vec![main.clone()];
+    let folder = main.with_extension("");
+    if folder.is_dir() {
+        paths.push(folder);
+    }
+    for extra in ["file-history", "session-env"] {
+        let dir = config_dir.join(extra).join(session_id);
+        if dir.is_dir() {
+            paths.push(dir);
+        }
+    }
+    if let Ok(todos) = fs::read_dir(config_dir.join("todos")) {
+        for todo in todos.flatten() {
+            let name = todo.file_name().to_string_lossy().to_string();
+            if name.starts_with(&format!("{session_id}-")) && name.ends_with(".json") {
+                paths.push(todo.path());
+            }
+        }
+    }
+    // a session being written to is not deleted: its agent may still be using it
+    let now = SystemTime::now();
+    for path in &paths {
+        if written_within(path, now, Duration::from_secs(60)) {
+            return Err(io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the session was written to in the last minute; it may still be running",
+            )));
+        }
+    }
+    let stamp = now
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let trash = crate::collectors::home_dir()
+        .unwrap_or_else(|| config_dir.clone())
+        .join(".agenthub")
+        .join("trash")
+        .join("sessions")
+        .join(format!("{stamp}-{session_id}"));
+    fs::create_dir_all(&trash).map_err(io)?;
+    for path in &paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_owned());
+        let target = trash.join(name);
+        if let Err(source) = fs::rename(path, &target) {
+            // another volume: a copy then a remove is the same move
+            let copied = if path.is_dir() {
+                copy_dir(path, &target).is_ok()
+            } else {
+                fs::copy(path, &target).is_ok()
+            };
+            if !copied || fs::remove_file(path).is_err() {
+                return Err(io(source));
+            }
+        }
+    }
+    if let Ok(mut guard) = claude_remote_sessions_cache().write() {
+        *guard = None;
+    }
+    Ok(trash)
+}
+
+fn written_within(path: &Path, now: SystemTime, window: Duration) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if meta.is_file() {
+        return meta
+            .modified()
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age < window);
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| written_within(&entry.path(), now, window))
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// Reads Codex's metadata-only state database when an app-server executable is
