@@ -43,6 +43,8 @@ pub struct ZCodeSessionEntry {
     pub output_tokens: Option<u64>,
     #[serde(default)]
     pub cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    pub request_count: Option<u64>,
 }
 
 pub fn normalize_sessions_json(
@@ -166,6 +168,7 @@ mod tests {
             input_tokens: Some(1000),
             output_tokens: Some(200),
             cache_read_tokens: Some(0),
+            request_count: Some(5),
         };
 
         let meta = ObservationMeta::now("device-test");
@@ -200,6 +203,7 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
             cache_read_tokens: None,
+            request_count: None,
         };
 
         let meta = ObservationMeta::now("device-test");

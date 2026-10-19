@@ -625,7 +625,7 @@ fn build_dashboard_summary(
                     .get("provider")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("");
-                let pt = c
+                let raw_pt = c
                     .get("prompt_tokens")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
@@ -640,7 +640,12 @@ fn build_dashboard_summary(
                 let tt = c
                     .get("total_tokens")
                     .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(pt + ct);
+                    .unwrap_or(raw_pt + ct);
+                let pt = if tt > raw_pt.saturating_add(ct) {
+                    tt.saturating_sub(ct)
+                } else {
+                    raw_pt
+                };
                 let req_count = c
                     .get("request_count")
                     .and_then(serde_json::Value::as_u64)

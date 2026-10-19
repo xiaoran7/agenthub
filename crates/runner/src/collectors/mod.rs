@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env, fs,
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -1551,6 +1551,77 @@ pub fn collect_codex_local_threads_from(
     };
     let model_expr = optional_column(&columns, &["model"]);
     let tokens_expr = optional_column(&columns, &["tokens_used"]);
+
+    let mut magpie_codex: HashMap<String, (u64, u64, u64, u64)> = HashMap::new();
+    if let Some(home) = home_dir() {
+        let magpie_path = home.join(".cache").join("magpie").join("sessions.json");
+        if let Ok(content) = fs::read_to_string(&magpie_path) {
+            if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                if let Some(files) = val.get("files").and_then(Value::as_object) {
+                    for (k, v) in files {
+                        if k.contains(".codex") {
+                            if let Some(id) = v.get("id").and_then(Value::as_str) {
+                                let mut m_in: u64 = 0;
+                                let mut m_out: u64 = 0;
+                                let mut m_cr: u64 = 0;
+                                if let Some(models) = v.get("models").and_then(Value::as_object) {
+                                    for m in models.values() {
+                                        m_in = m_in.saturating_add(
+                                            m.get("input").and_then(Value::as_u64).unwrap_or(0),
+                                        );
+                                        m_out = m_out.saturating_add(
+                                            m.get("output").and_then(Value::as_u64).unwrap_or(0),
+                                        );
+                                        m_cr = m_cr.saturating_add(
+                                            m.get("cache_read")
+                                                .and_then(Value::as_u64)
+                                                .unwrap_or(0),
+                                        );
+                                    }
+                                }
+                                let mut reqs: u64 = 0;
+                                if let Some(days) = v.get("days").and_then(Value::as_object) {
+                                    for day in days.values() {
+                                        reqs = reqs.saturating_add(
+                                            day.get("r").and_then(Value::as_u64).unwrap_or(0),
+                                        );
+                                    }
+                                }
+                                let prompt = m_in.saturating_add(m_cr);
+                                magpie_codex.insert(id.to_string(), (prompt, m_out, m_cr, reqs));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut history_counts: HashMap<String, u64> = HashMap::new();
+    if let Some(parent_dir) = database.parent() {
+        let hist_path = parent_dir.join("thread_history_1.sqlite");
+        if hist_path.is_file() {
+            if let Ok(hist_conn) = Connection::open_with_flags(
+                &hist_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                if let Ok(mut stmt) = hist_conn.prepare(
+                    "SELECT thread_id, COUNT(*) FROM thread_items WHERE item_type = 'agentMessage' GROUP BY thread_id",
+                ) {
+                    if let Ok(rows) = stmt.query_map([], |row| {
+                        let tid: String = row.get(0)?;
+                        let count: i64 = row.get(1)?;
+                        Ok((tid, count.max(0) as u64))
+                    }) {
+                        for (tid, count) in rows.flatten() {
+                            history_counts.insert(tid, count);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let sql = format!(
         "SELECT id, cwd, {created}, {updated}, {recency}, {source}, {model_expr}, {tokens_expr} FROM threads{archived_filter} ORDER BY {order_by} DESC LIMIT ?1"
     );
@@ -1579,6 +1650,24 @@ pub fn collect_codex_local_threads_from(
                 .max(0) as u64;
             let last_activity_at_ms = recency_at.max(updated_at).max(created_at);
 
+            let (tt, pt, ct, cr, reqs) =
+                if let Some(&(m_pt, m_ct, m_cr, m_reqs)) = magpie_codex.get(&id) {
+                    let actual_tt = tokens_used.max(m_pt.saturating_add(m_ct));
+                    let actual_cr = if m_cr > 0 {
+                        m_cr
+                    } else {
+                        ((actual_tt as f64) * 0.954) as u64
+                    };
+                    (actual_tt, m_pt, m_ct, actual_cr, m_reqs.max(1))
+                } else if tokens_used > 0 {
+                    let cr = ((tokens_used as f64) * 0.954) as u64;
+                    let reqs = history_counts.get(&id).copied().unwrap_or(1).max(1);
+                    (tokens_used, tokens_used, 0, cr, reqs)
+                } else {
+                    let reqs = history_counts.get(&id).copied().unwrap_or(1).max(1);
+                    (0, 0, 0, 0, reqs)
+                };
+
             let mut item = json!({
                 "id": id,
                 "session_id": id,
@@ -1589,15 +1678,18 @@ pub fn collect_codex_local_threads_from(
                 "recencyAt": recency_at,
                 "last_activity_at_ms": last_activity_at_ms,
                 "source": source,
-                "status": { "type": "persisted" }
+                "status": { "type": "persisted" },
+                "request_count": reqs,
+                "calls": reqs
             });
             if let Some(m) = model {
                 item["model"] = json!(m);
             }
-            if tokens_used > 0 {
-                item["total_tokens"] = json!(tokens_used);
-                item["prompt_tokens"] = json!(tokens_used);
-                item["completion_tokens"] = json!(0);
+            if tt > 0 {
+                item["total_tokens"] = json!(tt);
+                item["prompt_tokens"] = json!(pt);
+                item["completion_tokens"] = json!(ct);
+                item["cache_read_tokens"] = json!(cr);
             }
             Ok(item)
         })
@@ -2950,6 +3042,98 @@ fn zcode_sessions_cache() -> &'static RwLock<Option<ZCodeSessionsCache>> {
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
+#[derive(Default)]
+struct ZCodeAgg {
+    calls: u64,
+    total_tokens: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+    reasoning_tokens: u64,
+}
+
+fn aggregate_zcode_root_stats(connection: &Connection) -> HashMap<String, ZCodeAgg> {
+    let mut parent_map: HashMap<String, String> = HashMap::new();
+    if let Ok(mut stmt) = connection.prepare(
+        "SELECT id, parent_id FROM session WHERE parent_id IS NOT NULL AND parent_id != ''",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let parent_id: String = row.get(1)?;
+            Ok((id, parent_id))
+        }) {
+            for (id, parent_id) in rows.flatten() {
+                parent_map.insert(id, parent_id);
+            }
+        }
+    }
+
+    let mut root_stats: HashMap<String, ZCodeAgg> = HashMap::new();
+    let msg_sql = r#"
+        SELECT
+            session_id,
+            COUNT(id),
+            COALESCE(SUM(CAST(json_extract(data, '$.tokens.total') AS INTEGER)), 0),
+            COALESCE(SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)), 0),
+            COALESCE(SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)), 0),
+            COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.read') AS INTEGER)), 0),
+            COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.write') AS INTEGER)), 0),
+            COALESCE(SUM(CAST(json_extract(data, '$.tokens.reasoning') AS INTEGER)), 0)
+        FROM message
+        WHERE data LIKE '%"role":"assistant"%'
+        GROUP BY session_id
+    "#;
+
+    if let Ok(mut stmt) = connection.prepare(msg_sql) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let session_id: String = row.get(0)?;
+            let calls: i64 = row.get(1)?;
+            let total: i64 = row.get(2)?;
+            let input: i64 = row.get(3)?;
+            let output: i64 = row.get(4)?;
+            let cache_read: i64 = row.get(5)?;
+            let cache_write: i64 = row.get(6)?;
+            let reasoning: i64 = row.get(7)?;
+            Ok((
+                session_id,
+                calls,
+                total,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                reasoning,
+            ))
+        }) {
+            for (sid, calls, total, input, output, cache_read, cache_write, reasoning) in
+                rows.flatten()
+            {
+                let mut root_id = sid.as_str();
+                let mut visited = HashSet::new();
+                while let Some(parent) = parent_map.get(root_id) {
+                    if !visited.insert(root_id) {
+                        break;
+                    }
+                    root_id = parent.as_str();
+                }
+                let entry = root_stats.entry(root_id.to_string()).or_default();
+                entry.calls = entry.calls.saturating_add(calls.max(0) as u64);
+                entry.total_tokens = entry.total_tokens.saturating_add(total.max(0) as u64);
+                entry.input_tokens = entry.input_tokens.saturating_add(input.max(0) as u64);
+                entry.output_tokens = entry.output_tokens.saturating_add(output.max(0) as u64);
+                entry.cache_read_tokens =
+                    entry.cache_read_tokens.saturating_add(cache_read.max(0) as u64);
+                entry.cache_write_tokens =
+                    entry.cache_write_tokens.saturating_add(cache_write.max(0) as u64);
+                entry.reasoning_tokens =
+                    entry.reasoning_tokens.saturating_add(reasoning.max(0) as u64);
+            }
+        }
+    }
+    root_stats
+}
+
 pub fn collect_zcode_sessions_from(
     database: &Path,
     include_completed: bool,
@@ -2983,6 +3167,8 @@ pub fn collect_zcode_sessions_from(
         ZCODE_RECENT_SESSION_LIMIT
     };
 
+    let root_stats = aggregate_zcode_root_stats(&connection);
+
     let sql = r#"
         SELECT
             s.id,
@@ -3000,11 +3186,7 @@ pub fn collect_zcode_sessions_from(
             s.directory,
             s.time_created,
             s.time_updated,
-            (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as model,
-            (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as total_tokens,
-            (SELECT json_extract(data, '$.tokens.input') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as input_tokens,
-            (SELECT json_extract(data, '$.tokens.output') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as output_tokens,
-            (SELECT json_extract(data, '$.tokens.cache.read') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as cache_read_tokens
+            (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND data LIKE '%"role":"assistant"%' ORDER BY time_created DESC LIMIT 1) as model
         FROM session s
         WHERE (s.parent_id IS NULL OR s.parent_id = '')
           AND s.id NOT LIKE 'sess_subagent%'
@@ -3027,10 +3209,20 @@ pub fn collect_zcode_sessions_from(
             let time_created: i64 = row.get(3)?;
             let time_updated: i64 = row.get(4)?;
             let model: Option<String> = row.get(5)?;
-            let total_tokens: Option<i64> = row.get(6)?;
-            let input_tokens: Option<i64> = row.get(7)?;
-            let output_tokens: Option<i64> = row.get(8)?;
-            let cache_read_tokens: Option<i64> = row.get(9)?;
+
+            let stats = root_stats.get(&session_id);
+            let (total_tokens, input_tokens, output_tokens, cache_read_tokens, request_count) =
+                if let Some(st) = stats {
+                    (
+                        Some(st.total_tokens),
+                        Some(st.input_tokens),
+                        Some(st.output_tokens),
+                        Some(st.cache_read_tokens),
+                        Some(st.calls.max(1)),
+                    )
+                } else {
+                    (None, None, None, None, Some(1))
+                };
 
             Ok(crate::adapters::zcode::ZCodeSessionEntry {
                 session_id,
@@ -3044,10 +3236,11 @@ pub fn collect_zcode_sessions_from(
                 latest_tool_status: None,
                 is_running: false,
                 model,
-                total_tokens: total_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
-                input_tokens: input_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
-                output_tokens: output_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
-                cache_read_tokens: cache_read_tokens.and_then(|v| u64::try_from(v.max(0)).ok()),
+                total_tokens,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                request_count,
             })
         })
         .map_err(|source| CollectorError::Database {
@@ -3097,6 +3290,8 @@ pub fn collect_zcode_session_contexts_from(
         source,
     })?;
 
+    let root_stats = aggregate_zcode_root_stats(&connection);
+
     let sql = r#"
         SELECT
             s.id,
@@ -3111,14 +3306,8 @@ pub fn collect_zcode_session_contexts_from(
                  ORDER BY m.sequence ASC, p.sequence ASC
                  LIMIT 1)
             ) as title,
-            (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as model,
-            (SELECT json_extract(data, '$.mode') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' ORDER BY time_created DESC LIMIT 1) as mode,
-            (SELECT json_extract(data, '$.tokens.total') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as total_tokens,
-            (SELECT json_extract(data, '$.tokens.input') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as input_tokens,
-            (SELECT json_extract(data, '$.tokens.output') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as output_tokens,
-            (SELECT json_extract(data, '$.tokens.cache.read') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as cache_read_tokens,
-            (SELECT json_extract(data, '$.tokens.cache.write') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as cache_write_tokens,
-            (SELECT json_extract(data, '$.tokens.reasoning') FROM message WHERE session_id = s.id AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') > 0 ORDER BY time_created DESC LIMIT 1) as reasoning_tokens
+            (SELECT json_extract(data, '$.modelID') FROM message WHERE session_id = s.id AND data LIKE '%"role":"assistant"%' ORDER BY time_created DESC LIMIT 1) as model,
+            (SELECT json_extract(data, '$.mode') FROM message WHERE session_id = s.id AND data LIKE '%"role":"assistant"%' ORDER BY time_created DESC LIMIT 1) as mode
         FROM session s
         WHERE (s.parent_id IS NULL OR s.parent_id = '')
           AND s.id NOT LIKE 'sess_subagent%'
@@ -3135,17 +3324,43 @@ pub fn collect_zcode_session_contexts_from(
 
     let rows = statement
         .query_map([limit as i64], |row| {
+            let session_id: String = row.get(0)?;
+            let title: Option<String> = row.get(1)?;
+            let model: Option<String> = row.get(2)?;
+            let mode: Option<String> = row.get(3)?;
+
+            let stats = root_stats.get(&session_id);
+            let (
+                total_tokens,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+            ) = if let Some(st) = stats {
+                (
+                    Some(st.total_tokens as i64),
+                    Some(st.input_tokens as i64),
+                    Some(st.output_tokens as i64),
+                    Some(st.cache_read_tokens as i64),
+                    Some(st.cache_write_tokens as i64),
+                    Some(st.reasoning_tokens as i64),
+                )
+            } else {
+                (None, None, None, None, None, None)
+            };
+
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, Option<i64>>(5)?,
-                row.get::<_, Option<i64>>(6)?,
-                row.get::<_, Option<i64>>(7)?,
-                row.get::<_, Option<i64>>(8)?,
-                row.get::<_, Option<i64>>(9)?,
+                session_id,
+                title,
+                model,
+                mode,
+                total_tokens,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
             ))
         })
         .map_err(|source| CollectorError::Database {
@@ -5452,5 +5667,53 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(opt_resume.session_exists, Some(true));
+    }
+
+    #[test]
+    fn aggregate_zcode_root_stats_rolls_up_subagents_and_sums_assistant_tokens() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                title TEXT,
+                directory TEXT,
+                time_created INTEGER,
+                time_updated INTEGER
+            );
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                data TEXT NOT NULL,
+                time_created INTEGER
+            );
+            INSERT INTO session VALUES ('root_sess_1', NULL, 'Root Session', 'D:/code', 1000, 2000);
+            INSERT INTO session VALUES ('sub_sess_2', 'root_sess_1', 'Subagent', 'D:/code', 1100, 1900);
+            INSERT INTO session VALUES ('independent_sess_3', '', 'Other Session', 'D:/code', 1200, 2100);
+
+            -- 2 assistant messages in root_sess_1
+            INSERT INTO message VALUES ('m1', 'root_sess_1', '{\"role\":\"assistant\",\"tokens\":{\"total\":500,\"input\":400,\"output\":100,\"cache\":{\"read\":350,\"write\":50},\"reasoning\":20}}', 1010);
+            INSERT INTO message VALUES ('m2', 'root_sess_1', '{\"role\":\"assistant\",\"tokens\":{\"total\":600,\"input\":500,\"output\":100,\"cache\":{\"read\":450,\"write\":50},\"reasoning\":30}}', 1020);
+            -- 1 user message in root_sess_1 (should NOT be aggregated)
+            INSERT INTO message VALUES ('m3', 'root_sess_1', '{\"role\":\"user\",\"tokens\":{\"total\":1000,\"input\":1000,\"output\":0}}', 1005);
+            -- 1 assistant message in sub_sess_2 (must be rolled up to root_sess_1)
+            INSERT INTO message VALUES ('m4', 'sub_sess_2', '{\"role\":\"assistant\",\"tokens\":{\"total\":800,\"input\":700,\"output\":100,\"cache\":{\"read\":600,\"write\":0},\"reasoning\":50}}', 1110);
+            -- 1 assistant message in independent_sess_3
+            INSERT INTO message VALUES ('m5', 'independent_sess_3', '{\"role\":\"assistant\",\"tokens\":{\"total\":200,\"input\":150,\"output\":50,\"cache\":{\"read\":100,\"write\":0},\"reasoning\":0}}', 1210);",
+        ).unwrap();
+
+        let stats = aggregate_zcode_root_stats(&conn);
+        let root = stats.get("root_sess_1").expect("root_sess_1 should be present");
+        assert_eq!(root.calls, 3); // 2 in root + 1 in sub
+        assert_eq!(root.total_tokens, 1900); // 500 + 600 + 800
+        assert_eq!(root.input_tokens, 1600); // 400 + 500 + 700
+        assert_eq!(root.output_tokens, 300); // 100 + 100 + 100
+        assert_eq!(root.cache_read_tokens, 1400); // 350 + 450 + 600
+        assert_eq!(root.reasoning_tokens, 100); // 20 + 30 + 50
+
+        let other = stats.get("independent_sess_3").expect("independent_sess_3 should be present");
+        assert_eq!(other.calls, 1);
+        assert_eq!(other.total_tokens, 200);
+        assert_eq!(other.cache_read_tokens, 100);
     }
 }

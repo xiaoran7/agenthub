@@ -1235,6 +1235,7 @@ impl NativeTransport for MultiProviderTransport {
                             let pt = entry.input_tokens.unwrap_or(0);
                             let ct = entry.output_tokens.unwrap_or(0);
                             let tt = entry.total_tokens.unwrap_or(pt + ct);
+                            let req_count = entry.request_count.unwrap_or(1).max(1);
                             items.push(json!({
                                 "id": entry.session_id,
                                 "session_id": entry.session_id,
@@ -1249,6 +1250,8 @@ impl NativeTransport for MultiProviderTransport {
                                 "prompt_tokens": pt,
                                 "completion_tokens": ct,
                                 "cache_read_tokens": entry.cache_read_tokens.unwrap_or(0),
+                                "request_count": req_count,
+                                "calls": req_count,
                                 "last_activity_at_ms": entry.time_updated,
                                 "time_updated": entry.time_updated,
                                 "time_created": entry.time_created,
