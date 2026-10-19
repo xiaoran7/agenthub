@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- **修复能力发现单测在干净 CI 环境断言失败（`crates/runner/src/collectors/capabilities.rs`）**：
+  - 根因：`test_discover_capabilities_smoke` 此前硬编码断言 `caps.total_skills > 0 && caps.total_hooks > 0`，在未配置全局 `~/.claude` 或 `~/.agenthub` 的纯净 Linux/CI 容器中必定断言失败（`assertion failed: caps.total_skills > 0`）；
+  - 修复：将烟雾测试调整为验证总数与列表集合一致性，并新增独立单元测试 `test_discover_capabilities_in_workspace`，基于隔离的 `tempdir` 构造 Mock 工作区并验证 Skills 与 MCP 服务发现逻辑闭环。
+
 - **Web 控制台 UI/UX 重构（`/ui-design`）**：全站移除 Emoji，改用 2.2px 线宽内联 SVG 图标；拔除 `.remote-session-tree` 顶部渐变遮罩与 `.settings-page` 硬编码暗色变量，恢复浅/暗主题自然继承；输入框 42~46px、按钮 38~48px，补齐 GPU 加速微动效与 WCAG AA 对比度，统一 Claude Terracotta 品牌色。
 - **文档无损精简与事实对齐**：精简 `AGENTS.md`、`README*.md`、`llms*.txt` 与 `docs/*.md`（含验收记录、宣发模板与 `RELEASE_NOTES_*.md` 原位瘦身），`docs/CHANGELOG.md` 100% 保留全部历史版本头；统一 UTF-8 无 BOM 与纯 LF，清理过期测试计数、旧入口命令与相对时间词。
 - **输出速度只报整轮下限，不再出现 3,000+ tok/s 的假数字（`crates/runner/src/usage_ledger.rs`）**：

@@ -795,6 +795,7 @@ mod tests {
 
     #[test]
     fn test_discover_capabilities_smoke() {
+        // Smoke test: host-level discovery safely executes without panic in any environment (including clean CI)
         let caps = discover_capabilities(None);
         println!(
             "Discovered: {} skills, {} MCP servers, {} hooks",
@@ -815,9 +816,38 @@ mod tests {
         for h in &caps.hooks {
             println!("  [Hook] {} ({}) - agents: {:?}", h.name, h.event, h.agents);
         }
-        // Verify real discovery on local host returns valid counts
-        assert!(caps.total_skills > 0);
-        assert!(caps.total_hooks > 0);
+        // Verify internal invariants hold even when clean CI has zero host configs
+        assert_eq!(caps.total_skills, caps.skills.len());
+        assert_eq!(caps.total_mcp_servers, caps.mcp_servers.len());
+        assert_eq!(caps.total_hooks, caps.hooks.len());
+    }
+
+    #[test]
+    fn test_discover_capabilities_in_workspace() {
+        let dir = tempdir().unwrap();
+        let ws_path = dir.path();
+
+        // 1. Mock workspace skills (.claude/skills/demo_skill/SKILL.md)
+        let skill_dir = ws_path.join(".claude").join("skills").join("demo_skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: Demo Skill\ndescription: Test description\n---\nPrompt body",
+        )
+        .unwrap();
+
+        // 2. Mock workspace MCP servers (.mcp.json)
+        fs::write(
+            ws_path.join(".mcp.json"),
+            r#"{ "mcpServers": { "demo_mcp": { "command": "node", "args": ["app.js"] } } }"#,
+        )
+        .unwrap();
+
+        let caps = discover_capabilities(Some(ws_path));
+        assert!(caps.total_skills >= 1);
+        assert!(caps.skills.iter().any(|s| s.name == "Demo Skill"));
+        assert!(caps.total_mcp_servers >= 1);
+        assert!(caps.mcp_servers.iter().any(|m| m.name == "demo_mcp"));
     }
 
     #[test]
