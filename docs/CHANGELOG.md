@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-10-19
+
 ### 内嵌控制台页面收敛与用量账本 (Console Navigation Consolidation & Per-request Usage Ledger)
 
 - **导航与页面收敛 (Four Pages, One Settings)**：
@@ -27,6 +29,13 @@
   - 智能体视图与统计只保留 Coding Assistant（`claude_code`）、Claude Desktop（`claude_desktop`）、Codex、Grok、Gemini CLI；Claude Desktop 以数据目录 `AppData/Local/AIClaude` 与桌面端会话为探测依据，描述中明确它与 Coding Assistant 是两款独立产品；Antigravity / ZCode / Cursor / Cline 等仅计入会话来源，不再出现在智能体卡片；
 - **测试**：`usage_ledger` 新增失败重试配对、失败次日独立、会话上下文、分桶边界、周一起、序列时间升序等 10 项单元测试；`web_server` 资产测试改为断言四页导航、设置页能力分区、用量页元素与 `/icons/` 图标路径；`cargo test --workspace` 全部通过，`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 通过；
 - **文档与溯源**：README 开源引用表补充 magpie 图标集与用量账本页的模块归属，`docs/ARCHITECTURE.md` 更新视图数量、账本与图标来源、计价权威位置。
+
+### 构建、测试与发版 (Build & Packaging)
+
+- 编译并打包 `AgentHub-Runner-v2.5.1-windows-x64.zip`（4,753,162 字节）：`cargo build --release -p agenthub-runner` 产出单可执行文件 `agenthub-runner.exe`（11,752,960 字节），连同 `deploy/windows/` 下的 `README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1` 一并归档；
+- 实测发布二进制：`GET /` 引用 `/dashboard.js?v=2.5.1`，其内嵌脚本 SHA-256 与 `crates/runner/resources/dashboard.js` 源码逐字节一致（`50f901ec…4dba42`）；`/icons/claude-color.svg`、`/icons/xai.svg`、`/icons/zcode.png` 与 `/api/usage/ledger?period=7d` 均正常返回，HTML 只含四页导航与设置页，不含 `view-models` / `view-gateway` / `footPort`；
+- 计算生成 `AgentHub-v2.5.1-SHA256.txt` 校验和清单，按「打新包必删旧包」删除同平台旧包 `AgentHub-Runner-v2.5.0-windows-x64.zip` 与旧清单 `AgentHub-v2.5.0-SHA256.txt`；Android 产物按 AGENTS.md「Desktop（Tauri）与原生 Android 暂时冻结」保持 2.5.0 不动，新清单沿用其既有哈希；
+- 工作区版本同步递增：`Cargo.toml` 与 `Cargo.lock` 2.5.0 → 2.5.1，README 版本徽章与测试徽章（258）同步更新；Node 工作区清单 `package.json`、`apps/web`、`services/api`、`packages/contracts` 统一到 2.5.1，`package-lock.json` 由 `npm install --package-lock-only --ignore-scripts` 重算，依赖树无变化。
 
 ## [2.5.0] - 2026-10-19
 

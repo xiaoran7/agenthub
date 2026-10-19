@@ -1,0 +1,2 @@
+3c3f071e87a572047c075151d119270fc192352eb03c57e00d1b32c5e3e8b369 *AgentHub-Runner-v2.5.1-windows-x64.zip
+b4cb246250cb72b64693f6e13bb24185f3ac3d2e3d8763d4e3d7c650468e7b65 *AgentHub-v2.5.0-android-debug.apk
