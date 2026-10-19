@@ -30,6 +30,28 @@
   - 计算生成 `AgentHub-v2.4.99-SHA256.txt` 校验和清单，严格遵循工程铁律删除旧包保持产物目录唯一最新；
   - 自动化回归测试（236 个 Rust 测试全部通过，145 个 Node 契约测试全部通过）。
 
+### 上下文用量表、多选问答与增量 Markdown 渲染 (Context Capacity, Multi-Select Questions & Incremental Markdown)
+
+- **上下文容量数据打通 (Context Capacity Pipeline)**：
+  - 运行器此前从未把上下文用量投影到远端，手机端只能一律显示“未上报”；现在 Claude 的 `result` 行、Codex 的 `thread/tokenUsage/updated` 与 ACP 的 `usage_update` 统一归一化为 `{used, window}` 一对整数，经 `projected_event_raw` 白名单投影、Gateway `validateRemoteEventRaw` 双整数校验后送达客户端；
+  - `used` 计入 `input_tokens + cache_read + cache_creation`（缓存读写同样占窗口），并兼容 Codex camelCase 与 Claude/ACP snake_case 两种来源；`window` 缺省时不做任何分母猜测；
+  - `AgentStreamOutcome` 新增 `usage` 字段，Claude 流式子进程路径与一次性 CLI 路径都会把本轮用量带进 `turn/completed` 前后的事件流。
+- **会话页上下文容量表 (Session Context Gauge)**：
+  - 会话标题栏新增容量环（20dp，蓝/琥珀/红按 70%/90% 阈值变色，容量未上报时显示灰色空心环），点按展开一行内联容量条：`已用 / 总量 · 百分比`；没有容量时明确写“容量未上报”，绝不编造百分比；
+  - 容量条位于错误提示与审批卡片之间，不遮挡转录区；`compactTokens` 统一输出 `64k` / `1.2M` 这类紧凑单位；
+  - 新增纯 Kotlin 的 `latestContextUsage()`，按会话作用域取最新一条上报。
+- **多选问答卡片 (Multi-Select Question Cards)**：
+  - 问答卡片识别 `multi_select`：显示“可多选”标识与方形勾选框，可勾选多项（上限 6 个选项），底部按钮在未选择时禁用并显示“选择后提交”，选择后变为“提交 N 项选择”；
+  - 提交按契约发送字符串数组（`answer: string[]`），单选行为保持不变（点选即提交）；选项额外展示 `description` 副标题；
+  - 选择状态按 `question_id` 记忆，轮询刷新不会丢失已勾选项。
+- **增量 Markdown 解析 (Incremental Markdown Parsing)**：
+  - 新增 `MarkdownSegmentCache`：流式追加时只解析新增尾部，代码块闭合后不再重建；整段被替换（最终消息覆盖增量）或围栏可能被拆开（`\`` 落在增量边界）时回退全量解析，保证增量结果与全量解析逐段一致；
+  - `parseMarkdownSegments` 对不含围栏的普通文本直接返回单段，跳过正则扫描；代码块按位置与语言 `key` 稳定复用，普通段落文本经 `remember` 缓存。
+- **验证 (Verification)**：
+  - runner 库测试 184 通过（新增用量投影与 Claude 用量解析用例）、runner 集成测试 28 通过、API 测试 56 通过 / 0 失败、`tsc` 与 `cargo clippy` 干净；
+  - Android 单测 23 个通过（新增 2 个上下文用量用例与 6 个 Markdown 增量解析用例，其中一条直接断言“增量结果 == 全量解析”）；
+  - `Medium_Phone` 模拟器实测：会话页头部容量环显示 `64k / 200k · 32%`，展开后的内联容量条数值一致；多选卡片勾选三项后按钮变为“提交 3 项选择”，提交后的命令体为 `answer: ["上下文用量表","多选问题卡片","增量 Markdown 解析"]`，单选卡片行为未变；logcat 无崩溃。
+
 ## [2.4.98] - 2026-10-19
 
 ### 网关交互青空化重构、系统设置弹窗、高 DPI 托盘图标与 Agent-Nexus 现代菜单 (Gateway Modernization, Settings Modal & High-DPI Icons)

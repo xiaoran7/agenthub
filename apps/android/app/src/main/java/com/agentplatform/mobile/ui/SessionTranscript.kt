@@ -476,3 +476,35 @@ fun latestTurnFailure(events: List<JSONObject>, hubSessionId: String): TurnFailu
     }
     return failure
 }
+
+/** Context window fill, as reported by the provider after a turn. */
+data class ContextUsage(val used: Long, val window: Long?)
+
+/**
+ * The newest context-usage report that belongs to this session.
+ *
+ * The Runner projects one canonical pair (`used`, optional `window`) from the
+ * provider's own accounting; the phone never estimates a denominator, so a
+ * provider that reports consumption but not capacity yields `window = null`
+ * instead of a fabricated percentage.
+ */
+fun latestContextUsage(events: List<JSONObject>, hubSessionId: String): ContextUsage? {
+    var usage: ContextUsage? = null
+    for (envelope in events) {
+        val payload = envelope.optJSONObject("payload") ?: continue
+        if (payload.optString("type") != "event") continue
+        val event = payload.optJSONObject("event") ?: continue
+        val bindingHub =
+            event.optJSONObject("binding")?.optString("hub_session_id")?.takeIf { it.isNotEmpty() }
+        if (bindingHub != null && bindingHub != hubSessionId) continue
+        if (event.optString("kind") != "thread/tokenUsage/updated") continue
+        val reported =
+            event.optJSONObject("raw")?.optJSONObject("params")?.optJSONObject("tokenUsage")
+                ?: continue
+        val used = reported.optLong("used", 0)
+        if (used <= 0) continue
+        val window = reported.optLong("window", 0).takeIf { it > 0 }
+        usage = ContextUsage(used = used, window = window)
+    }
+    return usage
+}

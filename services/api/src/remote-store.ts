@@ -788,6 +788,34 @@ function validateRemoteEventRaw(
       throw new RemoteStoreError("unsafe_provider_event");
     return;
   }
+  if (kind === "thread/tokenUsage/updated") {
+    // Context capacity is two integers. Anything richer than that is provider
+    // bookkeeping the console has no use for, so it is rejected rather than
+    // stored.
+    const usage = params.tokenUsage;
+    if (
+      !only(["tokenUsage"]) ||
+      !usage ||
+      typeof usage !== "object" ||
+      Array.isArray(usage)
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    const typed = usage as Record<string, unknown>;
+    const isCount = (value: unknown) =>
+      value === undefined ||
+      (typeof value === "number" &&
+        Number.isSafeInteger(value) &&
+        value >= 0);
+    if (
+      Object.keys(typed).some((key) => !["used", "window"].includes(key)) ||
+      typeof typed.used !== "number" ||
+      !Number.isSafeInteger(typed.used) ||
+      typed.used < 0 ||
+      !isCount(typed.window)
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    return;
+  }
   if (kind === "history/snapshot") {
     if (!only(["items"]) || !Array.isArray(params.items))
       throw new RemoteStoreError("unsafe_provider_event");

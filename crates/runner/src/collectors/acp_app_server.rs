@@ -605,6 +605,25 @@ pub fn normalize_acp_message(
                             }
                         }));
                     }
+                    // ACP states window consumption directly; forward it in the
+                    // same shape Codex uses so clients need one reader.
+                    "usage_update" => {
+                        let used = update.get("used").and_then(Value::as_u64);
+                        let size = update.get("size").and_then(Value::as_u64);
+                        if used.is_some() || size.is_some() {
+                            normalized.push(json!({
+                                "method": "thread/tokenUsage/updated",
+                                "params": {
+                                    "threadId": session_id,
+                                    "turnId": active_turn_id,
+                                    "tokenUsage": {
+                                        "last": used.map(|used| json!({"inputTokens": used})),
+                                        "modelContextWindow": size
+                                    }
+                                }
+                            }));
+                        }
+                    }
                     _ => {}
                 }
             }

@@ -40,6 +40,12 @@ data class FormattedSegment(
  * 结构化切分 Markdown 代码块与普通文本
  */
 fun parseMarkdownSegments(content: String): List<FormattedSegment> {
+    // Streaming sends the message one delta at a time; the overwhelmingly
+    // common shape has no fence at all, and skipping the regex scan there is
+    // what keeps a long answer cheap to render.
+    if (!content.contains("```")) {
+        return if (content.isEmpty()) emptyList() else listOf(FormattedSegment(text = content))
+    }
     val segments = mutableListOf<FormattedSegment>()
     val codeBlockPattern = Pattern.compile("```([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*?)```")
     val matcher = codeBlockPattern.matcher(content)
@@ -65,6 +71,44 @@ fun parseMarkdownSegments(content: String): List<FormattedSegment> {
         }
     }
     return segments
+}
+
+/**
+ * Parses only what changed as a streaming message grows.
+ *
+ * Appending can never close a fence that started earlier, so unless the new
+ * delta itself contains a fence the previous segments stay valid: a plain tail
+ * is extended, and text after a closed block starts a new plain segment. Any
+ * other change (a final message replacing the deltas, a fence arriving) falls
+ * back to a full parse.
+ */
+class MarkdownSegmentCache {
+    private var source: String = ""
+    private var segments: List<FormattedSegment> = emptyList()
+
+    fun update(content: String): List<FormattedSegment> {
+        if (content == source) return segments
+        val appended =
+            if (source.isNotEmpty() && content.startsWith(source)) content.substring(source.length)
+            else null
+        // A fence can be split across two deltas ("``" then "`python"), so a
+        // backtick on either side of the seam also forces a full parse.
+        val fenceMayBeSplit =
+            appended != null && (source.endsWith("`") || appended.startsWith("`"))
+        segments =
+            if (appended != null && !fenceMayBeSplit && !appended.contains("```")) {
+                val last = segments.last()
+                if (last.isCodeBlock) {
+                    segments + FormattedSegment(text = appended)
+                } else {
+                    segments.dropLast(1) + last.copy(text = last.text + appended)
+                }
+            } else {
+                parseMarkdownSegments(content)
+            }
+        source = content
+        return segments
+    }
 }
 
 /**

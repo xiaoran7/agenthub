@@ -735,6 +735,34 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
             .pointer("/turn/id")
             .and_then(Value::as_str)
             .map(|id| json!({"params":{"turn":{"id":id}}})),
+        // How full the context window is. Clients get one canonical pair so a
+        // Codex camelCase report and a normalised Claude/ACP report read the
+        // same; the capacity stays optional because a provider may state
+        // consumption without stating the window.
+        "thread/tokenUsage/updated" => {
+            let usage = params.get("tokenUsage")?;
+            let positive = |value: Option<&Value>| {
+                value
+                    .and_then(Value::as_u64)
+                    .filter(|number| *number > 0)
+            };
+            let last = usage.get("last").or_else(|| usage.get("last_token_usage"));
+            let used = positive(usage.get("used"))
+                .or_else(|| last.and_then(|last| positive(last.get("inputTokens"))))
+                .or_else(|| last.and_then(|last| positive(last.get("input_tokens"))))
+                .or_else(|| positive(usage.get("inputTokens")))
+                .or_else(|| positive(usage.get("input_tokens")))?;
+            let window = positive(usage.get("window"))
+                .or_else(|| positive(usage.get("modelContextWindow")))
+                .or_else(|| positive(usage.get("model_context_window")))
+                .or_else(|| positive(usage.get("context_window_tokens")))
+                .or_else(|| positive(params.get("model_context_window")));
+            let mut projected = json!({"params":{"tokenUsage":{"used":used}}});
+            if let Some(window) = window {
+                projected["params"]["tokenUsage"]["window"] = json!(window);
+            }
+            Some(projected)
+        }
         "item/agentMessage/delta" => {
             let item_id = params.get("itemId").and_then(Value::as_str)?;
             let delta = params.get("delta").and_then(Value::as_str)?;
@@ -1063,6 +1091,64 @@ fn started_tool_items_project_only_render_fields() {
         json!({"id":"tool-one","type":"commandExecution","command":"cargo test"})
     );
     assert!(!projected.to_string().contains("do-not-send"));
+}
+
+#[cfg(test)]
+#[test]
+fn codex_token_usage_projects_a_canonical_pair() {
+    let event = crate::remote_host::HostEvent {
+        event_id: "usage-one".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("native-one".into()),
+        kind: "thread/tokenUsage/updated".into(),
+        raw: json!({"method":"thread/tokenUsage/updated","params":{
+            "threadId":"native-one",
+            "turnId":"turn-one",
+            "tokenUsage":{
+                "last":{"inputTokens":42000,"cachedInputTokens":9000,"outputTokens":100},
+                "total":{"inputTokens":88000,"totalTokens":90000},
+                "modelContextWindow":200000,
+                "internalBreakdown":"do-not-send"
+            }
+        }}),
+        binding: None,
+        approval_id: None,
+        approval: None,
+        question_id: None,
+        question: None,
+    };
+    let projected = projected_remote_event(&event).unwrap();
+    assert_eq!(
+        projected["event"]["raw"]["params"]["tokenUsage"],
+        json!({"used":42000,"window":200000})
+    );
+    assert!(!projected.to_string().contains("do-not-send"));
+}
+
+#[cfg(test)]
+#[test]
+fn token_usage_without_a_window_still_reports_consumption() {
+    let event = crate::remote_host::HostEvent {
+        event_id: "usage-two".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("native-one".into()),
+        kind: "thread/tokenUsage/updated".into(),
+        raw: json!({"method":"thread/tokenUsage/updated","params":{
+            "tokenUsage":{"last":{"inputTokens":12345}}
+        }}),
+        binding: None,
+        approval_id: None,
+        approval: None,
+        question_id: None,
+        question: None,
+    };
+    let projected = projected_remote_event(&event).unwrap();
+    assert_eq!(
+        projected["event"]["raw"]["params"]["tokenUsage"],
+        json!({"used":12345})
+    );
 }
 
 #[cfg(test)]

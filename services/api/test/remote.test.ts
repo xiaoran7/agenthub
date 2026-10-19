@@ -294,6 +294,26 @@ test("approval snapshots replace state and unsafe approval events never persist"
         }),
       /unsafe_provider_event/u,
     );
+    // Context capacity is two integers; provider bookkeeping around them is
+    // not something the console renders, so it never reaches storage.
+    assert.throws(
+      () =>
+        store.receive("owner", runner, 3, {
+          type: "event",
+          event: hostEvent("thread/tokenUsage/updated", {
+            raw: {
+              params: {
+                tokenUsage: {
+                  used: 42000,
+                  window: 200000,
+                  internalBreakdown: "usable-secret",
+                },
+              },
+            },
+          }),
+        }),
+      /unsafe_provider_event/u,
+    );
     for (const extra of [
       { command: "private command" },
       { diff: "private diff" },

@@ -290,4 +290,61 @@ class SessionTranscriptTest {
 
         assertTrue(latestTurnFailure(listOf(retrying), "hub-one")?.retrying == true)
     }
+
+    @Test
+    fun `context usage keeps the newest report and stays scoped to its session`() {
+        val scoped =
+            JSONObject()
+                .put("payload", JSONObject()
+                    .put("type", "event")
+                    .put("event", JSONObject()
+                        .put("kind", "thread/tokenUsage/updated")
+                        .put("binding", JSONObject().put("hub_session_id", "hub-one"))
+                        .put("raw", JSONObject().put("params", JSONObject().put(
+                            "tokenUsage",
+                            JSONObject().put("used", 42_000).put("window", 200_000),
+                        )))))
+        val other =
+            JSONObject()
+                .put("payload", JSONObject()
+                    .put("type", "event")
+                    .put("event", JSONObject()
+                        .put("kind", "thread/tokenUsage/updated")
+                        .put("binding", JSONObject().put("hub_session_id", "hub-two"))
+                        .put("raw", JSONObject().put("params", JSONObject().put(
+                            "tokenUsage",
+                            JSONObject().put("used", 900_000).put("window", 1_000_000),
+                        )))))
+        val newest =
+            JSONObject()
+                .put("payload", JSONObject()
+                    .put("type", "event")
+                    .put("event", JSONObject()
+                        .put("kind", "thread/tokenUsage/updated")
+                        .put("binding", JSONObject().put("hub_session_id", "hub-one"))
+                        .put("raw", JSONObject().put("params", JSONObject().put(
+                            "tokenUsage",
+                            JSONObject().put("used", 51_000).put("window", 200_000),
+                        )))))
+
+        assertEquals(ContextUsage(42_000, 200_000), latestContextUsage(listOf(scoped, other), "hub-one"))
+        assertEquals(ContextUsage(51_000, 200_000), latestContextUsage(listOf(scoped, other, newest), "hub-one"))
+        assertNull(latestContextUsage(listOf(scoped), "hub-three"))
+    }
+
+    @Test
+    fun `a usage report without a window still reports what was used`() {
+        val report =
+            JSONObject()
+                .put("payload", JSONObject()
+                    .put("type", "event")
+                    .put("event", JSONObject()
+                        .put("kind", "thread/tokenUsage/updated")
+                        .put("raw", JSONObject().put("params", JSONObject().put(
+                            "tokenUsage",
+                            JSONObject().put("used", 12_345),
+                        )))))
+
+        assertEquals(ContextUsage(12_345, null), latestContextUsage(listOf(report), "hub-one"))
+    }
 }

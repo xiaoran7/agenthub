@@ -601,6 +601,21 @@ impl NativeTransport for MultiProviderTransport {
                                 completed_params["realSessionId"] =
                                     json!(format!("claude_{}", real_id));
                             }
+                            if let Some(usage) = res.usage
+                                && let Ok(mut events) = events_queue.lock()
+                            {
+                                events.push_back(json!({
+                                    "method": "thread/tokenUsage/updated",
+                                    "params": {
+                                        "threadId": session_id_clone,
+                                        "turnId": turn_id_clone,
+                                        "tokenUsage": {
+                                            "last": {"inputTokens": usage.used},
+                                            "modelContextWindow": usage.window
+                                        }
+                                    }
+                                }));
+                            }
                         } else if let Ok(Err(ref err)) = outcome {
                             completed_params["turn"]["error"] = json!(err.to_string());
                         } else if outcome.is_err() {
@@ -1716,6 +1731,25 @@ impl NativeTransport for MultiProviderTransport {
                                     .get(session_id)
                                     .cloned()
                                     .unwrap_or_default();
+                                // The `result` line is where the CLI states how
+                                // much of the window the turn consumed. Without
+                                // forwarding it the phone can only say "capacity
+                                // was not reported", even though it was.
+                                if let Some(usage) =
+                                    crate::collectors::claude_result_context_usage(&msg)
+                                {
+                                    messages.push(json!({
+                                        "method": "thread/tokenUsage/updated",
+                                        "params": {
+                                            "threadId": session_id,
+                                            "turnId": turn_id,
+                                            "tokenUsage": {
+                                                "last": {"inputTokens": usage.used},
+                                                "modelContextWindow": usage.window
+                                            }
+                                        }
+                                    }));
+                                }
                                 messages.push(json!({
                                     "method": "turn/completed",
                                     "params": {

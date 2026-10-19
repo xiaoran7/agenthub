@@ -24,6 +24,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -833,3 +837,124 @@ internal fun stateColor(state: String): Color =
         "error" -> OrcaColors.accentRed
         else -> OrcaColors.textMuted
     }
+
+/** `128k` / `1.2M`: compact enough for a header, exact enough to trust. */
+internal fun compactTokens(tokens: Long): String =
+    when {
+        tokens >= 1_000_000 -> {
+            val millions = tokens / 1_000_000.0
+            if (millions >= 10) "${millions.toLong()}M" else String.format("%.1f", millions) + "M"
+        }
+        tokens >= 1_000 -> "${tokens / 1_000}k"
+        else -> tokens.toString()
+    }
+
+/**
+ * Context-window gauge for the session header.
+ *
+ * A ring is used instead of a bar because it has to live beside the state dot
+ * without stealing a whole row from the transcript. The percentage is only
+ * drawn when the provider reported a window: showing "42%" against a made-up
+ * denominator would be a lie, so an unknown capacity says so in words.
+ */
+@Composable
+internal fun ContextCapacityRing(
+    usage: ContextUsage,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val window = usage.window
+    val fraction =
+        if (window != null && window > 0) {
+            (usage.used.toFloat() / window.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+    val tint =
+        when {
+            window == null -> OrcaColors.textMuted
+            fraction >= 0.9f -> OrcaColors.accentRed
+            fraction >= 0.7f -> OrcaColors.accentAmber
+            else -> OrcaColors.accentBlue
+        }
+    Box(
+        modifier =
+            modifier
+                .size(OrcaSize.iconButton)
+                .clip(CircleShape)
+                .clickable(onClick = onToggle),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(20.dp)) {
+            val stroke = 2.dp.toPx()
+            val radius = (size.minDimension - stroke) / 2f
+            drawCircle(OrcaColors.borderStrong, radius = radius, style = Stroke(stroke))
+            if (window != null) {
+                drawArc(
+                    color = tint,
+                    startAngle = -90f,
+                    sweepAngle = 360f * fraction,
+                    useCenter = false,
+                    topLeft = Offset((size.width - radius * 2) / 2f, (size.height - radius * 2) / 2f),
+                    size = Size(radius * 2, radius * 2),
+                    style = Stroke(stroke, cap = StrokeCap.Round),
+                )
+            }
+        }
+    }
+}
+
+/** One-line capacity readout shown while the ring is expanded. */
+@Composable
+internal fun ContextCapacityStrip(usage: ContextUsage, modifier: Modifier = Modifier) {
+    val window = usage.window
+    val fraction =
+        if (window != null && window > 0) {
+            (usage.used.toFloat() / window.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+    val tint =
+        when {
+            window == null -> OrcaColors.textMuted
+            fraction >= 0.9f -> OrcaColors.accentRed
+            fraction >= 0.7f -> OrcaColors.accentAmber
+            else -> OrcaColors.accentBlue
+        }
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+    ) {
+        Text(
+            text = "上下文",
+            style = OrcaType.mono,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(
+            Modifier
+                .weight(1f)
+                .height(3.dp)
+                .clip(RoundedCornerShape(OrcaRadius.pill))
+                .background(OrcaColors.borderStrong),
+        ) {
+            if (window != null) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction)
+                        .height(3.dp)
+                        .background(tint),
+                )
+            }
+        }
+        Text(
+            text =
+                compactTokens(usage.used) +
+                    if (window != null) " / " + compactTokens(window) + " · " +
+                        String.format("%.0f", fraction * 100f) + "%"
+                    else " tokens · 容量未上报",
+            style = OrcaType.mono,
+            color = if (window != null) tint else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}

@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -216,6 +217,8 @@ fun RemoteScreen(
     val approvals = remember(events, hubId) { remoteApprovals(events, hubId) }
     val questions = remember(events, hubId) { remoteQuestions(events, hubId) }
     val turnFailure = remember(events, hubId) { latestTurnFailure(events, hubId) }
+    val usage = remember(events, hubId) { latestContextUsage(events, hubId) }
+    var showUsage by remember { mutableStateOf(false) }
 
     // Follow new output only while the reader is already at the bottom, so
     // scrolling back through history is never yanked away.
@@ -313,6 +316,9 @@ fun RemoteScreen(
                     )
                 }
             }
+            if (usage != null) {
+                ContextCapacityRing(usage = usage, onToggle = { showUsage = !showUsage })
+            }
             if (connected && !idle) {
                 Surface(
                     onClick = { submit(JSONObject().put("action", "interrupt")) },
@@ -340,6 +346,13 @@ fun RemoteScreen(
 
         if (error.isNotBlank()) {
             OrcaInlineError(error, Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs))
+        }
+
+        if (showUsage && usage != null) {
+            ContextCapacityStrip(
+                usage = usage,
+                modifier = Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xxs),
+            )
         }
 
         if (turnFailure != null && !turnFailure.retrying && turnFailure.message != dismissedFailure) {
@@ -387,7 +400,10 @@ fun RemoteScreen(
                                 JSONObject()
                                     .put("action", "answer_question")
                                     .put("question_id", id)
-                                    .put("answer", answer),
+                                    .put(
+                                        "answer",
+                                        if (answer is List<*>) JSONArray(answer) else answer,
+                                    ),
                             )
                         },
                     )
@@ -678,11 +694,15 @@ private fun DiffPreview(diff: String) {
 private fun QuestionCard(
     question: JSONObject,
     enabled: Boolean,
-    onAnswer: (String) -> Unit,
+    onAnswer: (Any) -> Unit,
 ) {
     val header = question.optString("header").ifBlank { "Agent 提问" }
     val prompt = question.optString("prompt").ifBlank { "请选择一个选项以继续。" }
     val options = question.optJSONArray("options")?.objects().orEmpty()
+    val multi = question.optBoolean("multi_select", false)
+    // Selection is per question and survives a poll-driven recomposition, but
+    // not a new question: a submitted answer clears the card anyway.
+    var picked by remember(question.optString("question_id")) { mutableStateOf(setOf<String>()) }
 
     Surface(
         modifier = Modifier.width(288.dp),
@@ -706,6 +726,13 @@ private fun QuestionCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (multi) {
+                    Text(
+                        text = "可多选",
+                        style = OrcaType.mono,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Text(
                 text = prompt,
@@ -721,29 +748,89 @@ private fun QuestionCard(
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
-                    options.take(4).forEach { option ->
+                    options.take(6).forEach { option ->
                         val label = option.optString("label")
+                        val selected = label in picked
                         Surface(
-                            onClick = { onAnswer(label) },
+                            onClick = {
+                                if (multi) {
+                                    picked = if (selected) picked - label else picked + label
+                                } else {
+                                    onAnswer(label)
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = enabled,
                             shape = RoundedCornerShape(OrcaRadius.button),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            color =
+                                if (selected) OrcaColors.accentBlue.copy(alpha = 0.18f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            border =
+                                BorderStroke(
+                                    1.dp,
+                                    if (selected) OrcaColors.accentBlue
+                                    else MaterialTheme.colorScheme.outline,
+                                ),
                         ) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row(
+                                modifier =
+                                    Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+                            ) {
+                                if (multi) SelectionBox(selected)
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    val description = option.optString("description")
+                                    if (description.isNotBlank()) {
+                                        Text(
+                                            text = description,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
                         }
+                    }
+                }
+                if (multi) {
+                    OrcaPrimaryButton(
+                        label = if (picked.isEmpty()) "选择后提交" else "提交 ${picked.size} 项选择",
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = enabled && picked.isNotEmpty(),
+                    ) {
+                        // The wire contract takes a string or a string array;
+                        // sending an array is what the desktop console does.
+                        onAnswer(picked.toList())
                     }
                 }
             }
         }
+    }
+}
+
+/** Square check affordance; `OrcaCheckIcon` is a bare glyph without a box. */
+@Composable
+private fun SelectionBox(selected: Boolean) {
+    Box(
+        modifier =
+            Modifier
+                .size(14.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(if (selected) OrcaColors.accentBlue else Color.Transparent)
+                .border(1.dp, if (selected) OrcaColors.accentBlue else OrcaColors.borderStrong, RoundedCornerShape(3.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) OrcaCheckIcon(OrcaColors.onBright, 10.dp)
     }
 }
 
@@ -1139,11 +1226,18 @@ private fun TerminalAccessoryBar(
 
 @Composable
 fun RenderMarkdownContent(content: String) {
-    val segments = remember(content) { parseMarkdownSegments(content) }
+    // The cache survives recomposition of the streaming row, so each delta only
+    // re-parses the changed tail instead of the whole message.
+    val cache = remember { MarkdownSegmentCache() }
+    val segments = remember(content, cache) { cache.update(content) }
     Column(Modifier.fillMaxWidth()) {
-        segments.forEach { seg ->
+        segments.forEachIndexed { index, seg ->
             if (seg.isCodeBlock) {
-                CodeBlockSurface(code = seg.text, language = seg.language)
+                // Only an unfinished code block can still change; a closed one
+                // is keyed by its text so it is not rebuilt on every delta.
+                key("block-" + index + "-" + seg.language) {
+                    CodeBlockSurface(code = seg.text, language = seg.language)
+                }
             } else {
                 Text(
                     text = buildInlineMarkdown(seg.text),

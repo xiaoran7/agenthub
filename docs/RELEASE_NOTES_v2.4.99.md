@@ -21,6 +21,11 @@
   - **交互式 MCP 服务注册与热探测**：新增“+ 注册 MCP 服务”青空弹窗组件与“重新探测”即时同步按钮。
   - **60 FPS 性能铁律保障**：严格硬件加速标注，杜绝滚动掉帧。
 
+* **📊 移动端上下文容量表、多选问答与增量 Markdown 渲染 (Context Capacity, Multi-Select Questions & Incremental Markdown)**:
+  - **上下文用量终于看得见**：Runner 把 Claude `result`、Codex `thread/tokenUsage/updated` 与 ACP `usage_update` 统一归一化为 `{used, window}`，手机会话页标题栏新增容量环，点按展开 `64k / 200k · 32%` 内联容量条；容量未上报时明确写“容量未上报”，不编造百分比。
+  - **多选问答**：问答卡片识别 `multi_select`，显示勾选框与“可多选”标识，可勾选多项后一次提交，命令体为字符串数组；未选择时提交按钮禁用，单选卡片行为不变。
+  - **流式渲染更省**：新增增量 Markdown 解析缓存，追加内容只解析新增尾部，代码块闭合后不再重建；围栏被拆开或整段替换时回退全量解析，并有单测直接断言“增量结果 == 全量解析”。
+
 ### 📦 Precompiled Deliverables
 
 * **Windows x64**: `AgentHub-Runner-v2.4.99-windows-x64.zip` (single executable + quickstart connect guide)

@@ -146,7 +146,57 @@ pub struct TurnOptions<'a> {
 pub struct AgentStreamOutcome {
     pub response: String,
     pub session_id: Option<String>,
+    pub usage: Option<ContextUsage>,
 }
+
+/// How full the provider's context window is after a turn.
+///
+/// `window` stays optional on purpose: a provider that reports consumption but
+/// not capacity must still be shown as "used, capacity unknown" rather than
+/// being given a guessed denominator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextUsage {
+    pub used: u64,
+    pub window: Option<u64>,
+}
+
+/// Reads context consumption out of a provider `usage` object. Cache reads and
+/// cache writes occupy the window just like fresh input, so all three count.
+pub(crate) fn context_usage_from_values(usage: &Value, window: Option<u64>) -> Option<ContextUsage> {
+    let input = usage_u64(usage, "input_tokens");
+    let cache_read = usage_u64(usage, "cache_read_input_tokens");
+    let cache_write = usage_u64(usage, "cache_creation_input_tokens");
+    let used = input
+        .saturating_add(cache_read)
+        .saturating_add(cache_write)
+        .max(usage_u64(usage, "total_tokens"));
+    if used == 0 {
+        return None;
+    }
+    let reported_window = window
+        .or_else(|| usage.get("context_window_tokens").and_then(Value::as_u64))
+        .or_else(|| usage.get("model_context_window").and_then(Value::as_u64))
+        .filter(|value| *value > 0);
+    Some(ContextUsage {
+        used,
+        window: reported_window,
+    })
+}
+
+/// Context usage carried by a Claude `result` line (`usage` plus an optional
+/// context window on the same message).
+pub(crate) fn claude_result_context_usage(value: &Value) -> Option<ContextUsage> {
+    if value.get("type").and_then(Value::as_str) != Some("result") {
+        return None;
+    }
+    let usage = value.get("usage")?;
+    let window = value
+        .get("model_context_window")
+        .and_then(Value::as_u64)
+        .or_else(|| value.get("modelContextWindow").and_then(Value::as_u64));
+    context_usage_from_values(usage, window)
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LocalSessionContext {
@@ -4055,6 +4105,7 @@ fn run_agent_stream_process(
                 return Ok(AgentStreamOutcome {
                     response: err_msg,
                     session_id,
+                    usage: extract_context_usage_from_output(agent, &output),
                 });
             }
         }
@@ -4079,7 +4130,24 @@ fn run_agent_stream_process(
     Ok(AgentStreamOutcome {
         response,
         session_id,
+        usage: extract_context_usage_from_output(agent, &output),
     })
+}
+
+/// The last usage report a CLI emitted for this turn. Only providers that
+/// state consumption in their stream are covered; the rest leave it `None`
+/// and the console honestly says the capacity was not reported.
+fn extract_context_usage_from_output(
+    agent: crate::domain::AgentType,
+    output: &str,
+) -> Option<ContextUsage> {
+    match agent {
+        crate::domain::AgentType::ClaudeCode => output.lines().rev().find_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            claude_result_context_usage(&value)
+        }),
+        _ => None,
+    }
 }
 
 fn extract_session_id_from_output(agent: crate::domain::AgentType, output: &str) -> Option<String> {
@@ -5296,6 +5364,39 @@ mod tests {
         assert_eq!(claude_context_window("claude-fable-5-1"), 1_000_000);
         assert_eq!(claude_context_window("custom-model[1m]"), 1_000_000);
         assert_eq!(claude_context_window("claude-3-7-sonnet"), 200_000);
+    }
+
+    #[test]
+    fn test_claude_result_reports_context_usage() {
+        // Cache reads and writes occupy the window like fresh input does.
+        let result = json!({
+            "type":"result",
+            "result":"done",
+            "usage":{"input_tokens":1000,"output_tokens":200,
+                     "cache_read_input_tokens":30000,"cache_creation_input_tokens":5000}
+        });
+        assert_eq!(
+            claude_result_context_usage(&result),
+            Some(ContextUsage { used: 36_000, window: None })
+        );
+
+        let with_window = json!({
+            "type":"result","usage":{"input_tokens":40_000},"model_context_window":200_000
+        });
+        assert_eq!(
+            claude_result_context_usage(&with_window),
+            Some(ContextUsage { used: 40_000, window: Some(200_000) })
+        );
+
+        // Nothing usable must stay absent rather than become a zero ring.
+        assert_eq!(
+            claude_result_context_usage(&json!({"type":"result","usage":{}})),
+            None
+        );
+        assert_eq!(
+            claude_result_context_usage(&json!({"type":"assistant","usage":{"input_tokens":5}})),
+            None
+        );
     }
 
     #[test]
