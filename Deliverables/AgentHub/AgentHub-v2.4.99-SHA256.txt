@@ -1,2 +1,0 @@
-02a019fc179c2e2f41c38595061b92b8b9a71678e9d19aea4e3bc3902ff6189b *AgentHub-v2.4.99-android-debug.apk
-47d25d0c851c935e0f47d776ea722d9796669f7c9fefd09058f096760af80be7 *AgentHub-Runner-v2.4.99-windows-x64.zip

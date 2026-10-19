@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.4.99] - 2026-10-19
+## [2.5.0] - 2026-10-19
 
 ### 内嵌控制台设置页化与开发热重载 (Console Settings Page & Dev Hot Reload)
 
@@ -14,7 +14,7 @@
   - 会话视图工具条上的“刷新”按钮补回 `id="refreshBtn"`，恢复手动探测时的 loading 状态反馈；
 - **开发构建热重载 (Hot Reload for Debug Builds)**：
   - `crates/runner/src/web_server.rs` 新增 `dev_assets()` / `asset_text()` / `assets_stamp()`：debug 构建直接读取 `resources/` 下的页面、样式与脚本（`cargo run` 即生效），release 构建与测试仍使用 `include_str!` 内嵌副本，测试断言与实际发版内容保持一致；
-  - `/dashboard.css`、`/dashboard.js` 在 dev 构建下以 `no-store` 返回，静态资源 URL 追加磁盘最新 mtime 作为版本号（`?v=2.4.99-<nanos>`），避免浏览器复用旧缓存；
+  - `/dashboard.css`、`/dashboard.js` 在 dev 构建下以 `no-store` 返回，静态资源 URL 追加磁盘最新 mtime 作为版本号（`?v=2.5.0-<nanos>`），避免浏览器复用旧缓存；
   - 新增长轮询端点 `GET /api/dev/wait?since=<stamp>`（最多约 20 秒），页面注入 `DEV_RELOAD_JS`，检测到 `resources/` 变更后自动 `location.reload()`；
   - `/api/dashboard` 返回的布局对象在 dev 构建下附加 `devAssets: true`，设置页“关于”分区据此显示“开发构建 · 已开启”状态；
 - **页面切换竞态修复 (Page Turn Race Fix)**：
@@ -22,6 +22,15 @@
   - 后台/隐藏窗口（`document.hidden`）以及 300ms 内 `transition.ready` 未就绪时改为直接切换 DOM，杜绝不可见窗口里翻页挂起导致设置按钮没反应；
 - **存储键补全**：`AppLayout.storage` 与 `app_layout_json` 补齐 `motion: agenthub_motion`，修复 `calmMotion()` 读到 `undefined` 键的问题；
 - **验证**：`cargo test --workspace` 245 项测试全部通过，`cargo clippy --workspace --all-targets` 无告警，浏览器实测设置页五个分区、搜索过滤、键盘快捷键、主题/动效/轮询切换与热重载刷新均正常。
+
+### 构建、测试与发版 (Build & Packaging)
+
+- 编译并打包 `AgentHub-Runner-v2.5.0-windows-x64.zip`（`cargo build --release -p agenthub-runner`，单可执行文件 + 连接向导）；
+- 编译并打包 `AgentHub-v2.5.0-android-debug.apk`（versionCode 100 / versionName 2.5.0，`./gradlew testDebugUnitTest assembleDebug` 通过）；
+- 计算生成 `AgentHub-v2.5.0-SHA256.txt` 校验和清单，按工程铁律删除同平台旧包 2.4.99 与 2.4.98，产物目录只保留最新一版；
+- 工作区版本同步递增：`Cargo.toml` 与 `Cargo.lock` 2.4.99 → 2.5.0，Android `versionCode` 99 → 100、`versionName` → 2.5.0，README 版本徽章与测试徽章（245）同步更新。
+
+## [2.4.99] - 2026-10-19
 
 ### 代码审查缺陷修复与并发稳定性加固 (Code Review Fixes & Concurrency Hardening)
 

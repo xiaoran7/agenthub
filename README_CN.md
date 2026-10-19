@@ -12,9 +12,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.4.99-0284c7.svg?style=flat-square" alt="Version" /></a>
+  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.5.0-0284c7.svg?style=flat-square" alt="Version" /></a>
   <a href="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml"><img src="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI Status" /></a>
-  <a href="https://github.com/xiaoran7/agenthub"><img src="https://img.shields.io/badge/tests-233%20passed-10b981.svg?style=flat-square" alt="Tests" /></a>
+  <a href="https://github.com/xiaoran7/agenthub"><img src="https://img.shields.io/badge/tests-245%20passed-10b981.svg?style=flat-square" alt="Tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b.svg?style=flat-square" alt="License" /></a>
   <a href="llms.txt"><img src="https://img.shields.io/badge/llms.txt-standardized-8b5cf6.svg?style=flat-square" alt="llms.txt" /></a>
   <img src="https://img.shields.io/badge/Rust-2024-f97316.svg?style=flat-square" alt="Rust 2024" />
