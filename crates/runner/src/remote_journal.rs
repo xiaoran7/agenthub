@@ -741,11 +741,8 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
         // consumption without stating the window.
         "thread/tokenUsage/updated" => {
             let usage = params.get("tokenUsage")?;
-            let positive = |value: Option<&Value>| {
-                value
-                    .and_then(Value::as_u64)
-                    .filter(|number| *number > 0)
-            };
+            let positive =
+                |value: Option<&Value>| value.and_then(Value::as_u64).filter(|number| *number > 0);
             let last = usage.get("last").or_else(|| usage.get("last_token_usage"));
             let used = positive(usage.get("used"))
                 .or_else(|| last.and_then(|last| positive(last.get("inputTokens"))))

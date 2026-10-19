@@ -952,8 +952,14 @@ mod tests {
         let events = normalize_acp_message(valid_usage, &mut prompts, &mut permissions, &mut turns);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["method"], "thread/tokenUsage/updated");
-        assert_eq!(events[0]["params"]["tokenUsage"]["last"]["inputTokens"], 15000);
-        assert_eq!(events[0]["params"]["tokenUsage"]["modelContextWindow"], 200000);
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["last"]["inputTokens"],
+            15000
+        );
+        assert_eq!(
+            events[0]["params"]["tokenUsage"]["modelContextWindow"],
+            200000
+        );
 
         // Size only without used tokens must not emit an invalid event with null last
         let size_only = json!({
@@ -967,7 +973,8 @@ mod tests {
                 }
             }
         });
-        let empty_events = normalize_acp_message(size_only, &mut prompts, &mut permissions, &mut turns);
+        let empty_events =
+            normalize_acp_message(size_only, &mut prompts, &mut permissions, &mut turns);
         assert_eq!(empty_events.len(), 0);
     }
 }

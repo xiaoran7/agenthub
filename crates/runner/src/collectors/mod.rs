@@ -162,7 +162,10 @@ pub struct ContextUsage {
 
 /// Reads context consumption out of a provider `usage` object. Cache reads and
 /// cache writes occupy the window just like fresh input, so all three count.
-pub(crate) fn context_usage_from_values(usage: &Value, window: Option<u64>) -> Option<ContextUsage> {
+pub(crate) fn context_usage_from_values(
+    usage: &Value,
+    window: Option<u64>,
+) -> Option<ContextUsage> {
     let input = usage_u64(usage, "input_tokens");
     let cache_read = usage_u64(usage, "cache_read_input_tokens");
     let cache_write = usage_u64(usage, "cache_creation_input_tokens");
@@ -196,7 +199,6 @@ pub(crate) fn claude_result_context_usage(value: &Value) -> Option<ContextUsage>
         .or_else(|| value.get("modelContextWindow").and_then(Value::as_u64));
     context_usage_from_values(usage, window)
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LocalSessionContext {
@@ -290,6 +292,10 @@ pub struct ClaudeTranscriptEntry {
     pub completion_tokens: u64,
     pub cache_read_tokens: u64,
     pub request_count: u64,
+    /// True when the transcript was written by Claude Desktop rather than the
+    /// Coding Assistant CLI. Both write to the same store; each line's
+    /// `entrypoint` is the only reliable discriminator.
+    pub desktop: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +309,9 @@ pub struct ClaudeRemoteSessionEntry {
     pub completion_tokens: u64,
     pub cache_read_tokens: u64,
     pub request_count: u64,
+    /// Written by Claude Desktop, not the Coding Assistant CLI.
+    #[serde(default)]
+    pub desktop: bool,
 }
 
 /// Enumerates Claude Code's documented local transcript store without invoking
@@ -1017,7 +1026,13 @@ fn read_claude_transcript_metadata(
     let mut prompt_tokens: u64 = 0;
     let mut completion_tokens: u64 = 0;
     let mut cache_read_tokens: u64 = 0;
+    // A reply is written once per content block, each line repeating the
+    // message's usage; counting lines would count blocks as requests, and
+    // summing every line would double the tokens. A message counts once, and
+    // its last line — the one with the final figures — stands for it.
+    let mut message_usage: HashMap<String, (u64, u64, u64)> = HashMap::new();
     let mut request_count: u64 = 0;
+    let mut desktop = false;
 
     // Scan all lines until EOF to accurately aggregate all assistant turns and token usage,
     // matching Magpie's comprehensive session accounting model.
@@ -1038,25 +1053,46 @@ fn read_claude_transcript_metadata(
         };
         if value.get("type").and_then(Value::as_str) == Some("assistant") {
             has_output = true;
-            request_count = request_count.saturating_add(1);
-            if model.is_none() {
-                model = value
-                    .pointer("/message/model")
-                    .or_else(|| value.get("model"))
-                    .and_then(Value::as_str)
-                    .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS));
+            if value
+                .get("entrypoint")
+                .and_then(Value::as_str)
+                .is_some_and(|e| e.starts_with("claude-desktop"))
+            {
+                desktop = true;
             }
+            let message_id = value
+                .pointer("/message/id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
             if let Some(usage) = value.pointer("/message/usage") {
                 let input = usage_u64(usage, "input_tokens");
                 let output = usage_u64(usage, "output_tokens");
                 let cache_read = usage_u64(usage, "cache_read_input_tokens");
                 let cache_write = usage_u64(usage, "cache_creation_input_tokens");
-                prompt_tokens = prompt_tokens
-                    .saturating_add(input)
-                    .saturating_add(cache_read)
-                    .saturating_add(cache_write);
-                completion_tokens = completion_tokens.saturating_add(output);
-                cache_read_tokens = cache_read_tokens.saturating_add(cache_read);
+                let figures = (
+                    input.saturating_add(cache_read).saturating_add(cache_write),
+                    output,
+                    cache_read,
+                );
+                let key = message_id
+                    .unwrap_or_else(|| format!("line-{}", request_count.saturating_add(1)));
+                if message_usage.insert(key, figures).is_none() {
+                    request_count = request_count.saturating_add(1);
+                }
+                if model.is_none() {
+                    model = value
+                        .pointer("/message/model")
+                        .or_else(|| value.get("model"))
+                        .and_then(Value::as_str)
+                        .filter(|m| !m.is_empty() && *m != "<synthetic>")
+                        .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS));
+                }
+            } else if let Some(id) = message_id {
+                // A block with no usage still belongs to a request.
+                if message_usage.insert(id, (0, 0, 0)).is_none() {
+                    request_count = request_count.saturating_add(1);
+                }
             }
         }
         if !has_output && is_assistant_output(&value) {
@@ -1094,6 +1130,11 @@ fn read_claude_transcript_metadata(
                 .map(str::to_owned)
         })
         .filter(|value| !value.trim().is_empty());
+    for (prompt, output, cache_read) in message_usage.values() {
+        prompt_tokens = prompt_tokens.saturating_add(*prompt);
+        completion_tokens = completion_tokens.saturating_add(*output);
+        cache_read_tokens = cache_read_tokens.saturating_add(*cache_read);
+    }
     Ok(session_id.map(|session_id| ClaudeTranscriptEntry {
         session_id,
         cwd: cwd.unwrap_or_default(),
@@ -1106,6 +1147,7 @@ fn read_claude_transcript_metadata(
         completion_tokens,
         cache_read_tokens,
         request_count,
+        desktop,
     }))
 }
 
@@ -1500,6 +1542,7 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
                     completion_tokens: entry.completion_tokens,
                     cache_read_tokens: entry.cache_read_tokens,
                     request_count: entry.request_count,
+                    desktop: entry.desktop,
                 });
             }
         }
@@ -5377,7 +5420,10 @@ mod tests {
         });
         assert_eq!(
             claude_result_context_usage(&result),
-            Some(ContextUsage { used: 36_000, window: None })
+            Some(ContextUsage {
+                used: 36_000,
+                window: None
+            })
         );
 
         let with_window = json!({
@@ -5385,7 +5431,10 @@ mod tests {
         });
         assert_eq!(
             claude_result_context_usage(&with_window),
-            Some(ContextUsage { used: 40_000, window: Some(200_000) })
+            Some(ContextUsage {
+                used: 40_000,
+                window: Some(200_000)
+            })
         );
 
         // Nothing usable must stay absent rather than become a zero ring.

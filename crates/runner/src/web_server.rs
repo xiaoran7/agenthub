@@ -243,6 +243,26 @@ fn handle_connection(
         return Ok(());
     }
 
+    // the vendor marks the usage page draws beside a model or an agent, taken
+    // verbatim from magpie's icon set (MIT, see console_icons.rs)
+    if let Some(icon) = crate::console_icons::find(path) {
+        let cache = if dev_assets() {
+            "no-store"
+        } else {
+            "public, max-age=31536000, immutable"
+        };
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            icon.mime,
+            icon.bytes,
+            false,
+            Some(cache),
+        )?;
+        return Ok(());
+    }
+
     if path == "/dashboard.css" {
         // the sheet carries no build stamp itself; the page asks for a versioned
         // URL, so a release can never pair a new page with an old sheet
@@ -403,6 +423,21 @@ impl ApiRequest<'_> {
             ("GET", "/api/dashboard") => {
                 let data = build_dashboard_summary(&handler, port);
                 send_json_response(stream, 200, &data)?;
+            }
+            // the usage page's per-request ledger: one record per model call,
+            // aggregated into the trend, the rankings, the heatmap and the
+            // request list. `period` is today | 7d | 30d | all.
+            ("GET", "/api/usage/ledger") => {
+                let period =
+                    crate::usage_ledger::Period::parse(query.get("period").map(String::as_str));
+                let limit = query
+                    .get("limit")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(200)
+                    .clamp(1, 1000);
+                let records = crate::usage_ledger::claude_records();
+                let digest = crate::usage_ledger::digest(&records, period, limit);
+                send_json_response(stream, 200, &digest)?;
             }
             ("POST", "/api/shutdown") => {
                 let resp = json!({
@@ -693,10 +728,10 @@ fn build_dashboard_summary(
 
     let mut total_sessions = 0;
     let mut claude_count = 0;
+    let mut claude_desktop_count = 0;
     let mut codex_count = 0;
-    let mut antigravity_count = 0;
     let mut grok_count = 0;
-    let mut zcode_count = 0;
+    let mut gemini_count = 0;
     let mut workspace_map: HashMap<String, usize> = HashMap::new();
     let mut discovered_sessions: Vec<serde_json::Value> = Vec::new();
 
@@ -729,25 +764,7 @@ fn build_dashboard_summary(
     }
 
     fn calc_cost(model_name: &str, prompt: u64, completion: u64, cache_read: u64) -> f64 {
-        let m = model_name.to_ascii_lowercase();
-        let (input_rate, output_rate, cache_read_rate) = if m.contains("opus") {
-            (15.0, 75.0, 1.5)
-        } else if m.contains("sonnet") || m.contains("fable") || m.contains("mythos") {
-            (3.0, 15.0, 0.3)
-        } else if m.contains("haiku") || m.contains("flash") || m.contains("mini") {
-            (0.25, 1.25, 0.025)
-        } else if m.contains("deepseek") {
-            (0.14, 0.28, 0.014)
-        } else if m.contains("codex") || m.contains("gpt-5") || m.contains("gpt-4") {
-            (2.5, 10.0, 1.25)
-        } else {
-            (3.0, 15.0, 0.3)
-        };
-        let regular_prompt = prompt.saturating_sub(cache_read);
-        (regular_prompt as f64 * input_rate
-            + completion as f64 * output_rate
-            + cache_read as f64 * cache_read_rate)
-            / 1_000_000.0
+        crate::usage_ledger::calc_cost(model_name, prompt, completion, cache_read)
     }
 
     let mut model_aggs: HashMap<String, ModelAgg> = HashMap::new();
@@ -848,8 +865,9 @@ fn build_dashboard_summary(
                 let (agent_id, agent_display_name) = match provider {
                     "claude_code" | "claude" => ("claude_code", "Claude Code"),
                     "codex" => ("codex", "Codex App-Server"),
-                    "antigravity" => ("antigravity", "Antigravity"),
-                    "grok_build" | "grok" => ("grok_build", "Grok Build"),
+                    "claude_desktop" => ("claude_desktop", "Claude Desktop"),
+                    "grok_build" | "grok" => ("grok_build", "Grok"),
+                    "gemini_cli" | "gemini" => ("gemini_cli", "Gemini CLI"),
                     "zcode" => ("zcode", "ZCode Agent"),
                     _ => ("other", "Other Agent"),
                 };
@@ -875,10 +893,13 @@ fn build_dashboard_summary(
 
                 match provider {
                     "claude_code" | "claude" => claude_count += 1,
+                    "claude_desktop" => claude_desktop_count += 1,
                     "codex" => codex_count += 1,
-                    "antigravity" => antigravity_count += 1,
                     "grok_build" | "grok" => grok_count += 1,
-                    "zcode" => zcode_count += 1,
+                    "gemini_cli" | "gemini" => gemini_count += 1,
+                    // antigravity, zcode, cursor and cline still have their
+                    // transcripts collected and listed under 会话, but they
+                    // are not part of the console's five-agent matrix
                     _ => {}
                 }
                 if let Some(ws) = c.get("workspace_path").and_then(serde_json::Value::as_str) {
@@ -1062,46 +1083,35 @@ fn build_dashboard_summary(
         "codex",
         &[r"AppData\Roaming\npm\codex.cmd", r".local\bin\codex"],
     );
-    let (antigravity_installed, antigravity_path) = check_agent_dir(".antigravity");
     let (grok_installed, grok_path) = check_agent_dir(".grok");
-    let (zcode_installed, zcode_path) = find_executable("zcode", &[]);
     let (gemini_installed, gemini_path) = find_executable(
         "gemini",
         &[r"AppData\Roaming\npm\gemini.cmd", r".local\bin\gemini"],
     );
-    let (cursor_installed, cursor_path) = find_executable("cursor", &[]);
-    let (cline_installed, cline_path) = check_agent_dir(".cline");
+    // Claude Desktop has no CLI to probe: its data folder is the evidence.
+    let (claude_desktop_installed, claude_desktop_path) =
+        check_agent_dir("AppData\\Local\\AIClaude");
 
     let mut active_agents_count = 0;
-    if claude_installed {
-        active_agents_count += 1;
-    }
-    if codex_installed {
-        active_agents_count += 1;
-    }
-    if antigravity_installed {
-        active_agents_count += 1;
-    }
-    if grok_installed {
-        active_agents_count += 1;
-    }
-    if zcode_installed {
-        active_agents_count += 1;
-    }
-    if gemini_installed {
-        active_agents_count += 1;
-    }
-    if cursor_installed {
-        active_agents_count += 1;
-    }
-    if cline_installed {
-        active_agents_count += 1;
+    for installed in [
+        claude_installed,
+        claude_desktop_installed,
+        codex_installed,
+        grok_installed,
+        gemini_installed,
+    ] {
+        if installed {
+            active_agents_count += 1;
+        }
     }
 
+    // The console's agent matrix is exactly the five official runtimes it
+    // shows. Coding Assistant and Claude Desktop are two different products
+    // that happen to share a transcript store, and are never folded together.
     let agents = json!([
         {
             "id": "claude_code",
-            "name": "Claude Code CLI",
+            "name": "Coding Assistant",
             "installed": claude_installed,
             "path": claude_path,
             "sessions_count": claude_count,
@@ -1110,8 +1120,18 @@ fn build_dashboard_summary(
             "description": "官方终端助手，支持 x-session-affinity 会话亲和性保护与 Prompt 缓存"
         },
         {
+            "id": "claude_desktop",
+            "name": "Claude Desktop",
+            "installed": claude_desktop_installed || claude_desktop_count > 0,
+            "path": claude_desktop_path,
+            "sessions_count": claude_desktop_count,
+            "command": "Claude",
+            "affinity": false,
+            "description": "Claude 桌面客户端的 Code / Cowork 会话，与 Coding Assistant 是两款独立产品"
+        },
+        {
             "id": "codex",
-            "name": "Codex App-Server",
+            "name": "Codex",
             "installed": codex_installed,
             "path": codex_path,
             "sessions_count": codex_count,
@@ -1120,64 +1140,24 @@ fn build_dashboard_summary(
             "description": "OpenAI Codex 智能代码辅助与工作区守护代理"
         },
         {
-            "id": "antigravity",
-            "name": "Antigravity",
-            "installed": antigravity_installed,
-            "path": antigravity_path,
-            "sessions_count": antigravity_count,
-            "command": "antigravity",
-            "affinity": false,
-            "description": "反重力代码推理引擎与头脑风暴运行时"
-        },
-        {
             "id": "grok_build",
-            "name": "Grok Build",
+            "name": "Grok",
             "installed": grok_installed,
             "path": grok_path,
             "sessions_count": grok_count,
-            "command": "grok-build",
+            "command": "grok",
             "affinity": false,
-            "description": "X.AI Grok 构建协同代理与会话记录器"
-        },
-        {
-            "id": "zcode",
-            "name": "ZCode Agent",
-            "installed": zcode_installed,
-            "path": zcode_path,
-            "sessions_count": zcode_count,
-            "command": "zcode",
-            "affinity": false,
-            "description": "系统级代码助手与快速原型生成器"
+            "description": "xAI Grok 构建协同代理与会话记录器"
         },
         {
             "id": "gemini_cli",
             "name": "Gemini CLI",
             "installed": gemini_installed,
             "path": gemini_path,
-            "sessions_count": 0,
+            "sessions_count": gemini_count,
             "command": "gemini",
             "affinity": false,
             "description": "Google Gemini 官方命令行编程助手"
-        },
-        {
-            "id": "cursor",
-            "name": "Cursor Agent",
-            "installed": cursor_installed,
-            "path": cursor_path,
-            "sessions_count": 0,
-            "command": "cursor",
-            "affinity": false,
-            "description": "Cursor 编辑器核心代码代理与终端执行引擎"
-        },
-        {
-            "id": "cline",
-            "name": "Cline",
-            "installed": cline_installed,
-            "path": cline_path,
-            "sessions_count": 0,
-            "command": "cline",
-            "affinity": false,
-            "description": "开源自主代码代理与工具编排助手"
         }
     ]);
 
@@ -1227,10 +1207,10 @@ fn build_dashboard_summary(
         "stats": {
             "total_sessions": total_sessions,
             "claude_sessions": claude_count,
+            "claude_desktop_sessions": claude_desktop_count,
             "codex_sessions": codex_count,
-            "antigravity_sessions": antigravity_count,
             "grok_sessions": grok_count,
-            "zcode_sessions": zcode_count,
+            "gemini_sessions": gemini_count,
             "active_agents": active_agents_count,
             "total_agents": total_agents_count,
             "total_models": models_json.len().max(gateway_models_count),
@@ -1601,7 +1581,10 @@ fn app_layout_json(port: u16) -> String {
             "closedGroups": "agenthub_closed_groups",
             "customGateway": "agenthub_custom_gateway", "sideNav": "agenthub_side_nav",
             "settingsTab": "agenthub_settings_tab", "pollMs": "agenthub_poll_ms",
-            "motion": "agenthub_motion"
+            "motion": "agenthub_motion",
+            "usageTab": "agenthub_usage_tab", "usagePeriod": "agenthub_usage_period",
+            "usageEvery": "agenthub_usage_every", "ledMetric": "agenthub_led_metric",
+            "ledSplit": "agenthub_led_split", "ledHeat": "agenthub_led_heat"
         }
     });
     if dev_assets() {
@@ -1747,13 +1730,88 @@ mod tests {
 
     #[test]
     fn dashboard_assets_include_capabilities_ecosystem() {
-        assert!(INDEX_HTML.contains("id=\"view-capabilities\""));
+        // the capability ecosystem is a Settings tab now, not a rail page:
+        // skills, MCP servers and hooks are configuration, read where the
+        // rest of the configuration is
+        assert!(!INDEX_HTML.contains("id=\"view-capabilities\""));
+        assert!(!INDEX_HTML.contains("data-view=\"capabilities\""));
+        assert!(INDEX_HTML.contains("id=\"setPage-capabilities\""));
+        assert!(INDEX_HTML.contains("id=\"capSubTabs\""));
         assert!(INDEX_HTML.contains("id=\"registerMcpModal\""));
-        assert!(INDEX_HTML.contains("data-view=\"capabilities\""));
-        assert!(DASHBOARD_CSS.contains(".cap-stats"));
         assert!(DASHBOARD_CSS.contains(".cap-card"));
         assert!(DASHBOARD_JS.contains("function renderCapabilities"));
         assert!(DASHBOARD_JS.contains("function submitRegisterMcp"));
+    }
+
+    #[test]
+    fn dashboard_navigation_keeps_four_pages_and_settings() {
+        // 会话 / 智能体 / 用量 / 工作区, and Settings behind the gear. The
+        // models and gateway pages are gone: the ledger is the only place a
+        // model is read, and routing is the upstream CPA's business
+        for view in ["sessions", "agents", "usage", "workspaces"] {
+            assert!(
+                INDEX_HTML.contains(&format!("data-view=\"{view}\"")),
+                "{view}"
+            );
+        }
+        for gone in ["models", "gateway", "capabilities"] {
+            assert!(
+                !INDEX_HTML.contains(&format!("data-view=\"{gone}\"")),
+                "{gone}"
+            );
+        }
+        assert!(INDEX_HTML.contains("id=\"setTab-capabilities\""));
+        assert!(INDEX_HTML.contains("id=\"setTab-gateway\""));
+        // the footer no longer repeats the address Settings already shows
+        assert!(!INDEX_HTML.contains("id=\"footPort\""));
+        assert!(!INDEX_HTML.contains("id=\"footEndpoint\""));
+    }
+
+    #[test]
+    fn dashboard_usage_page_reads_the_ledger() {
+        for id in [
+            "usageTabs",
+            "usagePeriods",
+            "usageEvery",
+            "usageKpi",
+            "ledChart",
+            "ledRank",
+            "ledHeat",
+            "ledWrap",
+            "usageSessions",
+            "usageContext",
+        ] {
+            assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "{id}");
+        }
+        for fn_name in [
+            "initUsage",
+            "loadUsage",
+            "drawLedgerTrend",
+            "drawLedgerHeat",
+            "renderLedgerRequests",
+            "exportLedgerCsv",
+        ] {
+            assert!(
+                DASHBOARD_JS.contains(&format!("function {fn_name}")),
+                "{fn_name}"
+            );
+        }
+        assert!(DASHBOARD_JS.contains("/api/usage/ledger?period="));
+        // the marks are the served files, never an inline redraw
+        assert!(DASHBOARD_JS.contains("/icons/${file}"));
+    }
+
+    #[test]
+    fn dashboard_agents_are_the_five_products() {
+        for id in [
+            "claude_code",
+            "claude_desktop",
+            "codex",
+            "grok_build",
+            "gemini_cli",
+        ] {
+            assert!(DASHBOARD_JS.contains(&format!("{id}:")), "{id}");
+        }
     }
 
     #[test]

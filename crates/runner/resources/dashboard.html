@@ -135,31 +135,18 @@
       <button data-view="agents" onclick="switchView('agents')" title="智能体 Agents">
         <span>智能体</span>
       </button>
-      <button data-view="capabilities" onclick="switchView('capabilities')" title="能力生态 Capabilities">
-        <span>能力</span>
-      </button>
       <button data-view="usage" onclick="switchView('usage')" title="用量 Usage">
         <span>用量</span>
-      </button>
-      <button data-view="models" onclick="switchView('models')" title="模型 Models">
-        <span>模型</span>
       </button>
       <button data-view="workspaces" onclick="switchView('workspaces')" title="工作区 Workspaces">
         <span>工作区</span>
       </button>
-      <button data-view="gateway" onclick="switchView('gateway')" title="网关 Gateway">
-        <span>网关</span>
-      </button>
     </nav>
     </div>
     <div class="side-foot">
-      <button class="side-gw off" id="headerPairBtn" onclick="openSettings('device')" title="云端 Web 控制台设备配对与绑定状态">
+      <button class="side-gw off" id="headerPairBtn" onclick="openSettings('gateway')" title="云端 Web 控制台设备配对与绑定状态">
         <i></i>
         <span id="headerPairText">未绑定 Web 控制台</span>
-      </button>
-      <button class="side-gw off" id="sideGwBtn" onclick="switchView('gateway')" title="上游网关探测状态与 Session Affinity 配置">
-        <i></i>
-        <span id="sideGwText">网关未探测</span>
       </button>
     </div>
     <div class="side-edge" id="sideEdge" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整侧栏宽度"></div>
@@ -199,7 +186,7 @@
         <span class="v" id="statTotalSessions">-</span>
         <span class="sub" id="statSessionsBreakdown" title="Coding Assistant · Codex · 其他来源">Coding Assistant - · Codex -</span>
       </div>
-      <button class="blk clickable cta" id="pairTile" onclick="openSettings('device')" title="点击关联云端 Web 控制台">
+      <button class="blk clickable cta" id="pairTile" onclick="openSettings('gateway')" title="点击关联云端 Web 控制台">
         <span class="k">云端 Web 绑定</span>
         <span class="v" id="statWebPairingStatus">未绑定</span>
         <span class="sub" id="statWebPairingSub">点击关联 Web 控制台</span>
@@ -249,215 +236,125 @@
     </div>
   </main>
 
-  <!-- View: capabilities (Skills · MCP Servers · Lifecycle Hooks) -->
-  <main class="view" id="view-capabilities" tabindex="-1">
-    <div class="tools">
-      <span class="label">智能体扩展生态矩阵 (Skills · MCP · Hooks)</span>
-      <span class="grow"></span>
-      <span class="tag ok" id="capStatusBadge">全域生态已纳管</span>
-      <button class="text action primary" onclick="openRegisterMcpModal()" id="btnRegisterMcp">
-        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
-        <span>注册 MCP 服务</span>
-      </button>
-      <button class="text action" onclick="syncCapabilities(event)" id="btnSyncCapabilities" title="全量扫描工作区与全局智能体扩展配置">
-        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg></span>
-        <span>重新探测同步</span>
-      </button>
-    </div>
-
-    <!-- 1. 4 组概览指标卡片 -->
-    <div class="stats cap-stats">
-      <div class="kpi cap-kpi">
-        <div class="cap-kpi-head">
-          <span class="cap-kpi-icon indigo">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19.439 7.85c0-1.571-1.286-2.85-2.87-2.85a2.86 2.86 0 0 0-2.849 2.85v.715H10.28v-.715A2.86 2.86 0 0 0 7.431 5C5.847 5 4.561 6.279 4.561 7.85c0 .75.293 1.433.774 1.944L4 11.144v8.295h16v-8.295l-1.335-1.35a2.81 2.81 0 0 0 .774-1.944z"/></svg>
-          </span>
-          <span class="cap-kpi-badge indigo" id="capKpiSkillsBadge">Skills</span>
-        </div>
-        <b id="capKpiSkills">0</b>
-        <span>已纳管技能 Skills</span>
-        <small id="capKpiSkillsSub">Prompt 技能与自动化工具包</small>
-      </div>
-
-      <div class="kpi cap-kpi">
-        <div class="cap-kpi-head">
-          <span class="cap-kpi-icon green">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/><circle cx="18" cy="10" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="6" cy="14" r="2"/></svg>
-          </span>
-          <span class="cap-kpi-badge green" id="capKpiMcpBadge">MCP Servers</span>
-        </div>
-        <b id="capKpiMcp">0</b>
-        <span>MCP 协议服务器</span>
-        <small id="capKpiMcpSub">Stdio 进程与 HTTP/SSE 协议端点</small>
-      </div>
-
-      <div class="kpi cap-kpi">
-        <div class="cap-kpi-head">
-          <span class="cap-kpi-icon amber">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-          </span>
-          <span class="cap-kpi-badge amber" id="capKpiHooksBadge">Hooks</span>
-        </div>
-        <b id="capKpiHooks">0</b>
-        <span>生命周期执行钩子</span>
-        <small id="capKpiHooksSub">工具前置拦截 · 启动 · 审批推送</small>
-      </div>
-
-      <div class="kpi cap-kpi">
-        <div class="cap-kpi-head">
-          <span class="cap-kpi-icon blue">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 15h.01M16 15h.01"/></svg>
-          </span>
-          <span class="cap-kpi-badge blue">Agents</span>
-        </div>
-        <b id="capKpiAgents">0</b>
-        <span>生态覆盖智能体</span>
-        <small id="capKpiAgentsSub">Claude Code · Codex 多端贯通</small>
-      </div>
-    </div>
-
-    <!-- 2. 分类切换与全局搜索条 -->
-    <div class="cap-filter-bar mt">
-      <div class="segs cap-segs" id="capSubTabs">
-        <button type="button" class="seg-btn on" data-tab="all" onclick="switchCapTab('all')">
-          <span>全部生态 (<span id="capCountAll">0</span>)</span>
-        </button>
-        <button type="button" class="seg-btn" data-tab="skills" onclick="switchCapTab('skills')">
-          <span>扩展技能 (<span id="capCountSkills">0</span>)</span>
-        </button>
-        <button type="button" class="seg-btn" data-tab="mcp" onclick="switchCapTab('mcp')">
-          <span>MCP 服务器 (<span id="capCountMcp">0</span>)</span>
-        </button>
-        <button type="button" class="seg-btn" data-tab="hooks" onclick="switchCapTab('hooks')">
-          <span>生命周期钩子 (<span id="capCountHooks">0</span>)</span>
-        </button>
-      </div>
-      <div class="cap-search-wrap">
-        <span class="cap-search-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        </span>
-        <input type="search" class="cap-search-input" id="capSearchInput" placeholder="搜索技能、MCP 服务器、拦截命令或智能体…" oninput="filterCapabilities()" />
-      </div>
-    </div>
-
-    <!-- 3. 动态列表与组件网格 -->
-    <!-- 3.1 技能模块 -->
-    <div class="list mt" id="capSkillsSection">
-      <div class="row-head">
-        <span class="ic-section indigo">🧩</span>
-        <span class="label">扩展技能库 (Skills Library)</span>
-        <span class="grow"></span>
-        <span class="tag" id="capSkillsSectionBadge">0 个技能</span>
-      </div>
-      <div class="cap-grid" id="capSkillsGrid">
-        <!-- dynamic skills cards -->
-      </div>
-    </div>
-
-    <!-- 3.2 MCP 服务器模块 -->
-    <div class="list mt" id="capMcpSection">
-      <div class="row-head">
-        <span class="ic-section green">🔌</span>
-        <span class="label">模型上下文协议服务器 (MCP Servers)</span>
-        <span class="grow"></span>
-        <span class="tag" id="capMcpSectionBadge">0 个服务</span>
-      </div>
-      <div class="cap-grid" id="capMcpGrid">
-        <!-- dynamic mcp cards -->
-      </div>
-    </div>
-
-    <!-- 3.3 钩子模块 -->
-    <div class="list mt" id="capHooksSection">
-      <div class="row-head">
-        <span class="ic-section amber">🪝</span>
-        <span class="label">生命周期自动化钩子 (Lifecycle Hooks)</span>
-        <span class="grow"></span>
-        <span class="tag" id="capHooksSectionBadge">0 个钩子</span>
-      </div>
-      <div class="cap-grid" id="capHooksGrid">
-        <!-- dynamic hooks cards -->
-      </div>
-    </div>
-  </main>
-
-  <!-- View 3: usage analytics -->
+  <!-- View 3: usage, the ledger's four readings of one period --------------
+       The overview's totals, trend and heatmap; the request table; the
+       sessions; and the context each session's last call was handed. The
+       controls at the head are magpie's: tabs for the reading, a period, a
+       refresh cadence, and on the request list a status, a search and a CSV. -->
   <main class="view" id="view-usage" tabindex="-1">
-    <div class="tools">
-      <span class="label">Token 消耗与成本分析</span>
+    <div class="usage-head">
+      <div class="segs" id="usageTabs" role="tablist" aria-label="用量视图">
+        <button type="button" class="opt on" role="tab" data-utab="overview">概览</button>
+        <button type="button" class="opt" role="tab" data-utab="requests">请求</button>
+        <button type="button" class="opt" role="tab" data-utab="sessions">会话</button>
+        <button type="button" class="opt" role="tab" data-utab="context">上下文</button>
+      </div>
+      <div class="segs" id="usagePeriods" aria-label="时间范围">
+        <button type="button" class="opt" data-period="today">今天</button>
+        <button type="button" class="opt on" data-period="7d">7 天</button>
+        <button type="button" class="opt" data-period="30d">30 天</button>
+        <button type="button" class="opt" data-period="all">全部</button>
+      </div>
       <span class="grow"></span>
-      <span class="tag" id="usagePeriodBadge">全部历史</span>
-    </div>
-    <div class="stats" id="usageKpiStats">
-      <div class="kpi">
-        <b id="kpiCost">—</b>
-        <span>预估花费 Cost</span>
-        <small id="kpiCostSub">按守护进程的模型费率测算</small>
-      </div>
-      <div class="kpi">
-        <b id="kpiTokens">0</b>
-        <span>总 Token 消耗</span>
-        <small id="kpiTokensSub">0 in · 0 out</small>
-      </div>
-      <div class="kpi">
-        <b id="kpiCache">0</b>
-        <span>缓存读取 Cache</span>
-        <small id="kpiCacheSub">命中率 0%</small>
-      </div>
-      <div class="kpi">
-        <b id="kpiCalls">0</b>
-        <span>总调用会话</span>
-        <small id="kpiCallsSub">跨多智能体累计会话</small>
-      </div>
-    </div>
-
-    <div class="list mt">
-      <div class="row-head">
-        <span class="label">模型用量分布</span>
-        <span class="tag" id="usageModelsCount">0 种模型</span>
-      </div>
-      <div id="usageModels">
-        <!-- skeleton loading placeholder matching user specification -->
-        <div class="skeleton-card" aria-busy="true" aria-label="正在加载模型用量…">
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 100%;"></div></div>
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 85%;"></div></div>
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 90%;"></div></div>
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 70%;"></div></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="list mt">
-      <div class="row-head">
-        <span class="label">智能体用量分布</span>
-        <span class="tag" id="usageAgentsCount">0 个智能体</span>
-      </div>
-      <div id="usageAgents">
-        <!-- skeleton loading placeholder matching user specification -->
-        <div class="skeleton-card" aria-busy="true" aria-label="正在加载智能体用量…">
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 100%;"></div></div>
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 80%;"></div></div>
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 88%;"></div></div>
-          <div class="skeleton-row"><div class="skeleton-bar" style="width: 65%;"></div></div>
-        </div>
-      </div>
-    </div>
-  </main>
-
-  <!-- View 4: the model catalog -->
-  <main class="view" id="view-models" tabindex="-1">
-    <div class="tools">
-      <span class="label">动态捕获模型可用状态与调用量排行</span>
-      <span class="grow"></span>
-      <span class="tag" id="modelsCountBadge">0 种模型</span>
-      <button class="text action" onclick="refreshModelsCatalog(event)" id="btnRefreshModels">
-        <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
-        <span>同步上游最新模型</span>
+      <button class="icon" id="usageReload" onclick="loadUsage(true)" title="立即刷新用量" aria-label="立即刷新用量">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></svg>
       </button>
+      <div class="segs" id="usageEvery" aria-label="自动刷新频率" title="自动刷新频率">
+        <button type="button" class="opt" data-ms="0">手动</button>
+        <button type="button" class="opt" data-ms="10000">10 秒</button>
+        <button type="button" class="opt on" data-ms="30000">30 秒</button>
+        <button type="button" class="opt" data-ms="60000">1 分钟</button>
+      </div>
     </div>
-    <div class="list" id="modelsGrid">
-      <!-- dynamic models list -->
-    </div>
+
+    <section class="usage-pane" id="usagePaneOverview">
+      <div class="led-strip" id="usageKpi">
+        <div class="blk">
+          <span class="k">请求</span>
+          <span class="v" id="ukCalls">—</span>
+          <span class="sub" id="ukCallsSub">—</span>
+        </div>
+        <div class="blk">
+          <span class="k">Token</span>
+          <span class="v" id="ukTokens">—</span>
+          <span class="sub" id="ukTokensSub">—</span>
+        </div>
+        <div class="blk">
+          <span class="k">预估花费</span>
+          <span class="v cost" id="ukCost">—</span>
+          <span class="sub" id="ukCostSub">按模型费率估算</span>
+        </div>
+        <div class="blk">
+          <span class="k">缓存命中</span>
+          <span class="v" id="ukCache">—</span>
+          <span class="sub" id="ukCacheSub">—</span>
+          <div class="meter"><i id="ukCacheMeter"></i></div>
+        </div>
+        <div class="blk">
+          <span class="k">输出速度</span>
+          <span class="v" id="ukSpeed">—</span>
+          <span class="sub" id="ukSpeedSub">—</span>
+        </div>
+      </div>
+
+      <section class="led-trend mt">
+        <div class="led-bar">
+          <div class="segs" id="ledMetric" aria-label="趋势指标"></div>
+          <span class="grow"></span>
+          <span class="led-split"><span class="led-by">分组</span><span class="segs" id="ledSplit" aria-label="趋势分组"></span></span>
+        </div>
+        <div class="led-body">
+          <div class="led-chart" id="ledChart"></div>
+          <div class="led-rank" id="ledRank"></div>
+        </div>
+      </section>
+
+      <section class="led-heat mt" id="ledHeat">
+        <div class="led-bar">
+          <div class="heat-title"><b>用量热力图</b><span>最近 53 周，每个方块是一天</span></div>
+          <span class="grow"></span>
+          <div class="segs" id="ledHeatMetric" aria-label="热力图指标"></div>
+        </div>
+        <div class="heat-scroll" id="ledHeatScroll"></div>
+        <div class="heat-foot"></div>
+        <div class="heat-tip" id="ledHeatTip" hidden></div>
+      </section>
+      <p class="usage-note" id="usageNote"></p>
+    </section>
+
+    <section class="usage-pane" id="usagePaneRequests" hidden>
+      <div class="tools">
+        <div class="segs" id="ledStatus" aria-label="请求状态">
+          <button type="button" class="opt on" data-status="">全部</button>
+          <button type="button" class="opt" data-status="failed">失败</button>
+          <button type="button" class="opt" data-status="retried">重试后成功</button>
+        </div>
+        <input class="inp" id="ledQ" type="search" placeholder="搜索模型、智能体、会话或目录…" autocomplete="off" spellcheck="false">
+        <span class="grow"></span>
+        <span class="tag" id="ledCount">0 条请求</span>
+        <button type="button" class="text action" onclick="exportLedgerCsv()" title="把当前筛选出的请求导出为 CSV">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/></svg></span>
+          <span>导出 CSV</span>
+        </button>
+      </div>
+      <div class="led-wrap" id="ledWrap">
+        <div class="led-none">正在读取用量…</div>
+      </div>
+    </section>
+
+    <section class="usage-pane" id="usagePaneSessions" hidden>
+      <p class="usage-note">本周期内有调用的会话，按最后活动排序；Token 与费用为该会话在本周期内的合计。</p>
+      <div class="led-wrap" id="usageSessions">
+        <div class="led-none">正在读取用量…</div>
+      </div>
+    </section>
+
+    <section class="usage-pane" id="usagePaneContext" hidden>
+      <p class="usage-note">每个会话最后一次成功调用交给模型的提示词大小（输入 + 缓存），也就是会话结束时上下文长到了多大。条形按本周期内最大的会话归一。</p>
+      <div class="led-wrap" id="usageContext">
+        <div class="led-none">正在读取用量…</div>
+      </div>
+    </section>
   </main>
 
   <!-- View 5: workspaces -->
@@ -472,226 +369,6 @@
     </div>
   </main>
 
-  <!-- View 6: gateway & session affinity -->
-  <main class="view" id="view-gateway" tabindex="-1">
-    <div class="tools">
-      <span class="label">智能体网关路由与会话亲和拓扑</span>
-      <span class="grow"></span>
-      <span class="tag ok" id="gatewayBadge">已激活 · 标准端点就绪</span>
-    </div>
-
-    <!-- 1. 网关概览指标看板 (4 组指标卡片) -->
-    <div class="stats gw-stats">
-      <div class="kpi gw-kpi">
-        <div class="gw-kpi-head">
-          <span class="gw-kpi-icon accent">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-          </span>
-          <span class="gw-kpi-badge ok" id="gwStatusPill">在线</span>
-        </div>
-        <b id="gwCardStatus">就绪</b>
-        <span>网关服务探测</span>
-        <small id="gwCardSource">自适应标准端点</small>
-      </div>
-
-      <div class="kpi gw-kpi">
-        <div class="gw-kpi-head">
-          <span class="gw-kpi-icon green">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          </span>
-          <span class="gw-kpi-badge green">锁定</span>
-        </div>
-        <b>已激活</b>
-        <span>会话亲和保护</span>
-        <small>固定单节点粘滞调度</small>
-      </div>
-
-      <div class="kpi gw-kpi">
-        <div class="gw-kpi-head">
-          <span class="gw-kpi-icon amber">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          </span>
-          <span class="gw-kpi-badge amber">90%+</span>
-        </div>
-        <b id="gwCacheHitRate">~90%</b>
-        <span>缓存命中预期</span>
-        <small>Prompt Cache 延迟降 70%</small>
-      </div>
-
-      <div class="kpi gw-kpi">
-        <div class="gw-kpi-head">
-          <span class="gw-kpi-icon blue">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </span>
-          <span class="gw-kpi-badge blue">标头</span>
-        </div>
-        <b class="mono" style="font-size: calc(var(--fs-body) + 0.5px);">x-session-affinity</b>
-        <span>亲和调度协议键</span>
-        <small>自动关联 Session 上下文</small>
-      </div>
-    </div>
-
-    <!-- 2. 会话亲和与缓存演进拓扑图示组件 (核心流程可视化卡片) -->
-    <div class="list mt">
-      <div class="row-head">
-        <span class="label">会话亲和 (Session Affinity) 路由拓扑与 Prompt Cache 演进机制</span>
-        <span class="grow"></span>
-        <span class="tag ok">高吞吐优化</span>
-      </div>
-      <div class="gw-topo-card">
-        <div class="topo-split">
-          <!-- Flow A: 无亲和打穿 -->
-          <div class="topo-flow bad">
-            <div class="topo-flow-head">
-              <span class="topo-dot bad"></span>
-              <b>无亲和随机调度 (打穿缓存)</b>
-              <span class="topo-tag bad">Cache Miss 高达 80%+</span>
-            </div>
-            <div class="topo-diagram">
-              <div class="topo-node agent">
-                <div class="t-title">Agent Client</div>
-                <div class="t-sub">连续多轮思考提问</div>
-              </div>
-              <div class="topo-arrows bad">
-                <div class="arrow-line"><span>Req 1 ➔</span></div>
-                <div class="arrow-line"><span>Req 2 ➔</span></div>
-                <div class="arrow-line"><span>Req 3 ➔</span></div>
-              </div>
-              <div class="topo-nodes-cluster">
-                <div class="node-box miss">Node A <i>(冷启动/写缓存)</i></div>
-                <div class="node-box miss">Node B <i>(未命中 ❌ 重建 KV)</i></div>
-                <div class="node-box miss">Node C <i>(未命中 ❌ 重建 KV)</i></div>
-              </div>
-            </div>
-            <div class="topo-summary bad">
-              <span>⚠️ 缺陷后果</span>：请求分散落入不同网关节点，服务端 Prompt Cache 无法复用，首字等待延迟成倍增加，Token 计费全额征收。
-            </div>
-          </div>
-
-          <!-- Flow B: 有亲和锁定 -->
-          <div class="topo-flow good">
-            <div class="topo-flow-head">
-              <span class="topo-dot good"></span>
-              <b>AgentHub 会话亲和粘滞 (锁定节点)</b>
-              <span class="topo-tag good">Cache Hit 90%+ ⚡</span>
-            </div>
-            <div class="topo-diagram">
-              <div class="topo-node agent good">
-                <div class="t-title">AgentHub 纳管智能体</div>
-                <div class="t-sub">透传 x-session-affinity</div>
-              </div>
-              <div class="topo-arrows good">
-                <div class="arrow-line"><span>Req 1, 2, 3... ➔</span></div>
-                <div class="arrow-badge">全量固定路由</div>
-              </div>
-              <div class="topo-nodes-cluster">
-                <div class="node-box hit">
-                  <div class="hit-title">Node A (已粘滞锁定)</div>
-                  <div class="hit-sub">⚡ 首次写入 ➔ 后续 100% 毫秒级复用</div>
-                </div>
-                <div class="node-box idle">Node B (负载均衡其他会话)</div>
-                <div class="node-box idle">Node C (负载均衡其他会话)</div>
-              </div>
-            </div>
-            <div class="topo-summary good">
-              <span>🚀 核心收益</span>：整个多轮对话稳定路由到同一物理计算节点，KV 缓存持续命中累进，流式响应提速 70%，Token 账单大幅缩减。
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 3. 参数快速复制与多环境代码切换器 -->
-    <div class="list mt">
-      <div class="row-head">
-        <span class="label">客户端多语言快速接入代码</span>
-        <span class="grow"></span>
-        <button class="text accent" onclick="copyCurrentSnippet()" id="btnCopySnippet">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;margin-right:4px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          <span id="copySnippetBtnText">复制当前配置</span>
-        </button>
-      </div>
-      <div class="gw-card">
-        <!-- 核心参数胶囊条 -->
-        <div class="gw-capsules">
-          <div class="capsule" onclick="copyValue('gwBaseUrl', '网关地址')">
-            <span class="c-label">网关 BASE URL</span>
-            <span class="c-val mono" id="gwBaseUrl">-</span>
-            <span class="c-copy" title="复制">📋</span>
-          </div>
-          <div class="capsule" onclick="copyValue('gwAffinityKey', '亲和标头')">
-            <span class="c-label">亲和 HEADER</span>
-            <span class="c-val mono" id="gwAffinityKey">x-session-affinity</span>
-            <span class="c-copy" title="复制">📋</span>
-          </div>
-          <div class="capsule" onclick="copyValue('gwSource', '探测来源')">
-            <span class="c-label">探测来源</span>
-            <span class="c-val" id="gwSource">-</span>
-            <span class="c-copy" title="复制">📋</span>
-          </div>
-        </div>
-
-        <!-- 语言环境选项卡 -->
-        <div class="gw-code-tabs">
-          <div class="segs" id="gwEnvTabs">
-            <button type="button" class="seg-btn on" data-env="bash" onclick="switchSnippetEnv('bash')"><span>Bash / Zsh (Linux & macOS)</span></button>
-            <button type="button" class="seg-btn" data-env="powershell" onclick="switchSnippetEnv('powershell')"><span>PowerShell (Windows)</span></button>
-            <button type="button" class="seg-btn" data-env="node" onclick="switchSnippetEnv('node')"><span>Node.js / TS</span></button>
-            <button type="button" class="seg-btn" data-env="python" onclick="switchSnippetEnv('python')"><span>Python (Anthropic SDK)</span></button>
-          </div>
-        </div>
-
-        <div class="snippet mt-s">
-          <pre id="gwCodeBlock"></pre>
-          <!-- hidden legacy elements kept for js compat -->
-          <pre id="envSnippet" style="display:none;"></pre>
-          <pre id="psSnippet" style="display:none;"></pre>
-          <pre id="nodeSnippet" style="display:none;"></pre>
-          <pre id="pySnippet" style="display:none;"></pre>
-        </div>
-      </div>
-    </div>
-
-    <!-- 4. 三大常见场景接入卡片 (组件卡片结合) -->
-    <div class="gw-scenarios-grid mt">
-      <div class="gw-scenario-card">
-        <div class="sc-head">
-          <span class="sc-icon">💻</span>
-          <div>
-            <b>Claude Code 官方 CLI</b>
-            <span>零修改透明生效</span>
-          </div>
-        </div>
-        <p>在终端启动 Claude Code 前导出 <code>ANTHROPIC_BASE_URL</code> 环境变量即可自动挂载会话亲和保护层。</p>
-        <div class="sc-cmd"><code>export ANTHROPIC_BASE_URL="http://127.0.0.1:4200"</code></div>
-      </div>
-
-      <div class="gw-scenario-card">
-        <div class="sc-head">
-          <span class="sc-icon">⚡</span>
-          <div>
-            <b>Codex / OpenCode</b>
-            <span>自定义请求头透传</span>
-          </div>
-        </div>
-        <p>在客户端网络设置或 <code>config.json</code> 中注入自定义标头 <code>x-session-affinity: &lt;session_id&gt;</code>，保障会话独立。</p>
-        <div class="sc-cmd"><code>"headers": { "x-session-affinity": "sess-xyz" }</code></div>
-      </div>
-
-      <div class="gw-scenario-card">
-        <div class="sc-head">
-          <span class="sc-icon">🤖</span>
-          <div>
-            <b>多智能体协同集群 (Subagents)</b>
-            <span>群组亲和树传递</span>
-          </div>
-        </div>
-        <p>子智能体派生时继承父会话的 Affinity Tag，所有 Agent 并发或流式步骤共享一个高命中 Prompt Cache。</p>
-        <div class="sc-cmd"><code>client.headers["x-session-affinity"] = rootSessionId</code></div>
-      </div>
-    </div>
-  </main>
-
   <!-- View: settings, the same page model as magpie's: a tab per part at the
        head of the page, the part's own rows under it, no sheet over the page -->
   <main class="view view-settings" id="view-settings" tabindex="-1">
@@ -699,8 +376,8 @@
       <div class="set-tabs" id="setTabs" role="tablist" aria-label="设置">
         <button type="button" role="tab" id="setTab-general" data-set="general" aria-controls="setPage-general" aria-selected="true">通用</button>
         <button type="button" role="tab" id="setTab-appearance" data-set="appearance" aria-controls="setPage-appearance" aria-selected="false">外观</button>
-        <button type="button" role="tab" id="setTab-device" data-set="device" aria-controls="setPage-device" aria-selected="false">设备与配对</button>
-        <button type="button" role="tab" id="setTab-gateway" data-set="gateway" aria-controls="setPage-gateway" aria-selected="false">网关</button>
+        <button type="button" role="tab" id="setTab-gateway" data-set="gateway" aria-controls="setPage-gateway" aria-selected="false">设备与网关</button>
+        <button type="button" role="tab" id="setTab-capabilities" data-set="capabilities" aria-controls="setPage-capabilities" aria-selected="false">能力生态</button>
         <button type="button" role="tab" id="setTab-about" data-set="about" aria-controls="setPage-about" aria-selected="false">关于</button>
       </div>
       <input class="inp set-q" id="setQ" type="search" placeholder="查找设置…" aria-label="查找设置">
@@ -768,7 +445,7 @@
       </div>
     </section>
 
-    <section class="set-page" id="setPage-device" role="tabpanel" aria-labelledby="setTab-device" hidden>
+    <section class="set-page" id="setPage-gateway" role="tabpanel" aria-labelledby="setTab-gateway" hidden>
       <div class="list prefs">
         <div class="row pref">
           <div class="who">
@@ -783,18 +460,19 @@
             <div class="sub mono" id="modalDeviceKey">-</div>
           </div>
         </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">绑定到云端 Web 控制台</div>
+            <div class="sub">本机主动出站，不需要在路由器上开端口</div>
+          </div>
+          <span class="tag" id="pairStateTag">未绑定</span>
+        </div>
         <div class="ok-box" id="pairedStatusBox" hidden>
           <b>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
             <span>已成功配对到云端 AgentHub</span>
           </b>
           <div class="sub" id="pairedGatewayInfo"></div>
-        </div>
-      </div>
-      <div class="list prefs mt">
-        <div class="row pref">
-          <div class="who"><div class="name">绑定到云端 Web 控制台</div><div class="sub">本机主动出站，不需要在路由器上开端口</div></div>
-          <span class="tag" id="pairStateTag">未绑定</span>
         </div>
         <form class="pref-form" id="pairForm" onsubmit="submitDevicePairing(event)">
           <label for="gatewayInput">网关地址</label>
@@ -809,16 +487,12 @@
           </div>
         </form>
       </div>
-    </section>
-
-    <section class="set-page" id="setPage-gateway" role="tabpanel" aria-labelledby="setTab-gateway" hidden>
-      <div class="list prefs">
+      <div class="list prefs mt">
         <div class="row pref">
           <div class="who">
             <div class="name">上游网关</div>
             <div class="sub" id="settingsGatewaySub">尚未探测</div>
           </div>
-          <button type="button" class="text action" onclick="switchView('gateway')">查看拓扑</button>
         </div>
         <div class="row pref">
           <div class="who"><div class="name">网关 BASE URL</div><div class="sub mono" id="settingsGatewayUrl">-</div></div>
@@ -831,22 +505,85 @@
         <div class="row pref">
           <div class="who">
             <div class="name">上游模型同步</div>
-            <div class="sub">从网关重新拉取一次可用模型清单</div>
+            <div class="sub">从网关重新拉取一次可用模型清单；路由与拓扑由上游 CPA 管理，本机只读取结果</div>
           </div>
           <button type="button" class="text action" onclick="refreshModelsCatalog(event)" id="setRefreshModels">
             <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg></span>
             <span>同步模型</span>
           </button>
         </div>
+      </div>
+    </section>
+
+    <section class="set-page" id="setPage-capabilities" role="tabpanel" aria-labelledby="setTab-capabilities" hidden>
+      <div class="list prefs">
         <div class="row pref">
           <div class="who">
-            <div class="name">能力生态同步</div>
-            <div class="sub">重新扫描技能、MCP 服务与生命周期钩子</div>
+            <div class="name">能力生态</div>
+            <div class="sub" id="capSummarySub">技能、MCP 服务与生命周期钩子，从本机各智能体的配置里读出</div>
           </div>
-          <button type="button" class="text action" onclick="syncCapabilities(event)" id="setSyncCapabilities">
+          <button type="button" class="text action" onclick="openRegisterMcpModal()" id="btnRegisterMcp">
+            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
+            <span>注册 MCP 服务</span>
+          </button>
+          <button type="button" class="text action" onclick="syncCapabilities(event)" id="btnSyncCapabilities" title="全量扫描工作区与全局智能体扩展配置">
+            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg></span>
             <span>重新探测</span>
           </button>
         </div>
+      </div>
+
+      <div class="cap-filter-bar mt">
+        <div class="segs cap-segs" id="capSubTabs">
+          <button type="button" class="seg-btn on" data-tab="all" onclick="switchCapTab('all')">
+            <span>全部 (<span id="capCountAll">0</span>)</span>
+          </button>
+          <button type="button" class="seg-btn" data-tab="skills" onclick="switchCapTab('skills')">
+            <span>技能 (<span id="capCountSkills">0</span>)</span>
+          </button>
+          <button type="button" class="seg-btn" data-tab="mcp" onclick="switchCapTab('mcp')">
+            <span>MCP (<span id="capCountMcp">0</span>)</span>
+          </button>
+          <button type="button" class="seg-btn" data-tab="hooks" onclick="switchCapTab('hooks')">
+            <span>钩子 (<span id="capCountHooks">0</span>)</span>
+          </button>
+        </div>
+        <div class="cap-search-wrap">
+          <span class="cap-search-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </span>
+          <input type="search" class="cap-search-input" id="capSearchInput" placeholder="搜索技能、MCP 服务器、拦截命令或智能体…" oninput="filterCapabilities()" />
+        </div>
+      </div>
+
+      <div class="list mt" id="capSkillsSection">
+        <div class="row-head">
+          <span class="ic-section indigo">🧩</span>
+          <span class="label">扩展技能库 (Skills Library)</span>
+          <span class="grow"></span>
+          <span class="tag" id="capSkillsSectionBadge">0 个技能</span>
+        </div>
+        <div class="cap-grid" id="capSkillsGrid"></div>
+      </div>
+
+      <div class="list mt" id="capMcpSection">
+        <div class="row-head">
+          <span class="ic-section green">🔌</span>
+          <span class="label">模型上下文协议服务器 (MCP Servers)</span>
+          <span class="grow"></span>
+          <span class="tag" id="capMcpSectionBadge">0 个服务</span>
+        </div>
+        <div class="cap-grid" id="capMcpGrid"></div>
+      </div>
+
+      <div class="list mt" id="capHooksSection">
+        <div class="row-head">
+          <span class="ic-section amber">🪝</span>
+          <span class="label">生命周期自动化钩子 (Lifecycle Hooks)</span>
+          <span class="grow"></span>
+          <span class="tag" id="capHooksSectionBadge">0 个钩子</span>
+        </div>
+        <div class="cap-grid" id="capHooksGrid"></div>
       </div>
     </section>
 
@@ -888,12 +625,6 @@
     </section>
   </main>
   </div>
-
-  <footer class="foot">
-    <span class="grow"></span>
-    <span class="status" id="footPort"></span>
-    <span class="status mono" id="footEndpoint"></span>
-  </footer>
 
   <!-- register MCP modal -->
   <div id="registerMcpModal" class="modal">

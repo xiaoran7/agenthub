@@ -53,11 +53,13 @@ AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。�
 `agenthub-runner web` / `daemon --web` 会由 daemon 自带一个内嵌控制台，默认 `http://127.0.0.1:4200`，由托盘进程以 Edge `--app=` 窗口打开：
 
 - 页面由三个静态资源组成——`crates/runner/resources/dashboard.html`（结构）、`dashboard.css`（样式）、`dashboard.js`（行为）——均经 `include_str!` 编入二进制，无外部依赖、无构建步骤。后两者以 `/dashboard.css?v=<版本>` 与 `/dashboard.js?v=<版本>` 提供，只有版本号与 `CARGO_PKG_VERSION` 一致时才回 `immutable` 缓存，因此页面与它运行的代码永远出自同一次构建；脚本拆成独立文件是为了让 `node --check` 与格式化工具能直接读取，不必解析页面；
-- 七个视图（会话、能力、智能体、用量、模型、工作区、网关）全部读取 `GET /api/dashboard` 的同一份聚合快照；
+- 四个视图（会话、智能体、用量、工作区）读取 `GET /api/dashboard` 的同一份聚合快照；设置（设备与网关、能力生态、外观、通用、关于）是第五个页面，不占导航行。模型与网关两页已删除：路由与拓扑归上游 CPA 管，本机只读结果；
+- **逐请求用量账本 (Per-request Usage Ledger)**：`crates/runner/src/usage_ledger.rs` 直接读 Coding Assistant / Claude Desktop 的本地会话记录（以 Claude 转录为主干，按 `message.id` + `requestId` 去重、同一消息多行以最后一行写入为准，Claude Desktop 按 `entrypoint` 前缀拆成独立智能体），`GET /api/usage/ledger?period=today|7d|30d|all` 返回一个周期的合计、按小时/天/周分桶的序列（含每个模型在每个桶的份额）、模型 / 模型·智能体 / 智能体三套排行、53 周热力图、会话行与最近请求；失败与重试按同一会话 10 分钟窗口配对（`retried` / `recovered`），回复速度按同一消息首尾时间戳测得的写入时长计算。页面只画账本给的数，不自行定价、不自行估算；
+- **厂商图标**：`crates/runner/src/console_icons.rs` 以 `include_bytes!` 内嵌 `crates/runner/resources/icons/` 下的 20 个标记，经 `/icons/<name>.svg|png` 提供；这些文件逐字节复制自 magpie 的 `internal/gui/assets/icons/`，按 magpie `internal/agent/icons.go` 的前缀表选图，页面不再手绘任何厂商 logo；
 - **能力生态纳管架构 (Federated Multi-Agent Library)**：参考上游开源项目 magpie 的统一资料库架构，集中纳管跨智能体（Claude Code、OpenAI Codex、工作区及 AgentHub 自定义）的 Skill（技能）、MCP Server（上下文协议服务）与 Hook（生命周期钩子）。支持多源聚合去重、动态筛选检索与交互式 MCP 协议服务注册；
 - 该页面的设计系统与布局原语逐条移植自上游开源项目 magpie（`https://github.com/yetone/magpie`，MIT License, Copyright (c) 2026 yetone）的 `internal/gui/assets/app.css`，AgentHub 只追加业务组合与数据绑定。上游归属、许可证与维护边界见 [README 开源引用与上游溯源](../README.md#开源引用与上游溯源)；
 - 控制台只是本机控制面的只读+命令薄壳，不持有 Session 状态机：写入动作（模型目录刷新、设备绑定、安全退出）仍经 daemon 的既有 HTTP 接口，语义与 Desktop IPC 一致；
-- **计价只有一个权威**：Token 到金额的换算只在 daemon 的 `calc_cost`（`crates/runner/src/web_server.rs`）发生，页面读取 `usage.models[].estimated_cost_usd` 展示，不再自带费率表；守护进程未定价的模型显示 `—`，不以本地估算冒充金额。
+- **计价只有一个权威**：Token 到金额的换算只在 daemon 的 `usage_ledger::calc_cost`（`crates/runner/src/usage_ledger.rs`）发生，按模型费率逐条计入 `LedgerRecord.cost`，页面只读 `cost` 字段，不自带费率表、不自行估算；守护进程未定价的模型显示 `—`，不以本地估算冒充金额。
 
 ### Desktop
 

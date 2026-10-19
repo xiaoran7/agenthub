@@ -2,11 +2,8 @@ let dashboardData = null;
 let lastRenderState = {
   agentsJson: "",
   workspacesJson: "",
-  modelsJson: "",
-  gatewayJson: "",
   deviceJson: "",
   sessionsJson: "",
-  usageJson: "",
   capabilitiesJson: "",
 };
 let consecutiveFailures = 0;
@@ -20,27 +17,21 @@ let sessionsRenderedAt = Date.now();
 const VIEW_LABELS = {
   sessions: "会话",
   agents: "智能体",
-  capabilities: "能力",
   usage: "用量",
-  models: "模型",
   workspaces: "工作区",
-  gateway: "网关",
   settings: "设置",
 };
 
 const VIEW_EN_LABELS = {
   sessions: "Sessions",
   agents: "Agents",
-  capabilities: "Capabilities",
   usage: "Usage",
-  models: "Models",
   workspaces: "Workspaces",
-  gateway: "Gateway",
   settings: "Settings",
 };
 
 // the settings page's own parts, one tab each, as magpie's Settings
-const SET_TABS = ["general", "appearance", "device", "gateway", "about"];
+const SET_TABS = ["general", "appearance", "gateway", "capabilities", "about"];
 
 function updateCrumb(viewId) {
   const title = document.getElementById("topCrumbTitle");
@@ -56,7 +47,7 @@ const PROVIDER_LABELS = {
   codex: "Codex",
   zcode: "ZCode",
   antigravity: "Antigravity",
-  grok_build: "Grok Build",
+  grok_build: "Grok",
   gemini: "Gemini CLI",
   gemini_cli: "Gemini CLI",
   cursor: "Cursor",
@@ -76,10 +67,6 @@ const STORE = Object.assign({}, LAYOUT.storage);
 const PORT = String(location.port || LAYOUT.webPort || 4200);
 // where the upstream gateway listens, when nothing on this machine says otherwise
 const GATEWAY_URL = `http://127.0.0.1:${LAYOUT.gatewayPort}`;
-const AFFINITY_HEADER = "x-session-affinity";
-// how often the console says it polls; the cadence itself is the reader's
-// (Settings › 自动探测间隔) or AppLayout's default
-const POLL_HINT = `每 ${Math.round((LAYOUT.dashboardPollMs || 4000) / 1000)} 秒自动探测一次`;
 const TOAST_MS = { ok: 2400, err: 4200 };
 
 // whether the reader asked for less motion — in the system, or in the
@@ -114,14 +101,10 @@ async function init() {
   layoutNav();
   initSideEdge();
   initTheme();
-  const endpoint = document.getElementById("footEndpoint");
-  if (endpoint)
-    endpoint.textContent = `${location.hostname || "127.0.0.1"}:${PORT}`;
-  const footPort = document.getElementById("footPort");
-  if (footPort) footPort.textContent = `端口 ${PORT}`;
   const savedView = localStorage.getItem(STORE.view);
   switchView(VIEW_LABELS[savedView] ? savedView : "sessions", true);
   initSettingsPage();
+  initUsage();
   // the first probe can land while the daemon is still scanning its
   // transcripts; ask again before telling anyone there are no sessions
   const ok = await refreshDashboard();
@@ -543,6 +526,9 @@ function switchView(viewId, silent) {
     scaleRailHl(!silent);
     // the settings page's own state is drawn as it comes into view
     if (viewId === "settings") renderSettings();
+    // the usage page's charts need a laid-out card to measure: a page drawn
+    // while hidden has no width, so the digest is drawn as it comes into view
+    if (viewId === "usage") drawUsage();
   };
   // a turn only draws when the window is painting frames: a tucked-away
   // console (or one in a background tab) would hold the switch until it is
@@ -673,22 +659,6 @@ async function refreshDashboard(manual) {
         lastRenderState.workspacesJson = wsStr;
       }
 
-      const modelsStr = JSON.stringify(dashboardData.models || []);
-      if (modelsStr !== lastRenderState.modelsJson || sessionsChanged) {
-        renderModels(dashboardData.models);
-        lastRenderState.modelsJson = modelsStr;
-      }
-
-      const usageStr = JSON.stringify(dashboardData.usage || {});
-      if (usageStr !== lastRenderState.usageJson || sessionsChanged) {
-        renderUsageAnalytics(
-          dashboardData.usage,
-          sessions,
-          dashboardData.stats,
-        );
-        lastRenderState.usageJson = usageStr;
-      }
-
       if (sessionsChanged) {
         renderSessions(sessions);
       }
@@ -702,12 +672,6 @@ async function refreshDashboard(manual) {
       if (lastGoodSessions.length === 0) {
         renderSessions([], settled ? "empty" : "pending");
       }
-    }
-
-    const gatewayStr = JSON.stringify(dashboardData.gateway || {});
-    if (gatewayStr !== lastRenderState.gatewayJson) {
-      renderGateway(dashboardData.gateway);
-      lastRenderState.gatewayJson = gatewayStr;
     }
 
     const capStr = JSON.stringify(dashboardData.capabilities || {});
@@ -784,7 +748,7 @@ function renderStats(stats, gateway) {
   const totalSessions = stats.total_sessions || 0;
   countTo(document.getElementById("statTotalSessions"), totalSessions);
   const breakdown = document.getElementById("statSessionsBreakdown");
-  breakdown.textContent = `Coding Assistant ${stats.claude_sessions || 0} · Codex ${stats.codex_sessions || 0} · 其他 ${(stats.antigravity_sessions || 0) + (stats.grok_sessions || 0) + (stats.zcode_sessions || 0)}`;
+    breakdown.textContent = `Coding Assistant ${stats.claude_sessions || 0} · Claude Desktop ${stats.claude_desktop_sessions || 0} · Codex ${stats.codex_sessions || 0} · Grok ${stats.grok_sessions || 0} · Gemini ${stats.gemini_sessions || 0}`;
   breakdown.title = breakdown.textContent;
 
   countTo(document.getElementById("statTotalModels"), stats.total_models || 0);
@@ -811,55 +775,69 @@ function renderStats(stats, gateway) {
   }
 }
 
+// The vendor marks are served from /icons/: the files magpie ships
+// (internal/gui/assets/icons, MIT) copied verbatim, never redrawn here. A
+// model the family table does not name gets a neutral plate rather than a
+// made-up logo, which is what made the old inline marks look wrong.
+const AGENT_ICONS = {
+  claude_code: "claudecode-color",
+  claude_desktop: "claude-color",
+  claude: "claude-color",
+  codex: "codex-color",
+  grok_build: "xai",
+  grok: "xai",
+  gemini_cli: "geminicli-color",
+  gemini: "gemini-color",
+  antigravity: "antigravity-color",
+  zcode: "zcode.png",
+};
+
+// magpie's family table (internal/agent/icons.go): a model id's prefix names
+// its vendor's mark, first match wins.
+const MODEL_FAMILIES = [
+  ["claude", "claude-color"],
+  ["gpt", "openai"], ["o1", "openai"], ["o3", "openai"], ["o4", "openai"], ["codex", "openai"],
+  ["gemini", "gemini-color"], ["gemma", "gemini-color"],
+  ["deepseek", "deepseek-color"],
+  ["grok", "xai"],
+  ["kimi", "kimi"], ["moonshot", "kimi"],
+  ["glm", "zhipu-color"], ["chatglm", "chatglm-color"],
+  ["qwen", "qwen-color"], ["qwq", "qwen-color"],
+  ["mistral", "mistral-color"], ["codestral", "mistral-color"], ["devstral", "mistral-color"], ["magistral", "mistral-color"],
+  ["minimax", "minimax-color"],
+  ["mimo", "mimocode"], ["xiaomi", "mimocode"],
+  ["step", "stepfun-color"],
+];
+
+// marks drawn with `currentColor`: as an <img> they paint black, so the dark
+// theme inverts them (dashboard.css img.mark.mono)
+const MONO_MARKS = new Set(["openai", "grok", "xai", "kimi", "moonshot", "mimocode"]);
+
+function modelIconName(name) {
+  let id = String(name || "").toLowerCase().trim();
+  // "vendor/model" on a relay: the model's own name decides
+  const slash = id.lastIndexOf("/");
+  if (slash >= 0) id = id.slice(slash + 1);
+  const hit = MODEL_FAMILIES.find(([prefix]) => id.startsWith(prefix));
+  return hit ? hit[1] : "";
+}
+
+function iconMark(name, size, alt) {
+  if (!name) {
+    return `<span class="mark none" style="width:${size}px;height:${size}px" aria-hidden="true"></span>`;
+  }
+  const file = name.endsWith(".png") ? name : `${name}.svg`;
+  const mono = MONO_MARKS.has(name.replace(/\.svg$/, "")) ? " mono" : "";
+  return `<img class="mark${mono}" src="/icons/${file}" width="${size}" height="${size}" alt="${escapeHtml(alt || "")}" loading="lazy">`;
+}
+
 function getAgentIcon(id, size = 18) {
-  const k = String(id || "")
-    .toLowerCase()
-    .trim();
-  // Claude Code / Claude Desktop: the Claude mark, which stays legible at 18px
-  if (
-    k === "claude_code" ||
-    k === "claude" ||
-    k.includes("claude-code") ||
-    k.includes("claudecode") ||
-    k.includes("claude_desktop") ||
-    k.includes("desktop")
-  ) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Claude</title><path d="M9.6 3.2 11 8.6l-4.4-3.3-1.2 1.7 4.7 3.1-5.5 1.3.5 2 5.4-1.9-3.4 4.5 1.7 1.2 3.2-4.7 1.4 5.4 2-.5-1.9-5.4 4.6 3.4 1.2-1.7-4.8-3.2 5.5-1.3-.5-2-5.5 1.9 3.5-4.6-1.7-1.2L12.9 10 11.6 4.6l-2 .5z" fill="#D97757"/></svg>`;
-  }
-  // Codex
-  if (k.includes("codex")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Codex</title><path d="M19.503 0H4.496A4.496 4.496 0 000 4.496v15.007A4.496 4.496 0 004.496 24h15.007A4.496 4.496 0 0024 19.503V4.496A4.496 4.496 0 0019.503 0z" fill="#3941FF"/><path d="M9.064 3.344a4.578 4.578 0 012.285-.312c1 .115 1.891.54 2.673 1.275.01.01.024.017.037.021a.09.09 0 00.043 0 4.55 4.55 0 013.046.275l.047.022.116.057a4.581 4.581 0 012.188 2.399c.209.51.313 1.041.315 1.595a4.24 4.24 0 01-.134 1.223.123.123 0 00.03.115c.594.607.988 1.33 1.183 2.17.289 1.425-.007 2.71-.887 3.854l-.136.166a4.548 4.548 0 01-2.201 1.388.123.123 0 00-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838-1.187-.006-2.239-.44-3.157-1.302a.107.107 0 00-.105-.024c-.388.125-.78.143-1.204.138a4.441 4.441 0 01-1.945-.466 4.544 4.544 0 01-1.61-1.335c-.152-.202-.303-.392-.414-.617a5.81 5.81 0 01-.37-.961 4.582 4.582 0 01-.014-2.298.124.124 0 00.006-.056.085.085 0 00-.027-.048 4.467 4.467 0 01-1.034-1.651 3.896 3.896 0 01-.251-1.192 5.189 5.189 0 01.141-1.6c.337-1.112.982-1.985 1.933-2.618.212-.141.413-.251.601-.33.215-.089.43-.164.646-.227a.098.098 0 00.065-.066 4.51 4.51 0 01.829-1.615 4.535 4.535 0 011.837-1.388zm3.482 10.565a.637.637 0 000 1.272h3.636a.637.637 0 100-1.272h-3.636zM8.462 9.23a.637.637 0 00-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 101.095.649l1.454-2.455a.636.636 0 00.005-.64L8.462 9.23z" fill="#FFFFFF"/></svg>`;
-  }
-  // ZCode (dark badge with a white Z)
-  if (k.includes("zcode") || k.startsWith("sess_")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>ZCode</title><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M6.2 6.5h11.6v2.6l-6.8 6.5h6.8v2.6H6.2v-2.6l6.8-6.5H6.2V6.5z" fill="#ffffff"/></svg>`;
-  }
-  // Gemini CLI
-  if (k.includes("gemini")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" fill="none"><title>Gemini CLI</title><defs><radialGradient id="gemini-sparkle-agent-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#paint0_radial_gemini_agent_${size})"/><defs><radialGradient id="paint0_radial_gemini_agent_${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs></svg>`;
-  }
-  // Grok
-  if (k.includes("grok")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Grok</title><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" fill="#111113"/></svg>`;
-  }
-  // Antigravity
-  if (k.includes("antigravity")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Antigravity</title><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z" fill="#00B95C"/><path d="M15.269 7.747c1.058 4.557 5.691 7.374 10.348 6.293 4.657-1.082 7.575-5.653 6.516-10.21-1.058-4.556-5.691-7.374-10.348-6.292-4.657 1.082-7.575 5.653-6.516 10.21z" fill="#FC413D"/><path d="M9.932 27.617c1.04 4.482 5.384 7.303 9.7 6.3 4.316-1.002 6.971-5.448 5.93-9.93-1.04-4.483-5.384-7.304-9.7-6.301-4.316 1.002-6.971 5.448-5.93 9.93z" fill="#3186FF"/><path d="M2.572-8.185C.392-3.329 2.778 2.472 7.9 4.771c5.122 2.3 11.042.227 13.222-4.63 2.18-4.855-.205-10.656-5.327-12.955-5.122-2.3-11.042-.227-13.222 4.63z" fill="#FBBC04"/></svg>`;
-  }
-  // Cursor
-  if (k.includes("cursor")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Cursor</title><path d="M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z" fill="#000000"/></svg>`;
-  }
-  // Cline
-  if (k.includes("cline")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>Cline</title><path d="M17.035 3.991c2.75 0 4.98 2.24 4.98 5.003v1.667l1.45 2.896a1.01 1.01 0 01-.002.909l-1.448 2.864v1.668c0 2.762-2.23 5.002-4.98 5.002H7.074c-2.751 0-4.98-2.24-4.98-5.002V17.33l-1.48-2.855a1.01 1.01 0 01-.003-.927l1.482-2.887V8.994c0-2.763 2.23-5.003 4.98-5.003h9.962zM8.265 9.6a2.274 2.274 0 00-2.274 2.274v4.042a2.274 2.274 0 004.547 0v-4.042A2.274 2.274 0 008.265 9.6zm7.326 0a2.274 2.274 0 00-2.274 2.274v4.042a2.274 2.274 0 104.548 0v-4.042A2.274 2.274 0 0015.59 9.6z" fill="#0EA5E9"/><path d="M12.054 5.558a2.779 2.779 0 100-5.558 2.779 2.779 0 000 5.558z" fill="#0EA5E9"/></svg>`;
-  }
-  // OpenCode
-  if (k.includes("opencode")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><title>OpenCode</title><path d="M16 6H8v12h8V6zm4 16H4V2h16v20z" fill="#10A37F"/></svg>`;
-  }
-  // Default neutral terminal badge
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h0M16 16h0"/></svg>`;
+  const key = String(id || "").toLowerCase().trim();
+  return iconMark(AGENT_ICONS[key] || "", size);
+}
+
+function getModelIcon(name, size = 18) {
+  return iconMark(modelIconName(name), size, name);
 }
 
 function renderAgents(agents) {
@@ -1198,56 +1176,6 @@ function fmtN(n, formatUnitTag = false) {
   return `${val}${unit}`;
 }
 
-function getModelIcon(name, size = 18) {
-  const k = String(name || "")
-    .toLowerCase()
-    .trim();
-  if (
-    k.includes("claude") ||
-    k.includes("sonnet") ||
-    k.includes("opus") ||
-    k.includes("haiku") ||
-    k.includes("fable") ||
-    k.includes("mythos")
-  ) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#FAF3EF"/><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill="#D97757" fill-rule="nonzero"/></svg>`;
-  }
-  if (
-    k.includes("gpt") ||
-    k.includes("codex") ||
-    k.includes("o1") ||
-    k.includes("o3") ||
-    k.includes("o4")
-  ) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#3941FF"/><circle cx="12" cy="12" r="5" fill="#FFFFFF"/></svg>`;
-  }
-  if (k.includes("deepseek")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#0066FF"/><path d="M6 14c2-4 6-6 10-4-3 5-7 6-10 4z" fill="#FFFFFF"/></svg>`;
-  }
-  if (k.includes("gemini")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 28 28" fill="none"><defs><radialGradient id="m-gemini-sparkle-${size}" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(2.77876 11.3795) rotate(18.6832) scale(29.8025 238.737)"><stop offset="0.0671246" stop-color="#9168C0"/><stop offset="0.342551" stop-color="#5684D1"/><stop offset="0.672076" stop-color="#1BA1E3"/></radialGradient></defs><path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="url(#m-gemini-sparkle-${size})"/></svg>`;
-  }
-  if (k.includes("qwen")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#615CED"/><path d="M12 5.5l5.5 3.5v6l-5.5 3.5L6.5 15V9L12 5.5z" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/></svg>`;
-  }
-  if (k.includes("minimax") || k.includes("abab")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#FF4D4F"/><path d="M6 15V9l4 4 4-4v6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  }
-  if (k.includes("glm") || k.includes("zhipu")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#0F62FE"/><circle cx="12" cy="12" r="5" stroke="#FFFFFF" stroke-width="2.2"/><circle cx="12" cy="12" r="1.8" fill="#FFFFFF"/></svg>`;
-  }
-  if (k.includes("grok")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#111113"/><path d="M7 17l10-10M17 17L7 7" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/></svg>`;
-  }
-  if (k.includes("step")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#2563EB"/><path d="M6 18h4v-4h4v-4h4V6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  }
-  if (k.includes("stealth") || k.includes("bunny")) {
-    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4.5" fill="#7C3AED"/><path d="M12 4l3 6-3 4-3-4 3-6zm0 10l4 6H8l4-6z" fill="#FFFFFF"/></svg>`;
-  }
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>`;
-}
-
 function fmtCostUsd(cost) {
   if (cost >= 100) return "≈$" + Math.round(cost);
   return "≈$" + Number(cost).toFixed(2);
@@ -1266,443 +1194,6 @@ function costCell(cost) {
 // page reads those figures back and never derives one of its own, so the
 // 模型 and 用量 views cannot report two different numbers for one model.
 // A model the daemon has not priced reads as a dash, not a local guess.
-function backendModelCosts() {
-  const models =
-    (dashboardData && dashboardData.usage && dashboardData.usage.models) || [];
-  const map = {};
-  models.forEach((m) => {
-    if (!m || !m.name) return;
-    // keep "no price" distinguishable from "priced at zero": only a real
-    // number goes into the map
-    const cost = m.estimated_cost_usd;
-    if (cost === null || cost === undefined) return;
-    const n = Number(cost);
-    if (Number.isFinite(n)) map[String(m.name).toLowerCase()] = n;
-  });
-  return map;
-}
-
-function renderUsageAnalytics(usage, sessions, stats) {
-  let costUsd = null; // null until the daemon's own pricing arrives
-  let totalTokens = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheRead = 0;
-  let cacheHitRate = 0;
-  let calls = 0;
-  let modelsList = [];
-  let agentsList = [];
-
-  if (
-    usage &&
-    typeof usage === "object" &&
-    (usage.total_tokens ||
-      usage.calls ||
-      (usage.models && usage.models.length > 0))
-  ) {
-    // Authoritative backend aggregated metrics. A missing or non-numeric cost
-    // stays null so the tile can tell "not priced" from "priced at zero".
-    const rawCost = usage.cost_usd;
-    costUsd =
-      rawCost === null || rawCost === undefined
-        ? null
-        : Number.isFinite(Number(rawCost))
-          ? Number(rawCost)
-          : null;
-    totalTokens = Number(usage.total_tokens) || 0;
-    inputTokens = Number(usage.input) || 0;
-    outputTokens = Number(usage.output) || 0;
-    cacheRead = Number(usage.cache_read) || 0;
-    cacheHitRate = Number(usage.cache_hit_rate_pct) || 0;
-    calls = Number(usage.calls) || (sessions ? sessions.length : 0);
-    modelsList = Array.isArray(usage.models) ? usage.models : [];
-    agentsList = Array.isArray(usage.agents) ? usage.agents : [];
-  } else {
-    // Robust client-side fallback aggregation. Token counts can be summed
-    // here; money cannot — pricing lives in the daemon, so these rows carry
-    // no cost and the renderer shows a dash instead of a made-up figure.
-    const modelMap = {};
-    const agentMap = {};
-    (sessions || []).forEach((s) => {
-      const pt = Number(s.prompt_tokens) || 0;
-      const ct = Number(s.completion_tokens) || 0;
-      const tt = Number(s.total_tokens) || pt + ct;
-      const cr = Number(s.cache_read_tokens) || 0;
-      const reqCount = Number(s.request_count || s.calls) || 1;
-      inputTokens += pt;
-      outputTokens += ct;
-      totalTokens += tt;
-      cacheRead += cr;
-      calls += reqCount;
-
-      let m = (s.model || s.model_name || "").trim() || "default";
-      if (!modelMap[m])
-        modelMap[m] = {
-          name: m,
-          calls: 0,
-          total_tokens: 0,
-          prompt_tokens: 0,
-          cache_read_tokens: 0,
-        };
-      modelMap[m].calls += reqCount;
-      modelMap[m].total_tokens += tt;
-      modelMap[m].prompt_tokens += pt;
-      modelMap[m].cache_read_tokens += cr;
-
-      let a = (s.provider || s.agent_name || "agent").trim();
-      if (!agentMap[a])
-        agentMap[a] = {
-          id: a,
-          name: a,
-          calls: 0,
-          total_tokens: 0,
-          prompt_tokens: 0,
-          cache_read_tokens: 0,
-        };
-      agentMap[a].calls += reqCount;
-      agentMap[a].total_tokens += tt;
-      agentMap[a].prompt_tokens += pt;
-      agentMap[a].cache_read_tokens += cr;
-    });
-
-    if (inputTokens > 0) {
-      cacheHitRate = Math.min(100, Math.round((cacheRead / inputTokens) * 100));
-    }
-
-    const totalAll = Math.max(1, totalTokens);
-    modelsList = Object.values(modelMap).map((m) => {
-      const hr =
-        m.prompt_tokens > 0
-          ? Math.min(
-              100,
-              Math.round((m.cache_read_tokens / m.prompt_tokens) * 100),
-            )
-          : 0;
-      return {
-        name: m.name,
-        calls: m.calls,
-        total_tokens: m.total_tokens,
-        share_pct: Math.min(100, Math.round((m.total_tokens / totalAll) * 100)),
-        cache_hit_rate_pct: hr,
-      };
-    });
-    modelsList.sort((a, b) => b.total_tokens - a.total_tokens);
-
-    agentsList = Object.values(agentMap).map((a) => {
-      const hr =
-        a.prompt_tokens > 0
-          ? Math.min(
-              100,
-              Math.round((a.cache_read_tokens / a.prompt_tokens) * 100),
-            )
-          : 0;
-      return {
-        id: a.id,
-        name: a.name,
-        calls: a.calls,
-        total_tokens: a.total_tokens,
-        share_pct: Math.min(100, Math.round((a.total_tokens / totalAll) * 100)),
-        cache_hit_rate_pct: hr,
-      };
-    });
-    agentsList.sort((a, b) => b.total_tokens - a.total_tokens);
-  }
-
-  // Update the 4 KPI tiles
-  const costEl = document.getElementById("kpiCost");
-  const tokensEl = document.getElementById("kpiTokens");
-  const tokensSubEl = document.getElementById("kpiTokensSub");
-  const cacheEl = document.getElementById("kpiCache");
-  const cacheSubEl = document.getElementById("kpiCacheSub");
-  const callsEl = document.getElementById("kpiCalls");
-  const callsSubEl = document.getElementById("kpiCallsSub");
-
-  // the figure is the daemon's; when the fallback path ran there is none,
-  // and the tile says so rather than showing a locally invented total
-  if (costEl)
-    costEl.textContent = costUsd === null ? "—" : `≈$${costUsd.toFixed(2)}`;
-  if (tokensEl) tokensEl.innerHTML = fmtN(totalTokens, true);
-  if (tokensSubEl)
-    tokensSubEl.textContent = `${fmtN(inputTokens)} in · ${fmtN(outputTokens)} out`;
-  if (cacheEl) cacheEl.innerHTML = fmtN(cacheRead, true);
-  if (cacheSubEl) cacheSubEl.textContent = `输入命中 ${cacheHitRate}%`;
-  if (cacheSubEl)
-    cacheSubEl.title = `${fmtN(cacheRead)} 输入 Token 由上游缓存直接返回，未重新计算`;
-  if (callsEl) callsEl.textContent = calls.toLocaleString();
-  const sessionsCount = Number((usage && usage.sessions) ?? (sessions ? sessions.length : 0));
-  if (callsSubEl) {
-    if (sessionsCount > 0 && calls > sessionsCount) {
-      callsSubEl.textContent = `${sessionsCount.toLocaleString()} 个会话 · ${calls.toLocaleString()} 次请求`;
-    } else {
-      callsSubEl.textContent = "跨多智能体累计请求";
-    }
-  }
-
-  // Render the models breakdown
-  const modelsContainer = document.getElementById("usageModels");
-  const modelsCountEl = document.getElementById("usageModelsCount");
-  if (modelsCountEl) modelsCountEl.textContent = `${modelsList.length} 种模型`;
-
-  const isUsageLoading = !dashboardData || (!dashboardData.usage && (!sessions || sessions.length === 0));
-
-  if (modelsContainer) {
-    if (isUsageLoading) {
-      modelsContainer.innerHTML = renderSkeletonCard(4);
-    } else if (modelsList.length === 0) {
-      modelsContainer.innerHTML = `
-        <div class="empty-state">
-          <b>暂无模型调用数据</b>
-          会话产生实际交互后将自动统计 Token 消耗
-        </div>
-      `;
-    } else {
-      modelsContainer.innerHTML = modelsList
-        .map((m) => {
-          const pct = Math.max(0, Math.min(100, m.share_pct || 0));
-          const cStr = costCell(m.estimated_cost_usd);
-          return `
-          <div class="row stat">
-            <span class="ic">${getModelIcon(m.name, 20)}</span>
-            <div class="who">
-              <div class="name-line">
-                <span class="name">${escapeHtml(m.name)}</span>
-              </div>
-              <div class="sub">${(m.calls || 0).toLocaleString()} 次调用 · 缓存命中 ${m.cache_hit_rate_pct || 0}%</div>
-            </div>
-            <div class="share" title="${pct}% 调用占比">
-              <i style="width: ${Math.max(2, pct)}%;"></i>
-            </div>
-            <div class="num">
-              <b>${fmtN(m.total_tokens || 0)}</b>
-              <small>${pct}%</small>
-            </div>
-            <div class="cost">${cStr}</div>
-          </div>
-        `;
-        })
-        .join("");
-    }
-  }
-
-  // Render the agents breakdown
-  const agentsContainer = document.getElementById("usageAgents");
-  const agentsCountEl = document.getElementById("usageAgentsCount");
-  if (agentsCountEl)
-    agentsCountEl.textContent = `${agentsList.length} 个智能体`;
-
-  if (agentsContainer) {
-    if (isUsageLoading) {
-      agentsContainer.innerHTML = renderSkeletonCard(4);
-    } else if (agentsList.length === 0) {
-      agentsContainer.innerHTML = `
-        <div class="empty-state">
-          <b>暂无智能体调用数据</b>
-          会话产生实际交互后将自动统计
-        </div>
-      `;
-    } else {
-      agentsContainer.innerHTML = agentsList
-        .map((a) => {
-          const pct = Math.max(0, Math.min(100, a.share_pct || 0));
-          const cStr = costCell(a.estimated_cost_usd);
-          return `
-          <div class="row stat">
-            <span class="ic">${getAgentIcon(a.id || a.name, 20)}</span>
-            <div class="who">
-              <div class="name-line">
-                <span class="name">${escapeHtml(a.name)}</span>
-              </div>
-              <div class="sub">${(a.calls || 0).toLocaleString()} 次调用 · 缓存命中 ${a.cache_hit_rate_pct || 0}%</div>
-            </div>
-            <div class="share" title="${pct}% 调用占比">
-              <i style="width: ${Math.max(2, pct)}%;"></i>
-            </div>
-            <div class="num">
-              <b>${fmtN(a.total_tokens || 0)}</b>
-              <small>${pct}%</small>
-            </div>
-            <div class="cost">${cStr}</div>
-          </div>
-        `;
-        })
-        .join("");
-    }
-  }
-}
-
-function renderModels(models) {
-  const container = document.getElementById("modelsGrid");
-  const countBadge = document.getElementById("modelsCountBadge");
-  if (!container) return;
-
-  let list = Array.isArray(models) && models.length > 0 ? [...models] : [];
-
-  // Calculate token counts and call counts from sessions
-  const modelStats = {};
-  let totalTokensAll = 0;
-  (allSessionsData || []).forEach((s) => {
-    const rawM = (s.model || s.model_name || "").trim();
-    const m = rawM.toLowerCase();
-    const pt = s.prompt_tokens || 0;
-    const ct = s.completion_tokens || 0;
-    const tt = pt + ct || s.total_tokens || 0;
-    if (m) {
-      if (!modelStats[m])
-        modelStats[m] = { in: 0, out: 0, total: 0, calls: 0, rawName: rawM };
-      modelStats[m].in += pt;
-      modelStats[m].out += ct;
-      modelStats[m].total += tt;
-      modelStats[m].calls += 1;
-      totalTokensAll += tt;
-    }
-  });
-
-  // If the backend sent no catalog, build one from the sessions seen
-  if (list.length === 0) {
-    Object.keys(modelStats).forEach((k) => {
-      const st = modelStats[k];
-      list.push({
-        id: k,
-        display_name: st.rawName || k,
-        supports_vision: false,
-        supports_reasoning: false,
-        context_window_str: "",
-      });
-    });
-  }
-
-  if (list.length === 0) {
-    if (countBadge) countBadge.textContent = "0 种模型";
-    container.innerHTML = `
-      <div class="empty-state">
-        <b>暂无模型记录</b>
-        会话中使用模型后将自动提取并展示真实模型画册
-      </div>
-    `;
-    return;
-  }
-
-  const norm = (s) =>
-    String(s || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
-  // the transcripts record the name the CLI reported, the catalog carries the
-  // gateway's id, so match on a normalised form and only on exact equality:
-  // a loose match would credit one model's tokens to unrelated rows
-  const claimed = new Set();
-  const matchStats = (id, name) => {
-    const direct =
-      modelStats[String(id || "").toLowerCase()] ||
-      modelStats[String(name || "").toLowerCase()];
-    if (direct) return direct;
-    const target = norm(id) || norm(name);
-    if (!target) return undefined;
-    const key = Object.keys(modelStats).find((k) => norm(k) === target);
-    return key ? modelStats[key] : undefined;
-  };
-
-  const items = list.map((m) => {
-    const id = (m.id || m.name || "").toLowerCase();
-    const name = m.display_name || m.name || m.id || "Unknown Model";
-
-    const st = matchStats(id, name);
-    if (st) claimed.add(st.rawName.toLowerCase());
-
-    const tags = [];
-    if (m.supports_vision) tags.push('<span class="tag accent">Vision</span>');
-    if (m.supports_reasoning)
-      tags.push('<span class="tag warn">Thinking</span>');
-    // only a context window the backend declared, never a fabricated default
-    const ctxStr =
-      m.context_window_str ||
-      (m.context_length > 0
-        ? m.context_length >= 1000000
-          ? Math.round(m.context_length / 1000000) + "M"
-          : Math.round(m.context_length / 1000) + "K"
-        : "");
-    if (ctxStr) {
-      tags.push(`<span class="tag ok">${escapeHtml(ctxStr)}</span>`);
-    }
-
-    return {
-      id: m.id,
-      name,
-      tags,
-      totalTokens: st ? st.total : 0,
-      inTokens: st ? st.in : 0,
-      outTokens: st ? st.out : 0,
-      calls: st ? st.calls : 0,
-    };
-  });
-
-  // models the transcripts recorded under a name the catalog does not carry
-  // still belong in the ranking, with their real token counts
-  Object.keys(modelStats).forEach((k) => {
-    const st = modelStats[k];
-    if (claimed.has(st.rawName.toLowerCase())) return;
-    items.push({
-      id: st.rawName,
-      name: st.rawName,
-      tags: [],
-      totalTokens: st.total,
-      inTokens: st.in,
-      outTokens: st.out,
-      calls: st.calls,
-    });
-  });
-
-  items.sort(
-    (a, b) => b.totalTokens - a.totalTokens || a.name.localeCompare(b.name),
-  );
-
-  if (countBadge) {
-    countBadge.textContent = `${items.length} 种模型`;
-  }
-
-  const maxTokens = Math.max(1, items[0]?.totalTokens || totalTokensAll || 1);
-
-  const costMap = backendModelCosts();
-
-  container.innerHTML = items
-    .map((item) => {
-      const safeName = escapeHtml(item.name);
-      const pct = Math.min(
-        100,
-        Math.round((item.totalTokens / maxTokens) * 100),
-      );
-      const tokensStr = fmtN(item.totalTokens);
-      const subText =
-        item.calls > 0
-          ? `${fmtN(item.inTokens)} in · ${fmtN(item.outTokens)} out`
-          : "就绪";
-      const costKey = String(item.name).toLowerCase();
-      // only the daemon's figure; a model it has not priced reads as a dash,
-      // the same as in the usage view
-      const costStr = Object.prototype.hasOwnProperty.call(costMap, costKey)
-        ? costCell(costMap[costKey])
-        : "—";
-      const callsText =
-        item.calls > 0 ? `<span>${item.calls} 次调用</span>` : "";
-
-      return `<div class="row stat">
-        <span class="ic">${getModelIcon(item.name, 20)}</span>
-        <div class="who">
-          <div class="name-line"><span class="name" title="${safeName}">${safeName}</span></div>
-          <div class="sub flow">${callsText}${item.tags.join(" ")}</div>
-        </div>
-        <div class="share" title="${pct}% 调用占比">
-          <i style="width: ${Math.max(item.totalTokens > 0 ? 2 : 0, pct)}%;"></i>
-        </div>
-        <div class="num">
-          <b>${tokensStr}</b>
-          <small>${subText}</small>
-        </div>
-        <div class="cost">${costStr}</div>
-      </div>`;
-    })
-    .join("");
-}
-
 async function refreshModelsCatalog(event) {
   const btn = document.getElementById("btnRefreshModels");
   if (btn) {
@@ -1714,7 +1205,6 @@ async function refreshModelsCatalog(event) {
     if (resp.ok) {
       const data = await resp.json();
       if (data && data.data) {
-        renderModels(data.data);
         toast(`已同步上游模型列表，共 ${data.data.length} 个可用模型`);
       } else {
         toast("上游没有返回模型列表，请稍后再试", "err");
@@ -1838,111 +1328,6 @@ function shortParent(p) {
   return (parent.length > 2 ? "…/" : "") + tail + "/";
 }
 
-let currentSnippetEnv = "bash";
-
-function renderGateway(gateway) {
-  if (!gateway) return;
-  const baseUrl = gateway.base_url || GATEWAY_URL;
-  const host = String(baseUrl).replace(/^https?:\/\//, "");
-
-  const badge = document.getElementById("gatewayBadge");
-  if (badge) {
-    const source = gateway.source || "gateway";
-    const text = gateway.detected ? `已连接 · ${source}` : "标准端点就绪";
-    badge.textContent = text;
-    badge.title = text;
-    badge.className = gateway.detected ? "tag ok cap-long" : "tag cap-long";
-  }
-
-  const gwBtn = document.getElementById("sideGwBtn");
-  const gwText = document.getElementById("sideGwText");
-  if (gwBtn) gwBtn.classList.toggle("off", !gateway.detected);
-  if (gwText) {
-    gwText.textContent = gateway.detected ? `网关 ${host}` : "网关未探测";
-  }
-
-  // KPI card updates
-  const gwCardStatus = document.getElementById("gwCardStatus");
-  if (gwCardStatus) gwCardStatus.textContent = gateway.detected ? "已连接" : "就绪";
-  const gwStatusPill = document.getElementById("gwStatusPill");
-  if (gwStatusPill) {
-    gwStatusPill.textContent = gateway.detected ? "ONLINE" : "READY";
-    gwStatusPill.className = gateway.detected ? "gw-kpi-badge ok" : "gw-kpi-badge blue";
-  }
-  const gwCardSource = document.getElementById("gwCardSource");
-  if (gwCardSource) {
-    gwCardSource.textContent = gateway.detected
-      ? gateway.source || "上游网关"
-      : "自适应标准端点";
-  }
-
-  // Parameter capsules
-  const baseElem = document.getElementById("gwBaseUrl");
-  if (baseElem) baseElem.textContent = baseUrl;
-  const srcElem = document.getElementById("gwSource");
-  if (srcElem) {
-    srcElem.textContent = gateway.detected
-      ? gateway.source || "上游网关"
-      : "自适应标准端点";
-  }
-
-  // Generate snippets for all 4 environments
-  const bashCode = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
-  const psCode = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "${AFFINITY_HEADER}=agenthub-session-1"`;
-  const nodeCode = `import Anthropic from '@anthropic-ai/sdk';\n\nconst client = new Anthropic({\n  baseURL: '${baseUrl}',\n  defaultHeaders: {\n    '${AFFINITY_HEADER}': 'agenthub-session-1',\n  },\n});`;
-  const pyCode = `from anthropic import Anthropic\n\nclient = Anthropic(\n    base_url="${baseUrl}",\n    default_headers={\n        "${AFFINITY_HEADER}": "agenthub-session-1",\n    },\n)`;
-
-  const envElem = document.getElementById("envSnippet");
-  if (envElem) envElem.textContent = bashCode;
-  const psElem = document.getElementById("psSnippet");
-  if (psElem) psElem.textContent = psCode;
-  const nodeElem = document.getElementById("nodeSnippet");
-  if (nodeElem) nodeElem.textContent = nodeCode;
-  const pyElem = document.getElementById("pySnippet");
-  if (pyElem) pyElem.textContent = pyCode;
-
-  updateActiveSnippet();
-}
-
-function updateActiveSnippet() {
-  const codeBlock = document.getElementById("gwCodeBlock");
-  if (!codeBlock) return;
-  const baseUrl =
-    (dashboardData && dashboardData.gateway && dashboardData.gateway.base_url) ||
-    GATEWAY_URL;
-  if (currentSnippetEnv === "bash") {
-    codeBlock.textContent = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
-  } else if (currentSnippetEnv === "powershell") {
-    codeBlock.textContent = `$env:ANTHROPIC_BASE_URL = "${baseUrl}"\n$env:ANTHROPIC_CUSTOM_HEADERS = "${AFFINITY_HEADER}=agenthub-session-1"`;
-  } else if (currentSnippetEnv === "node") {
-    codeBlock.textContent = `import Anthropic from '@anthropic-ai/sdk';\n\nconst client = new Anthropic({\n  baseURL: '${baseUrl}',\n  defaultHeaders: {\n    '${AFFINITY_HEADER}': 'agenthub-session-1',\n  },\n});`;
-  } else if (currentSnippetEnv === "python") {
-    codeBlock.textContent = `from anthropic import Anthropic\n\nclient = Anthropic(\n    base_url="${baseUrl}",\n    default_headers={\n        "${AFFINITY_HEADER}": "agenthub-session-1",\n    },\n)`;
-  }
-}
-
-function switchSnippetEnv(env) {
-  currentSnippetEnv = env;
-  const tabs = document.querySelectorAll("#gwEnvTabs .seg-btn");
-  tabs.forEach((btn) => {
-    btn.classList.toggle("on", btn.getAttribute("data-env") === env);
-  });
-  updateActiveSnippet();
-}
-
-function copyCurrentSnippet() {
-  const codeBlock = document.getElementById("gwCodeBlock");
-  if (codeBlock && codeBlock.textContent) {
-    copyText(codeBlock.textContent);
-    const envNames = {
-      bash: "Bash",
-      powershell: "PowerShell",
-      node: "Node.js",
-      python: "Python",
-    };
-    toast(`已复制 ${envNames[currentSnippetEnv] || "当前"} 配置`);
-  }
-}
 
 function copyValue(elementId, label) {
   const el = document.getElementById(elementId);
@@ -1964,39 +1349,11 @@ function renderCapabilities(caps) {
   const mcpServers = cachedCapabilities.mcp_servers || [];
   const hooks = cachedCapabilities.hooks || [];
 
-  const kpiSkills = document.getElementById("capKpiSkills");
-  const kpiMcp = document.getElementById("capKpiMcp");
-  const kpiHooks = document.getElementById("capKpiHooks");
-  const kpiAgents = document.getElementById("capKpiAgents");
-
-  if (kpiSkills)
-    countTo(
-      kpiSkills,
-      cachedCapabilities.total_skills != null
-        ? cachedCapabilities.total_skills
-        : skills.length,
-    );
-  if (kpiMcp)
-    countTo(
-      kpiMcp,
-      cachedCapabilities.total_mcp_servers != null
-        ? cachedCapabilities.total_mcp_servers
-        : mcpServers.length,
-    );
-  if (kpiHooks)
-    countTo(
-      kpiHooks,
-      cachedCapabilities.total_hooks != null
-        ? cachedCapabilities.total_hooks
-        : hooks.length,
-    );
-
-  // Compute agents covered across skills, mcp, hooks
-  const agentsSet = new Set();
-  skills.forEach((s) => (s.agents || []).forEach((a) => agentsSet.add(a)));
-  mcpServers.forEach((m) => (m.agents || []).forEach((a) => agentsSet.add(a)));
-  hooks.forEach((h) => (h.agents || []).forEach((a) => agentsSet.add(a)));
-  if (kpiAgents) countTo(kpiAgents, agentsSet.size);
+  // the tab's own line says what the scan found, in one sentence
+  const summary = document.getElementById("capSummarySub");
+  if (summary) {
+    summary.textContent = `${skills.length} 个技能 · ${mcpServers.length} 个 MCP 服务 · ${hooks.length} 个生命周期钩子，从本机各智能体的配置里读出`;
+  }
 
   // Subtab count badges
   const totalCount = skills.length + mcpServers.length + hooks.length;
@@ -2484,24 +1841,6 @@ function toast(msg, kind) {
   );
 }
 
-function copyGatewayConfig() {
-  const baseUrl =
-    dashboardData && dashboardData.gateway && dashboardData.gateway.base_url
-      ? dashboardData.gateway.base_url
-      : GATEWAY_URL;
-  const text = `export ANTHROPIC_BASE_URL="${baseUrl}"\nexport ANTHROPIC_CUSTOM_HEADERS="${AFFINITY_HEADER}=agenthub-session-1"`;
-  copyText(text);
-  toast("已复制网关环境变量");
-}
-
-function copySnippet(id) {
-  const elem = document.getElementById(id);
-  if (elem) {
-    copyText(elem.textContent);
-    toast(id === "psSnippet" ? "已复制 PowerShell 配置" : "已复制 Bash 配置");
-  }
-}
-
 function copyText(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text);
@@ -2515,6 +1854,1110 @@ function copyText(text) {
   }
 }
 
+// ---- the usage page: the ledger's four readings of one period ------------
+// The daemon reads Coding Assistant's transcripts once and answers a digest
+// per period (usage_ledger.rs): totals, a series, the rankings, a year of
+// days, the sessions and the latest requests. This page draws them in
+// magpie's idiom — the same stacked columns, ranking bars and heatmap — and
+// never derives a figure of its own: cost, speed and cache reads are the
+// daemon's.
+const USAGE_TABS = [
+  ["overview", "概览"],
+  ["requests", "请求"],
+  ["sessions", "会话"],
+  ["context", "上下文"],
+];
+const LED_TREND = [
+  ["tokens", "Token"],
+  ["cost", "费用"],
+  ["calls", "请求"],
+  ["speed", "速度"],
+];
+const LED_SPLITS = [
+  ["model", "模型"],
+  ["model_at", "模型·智能体"],
+  ["agent", "智能体"],
+];
+const LED_HEAT = [
+  ["tokens", "Token"],
+  ["calls", "请求"],
+  ["cost", "费用"],
+];
+// the ranking's colours: as many as the chart can tell apart; the rest are
+// "其他" in grey, as magpie's LED_SHOWN
+const LED_SHOWN = 7;
+const LED_STATUSES = { "": "全部", failed: "失败", retried: "重试后成功" };
+
+let usageTab = "overview";
+let usagePeriod = "7d";
+let ledMetric = "tokens";
+let ledSplit = "model";
+let ledHeatMetric = "tokens";
+let ledStatus = "";
+let ledQuery = "";
+let usageDigest = null;
+let usageLoading = false;
+let usageSeq = 0;
+let usageTimer = 0;
+let usageEvery = 30000;
+let ledSelectedDay = "";
+// the digest is the daemon's; the page keeps the last one while a refresh is
+// out, so a poll never blanks the figures it already showed
+
+try {
+  const saved = localStorage.getItem(STORE.usageTab);
+  if (USAGE_TABS.some(([id]) => id === saved)) usageTab = saved;
+  const period = localStorage.getItem(STORE.usagePeriod);
+  if (["today", "7d", "30d", "all"].includes(period)) usagePeriod = period;
+  const metric = localStorage.getItem(STORE.ledMetric);
+  if (LED_TREND.some(([id]) => id === metric)) ledMetric = metric;
+  const split = localStorage.getItem(STORE.ledSplit);
+  if (LED_SPLITS.some(([id]) => id === split)) ledSplit = split;
+  const heat = localStorage.getItem(STORE.ledHeat);
+  if (LED_HEAT.some(([id]) => id === heat)) ledHeatMetric = heat;
+  const every = parseInt(localStorage.getItem(STORE.usageEvery) || "", 10);
+  if ([0, 10000, 30000, 60000].includes(every)) usageEvery = every;
+} catch (e) {}
+
+function initUsage() {
+  const tabs = document.getElementById("usageTabs");
+  if (tabs)
+    tabs.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-utab]");
+      if (b) setUsageTab(b.dataset.utab);
+    });
+  const periods = document.getElementById("usagePeriods");
+  if (periods)
+    periods.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-period]");
+      if (b && b.dataset.period !== usagePeriod) setUsagePeriod(b.dataset.period);
+    });
+  const every = document.getElementById("usageEvery");
+  if (every)
+    every.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-ms]");
+      if (b) setUsageEvery(Number(b.dataset.ms));
+    });
+  const status = document.getElementById("ledStatus");
+  if (status)
+    status.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-status]");
+      if (!b) return;
+      ledStatus = b.dataset.status || "";
+      pickUsageSegs();
+      renderLedgerRequests();
+    });
+  const q = document.getElementById("ledQ");
+  if (q)
+    q.addEventListener("input", () => {
+      ledQuery = q.value.trim().toLowerCase();
+      renderLedgerRequests();
+    });
+  const metric = document.getElementById("ledMetric");
+  if (metric)
+    metric.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-metric]");
+      if (!b || b.dataset.metric === ledMetric) return;
+      ledMetric = b.dataset.metric;
+      remember("ledMetric", ledMetric);
+      drawLedgerTrend();
+    });
+  const split = document.getElementById("ledSplit");
+  if (split)
+    split.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-split]");
+      if (!b || b.dataset.split === ledSplit) return;
+      ledSplit = b.dataset.split;
+      remember("ledSplit", ledSplit);
+      drawLedgerTrend();
+    });
+  const heat = document.getElementById("ledHeatMetric");
+  if (heat)
+    heat.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-heat]");
+      if (!b || b.dataset.heat === ledHeatMetric) return;
+      ledHeatMetric = b.dataset.heat;
+      remember("ledHeat", ledHeatMetric);
+      drawLedgerHeat();
+    });
+  window.addEventListener("resize", () => {
+    if (!isUsageOpen()) return;
+    clearTimeout(initUsage._resize);
+    initUsage._resize = setTimeout(() => {
+      if (usageTab === "overview") {
+        drawLedgerTrend();
+        drawLedgerHeat();
+      }
+    }, 140);
+  });
+  setUsageTab(usageTab, true);
+  pickUsageSegs();
+  loadUsage();
+  startUsageTimer();
+}
+
+function remember(key, value) {
+  try {
+    localStorage.setItem(STORE[key], value);
+  } catch (e) {}
+}
+
+function isUsageOpen() {
+  return !!document.getElementById("view-usage")?.classList.contains("active");
+}
+
+function setUsageTab(tab, silent) {
+  if (!USAGE_TABS.some(([id]) => id === tab)) tab = "overview";
+  usageTab = tab;
+  if (!silent) remember("usageTab", tab);
+  document.querySelectorAll("#usageTabs button[data-utab]").forEach((b) => {
+    const on = b.dataset.utab === tab;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  document.getElementById("usagePaneOverview").hidden = tab !== "overview";
+  document.getElementById("usagePaneRequests").hidden = tab !== "requests";
+  document.getElementById("usagePaneSessions").hidden = tab !== "sessions";
+  document.getElementById("usagePaneContext").hidden = tab !== "context";
+  // the period steers every tab but the request list's own status, which the
+  // list keeps; drawing again reads the digest already in hand
+  if (usageDigest) drawUsage();
+}
+
+function setUsagePeriod(period) {
+  if (!["today", "7d", "30d", "all"].includes(period)) return;
+  usagePeriod = period;
+  remember("usagePeriod", period);
+  pickUsageSegs();
+  loadUsage(true);
+}
+
+function setUsageEvery(ms) {
+  usageEvery = ms;
+  try {
+    localStorage.setItem(STORE.usageEvery, String(ms));
+  } catch (e) {}
+  pickUsageSegs();
+  startUsageTimer();
+  toast(ms ? `用量每 ${Math.round(ms / 1000)} 秒自动刷新` : "用量改为手动刷新");
+}
+
+// the cadence is the reader's: the console's own rule is never under half a
+// second, and the ledger's answer is cached for five, so ten is the floor here
+function startUsageTimer() {
+  clearInterval(usageTimer);
+  if (!usageEvery) return;
+  usageTimer = setInterval(() => {
+    if (isUsageOpen() && !document.hidden) loadUsage();
+  }, Math.max(10000, usageEvery));
+}
+
+function pickUsageSegs() {
+  document.querySelectorAll("#usagePeriods button[data-period]").forEach((b) => {
+    b.classList.toggle("on", b.dataset.period === usagePeriod);
+  });
+  document.querySelectorAll("#usageEvery button[data-ms]").forEach((b) => {
+    b.classList.toggle("on", Number(b.dataset.ms) === usageEvery);
+  });
+  document.querySelectorAll("#ledStatus button[data-status]").forEach((b) => {
+    b.classList.toggle("on", (b.dataset.status || "") === ledStatus);
+  });
+  fillSegs("ledMetric", LED_TREND, ledMetric, "data-metric");
+  fillSegs("ledSplit", LED_SPLITS, ledSplit, "data-split");
+  fillSegs("ledHeatMetric", LED_HEAT, ledHeatMetric, "data-heat");
+}
+
+function fillSegs(id, options, current, attr) {
+  const seg = document.getElementById(id);
+  if (!seg) return;
+  seg.innerHTML = options
+    .map(
+      ([value, label]) =>
+        `<button type="button" class="opt${value === current ? " on" : ""}" ${attr}="${value}">${label}</button>`,
+    )
+    .join("");
+}
+
+async function loadUsage(manual) {
+  if (usageLoading) return;
+  usageLoading = true;
+  const seq = ++usageSeq;
+  const btn = document.getElementById("usageReload");
+  if (btn) btn.classList.add("busy");
+  if (manual && !usageDigest) drawUsageLoading();
+  try {
+    const resp = await fetch(
+      `/api/usage/ledger?period=${encodeURIComponent(usagePeriod)}&limit=1000`,
+      { cache: "no-store" },
+    );
+    if (!resp.ok) {
+      toast(`读取用量失败（HTTP ${resp.status}）`, "err");
+      return;
+    }
+    const data = await resp.json();
+    if (seq !== usageSeq) return;
+    usageDigest = data;
+    drawUsage();
+  } catch (e) {
+    toast("读取用量失败：" + e.message, "err");
+  } finally {
+    usageLoading = false;
+    if (btn) btn.classList.remove("busy");
+  }
+}
+
+function drawUsageLoading() {
+  const note = document.getElementById("usageNote");
+  if (note) note.textContent = "正在读取 Coding Assistant 的会话记录…";
+}
+
+function drawUsage() {
+  const d = usageDigest;
+  // a hidden page has no width to lay a chart out in; the digest stays in
+  // hand and is drawn the moment the page is looked at
+  if (!d || !isUsageOpen()) return;
+  drawUsageKpis(d);
+  // the overview's charts are measured from their card: while that tab is
+  // not the one in view, there is no width to draw in
+  if (!document.getElementById("usagePaneOverview").hidden) {
+    drawLedgerTrend();
+    drawLedgerHeat();
+  }
+  renderLedgerRequests();
+  renderLedgerSessions();
+  renderLedgerContext();
+  const note = document.getElementById("usageNote");
+  if (note) {
+    note.textContent = `统计范围：Coding Assistant 与 Claude Desktop 的本地会话记录（${d.from} 至 ${d.to}）。Codex、Grok、Gemini 的会话只有整段合计，不在这里逐条列出。`;
+  }
+}
+
+function fmtMoney(v) {
+  const n = Number(v) || 0;
+  if (n >= 1000) return "$" + Math.round(n).toLocaleString();
+  if (n >= 100) return "$" + n.toFixed(0);
+  return "$" + n.toFixed(2);
+}
+
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  const h = Math.floor(m / 60);
+  return `${h} 小时 ${m % 60} 分`;
+}
+
+function fmtWhen(ms, withDate) {
+  const d = new Date(ms);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (!withDate) return hm;
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
+function drawUsageKpis(d) {
+  const set = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = value;
+  };
+  const calls = d.calls || 0;
+  const prompt = (d.input || 0) + (d.cache_read || 0) + (d.cache_write || 0);
+  const hit = prompt > 0 ? (100 * (d.cache_read || 0)) / prompt : 0;
+  set("ukCalls", calls.toLocaleString());
+  set(
+    "ukCallsSub",
+    d.errors
+      ? `${d.errors.toLocaleString()} 次失败${d.retried ? ` · ${d.retried} 次重试后成功` : ""}`
+      : `${(d.sessions || 0).toLocaleString()} 个会话 · 无失败`,
+  );
+  set("ukTokens", fmtN(d.tokens || 0, true));
+  set(
+    "ukTokensSub",
+    `${fmtN(d.input || 0)} in · ${fmtN(d.output || 0)} out · ${fmtN((d.cache_read || 0) + (d.cache_write || 0))} cache`,
+  );
+  set("ukCost", fmtMoney(d.cost));
+  set(
+    "ukCostSub",
+    calls ? `平均 ${fmtMoney((d.cost || 0) / calls)} / 次请求` : "按模型费率估算",
+  );
+  set("ukCache", hit.toFixed(1) + "%");
+  set("ukCacheSub", `${fmtN(d.cache_read || 0)} 个输入 Token 由缓存返回`);
+  const meter = document.getElementById("ukCacheMeter");
+  if (meter) meter.style.width = Math.min(100, hit).toFixed(1) + "%";
+  set("ukSpeed", d.speed > 0 ? `${Math.round(d.speed)} tok/s` : "—");
+  set(
+    "ukSpeedSub",
+    d.timed
+      ? `${d.timed.toLocaleString()} 个有写入时长的回复`
+      : "本周期没有可测写入时长的回复",
+  );
+}
+
+// the metric a chart counts for one point or one share
+function ledValue(metric, x) {
+  if (metric === "speed") return Number(x.speed) || 0;
+  if (metric === "cost") return Number(x.cost) || 0;
+  if (metric === "calls") return Number(x.calls) || 0;
+  return Number(x.tokens) || 0;
+}
+
+function ledPartValue(metric, part) {
+  if (metric === "cost") return Number(part.cost) || 0;
+  if (metric === "calls") return Number(part.calls) || 0;
+  return Number(part.tokens) || 0;
+}
+
+function ledFormat(metric, v) {
+  if (metric === "cost") return fmtMoney(v);
+  if (metric === "calls") return Math.round(v).toLocaleString();
+  if (metric === "speed") return Math.round(v) + " tok/s";
+  return fmtN(Math.round(v));
+}
+
+// an axis's top with four steps under it: round numbers, at least the largest
+function ledAxis(max) {
+  if (!(max > 0)) return 4;
+  const e = Math.pow(10, Math.floor(Math.log10(max / 4)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * e * 4 >= max) return m * e * 4;
+  return 10 * e * 4;
+}
+
+// what a chart tells apart, most first, and the colour of each; the rest are
+// "其他". The ranking and the chart share this list, so a colour means one
+// model on both.
+function ledCategories(split, metric) {
+  const rows = ((usageDigest && usageDigest.by && usageDigest.by[split]) || []).slice();
+  rows.sort(
+    (a, b) =>
+      ledValue(metric, b) - ledValue(metric, a) || (b.tokens || 0) - (a.tokens || 0),
+  );
+  const top = rows.slice(0, LED_SHOWN).map((x, i) => ({
+    ...x,
+    color: `var(--c${i + 1})`,
+  }));
+  return { top, rest: rows.slice(LED_SHOWN), list: rows };
+}
+
+function ledName(x, split) {
+  const name = x.name || x.id || "—";
+  if (split === "model_at" && x.agent) return `${name} · ${providerLabel(x.agent)}`;
+  return name;
+}
+
+// the bucket a period reads by, as the daemon chose it: hours for a day,
+// days for a week or a month, weeks for the whole store (usage_ledger.rs)
+function ledBucketName(d) {
+  if (d.period === "today") return "hour";
+  if (d.period === "7d" || d.period === "30d") return "day";
+  return "week";
+}
+
+function ledTick(t, bucket) {
+  const d = new Date(t);
+  if (bucket === "hour") return String(d.getHours()).padStart(2, "0") + ":00";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function ledWhen(t, bucket) {
+  const d = new Date(t);
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  if (bucket === "hour")
+    return `${day} ${String(d.getHours()).padStart(2, "0")}:00`;
+  return bucket === "week" ? `自 ${day} 起的一周` : day;
+}
+
+const SVGNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs, style) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (style) Object.assign(e.style, style);
+  return e;
+}
+
+// The trend: one column per bucket of the period, its parts stacked in the
+// ranking's colours (tokens, cost and calls add up; a speed does not, so each
+// model is a mark at its own speed on the bucket's track, as magpie draws
+// #860). The ranking beside it is the legend and the other reading.
+function drawLedgerTrend() {
+  const box = document.getElementById("ledChart");
+  if (!box || !usageDigest) return;
+  const d = usageDigest;
+  const bucket = ledBucketName(d);
+  box.replaceChildren();
+  const plot = document.createElement("div");
+  plot.className = "plot";
+  box.append(plot);
+  const W = plot.clientWidth;
+  const H = plot.clientHeight || 236;
+  const pts = d.series || [];
+  if (W < 100 || !pts.length) {
+    const none = document.createElement("div");
+    none.className = "none";
+    none.textContent = "本周期没有请求";
+    plot.append(none);
+    drawLedgerRank(d, bucket);
+    return;
+  }
+  const { top } = ledCategories(ledSplit, ledMetric);
+  const totals = pts.map((p) => ledValue(ledMetric, p));
+  const speed = ledMetric === "speed";
+  const partOf = (p, id) => (p.by && p.by[ledSplit] && p.by[ledSplit][id]) || {};
+  const max = Math.max(
+    0,
+    ...totals,
+    ...(speed
+      ? pts.flatMap((p) =>
+          top.map((c) => {
+            const part = partOf(p, c.id);
+            return part.timed ? part.output / (part.duration_ms / 1000) : 0;
+          }),
+        )
+      : []),
+  );
+  if (!(max > 0)) {
+    const none = document.createElement("div");
+    none.className = "none";
+    none.textContent =
+      ledMetric === "cost" ? "本周期没有已知价格的请求" : "本周期没有请求";
+    plot.append(none);
+    drawLedgerRank(d, bucket);
+    return;
+  }
+  const topV = ledAxis(max);
+  const g = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  g.setAttribute("aria-label", "用量趋势");
+  plot.append(g);
+  const labels = [0, 1, 2, 3, 4].map((i) => {
+    const lab = sv("text", { "text-anchor": "end", class: "axis" });
+    lab.textContent = ledFormat(ledMetric, topV * (1 - i / 4));
+    g.append(lab);
+    return lab;
+  });
+  let widest = 0;
+  labels.forEach((lab) => {
+    try {
+      widest = Math.max(widest, lab.getComputedTextLength());
+    } catch (e) {}
+  });
+  const M = { l: widest > 0 ? Math.ceil(widest) + 8 : 48, r: 8, t: 10, b: 24 };
+  const pw = W - M.l - M.r;
+  const ph = H - M.t - M.b;
+  const n = pts.length;
+  const slot = pw / n;
+  const bw = Math.max(2, Math.min(30, slot * 0.68));
+  const Y = (v) => M.t + ph - (ph * v) / topV;
+  labels.forEach((lab, i) => {
+    const y = M.t + (ph * i) / 4;
+    lab.setAttribute("x", M.l - 6);
+    lab.setAttribute("y", y + 3.5);
+    g.insertBefore(
+      sv("line", { x1: M.l, x2: W - M.r, y1: y, y2: y, class: "grid" }),
+      lab,
+    );
+  });
+  const room = Math.max(2, Math.floor(pw / 62));
+  const every = Math.ceil(n / room);
+  pts.forEach((p, i) => {
+    if (i % every) return;
+    const x = sv("text", {
+      x: M.l + slot * (i + 0.5),
+      y: H - 6,
+      "text-anchor": "middle",
+      class: "axis",
+    });
+    x.textContent = ledTick(p.t, bucket);
+    g.append(x);
+  });
+  const hot = sv(
+    "rect",
+    { class: "hot", y: M.t, height: ph, rx: 3, width: slot },
+    { display: "none" },
+  );
+  g.append(hot);
+
+  const segs = [];
+  pts.forEach((p, i) => {
+    const x = M.l + slot * (i + 0.5) - bw / 2;
+    let y0 = 0;
+    const draw = (key, color, v) => {
+      if (!(v > 0)) return;
+      const r = sv(
+        "rect",
+        {
+          x,
+          width: bw,
+          y: Y(y0 + v),
+          height: Math.max(0.5, Y(y0) - Y(y0 + v)),
+          rx: 1,
+          class: "col",
+          "data-k": key,
+          "data-color": color,
+        },
+        { fill: color },
+      );
+      g.append(r);
+      segs.push(r);
+      y0 += v;
+    };
+    if (speed) {
+      // the bucket's own speed as a track, each model a mark at its own
+      if (totals[i] > 0) {
+        draw("\0all", "var(--pill)", totals[i]);
+        segs[segs.length - 1].classList.add("all");
+      }
+      for (const c of top) {
+        const part = partOf(p, c.id);
+        const v = part.timed ? part.output / (part.duration_ms / 1000) : 0;
+        if (!(v > 0)) continue;
+        if (v > totals[i]) {
+          const topY = Y(totals[i]);
+          const stem = sv(
+            "line",
+            {
+              x1: x + bw / 2,
+              x2: x + bw / 2,
+              y1: topY,
+              y2: Math.min(Y(v) + 1.5, topY),
+              class: "col stem",
+              "data-k": c.id,
+              "data-color": c.color,
+            },
+            { stroke: c.color, strokeWidth: 1, strokeOpacity: ".45" },
+          );
+          g.append(stem);
+          segs.push(stem);
+        }
+        const r = sv(
+          "rect",
+          {
+            x,
+            width: bw,
+            y: Y(v) - 1.5,
+            height: 3,
+            rx: 1.5,
+            class: "col mark",
+            "data-k": c.id,
+            "data-color": c.color,
+          },
+          { fill: c.color },
+        );
+        g.append(r);
+        segs.push(r);
+      }
+      return;
+    }
+    let stacked = 0;
+    for (const c of top) {
+      const v = ledPartValue(ledMetric, partOf(p, c.id));
+      stacked += v;
+      draw(c.id, c.color, v);
+    }
+    draw("\0other", "var(--faint)", Math.max(0, totals[i] - stacked));
+  });
+
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  tip.hidden = true;
+  plot.append(tip);
+  const nameOf = (c) => ledName(c, ledSplit);
+  const at = (e) => {
+    const r = g.getBoundingClientRect();
+    const i = Math.max(
+      0,
+      Math.min(
+        n - 1,
+        Math.floor((((e.clientX - r.left) / r.width) * W - M.l) / slot),
+      ),
+    );
+    const p = pts[i];
+    hot.setAttribute("x", M.l + slot * i);
+    hot.style.display = "";
+    tip.replaceChildren();
+    const head = document.createElement("b");
+    head.textContent = ledWhen(p.t, bucket);
+    tip.append(head);
+    const rows = top.map((c) => {
+      const part = partOf(p, c.id);
+      const v = speed
+        ? part.timed
+          ? part.output / (part.duration_ms / 1000)
+          : 0
+        : ledPartValue(ledMetric, part);
+      return [nameOf(c), c.color, v];
+    });
+    if (!speed) {
+      rows.push([
+        "其他",
+        "var(--faint)",
+        Math.max(0, totals[i] - rows.reduce((a, x) => a + x[2], 0)),
+      ]);
+    }
+    for (const [nm, color, v] of rows.filter((x) => x[2] > 0).sort((a, b) => b[2] - a[2])) {
+      const row = document.createElement("div");
+      const sw = document.createElement("i");
+      sw.style.background = color;
+      const label = document.createElement("span");
+      label.textContent = nm;
+      const val = document.createElement("em");
+      val.textContent = ledFormat(ledMetric, v);
+      row.append(sw, label, val);
+      tip.append(row);
+    }
+    const sum = document.createElement("div");
+    sum.className = "sum";
+    const a = document.createElement("span");
+    a.textContent = speed ? "合计" : "总计";
+    const b = document.createElement("em");
+    b.textContent = ledFormat(ledMetric, totals[i]);
+    if (ledMetric !== "calls" && p.calls)
+      b.textContent += ` · ${p.calls.toLocaleString()} 次请求`;
+    sum.append(a, b);
+    tip.append(sum);
+    tip.hidden = false;
+    const x = M.l + slot * (i + 0.5);
+    const w = tip.offsetWidth;
+    tip.style.left = Math.max(0, x + 14 + w > W ? x - w - 14 : x + 14) + "px";
+  };
+  g.onpointermove = at;
+  g.onpointerdown = at;
+  g.onpointerleave = () => {
+    hot.style.display = "none";
+    tip.hidden = true;
+  };
+  box.emphasize = (key) => {
+    for (const r of segs) {
+      r.style.opacity = key != null && r.dataset.k !== key ? ".22" : "";
+    }
+  };
+  drawLedgerRank(d, bucket);
+}
+
+// the ranking beside the chart: who the requests were of, by the metric, the
+// most first, each with its share, its figures and a bar in its colour.
+function drawLedgerRank(d, bucket) {
+  const box = document.getElementById("ledRank");
+  if (!box) return;
+  const kept = box.scrollTop;
+  box.replaceChildren();
+  const { top, rest, list } = ledCategories(ledSplit, ledMetric);
+  if (!list.length) return;
+  const total = list.reduce((a, x) => a + ledValue(ledMetric, x), 0) || 1;
+  const leader = Math.max(1, ledValue(ledMetric, top[0]));
+  const one = (x, color, plain) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "rk" + (plain ? " plain" : "");
+    const v = ledValue(ledMetric, x);
+    const head = document.createElement("div");
+    head.className = "rk-a";
+    const sw = document.createElement("i");
+    sw.className = "rk-sw";
+    sw.style.background = color;
+    head.append(sw);
+    const name = document.createElement("span");
+    name.className = "rk-nm";
+    name.textContent = ledName(x, ledSplit);
+    name.title = name.textContent;
+    const val = document.createElement("span");
+    val.className = "rk-val";
+    val.textContent =
+      ledMetric === "speed"
+        ? x.timed
+          ? Math.round(x.output / (x.duration_ms / 1000)) + " tok/s"
+          : "—"
+        : ledFormat(ledMetric, v);
+    head.append(name, val);
+    const bar = document.createElement("div");
+    bar.className = "rk-bar";
+    const fill = document.createElement("i");
+    fill.style.width = Math.max(1.5, (100 * v) / leader).toFixed(1) + "%";
+    fill.style.background = color;
+    bar.append(fill);
+    const more = document.createElement("div");
+    more.className = "rk-b";
+    const facts = [];
+    if (ledMetric !== "calls") facts.push(`${(x.calls || 0).toLocaleString()} 次请求`);
+    if (ledMetric !== "tokens") facts.push(`${fmtN(x.tokens || 0)} Token`);
+    if (ledMetric !== "cost") facts.push(fmtMoney(x.cost));
+    if (x.errors) facts.push(`${x.errors} 次失败`);
+    more.textContent = facts.join(" · ") + ` · ${Math.round((100 * v) / total)}%`;
+    b.append(head, bar, more);
+    if (!plain) {
+      b.onpointerenter = () => box.parentElement?.querySelector(".led-chart")?.emphasize?.(x.id);
+      b.onpointerleave = () => box.parentElement?.querySelector(".led-chart")?.emphasize?.(null);
+    }
+    return b;
+  };
+  for (const x of top) box.append(one(x, x.color));
+  if (rest.length) {
+    const other = rest.reduce(
+      (acc, x) => {
+        for (const k of ["calls", "tokens", "cost", "errors", "output", "duration_ms", "timed"])
+          acc[k] = (acc[k] || 0) + (x[k] || 0);
+        return acc;
+      },
+      { id: "\0other", name: `其他 (${rest.length})` },
+    );
+    box.append(one(other, "var(--faint)", true));
+  }
+  box.scrollTop = kept;
+}
+
+// ---- the heatmap: 53 weeks of days, Monday on top ------------------------
+function heatDate(s) {
+  const [y, m, d] = String(s).split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function heatISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// the five levels, from the distribution of the days that had anything: a
+// small store reads by its own scale rather than by an absolute one
+function heatLevels(values) {
+  const nz = values.filter((v) => v > 0).sort((a, b) => a - b);
+  if (!nz.length) return () => 0;
+  if (nz.length < 8) {
+    const most = nz[nz.length - 1];
+    return (v) => (v <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((4 * v) / most - 1e-9))));
+  }
+  const q = (p) => nz[Math.min(nz.length - 1, Math.floor(p * nz.length))];
+  const [a, b, c, top] = [q(0.25), q(0.5), q(0.75), nz[nz.length - 1]];
+  return (v) => (v <= 0 ? 0 : v >= top ? 4 : v <= a ? 1 : v <= b ? 2 : v <= c ? 3 : 4);
+}
+
+function drawLedgerHeat() {
+  const box = document.getElementById("ledHeat");
+  const scroll = document.getElementById("ledHeatScroll");
+  if (!box || !scroll || !usageDigest) return;
+  const d = usageDigest;
+  if (!d.heat_from || !d.heat_to) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const at = new Map((d.heat || []).map((x) => [x.date, x]));
+  const first = heatDate(d.heat_from);
+  const last = heatDate(d.heat_to);
+  const days = [];
+  for (let cur = new Date(first); cur <= last; cur.setDate(cur.getDate() + 1)) {
+    const x = at.get(heatISO(cur)) || { calls: 0, tokens: 0, cost: 0 };
+    days.push({ ...x, day: new Date(cur) });
+  }
+  const value = (x) =>
+    ledHeatMetric === "cost" ? x.cost : ledHeatMetric === "calls" ? x.calls : x.tokens;
+  const level = heatLevels(days.map(value));
+  const shape = [d.heat_from, d.heat_to].join("|");
+  let grid = scroll.querySelector(".heat-grid");
+  if (!grid || grid.dataset.shape !== shape) {
+    grid = document.createElement("div");
+    grid.className = "heat-grid";
+    grid.dataset.shape = shape;
+    grid.setAttribute("role", "img");
+    const names = ["一", "二", "三", "四", "五", "六", "日"];
+    for (let i = 0; i < 7; i++) {
+      const l = document.createElement("span");
+      l.className = "wd";
+      l.textContent = i % 2 ? "" : names[i];
+      l.style.gridArea = `${i + 2} / 1`;
+      grid.append(l);
+    }
+    const weeks = Math.ceil(days.length / 7);
+    const labels = [];
+    let month = -1;
+    days.forEach((x, i) => {
+      const w = Math.floor(i / 7);
+      const wd = i % 7;
+      if (wd === 0 && x.day.getMonth() !== month) {
+        month = x.day.getMonth();
+        if (
+          (!labels.length || w - labels[labels.length - 1].w >= 3) &&
+          !(w === 0 && x.day.getDate() > 14) &&
+          w < weeks - 1
+        ) {
+          const m = document.createElement("span");
+          m.className = "mo";
+          m.textContent = `${x.day.getMonth() + 1}月`;
+          labels.push({ m, w });
+          grid.append(m);
+        }
+      }
+      const c = document.createElement("i");
+      c.dataset.date = heatISO(x.day);
+      c.style.gridArea = `${wd + 2} / ${w + 2}`;
+      grid.append(c);
+    });
+    labels.forEach(({ m, w }, i) => {
+      m.style.gridArea = `1 / ${w + 2} / 2 / ${(labels[i + 1]?.w ?? weeks) + 2}`;
+    });
+    grid.onpointerover = (e) => {
+      if (e.target.dataset?.date) heatTip(e.target);
+    };
+    grid.onpointerleave = () => {
+      const tip = document.getElementById("ledHeatTip");
+      if (tip) tip.hidden = true;
+    };
+    scroll.replaceChildren(grid);
+    // the newest week is what the reader came for: the card opens at its end
+    scroll.scrollLeft = scroll.scrollWidth;
+  }
+  grid.setAttribute("aria-label", "用量热力图");
+  const cells = grid.querySelectorAll("i");
+  days.forEach((x, i) => {
+    const c = cells[i];
+    if (!c) return;
+    c.className = "l" + level(value(x));
+    c.day = x;
+  });
+  const legend = box.querySelector(".heat-foot");
+  if (legend) {
+    legend.replaceChildren();
+    const span = document.createElement("span");
+    span.className = "sess-legend";
+    span.append(Object.assign(document.createElement("span"), { textContent: "少" }));
+    for (let i = 0; i <= 4; i++) {
+      const sw = document.createElement("i");
+      sw.className = "l" + i;
+      span.append(sw);
+    }
+    span.append(Object.assign(document.createElement("span"), { textContent: "多" }));
+    legend.append(span);
+  }
+  const tip = document.getElementById("ledHeatTip");
+  if (tip && !tip.hidden && tip.cell?.isConnected) heatTip(tip.cell);
+  else if (tip) tip.hidden = true;
+}
+
+// the tip over a day, above it and kept inside the card
+function heatTip(cell) {
+  const box = document.getElementById("ledHeat");
+  const tip = document.getElementById("ledHeatTip");
+  if (!box || !tip || !cell.day) return;
+  const x = cell.day;
+  tip.replaceChildren();
+  const head = document.createElement("b");
+  head.textContent = `${x.day.getFullYear()}年${x.day.getMonth() + 1}月${x.day.getDate()}日 周${["日", "一", "二", "三", "四", "五", "六"][x.day.getDay()]}`;
+  tip.append(head);
+  if (!x.calls) {
+    const none = document.createElement("span");
+    none.textContent = "没有请求";
+    tip.append(none);
+  } else {
+    const parts = [`${fmtN(x.tokens)} Token`, `${x.calls} 次请求`];
+    if (x.cost) parts.push(fmtMoney(x.cost));
+    if (x.errors) parts.push(`${x.errors} 次失败`);
+    const span = document.createElement("span");
+    span.textContent = parts.join(" · ");
+    tip.append(span);
+  }
+  tip.cell = cell;
+  tip.hidden = false;
+  const b = box.getBoundingClientRect();
+  const c = cell.getBoundingClientRect();
+  const w = tip.offsetWidth;
+  const h = tip.offsetHeight;
+  const left = Math.max(6, Math.min(b.width - w - 6, c.left - b.left + c.width / 2 - w / 2));
+  let top = c.top - b.top - h - 6;
+  if (top < 4) top = c.bottom - b.top + 6;
+  tip.style.left = left + "px";
+  tip.style.top = top + "px";
+}
+
+// ---- the request table ---------------------------------------------------
+// The rows the period holds, then the page's own status and search. The
+// statuses are the daemon's readings: a failure a later try answered is
+// "retried", not failed; the call that answered it says "retried".
+function ledFilteredRows() {
+  const rows = (usageDigest && usageDigest.recent) || [];
+  return rows.filter((r) => {
+    if (ledStatus === "failed" && !(r.error && !r.recovered)) return false;
+    if (ledStatus === "retried" && !r.retried) return false;
+    if (!ledQuery) return true;
+    const text = `${r.model || ""} ${r.agent || ""} ${r.session || ""} ${r.cwd || ""} ${r.error || ""}`.toLowerCase();
+    return text.includes(ledQuery);
+  });
+}
+
+function ledStatusCell(r) {
+  if (r.retried) return `<span class="tag ok">重试后成功</span>`;
+  if (r.error && !r.recovered)
+    return `<span class="tag err" title="${escapeHtml(r.error)}">失败</span>`;
+  if (r.error) return `<span class="tag warn" title="${escapeHtml(r.error)}">已恢复</span>`;
+  return `<span class="tag">成功</span>`;
+}
+
+function renderLedgerRequests() {
+  const wrap = document.getElementById("ledWrap");
+  const badge = document.getElementById("ledCount");
+  if (!wrap) return;
+  // a poll redraws the same list: the reader's place in it stays put
+  const kept = wrap.scrollTop;
+  if (!usageDigest) {
+    wrap.innerHTML = `<div class="led-none">正在读取用量…</div>`;
+    return;
+  }
+  const rows = ledFilteredRows();
+  if (badge) badge.textContent = `${rows.length.toLocaleString()} 条请求`;
+  if (!rows.length) {
+    // the list holds the period's latest calls, not every call of the period:
+    // a filter that finds nothing here says so rather than implying the period
+    // had no failure at all
+    wrap.innerHTML = `<div class="led-none">${
+      ledStatus || ledQuery
+        ? "最近的请求里没有符合筛选条件的记录"
+        : "本周期没有请求"
+    }</div>`;
+    // a reader looking for a rare failure is told where it may still be: the
+    // table draws the latest calls, the figures above count every call
+    if (ledStatus && usageDigest.errors) {
+      wrap.firstElementChild.textContent += `（本周期共 ${usageDigest.errors} 次失败，最近的一千条里没有）`;
+    }
+    return;
+  }
+  wrap.innerHTML = `
+    <table class="led">
+      <thead><tr>
+        <th>时间</th><th>智能体</th><th>模型</th><th class="n">输入</th><th class="n">输出</th><th class="n">缓存读</th><th class="n">费用</th><th>状态</th>
+      </tr></thead>
+      <tbody>${rows
+        .map((r) => {
+          const failed = r.error && !r.recovered;
+          return `<tr${failed ? ' class="bad"' : ""}>
+            <td class="when">${escapeHtml(fmtWhen(r.t, usagePeriod !== "today"))}</td>
+            <td class="muted">${escapeHtml(providerLabel(r.agent))}</td>
+            <td class="model-value">${r.model ? getModelIcon(r.model, 14) + escapeHtml(r.model) : "—"}</td>
+            <td class="n">${fmtN(r.input || 0)}</td>
+            <td class="n">${fmtN(r.output || 0)}</td>
+            <td class="n">${fmtN(r.cache_read || 0)}</td>
+            <td class="n">${fmtMoney(r.cost || 0)}</td>
+            <td>${ledStatusCell(r)}</td>
+          </tr>`;
+        })
+        .join("")}</tbody>
+    </table>`;
+  wrap.scrollTop = kept;
+}
+
+// ---- the sessions and the context ---------------------------------------
+function renderLedgerSessions() {
+  const wrap = document.getElementById("usageSessions");
+  if (!wrap) return;
+  const kept = wrap.scrollTop;
+  const rows = (usageDigest && usageDigest.session_rows) || [];
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="led-none">本周期没有会话</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <table class="led">
+      <thead><tr>
+        <th>最后活动</th><th>智能体</th><th>模型</th><th>目录</th><th class="n">请求</th><th class="n">Token</th><th class="n">费用</th><th>状态</th>
+      </tr></thead>
+      <tbody>${rows
+        .map(
+          (s) => `<tr>
+            <td class="when">${escapeHtml(fmtWhen(s.last, usagePeriod !== "today"))}</td>
+            <td class="muted">${escapeHtml(s.agent_name)}</td>
+            <td class="model-value">${s.model ? getModelIcon(s.model, 14) + escapeHtml(s.model) : "—"}</td>
+            <td class="muted mono" title="${escapeHtml(s.cwd)}">${escapeHtml(shortPath(s.cwd))}</td>
+            <td class="n">${(s.calls || 0).toLocaleString()}</td>
+            <td class="n">${fmtN(s.tokens || 0)}</td>
+            <td class="n">${fmtMoney(s.cost || 0)}</td>
+            <td>${s.errors ? `<span class="tag err">${s.errors} 次失败</span>` : `<span class="tag ok">正常</span>`}</td>
+          </tr>`,
+        )
+        .join("")}</tbody>
+    </table>`;
+  wrap.scrollTop = kept;
+}
+
+function renderLedgerContext() {
+  const wrap = document.getElementById("usageContext");
+  if (!wrap) return;
+  const kept = wrap.scrollTop;
+  const rows = ((usageDigest && usageDigest.session_rows) || [])
+    .filter((s) => s.context > 0)
+    .sort((a, b) => b.context - a.context);
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="led-none">本周期没有可读的上下文</div>`;
+    return;
+  }
+  const max = Math.max(1, rows[0].context);
+  wrap.innerHTML = rows
+    .map((s) => {
+      const pct = Math.max(1, Math.round((100 * s.context) / max));
+      return `<div class="row stat ctx-row">
+        <span class="ic">${getAgentIcon(s.agent, 18)}</span>
+        <div class="who">
+          <div class="name-line"><span class="name">${escapeHtml(shortPath(s.cwd) || s.id.slice(0, 8))}</span>
+            <span class="tag mono">${escapeHtml(s.id.slice(0, 8))}</span></div>
+          <div class="sub">${escapeHtml(s.agent_name)} · ${escapeHtml(s.model || "—")} · ${(s.calls || 0).toLocaleString()} 次请求</div>
+        </div>
+        <div class="share" title="上下文 ${fmtN(s.context)} Token"><i style="width:${pct}%;"></i></div>
+        <div class="num"><b>${fmtN(s.context)}</b><small>提示词 Token</small></div>
+        <div class="ctx-when">${escapeHtml(fmtWhen(s.last, false))}</div>
+      </div>`;
+    })
+    .join("");
+  wrap.scrollTop = kept;
+}
+
+// the tail of a path, so a row keeps its identity without the drive letters
+function shortPath(p) {
+  const parts = String(p || "")
+    .split(/[\\/]/)
+    .filter(Boolean);
+  if (!parts.length) return "";
+  return parts.slice(-2).join("/");
+}
+
+// The CSV is the filtered list, every row the period answered, not just the
+// thousand the table draws: a reader exporting wants the period's requests.
+function exportLedgerCsv() {
+  if (!usageDigest) return;
+  const rows = ledFilteredRows();
+  if (!rows.length) {
+    toast("当前筛选没有可导出的请求", "err");
+    return;
+  }
+  const head = ["time", "agent", "model", "session", "cwd", "input", "output", "cache_read", "cache_write", "cost_usd", "status", "error"];
+  const cell = (v) => {
+    const s = String(v == null ? "" : v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const body = rows.map((r) => {
+    const status = r.error ? (r.recovered ? "recovered" : "failed") : r.retried ? "retried" : "ok";
+    return [
+      new Date(r.t).toISOString(),
+      r.agent,
+      r.model,
+      r.session,
+      r.cwd,
+      r.input,
+      r.output,
+      r.cache_read,
+      r.cache_write,
+      (Number(r.cost) || 0).toFixed(6),
+      status,
+      r.error || "",
+    ]
+      .map(cell)
+      .join(",");
+  });
+  const csv = "﻿" + [head.join(","), ...body].join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `agenthub-usage-${usagePeriod}-${heatISO(new Date())}.csv`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`已导出 ${rows.length.toLocaleString()} 条请求`);
+}
+
 // ---- the settings page -----------------------------------------------------
 // magpie's Settings: a tab per part across the head, that part's rows under
 // it, and a box that searches every part at once while it holds words. The
@@ -2526,8 +2969,8 @@ let settingsQuery = "";
 const SET_TAB_LABELS = {
   general: "通用 · General",
   appearance: "外观 · Appearance",
-  device: "设备与配对 · Device",
-  gateway: "网关 · Gateway",
+  gateway: "设备与网关 · Gateway",
+  capabilities: "能力生态 · Capabilities",
   about: "关于 · About",
 };
 

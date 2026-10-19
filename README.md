@@ -141,10 +141,10 @@ AgentHub adheres strictly to open-source governance and licenses:
 
 | Upstream Project | License | Module / Role in AgentHub |
 | :--- | :--- | :--- |
-| [magpie](https://github.com/yetone/magpie) | MIT License, Copyright (c) 2026 yetone | Embedded Web Console design system, layout primitives, and federated Multi-Agent Library architecture (Skill, MCP Server, Hook ecosystem management in `crates/runner/src/collectors/capabilities.rs` & `crates/runner/resources/`) |
+| [magpie](https://github.com/yetone/magpie) | MIT License, Copyright (c) 2026 yetone | Embedded Web Console design system, layout primitives, the vendor icon set (`crates/runner/resources/icons/`, copied verbatim from magpie's `internal/gui/assets/icons/` and served by `crates/runner/src/console_icons.rs`), the per-request usage ledger page (tabs / period / status / heatmap / stacked trend / ranking / request table, after magpie's usage view), and the federated Multi-Agent Library architecture (Skill, MCP Server, Hook ecosystem management in `crates/runner/src/collectors/capabilities.rs` & `crates/runner/resources/`) |
 | [stablyai/orca](https://github.com/stablyai/orca) | Apache 2.0 / MIT | Mobile Companion UI philosophy, terminal accessory row, and fleet mission-control layout (`apps/android`) |
 
-> **Note**: Foundation CSS tokens (light/dark themes, segmented top bar, responsive grid, dialogs, and stat rows) are ported from magpie's `internal/gui/assets/app.css`. Upstream copyright and MIT license declarations remain intact in the source headers.
+> **Note**: Foundation CSS tokens (light/dark themes, segmented top bar, responsive grid, dialogs, and stat rows) are ported from magpie's `internal/gui/assets/app.css`; the vendor marks under `crates/runner/resources/icons/` are byte-for-byte copies from magpie's `internal/gui/assets/icons/`, selected by the same model-family prefix table (`internal/agent/icons.go`). Upstream copyright and MIT license declarations remain intact in the source headers.
 
 ---
 

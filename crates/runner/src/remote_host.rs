@@ -1286,6 +1286,14 @@ impl NativeTransport for MultiProviderTransport {
                         && let Some(items) = response["data"].as_array_mut()
                     {
                         for entry in claude_entries {
+                            // Desktop and the CLI share one transcript tree;
+                            // the entry point is what tells them apart, and
+                            // they are distinct products in the console.
+                            let provider = if entry.desktop {
+                                "claude_desktop"
+                            } else {
+                                "claude_code"
+                            };
                             items.push(json!({
                                 "id": format!("claude_{}", entry.session_id),
                                 "session_id": format!("claude_{}", entry.session_id),
@@ -1293,8 +1301,8 @@ impl NativeTransport for MultiProviderTransport {
                                 "workspace_path": entry.cwd,
                                 "name": entry.title.clone().unwrap_or_else(|| entry.session_id.clone()),
                                 "title": entry.title,
-                                "provider": "claude_code",
-                                "agent_name": "claude_code",
+                                "provider": provider,
+                                "agent_name": provider,
                                 "model": entry.model,
                                 "prompt_tokens": entry.prompt_tokens,
                                 "completion_tokens": entry.completion_tokens,

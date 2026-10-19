@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased]
+
+### 内嵌控制台页面收敛与用量账本 (Console Navigation Consolidation & Per-request Usage Ledger)
+
+- **导航与页面收敛 (Four Pages, One Settings)**：
+  - 删除页脚常驻的端口/端点显示（`#footPort`、`#footEndpoint`），该信息设置页“关于”分区已有；`.foot` 元素与相关样式一并移除；
+  - 删除“模型”与“网关”两个视图（`#view-models`、`#view-gateway`），主界面只保留会话、智能体、用量、工作区四页；路由与拓扑明确归上游 CPA（cliproxyapi）管理，本机控制台不再绘制任何拓扑图；
+  - “能力”从主视图移入设置页：新增设置标签“能力生态”，内含全部/技能/MCP/钩子四个子筛选、跨全部分区的搜索、注册 MCP 服务与重新探测按钮；原 `#view-capabilities` 及其 KPI 卡片删除，能力概览改为一句话（`#capSummarySub`）；
+  - “设备与配对”并入设置页“设备与网关”分区（`setPage-gateway`）：设备 ID、硬件公钥、绑定状态、配对表单、上游网关 BASE URL、亲和标头、上游模型同步行同处一页；`openSettings('gateway')` 成为侧栏与工作区配对入口的唯一去向；
+  - 设置标签固定为 通用 / 外观 / 设备与网关 / 能力生态 / 关于 五项，`SET_TAB_LABELS` 与 `SET_TABS` 同步，删除已不存在的 `device` 标签；
+- **逐请求用量账本 (Per-request Usage Ledger)**：
+  - 新增 `crates/runner/src/usage_ledger.rs`：以 Claude 转录为主干逐条解析每次调用（时间、智能体、模型、会话、目录、输入/输出/缓存读写、是否失败），按 `message.id` + `requestId` 去重并以同一消息最后一行写入为准；`entrypoint` 以 `claude-desktop` 开头记为 Claude Desktop，其余记为 Coding Assistant，两者严格区分；
+  - API 错误行（`isApiErrorMessage`、`model: "<synthetic>"`、零用量）计为失败请求，不计入模型排行；同一会话 10 分钟内的失败后成功配对为 `retried` / `recovered`，汇总只把未被后续成功回答的失败算作 `errors`；
+  - 回复速度由同一消息首行与末行时间戳之差（写入时长）与输出 Token 计算，`speed` / `timed` 只在有可测回复时给出；
+  - `GET /api/usage/ledger?period=today|7d|30d|all&limit=1..1000` 返回 `LedgerDigest`：周期合计、按小时/天/周分桶且按时间升序的 `series`（每个桶含模型 / 模型·智能体 / 智能体三套份额）、三套排行、53 周（周一起）热力图、会话行（含最后上下文大小）与最近请求；账本扫描按 5 秒缓存，轮询不会重复读盘；
+- **用量页按 magpie 的用法视图重做 (Usage Page, after magpie)**：
+  - 顶部四段标签（概览 / 请求 / 会话 / 上下文）、周期（今天 / 7 天 / 30 天 / 全部）、手动/10 秒/30 秒/1 分钟刷新频率，选择全部持久化到 localStorage；
+  - 概览：五格 KPI（请求、Token、预估花费、缓存命中、输出速度，含失败/重试、in/out/cache 拆分、缓存命中率条），堆叠柱状趋势图（Token / 费用 / 请求 / 速度四种指标，按模型 / 模型·智能体 / 智能体三种分组，速度指标按每个模型单独标点），右侧排行条（前 7 名按色，其余归入“其他”，悬停联动高亮图表），53 周热力图（Token / 请求 / 费用三种指标、周一起、月份标签、五级色阶、悬停日详情、自动滚到最新一周）；
+  - 请求表：时间/智能体/模型/输入/输出/缓存读/费用/状态，状态筛选（全部 / 失败 / 重试后成功）、搜索、条数统计与 CSV 导出（UTF-8 BOM，含完整错误信息）；会话表与上下文表分别列出周期内会话与每个会话最后交给模型的提示词大小；
+  - 图表在页面可见且卡片有宽度时才绘制，隐藏页面不画零宽 SVG；轮询刷新保留表格滚动位置；
+- **模型图标改为逐字节取用 magpie 资源 (Vendor Marks from magpie)**：
+  - 新增 `crates/runner/src/console_icons.rs`，以 `include_bytes!` 内嵌 `crates/runner/resources/icons/` 下 19 个 SVG 与 1 个 PNG，经 `/icons/<name>.svg|png` 提供（dev 构建 `no-store`，发布构建 immutable）；
+  - 所有图标逐字节复制自 magpie `internal/gui/assets/icons/`，模型按 magpie `internal/agent/icons.go` 的前缀表选图（claude / gpt / gemini / deepseek / grok / kimi / glm / qwen / mistral / minimax / mimo / step 等）；删除页面里手绘的近似 SVG，未知模型显示中性空位而不是编造 logo；`currentColor` 单色图标在深色主题下以 `filter: invert(1)` 反相；
+- **智能体收敛为五个产品 (Five Agent Products)**：
+  - 智能体视图与统计只保留 Coding Assistant（`claude_code`）、Claude Desktop（`claude_desktop`）、Codex、Grok、Gemini CLI；Claude Desktop 以数据目录 `AppData/Local/AIClaude` 与桌面端会话为探测依据，描述中明确它与 Coding Assistant 是两款独立产品；Antigravity / ZCode / Cursor / Cline 等仅计入会话来源，不再出现在智能体卡片；
+- **测试**：`usage_ledger` 新增失败重试配对、失败次日独立、会话上下文、分桶边界、周一起、序列时间升序等 10 项单元测试；`web_server` 资产测试改为断言四页导航、设置页能力分区、用量页元素与 `/icons/` 图标路径；`cargo test --workspace` 全部通过，`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 通过；
+- **文档与溯源**：README 开源引用表补充 magpie 图标集与用量账本页的模块归属，`docs/ARCHITECTURE.md` 更新视图数量、账本与图标来源、计价权威位置。
+
 ## [2.5.0] - 2026-10-19
 
 ### 内嵌控制台设置页化与开发热重载 (Console Settings Page & Dev Hot Reload)
