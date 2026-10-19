@@ -1765,7 +1765,9 @@ mod tests {
         assert!(INDEX_HTML.contains("id=\"setPage-capabilities\""));
         assert!(INDEX_HTML.contains("id=\"capSubTabs\""));
         assert!(INDEX_HTML.contains("id=\"registerMcpModal\""));
-        assert!(DASHBOARD_CSS.contains(".cap-card"));
+        // the ecosystem reads as flat console rows, the same .row idiom as
+        // every other page, not as a second card design
+        assert!(DASHBOARD_CSS.contains(".cap-row"));
         assert!(DASHBOARD_JS.contains("function renderCapabilities"));
         assert!(DASHBOARD_JS.contains("function submitRegisterMcp"));
     }

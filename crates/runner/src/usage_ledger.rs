@@ -107,10 +107,6 @@ fn local_offset_ms(now_ms: i64) -> i64 {
 pub struct LedgerRecord {
     /// The call's last write, in milliseconds since the epoch.
     pub t: i64,
-    /// The first line of the same message, in milliseconds. A reply written as
-    /// several blocks spans this, which is the only timing a transcript keeps:
-    /// it bounds how long the model took to write the reply.
-    pub t_start: i64,
     /// The moment the reply was asked for: the last prompt or tool result
     /// before its first line, or the end of the previous reply. It is what
     /// [`LedgerRecord::floor_ms`] measures a whole turn from, so it never
@@ -167,57 +163,38 @@ impl LedgerRecord {
             .saturating_add(self.cache_write)
     }
 
-    /// The ms the reply was seen writing, from its first line to its last,
-    /// when that window can time a speed at all.
-    ///
-    /// magpie's rule (usage.MinDecodeMs, usage.MaxDecodeSpeed): a window
-    /// shorter than 100 ms, or one over which the tokens would have come
-    /// faster than 10,000 a second, did not time the writing — the reply
-    /// arrived in one burst at its end, already written before the window
-    /// opened. Such a reply tells no speed and is left out rather than
-    /// counted as instant, which is what turned a burst into thousands of
-    /// tok/s.
-    pub fn write_ms(&self) -> Option<u64> {
-        let ms = self.t.saturating_sub(self.t_start);
-        decode_window(self.output, ms.try_into().ok()?)
-    }
-
     /// The whole turn a reply read from a transcript file can be timed over:
     /// from the moment it was asked for to its last line, the wait for the
     /// first token included.
     ///
-    /// A transcript file has no first-token time, so this is the least the
-    /// reply wrote at, not its speed: magpie's `Row.Floor`. It is told only
-    /// for a reply of 1,000 tokens or more over a second or more (a shorter
-    /// one is mostly wait, and would read far under its real speed) and no
-    /// faster than 10,000 tok/s.
+    /// A transcript file has no first-token time. Its message lines each carry
+    /// the finished usage, and a message's first line is its first *content
+    /// block*, not its first token — the blocks land together, so the span
+    /// from the first line to the last says nothing about how long the model
+    /// wrote. The only honest timing is the whole turn: magpie's `Row.Floor`.
+    /// It is the least the reply wrote at, not its speed, and is told only for
+    /// a reply of 1,000 tokens or more over a second or more (a shorter one is
+    /// mostly wait, and would read far under its real speed) and no faster
+    /// than 10,000 tok/s.
     pub fn floor_ms(&self) -> Option<u64> {
-        if self.asked <= 0 || self.asked >= self.t_start {
+        if self.asked <= 0 || self.asked >= self.t {
             return None;
         }
         let ms: u64 = self.t.saturating_sub(self.asked).try_into().ok()?;
-        (self.output >= FLOOR_MIN_OUTPUT && ms >= FLOOR_MIN_MS).then_some(ms)
+        if self.output < FLOOR_MIN_OUTPUT || ms < FLOOR_MIN_MS {
+            return None;
+        }
+        // output * 1000 <= 10_000 * ms, without overflowing on a huge reply
+        if self.output.saturating_mul(1000) > MAX_DECODE_SPEED.saturating_mul(ms) {
+            return None;
+        }
+        Some(ms)
     }
 }
 
-/// A window that timed writing, per magpie's `usage.DecodeWindow`: 0 for one
-/// too short to tell anything by, or too fast to be a stream.
-fn decode_window(output: u64, ms: u64) -> Option<u64> {
-    if output == 0 || ms < MIN_DECODE_MS {
-        return None;
-    }
-    // output * 1000 <= 10_000 * ms, without overflowing on a huge reply
-    if output.saturating_mul(1000) > MAX_DECODE_SPEED.saturating_mul(ms) {
-        return None;
-    }
-    Some(ms)
-}
-
-/// The least a decode window can be and still time anything: a tenth of a
-/// second (magpie's `usage.MinDecodeMs`).
-const MIN_DECODE_MS: u64 = 100;
 /// The fastest a real stream writes: 10,000 tokens a second (magpie's
-/// `usage.MaxDecodeSpeed`). Anything above is one burst, not writing.
+/// `usage.MaxDecodeSpeed`). A whole turn that reads faster than this timed
+/// something other than the writing.
 const MAX_DECODE_SPEED: u64 = 10_000;
 /// The least a whole-turn floor is told for: a shorter reply is mostly the
 /// wait for its first token (magpie's `Row.Floor`).
@@ -657,7 +634,6 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
         let asked = last_user_ms.max(last_assistant_ms).min(time);
         let record = LedgerRecord {
             t: time,
-            t_start: time,
             asked,
             agent,
             model: if failed { String::new() } else { model.clone() },
@@ -686,12 +662,10 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
         };
         match index.get(&key) {
             Some(&at) => {
-                // the message's first line keeps the moment the reply began,
-                // and the ask it answers
-                let started = calls[at].t_start;
+                // the message's latest line carries the final usage; the ask
+                // it answers was fixed when the message began
                 let asked = calls[at].asked;
                 calls[at] = record;
-                calls[at].t_start = started;
                 calls[at].asked = asked;
             }
             None => {
@@ -817,9 +791,9 @@ pub struct SeriesPoint {
     pub tokens: u64,
     pub cost: f64,
     pub errors: u64,
-    /// The bucket's own speed and floor, over every reply in it (see
-    /// [`Timing`]). A speed is not a share of anything, so the chart draws it
-    /// as a track with each model's mark on it.
+    /// The bucket's own floor, over every reply in it (see [`Timing`]). A
+    /// speed is not a share of anything, so the chart draws it as a track
+    /// with each model's mark on it.
     #[serde(flatten)]
     pub timing: Timing,
     /// The bucket's calls by each ranking dimension, so the chart can stack
@@ -841,24 +815,24 @@ pub struct Part {
     pub tokens: u64,
     pub output: u64,
     pub cost: f64,
-    /// The speed the timed replies of this part wrote at: their output over
-    /// the ms they were seen writing (see [`Timing`]).
+    /// The floor of the replies of this part: their output over the whole
+    /// turn each was asked in (see [`Timing`]).
     #[serde(flatten)]
     pub timing: Timing,
 }
 
-/// The speed a group of replies reads at, in magpie's two figures.
+/// The speed a group of replies reads at, as magpie tells it for a file
+/// source: one figure, a floor.
 ///
-/// A speed is summed, not averaged: the group's output over the group's
-/// writing time. An average of per-reply rates lets one short, fast reply
-/// stand for a long, slow one. Replies the transcript timed only from their
-/// first line are `decode_*`; the longer ones a whole turn can time are
-/// `floor_*`, a least rather than a speed.
+/// A transcript file never says when an answer began — its first line is the
+/// first content block, not the first token — so a reply's speed after its
+/// first token cannot be measured from it. What the file does say is when the
+/// reply was asked for and when it ended, and the tokens over that whole turn
+/// are the least the reply wrote at. A speed is summed, not averaged: the
+/// group's output over the group's time. An average of per-reply rates lets
+/// one short, fast reply stand for a long, slow one.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Timing {
-    pub decode_out: u64,
-    pub decode_ms: u64,
-    pub decode_n: u64,
     pub floor_out: u64,
     pub floor_ms: u64,
     pub floor_n: u64,
@@ -866,27 +840,14 @@ pub struct Timing {
 
 impl Timing {
     fn observe(&mut self, record: &LedgerRecord) {
-        if let Some(ms) = record.write_ms() {
-            self.decode_out = self.decode_out.saturating_add(record.output);
-            self.decode_ms = self.decode_ms.saturating_add(ms);
-            self.decode_n = self.decode_n.saturating_add(1);
-        } else if let Some(ms) = record.floor_ms() {
+        if let Some(ms) = record.floor_ms() {
             self.floor_out = self.floor_out.saturating_add(record.output);
             self.floor_ms = self.floor_ms.saturating_add(ms);
             self.floor_n = self.floor_n.saturating_add(1);
         }
     }
 
-    /// The measured speed, in tokens a second; 0 for none timed.
-    pub fn speed(&self) -> f64 {
-        if self.decode_ms == 0 {
-            0.0
-        } else {
-            self.decode_out as f64 / (self.decode_ms as f64 / 1000.0)
-        }
-    }
-
-    /// The least the untimed replies wrote at, in tokens a second; 0 for none.
+    /// The least the replies wrote at, in tokens a second; 0 for none timed.
     pub fn floor(&self) -> f64 {
         if self.floor_ms == 0 {
             0.0
@@ -1327,7 +1288,6 @@ mod tests {
     fn record(t: i64, agent: &'static str, model: &str, input: u64, output: u64) -> LedgerRecord {
         LedgerRecord {
             t,
-            t_start: t,
             asked: 0,
             agent,
             model: model.to_owned(),
@@ -1478,55 +1438,55 @@ mod tests {
     }
 
     #[test]
-    fn a_burst_is_no_speed_but_a_stream_is() {
-        let mut burst = record(10_000, "claude_code", "claude-sonnet-5", 0, 17_145);
-        burst.t_start = 10_000 - 77; // 17k tokens in 77 ms: one burst
-        assert_eq!(
-            burst.write_ms(),
-            None,
-            "a window under 100 ms times nothing"
-        );
+    fn a_transcript_tells_only_the_whole_turn() {
+        // A message's first line is its first content block, not its first
+        // token: the blocks land together. A reply of 17k tokens written
+        // "in 77 ms" was already written when its first line arrived, so the
+        // span between its lines is no writing window and tells no speed.
+        let mut burst = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 17_145);
+        burst.asked = 1_000_000 - 77;
+        assert_eq!(burst.floor_ms(), None, "under a second: mostly wait");
 
-        let mut too_fast = record(10_000, "claude_code", "claude-sonnet-5", 0, 5_000);
-        too_fast.t_start = 10_000 - 200; // 25,000 tok/s: past any real stream
-        assert_eq!(too_fast.write_ms(), None);
+        // The whole turn is what the file can time, and it is a floor.
+        let mut turn = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 5_000);
+        turn.asked = 1_000_000 - 20_000;
+        assert_eq!(turn.floor_ms(), Some(20_000), "5,000 tokens in 20 s");
 
-        let mut stream = record(10_000, "claude_code", "claude-sonnet-5", 0, 400);
-        stream.t_start = 10_000 - 1_000; // 400 tok/s over a second
-        assert_eq!(stream.write_ms(), Some(1_000));
+        // Faster than any real stream over the whole turn: the transcript
+        // timed something other than the writing.
+        let mut too_fast = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 5_000);
+        too_fast.asked = 1_000_000 - 400; // 12,500 tok/s
+        assert_eq!(too_fast.floor_ms(), None);
     }
 
     #[test]
     fn a_whole_turn_is_a_floor_only_for_a_long_reply() {
         let mut long = record(20_000, "claude_code", "claude-sonnet-5", 0, 1_500);
-        long.t_start = 20_000;
         long.asked = 15_000; // asked 5 s before its last line
         assert_eq!(long.floor_ms(), Some(5_000));
 
         let mut short = record(20_000, "claude_code", "claude-sonnet-5", 0, 999);
-        short.t_start = 20_000;
         short.asked = 15_000;
         assert_eq!(short.floor_ms(), None, "a short reply is mostly wait");
 
-        let mut unasked = record(20_000, "claude_code", "claude-sonnet-5", 0, 2_000);
-        unasked.t_start = 20_000;
+        let unasked = record(20_000, "claude_code", "claude-sonnet-5", 0, 2_000);
         assert_eq!(unasked.floor_ms(), None, "no ask, no whole turn");
     }
 
     #[test]
-    fn speeds_are_summed_not_averaged() {
-        // A fast short reply and a slow long one: the group's speed is its
+    fn floors_are_summed_not_averaged() {
+        // A fast short reply and a slow long one: the group's floor is its
         // tokens over its time, not the mean of two rates.
         let now = chrono::Local::now().timestamp_millis();
-        let mut fast = record(now, "claude_code", "claude-sonnet-5", 0, 100);
-        fast.t_start = now - 100; // 1,000 tok/s
-        let mut slow = record(now, "claude_code", "claude-sonnet-5", 0, 1_000);
-        slow.t_start = now - 10_000; // 100 tok/s
+        let mut fast = record(now, "claude_code", "claude-sonnet-5", 0, 2_000);
+        fast.asked = now - 2_000; // 1,000 tok/s over the turn
+        let mut slow = record(now, "claude_code", "claude-sonnet-5", 0, 2_000);
+        slow.asked = now - 20_000; // 100 tok/s over the turn
         let d = digest(&[fast, slow], Period::Today, 10);
-        assert_eq!(d.timing.decode_n, 2);
+        assert_eq!(d.timing.floor_n, 2);
         assert!(
-            (d.timing.speed() - 108.9).abs() < 0.5,
-            "1,100 tokens in 10.1 s"
+            (d.timing.floor() - 181.8).abs() < 0.5,
+            "4,000 tokens in 22 s"
         );
     }
 

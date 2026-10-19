@@ -1764,6 +1764,22 @@ fn read_claude_subagent(path: &Path) -> Option<ClaudeSubagentEntry> {
 ///
 /// Returns the folder the files were moved into, or the reason they were not.
 pub fn delete_claude_session(session_id: &str) -> Result<PathBuf, CollectorError> {
+    let config_dir = discover_claude_config_dir()?;
+    let trash_root = home_dir()
+        .unwrap_or_else(|| config_dir.clone())
+        .join(".agenthub")
+        .join("trash")
+        .join("sessions");
+    delete_claude_session_in(&config_dir, &trash_root, session_id)
+}
+
+/// [`delete_claude_session`] against a store the caller names, so a test can
+/// run it on a scratch store rather than the reader's own.
+fn delete_claude_session_in(
+    config_dir: &Path,
+    trash_root: &Path,
+    session_id: &str,
+) -> Result<PathBuf, CollectorError> {
     let program = "Claude transcript store";
     let io = |source: std::io::Error| CollectorError::Io {
         program: program.to_owned(),
@@ -1780,7 +1796,6 @@ pub fn delete_claude_session(session_id: &str) -> Result<PathBuf, CollectorError
             "not a session id",
         )));
     }
-    let config_dir = discover_claude_config_dir()?;
     let projects = config_dir.join("projects");
     let mut main: Option<PathBuf> = None;
     if let Ok(entries) = fs::read_dir(&projects) {
@@ -1831,12 +1846,7 @@ pub fn delete_claude_session(session_id: &str) -> Result<PathBuf, CollectorError
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or_default();
-    let trash = crate::collectors::home_dir()
-        .unwrap_or_else(|| config_dir.clone())
-        .join(".agenthub")
-        .join("trash")
-        .join("sessions")
-        .join(format!("{stamp}-{session_id}"));
+    let trash = trash_root.join(format!("{stamp}-{session_id}"));
     fs::create_dir_all(&trash).map_err(io)?;
     for path in &paths {
         let name = path
@@ -6213,5 +6223,92 @@ mod tests {
         assert_eq!(other.calls, 1);
         assert_eq!(other.total_tokens, 200);
         assert_eq!(other.cache_read_tokens, 100);
+    }
+
+    #[test]
+    fn a_sessions_subagents_are_read_from_their_own_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects").join("-p");
+        let session = project.join("s1");
+        let subs = session.join("subagents");
+        fs::create_dir_all(&subs).unwrap();
+        let main = project.join("s1.jsonl");
+        fs::write(&main, "").unwrap();
+        fs::write(
+            subs.join("agent-aaa.jsonl"),
+            concat!(
+                r#"{"type":"assistant","message":{"id":"m1","model":"deepseek-v4.1-flash","usage":{"input_tokens":10,"output_tokens":100,"cache_read_input_tokens":900,"cache_creation_input_tokens":0}}}"#,
+                "\n",
+                // the same message's next block repeats the usage: one call
+                r#"{"type":"assistant","message":{"id":"m1","model":"deepseek-v4.1-flash","usage":{"input_tokens":10,"output_tokens":100,"cache_read_input_tokens":900,"cache_creation_input_tokens":0}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            subs.join("agent-aaa.meta.json"),
+            r#"{"agentType":"Explore","description":"Survey the module","spawnDepth":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            subs.join("agent-bbb.jsonl"),
+            r#"{"type":"assistant","message":{"id":"m2","model":"gemini-3.8-flash-n","usage":{"input_tokens":5,"output_tokens":50}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            subs.join("agent-bbb.meta.json"),
+            r#"{"agentType":"Plan","description":"Write the plan","parentAgentId":"aaa","spawnDepth":2}"#,
+        )
+        .unwrap();
+
+        let mut found = collect_claude_subagents(&main);
+        found.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(found.len(), 2, "one entry per subagent file");
+        assert_eq!(found[0].id, "aaa");
+        assert_eq!(found[0].kind, "Explore");
+        assert_eq!(found[0].description, "Survey the module");
+        assert_eq!(found[0].request_count, 1, "a message counts once");
+        assert_eq!(found[0].completion_tokens, 100);
+        assert_eq!(found[1].parent, "aaa", "a nested subagent names its parent");
+        assert_eq!(found[1].depth, 2);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn deleting_a_session_moves_its_files_to_the_trash() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("claude");
+        let project = config.join("projects").join("-p");
+        let session = project.join("s1");
+        fs::create_dir_all(session.join("subagents")).unwrap();
+        fs::write(project.join("s1.jsonl"), "{}\n").unwrap();
+        fs::write(session.join("subagents").join("agent-a.jsonl"), "{}\n").unwrap();
+        let trash = dir.path().join("trash");
+        // a session written just now is still being used
+        let refused = delete_claude_session_in(&config, &trash, "s1");
+        assert!(refused.is_err(), "a session written this minute is kept");
+
+        // backdate every file past the guard, then delete
+        let old = SystemTime::now() - Duration::from_secs(600);
+        let backdate = |path: &Path| {
+            let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_modified(old).unwrap();
+        };
+        backdate(&project.join("s1.jsonl"));
+        backdate(&session.join("subagents").join("agent-a.jsonl"));
+        let moved = delete_claude_session_in(&config, &trash, "s1").expect("deleted");
+        assert!(!project.join("s1.jsonl").exists());
+        assert!(!session.exists(), "the subagent folder goes with it");
+        assert!(moved.starts_with(&trash));
+        assert!(
+            moved.join("s1.jsonl").is_file(),
+            "the transcript is in the trash, not gone"
+        );
+
+        // an id the store never had is refused, not created
+        assert!(delete_claude_session_in(&config, &trash, "missing").is_err());
+        // and an id that could walk the tree is refused before any lookup
+        assert!(delete_claude_session_in(&config, &trash, "../s1").is_err());
+        fs::remove_dir_all(dir).ok();
     }
 }

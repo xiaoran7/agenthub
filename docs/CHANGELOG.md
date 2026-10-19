@@ -4,6 +4,19 @@
 
 - **Web 控制台 UI/UX 重构（`/ui-design`）**：全站移除 Emoji，改用 2.2px 线宽内联 SVG 图标；拔除 `.remote-session-tree` 顶部渐变遮罩与 `.settings-page` 硬编码暗色变量，恢复浅/暗主题自然继承；输入框 42~46px、按钮 38~48px，补齐 GPU 加速微动效与 WCAG AA 对比度，统一 Claude Terracotta 品牌色。
 - **文档无损精简与事实对齐**：精简 `AGENTS.md`、`README*.md`、`llms*.txt` 与 `docs/*.md`（含验收记录、宣发模板与 `RELEASE_NOTES_*.md` 原位瘦身），`docs/CHANGELOG.md` 100% 保留全部历史版本头；统一 UTF-8 无 BOM 与纯 LF，清理过期测试计数、旧入口命令与相对时间词。
+- **输出速度只报整轮下限，不再出现 3,000+ tok/s 的假数字（`crates/runner/src/usage_ledger.rs`）**：
+  - 根因：Claude 转录里同一条消息的每个内容块都会重复写一次最终 usage，消息的"第一行"是第一个内容块而不是第一个 token；按首行→末行计时读到过 8,300 tok/s，属于把"整块落地"当成"逐 token 流式写出"；
+  - 对齐上游 magpie 的 `Row.Floor`：转录来源的调用**只**报整轮下限（从"被提问"到最后一行），要求输出 ≥1,000 token、时长 ≥1,000 ms、且不高于 10,000 tok/s，否则不计；
+  - `Timing` 删掉 `decode_*` 三个字段，`write_ms()`/`decode_window()` 移除，`LedgerRecord.t_start` 一并删除；线上实测从 1,170 tok/s 降到 **149.9 tok/s / 1,287 个整轮回复**；
+  - 前端 `ledSpeed()` 改为 `ledFloor()`，KPI、趋势图、排行、tooltip 一律显示 `≥N tok/s`，速度轴改为按"每个模型自己的下限刻度"绘制，不再把速度当成可叠加份额。
+- **用量趋势的指标/分组按钮全部生效（`resources/dashboard.js`）**：三组按钮原来只写 localStorage 与 `.on` 状态、不触发 `pickUsageSegs()` 重绘，现改为切换后立即重算分组与图表；实测 Token/费用/请求/速度与模型/模型·智能体/智能体六个按钮均会切 `.on` 并重绘。
+- **会话页对标 magpie：子代理展开 + 多选删除（`collectors/mod.rs` / `remote_host.rs` / `web_server.rs` / `dashboard.js`）**：
+  - 新增 `ClaudeSubagentEntry` 与 `collect_claude_subagents()`，读取 `<session>/subagents/agent-*.jsonl` 与 `workflows/<run>/agent-*.jsonl`，从 `.meta.json` 取 `agentType`、`description`、`spawnDepth`、`parentAgentId`，按 `message.id` 聚合请求数与 token；子代理缩进挂在父会话下方，显示类型、任务说明、模型、请求数与 Token；
+  - 新增 `POST /api/sessions/delete` 与 `delete_claude_session()`：把会话转录、子代理目录、`file-history/`、`session-env/`、`todos/` 一并移入 `~/.agenthub/trash/sessions/<时间戳>-<id>/`（跨卷时复制再删除），最近 60 秒内仍在写入的会话拒绝删除；
+  - 前端补复选框、全选（含 indeterminate）、`N 个已选`、行内悬停删除与二次确认弹窗；
+  - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
+- **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
+- **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
 
 ## [2.5.2] - 2026-10-19
 

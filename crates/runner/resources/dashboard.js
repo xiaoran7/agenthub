@@ -511,6 +511,20 @@ function switchView(viewId, silent) {
     if (view) {
       view.classList.add("active");
       if (!silent) view.scrollTop = 0;
+      // the settings head's hairline follows the page's own scroll: it is
+      // drawn only once the rows are under the head
+      if (viewId === "settings") {
+        const head = view.querySelector(".set-head");
+        if (head && !head.dataset.scrollBound) {
+          head.dataset.scrollBound = "1";
+          view.addEventListener(
+            "scroll",
+            () => view.classList.toggle("scrolled", view.scrollTop > 2),
+            { passive: true },
+          );
+        }
+        view.classList.toggle("scrolled", view.scrollTop > 2);
+      }
     }
 
     if (!silent) {
@@ -994,7 +1008,8 @@ function renderSessions(sessions, mode = "data") {
 
       const itemsHtml = grp.items
         .map((item, index) => {
-          const rawId = item.session_id || item.id || "";
+          const rawId =
+            item.provider_session_id || item.session_id || item.id || "";
           const hasId = !!rawId && rawId !== "unknown";
           const prompt = escapeHtml(
             item.prompt ||
@@ -1209,7 +1224,7 @@ function askDeleteSessions(one) {
   if (!ids.length) return;
   const byId = new Map(
     dedupeSessions(lastGoodSessions).map((s) => [
-      s.session_id || s.id || "",
+      s.provider_session_id || s.session_id || s.id || "",
       s,
     ]),
   );
@@ -1269,7 +1284,11 @@ async function confirmDeleteSessions() {
       body: JSON.stringify({ ids }),
     });
     const data = resp.ok ? await resp.json() : { deleted: [], refused: [] };
-    for (const id of data.deleted || []) pickedSessions.delete(id);
+    // a refused session stays picked, so the reader can retry it
+    const kept = new Set(
+      (data.refused || []).map((r) => String(r.id || "").replace(/^claude_/, "")),
+    );
+    for (const id of [...pickedSessions]) if (!kept.has(id)) pickedSessions.delete(id);
     closeDeleteSessions();
     if ((data.deleted || []).length) {
       toast(
@@ -1682,7 +1701,7 @@ function applyCapabilitiesFilter() {
   // Render skills
   if (skillsGrid && showSkills) {
     if (matchedSkills.length === 0) {
-      skillsGrid.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; grid-column:1/-1;"><b>没有找到匹配的扩展技能</b><span class="why">检查检索关键词，或在 ~/.claude/skills 与工作区放入 SKILL.md</span></div>`;
+      skillsGrid.innerHTML = `<div class="empty-state"><b>没有找到匹配的扩展技能</b><span class="why">检查检索关键词，或在 ~/.claude/skills 与工作区放入 SKILL.md</span></div>`;
     } else {
       skillsGrid.innerHTML = matchedSkills.map(renderSkillCard).join("");
     }
@@ -1691,7 +1710,7 @@ function applyCapabilitiesFilter() {
   // Render MCP
   if (mcpGrid && showMcp) {
     if (matchedMcp.length === 0) {
-      mcpGrid.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; grid-column:1/-1;"><b>没有找到匹配的 MCP 协议服务器</b><span class="why">可点击右上角“注册 MCP 服务”添加自定义协议进程</span></div>`;
+      mcpGrid.innerHTML = `<div class="empty-state"><b>没有找到匹配的 MCP 协议服务器</b><span class="why">可点击右上角“注册 MCP 服务”添加自定义协议进程</span></div>`;
     } else {
       mcpGrid.innerHTML = matchedMcp.map(renderMcpCard).join("");
     }
@@ -1700,140 +1719,101 @@ function applyCapabilitiesFilter() {
   // Render Hooks
   if (hooksGrid && showHooks) {
     if (matchedHooks.length === 0) {
-      hooksGrid.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; grid-column:1/-1;"><b>没有找到匹配的生命周期钩子</b><span class="why">在 Claude Code 或 Codex 配置 PreToolUse、SessionStart 等钩子后自动纳管</span></div>`;
+      hooksGrid.innerHTML = `<div class="empty-state"><b>没有找到匹配的生命周期钩子</b><span class="why">在 Claude Code 或 Codex 配置 PreToolUse、SessionStart 等钩子后自动纳管</span></div>`;
     } else {
       hooksGrid.innerHTML = matchedHooks.map(renderHookCard).join("");
     }
   }
 }
 
-function renderSkillCard(skill) {
-  const agentPills = (skill.agents || [])
+// One capability a row, in the console's own idiom: a title, one quiet line
+// of facts, and a value column. No icon chips, no coloured event badges, no
+// lifted cards: the capability page is a list of what this machine can do,
+// read the same way as a session or a setting. A long path or command is cut
+// with an ellipsis rather than wrapped, so no row grows past its card.
+function capAgentMarks(agents, fallback) {
+  const list = (agents || []).filter(Boolean);
+  if (!list.length) return `<span class="cap-agents-none">${fallback}</span>`;
+  return list
     .map(
       (a) =>
-        `<span class="cap-agent-pill">${getAgentIcon(a, 12)}<span>${escapeHtml(a)}</span></span>`,
+        `<span class="cap-agent">${getAgentIcon(a, 13)}<span>${escapeHtml(providerLabel(a))}</span></span>`,
     )
     .join("");
+}
 
-  const scriptTag = skill.has_scripts
-    ? `<span class="tag ok" style="font-size:11px;" title="包含可执行自动化脚本">可执行脚本</span>`
-    : ``;
-
-  const safePath = escapeHtml(skill.path).replace(/\\/g, "\\\\");
-
+function capRow({ name, kind, value, facts, agents, meta, copyLabel, title }) {
+  const safeValue = escapeHtml(value || "—");
   return `
-    <div class="cap-card">
-      <div class="cap-card-head">
-        <div class="cap-card-title-group">
-          <span class="cap-card-icon skill">🧩</span>
-          <b class="cap-card-title" title="${escapeHtml(skill.name)}">${escapeHtml(skill.name)}</b>
+    <div class="row cap-row" title="${escapeHtml(title || "")}">
+      <div class="who">
+        <div class="name-line">
+          <span class="name">${escapeHtml(name || "—")}</span>
+          ${kind ? `<span class="tag">${escapeHtml(kind)}</span>` : ""}
         </div>
-        <div class="cap-tags">
-          ${scriptTag}
-          <span class="tag mono" style="font-size:11px;">${escapeHtml(skill.source)}</span>
-        </div>
+        <div class="sub flow">${facts.filter(Boolean).join(" · ")}</div>
+        <button type="button" class="cap-copy mono" onclick="copyText(this.dataset.v); toast('${copyLabel}')" data-v="${escapeHtml(value || "")}" title="${escapeHtml(value || "")}">
+          <span class="cap-copy-text">${safeValue}</span>
+        </button>
       </div>
-      <p class="cap-desc" title="${escapeHtml(skill.description)}">${escapeHtml(skill.description || "暂无描述说明")}</p>
-      <div class="cap-code-box" onclick="copyText('${safePath}'); toast('已复制技能文件路径');" title="点击复制完整路径">
-        <span>${escapeHtml(skill.path)}</span>
-      </div>
-      <div class="cap-card-foot">
-        <div class="cap-agent-pills">${agentPills || '<span class="tag">全局通用</span>'}</div>
-        <span class="status mono" style="font-size:11px;">${skill.enabled ? "已启用" : "已停用"}</span>
+      <div class="cap-side">
+        <div class="cap-agents">${capAgentMarks(agents, "全局")}</div>
+        ${meta ? `<span class="cap-meta">${meta}</span>` : ""}
       </div>
     </div>
   `;
+}
+
+function renderSkillCard(skill) {
+  return capRow({
+    name: skill.name,
+    kind: skill.source,
+    value: skill.path,
+    copyLabel: "已复制技能文件路径",
+    title: skill.description || "",
+    facts: [
+      escapeHtml(skill.description || "暂无描述说明"),
+      skill.has_scripts ? "含可执行脚本" : "",
+    ],
+    agents: skill.agents,
+    meta: skill.enabled ? "已启用" : "已停用",
+  });
 }
 
 function renderMcpCard(mcp) {
-  const agentPills = (mcp.agents || [])
-    .map(
-      (a) =>
-        `<span class="cap-agent-pill">${getAgentIcon(a, 12)}<span>${escapeHtml(a)}</span></span>`,
-    )
-    .join("");
-
-  const transportClass = (mcp.transport || "stdio").toLowerCase();
-  const isStdio = transportClass === "stdio";
-  const cmdOrUrl = isStdio
-    ? `${mcp.command || ""} ${(mcp.args || []).join(" ")}`.trim()
-    : mcp.url || "";
-
-  const statusDot =
-    mcp.status === "active"
-      ? `<span class="cap-status-dot active"></span><span style="color:var(--green);font-weight:600;">活跃运行</span>`
-      : `<span class="cap-status-dot configured"></span><span>已配置</span>`;
-
-  const safeCmd = escapeHtml(cmdOrUrl).replace(/\\/g, "\\\\");
-
-  return `
-    <div class="cap-card">
-      <div class="cap-card-head">
-        <div class="cap-card-title-group">
-          <span class="cap-card-icon mcp">🔌</span>
-          <b class="cap-card-title" title="${escapeHtml(mcp.name)}">${escapeHtml(mcp.name)}</b>
-          <span class="cap-badge ${transportClass}">${escapeHtml(mcp.transport || "stdio")}</span>
-        </div>
-        <div class="cap-tags">
-          <span class="tag mono" style="font-size:11px;">${escapeHtml(mcp.source)}</span>
-        </div>
-      </div>
-      <div class="cap-code-box" onclick="copyText('${safeCmd}'); toast('已复制 MCP 执行参数');" title="点击复制执行命令或端点">
-        <span>${escapeHtml(cmdOrUrl || "—")}</span>
-      </div>
-      <div class="cap-card-foot">
-        <div class="cap-agent-pills">${agentPills || '<span class="tag">共享服务</span>'}</div>
-        <div style="display:flex; align-items:center; font-size:11px;">
-          ${statusDot}
-        </div>
-      </div>
-    </div>
-  `;
+  const transport = (mcp.transport || "stdio").toLowerCase();
+  const cmdOrUrl =
+    transport === "stdio"
+      ? `${mcp.command || ""} ${(mcp.args || []).join(" ")}`.trim()
+      : mcp.url || "";
+  return capRow({
+    name: mcp.name,
+    kind: transport,
+    value: cmdOrUrl,
+    copyLabel: "已复制 MCP 执行参数",
+    title: cmdOrUrl,
+    facts: [escapeHtml(mcp.source || "")],
+    agents: mcp.agents,
+    meta:
+      mcp.status === "active"
+        ? `<span class="cap-live"><i></i>活跃运行</span>`
+        : "已配置",
+  });
 }
 
 function renderHookCard(hook) {
-  const agentPills = (hook.agents || [])
-    .map(
-      (a) =>
-        `<span class="cap-agent-pill">${getAgentIcon(a, 12)}<span>${escapeHtml(a)}</span></span>`,
-    )
-    .join("");
-
-  let eventBadgeClass = "event-other";
-  const ev = (hook.event || "").toLowerCase();
-  if (ev.includes("pre")) eventBadgeClass = "event-pre";
-  else if (ev.includes("session")) eventBadgeClass = "event-session";
-  else if (ev.includes("post")) eventBadgeClass = "event-post";
-  else if (ev.includes("perm")) eventBadgeClass = "event-perm";
-
-  const matcherTag = hook.matcher
-    ? `<span class="tag mono" style="font-size:11px;" title="工具匹配器">拦截: ${escapeHtml(hook.matcher)}</span>`
-    : ``;
-
-  const safeCmd = escapeHtml(hook.command).replace(/\\/g, "\\\\");
-
-  return `
-    <div class="cap-card">
-      <div class="cap-card-head">
-        <div class="cap-card-title-group">
-          <span class="cap-card-icon hook">🪝</span>
-          <b class="cap-card-title" title="${escapeHtml(hook.name)}">${escapeHtml(hook.name)}</b>
-          <span class="cap-badge ${eventBadgeClass}">${escapeHtml(hook.event_display || hook.event)}</span>
-        </div>
-        <div class="cap-tags">
-          ${matcherTag}
-          <span class="tag mono" style="font-size:11px;">${escapeHtml(hook.source)}</span>
-        </div>
-      </div>
-      <div class="cap-code-box" onclick="copyText('${safeCmd}'); toast('已复制 Hook 执行命令');" title="点击复制钩子执行命令">
-        <span>${escapeHtml(hook.command)}</span>
-      </div>
-      <div class="cap-card-foot">
-        <div class="cap-agent-pills">${agentPills}</div>
-        <span class="status mono" style="font-size:11px;">超时: ${hook.timeout_sec || 10}s</span>
-      </div>
-    </div>
-  `;
+  const facts = [escapeHtml(hook.event_display || hook.event || "")];
+  if (hook.matcher) facts.push(`拦截 ${escapeHtml(hook.matcher)}`);
+  return capRow({
+    name: hook.name,
+    kind: hook.event || "",
+    value: hook.command,
+    copyLabel: "已复制 Hook 执行命令",
+    title: hook.event_display || hook.event || "",
+    facts,
+    agents: hook.agents,
+    meta: `${hook.timeout_sec || 10}s`,
+  });
 }
 
 async function syncCapabilities(event) {
@@ -2412,43 +2392,36 @@ function drawUsageKpis(d) {
   if (meter) meter.style.width = Math.min(100, hit).toFixed(1) + "%";
   const gs = ledGroupSpeed(d);
   set("ukSpeed", gs ? gs.main : "—");
-  set("ukSpeedSub", gs ? gs.sub : "本周期没有可测写入速度的回复");
+  set("ukSpeedSub", gs ? gs.sub : "本周期没有可整轮计时的回复");
 }
 
-// How fast a group of replies wrote, by magpie's two figures.
+// How fast a group of replies wrote: a floor, the one figure a transcript
+// file can honestly tell.
 //
-// A speed is summed, not averaged: the group's output over the time it was
-// seen writing. An average of per-reply rates lets one short burst stand for
-// a long reply, which is how a page came to claim 3,000 tok/s. Replies timed
-// from their first line are `decode_*`; a reply the transcript wrote in one
-// line has no writing window at all, so the least it can be said to have
-// written at is its output over the whole turn (`floor_*`), said as "≥".
-function ledSpeed(x) {
-  return x && x.decode_ms > 0 ? (1000 * (x.decode_out || 0)) / x.decode_ms : 0;
-}
+// A transcript never says when an answer began — a message's first line is
+// its first content block, not its first token, and the blocks land together
+// — so timing from that line read thousands of tok/s and is not used. What
+// the file does say is when the reply was asked for and when it ended; the
+// tokens over that whole turn are the least it wrote at. A speed is summed,
+// not averaged: the group's output over the group's time, so one short, fast
+// reply cannot stand for a long, slow one.
 function ledFloor(x) {
   return x && x.floor_ms > 0 ? (1000 * (x.floor_out || 0)) / x.floor_ms : 0;
 }
 function ledGroupSpeed(x) {
-  const v = ledSpeed(x);
   const f = ledFloor(x);
-  const kv = (x && x.decode_n) || 0;
   const kf = (x && x.floor_n) || 0;
-  if (!v && !f) return null;
-  const timed = v ? { s: v, head: `${Math.round(v)} tok/s`, n: kv, tail: `${kv.toLocaleString()} 个有写入时长的回复` } : null;
-  const floor = f ? { s: f, head: `≥${Math.round(f)} tok/s`, n: kf, tail: `${kf.toLocaleString()} 个整轮计时的回复` } : null;
-  // the larger sample first; a tie keeps the measured one first
-  const [a, b] = timed && floor && kf > kv ? [floor, timed] : [timed || floor, timed && floor];
+  if (!f) return null;
   return {
-    main: a.head,
-    sub: b ? `${a.tail} · ${b.head}（${b.tail}）` : a.tail,
-    value: a.s,
+    main: `≥${Math.round(f)} tok/s`,
+    sub: `${kf.toLocaleString()} 个整轮计时的回复`,
+    value: f,
   };
 }
 
 // the metric a chart counts for one point or one share
 function ledValue(metric, x) {
-  if (metric === "speed") return ledSpeed(x);
+  if (metric === "speed") return ledFloor(x);
   if (metric === "cost") return Number(x.cost) || 0;
   if (metric === "calls") return Number(x.calls) || 0;
   return Number(x.tokens) || 0;
@@ -2463,7 +2436,7 @@ function ledRankValue(metric, x) {
 }
 
 function ledPartValue(metric, part) {
-  if (metric === "speed") return ledSpeed(part);
+  if (metric === "speed") return ledFloor(part);
   if (metric === "cost") return Number(part.cost) || 0;
   if (metric === "calls") return Number(part.calls) || 0;
   return Number(part.tokens) || 0;
@@ -2472,7 +2445,7 @@ function ledPartValue(metric, part) {
 function ledFormat(metric, v) {
   if (metric === "cost") return fmtMoney(v);
   if (metric === "calls") return Math.round(v).toLocaleString();
-  if (metric === "speed") return Math.round(v) + " tok/s";
+  if (metric === "speed") return "≥" + Math.round(v) + " tok/s";
   return fmtN(Math.round(v));
 }
 
@@ -2575,7 +2548,7 @@ function drawLedgerTrend() {
   const max = Math.max(
     0,
     ...totals,
-    ...(speed ? pts.flatMap((p) => top.map((c) => ledSpeed(partOf(p, c.id)))) : []),
+    ...(speed ? pts.flatMap((p) => top.map((c) => ledFloor(partOf(p, c.id)))) : []),
   );
   if (!(max > 0)) {
     const none = document.createElement("div");
@@ -2584,7 +2557,7 @@ function drawLedgerTrend() {
       ledMetric === "cost"
         ? "本周期没有已知价格的请求"
         : speed
-          ? "本周期没有可测写入速度的回复"
+          ? "本周期没有可整轮计时的回复"
           : "本周期没有请求";
     plot.append(none);
     drawLedgerRank(d, bucket);
@@ -2673,7 +2646,7 @@ function drawLedgerTrend() {
         segs[segs.length - 1].classList.add("all");
       }
       for (const c of top) {
-        const v = ledSpeed(partOf(p, c.id));
+        const v = ledFloor(partOf(p, c.id));
         if (!(v > 0)) continue;
         if (v > totals[i]) {
           const topY = Y(totals[i]);
@@ -2767,7 +2740,7 @@ function drawLedgerTrend() {
     const sum = document.createElement("div");
     sum.className = "sum";
     const a = document.createElement("span");
-    a.textContent = speed ? "合计" : "总计";
+    a.textContent = speed ? "本时段" : "总计";
     const b = document.createElement("em");
     b.textContent = ledFormat(ledMetric, totals[i]);
     if (ledMetric !== "calls" && p.calls)
@@ -2854,7 +2827,6 @@ function drawLedgerRank(d, bucket) {
       (acc, x) => {
         for (const k of [
           "calls", "tokens", "cost", "errors", "output",
-          "decode_out", "decode_ms", "decode_n",
           "floor_out", "floor_ms", "floor_n",
         ])
           acc[k] = (acc[k] || 0) + (x[k] || 0);
