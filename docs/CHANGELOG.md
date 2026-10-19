@@ -19,6 +19,10 @@
   - 新增 Rust 单元与集成测试（`acp_app_server` 协议解析与脱敏比对测试、`MultiProviderTransport` 路由测试、`PendingApprovalSnapshot` 契约投影测试，172 + 28 项测试全部通过）；
   - TypeScript `@agent-pulse/contracts` 与 `@agent-pulse/api` 单元测试全部通过（15 + 56 项测试通过）；
   - `@agent-pulse/web` 前端生产构建 0 错误编译通过。
+- **产物重新打包归档 (Repackaged Deliverables)**：
+  - 产出 `AgentHub-Runner-v2.4.96-windows-x64.zip`（含 release 构建的 `agenthub-runner.exe` 与快速开始指南）；
+  - 产出 `AgentHub-v2.4.96-android-debug.apk`（versionCode 96，versionName 2.4.96）；
+  - 更新校验和清单 `AgentHub-v2.4.96-SHA256.txt` 并严格清理旧版本归档。
 
 ## [2.4.95] - 2026-10-19
 
