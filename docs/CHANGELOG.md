@@ -17,6 +17,7 @@
   - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
 - **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
 - **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
+- **构建与发版**：重新编译 `cargo build --release -p agenthub-runner` 并重打包 `AgentHub-Runner-v2.5.2-windows-x64.zip`（4,729,879 字节，含 12,002,304 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`），刷新 `AgentHub-v2.5.2-SHA256.txt`（`dfc4f4d3…9b21`）；旧包先删后打，产物目录仍只保留最新一版。验证：`cargo test --workspace` 205 项全绿，`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过。
 
 ## [2.5.2] - 2026-10-19
 
