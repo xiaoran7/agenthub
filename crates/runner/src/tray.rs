@@ -22,12 +22,12 @@ mod windows_tray {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadIconW, LoadImageW,
-        IMAGE_ICON, LR_DEFAULTCOLOR, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-        PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetMenuDefaultItem,
-        SM_CXICON, SM_CYICON, SM_CXSMICON, SM_CYSMICON, TPM_RIGHTBUTTON, TrackPopupMenu,
-        TranslateMessage, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL,
-        WM_RBUTTONUP, WM_USER, WNDCLASSW,
+        DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, IMAGE_ICON, LR_DEFAULTCOLOR,
+        LoadIconW, LoadImageW, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
+        PostQuitMessage, RegisterClassW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON,
+        SetForegroundWindow, SetMenuDefaultItem, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
+        WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_USER,
+        WNDCLASSW,
     };
 
     const WM_TRAY_CALLBACK: u32 = WM_USER + 101;
@@ -111,14 +111,7 @@ mod windows_tray {
 
             let cx_sm = GetSystemMetrics(SM_CXSMICON);
             let cy_sm = GetSystemMetrics(SM_CYSMICON);
-            let hicon_sm = LoadImageW(
-                hinstance,
-                1 as _,
-                IMAGE_ICON,
-                cx_sm,
-                cy_sm,
-                LR_DEFAULTCOLOR,
-            );
+            let hicon_sm = LoadImageW(hinstance, 1 as _, IMAGE_ICON, cx_sm, cy_sm, LR_DEFAULTCOLOR);
             let hicon_sm = if hicon_sm != 0 as _ {
                 hicon_sm as _
             } else {
@@ -218,7 +211,8 @@ mod windows_tray {
                             .trim_end_matches('/');
 
                         // 1. 顶部状态标题头（禁用态/浅灰）：对齐现代系统托盘规范
-                        let title_text = format!("AgentHub v{} (运行中: {})\0", version, display_host);
+                        let title_text =
+                            format!("AgentHub v{} (运行中: {})\0", version, display_host);
                         let title_u16: Vec<u16> = title_text.encode_utf16().collect();
                         AppendMenuW(
                             hmenu,
@@ -230,8 +224,10 @@ mod windows_tray {
 
                         // 2. 核心功能入口
                         let show_app_text: Vec<u16> = "打开协同控制台\0".encode_utf16().collect();
-                        let show_gw_text: Vec<u16> = "查看演进拓扑 (网关)\0".encode_utf16().collect();
-                        let open_browser_text: Vec<u16> = "在系统浏览器中打开\0".encode_utf16().collect();
+                        let show_gw_text: Vec<u16> =
+                            "查看演进拓扑 (网关)\0".encode_utf16().collect();
+                        let open_browser_text: Vec<u16> =
+                            "在系统浏览器中打开\0".encode_utf16().collect();
                         let open_dir_text: Vec<u16> = "打开数据存储目录\0".encode_utf16().collect();
                         let exit_text: Vec<u16> = "退出 AgentHub\0".encode_utf16().collect();
 

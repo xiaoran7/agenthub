@@ -897,4 +897,3 @@ mod tests {
         assert!(prompts.is_empty());
     }
 }
-

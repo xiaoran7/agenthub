@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.4.99] - 2026-10-19
+
+### 智能体生态能力纳管架构与青空能力控制台 (Federated Skill / MCP / Hook Library & Aozora Capabilities View)
+
+- **上游 Magpie 统一资料库体系 (Federated Multi-Agent Library Architecture)**：
+  - 参考并吸收上游开源项目 magpie（`internal/library/`）的集中纳管设计，在 AgentHub Runtime 原生实现跨智能体的能力资产集中扫描与统一建模：
+    - **Skill 技能纳管**：全面扫描 `~/.claude/skills`、当前工作区 `.claude/skills` 及 Codex 技能目录，自动提取并解析 Markdown YAML Frontmatter、技能名称、首行功能摘要与可执行脚本支持标识（`has_scripts`）；
+    - **MCP Server 上下文协议服务**：集中解析 Claude 配置文件（`~/.claude.json`）、Codex 配置（`~/.codex/config.toml`）、工作区配置（`.mcp.json`）以及 AgentHub 独立配置（`~/.agenthub/mcp.json`），归一化为 `stdio` 本地进程与 `sse`/`http` 远程端点两种传输模式，保留启动命令、参数、环境变量及自定义 HTTP 请求头；
+    - **Hook 生命周期钩子**：深度解析 Claude `settings.json` 与 Codex hooks，精准识别捕获 `PreToolUse`（工具前置拦截）、`PostToolUse`（工具后置处理）、`SessionStart`（会话初始化）、`PermissionRequest`（高危权限审批）等关键自动化事件；
+  - **零外部依赖配置解析与安全健壮性**：规避外部 crate 依赖引入与网络拉取风险，基于纯 Rust 字符状态机实现高效可靠的 `parse_mcp_from_codex_toml` 与 `unescape_toml_str`，支持严苛的 Windows 反斜杠路径还原与多行字段解析；
+  - **多源数据去重与智能体归集合并 (Multi-Source Deduplication & Agent Aggregation)**：同名能力在多个智能体或工作区同时存在时自动聚合并保留所有所属智能体标签（如 `["Claude Code", "Codex"]`），并在卡片底部渲染各智能体微型矢量胶囊徽章。
+- **青空设计系统生态能力看板 (Aozora Capabilities Console View)**：
+  - 彻底摒弃大段纯文字说明，在内嵌 Web 控制台开辟独立的“能力 (Capabilities)”视图，全面贯彻青空规范的“图标 + 卡片 + 组件结合”；
+  - 顶部设立 4 组带有动态色系的大指标看板卡片：
+    - 技能数（Skills / Indigo）、MCP 服务（MCP Servers / Green）、钩子（Hooks / Amber）、受管智能体（Agents / Blue）；
+  - 交互式分类切换与实时搜索（Filter Bar）：支持全部 / 技能 / MCP 服务 / 钩子 4 类维度即时过滤，并提供全局关键词模糊匹配；
+  - 精细卡片设计：
+    - Skill 卡片：提供参数模板展示与自动化脚本指示；
+    - MCP 服务卡片：等宽终端命令行预览与一键复制命令胶囊，远程端点展示与 Headers 计数；
+    - Hook 卡片：事件类型彩色胶囊徽章、执行超时指示与指令一键复制；
+  - **交互式 MCP 服务注册与热探测 (Interactive MCP Registration & Sync)**：
+    - 新增“+ 注册 MCP 服务”青空弹窗组件，支持按名称、传输模式（stdio/sse）、命令/参数或 URL 快速登记至 `~/.agenthub/mcp.json`；
+    - 增加“重新探测”按钮，调用 `POST /api/capabilities/sync` 即时刷新全局能力清单；
+  - **60 FPS 性能铁律保障**：所有动画均添加 `will-change: transform; transform: translateZ(0);` 硬件加速，列表滚动彻底杜绝 `backdrop-filter: blur(...)` 堆叠，保证丝滑流畅。
+- **构建、测试与发版 (Build & Packaging)**：
+  - 编译并打包 `AgentHub-Runner-v2.4.99-windows-x64.zip`；
+  - 编译并打包 `AgentHub-v2.4.99-android-debug.apk`；
+  - 计算生成 `AgentHub-v2.4.99-SHA256.txt` 校验和清单，严格遵循工程铁律删除旧包保持产物目录唯一最新；
+  - 自动化回归测试（236 个 Rust 测试全部通过，145 个 Node 契约测试全部通过）。
+
 ## [2.4.98] - 2026-10-19
 
 ### 网关交互青空化重构、系统设置弹窗、高 DPI 托盘图标与 Agent-Nexus 现代菜单 (Gateway Modernization, Settings Modal & High-DPI Icons)

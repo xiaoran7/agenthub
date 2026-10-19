@@ -98,7 +98,10 @@ impl NativeTransport for AcpAppServer {
     }
 
     fn respond(&mut self, id: Value, result: Value) -> Result<(), NativeError> {
-        let decision = result.get("decision").and_then(Value::as_str).unwrap_or("decline");
+        let decision = result
+            .get("decision")
+            .and_then(Value::as_str)
+            .unwrap_or("decline");
         self.respond_permission(id, decision)
             .map_err(|_| NativeError::uncertain("provider_transport_lost"))
     }
@@ -170,7 +173,12 @@ impl MultiProviderTransport {
         }
     }
 
-    pub fn add_acp_server(&mut self, session_id: impl Into<String>, server: AcpAppServer, cwd: PathBuf) {
+    pub fn add_acp_server(
+        &mut self,
+        session_id: impl Into<String>,
+        server: AcpAppServer,
+        cwd: PathBuf,
+    ) {
         let sid = session_id.into();
         self.acp_cached_cwds.insert(sid.clone(), cwd);
         self.acp_servers.insert(sid, server);
@@ -363,9 +371,9 @@ impl NativeTransport for MultiProviderTransport {
                 let mut server = AcpAppServer::start(&binary_path, &args, Duration::from_secs(20))
                     .map_err(|e| NativeError::rejected(format!("acp_start_failed: {}", e)))?;
 
-                let native_id = server
-                    .session_new(&cwd_path)
-                    .map_err(|e| NativeError::uncertain(format!("acp_session_new_failed: {}", e)))?;
+                let native_id = server.session_new(&cwd_path).map_err(|e| {
+                    NativeError::uncertain(format!("acp_session_new_failed: {}", e))
+                })?;
 
                 let session_id = format!("acp_{}", native_id);
                 self.acp_cached_cwds.insert(session_id.clone(), cwd_path);
@@ -1604,9 +1612,13 @@ impl NativeTransport for MultiProviderTransport {
                                                 input.get("new_string").and_then(Value::as_str),
                                             ) {
                                                 let sanitized_old =
-                                                    crate::privacy::redact_paths_inside_text(old_str);
+                                                    crate::privacy::redact_paths_inside_text(
+                                                        old_str,
+                                                    );
                                                 let sanitized_new =
-                                                    crate::privacy::redact_paths_inside_text(new_str);
+                                                    crate::privacy::redact_paths_inside_text(
+                                                        new_str,
+                                                    );
                                                 let mut payload = json!({
                                                     "old_string": sanitized_old,
                                                     "new_string": sanitized_new,
@@ -1620,7 +1632,9 @@ impl NativeTransport for MultiProviderTransport {
                                                 input.get("content").and_then(Value::as_str)
                                             {
                                                 let sanitized =
-                                                    crate::privacy::redact_paths_inside_text(content);
+                                                    crate::privacy::redact_paths_inside_text(
+                                                        content,
+                                                    );
                                                 let mut payload = json!({
                                                     "new_string": sanitized,
                                                 })
@@ -1633,7 +1647,9 @@ impl NativeTransport for MultiProviderTransport {
                                                 input.get("new_source").and_then(Value::as_str)
                                             {
                                                 let sanitized =
-                                                    crate::privacy::redact_paths_inside_text(new_source);
+                                                    crate::privacy::redact_paths_inside_text(
+                                                        new_source,
+                                                    );
                                                 let mut payload = json!({
                                                     "new_string": sanitized,
                                                 })
@@ -1648,7 +1664,9 @@ impl NativeTransport for MultiProviderTransport {
                                                 .and_then(Value::as_str)
                                             {
                                                 let mut sanitized =
-                                                    crate::privacy::redact_paths_inside_text(raw_diff);
+                                                    crate::privacy::redact_paths_inside_text(
+                                                        raw_diff,
+                                                    );
                                                 if sanitized.len() > 65536 {
                                                     sanitized.truncate(65536);
                                                 }
@@ -1983,7 +2001,10 @@ impl NativeTransport for MultiProviderTransport {
                     }
                 }
                 Err(e) => {
-                    eprintln!("[MultiProviderTransport] acp drain error for {}: {:?}", session_id, e);
+                    eprintln!(
+                        "[MultiProviderTransport] acp drain error for {}: {:?}",
+                        session_id, e
+                    );
                     dead_acp_sessions.push(session_id.clone());
                 }
             }
@@ -3175,8 +3196,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                 let command_preview = params["command"].as_str().map(str::to_owned);
                                 let path = params["filePath"].as_str().map(str::to_owned);
                                 let diff = params["diff"].as_str().map(|d| {
-                                    let mut sanitized =
-                                        crate::privacy::redact_paths_inside_text(d);
+                                    let mut sanitized = crate::privacy::redact_paths_inside_text(d);
                                     if sanitized.len() > 65536 {
                                         sanitized.truncate(65536);
                                     }

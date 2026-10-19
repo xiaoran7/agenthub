@@ -915,7 +915,6 @@ fn file_change_approval_preserves_sanitized_diff() {
     assert!(host.pending_approvals().is_empty());
 }
 
-
 #[test]
 fn unknown_notifications_are_retained_without_inventing_execution_state() {
     let (dir, fake, mut host) = setup();
@@ -1165,20 +1164,28 @@ fn acp_session_routing_in_multiprovider_transport() {
     // 3. thread/archive and thread/unarchive succeed for an ACP session
     assert!(
         transport
-            .request("thread/archive", json!({ "threadId": "acp_session_test_1" }))
+            .request(
+                "thread/archive",
+                json!({ "threadId": "acp_session_test_1" })
+            )
             .is_ok()
     );
     assert!(
         transport
-            .request("thread/unarchive", json!({ "threadId": "acp_session_test_1" }))
+            .request(
+                "thread/unarchive",
+                json!({ "threadId": "acp_session_test_1" })
+            )
             .is_ok()
     );
 
     // 4. turn/interrupt for an ACP session succeeds
     assert!(
         transport
-            .request("turn/interrupt", json!({ "threadId": "acp_session_test_1" }))
+            .request(
+                "turn/interrupt",
+                json!({ "threadId": "acp_session_test_1" })
+            )
             .is_ok()
     );
 }
-

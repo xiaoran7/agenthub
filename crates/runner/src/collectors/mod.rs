@@ -21,6 +21,7 @@ use thiserror::Error;
 #[cfg(test)]
 use std::sync::mpsc;
 
+pub mod capabilities;
 pub mod workspace;
 
 const MAX_PROTOCOL_LINE_BYTES: usize = 16 * 1024 * 1024;
@@ -3122,12 +3123,15 @@ fn aggregate_zcode_root_stats(connection: &Connection) -> HashMap<String, ZCodeA
                 entry.total_tokens = entry.total_tokens.saturating_add(total.max(0) as u64);
                 entry.input_tokens = entry.input_tokens.saturating_add(input.max(0) as u64);
                 entry.output_tokens = entry.output_tokens.saturating_add(output.max(0) as u64);
-                entry.cache_read_tokens =
-                    entry.cache_read_tokens.saturating_add(cache_read.max(0) as u64);
-                entry.cache_write_tokens =
-                    entry.cache_write_tokens.saturating_add(cache_write.max(0) as u64);
-                entry.reasoning_tokens =
-                    entry.reasoning_tokens.saturating_add(reasoning.max(0) as u64);
+                entry.cache_read_tokens = entry
+                    .cache_read_tokens
+                    .saturating_add(cache_read.max(0) as u64);
+                entry.cache_write_tokens = entry
+                    .cache_write_tokens
+                    .saturating_add(cache_write.max(0) as u64);
+                entry.reasoning_tokens = entry
+                    .reasoning_tokens
+                    .saturating_add(reasoning.max(0) as u64);
             }
         }
     }
@@ -5703,7 +5707,9 @@ mod tests {
         ).unwrap();
 
         let stats = aggregate_zcode_root_stats(&conn);
-        let root = stats.get("root_sess_1").expect("root_sess_1 should be present");
+        let root = stats
+            .get("root_sess_1")
+            .expect("root_sess_1 should be present");
         assert_eq!(root.calls, 3); // 2 in root + 1 in sub
         assert_eq!(root.total_tokens, 1900); // 500 + 600 + 800
         assert_eq!(root.input_tokens, 1600); // 400 + 500 + 700
@@ -5711,7 +5717,9 @@ mod tests {
         assert_eq!(root.cache_read_tokens, 1400); // 350 + 450 + 600
         assert_eq!(root.reasoning_tokens, 100); // 20 + 30 + 50
 
-        let other = stats.get("independent_sess_3").expect("independent_sess_3 should be present");
+        let other = stats
+            .get("independent_sess_3")
+            .expect("independent_sess_3 should be present");
         assert_eq!(other.calls, 1);
         assert_eq!(other.total_tokens, 200);
         assert_eq!(other.cache_read_tokens, 100);

@@ -438,6 +438,62 @@ impl ApiRequest<'_> {
                 let ws = crate::collectors::workspace::discover_all_workspaces();
                 send_json_response(stream, 200, &json!({ "workspaces": ws }))?;
             }
+            ("GET", "/api/capabilities") => {
+                let caps = crate::collectors::capabilities::discover_capabilities(None);
+                send_json_response(stream, 200, &json!({ "ok": true, "capabilities": caps }))?;
+            }
+            ("POST", "/api/capabilities/mcp/register") => {
+                #[derive(Deserialize)]
+                struct RegisterMcpReq {
+                    name: String,
+                    command: Option<String>,
+                    #[serde(default)]
+                    args: Vec<String>,
+                    url: Option<String>,
+                    #[serde(default)]
+                    headers: HashMap<String, String>,
+                }
+                match serde_json::from_slice::<RegisterMcpReq>(body) {
+                    Ok(req) => {
+                        match crate::collectors::capabilities::register_agenthub_mcp_server(
+                            &req.name,
+                            req.command,
+                            req.args,
+                            req.url,
+                            req.headers,
+                        ) {
+                            Ok(srv) => send_json_response(
+                                stream,
+                                200,
+                                &json!({ "ok": true, "server": srv }),
+                            )?,
+                            Err(err) => send_json_response(
+                                stream,
+                                400,
+                                &json!({ "ok": false, "error": err }),
+                            )?,
+                        }
+                    }
+                    Err(err) => {
+                        let err_json =
+                            json!({ "error": format!("invalid_mcp_register_payload: {}", err) });
+                        send_json_response(stream, 400, &err_json)?;
+                    }
+                }
+            }
+            ("POST", "/api/capabilities/sync") => {
+                // Invalidate dashboard summary cache to ensure fresh capabilities view
+                if let Ok(mut guard) = dashboard_summary_cache().write() {
+                    *guard = None;
+                }
+                let caps = crate::collectors::capabilities::discover_capabilities(None);
+                let resp = json!({
+                    "ok": true,
+                    "message": "已完成智能体扩展生态 (Skills/MCP/Hooks) 探测与统一对齐",
+                    "capabilities": caps
+                });
+                send_json_response(stream, 200, &resp)?;
+            }
             ("GET", "/api/discover") => {
                 let resp = handler.handle(DaemonRequest::Discover);
                 send_json_response(stream, 200, &resp)?;
@@ -1120,6 +1176,7 @@ fn build_dashboard_summary(
     };
 
     let total_agents_count = agents.as_array().map(|a| a.len()).unwrap_or(0);
+    let capabilities = crate::collectors::capabilities::discover_capabilities(None);
 
     let summary = json!({
         "device_id": "local-dev",
@@ -1135,10 +1192,14 @@ fn build_dashboard_summary(
             "total_agents": total_agents_count,
             "total_models": models_json.len().max(gateway_models_count),
             "total_workspaces": workspaces_json.len(),
+            "total_skills": capabilities.total_skills,
+            "total_mcp_servers": capabilities.total_mcp_servers,
+            "total_hooks": capabilities.total_hooks,
         },
         "agents": agents,
         "workspaces": workspaces_json,
         "models": models_json,
+        "capabilities": capabilities,
         "gateway": {
             "detected": gateway_detected,
             "source": gateway_source,
@@ -1569,6 +1630,17 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_assets_include_capabilities_ecosystem() {
+        assert!(INDEX_HTML.contains("id=\"view-capabilities\""));
+        assert!(INDEX_HTML.contains("id=\"registerMcpModal\""));
+        assert!(INDEX_HTML.contains("data-view=\"capabilities\""));
+        assert!(DASHBOARD_CSS.contains(".cap-stats"));
+        assert!(DASHBOARD_CSS.contains(".cap-card"));
+        assert!(DASHBOARD_JS.contains("function renderCapabilities"));
+        assert!(DASHBOARD_JS.contains("function submitRegisterMcp"));
+    }
+
+    #[test]
     fn test_parse_path_and_query() {
         let (path, query) = parse_path_and_query("/api/events?after=10&limit=50");
         assert_eq!(path, "/api/events");
@@ -1605,6 +1677,20 @@ mod tests {
             .call()
             .expect("should connect to root html");
         assert_eq!(root_resp.status().as_u16(), 200);
+
+        // 测试 GET /api/capabilities
+        let cap_url = format!("http://127.0.0.1:{}/api/capabilities", bound_port);
+        let cap_resp = ureq::get(&cap_url)
+            .call()
+            .expect("should connect to /api/capabilities");
+        assert_eq!(cap_resp.status().as_u16(), 200);
+
+        // 测试 POST /api/capabilities/sync
+        let sync_url = format!("http://127.0.0.1:{}/api/capabilities/sync", bound_port);
+        let sync_resp = ureq::post(&sync_url)
+            .send_empty()
+            .expect("should connect to /api/capabilities/sync");
+        assert_eq!(sync_resp.status().as_u16(), 200);
 
         stopped.store(true, Ordering::Relaxed);
     }

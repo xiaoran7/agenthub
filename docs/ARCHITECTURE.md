@@ -53,7 +53,8 @@ AgentHub 只有一个 Session 核心：运行在开发机上的 `agenthubd`。�
 `agenthub-runner web` / `daemon --web` 会由 daemon 自带一个内嵌控制台，默认 `http://127.0.0.1:4200`，由托盘进程以 Edge `--app=` 窗口打开：
 
 - 页面由三个静态资源组成——`crates/runner/resources/dashboard.html`（结构）、`dashboard.css`（样式）、`dashboard.js`（行为）——均经 `include_str!` 编入二进制，无外部依赖、无构建步骤。后两者以 `/dashboard.css?v=<版本>` 与 `/dashboard.js?v=<版本>` 提供，只有版本号与 `CARGO_PKG_VERSION` 一致时才回 `immutable` 缓存，因此页面与它运行的代码永远出自同一次构建；脚本拆成独立文件是为了让 `node --check` 与格式化工具能直接读取，不必解析页面；
-- 六个视图（会话、智能体、用量、模型、工作区、网关）全部读取 `GET /api/dashboard` 的同一份聚合快照；
+- 七个视图（会话、能力、智能体、用量、模型、工作区、网关）全部读取 `GET /api/dashboard` 的同一份聚合快照；
+- **能力生态纳管架构 (Federated Multi-Agent Library)**：参考上游开源项目 magpie 的统一资料库架构，集中纳管跨智能体（Claude Code、OpenAI Codex、工作区及 AgentHub 自定义）的 Skill（技能）、MCP Server（上下文协议服务）与 Hook（生命周期钩子）。支持多源聚合去重、动态筛选检索与交互式 MCP 协议服务注册；
 - 该页面的设计系统与布局原语逐条移植自上游开源项目 magpie（`https://github.com/yetone/magpie`，MIT License, Copyright (c) 2026 yetone）的 `internal/gui/assets/app.css`，AgentHub 只追加业务组合与数据绑定。上游归属、许可证与维护边界见 [README 开源引用与上游溯源](../README.md#开源引用与上游溯源)；
 - 控制台只是本机控制面的只读+命令薄壳，不持有 Session 状态机：写入动作（模型目录刷新、设备绑定、安全退出）仍经 daemon 的既有 HTTP 接口，语义与 Desktop IPC 一致；
 - **计价只有一个权威**：Token 到金额的换算只在 daemon 的 `calc_cost`（`crates/runner/src/web_server.rs`）发生，页面读取 `usage.models[].estimated_cost_usd` 展示，不再自带费率表；守护进程未定价的模型显示 `—`，不以本地估算冒充金额。

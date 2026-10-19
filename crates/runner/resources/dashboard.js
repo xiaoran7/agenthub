@@ -7,6 +7,7 @@ let lastRenderState = {
   deviceJson: "",
   sessionsJson: "",
   usageJson: "",
+  capabilitiesJson: "",
 };
 let consecutiveFailures = 0;
 let consecutiveEmptyResponses = 0;
@@ -19,6 +20,7 @@ let sessionsRenderedAt = Date.now();
 const VIEW_LABELS = {
   sessions: "会话",
   agents: "智能体",
+  capabilities: "能力",
   usage: "用量",
   models: "模型",
   workspaces: "工作区",
@@ -28,6 +30,7 @@ const VIEW_LABELS = {
 const VIEW_EN_LABELS = {
   sessions: "Sessions",
   agents: "Agents",
+  capabilities: "Capabilities",
   usage: "Usage",
   models: "Models",
   workspaces: "Workspaces",
@@ -599,6 +602,12 @@ async function refreshDashboard(manual) {
     if (gatewayStr !== lastRenderState.gatewayJson) {
       renderGateway(dashboardData.gateway);
       lastRenderState.gatewayJson = gatewayStr;
+    }
+
+    const capStr = JSON.stringify(dashboardData.capabilities || {});
+    if (capStr !== lastRenderState.capabilitiesJson) {
+      renderCapabilities(dashboardData.capabilities);
+      lastRenderState.capabilitiesJson = capStr;
     }
 
     const deviceStr = JSON.stringify(dashboardData.device || {});
@@ -1831,6 +1840,429 @@ function copyValue(elementId, label) {
   if (el && el.textContent && el.textContent !== "-") {
     copyText(el.textContent);
     toast(`已复制 ${label}`);
+  }
+}
+
+// ---- capabilities view: unified multi-agent library (skills, mcp, hooks) ----
+let currentCapTab = "all";
+let currentCapSearch = "";
+let cachedCapabilities = null;
+let currentMcpTransport = "stdio";
+
+function renderCapabilities(caps) {
+  cachedCapabilities = caps || { skills: [], mcp_servers: [], hooks: [] };
+  const skills = cachedCapabilities.skills || [];
+  const mcpServers = cachedCapabilities.mcp_servers || [];
+  const hooks = cachedCapabilities.hooks || [];
+
+  const kpiSkills = document.getElementById("capKpiSkills");
+  const kpiMcp = document.getElementById("capKpiMcp");
+  const kpiHooks = document.getElementById("capKpiHooks");
+  const kpiAgents = document.getElementById("capKpiAgents");
+
+  if (kpiSkills)
+    countTo(
+      kpiSkills,
+      cachedCapabilities.total_skills != null
+        ? cachedCapabilities.total_skills
+        : skills.length,
+    );
+  if (kpiMcp)
+    countTo(
+      kpiMcp,
+      cachedCapabilities.total_mcp_servers != null
+        ? cachedCapabilities.total_mcp_servers
+        : mcpServers.length,
+    );
+  if (kpiHooks)
+    countTo(
+      kpiHooks,
+      cachedCapabilities.total_hooks != null
+        ? cachedCapabilities.total_hooks
+        : hooks.length,
+    );
+
+  // Compute agents covered across skills, mcp, hooks
+  const agentsSet = new Set();
+  skills.forEach((s) => (s.agents || []).forEach((a) => agentsSet.add(a)));
+  mcpServers.forEach((m) => (m.agents || []).forEach((a) => agentsSet.add(a)));
+  hooks.forEach((h) => (h.agents || []).forEach((a) => agentsSet.add(a)));
+  if (kpiAgents) countTo(kpiAgents, agentsSet.size);
+
+  // Subtab count badges
+  const totalCount = skills.length + mcpServers.length + hooks.length;
+  const countAll = document.getElementById("capCountAll");
+  const countSkills = document.getElementById("capCountSkills");
+  const countMcp = document.getElementById("capCountMcp");
+  const countHooks = document.getElementById("capCountHooks");
+
+  if (countAll) countAll.textContent = totalCount;
+  if (countSkills) countSkills.textContent = skills.length;
+  if (countMcp) countMcp.textContent = mcpServers.length;
+  if (countHooks) countHooks.textContent = hooks.length;
+
+  applyCapabilitiesFilter();
+}
+
+function switchCapTab(tab) {
+  currentCapTab = tab;
+  document.querySelectorAll("#capSubTabs .seg-btn").forEach((btn) => {
+    btn.classList.toggle("on", btn.dataset.tab === tab);
+  });
+  applyCapabilitiesFilter();
+}
+
+function filterCapabilities() {
+  const inp = document.getElementById("capSearchInput");
+  currentCapSearch = (inp ? inp.value : "").trim().toLowerCase();
+  applyCapabilitiesFilter();
+}
+
+function applyCapabilitiesFilter() {
+  if (!cachedCapabilities) return;
+  const skills = cachedCapabilities.skills || [];
+  const mcpServers = cachedCapabilities.mcp_servers || [];
+  const hooks = cachedCapabilities.hooks || [];
+
+  const q = currentCapSearch;
+
+  // Filter skills
+  const matchedSkills = skills.filter((s) => {
+    if (!q) return true;
+    return (
+      (s.name || "").toLowerCase().includes(q) ||
+      (s.description || "").toLowerCase().includes(q) ||
+      (s.source || "").toLowerCase().includes(q) ||
+      (s.path || "").toLowerCase().includes(q) ||
+      (s.agents || []).join(" ").toLowerCase().includes(q)
+    );
+  });
+
+  // Filter MCP
+  const matchedMcp = mcpServers.filter((m) => {
+    if (!q) return true;
+    return (
+      (m.name || "").toLowerCase().includes(q) ||
+      (m.command || "").toLowerCase().includes(q) ||
+      (m.args || []).join(" ").toLowerCase().includes(q) ||
+      (m.url || "").toLowerCase().includes(q) ||
+      (m.source || "").toLowerCase().includes(q) ||
+      (m.transport || "").toLowerCase().includes(q) ||
+      (m.agents || []).join(" ").toLowerCase().includes(q)
+    );
+  });
+
+  // Filter Hooks
+  const matchedHooks = hooks.filter((h) => {
+    if (!q) return true;
+    return (
+      (h.name || "").toLowerCase().includes(q) ||
+      (h.event || "").toLowerCase().includes(q) ||
+      (h.event_display || "").toLowerCase().includes(q) ||
+      (h.matcher || "").toLowerCase().includes(q) ||
+      (h.command || "").toLowerCase().includes(q) ||
+      (h.source || "").toLowerCase().includes(q) ||
+      (h.agents || []).join(" ").toLowerCase().includes(q)
+    );
+  });
+
+  const skillsSection = document.getElementById("capSkillsSection");
+  const mcpSection = document.getElementById("capMcpSection");
+  const hooksSection = document.getElementById("capHooksSection");
+
+  const skillsGrid = document.getElementById("capSkillsGrid");
+  const mcpGrid = document.getElementById("capMcpGrid");
+  const hooksGrid = document.getElementById("capHooksGrid");
+
+  const skillsBadge = document.getElementById("capSkillsSectionBadge");
+  const mcpBadge = document.getElementById("capMcpSectionBadge");
+  const hooksBadge = document.getElementById("capHooksSectionBadge");
+
+  const showSkills = currentCapTab === "all" || currentCapTab === "skills";
+  const showMcp = currentCapTab === "all" || currentCapTab === "mcp";
+  const showHooks = currentCapTab === "all" || currentCapTab === "hooks";
+
+  if (skillsSection) skillsSection.style.display = showSkills ? "" : "none";
+  if (mcpSection) mcpSection.style.display = showMcp ? "" : "none";
+  if (hooksSection) hooksSection.style.display = showHooks ? "" : "none";
+
+  if (skillsBadge) skillsBadge.textContent = `${matchedSkills.length} 个技能`;
+  if (mcpBadge) mcpBadge.textContent = `${matchedMcp.length} 个服务`;
+  if (hooksBadge) hooksBadge.textContent = `${matchedHooks.length} 个钩子`;
+
+  // Render skills
+  if (skillsGrid && showSkills) {
+    if (matchedSkills.length === 0) {
+      skillsGrid.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; grid-column:1/-1;"><b>没有找到匹配的扩展技能</b><span class="why">检查检索关键词，或在 ~/.claude/skills 与工作区放入 SKILL.md</span></div>`;
+    } else {
+      skillsGrid.innerHTML = matchedSkills.map(renderSkillCard).join("");
+    }
+  }
+
+  // Render MCP
+  if (mcpGrid && showMcp) {
+    if (matchedMcp.length === 0) {
+      mcpGrid.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; grid-column:1/-1;"><b>没有找到匹配的 MCP 协议服务器</b><span class="why">可点击右上角“注册 MCP 服务”添加自定义协议进程</span></div>`;
+    } else {
+      mcpGrid.innerHTML = matchedMcp.map(renderMcpCard).join("");
+    }
+  }
+
+  // Render Hooks
+  if (hooksGrid && showHooks) {
+    if (matchedHooks.length === 0) {
+      hooksGrid.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; grid-column:1/-1;"><b>没有找到匹配的生命周期钩子</b><span class="why">在 Claude Code 或 Codex 配置 PreToolUse、SessionStart 等钩子后自动纳管</span></div>`;
+    } else {
+      hooksGrid.innerHTML = matchedHooks.map(renderHookCard).join("");
+    }
+  }
+}
+
+function renderSkillCard(skill) {
+  const agentPills = (skill.agents || [])
+    .map(
+      (a) =>
+        `<span class="cap-agent-pill">${getAgentIcon(a, 12)}<span>${escapeHtml(a)}</span></span>`,
+    )
+    .join("");
+
+  const scriptTag = skill.has_scripts
+    ? `<span class="tag ok" style="font-size:11px;" title="包含可执行自动化脚本">可执行脚本</span>`
+    : ``;
+
+  const safePath = escapeHtml(skill.path).replace(/\\/g, "\\\\");
+
+  return `
+    <div class="cap-card">
+      <div class="cap-card-head">
+        <div class="cap-card-title-group">
+          <span class="cap-card-icon skill">🧩</span>
+          <b class="cap-card-title" title="${escapeHtml(skill.name)}">${escapeHtml(skill.name)}</b>
+        </div>
+        <div class="cap-tags">
+          ${scriptTag}
+          <span class="tag mono" style="font-size:11px;">${escapeHtml(skill.source)}</span>
+        </div>
+      </div>
+      <p class="cap-desc" title="${escapeHtml(skill.description)}">${escapeHtml(skill.description || "暂无描述说明")}</p>
+      <div class="cap-code-box" onclick="copyText('${safePath}'); toast('已复制技能文件路径');" title="点击复制完整路径">
+        <span>${escapeHtml(skill.path)}</span>
+      </div>
+      <div class="cap-card-foot">
+        <div class="cap-agent-pills">${agentPills || '<span class="tag">全局通用</span>'}</div>
+        <span class="status mono" style="font-size:11px;">${skill.enabled ? "已启用" : "已停用"}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderMcpCard(mcp) {
+  const agentPills = (mcp.agents || [])
+    .map(
+      (a) =>
+        `<span class="cap-agent-pill">${getAgentIcon(a, 12)}<span>${escapeHtml(a)}</span></span>`,
+    )
+    .join("");
+
+  const transportClass = (mcp.transport || "stdio").toLowerCase();
+  const isStdio = transportClass === "stdio";
+  const cmdOrUrl = isStdio
+    ? `${mcp.command || ""} ${(mcp.args || []).join(" ")}`.trim()
+    : mcp.url || "";
+
+  const statusDot =
+    mcp.status === "active"
+      ? `<span class="cap-status-dot active"></span><span style="color:var(--green);font-weight:600;">活跃运行</span>`
+      : `<span class="cap-status-dot configured"></span><span>已配置</span>`;
+
+  const safeCmd = escapeHtml(cmdOrUrl).replace(/\\/g, "\\\\");
+
+  return `
+    <div class="cap-card">
+      <div class="cap-card-head">
+        <div class="cap-card-title-group">
+          <span class="cap-card-icon mcp">🔌</span>
+          <b class="cap-card-title" title="${escapeHtml(mcp.name)}">${escapeHtml(mcp.name)}</b>
+          <span class="cap-badge ${transportClass}">${escapeHtml(mcp.transport || "stdio")}</span>
+        </div>
+        <div class="cap-tags">
+          <span class="tag mono" style="font-size:11px;">${escapeHtml(mcp.source)}</span>
+        </div>
+      </div>
+      <div class="cap-code-box" onclick="copyText('${safeCmd}'); toast('已复制 MCP 执行参数');" title="点击复制执行命令或端点">
+        <span>${escapeHtml(cmdOrUrl || "—")}</span>
+      </div>
+      <div class="cap-card-foot">
+        <div class="cap-agent-pills">${agentPills || '<span class="tag">共享服务</span>'}</div>
+        <div style="display:flex; align-items:center; font-size:11px;">
+          ${statusDot}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderHookCard(hook) {
+  const agentPills = (hook.agents || [])
+    .map(
+      (a) =>
+        `<span class="cap-agent-pill">${getAgentIcon(a, 12)}<span>${escapeHtml(a)}</span></span>`,
+    )
+    .join("");
+
+  let eventBadgeClass = "event-other";
+  const ev = (hook.event || "").toLowerCase();
+  if (ev.includes("pre")) eventBadgeClass = "event-pre";
+  else if (ev.includes("session")) eventBadgeClass = "event-session";
+  else if (ev.includes("post")) eventBadgeClass = "event-post";
+  else if (ev.includes("perm")) eventBadgeClass = "event-perm";
+
+  const matcherTag = hook.matcher
+    ? `<span class="tag mono" style="font-size:11px;" title="工具匹配器">拦截: ${escapeHtml(hook.matcher)}</span>`
+    : ``;
+
+  const safeCmd = escapeHtml(hook.command).replace(/\\/g, "\\\\");
+
+  return `
+    <div class="cap-card">
+      <div class="cap-card-head">
+        <div class="cap-card-title-group">
+          <span class="cap-card-icon hook">🪝</span>
+          <b class="cap-card-title" title="${escapeHtml(hook.name)}">${escapeHtml(hook.name)}</b>
+          <span class="cap-badge ${eventBadgeClass}">${escapeHtml(hook.event_display || hook.event)}</span>
+        </div>
+        <div class="cap-tags">
+          ${matcherTag}
+          <span class="tag mono" style="font-size:11px;">${escapeHtml(hook.source)}</span>
+        </div>
+      </div>
+      <div class="cap-code-box" onclick="copyText('${safeCmd}'); toast('已复制 Hook 执行命令');" title="点击复制钩子执行命令">
+        <span>${escapeHtml(hook.command)}</span>
+      </div>
+      <div class="cap-card-foot">
+        <div class="cap-agent-pills">${agentPills}</div>
+        <span class="status mono" style="font-size:11px;">超时: ${hook.timeout_sec || 10}s</span>
+      </div>
+    </div>
+  `;
+}
+
+async function syncCapabilities(event) {
+  const btn = document.getElementById("btnSyncCapabilities");
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("busy");
+  }
+  try {
+    const resp = await fetch("/api/capabilities/sync", { method: "POST" });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.capabilities) {
+        cachedCapabilities = data.capabilities;
+        renderCapabilities(data.capabilities);
+      }
+      toast("已完成智能体扩展生态 (Skills/MCP/Hooks) 探测与统一对齐");
+    } else {
+      toast(`同步失败 (HTTP ${resp.status})`, "err");
+    }
+  } catch (err) {
+    toast("同步能力生态失败: " + err.message, "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove("busy");
+    }
+  }
+}
+
+function openRegisterMcpModal() {
+  const modal = document.getElementById("registerMcpModal");
+  if (!modal) return;
+  document.getElementById("mcpFormName").value = "";
+  document.getElementById("mcpFormCommand").value = "";
+  document.getElementById("mcpFormArgs").value = "";
+  document.getElementById("mcpFormUrl").value = "";
+  document.getElementById("mcpFormStatus").textContent = "";
+  selectMcpTransport("stdio");
+  modal.classList.add("open");
+}
+
+function closeRegisterMcpModal() {
+  const modal = document.getElementById("registerMcpModal");
+  if (modal) modal.classList.remove("open");
+}
+
+function selectMcpTransport(transport) {
+  currentMcpTransport = transport;
+  const segs = document.getElementById("mcpTransportSegs");
+  if (segs) {
+    segs.querySelectorAll(".seg-btn").forEach((btn) => {
+      btn.classList.toggle("on", btn.dataset.transport === transport);
+    });
+  }
+  const stdioFields = document.getElementById("mcpStdioFields");
+  const httpFields = document.getElementById("mcpHttpFields");
+  if (stdioFields)
+    stdioFields.style.display = transport === "stdio" ? "contents" : "none";
+  if (httpFields)
+    httpFields.style.display = transport === "stdio" ? "none" : "contents";
+}
+
+async function submitRegisterMcp(event) {
+  event.preventDefault();
+  const name = document.getElementById("mcpFormName").value.trim();
+  const cmd = document.getElementById("mcpFormCommand").value.trim();
+  const argsRaw = document.getElementById("mcpFormArgs").value.trim();
+  const url = document.getElementById("mcpFormUrl").value.trim();
+  const submitBtn = document.getElementById("btnSubmitMcp");
+
+  if (!name) {
+    toast("请输入服务标识名称", "err");
+    return;
+  }
+
+  const isStdio = currentMcpTransport === "stdio";
+  if (isStdio && !cmd) {
+    toast("本地 Stdio 进程必须填写启动命令", "err");
+    return;
+  }
+  if (!isStdio && !url) {
+    toast("远程端点必须填写有效的服务 URL", "err");
+    return;
+  }
+
+  const args = argsRaw ? argsRaw.split(/\s+/).filter(Boolean) : [];
+  const payload = {
+    name,
+    command: isStdio ? cmd : null,
+    args: isStdio ? args : [],
+    url: isStdio ? null : url,
+    headers: {},
+  };
+
+  const origHtml = submitBtn.innerHTML;
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = "<span>保存中…</span>";
+
+  try {
+    const resp = await fetch("/api/capabilities/mcp/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const resData = await resp.json();
+    if (resp.ok && resData.ok) {
+      closeRegisterMcpModal();
+      toast(`已成功注册 MCP 服务 ${name}`);
+      await refreshDashboard(true);
+    } else {
+      toast(`注册 MCP 失败: ${resData.error || "未知错误"}`, "err");
+    }
+  } catch (err) {
+    toast(`注册 MCP 异常: ${err.message}`, "err");
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = origHtml;
   }
 }
 
