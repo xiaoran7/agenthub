@@ -351,52 +351,40 @@ impl AcpAppServer {
         timeout: Duration,
     ) -> Result<Value, CollectorError> {
         let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(CollectorError::Timeout {
-                    program: self.program.clone(),
-                    timeout_ms: timeout.as_millis(),
-                });
-            }
-            match self.receiver.recv_timeout(remaining) {
-                Ok(ProtocolRead::Message(message)) => return Ok(message),
-                Ok(ProtocolRead::LineTooLarge) => {
-                    return Err(CollectorError::ProtocolLineTooLarge {
-                        program: self.program.clone(),
-                        limit: super::MAX_PROTOCOL_LINE_BYTES,
-                    });
-                }
-                Ok(ProtocolRead::InvalidJson(source)) => {
-                    return Err(CollectorError::InvalidJson {
-                        program: self.program.clone(),
-                        source,
-                    });
-                }
-                Ok(ProtocolRead::Io(source)) => {
-                    return Err(CollectorError::Io {
-                        program: self.program.clone(),
-                        source,
-                    });
-                }
-                Ok(ProtocolRead::Eof) => {
-                    return Err(CollectorError::UnexpectedEof {
-                        program: self.program.clone(),
-                        request_id,
-                    });
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(CollectorError::Timeout {
-                        program: self.program.clone(),
-                        timeout_ms: timeout.as_millis(),
-                    });
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(CollectorError::ReaderStopped {
-                        program: self.program.clone(),
-                    });
-                }
-            }
+        // Every arm below resolves the read one way or another, so this is a
+        // single bounded wait rather than a retry loop.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(CollectorError::Timeout {
+                program: self.program.clone(),
+                timeout_ms: timeout.as_millis(),
+            });
+        }
+        match self.receiver.recv_timeout(remaining) {
+            Ok(ProtocolRead::Message(message)) => Ok(message),
+            Ok(ProtocolRead::LineTooLarge) => Err(CollectorError::ProtocolLineTooLarge {
+                program: self.program.clone(),
+                limit: super::MAX_PROTOCOL_LINE_BYTES,
+            }),
+            Ok(ProtocolRead::InvalidJson(source)) => Err(CollectorError::InvalidJson {
+                program: self.program.clone(),
+                source,
+            }),
+            Ok(ProtocolRead::Io(source)) => Err(CollectorError::Io {
+                program: self.program.clone(),
+                source,
+            }),
+            Ok(ProtocolRead::Eof) => Err(CollectorError::UnexpectedEof {
+                program: self.program.clone(),
+                request_id,
+            }),
+            Err(RecvTimeoutError::Timeout) => Err(CollectorError::Timeout {
+                program: self.program.clone(),
+                timeout_ms: timeout.as_millis(),
+            }),
+            Err(RecvTimeoutError::Disconnected) => Err(CollectorError::ReaderStopped {
+                program: self.program.clone(),
+            }),
         }
     }
 }

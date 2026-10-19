@@ -21,6 +21,13 @@
 * **🪄 现代 Fluent 原生上下文菜单 (Agent-Nexus Modern Tray Menu)**:
   - **Win32 现代托盘菜单**：加入运行中状态信息头、粗体控制台默认项、拓扑跳转、在系统浏览器中打开、数据目录快捷打开以及退出操作。
 
+* **📱 Android 会话流式转录、历史回放与工具卡片 (Streaming Transcript, History Replay & Tool Cards)**:
+  - **会话内容真正渲染出来**：新增与 Web 控制台同语义的转录解析器，增量消息实时累积，最终消息原位替换；会话恢复时回放 `history/snapshot`，并丢弃其之前的陈旧重放。
+  - **工具卡片可展开看输出**：`item/started` 与 `item/completed` 合并为同一行，运行中显示“执行中…”，完成后展开查看 `命令 / 参数`、`执行输出` 并一键复制；补丁类命令直接按行着色渲染；连续工具调用折叠为一组，不再铺满整屏。
+  - **流式与思考体验**：尾部消息带脉动光标与“生成中”标签，`reasoning` / `thinking` 收进可折叠“思考过程”手风琴，`<think…>` 标签不再混进正文。
+  - **失败可见**：“这一轮没有完成”卡片展示提供方原因，重试中的错误不误报为最终失败，下一轮开始后自动清除。
+  - **传输层修复**：`history/snapshot` 的 `content` 在投影层归一化为 `text`，修复恢复会话历史为空；`item/started` 获得窄字段白名单，实时“执行中”状态终于能到达客户端。
+
 ### 📦 Precompiled Deliverables
 
 * **Windows x64**: `AgentHub-Runner-v2.4.98-windows-x64.zip` (single executable + quickstart connect guide)

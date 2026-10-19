@@ -21,6 +21,33 @@
   - 对齐现代上下文菜单风格：顶部只读状态头展示当前版本与监听端口；
   - 控制台入口设为系统原生加粗默认项；新增拓扑直达、在系统浏览器中打开、数据目录快速唤起等菜单。
 
+### Android 会话流式转录、历史回放与工具卡片 (Streaming Transcript, History Replay & Tool Cards)
+
+- **会话转录解析器 (Session Transcript Parser)**：
+  - 新增纯 Kotlin 的 `SessionTranscript.kt`，把运行器事件流解析为不可变的 `TranscriptItem` 列表，语义与 Web 控制台 `apps/web/src/lib/remote.ts` 的 `conversationItems` 保持一致，手机与浏览器的转录不再各说各话；
+  - 支持 `item/agentMessage/delta` 增量累积，并在 `item/completed` 到达时用最终文本原位替换，不再出现“增量 + 完整消息”双份重复；
+  - 支持 `history/snapshot` 历史回放：只取最后一条非空快照，丢弃其之前的陈旧重放事件，会话恢复后历史不再空白；
+  - 识别 `send_prompt` 命令回执里的 `result.turn.id`，把用户提问与对应轮次绑定，用户气泡与回复正确配对；
+  - 裸工具 JSON（`{"command":…,"description":…}`）转成工具卡片，并与后续 `commandExecution` 完成项按 id 合并，不产生重复行。
+- **工具与审批卡片 (Tool & Approval Cards)**：
+  - `item/started` 与 `item/completed` 按 id 合并为同一行：运行中为琥珀色状态点 +“执行中…”，完成后为绿色/红色 +“已完成”/“执行失败”，不会卡在永远转圈的假运行态；
+  - 工具卡片可展开查看 `命令 / 参数` 与 `执行输出`，并支持一键复制；命令形如补丁时改用现有 `DiffPreview` 按行着色渲染；
+  - `toolCall` / `functionCall` / `mcpToolCall` 统一显示为 `server · tool`，`fileChange` 显示为 `文件修改 · 文件名`；
+  - 连续工具调用折叠为一组（“已执行 N 个工具与操作”，预览前 3 项，可整体展开）；`turn/completed` 到达时把仍处于运行态的工具行结算为已完成，兼容 Claude 只发活动标记、不发完成项的情况。
+- **流式与思考过程的 UX (Streaming & Reasoning UX)**：
+  - 尾部流式消息带脉动光标与“生成中”等宽标签，`turn/completed` 或切走会话后自动停止；
+  - `reasoning` / `thinking` 条目收进可折叠的“思考过程”手风琴，`<think…>` 标签会在流式过程中剥离并渲染为思考块，正文不再夹杂原始标签；
+  - 新增“这一轮没有完成”失败卡片，展示提供方可读原因；`willRetry` 的重试中错误不显示为最终失败，下一轮 `turn/started` 到达后自动清除。
+- **传输层修复 (Transport Fixes)**：
+  - `projected_event_raw` 将 `history/snapshot` 条目的 `content` 归一化为 `text`（`load_session_conversation` 写的是 `content`，两端客户端读的是 `text`），修复恢复会话历史为空的问题；新增 Rust 测试 `history_snapshot_projects_conversation_content_as_text`；
+  - 新增 `item/started` 的窄投影（只放行 `id/type` 与 `command/commandLine/toolName/name/path/status/text`），此前该事件被 Gateway 校验当作 `unsafe_provider_event` 丢弃，客户端永远看不到“执行中”；
+  - Gateway `validateRemoteEventRaw` 增加对应白名单分支，并新增拒绝用例：携带 `input` 等额外字段的 `item/started` 仍按 `unsafe_provider_event` 拒绝，避免提供方任意对象随帧透传。
+- **验证 (Verification)**：
+  - 新增 11 个 Android JVM 单元测试（`SessionTranscriptTest.kt`），覆盖最终消息替换、流式光标停止、历史快照与陈旧重放、裸工具 JSON 合并、started/completed 单行、turn 结束结算、`server · tool` 标签、提问回执、审批会话隔离、失败原因与重试标记；
+  - 在 `Medium_Phone` 模拟器以 `adb reverse` 接入本地假 Gateway 实测：历史回放、审批 Diff 展开、工具组展开后的 `命令执行` 与 `mcp · fetch`、思考手风琴、脉动光标、429 失败横幅均按预期显示，1.3× 系统字体无溢出、logcat 无崩溃；
+  - runner 库测试 180 通过，API 测试 56 通过 / 0 失败且 `tsc` 无错，Android 15 个单测通过，`./gradlew :app:assembleDebug` 通过；
+  - 顺带修复 `acp_app_server.rs` 中 deny-by-default 的 `clippy::never_loop`（`read_message` 的循环每个分支都直接返回，改为单次有界等待），`cargo clippy -p agenthub-runner --lib --all-targets` 恢复通过。
+
 ## [2.4.97] - 2026-10-19
 
 ### Android 移动端视觉对齐、间距栅格统一与功能入口分区 (Visual Alignment, Spacing Grid & Action Grouping)

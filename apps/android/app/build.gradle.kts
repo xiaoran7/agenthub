@@ -69,4 +69,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     testImplementation("junit:junit:4.13.2")
+    // The Android SDK ships org.json stubs that throw in JVM unit tests; the
+    // transcript parser is pure Kotlin, so the real implementation is used.
+    testImplementation("org.json:json:20180813")
 }

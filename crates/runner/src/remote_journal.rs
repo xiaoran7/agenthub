@@ -705,35 +705,32 @@ fn codex_error_summary(detail: &Value) -> Value {
 fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
     let params = event.raw.get("params")?;
     match event.kind.as_str() {
-        "history/snapshot" => params
-            .get("items")
-            .and_then(Value::as_array)
-            .map(|items| {
-                // `conversation::load_session_conversation` stores message text
-                // under `content`, while every client reads `text` (the same
-                // key the live item events use). Project one canonical shape so
-                // a resumed session shows its history instead of an empty
-                // transcript, and drop fields no client understands.
-                let normalized: Vec<Value> = items
-                    .iter()
-                    .map(|item| {
-                        let mut out = serde_json::Map::new();
-                        for key in ["role", "kind", "label", "status"] {
-                            if let Some(value) = item.get(key).and_then(Value::as_str) {
-                                out.insert(key.into(), json!(value));
-                            }
+        "history/snapshot" => params.get("items").and_then(Value::as_array).map(|items| {
+            // `conversation::load_session_conversation` stores message text
+            // under `content`, while every client reads `text` (the same
+            // key the live item events use). Project one canonical shape so
+            // a resumed session shows its history instead of an empty
+            // transcript, and drop fields no client understands.
+            let normalized: Vec<Value> = items
+                .iter()
+                .map(|item| {
+                    let mut out = serde_json::Map::new();
+                    for key in ["role", "kind", "label", "status"] {
+                        if let Some(value) = item.get(key).and_then(Value::as_str) {
+                            out.insert(key.into(), json!(value));
                         }
-                        let text = item
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .or_else(|| item.get("content").and_then(Value::as_str))
-                            .unwrap_or_default();
-                        out.insert("text".into(), json!(text));
-                        Value::Object(out)
-                    })
-                    .collect();
-                json!({"params":{"items": normalized}})
-            }),
+                    }
+                    let text = item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .or_else(|| item.get("content").and_then(Value::as_str))
+                        .unwrap_or_default();
+                    out.insert("text".into(), json!(text));
+                    Value::Object(out)
+                })
+                .collect();
+            json!({"params":{"items": normalized}})
+        }),
         "turn/started" | "turn/completed" => params
             .pointer("/turn/id")
             .and_then(Value::as_str)
@@ -818,7 +815,15 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
                 return None;
             }
             let mut started = json!({"id": id, "type": item_type});
-            for key in ["command", "commandLine", "toolName", "name", "path", "status", "text"] {
+            for key in [
+                "command",
+                "commandLine",
+                "toolName",
+                "name",
+                "path",
+                "status",
+                "text",
+            ] {
                 if let Some(value) = item.get(key).and_then(Value::as_str) {
                     started[key] = json!(value);
                 }
