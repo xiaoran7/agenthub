@@ -288,7 +288,33 @@ function parseDiffStats(content?: string): DiffStats {
     if (line.startsWith("+")) additions++;
     else if (line.startsWith("-")) deletions++;
   }
-  return { additions, deletions };
+
+  if (!oldText && !newText && (additions > 0 || deletions > 0)) {
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
+    for (const line of lines) {
+      if (
+        line.startsWith("+++") ||
+        line.startsWith("---") ||
+        line.startsWith("@@")
+      ) {
+        continue;
+      }
+      if (line.startsWith("-")) {
+        oldLines.push(line.slice(1));
+      } else if (line.startsWith("+")) {
+        newLines.push(line.slice(1));
+      } else {
+        const ctx = line.startsWith(" ") ? line.slice(1) : line;
+        oldLines.push(ctx);
+        newLines.push(ctx);
+      }
+    }
+    if (oldLines.length > 0) oldText = oldLines.join("\n");
+    if (newLines.length > 0) newText = newLines.join("\n");
+  }
+
+  return { additions, deletions, oldText, newText };
 }
 
 interface QuestionItem {
@@ -617,6 +643,9 @@ export function RemoteConsole({
     action: "approve" | "decline";
   } | null>(null);
   const [copiedApprovalId, setCopiedApprovalId] = useState<string | null>(null);
+  const [collapsedApprovalDiffs, setCollapsedApprovalDiffs] = useState<
+    Record<string, boolean>
+  >({});
   const [submittingQuestionId, setSubmittingQuestionId] = useState<
     string | null
   >(null);
@@ -2408,6 +2437,133 @@ export function RemoteConsole({
                         </div>
                       </div>
                     )}
+                    {approval.diff && (() => {
+                      const diffStats = parseDiffStats(approval.diff);
+                      const isCollapsed =
+                        collapsedApprovalDiffs[approval.approval_id] ?? false;
+                      const isDiffCopied =
+                        copiedApprovalId === `${approval.approval_id}-diff`;
+                      return (
+                        <div className="remote-approval-diff-section">
+                          <div className="remote-approval-diff-header">
+                            <div className="remote-approval-diff-title-wrap">
+                              <span className="remote-approval-box-label">
+                                拟修改代码变更 (Diff)
+                              </span>
+                              {(diffStats.additions > 0 ||
+                                diffStats.deletions > 0) && (
+                                <span className="remote-approval-diff-badge">
+                                  {diffStats.additions > 0 && (
+                                    <span className="remote-diff-stat-add">
+                                      +{diffStats.additions}
+                                    </span>
+                                  )}
+                                  {diffStats.deletions > 0 && (
+                                    <span className="remote-diff-stat-del">
+                                      -{diffStats.deletions}
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                            </div>
+                            <div className="remote-approval-diff-actions">
+                              <button
+                                type="button"
+                                className="remote-card-mini-copy"
+                                onClick={() =>
+                                  handleCopyText(
+                                    `${approval.approval_id}-diff`,
+                                    approval.diff!,
+                                  )
+                                }
+                                title="复制完整 Diff 内容"
+                              >
+                                {isDiffCopied ? "✓ 已复制" : "复制变更"}
+                              </button>
+                              <button
+                                type="button"
+                                className="remote-approval-diff-toggle-btn"
+                                onClick={() =>
+                                  setCollapsedApprovalDiffs((prev) => ({
+                                    ...prev,
+                                    [approval.approval_id]: !isCollapsed,
+                                  }))
+                                }
+                                title={isCollapsed ? "展开比对" : "折叠比对"}
+                              >
+                                {isCollapsed ? "展开比对 ▼" : "折叠比对 ▲"}
+                              </button>
+                            </div>
+                          </div>
+                          {!isCollapsed && (
+                            <div className="remote-approval-diff-body">
+                              {diffStats.oldText || diffStats.newText ? (
+                                <div className="remote-diff-viewer">
+                                  {diffStats.oldText && (
+                                    <div className="remote-diff-chunk del">
+                                      <div className="remote-diff-bar">
+                                        <span className="remote-diff-tag">
+                                          - 变更前代码
+                                        </span>
+                                        <button
+                                          type="button"
+                                          className="remote-card-mini-copy"
+                                          onClick={() =>
+                                            handleCopyText(
+                                              `${approval.approval_id}-diff-del`,
+                                              diffStats.oldText!,
+                                            )
+                                          }
+                                        >
+                                          {copiedApprovalId ===
+                                          `${approval.approval_id}-diff-del`
+                                            ? "✓ 已复制"
+                                            : "复制"}
+                                        </button>
+                                      </div>
+                                      <pre className="remote-diff-pre">
+                                        {diffStats.oldText}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {diffStats.newText && (
+                                    <div className="remote-diff-chunk add">
+                                      <div className="remote-diff-bar">
+                                        <span className="remote-diff-tag">
+                                          + 变更后代码
+                                        </span>
+                                        <button
+                                          type="button"
+                                          className="remote-card-mini-copy"
+                                          onClick={() =>
+                                            handleCopyText(
+                                              `${approval.approval_id}-diff-add`,
+                                              diffStats.newText!,
+                                            )
+                                          }
+                                        >
+                                          {copiedApprovalId ===
+                                          `${approval.approval_id}-diff-add`
+                                            ? "✓ 已复制"
+                                            : "复制"}
+                                        </button>
+                                      </div>
+                                      <pre className="remote-diff-pre">
+                                        {diffStats.newText}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <pre className="remote-diff-pre remote-approval-raw-diff">
+                                  {approval.diff}
+                                </pre>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="remote-approval-actions">
                       <button
                         type="button"

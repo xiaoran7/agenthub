@@ -1806,6 +1806,100 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 :root[data-theme="dark"] .remote-approval-command-box {
   color: #86efac;
 }
+.remote-approval-diff-section {
+  margin: 10px 0 14px;
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--radius-md, 6px);
+  background: var(--cds-surface-0, rgba(0, 0, 0, 0.02));
+  overflow: hidden;
+}
+.remote-approval-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--cds-surface-1, rgba(255, 255, 255, 0.7));
+  border-bottom: 1px solid var(--cds-border, rgba(0, 0, 0, 0.08));
+}
+[data-theme="dark"] .remote-approval-diff-header {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+.remote-approval-diff-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-approval-diff-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.04));
+}
+[data-theme="dark"] .remote-approval-diff-badge {
+  background: rgba(255, 255, 255, 0.06);
+}
+.remote-diff-stat-add {
+  color: #16a34a;
+}
+[data-theme="dark"] .remote-diff-stat-add {
+  color: #4ade80;
+}
+.remote-diff-stat-del {
+  color: #ef4444;
+}
+[data-theme="dark"] .remote-diff-stat-del {
+  color: #f87171;
+}
+.remote-approval-diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.remote-approval-diff-toggle-btn {
+  background: var(--cds-surface-2, transparent);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.12));
+  color: var(--cds-text-secondary, #525252);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+.remote-approval-diff-toggle-btn:hover {
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.05));
+  color: var(--cds-text-primary, #151515);
+  border-color: var(--cds-border-strong, rgba(0, 0, 0, 0.2));
+}
+[data-theme="dark"] .remote-approval-diff-toggle-btn {
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #94a3b8;
+}
+[data-theme="dark"] .remote-approval-diff-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f5f9;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.remote-approval-diff-body {
+  padding: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.remote-approval-diff-body .remote-diff-viewer {
+  margin: 0;
+}
+.remote-approval-raw-diff {
+  background: var(--cds-surface-0, #0d0e12);
+  border: 1px solid var(--cds-border, #1e222a);
+  border-radius: var(--radius-md, 6px);
+  color: var(--cds-text-primary, #f1f5f9);
+}
 .remote-approval > div,
 .remote-approval-actions {
   display: flex;

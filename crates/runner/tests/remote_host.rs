@@ -858,6 +858,65 @@ fn raw_filesystem_path_is_rejected_as_unauthorized_workspace() {
 }
 
 #[test]
+fn file_change_approval_preserves_sanitized_diff() {
+    let (dir, fake, mut host) = setup();
+    bind(&dir, &fake, &mut host);
+    start_turn(&fake, &mut host, "turn-file-1");
+
+    let raw_diff = "@@ -1,2 +1,2 @@\n-import secret from \"/Users/alice/config.json\";\n+import secret from \"/Users/alice/new_config.json\";\n";
+    fake.event(json!({
+        "id": 88,
+        "method": "item/fileChange/requestApproval",
+        "params": {
+            "threadId": "native-real",
+            "turnId": "turn-file-1",
+            "filePath": "src/config.ts",
+            "diff": raw_diff,
+            "reason": "Update config import",
+            "availableDecisions": ["accept", "decline"]
+        }
+    }));
+
+    let events = host.poll().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "approval_requested");
+    let approval_id = events[0].approval_id.clone().unwrap();
+
+    let approvals = host.pending_approvals();
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0].approval_id, approval_id);
+    assert_eq!(approvals[0].tool_name.as_deref(), Some("FileChange"));
+    assert_eq!(approvals[0].path.as_deref(), Some("src/config.ts"));
+    assert_eq!(approvals[0].risk_level.as_deref(), Some("medium"));
+    assert!(approvals[0].can_approve);
+    assert!(approvals[0].can_decline);
+
+    let diff = approvals[0].diff.as_ref().expect("diff should be present");
+    // Local filesystem paths must be redacted
+    assert!(!diff.contains("/Users/alice/config.json"));
+    assert!(!diff.contains("/Users/alice/new_config.json"));
+    assert!(diff.contains("[local_path_redacted]"));
+
+    let encoded = serde_json::to_value(&approvals[0]).unwrap();
+    assert!(encoded.get("diff").is_some());
+    for forbidden in ["request_id", "raw"] {
+        assert!(encoded.get(forbidden).is_none());
+    }
+
+    let action = RemoteAction::ResolveApproval {
+        approval_id,
+        approved: true,
+    };
+    assert_eq!(
+        host.handle_command(control(&host, "approve-file", action))
+            .status,
+        "accepted"
+    );
+    assert!(host.pending_approvals().is_empty());
+}
+
+
+#[test]
 fn unknown_notifications_are_retained_without_inventing_execution_state() {
     let (dir, fake, mut host) = setup();
     bind(&dir, &fake, &mut host);
@@ -1084,3 +1143,42 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
         assert!(turn_starts[1].1.get("sessionExists").is_none());
     }
 }
+
+#[test]
+fn acp_session_routing_in_multiprovider_transport() {
+    let mut transport = MultiProviderTransport::new(None, None);
+
+    // 1. thread/read for an ACP session returns an idle thread with its session id
+    let read_res = transport
+        .request("thread/read", json!({ "threadId": "acp_session_test_1" }))
+        .expect("thread/read should succeed");
+    assert_eq!(read_res["thread"]["id"], "acp_session_test_1");
+    assert_eq!(read_res["thread"]["status"]["type"], "idle");
+
+    // 2. thread/resume for an ACP session returns the session
+    let resume_res = transport
+        .request("thread/resume", json!({ "threadId": "acp_session_test_1" }))
+        .expect("thread/resume should succeed");
+    assert_eq!(resume_res["thread"]["id"], "acp_session_test_1");
+    assert_eq!(resume_res["thread"]["status"]["type"], "idle");
+
+    // 3. thread/archive and thread/unarchive succeed for an ACP session
+    assert!(
+        transport
+            .request("thread/archive", json!({ "threadId": "acp_session_test_1" }))
+            .is_ok()
+    );
+    assert!(
+        transport
+            .request("thread/unarchive", json!({ "threadId": "acp_session_test_1" }))
+            .is_ok()
+    );
+
+    // 4. turn/interrupt for an ACP session succeeds
+    assert!(
+        transport
+            .request("turn/interrupt", json!({ "threadId": "acp_session_test_1" }))
+            .is_ok()
+    );
+}
+

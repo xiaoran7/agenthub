@@ -104,15 +104,17 @@ test("remote pending approvals expose only opaque actionable descriptors", () =>
     turn_id: "turn-one",
     can_approve: true,
     can_decline: false,
+    diff: "@@ -1 +1 @@\n-old\n+new",
   };
   assert.deepEqual(parseRemotePendingApproval(approval), approval);
   for (const unsafe of [
     { ...approval, request_id: 7 },
     { ...approval, raw: { command: "secret" } },
     { ...approval, command: "secret" },
-    { ...approval, diff: "secret" },
+    { ...approval, secret_token: "secret" },
     { ...approval, approval_id: "approval-provider-request" },
     { ...approval, can_approve: "true" },
+    { ...approval, diff: "x".repeat(65537) },
   ]) {
     assert.throws(
       () => parseRemotePendingApproval(unsafe),

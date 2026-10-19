@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.4.96] - 2026-10-19
+
+### 审批卡片 Diff 预览与通用 ACP 适配器架构 (Approval Diff Preview & Generic ACP Protocol Adapter)
+
+- **审批卡片可折叠代码变更比对预览 (Collapsible Diff Preview on Approval Cards)**：
+  - 针对 Claude Code `Edit`/`Write`、Codex 以及外部 Agent 的文件修改请求（`item/fileChange/requestApproval`），在 Rust Runner 侧自动提取结构化代码修改对比（包含老串/新串 JSON 与 Unified Patch 两种格式）；
+  - 严格执行隐私脱敏与尺寸防护：调用 `redact_paths_inside_text` 将本地文件绝对路径脱敏为 `[local_path_redacted]`，并限制 Diff 尺寸在 64 KiB 以内，杜绝 IPC/WebSocket 单帧超限与私密路径外泄；
+  - TypeScript 契约（`packages/contracts`）扩展 `RemotePendingApproval.diff` 字段与单字段严格校验，过滤非授权凭据字段；
+  - Web 控制台与移动端 PWA 引入 Aozora UI 极简通透折叠卡片（`.remote-diff-viewer`）：支持 `+add -del` 增删统计徽章、删除块（淡红）与新增块（淡绿）双栏或分块平铺展示、独立一键拷贝，并在窄屏移动视口下自适应折行，杜绝水平横移与掉帧。
+- **通用 ACP（Agent Client Protocol）stdio 适配器 (Generic ACP stdio Collector & Adapter)**：
+  - 在 `crates/runner/src/collectors/acp_app_server.rs` 实现标准 JSON-RPC 2.0 stdio ACP 适配器，使 AgentHub 能够无缝接入官方及开源社区的任何 ACP 兼容 Agent（如 `@agentclientprotocol/claude-agent-acp`、`@agentclientprotocol/codex-acp` 或自定义 ACP 智能体）；
+  - **进程隔离与生命周期安全**：利用 `ChildJob`（Windows Job Object `KILL_ON_JOB_CLOSE` 及 Unix 进程组）保证后台 Agent 退出时子进程树彻底连带终结，绝无孤儿僵尸进程残留；
+  - **解耦解决长阻塞 RPC 架构阻抗**：针对 ACP `session/prompt` 阻塞直至回合结束与 AgentHub `turn/start` 需立即返回活动 `turn_id` 的冲突，采用异步回合追踪方案，后台响应时自动转化为 `turn/completed`；
+  - **协议事件归一化**：将 ACP `session/update`（`agent_message_chunk`、`tool_call`、`tool_call_update`）转换为 AgentHub 标准转录事件，并将 `session/request_permission` 转换为 `item/fileChange/requestApproval` 与 `item/commandExecution/requestApproval`，自动接入 Diff 比对预览链路；
+  - **多提供商动态路由 (MultiProviderTransport)**：在 `remote_host.rs` 统一识别并路由 `acp_` 前缀会话与 `agentType == "acp"` 启动请求，无损兼容既有 Codex、Claude Code、Antigravity 与 Grok 会话。
+- **全链路自动化测试与闭环验证 (100% Green CI & Contract Alignment)**：
+  - 新增 Rust 单元与集成测试（`acp_app_server` 协议解析与脱敏比对测试、`MultiProviderTransport` 路由测试、`PendingApprovalSnapshot` 契约投影测试，172 + 28 项测试全部通过）；
+  - TypeScript `@agent-pulse/contracts` 与 `@agent-pulse/api` 单元测试全部通过（15 + 56 项测试通过）；
+  - `@agent-pulse/web` 前端生产构建 0 错误编译通过。
+
 ## [2.4.95] - 2026-10-19
 
 ### 极速骨架屏加载、药丸导航美学、侧栏交互加固与 Magpie 计量对齐 (Skeleton Shimmer, Nav Pill Aesthetics & Magpie Token Alignment)

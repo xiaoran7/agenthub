@@ -4440,6 +4440,9 @@ pub use zcode_app_server::*;
 pub mod claude_app_server;
 pub use claude_app_server::*;
 
+pub mod acp_app_server;
+pub use acp_app_server::*;
+
 #[derive(Debug, Clone)]
 pub struct CollectorBinaries {
     pub claude: PathBuf,

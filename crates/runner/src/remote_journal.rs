@@ -889,6 +889,7 @@ fn approval_remote_projection_omits_provider_request_payload() {
         tool_name: Some("Bash".into()),
         command_preview: Some("cargo test".into()),
         path: None,
+        diff: None,
         description: Some("Run unit tests".into()),
         risk_level: Some("high".into()),
     };

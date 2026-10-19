@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::collectors::{ClaudeProcessSession, CodexAppServer, ZCodeAppServer};
+use crate::collectors::{AcpAppServer, ClaudeProcessSession, CodexAppServer, ZCodeAppServer};
 use crate::domain::AgentType;
 
 /// In-memory replay window for command receipts.
@@ -87,6 +87,28 @@ impl NativeTransport for CodexAppServer {
     }
 }
 
+impl NativeTransport for AcpAppServer {
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, NativeError> {
+        self.request(method, params).map_err(|error| match error {
+            crate::collectors::CollectorError::Protocol { .. } => {
+                NativeError::rejected("provider_rejected")
+            }
+            _ => NativeError::uncertain("provider_transport_lost"),
+        })
+    }
+
+    fn respond(&mut self, id: Value, result: Value) -> Result<(), NativeError> {
+        let decision = result.get("decision").and_then(Value::as_str).unwrap_or("decline");
+        self.respond_permission(id, decision)
+            .map_err(|_| NativeError::uncertain("provider_transport_lost"))
+    }
+
+    fn drain(&mut self) -> Result<Vec<Value>, NativeError> {
+        self.drain_messages()
+            .map_err(|_| NativeError::uncertain("provider_transport_lost"))
+    }
+}
+
 pub struct MultiProviderTransport {
     codex: Option<CodexAppServer>,
     zcode: Option<ZCodeAppServer>,
@@ -110,6 +132,10 @@ pub struct MultiProviderTransport {
     grok_cancels: HashMap<String, Arc<AtomicBool>>,
     grok_buffered_events: Arc<Mutex<VecDeque<Value>>>,
     grok_cached_cwds: HashMap<String, PathBuf>,
+    acp_servers: HashMap<String, AcpAppServer>,
+    acp_active_turns: HashMap<String, String>,
+    acp_buffered_events: VecDeque<Value>,
+    acp_cached_cwds: HashMap<String, PathBuf>,
 }
 
 impl MultiProviderTransport {
@@ -137,7 +163,17 @@ impl MultiProviderTransport {
             grok_cancels: HashMap::new(),
             grok_buffered_events: Arc::new(Mutex::new(VecDeque::new())),
             grok_cached_cwds: HashMap::new(),
+            acp_servers: HashMap::new(),
+            acp_active_turns: HashMap::new(),
+            acp_buffered_events: VecDeque::new(),
+            acp_cached_cwds: HashMap::new(),
         }
+    }
+
+    pub fn add_acp_server(&mut self, session_id: impl Into<String>, server: AcpAppServer, cwd: PathBuf) {
+        let sid = session_id.into();
+        self.acp_cached_cwds.insert(sid.clone(), cwd);
+        self.acp_servers.insert(sid, server);
     }
 
     fn ensure_zcode(&mut self) -> Result<&mut ZCodeAppServer, NativeError> {
@@ -217,6 +253,12 @@ impl NativeTransport for MultiProviderTransport {
             .and_then(Value::as_str)
             .is_some_and(|id| id.starts_with("grok_"));
 
+        let is_acp = params
+            .get("threadId")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.starts_with("acp_"));
+
         let agent_type = params
             .get("agentType")
             .and_then(Value::as_str)
@@ -286,6 +328,49 @@ impl NativeTransport for MultiProviderTransport {
                 let session_id = format!("grok_{}", uuid::Uuid::new_v4());
                 self.grok_cached_cwds
                     .insert(session_id.clone(), PathBuf::from(&cwd));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd,
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "thread/start" if agent_type == "acp" || agent_type.starts_with("acp:") => {
+                let cwd = params["cwd"].as_str().unwrap_or(".").to_string();
+                let cwd_path = PathBuf::from(&cwd);
+
+                let binary_path = if let Some(custom) = agent_type.strip_prefix("acp:") {
+                    PathBuf::from(custom)
+                } else if let Some(specified) = params.get("binaryPath").and_then(Value::as_str) {
+                    PathBuf::from(specified)
+                } else {
+                    crate::collectors::discover_acp_binary()
+                        .unwrap_or_else(|| PathBuf::from("claude-agent-acp"))
+                };
+
+                let args: Vec<String> = params
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let mut server = AcpAppServer::start(&binary_path, &args, Duration::from_secs(20))
+                    .map_err(|e| NativeError::rejected(format!("acp_start_failed: {}", e)))?;
+
+                let native_id = server
+                    .session_new(&cwd_path)
+                    .map_err(|e| NativeError::uncertain(format!("acp_session_new_failed: {}", e)))?;
+
+                let session_id = format!("acp_{}", native_id);
+                self.acp_cached_cwds.insert(session_id.clone(), cwd_path);
+                self.acp_servers.insert(session_id.clone(), server);
+
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -1032,6 +1117,85 @@ impl NativeTransport for MultiProviderTransport {
                 Ok(json!({"ok": true}))
             }
             "thread/archive" | "thread/unarchive" if is_zcode => Ok(json!({"ok": true})),
+            "thread/read" if is_acp => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let cwd = self
+                    .acp_cached_cwds
+                    .get(session_id)
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from("."));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd.to_string_lossy(),
+                        "status": { "type": "idle" },
+                        "name": session_id
+                    }
+                }))
+            }
+            "thread/resume" if is_acp => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let cwd = self
+                    .acp_cached_cwds
+                    .get(session_id)
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from("."));
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd.to_string_lossy(),
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "turn/start" if is_acp => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let raw_session_id = session_id.strip_prefix("acp_").unwrap_or(session_id);
+                let text = params["input"]
+                    .as_array()
+                    .and_then(|arr| arr.iter().find_map(|item| item["text"].as_str()))
+                    .unwrap_or("");
+                let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
+                self.acp_active_turns
+                    .insert(session_id.to_string(), turn_id.clone());
+
+                let server = self
+                    .acp_servers
+                    .get_mut(session_id)
+                    .ok_or_else(|| NativeError::rejected("acp_session_not_found"))?;
+
+                server
+                    .send_tracked_prompt(raw_session_id, text, &turn_id)
+                    .map_err(|e| NativeError::uncertain(format!("acp_send_failed: {}", e)))?;
+
+                self.acp_buffered_events.push_back(json!({
+                    "method": "turn/started",
+                    "params": {
+                        "threadId": session_id,
+                        "turn": {
+                            "id": turn_id.clone(),
+                            "status": { "type": "inProgress" }
+                        }
+                    }
+                }));
+
+                Ok(json!({
+                    "turn": {
+                        "id": turn_id,
+                        "status": { "type": "inProgress" }
+                    }
+                }))
+            }
+            "turn/interrupt" if is_acp => {
+                let session_id = params["threadId"].as_str().unwrap_or("");
+                let raw_session_id = session_id.strip_prefix("acp_").unwrap_or(session_id);
+                if let Some(server) = self.acp_servers.get_mut(session_id) {
+                    let _ = server.session_cancel(raw_session_id);
+                }
+                self.acp_active_turns.remove(session_id);
+                Ok(json!({"ok": true}))
+            }
+            "thread/archive" | "thread/unarchive" if is_acp => Ok(json!({"ok": true})),
             "thread/list" => {
                 let is_first_page = params
                     .get("cursor")
@@ -1211,6 +1375,19 @@ impl NativeTransport for MultiProviderTransport {
             for session in self.claude_sessions.values_mut() {
                 let _ =
                     session.send_control_response(actual_id, "success", response_payload.clone());
+            }
+            return Ok(());
+        }
+        // If request ID is string and starts with "acp_req_", route to ACP server
+        if let Some(id_str) = id.as_str()
+            && id_str.starts_with("acp_req_")
+        {
+            let decision = result
+                .get("decision")
+                .and_then(Value::as_str)
+                .unwrap_or("decline");
+            for server in self.acp_servers.values_mut() {
+                let _ = server.respond_permission(id.clone(), decision);
             }
             return Ok(());
         }
@@ -1419,6 +1596,64 @@ impl NativeTransport for MultiProviderTransport {
                                             .and_then(Value::as_str);
 
                                         if is_file {
+                                            let diff = if let (Some(old_str), Some(new_str)) = (
+                                                input.get("old_string").and_then(Value::as_str),
+                                                input.get("new_string").and_then(Value::as_str),
+                                            ) {
+                                                let sanitized_old =
+                                                    crate::privacy::redact_paths_inside_text(old_str);
+                                                let sanitized_new =
+                                                    crate::privacy::redact_paths_inside_text(new_str);
+                                                let mut payload = json!({
+                                                    "old_string": sanitized_old,
+                                                    "new_string": sanitized_new,
+                                                })
+                                                .to_string();
+                                                if payload.len() > 65536 {
+                                                    payload.truncate(65536);
+                                                }
+                                                Some(payload)
+                                            } else if let Some(content) =
+                                                input.get("content").and_then(Value::as_str)
+                                            {
+                                                let sanitized =
+                                                    crate::privacy::redact_paths_inside_text(content);
+                                                let mut payload = json!({
+                                                    "new_string": sanitized,
+                                                })
+                                                .to_string();
+                                                if payload.len() > 65536 {
+                                                    payload.truncate(65536);
+                                                }
+                                                Some(payload)
+                                            } else if let Some(new_source) =
+                                                input.get("new_source").and_then(Value::as_str)
+                                            {
+                                                let sanitized =
+                                                    crate::privacy::redact_paths_inside_text(new_source);
+                                                let mut payload = json!({
+                                                    "new_string": sanitized,
+                                                })
+                                                .to_string();
+                                                if payload.len() > 65536 {
+                                                    payload.truncate(65536);
+                                                }
+                                                Some(payload)
+                                            } else if let Some(raw_diff) = input
+                                                .get("diff")
+                                                .or_else(|| input.get("patch"))
+                                                .and_then(Value::as_str)
+                                            {
+                                                let mut sanitized =
+                                                    crate::privacy::redact_paths_inside_text(raw_diff);
+                                                if sanitized.len() > 65536 {
+                                                    sanitized.truncate(65536);
+                                                }
+                                                Some(sanitized)
+                                            } else {
+                                                None
+                                            };
+
                                             messages.push(json!({
                                                 "id": format!("claude_req_{}", req_id),
                                                 "method": "item/fileChange/requestApproval",
@@ -1428,6 +1663,7 @@ impl NativeTransport for MultiProviderTransport {
                                                     "requestId": req_id,
                                                     "toolName": tool_name_str,
                                                     "filePath": file_path,
+                                                    "diff": diff,
                                                     "reason": reason,
                                                     "availableDecisions": ["accept", "decline"]
                                                 }
@@ -1721,9 +1957,43 @@ impl NativeTransport for MultiProviderTransport {
             self.zcode = None;
         }
 
+        while let Some(evt) = self.acp_buffered_events.pop_front() {
+            messages.push(evt);
+        }
+
+        let mut dead_acp_sessions = Vec::new();
+        for (session_id, server) in self.acp_servers.iter_mut() {
+            match server.drain_messages() {
+                Ok(acp_msgs) => {
+                    for mut msg in acp_msgs {
+                        if let Some(params) = msg.get_mut("params") {
+                            if let Some(tid) = params.get("threadId").and_then(Value::as_str) {
+                                if !tid.starts_with("acp_") {
+                                    params["threadId"] = json!(format!("acp_{}", tid));
+                                }
+                            }
+                        }
+                        if msg.get("method").and_then(Value::as_str) == Some("turn/completed") {
+                            self.acp_active_turns.remove(session_id);
+                        }
+                        messages.push(msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[MultiProviderTransport] acp drain error for {}: {:?}", session_id, e);
+                    dead_acp_sessions.push(session_id.clone());
+                }
+            }
+        }
+        for sid in dead_acp_sessions {
+            self.acp_servers.remove(&sid);
+            self.acp_active_turns.remove(&sid);
+        }
+
         // Only mark transport lost if codex itself dropped AND there are no other active provider streams
         if codex_lost
             && self.zcode.is_none()
+            && self.acp_active_turns.is_empty()
             && self.claude_active_turns.is_empty()
             && self.antigravity_active_turns.is_empty()
             && self.grok_active_turns.is_empty()
@@ -1879,6 +2149,8 @@ pub struct PendingApprovalSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk_level: Option<String>,
@@ -1917,6 +2189,7 @@ struct PendingApproval {
     tool_name: Option<String>,
     command_preview: Option<String>,
     path: Option<String>,
+    diff: Option<String>,
     description: Option<String>,
     risk_level: Option<String>,
 }
@@ -2019,6 +2292,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     tool_name: approval.tool_name.clone(),
                     command_preview: approval.command_preview.clone(),
                     path: approval.path.clone(),
+                    diff: approval.diff.clone(),
                     description: approval.description.clone(),
                     risk_level: approval.risk_level.clone(),
                 }
@@ -2897,6 +3171,14 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     });
                                 let command_preview = params["command"].as_str().map(str::to_owned);
                                 let path = params["filePath"].as_str().map(str::to_owned);
+                                let diff = params["diff"].as_str().map(|d| {
+                                    let mut sanitized =
+                                        crate::privacy::redact_paths_inside_text(d);
+                                    if sanitized.len() > 65536 {
+                                        sanitized.truncate(65536);
+                                    }
+                                    sanitized
+                                });
                                 let description = params["reason"].as_str().map(str::to_owned);
                                 let risk_level = if is_command_approval {
                                     Some("high".to_string())
@@ -2920,6 +3202,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     tool_name: tool_name.clone(),
                                     command_preview: command_preview.clone(),
                                     path: path.clone(),
+                                    diff: diff.clone(),
                                     description: description.clone(),
                                     risk_level: risk_level.clone(),
                                 };
@@ -2933,6 +3216,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                         tool_name,
                                         command_preview,
                                         path,
+                                        diff,
                                         description,
                                         risk_level,
                                     }

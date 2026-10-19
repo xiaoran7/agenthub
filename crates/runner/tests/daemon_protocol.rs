@@ -68,6 +68,7 @@ fn response_and_event_envelopes_preserve_request_identity_and_cursor() {
                 tool_name: Some("Bash".into()),
                 command_preview: Some("cargo test".into()),
                 path: None,
+                diff: None,
                 description: None,
                 risk_level: Some("high".into()),
             }],

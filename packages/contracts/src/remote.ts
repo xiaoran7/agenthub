@@ -36,6 +36,7 @@ export interface RemotePendingApproval {
   tool_name?: string;
   command_preview?: string;
   path?: string;
+  diff?: string;
   description?: string;
   risk_level?: "low" | "medium" | "high";
 }
@@ -165,6 +166,7 @@ export function parseRemotePendingApproval(
     "tool_name",
     "command_preview",
     "path",
+    "diff",
     "description",
     "risk_level",
   ]);
@@ -183,6 +185,7 @@ export function parseRemotePendingApproval(
   if (approval.command_preview !== undefined)
     text(approval.command_preview, 32768);
   if (approval.path !== undefined) text(approval.path, 1024);
+  if (approval.diff !== undefined) text(approval.diff, 65536);
   if (approval.description !== undefined) text(approval.description, 4096);
   if (approval.risk_level !== undefined)
     member(approval.risk_level, ["low", "medium", "high"]);
