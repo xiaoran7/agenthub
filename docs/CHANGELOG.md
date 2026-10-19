@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.4.97] - 2026-10-19
+
+### Android 移动端视觉对齐、间距栅格统一与功能入口分区 (Visual Alignment, Spacing Grid & Action Grouping)
+
+- **统一设计令牌 (Single Source of Design Tokens)**：
+  - 删除自创的浅色调色板，主题与上游 Orca 移动端保持一致，固定为石墨深色单主题，彻底消除“深色外壳 + 浅色弹窗”的割裂感；
+  - 新增 `OrcaSpace`（2/4/8/12/16/24/32 四点栅格）、`OrcaRadius`（卡片 14 / 控件 6 / 输入 8 / 图标砖 12 / 药丸 100）、`OrcaSize`（图标砖 40、图标触控区 40、字形 18）与 `OrcaType`（小节标题、等宽元信息、代码）四组令牌；
+  - 所有屏幕的内边距、行距、圆角与字号一律从令牌取值，清除原先散落的 `8/10/12/14/18/34/44dp` 魔法数字与 `10/10.5/11.5/12.5/15/16/19/24sp` 零散字号覆盖；
+  - 字号收敛为四级层次：24sp 页面标题、18sp 品牌字、14sp 行标题与正文、12sp 辅助说明、11sp 等宽标签，中文小节标题改回无衬线字体，避免等宽字体显示中文时的字距断裂。
+- **统一组行组件 (Unified Row & Group Primitives)**：
+  - 新增 `OrcaRow` 单一组行原语（标题 / 副标题 / 状态点 / 状态文字 / 等宽元信息 / 前置图标砖 / 尾部动作），主机、会话、工作区、发现会话、维护项全部复用同一套排版；
+  - 新增 `OrcaListGroup` + `OrcaRowDivider`：多行内容收进同一张卡片、行间用 14dp 内缩细分割线，取代原先“每行一张卡片 + 8dp 间隔”的碎片化堆叠；
+  - 三宫格统计合并为一张 `OrcaStatStrip`（竖线分隔），移除三张独立卡片的重复边框与阴影；
+  - `OrcaCard` / `OrcaChip` / `OrcaPrimaryButton` / `OrcaSecondaryButton` / `OrcaIconButton` 统一改用 `Surface(onClick=)`，触控涟漪与禁用态由 Material 3 原生处理，按钮最小高度 44dp 满足触控规范。
+- **入口分区，设置只留一处 (One Settings Entry Point)**：
+  - 设置（Gateway 端点、访问令牌、开发用户）只保留首页右上角一个入口，主机页、引导页、底部链接等五处重复入口全部移除；
+  - 新增独立“接入主机”引导页（三步接入 + 可复制启动命令 + 返回首页），与“设置”职责彻底分离：设置管“这台手机连哪里”，接入页管“怎么再加一台电脑”；
+  - 首页“主机”小节标题右侧、未配置引导页均提供“接入主机”动作；主机页不再出现设置图标，只保留刷新；
+  - 设置图标改为更易识别的滑杆字形，与相邻的刷新环形图标区分明确；“断开并清除本机配置”归入“维护”分组并使用危险色标题。
+- **渲染性能 (Render Performance)**：
+  - 车机快照按 `runners`/`sessions` 一次性解析为不可变 `Fleet`/`HostEntry`/`SessionEntry` 数据类，所有屏幕只读 Kotlin 对象，不再在组合阶段反复 `JSONObject` 取值、`filter` 与 `toString()`，消除 O(n·m) 的主机会话过滤；
+  - 轮询结果与上一版逐字节比对，内容未变化时不写回状态，空闲轮询零重组；
+  - 轮询通过 `repeatOnLifecycle(RESUMED)` 绑定前台生命周期，退到后台立即停止；有活动会话时 1.5s 一轮、全部空闲时 3s 一轮，手动刷新通过 `Channel.CONFLATED` 立即唤醒；
+  - 会话页同样按生命周期暂停轮询，并仅在内容变化时更新事件与命令列表；转录只在用户停留底部时跟随滚动，上翻历史不再被强制拉回；
+  - 路由转场时长由 360/460ms 收紧到 220/280ms，删除未使用的 `MotionEntrance`/`MotionSelection`/`AnimatedMetricText` 与装饰性图标，减少无效动画与组合开销。
+- **视觉修正 (Visual Fixes)**：
+  - 启动主题改为深色（`#111111`），新增 Android 12+ 深色启动画面主题与自适应图标（背景 `#0D111A`），消除启动瞬间的白屏闪光；
+  - 首页问候语不再重复硬编码 24sp，副标题改为“1 / 2 台主机在线 · 1 个会话运行中”的可读摘要；会话列表按“待处理 → 运行中 → 空闲 → 异常 → 已结束”排序，最需要处理的会话优先出现；
+  - 会话页标题提升为 15sp，审批卡片内嵌可折叠 Diff 视图（按行着色，最多 60 行，11sp 等宽），审批正文与工具行统一使用等宽字体。
+- **验证 (Verification)**：
+  - 在 `Medium_Phone` 模拟器（1080×2400 / 420dpi / Android 16）以 `adb reverse` 接入本地假 Gateway，逐屏实测首页、主机页、会话页、审批横幅、Diff 展开、接入引导页与设置页，并核对 1.3× 系统字体缩放下布局不溢出；
+  - `./gradlew :app:testDebugUnitTest` 通过，`./gradlew :app:assembleDebug` 通过，产物为 versionCode 97 / versionName 2.4.97 的 `AgentHub-v2.4.97-android-debug.apk`，并同步清理同平台旧版 APK。
+
 ## [2.4.96] - 2026-10-19
 
 ### 审批卡片 Diff 预览与通用 ACP 适配器架构 (Approval Diff Preview & Generic ACP Protocol Adapter)

@@ -2,8 +2,9 @@ package com.agentplatform.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,7 +35,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,13 +47,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.agentplatform.mobile.data.AgentGateway
 import com.agentplatform.mobile.data.GatewayException
 import java.net.URLEncoder
@@ -82,7 +84,7 @@ private fun sessionError(error: Exception): String =
         "question_not_pending" -> "问题已处理或已过期。"
         else ->
             when ((error as? GatewayException)?.status) {
-                401, 403 -> "认证失效，请在设置中更新访问令牌。"
+                401, 403 -> "认证失效，请到设置更新访问令牌。"
                 408, 504 -> "请求超时，请检查网络后重试。"
                 null -> "暂时无法连接 Gateway，请检查网络与电脑连接。"
                 else -> "Gateway 暂时不可用，请稍后重试。"
@@ -98,10 +100,10 @@ data class UiMessage(
 )
 
 // =========================================================================
-// Orca Session Screen
+// Session screen
 //
-// Header (back / workspace / stop) -> live transcript -> approval & question
-// banners -> terminal accessory keys -> composer.
+// Header -> approval / question banners -> transcript -> accessory keys ->
+// composer. Polling pauses whenever the app leaves the foreground.
 // =========================================================================
 
 @Composable
@@ -113,6 +115,7 @@ fun RemoteScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     var events by remember { mutableStateOf(listOf<JSONObject>()) }
     var commands by remember { mutableStateOf(listOf<JSONObject>()) }
     var draft by remember { mutableStateOf("") }
@@ -122,7 +125,6 @@ fun RemoteScreen(
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
 
-    // Snapshot-derived session status (owns freshness for the header).
     val session =
         remember(snapshot, runnerId, hubId) {
             snapshot.optJSONArray("sessions")?.objects()?.find {
@@ -136,35 +138,44 @@ fun RemoteScreen(
     val idle = connected && executionState in listOf("idle", "completed")
     val generation = binding?.optString("host_generation").orEmpty()
 
-    // Event polling for this session.
-    LaunchedEffect(gateway, runnerId, hubId) {
+    // Event polling. Only diffed payloads update state, so an idle poll does
+    // not recompose the transcript.
+    LaunchedEffect(gateway, runnerId, hubId, lifecycle) {
         events = emptyList()
         commands = emptyList()
         var cursor = 0L
-        while (true) {
-            try {
-                val batch =
-                    withContext(Dispatchers.IO) {
-                        gateway.remoteRequest(
-                            "/events?runner=${encoded(runnerId)}&hub=${encoded(hubId)}&after=$cursor",
-                        ).getJSONArray("events").objects()
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                var hadActivity = false
+                try {
+                    val batch =
+                        withContext(Dispatchers.IO) {
+                            gateway.remoteRequest(
+                                "/events?runner=${encoded(runnerId)}&hub=${encoded(hubId)}&after=$cursor",
+                            ).getJSONArray("events").objects()
+                        }
+                    if (batch.isNotEmpty()) {
+                        cursor = batch.last().optLong("cursor", cursor)
+                        events = (events + batch).takeLast(1_200)
+                        hadActivity = true
                     }
-                if (batch.isNotEmpty()) {
-                    cursor = batch.last().optLong("cursor", cursor)
-                    events = (events + batch).takeLast(1_200)
+                    val commandList =
+                        withContext(Dispatchers.IO) {
+                            gateway.remoteRequest("/sessions/${encoded(runnerId)}/${encoded(hubId)}")
+                                .optJSONArray("commands")?.objects().orEmpty()
+                        }
+                    if (commandList.toString() != commands.toString()) {
+                        commands = commandList
+                        hadActivity = true
+                    }
+                    if (error.isNotEmpty()) error = ""
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (failure: Exception) {
+                    error = sessionError(failure)
                 }
-                commands =
-                    withContext(Dispatchers.IO) {
-                        gateway.remoteRequest("/sessions/${encoded(runnerId)}/${encoded(hubId)}")
-                            .optJSONArray("commands")?.objects().orEmpty()
-                    }
-                if (error.isNotEmpty()) error = ""
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (failure: Exception) {
-                error = sessionError(failure)
+                delay(if (hadActivity) 500 else 900)
             }
-            delay(600)
         }
     }
 
@@ -172,9 +183,14 @@ fun RemoteScreen(
     val approvals = remember(events, hubId) { remoteApprovals(events, hubId) }
     val questions = remember(events, hubId) { remoteQuestions(events, hubId) }
 
-    LaunchedEffect(conversation.size, approvals.size, questions.size) {
-        if (conversation.isNotEmpty()) {
-            listState.animateScrollToItem((conversation.size - 1).coerceAtLeast(0))
+    // Follow new output only while the reader is already at the bottom, so
+    // scrolling back through history is never yanked away.
+    val lastMessageLength = conversation.lastOrNull()?.text?.length ?: 0
+    LaunchedEffect(conversation.size, lastMessageLength) {
+        if (conversation.isEmpty()) return@LaunchedEffect
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (lastVisible >= conversation.lastIndex - 1) {
+            listState.scrollToItem(conversation.lastIndex)
         }
     }
 
@@ -217,72 +233,70 @@ fun RemoteScreen(
         submit(JSONObject().put("action", "send_prompt").put("text", trimmed))
     }
 
-    DisposableEffect(Unit) { onDispose { } }
-
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding(),
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding(),
     ) {
-        // -------------------------------------------------------------
-        // Header: back, live dot, workspace, stop/lock state
-        // -------------------------------------------------------------
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OrcaIconButton(onClick = onBack) {
-                OrcaBackChevron(tint = MaterialTheme.colorScheme.onSurface)
+                OrcaBackChevron(MaterialTheme.colorScheme.onSurface)
             }
-            OrcaStatusDot(
-                color = if (connected) OrcaColors.accentGreen else OrcaColors.accentAmber,
-                size = 8,
-                modifier = Modifier.padding(horizontal = 6.dp),
-            )
             Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(1.dp),
+                modifier = Modifier.weight(1f).padding(start = OrcaSpace.xs),
+                verticalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
             ) {
                 Text(
-                    workspaceLabel(binding?.optString("workspace_path").orEmpty()),
-                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
-                    fontWeight = FontWeight.SemiBold,
+                    text = workspaceLabel(binding?.optString("workspace_path").orEmpty()),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    if (connected) stateLabel(executionState) else "正在恢复控制…",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                    color = if (connected) stateColor(executionState) else OrcaColors.accentAmber,
-                    maxLines = 1,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+                ) {
+                    OrcaStatusDot(
+                        color = if (connected) stateColor(executionState) else OrcaColors.accentAmber,
+                        5.dp,
+                    )
+                    Text(
+                        text = if (connected) stateLabel(executionState) else "正在恢复控制…",
+                        style = OrcaType.mono,
+                        color = if (connected) stateColor(executionState) else OrcaColors.accentAmber,
+                        maxLines = 1,
+                    )
+                }
             }
             if (connected && !idle) {
                 Surface(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable(enabled = !busy) {
-                            submit(JSONObject().put("action", "interrupt"))
-                        },
-                    shape = RoundedCornerShape(6.dp),
+                    onClick = { submit(JSONObject().put("action", "interrupt")) },
+                    modifier = Modifier.height(32.dp),
+                    enabled = !busy,
+                    shape = RoundedCornerShape(OrcaRadius.button),
                     color = OrcaColors.accentRed.copy(alpha = 0.12f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.6f)),
+                    border = BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.5f)),
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = OrcaSpace.md),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
                     ) {
-                        OrcaStopIcon(tint = OrcaColors.accentRed)
+                        OrcaStopIcon(OrcaColors.accentRed)
                         Text(
-                            "停止",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
+                            text = "停止",
+                            style = MaterialTheme.typography.labelMedium,
                             color = OrcaColors.accentRed,
                         )
                     }
@@ -291,21 +305,17 @@ fun RemoteScreen(
         }
 
         if (error.isNotBlank()) {
-            OrcaInlineError(error, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            OrcaInlineError(error, Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs))
         }
 
-        // -------------------------------------------------------------
-        // Prompt banners: approvals then questions (Orca intervention cards)
-        // -------------------------------------------------------------
         if (approvals.isNotEmpty() || questions.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
+                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
             ) {
                 items(approvals.entries.toList(), key = { it.key }) { (id, approval) ->
                     ApprovalCard(
-                        approvalId = id,
                         approval = approval,
                         enabled = connected && !busy,
                         onApprove = {
@@ -328,7 +338,6 @@ fun RemoteScreen(
                 }
                 items(questions.entries.toList(), key = { "q-" + it.key }) { (id, question) ->
                     QuestionCard(
-                        questionId = id,
                         question = question,
                         enabled = connected && !busy,
                         onAnswer = { answer ->
@@ -344,23 +353,23 @@ fun RemoteScreen(
             }
         }
 
-        // -------------------------------------------------------------
-        // Transcript
-        // -------------------------------------------------------------
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
+            verticalArrangement = Arrangement.spacedBy(OrcaSpace.md),
         ) {
             if (conversation.isEmpty()) {
                 item {
-                    OrcaNoticeCard(
-                        title = if (connected) "等待 Agent 输出" else "等待电脑连线",
-                        body =
-                            if (connected) "会话建立后，消息、思考过程与工具调用会实时出现在这里。"
-                            else "保持 Runner 在线，手机端会自动恢复这条会话的控制权。",
-                    )
+                    OrcaCard {
+                        OrcaNoticeCard(
+                            title = if (connected) "等待 Agent 输出" else "等待电脑连线",
+                            body =
+                                if (connected) "会话建立后，消息、思考过程与工具调用会实时出现在这里。"
+                                else "保持 Runner 在线，手机端会自动恢复这条会话的控制权。",
+                            icon = { OrcaTerminalIcon(MaterialTheme.colorScheme.onSurfaceVariant, 22.dp) },
+                        )
+                    }
                 }
             }
             items(conversation, key = { it.id }) { message ->
@@ -373,9 +382,6 @@ fun RemoteScreen(
             }
         }
 
-        // -------------------------------------------------------------
-        // Terminal accessory row (Orca key definitions)
-        // -------------------------------------------------------------
         TerminalAccessoryBar(
             enabled = connected && !busy,
             onKey = { key ->
@@ -391,29 +397,28 @@ fun RemoteScreen(
             },
         )
 
-        // -------------------------------------------------------------
-        // Composer
-        // -------------------------------------------------------------
         Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 12.dp),
-            shape = RoundedCornerShape(14.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
+            shape = RoundedCornerShape(OrcaRadius.card),
             color = MaterialTheme.colorScheme.surface,
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         ) {
             Row(
-                modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                modifier = Modifier.padding(start = OrcaSpace.rowH, end = OrcaSpace.sm, top = OrcaSpace.xs, bottom = OrcaSpace.xs),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                Box(modifier = Modifier.weight(1f).padding(vertical = 9.dp)) {
+                Box(modifier = Modifier.weight(1f).padding(vertical = OrcaSpace.sm)) {
                     if (draft.isEmpty()) {
                         Text(
-                            when {
-                                !connected -> "等待电脑连线…"
-                                !idle -> "Agent 正在执行中…"
-                                else -> "输入指令，或使用上方快捷键…"
-                            },
+                            text =
+                                when {
+                                    !connected -> "等待电脑连线…"
+                                    !idle -> "Agent 正在执行中…"
+                                    else -> "输入指令，或使用上方快捷键…"
+                                },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         )
@@ -434,17 +439,18 @@ fun RemoteScreen(
                     )
                 }
                 Box(
-                    modifier = Modifier
-                        .padding(bottom = 5.dp)
-                        .size(32.dp)
-                        .background(
-                            if (idle && connected && !busy && draft.isNotBlank()) OrcaColors.accentBlue
-                            else MaterialTheme.colorScheme.surfaceVariant,
-                            CircleShape,
-                        )
-                        .clickable(enabled = idle && connected && !busy && draft.isNotBlank()) {
-                            sendPrompt(draft)
-                        },
+                    modifier =
+                        Modifier
+                            .padding(bottom = OrcaSpace.xs)
+                            .size(36.dp)
+                            .background(
+                                if (idle && connected && !busy && draft.isNotBlank()) OrcaColors.accentBlue
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                CircleShape,
+                            )
+                            .clickable(enabled = idle && connected && !busy && draft.isNotBlank()) {
+                                sendPrompt(draft)
+                            },
                     contentAlignment = Alignment.Center,
                 ) {
                     OrcaSendIcon(
@@ -459,12 +465,11 @@ fun RemoteScreen(
 }
 
 // =========================================================================
-// Banner Cards
+// Intervention banners
 // =========================================================================
 
 @Composable
 private fun ApprovalCard(
-    approvalId: String,
     approval: JSONObject,
     enabled: Boolean,
     onApprove: () -> Unit,
@@ -477,28 +482,32 @@ private fun ApprovalCard(
             .ifBlank { approval.optString("description") }
             .ifBlank { approval.optString("path") }
             .ifBlank { "Agent 请求执行受保护操作，请确认是否放行。" }
+    val diff = approval.optString("diff")
+    var expanded by remember(approval.toString()) { mutableStateOf(false) }
 
     Surface(
-        modifier = Modifier.width(292.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = OrcaColors.accentAmber.copy(alpha = 0.10f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, OrcaColors.accentAmber.copy(alpha = 0.7f)),
+        modifier = Modifier.width(288.dp),
+        shape = RoundedCornerShape(OrcaRadius.card),
+        color = OrcaColors.accentAmber.copy(alpha = 0.08f),
+        border = BorderStroke(1.dp, OrcaColors.accentAmber.copy(alpha = 0.55f)),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier.padding(OrcaSpace.md),
+            verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OrcaStatusDot(color = OrcaColors.accentAmber, size = 7)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+                ) {
+                    OrcaStatusDot(OrcaColors.accentAmber, 6.dp)
                     Text(
-                        "需要授权",
+                        text = "需要授权",
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
                         color = OrcaColors.accentAmber,
                     )
                 }
@@ -508,17 +517,22 @@ private fun ApprovalCard(
                 )
             }
             Text(
-                body,
-                style =
-                    MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.5.sp,
-                    ),
+                text = body,
+                style = OrcaType.mono,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 4,
+                maxLines = if (expanded) Int.MAX_VALUE else 3,
                 overflow = TextOverflow.Ellipsis,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (diff.isNotBlank()) {
+                OrcaTextAction(
+                    label = if (expanded) "收起变更" else "查看变更",
+                    onClick = { expanded = !expanded },
+                )
+                AnimatedVisibility(visible = expanded) {
+                    DiffPreview(diff)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm)) {
                 OrcaSecondaryButton(
                     label = "拒绝",
                     modifier = Modifier.weight(1f),
@@ -526,7 +540,7 @@ private fun ApprovalCard(
                     onClick = onDecline,
                 )
                 OrcaPrimaryButton(
-                    label = "批准执行",
+                    label = "批准",
                     modifier = Modifier.weight(1f),
                     enabled = enabled && approval.optBoolean("can_approve", true),
                     onClick = onApprove,
@@ -537,8 +551,37 @@ private fun ApprovalCard(
 }
 
 @Composable
+private fun DiffPreview(diff: String) {
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(OrcaRadius.button))
+                .background(OrcaColors.bgInset)
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(OrcaRadius.button))
+                .padding(OrcaSpace.sm),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        diff.lineSequence().take(60).forEach { line ->
+            val color =
+                when {
+                    line.startsWith("+") && !line.startsWith("+++") -> OrcaColors.accentGreen
+                    line.startsWith("-") && !line.startsWith("---") -> OrcaColors.accentRed
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            Text(
+                text = line.ifEmpty { " " },
+                style = OrcaType.code.copy(fontSize = 11.sp),
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 private fun QuestionCard(
-    questionId: String,
     question: JSONObject,
     enabled: Boolean,
     onAnswer: (String) -> Unit,
@@ -548,56 +591,57 @@ private fun QuestionCard(
     val options = question.optJSONArray("options")?.objects().orEmpty()
 
     Surface(
-        modifier = Modifier.width(292.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = OrcaColors.accentBlue.copy(alpha = 0.10f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, OrcaColors.accentBlue.copy(alpha = 0.7f)),
+        modifier = Modifier.width(288.dp),
+        shape = RoundedCornerShape(OrcaRadius.card),
+        color = OrcaColors.accentBlue.copy(alpha = 0.08f),
+        border = BorderStroke(1.dp, OrcaColors.accentBlue.copy(alpha = 0.55f)),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier.padding(OrcaSpace.md),
+            verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OrcaStatusDot(color = OrcaColors.accentBlue, size = 7)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+            ) {
+                OrcaStatusDot(OrcaColors.accentBlue, 6.dp)
                 Text(
-                    header,
+                    text = header,
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
                     color = OrcaColors.accentBlue,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
             Text(
-                prompt,
+                text = prompt,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
             if (options.isEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm)) {
                     OrcaSecondaryButton("跳过", Modifier.weight(1f), enabled) { onAnswer("") }
                     OrcaPrimaryButton("继续", Modifier.weight(1f), enabled) { onAnswer("继续") }
                 }
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
                     options.take(4).forEach { option ->
                         val label = option.optString("label")
                         Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable(enabled = enabled) { onAnswer(label) },
-                            shape = RoundedCornerShape(6.dp),
+                            onClick = { onAnswer(label) },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = enabled,
+                            shape = RoundedCornerShape(OrcaRadius.button),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         ) {
                             Text(
-                                label,
+                                text = label,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -621,15 +665,15 @@ private fun UserBubble(text: String) {
     ) {
         Surface(
             modifier = Modifier.widthIn(max = 300.dp),
-            shape = RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp),
+            shape = RoundedCornerShape(OrcaRadius.card, OrcaRadius.card, OrcaSpace.xs, OrcaRadius.card),
             color = MaterialTheme.colorScheme.surfaceVariant,
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         ) {
             Text(
                 text = text,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
             )
         }
     }
@@ -637,7 +681,6 @@ private fun UserBubble(text: String) {
 
 @Composable
 private fun AssistantMessage(message: UiMessage) {
-    val isDark = MaterialTheme.colorScheme.background == OrcaColors.bgBase
     Column(modifier = Modifier.fillMaxWidth()) {
         if (message.text.contains("<think>") && message.text.contains("</think>")) {
             val start = message.text.indexOf("<think>") + 7
@@ -649,12 +692,11 @@ private fun AssistantMessage(message: UiMessage) {
                 )
                 RenderMarkdownContent(
                     content = message.text.substring(end + 8),
-                    isDark = isDark,
                 )
                 return@Column
             }
         }
-        RenderMarkdownContent(content = message.text, isDark = isDark)
+        RenderMarkdownContent(content = message.text)
     }
 }
 
@@ -663,16 +705,12 @@ private fun ToolLine(title: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
     ) {
-        OrcaStatusDot(color = OrcaColors.accentPurple, size = 6)
+        OrcaStatusDot(OrcaColors.accentPurple, 5.dp)
         Text(
-            title,
-            style =
-                MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.5.sp,
-                ),
+            text = title,
+            style = OrcaType.mono,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -683,7 +721,7 @@ private fun ToolLine(title: String) {
 @Composable
 private fun SystemLine(text: String) {
     Text(
-        text,
+        text = text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
         modifier = Modifier.fillMaxWidth(),
@@ -691,7 +729,7 @@ private fun SystemLine(text: String) {
 }
 
 // =========================================================================
-// Terminal accessory row — ported from Orca `terminal-key-definitions.ts`
+// Accessory keys — ported from Orca `terminal-key-definitions.ts`
 // =========================================================================
 
 private data class AccessoryKey(val label: String, val danger: Boolean = false)
@@ -719,34 +757,28 @@ private fun TerminalAccessoryBar(
 ) {
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = PaddingValues(horizontal = OrcaSpace.lg),
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         items(ACCESSORY_KEYS) { key ->
+            val tint = if (key.danger) OrcaColors.accentRed else MaterialTheme.colorScheme.onSurface
             Surface(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(enabled = enabled) { onKey(key.label) },
-                shape = RoundedCornerShape(6.dp),
-                color =
-                    if (key.danger) OrcaColors.accentRed.copy(alpha = 0.12f)
-                    else MaterialTheme.colorScheme.surfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (key.danger) OrcaColors.accentRed.copy(alpha = 0.5f)
-                    else MaterialTheme.colorScheme.outline,
-                ),
+                onClick = { onKey(key.label) },
+                enabled = enabled,
+                shape = RoundedCornerShape(OrcaRadius.button),
+                color = if (key.danger) OrcaColors.accentRed.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surfaceVariant,
+                border =
+                    BorderStroke(
+                        1.dp,
+                        if (key.danger) OrcaColors.accentRed.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline,
+                    ),
             ) {
                 Text(
-                    key.label,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                    color =
-                        if (key.danger) OrcaColors.accentRed
-                        else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    text = key.label,
+                    style = OrcaType.mono,
+                    color = tint,
+                    modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 5.dp),
                 )
             }
         }
@@ -760,18 +792,17 @@ private fun TerminalAccessoryBar(
         }
         items(ACCESSORY_MACROS) { macro ->
             Surface(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(enabled = enabled) { onMacro(macro) },
-                shape = RoundedCornerShape(6.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                onClick = { onMacro(macro) },
+                enabled = enabled,
+                shape = RoundedCornerShape(OrcaRadius.button),
+                color = Color.Transparent,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             ) {
                 Text(
-                    macro,
+                    text = macro,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 5.dp),
                 )
             }
         }
@@ -783,7 +814,7 @@ private fun TerminalAccessoryBar(
 // =========================================================================
 
 @Composable
-fun RenderMarkdownContent(content: String, isDark: Boolean) {
+fun RenderMarkdownContent(content: String) {
     val segments = remember(content) { parseMarkdownSegments(content) }
     Column(Modifier.fillMaxWidth()) {
         segments.forEach { seg ->
@@ -791,10 +822,10 @@ fun RenderMarkdownContent(content: String, isDark: Boolean) {
                 CodeBlockSurface(code = seg.text, language = seg.language)
             } else {
                 Text(
-                    text = buildInlineMarkdown(seg.text, isDark),
-                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
+                    text = buildInlineMarkdown(seg.text),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(vertical = 2.dp),
+                    modifier = Modifier.padding(vertical = OrcaSpace.xxs),
                 )
             }
         }
@@ -810,7 +841,6 @@ private fun parseStructuredConversation(
     commands: List<JSONObject>,
 ): List<UiMessage> {
     val result = linkedMapOf<String, UiMessage>()
-    // Prompt text is keyed by the turn id the command produced.
     val prompts =
         commands
             .mapNotNull { command ->
@@ -945,8 +975,6 @@ private fun parseStructuredConversation(
         }
     }
 
-    // Keep insertion order: prompts and tool lines interleave naturally because
-    // each is first seen at its event's position in the stream.
     return result.values.toList()
 }
 

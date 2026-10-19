@@ -1,15 +1,20 @@
 package com.agentplatform.mobile.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,73 +27,43 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.agentplatform.mobile.data.AgentType
-import com.agentplatform.mobile.data.DeviceRecord
 
 // =========================================================================
-// Orca Mobile Shared Primitives
-// Mirrors stablyai/orca mobile/src/components/*
+// AgentHub shared primitives
+//
+// Every surface, row, chip and button in the app is built from this file so
+// spacing, radii and type stay on the same grid. Layout values follow
+// stablyai/orca mobile (MIT): 4/8/12/16/24 spacing, 14dp cards, 6dp controls.
 // =========================================================================
 
-/** Status dot: 7dp, matches Orca `StatusDot`. */
+/** Status dot used for host and session state. */
 @Composable
 fun OrcaStatusDot(
     color: Color,
-    size: Int = 7,
+    size: Dp = 6.dp,
     modifier: Modifier = Modifier,
 ) {
     Box(
         modifier
-            .size(size.dp)
+            .size(size)
             .background(color, CircleShape),
     )
 }
 
-/** Uppercase section label: 11sp, weight 600, muted, letter-spacing 0.6. */
-@Composable
-fun OrcaSectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text.uppercase(),
-        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.6.sp),
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.padding(start = 4.dp, bottom = 6.dp),
-    )
-}
-
-/** Orca-style panel card: bgPanel, 1px border, radius 14. */
-@Composable
-fun OrcaCard(
-    modifier: Modifier = Modifier,
-    onClick: (() -> Unit)? = null,
-    content: @Composable () -> Unit,
-) {
-    val shape = RoundedCornerShape(14.dp)
-    Surface(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .clip(shape)
-                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-        shape = shape,
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        content = content,
-    )
-}
-
-/** Section header row: label on the left, optional trailing action. */
+/** Uppercase section label with a trailing action slot. */
 @Composable
 fun OrcaSectionHeader(
     title: String,
@@ -98,21 +73,186 @@ fun OrcaSectionHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 18.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
+            .padding(start = 2.dp, end = 2.dp, top = OrcaSpace.xl, bottom = OrcaSpace.sm),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = title.uppercase(),
-            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.6.sp),
-            fontWeight = FontWeight.SemiBold,
+            text = title,
+            style = OrcaType.section,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         trailing?.invoke()
     }
 }
 
-/** Small pill chip: fully rounded, 999 radius, subtle border. */
+/** Panel surface with a 1dp hairline border and 14dp radius. */
+@Composable
+fun OrcaCard(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    val shape = RoundedCornerShape(OrcaRadius.card)
+    val border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = MaterialTheme.colorScheme.surface,
+            border = border,
+            content = content,
+        )
+    } else {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = MaterialTheme.colorScheme.surface,
+            border = border,
+            content = content,
+        )
+    }
+}
+
+/** Card that groups rows; rows are separated by [OrcaRowDivider]. */
+@Composable
+fun OrcaListGroup(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    OrcaCard(modifier) {
+        Column(content = content)
+    }
+}
+
+/** Hairline separator inside a list group. */
+@Composable
+fun OrcaRowDivider(startInset: Dp = OrcaSpace.rowH) {
+    Spacer(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = startInset)
+            .height(1.dp)
+            .background(MaterialTheme.colorScheme.outline),
+    )
+}
+
+/**
+ * The single row primitive for hosts, sessions, workspaces and settings.
+ * Title is always one line; subtitle and meta are optional.
+ */
+@Composable
+fun OrcaRow(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    meta: String? = null,
+    statusColor: Color? = null,
+    statusText: String? = null,
+    titleColor: Color = Color.Unspecified,
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick)
+                else Modifier,
+            )
+            .padding(horizontal = OrcaSpace.rowH, vertical = OrcaSpace.rowV),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.md),
+    ) {
+        leading?.invoke()
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
+        ) {
+            Text(
+                text = title,
+                style = OrcaType.rowTitle,
+                color =
+                    if (titleColor == Color.Unspecified) MaterialTheme.colorScheme.onSurface
+                    else titleColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (statusText != null || meta != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+                ) {
+                    if (statusColor != null) OrcaStatusDot(statusColor, 6.dp)
+                    if (statusText != null) {
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = statusColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                    if (statusText != null && meta != null) OrcaDotSeparator()
+                    meta?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = it,
+                            style = OrcaType.mono,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+        trailing?.invoke(this)
+    }
+}
+
+@Composable
+fun OrcaDotSeparator() {
+    Text(
+        "·",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+    )
+}
+
+/** Small text button used for section-level actions such as "添加". */
+@Composable
+fun OrcaTextAction(
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color =
+            if (enabled) OrcaColors.accentBlue
+            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        modifier = modifier
+            .clip(RoundedCornerShape(OrcaRadius.button))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = OrcaSpace.sm, vertical = OrcaSpace.xs),
+    )
+}
+
+/** Compact pill chip for endpoints and metadata. */
 @Composable
 fun OrcaChip(
     text: String,
@@ -121,26 +261,41 @@ fun OrcaChip(
     background: Color = MaterialTheme.colorScheme.surfaceVariant,
     onClick: (() -> Unit)? = null,
 ) {
-    Surface(
-        modifier =
-            modifier
-                .clip(RoundedCornerShape(999.dp))
-                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-        shape = RoundedCornerShape(999.dp),
-        color = background,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-            color = color,
-            maxLines = 1,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
+    val shape = RoundedCornerShape(OrcaRadius.pill)
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            modifier = modifier,
+            shape = shape,
+            color = background,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) {
+            OrcaChipLabel(text, color)
+        }
+    } else {
+        Surface(
+            modifier = modifier,
+            shape = shape,
+            color = background,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) {
+            OrcaChipLabel(text, color)
+        }
     }
 }
 
-/** Primary CTA: bright surface with dark text (Orca inverted button in dark mode). */
+@Composable
+private fun OrcaChipLabel(text: String, color: Color) {
+    Text(
+        text = text,
+        style = OrcaType.mono,
+        color = color,
+        maxLines = 1,
+        modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 4.dp),
+    )
+}
+
+/** Inverted primary action, the only bright surface in the interface. */
 @Composable
 fun OrcaPrimaryButton(
     label: String,
@@ -148,33 +303,31 @@ fun OrcaPrimaryButton(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    val dark = MaterialTheme.colorScheme.background == OrcaColors.bgBase
-    val fill = if (dark) OrcaColors.surfaceBright else MaterialTheme.colorScheme.primary
-    val content = if (dark) OrcaColors.onBrightPrimary else Color.White
     Surface(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(6.dp),
-        color = if (enabled) fill else fill.copy(alpha = 0.35f),
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 44.dp),
+        enabled = enabled,
+        shape = RoundedCornerShape(OrcaRadius.button),
+        color = if (enabled) OrcaColors.surfaceBright else OrcaColors.bgRaised,
     ) {
         Box(
-            modifier = Modifier.padding(vertical = 11.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.md),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                label,
-                style = MaterialTheme.typography.titleSmall,
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = if (enabled) content else content.copy(alpha = 0.6f),
+                color =
+                    if (enabled) OrcaColors.onBright
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                maxLines = 1,
             )
         }
     }
 }
 
-/** Secondary button: border + panel fill. */
+/** Bordered secondary action. */
 @Composable
 fun OrcaSecondaryButton(
     label: String,
@@ -183,58 +336,73 @@ fun OrcaSecondaryButton(
     onClick: () -> Unit,
 ) {
     Surface(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(6.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 44.dp),
+        enabled = enabled,
+        shape = RoundedCornerShape(OrcaRadius.button),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
         Box(
-            modifier = Modifier.padding(vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.md),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                label,
-                style = MaterialTheme.typography.titleSmall,
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
                 color =
                     if (enabled) MaterialTheme.colorScheme.onSurface
                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                maxLines = 1,
             )
         }
     }
 }
 
-/** 46x46 rounded-square icon tile, radius 13, bgRaised — matches Orca host/resume cards. */
+/** 40dp square icon button; the glyph itself stays 18dp. */
 @Composable
-fun OrcaIconTile(
+fun OrcaIconButton(
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    size: Int = 46,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    Box(
-        modifier = modifier
-            .size(size.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(13.dp)),
-        contentAlignment = Alignment.Center,
+    Surface(
+        onClick = onClick,
+        modifier = modifier.size(OrcaSize.iconButton),
+        enabled = enabled,
+        shape = RoundedCornerShape(OrcaRadius.button),
+        color = Color.Transparent,
     ) {
-        content()
+        Box(contentAlignment = Alignment.Center) { content() }
     }
 }
 
+/** Rounded-square icon tile used as a row lead. */
+@Composable
+fun OrcaIconTile(
+    modifier: Modifier = Modifier,
+    size: Dp = OrcaSize.tile,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(OrcaRadius.tile)),
+        contentAlignment = Alignment.Center,
+        content = content,
+    )
+}
+
 // -------------------------------------------------------------------------
-// Icons (vector-drawn to avoid an icon dependency, matching Orca glyph set)
+// Icons: vector-drawn so the app ships no icon dependency.
 // -------------------------------------------------------------------------
 
 @Composable
-fun OrcaLogo(size: Int = 22, tint: Color = MaterialTheme.colorScheme.onBackground) {
-    Canvas(modifier = Modifier.size((size * 1.57f).dp, size.dp)) {
+fun OrcaLogo(size: Dp = 20.dp, tint: Color = MaterialTheme.colorScheme.onBackground) {
+    Canvas(modifier = Modifier.size(size * 1.45f, size)) {
         val w = this.size.width
         val h = this.size.height
-        // Stylized wave-mark: body arc + dorsal fin + tail, single silhouette.
         val body = Path().apply {
             moveTo(w * 0.04f, h * 0.62f)
             cubicTo(w * 0.18f, h * 0.20f, w * 0.52f, h * 0.08f, w * 0.78f, h * 0.26f)
@@ -247,7 +415,6 @@ fun OrcaLogo(size: Int = 22, tint: Color = MaterialTheme.colorScheme.onBackgroun
             close()
         }
         drawPath(body, color = tint)
-        // Dorsal fin cut-out
         val fin = Path().apply {
             moveTo(w * 0.46f, h * 0.20f)
             lineTo(w * 0.54f, h * 0.04f)
@@ -255,26 +422,20 @@ fun OrcaLogo(size: Int = 22, tint: Color = MaterialTheme.colorScheme.onBackgroun
             close()
         }
         drawPath(fin, color = tint)
-        // Eye negative space
-        drawCircle(
-            color = tint.copy(alpha = 0.0f),
-            radius = h * 0.05f,
-            center = Offset(w * 0.30f, h * 0.52f),
-        )
     }
 }
 
 @Composable
-fun OrcaMonitorIcon(tint: Color, size: Int = 20) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaMonitorIcon(tint: Color, size: Dp = OrcaSize.icon) {
+    Canvas(modifier = Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val stroke = 1.6.dp.toPx()
         drawRoundRect(
             color = tint,
             topLeft = Offset(w * 0.10f, h * 0.16f),
-            size = androidx.compose.ui.geometry.Size(w * 0.80f, h * 0.56f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+            size = Size(w * 0.80f, h * 0.56f),
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
             style = Stroke(width = stroke),
         )
         drawLine(
@@ -295,8 +456,8 @@ fun OrcaMonitorIcon(tint: Color, size: Int = 20) {
 }
 
 @Composable
-fun OrcaTerminalIcon(tint: Color, size: Int = 18) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaTerminalIcon(tint: Color, size: Dp = OrcaSize.icon) {
+    Canvas(modifier = Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val stroke = 1.7.dp.toPx()
@@ -321,8 +482,8 @@ fun OrcaTerminalIcon(tint: Color, size: Int = 18) {
 }
 
 @Composable
-fun OrcaChevronRight(tint: Color, size: Int = 16) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaChevronRight(tint: Color, size: Dp = 16.dp) {
+    Canvas(modifier = Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val stroke = 1.6.dp.toPx()
@@ -340,48 +501,24 @@ fun OrcaChevronRight(tint: Color, size: Int = 16) {
 }
 
 @Composable
-fun OrcaChevronDown(tint: Color, size: Int = 14, expanded: Boolean = false) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaChevronDown(tint: Color, size: Dp = 14.dp, expanded: Boolean = false) {
+    Canvas(modifier = Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val stroke = 1.6.dp.toPx()
         if (expanded) {
-            drawLine(
-                color = tint,
-                start = Offset(w * 0.20f, h * 0.62f),
-                end = Offset(w * 0.50f, h * 0.34f),
-                strokeWidth = stroke,
-                cap = StrokeCap.Round,
-            )
-            drawLine(
-                color = tint,
-                start = Offset(w * 0.50f, h * 0.34f),
-                end = Offset(w * 0.80f, h * 0.62f),
-                strokeWidth = stroke,
-                cap = StrokeCap.Round,
-            )
+            drawLine(tint, Offset(w * 0.20f, h * 0.62f), Offset(w * 0.50f, h * 0.34f), stroke, StrokeCap.Round)
+            drawLine(tint, Offset(w * 0.50f, h * 0.34f), Offset(w * 0.80f, h * 0.62f), stroke, StrokeCap.Round)
         } else {
-            drawLine(
-                color = tint,
-                start = Offset(w * 0.20f, h * 0.38f),
-                end = Offset(w * 0.50f, h * 0.66f),
-                strokeWidth = stroke,
-                cap = StrokeCap.Round,
-            )
-            drawLine(
-                color = tint,
-                start = Offset(w * 0.50f, h * 0.66f),
-                end = Offset(w * 0.80f, h * 0.38f),
-                strokeWidth = stroke,
-                cap = StrokeCap.Round,
-            )
+            drawLine(tint, Offset(w * 0.20f, h * 0.38f), Offset(w * 0.50f, h * 0.66f), stroke, StrokeCap.Round)
+            drawLine(tint, Offset(w * 0.50f, h * 0.66f), Offset(w * 0.80f, h * 0.38f), stroke, StrokeCap.Round)
         }
     }
 }
 
 @Composable
-fun OrcaBackChevron(tint: Color, size: Int = 20) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaBackChevron(tint: Color, size: Dp = 20.dp) {
+    Canvas(modifier = Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val stroke = 1.9.dp.toPx()
@@ -399,8 +536,8 @@ fun OrcaBackChevron(tint: Color, size: Int = 20) {
 }
 
 @Composable
-fun OrcaRefreshIcon(tint: Color, size: Int = 18) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaRefreshIcon(tint: Color, size: Dp = OrcaSize.icon) {
+    Canvas(modifier = Modifier.size(size)) {
         val stroke = 1.7.dp.toPx()
         drawArc(
             color = tint,
@@ -411,272 +548,119 @@ fun OrcaRefreshIcon(tint: Color, size: Int = 18) {
         )
         val tipX = this.size.width * 0.80f
         val tipY = this.size.height * 0.24f
-        drawLine(
-            color = tint,
-            start = Offset(tipX - 5.dp.toPx(), tipY),
-            end = Offset(tipX, tipY),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = tint,
-            start = Offset(tipX, tipY),
-            end = Offset(tipX, tipY + 5.dp.toPx()),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
+        drawLine(tint, Offset(tipX - 5.dp.toPx(), tipY), Offset(tipX, tipY), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(tipX, tipY), Offset(tipX, tipY + 5.dp.toPx()), stroke, StrokeCap.Round)
     }
 }
 
 @Composable
-fun OrcaPlusIcon(tint: Color, size: Int = 18) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaPlusIcon(tint: Color, size: Dp = OrcaSize.icon) {
+    Canvas(modifier = Modifier.size(size)) {
         val stroke = 1.9.dp.toPx()
         drawLine(
-            color = tint,
-            start = Offset(this.size.width * 0.5f, this.size.height * 0.18f),
-            end = Offset(this.size.width * 0.5f, this.size.height * 0.82f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
+            tint,
+            Offset(this.size.width * 0.5f, this.size.height * 0.18f),
+            Offset(this.size.width * 0.5f, this.size.height * 0.82f),
+            stroke,
+            StrokeCap.Round,
         )
         drawLine(
-            color = tint,
-            start = Offset(this.size.width * 0.18f, this.size.height * 0.5f),
-            end = Offset(this.size.width * 0.82f, this.size.height * 0.5f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
+            tint,
+            Offset(this.size.width * 0.18f, this.size.height * 0.5f),
+            Offset(this.size.width * 0.82f, this.size.height * 0.5f),
+            stroke,
+            StrokeCap.Round,
         )
     }
 }
 
 @Composable
-fun OrcaMoreIcon(tint: Color, size: Int = 18) {
-    Canvas(modifier = Modifier.size(size.dp)) {
-        val r = 1.5.dp.toPx()
-        val cx = this.size.width * 0.5f
-        drawCircle(tint, r, Offset(cx, this.size.height * 0.22f))
-        drawCircle(tint, r, Offset(cx, this.size.height * 0.50f))
-        drawCircle(tint, r, Offset(cx, this.size.height * 0.78f))
-    }
-}
-
-@Composable
-fun OrcaSendIcon(tint: Color, size: Int = 14) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaSendIcon(tint: Color, size: Dp = 16.dp) {
+    Canvas(modifier = Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val stroke = 1.8.dp.toPx()
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.5f, h * 0.88f),
-            end = Offset(w * 0.5f, h * 0.14f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.20f, h * 0.44f),
-            end = Offset(w * 0.50f, h * 0.14f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.80f, h * 0.44f),
-            end = Offset(w * 0.50f, h * 0.14f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
+        drawLine(tint, Offset(w * 0.5f, h * 0.88f), Offset(w * 0.5f, h * 0.14f), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.20f, h * 0.44f), Offset(w * 0.50f, h * 0.14f), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.80f, h * 0.44f), Offset(w * 0.50f, h * 0.14f), stroke, StrokeCap.Round)
     }
 }
 
 @Composable
-fun OrcaStopIcon(tint: Color, size: Int = 12) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaStopIcon(tint: Color, size: Dp = 10.dp) {
+    Canvas(modifier = Modifier.size(size)) {
         drawRoundRect(
             color = tint,
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.5.dp.toPx()),
+            cornerRadius = CornerRadius(1.5.dp.toPx()),
         )
     }
 }
 
 @Composable
-fun OrcaSettingsIcon(tint: Color, size: Int = 18) {
-    Canvas(modifier = Modifier.size(size.dp)) {
+fun OrcaSettingsIcon(tint: Color, size: Dp = OrcaSize.icon) {
+    // Sliders glyph: unambiguous for "preferences" and visually distinct from
+    // the refresh ring that sits next to it in the top bar.
+    Canvas(modifier = Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
         val stroke = 1.6.dp.toPx()
-        drawCircle(
-            color = tint,
-            radius = w * 0.20f,
-            center = Offset(w * 0.5f, h * 0.5f),
-            style = Stroke(width = stroke),
-        )
-        val outer = w * 0.38f
-        repeat(6) { index ->
-            val angle = (index * 60f) * (Math.PI / 180.0)
-            val sx = w * 0.5f + (outer * Math.cos(angle)).toFloat()
-            val sy = h * 0.5f + (outer * Math.sin(angle)).toFloat()
-            val ex = w * 0.5f + (outer * 1.24f * Math.cos(angle)).toFloat()
-            val ey = h * 0.5f + (outer * 1.24f * Math.sin(angle)).toFloat()
-            drawLine(tint, Offset(sx, sy), Offset(ex, ey), stroke, StrokeCap.Round)
+        val rows = listOf(0.28f to 0.68f, 0.72f to 0.34f)
+        rows.forEach { (y, knobX) ->
+            drawLine(
+                tint,
+                Offset(w * 0.14f, h * y),
+                Offset(w * 0.86f, h * y),
+                stroke,
+                StrokeCap.Round,
+            )
+            drawCircle(
+                color = tint,
+                radius = w * 0.11f,
+                center = Offset(w * knobX, h * y),
+                style = Stroke(width = stroke),
+            )
         }
     }
 }
 
-/** Agent provider dot color, matching Orca's per-provider identity colors. */
-fun agentAccent(type: AgentType): Color =
-    when (type) {
-        AgentType.CLAUDE_CODE -> OrcaColors.providerClaude
-        AgentType.CODEX -> OrcaColors.providerCodex
-        AgentType.ANTIGRAVITY -> OrcaColors.providerAntigravity
-        AgentType.GROK_BUILD -> OrcaColors.providerGrok
-        AgentType.UNKNOWN -> OrcaColors.providerUnknown
-    }
-
 @Composable
-fun AgentProviderDot(type: AgentType, size: Int = 7) {
-    Box(
-        Modifier
-            .size(size.dp)
-            .background(agentAccent(type), CircleShape),
-    )
+fun OrcaCheckIcon(tint: Color, size: Dp = OrcaSize.icon) {
+    Canvas(modifier = Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val path = Path().apply {
+            moveTo(w * 0.20f, h * 0.52f)
+            lineTo(w * 0.42f, h * 0.74f)
+            lineTo(w * 0.80f, h * 0.28f)
+        }
+        drawPath(
+            path,
+            color = tint,
+            style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+    }
 }
 
-/** "Host 1"-style label derived from the runner/device id. */
+// -------------------------------------------------------------------------
+// Composite blocks
+// -------------------------------------------------------------------------
+
+/** "Host 1A2B3C" label derived from the runner id. */
 fun hostDisplayName(deviceId: String): String {
+    if (deviceId.isBlank()) return "未知主机"
     val tail = deviceId.takeLast(6).uppercase()
     return "Host $tail"
 }
 
-/** Two-tone inline metadata row used across home rows. */
-@Composable
-fun OrcaMetaRow(
-    primary: String,
-    secondary: String? = null,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = primary,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (secondary != null) {
-            Text(
-                "·",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            )
-            Text(
-                text = secondary,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-/** Empty/error state card, Orca wording style. */
-@Composable
-fun OrcaNoticeCard(
-    title: String,
-    body: String,
-    modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 26.dp, horizontal = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = tint,
-        )
-        Text(
-            body,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            lineHeight = 18.sp,
-        )
-    }
-}
-
-/** Simple stat card used in the home hero row (Agents / Agent time / PRs). */
-@Composable
-fun OrcaStatCard(
-    value: String,
-    label: String,
-    modifier: Modifier = Modifier,
-    highlight: Color? = null,
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                value,
-                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
-                fontWeight = FontWeight.Bold,
-                color = highlight ?: MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                label,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-/** Thin divider matching Orca's inset separators. */
-@Composable
-fun OrcaDivider(modifier: Modifier = Modifier, insetStart: Int = 16) {
-    Spacer(
-        modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .padding(start = insetStart.dp)
-            .background(MaterialTheme.colorScheme.outline),
-    )
-}
-
-/** Host status ring: 46dp tile ring used by Orca's host cards. */
+/** Monitor tile with an online/offline dot in the corner. */
 @Composable
 fun HostStatusTile(
     online: Boolean,
     modifier: Modifier = Modifier,
-    size: Int = 46,
+    size: Dp = OrcaSize.tile,
 ) {
-    val ring = if (online) OrcaColors.accentGreen else MaterialTheme.colorScheme.outline.copy(alpha = 0.9f)
-    Box(
-        modifier
-            .size(size.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(13.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
+    val dot = if (online) OrcaColors.accentGreen else MaterialTheme.colorScheme.outlineVariant
+    OrcaIconTile(modifier, size) {
         OrcaMonitorIcon(
             tint =
                 if (online) MaterialTheme.colorScheme.onSurface
@@ -689,8 +673,142 @@ fun HostStatusTile(
                 .size(10.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
                 .padding(2.dp)
-                .background(ring, CircleShape),
+                .background(dot, CircleShape),
         )
+    }
+}
+
+/** Three-up metric strip; the three figures share one surface. */
+@Composable
+fun OrcaStatStrip(
+    modifier: Modifier = Modifier,
+    stats: List<OrcaStat>,
+) {
+    OrcaCard(modifier) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = OrcaSpace.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            stats.forEachIndexed { index, stat ->
+                if (index > 0) {
+                    Spacer(
+                        Modifier
+                            .width(1.dp)
+                            .height(26.dp)
+                            .background(MaterialTheme.colorScheme.outline),
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f).padding(horizontal = OrcaSpace.md),
+                    verticalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
+                ) {
+                    Text(
+                        text = stat.value,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = stat.color ?: MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                    Text(
+                        text = stat.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+data class OrcaStat(val value: String, val label: String, val color: Color? = null)
+
+/** Empty/error placeholder inside a card. */
+@Composable
+fun OrcaNoticeCard(
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier,
+    icon: (@Composable () -> Unit)? = null,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = OrcaSpace.xl, vertical = OrcaSpace.xl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+    ) {
+        icon?.invoke()
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = body,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** Inline error strip shared by every screen. */
+@Composable
+fun OrcaInlineError(message: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(OrcaRadius.button),
+        color = OrcaColors.accentRed.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.45f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+        ) {
+            OrcaStatusDot(OrcaColors.accentRed, 6.dp)
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = OrcaColors.accentRed,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/** Two-line explanatory block used in onboarding. */
+@Composable
+fun OrcaStepRow(index: Int, title: String, body: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = OrcaSpace.rowH, vertical = OrcaSpace.md),
+        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.md),
+    ) {
+        Text(
+            text = "$index",
+            style = OrcaType.mono,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(16.dp).padding(top = 2.dp),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
+        ) {
+            Text(
+                text = title,
+                style = OrcaType.rowTitle,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -714,55 +832,4 @@ internal fun stateColor(state: String): Color =
         "idle", "completed" -> OrcaColors.accentGreen
         "error" -> OrcaColors.accentRed
         else -> OrcaColors.textMuted
-    }
-
-/** 32dp square icon button used in Orca headers. */
-@Composable
-internal fun OrcaIconButton(
-    onClick: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(6.dp),
-        color = Color.Transparent,
-    ) {
-        Box(contentAlignment = Alignment.Center) { content() }
-    }
-}
-
-/** Inline error strip shared by all Orca screens. */
-@Composable
-internal fun OrcaInlineError(message: String, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(6.dp),
-        color = OrcaColors.accentRed.copy(alpha = 0.10f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.5f)),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OrcaStatusDot(color = OrcaColors.accentRed, size = 7)
-            Text(
-                message,
-                style = MaterialTheme.typography.bodySmall,
-                color = OrcaColors.accentRed,
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-fun deviceStatusText(device: DeviceRecord, activeSessions: Int): String =
-    when {
-        device.revoked -> "已撤销访问"
-        device.online && activeSessions > 0 -> "已连接 · $activeSessions 个活动会话"
-        device.online -> "已连接"
-        else -> "已断开"
     }

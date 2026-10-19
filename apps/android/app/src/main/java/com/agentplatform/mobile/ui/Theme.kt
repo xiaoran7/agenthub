@@ -1,27 +1,28 @@
 package com.agentplatform.mobile.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 // =========================================================================
-// Orca Mobile Design Tokens
+// AgentHub mobile design tokens
 //
-// Ported from stablyai/orca `mobile/src/theme/mobile-theme.ts`.
-// Upstream: https://github.com/stablyai/orca (MIT / Apache-2.0)
-// Token values below intentionally mirror upstream so the AgentHub companion
-// stays visually interchangeable with the Orca mobile app.
+// Layout, color and type values are ported from stablyai/orca
+// `mobile/src/theme/mobile-theme.ts` (MIT). Upstream ships a single graphite
+// theme, so this companion is dark-only as well; a separate light palette was
+// a local invention that diluted the visual identity.
+// Upstream: https://github.com/stablyai/orca
 // =========================================================================
 
 object OrcaColors {
-    // Dark surfaces (upstream `colors.bg*`)
+    // Surfaces (upstream `colors.bg*`)
     val bgBase = Color(0xFF111111)
     val bgPanel = Color(0xFF1A1A1A)
     val bgRaised = Color(0xFF242424)
@@ -43,110 +44,90 @@ object OrcaColors {
     val accentGreen = Color(0xFF22C55E)
     val accentAmber = Color(0xFFF59E0B)
     val accentRed = Color(0xFFEF4444)
-    val accentMerge = Color(0xFF16A34A)
     val accentPurple = Color(0xFFA78BFA)
-    val accentOrange = Color(0xFFF97316)
 
-    // Bright surface (used for primary CTA fill in dark mode)
+    // Inverted call-to-action (upstream `surfaceBright` in dark mode)
     val surfaceBright = Color(0xFFF5F5F5)
-    val onBrightPrimary = Color(0xFF111111)
-    val onBrightSecondary = Color(0xFF4A4A4A)
-
-    // Git / diff (upstream)
-    val diffAdded = Color(0xFF81B88B)
-    val diffDeleted = Color(0xFFC74E39)
-    val chatDiffAdded = Color(0xFFA5CCAC)
-    val chatDiffRemoved = Color(0xFFD68273)
-
-    // Terminal
-    val terminalBg = Color(0xFF1A1B26)
-
-    // Provider identity dots (Orca agent icons)
-    val providerClaude = Color(0xFFC86646)
-    val providerCodex = Color(0xFF3B82F6)
-    val providerAntigravity = Color(0xFF22C55E)
-    val providerGrok = Color(0xFFA78BFA)
-    val providerUnknown = Color(0xFF8C8C8C)
-
-    // Light surfaces: Orca ships dark-first, but AgentHub honors the system theme.
-    val lightBgBase = Color(0xFFF7F7F7)
-    val lightBgPanel = Color(0xFFFFFFFF)
-    val lightBgRaised = Color(0xFFEFEFEF)
-    val lightBgInset = Color(0xFFE8E8E8)
-    val lightTextPrimary = Color(0xFF141414)
-    val lightTextSecondary = Color(0xFF4A4A4A)
-    val lightTextMuted = Color(0xFF6B6B6B)
-    val lightTextFaint = Color(0xFF9A9A9A)
-    val lightBorderSubtle = Color(0xFFE2E2E2)
-    val lightBorderStrong = Color(0xFFCACACA)
-    val lightAccentBlue = Color(0xFF2563EB)
+    val onBright = Color(0xFF111111)
 }
 
-object OrcaSpacing {
-    val xs = 4
-    val sm = 8
-    val md = 12
-    val lg = 16
-    val xl = 24
+/**
+ * Four-point spacing grid. Every gap in the UI comes from this scale, so
+ * padding stays optically aligned across screens.
+ */
+object OrcaSpace {
+    val xxs = 2.dp
+    val xs = 4.dp
+    val sm = 8.dp
+    val md = 12.dp
+    val lg = 16.dp
+    val xl = 24.dp
+    val xxl = 32.dp
+
+    /** Horizontal inset inside a grouped row. */
+    val rowH = 14.dp
+
+    /** Vertical inset inside a grouped row. */
+    val rowV = 12.dp
 }
 
-object OrcaRadii {
-    val row = 6
-    val card = 14
-    val button = 6
-    val input = 6
+object OrcaRadius {
+    val card = 14.dp
+    val button = 6.dp
+    val input = 8.dp
+    val tile = 12.dp
+    val pill = 100.dp
 }
 
-// Legacy aliases kept so the rest of the app (and tests) still compile.
-val LightBgPrimary = OrcaColors.lightBgBase
-val LightBgSurface = OrcaColors.lightBgPanel
-val LightBgSurfaceVariant = OrcaColors.lightBgRaised
-val LightTextPrimary = OrcaColors.lightTextPrimary
-val LightTextSecondary = OrcaColors.lightTextSecondary
-val LightTextMuted = OrcaColors.lightTextMuted
-val LightBorderSubtle = OrcaColors.lightBorderSubtle
-val LightBorderContrast = OrcaColors.lightBorderStrong
-val LightBrandAccent = OrcaColors.lightAccentBlue
+object OrcaSize {
+    /** Icon tile used by list rows. */
+    val tile = 40.dp
 
-val DarkBgPrimary = OrcaColors.bgBase
-val DarkBgSurface = OrcaColors.bgPanel
-val DarkBgSurfaceVariant = OrcaColors.bgRaised
-val DarkTextPrimary = OrcaColors.textPrimary
-val DarkTextSecondary = OrcaColors.textSecondary
-val DarkTextMuted = OrcaColors.textMuted
-val DarkBorderSubtle = OrcaColors.borderSubtle
-val DarkBorderContrast = OrcaColors.borderStrong
-val DarkBrandAccent = OrcaColors.accentBlue
+    /** Icon button touch target in headers. */
+    val iconButton = 40.dp
 
-val StatusBlue = OrcaColors.accentBlue
-val StatusAmber = OrcaColors.accentAmber
-val StatusGreen = OrcaColors.accentMerge
-val StatusGreenBright = OrcaColors.accentGreen
-val StatusRed = OrcaColors.accentRed
-val StatusRedBright = OrcaColors.accentRed
-val StatusPurple = OrcaColors.accentPurple
+    /** Visible icon glyph. */
+    val icon = 18.dp
+}
 
-private val LightColors =
-    lightColorScheme(
-        primary = OrcaColors.lightAccentBlue,
-        onPrimary = Color.White,
-        primaryContainer = Color(0xFFE4EDFD),
-        onPrimaryContainer = Color(0xFF1D4ED8),
-        secondary = OrcaColors.lightTextSecondary,
-        onSecondary = Color.White,
-        background = OrcaColors.lightBgBase,
-        onBackground = OrcaColors.lightTextPrimary,
-        surface = OrcaColors.lightBgPanel,
-        onSurface = OrcaColors.lightTextPrimary,
-        surfaceVariant = OrcaColors.lightBgRaised,
-        onSurfaceVariant = OrcaColors.lightTextSecondary,
-        outline = OrcaColors.lightBorderSubtle,
-        outlineVariant = OrcaColors.lightBorderStrong,
-        error = OrcaColors.accentRed,
-        onError = Color.White,
-    )
+/**
+ * Styles that fall outside the Material 3 roles.
+ * Section labels stay sans-serif for Chinese legibility; machine identifiers
+ * and key caps use the mono face.
+ */
+object OrcaType {
+    val section =
+        TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            letterSpacing = 0.3.sp,
+        )
+    val rowTitle =
+        TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+            lineHeight = 18.sp,
+        )
+    val mono =
+        TextStyle(
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+        )
+    val code =
+        TextStyle(
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Normal,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+        )
+}
 
-private val DarkColors =
+private val OrcaColorScheme =
     darkColorScheme(
         primary = OrcaColors.accentBlue,
         onPrimary = Color.White,
@@ -160,23 +141,17 @@ private val DarkColors =
         onSurface = OrcaColors.textPrimary,
         surfaceVariant = OrcaColors.bgRaised,
         onSurfaceVariant = OrcaColors.textSecondary,
+        surfaceTint = Color.Transparent,
         outline = OrcaColors.borderSubtle,
         outlineVariant = OrcaColors.borderStrong,
         error = OrcaColors.accentRed,
         onError = Color.White,
     )
 
-// Upstream tokens: title 18, body 14, meta 12, mono family.
+// Upstream scale: title 18, body 14, meta 12; weights tightened for a
+// squarer, product-grade feel.
 private val Typography =
-    androidx.compose.material3.Typography(
-        displayLarge =
-            TextStyle(
-                fontFamily = FontFamily.SansSerif,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 32.sp,
-                lineHeight = 36.sp,
-                letterSpacing = (-0.8).sp,
-            ),
+    Typography(
         headlineLarge =
             TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -256,17 +231,14 @@ private val Typography =
                 fontWeight = FontWeight.Medium,
                 fontSize = 11.sp,
                 lineHeight = 14.sp,
-                letterSpacing = 0.6.sp,
+                letterSpacing = 0.4.sp,
             ),
     )
 
 @Composable
-fun AgentPlatformTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    content: @Composable () -> Unit,
-) {
+fun AgentPlatformTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = OrcaColorScheme,
         typography = Typography,
         content = content,
     )
