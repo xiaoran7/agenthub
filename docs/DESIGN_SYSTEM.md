@@ -65,3 +65,4 @@ AgentHub 的 Workspace-First（工作区优先）会话组织、多 Agent 远程
 - 令牌、46px 顶栏、带分组标签的固定侧栏、自滚动视图、`.list` / `.row` / `.row.stat` 行模型、`.stats` / `.kpi` 指标卡与 `.editor` 表单网格均来自 magpie 的 `internal/gui/assets/app.css`，上游归属与维护边界归该仓库；
 - 该界面只服务本机单窗口（托盘窗口 940×720），不承担跨端一致性；跨端 Web 与 Android 仍以第 2 节为准；
 - 第 5 节的动效与性能约束继续适用：只驱动 `transform` / `opacity`，不用 `background-attachment: fixed`，模糊只出现在遮挡层 `.modal`，滚动列表内不叠加大面积 `backdrop-filter`，轮询刷新不低于 500ms。
+- 设置是页面（`#view-settings`）而不是弹窗，沿用 magpie `#view-settings` 的模型：顶栏下的 `.set-tabs` 分段标签 + `.list.prefs` / `.row.pref` 设置行 + 跨分区搜索框；顶栏齿轮是这一页的开关（再次按下或 `Esc` 回到原页面），控制台其余设置项一律收进这里，顶栏只保留必要的身份与配对入口。

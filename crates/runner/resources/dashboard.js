@@ -25,6 +25,7 @@ const VIEW_LABELS = {
   models: "模型",
   workspaces: "工作区",
   gateway: "网关",
+  settings: "设置",
 };
 
 const VIEW_EN_LABELS = {
@@ -35,7 +36,11 @@ const VIEW_EN_LABELS = {
   models: "Models",
   workspaces: "Workspaces",
   gateway: "Gateway",
+  settings: "Settings",
 };
+
+// the settings page's own parts, one tab each, as magpie's Settings
+const SET_TABS = ["general", "appearance", "device", "gateway", "about"];
 
 function updateCrumb(viewId) {
   const title = document.getElementById("topCrumbTitle");
@@ -72,18 +77,20 @@ const PORT = String(location.port || LAYOUT.webPort || 4200);
 // where the upstream gateway listens, when nothing on this machine says otherwise
 const GATEWAY_URL = `http://127.0.0.1:${LAYOUT.gatewayPort}`;
 const AFFINITY_HEADER = "x-session-affinity";
-// how often the console says it polls; the cadence itself is AppLayout's
+// how often the console says it polls; the cadence itself is the reader's
+// (Settings › 自动探测间隔) or AppLayout's default
 const POLL_HINT = `每 ${Math.round((LAYOUT.dashboardPollMs || 4000) / 1000)} 秒自动探测一次`;
 const TOAST_MS = { ok: 2400, err: 4200 };
 
-// whether the reader asked the system for less motion; every scripted
-// animation checks this once, the way magpie's navCalm() does
+// whether the reader asked for less motion — in the system, or in the
+// console's own Settings › 外观 row; every scripted animation checks this
+// once, the way magpie's navCalm() does
 const calmMotion = () =>
-  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  motionOff() || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// The theme the bootstrap script already applied; the button only redraws
+// The theme the bootstrap script already applied; the sheet only redraws it
 function initTheme() {
-  updateThemeButtonUI();
+  updateThemeChoice();
   // the window's caption is painted before the page is up, from the copy
   // the console left last time; a first window in this profile, or one
   // whose copy went stale, brings that copy up to the page's theme
@@ -114,6 +121,7 @@ async function init() {
   if (footPort) footPort.textContent = `端口 ${PORT}`;
   const savedView = localStorage.getItem(STORE.view);
   switchView(VIEW_LABELS[savedView] ? savedView : "sessions", true);
+  initSettingsPage();
   // the first probe can land while the daemon is still scanning its
   // transcripts; ask again before telling anyone there are no sessions
   const ok = await refreshDashboard();
@@ -128,7 +136,7 @@ async function init() {
       await refreshDashboard();
     }
   }
-  setInterval(refreshDashboard, LAYOUT.dashboardPollMs || 4000);
+  startPolling();
   // the page follows the window it is drawn in; a turn tucked away or
   // opened with the button only holds until the next resize
   window.addEventListener("resize", clampSideWidth, { passive: true });
@@ -295,7 +303,8 @@ function initSideEdge() {
   });
 }
 
-// Keyboard shortcuts: Ctrl+Shift+S (sidebar), Ctrl+, (settings), Esc (close modals)
+// Keyboard shortcuts: Ctrl+Shift+S (sidebar), Ctrl+, (settings), Esc (close
+// whatever is open, and back out of settings to the page it came from)
 window.addEventListener("keydown", (e) => {
   if (
     e.ctrlKey &&
@@ -307,10 +316,27 @@ window.addEventListener("keydown", (e) => {
     toggleSideNav();
   } else if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",") {
     e.preventDefault();
-    openSettingsModal();
+    openSettings();
   } else if (e.key === "Escape") {
-    closeSettingsModal();
-    closePairModal();
+    closeRegisterMcpModal();
+    leaveSettings();
+  } else if (
+    isSettingsOpen() &&
+    (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    !e.metaKey
+  ) {
+    // the tabs answer the arrow keys, as magpie's Settings tabs do
+    const at = SET_TABS.indexOf(settingsTab);
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || "");
+    if (at >= 0 && !typing) {
+      e.preventDefault();
+      const next =
+        SET_TABS[(at + (e.key === "ArrowRight" ? 1 : -1) + SET_TABS.length) % SET_TABS.length];
+      setSetTab(next, true);
+      document.getElementById("setTab-" + next)?.focus();
+    }
   }
 });
 
@@ -464,10 +490,19 @@ function fitNavTrack() {
 // Switch between the views
 function switchView(viewId, silent) {
   if (!VIEW_LABELS[viewId]) return;
+  // Settings is a page like any other, but not a row in the rail: the page
+  // the reader came from is kept, so leaving Settings turns back to it
+  if (viewId !== "settings" && lastNavView !== viewId) lastNavView = viewId;
   // a click turns the page as one motion (view-transition in dashboard.css,
   // the way magpie's pages turn); the first paint, a restored page and a
-  // reader who asked for less motion get the page at once
+  // reader who asked for less motion get the page at once.
+  // A turn's own drawing runs after the browser has snapshotted the old page,
+  // so a second switch made before that lands would otherwise draw an older
+  // page over the newer one; each switch takes a number and only the newest
+  // is allowed to draw it
+  const gen = ++turnSeq;
   const turn = () => {
+    if (gen !== turnSeq) return;
     document
       .querySelectorAll("#nav button[data-view]")
       .forEach((b) => b.classList.remove("on"));
@@ -479,6 +514,11 @@ function switchView(viewId, silent) {
       document.getElementById("nav-" + viewId) ||
       document.querySelector(`#nav button[data-view="${viewId}"]`);
     if (btn) btn.classList.add("on");
+    // Settings is no rail row: its gear is the row, and it reads as open the
+    // way magpie's #prefs does
+    document
+      .getElementById("btnSettings")
+      ?.classList.toggle("on", viewId === "settings");
 
     const view = document.getElementById("view-" + viewId);
     if (view) {
@@ -501,16 +541,82 @@ function switchView(viewId, silent) {
     fitNavTrack();
     scaleSegThumb(!silent);
     scaleRailHl(!silent);
+    // the settings page's own state is drawn as it comes into view
+    if (viewId === "settings") renderSettings();
   };
-  if (silent || calmMotion() || !document.startViewTransition) {
+  // a turn only draws when the window is painting frames: a tucked-away
+  // console (or one in a background tab) would hold the switch until it is
+  // looked at again, so there the page is simply drawn at once
+  if (
+    silent ||
+    document.hidden ||
+    calmMotion() ||
+    !document.startViewTransition
+  ) {
     turn();
     return;
   }
   document.documentElement.classList.add("page-turn");
   const vt = document.startViewTransition(turn);
-  vt.finished.finally(() =>
-    document.documentElement.classList.remove("page-turn"),
+  // a window that is up but not being painted (occluded, or a pane nobody is
+  // looking at) never starts the turn at all: the page is handed over anyway
+  // after a frame's worth of waiting, instead of the switch hanging on a frame
+  // that will not come
+  let drawn = false;
+  const atOnce = setTimeout(() => {
+    if (drawn) return;
+    drawn = true;
+    turn();
+    if (gen === turnSeq) document.documentElement.classList.remove("page-turn");
+  }, 300);
+  vt.ready.then(
+    () => {
+      drawn = true;
+      clearTimeout(atOnce);
+    },
+    () => clearTimeout(atOnce),
   );
+  // the turn's own class comes off with the newest turn only: an older one
+  // finishing late must not uncover a page still turning. A turn that a newer
+  // one skipped finishes as a rejection, which is not a failure here
+  vt.finished
+    .catch(() => {})
+    .finally(() => {
+      if (gen === turnSeq) document.documentElement.classList.remove("page-turn");
+    });
+}
+
+// the page the rail last held; leaving Settings turns back to it
+let lastNavView = "sessions";
+// the newest page turn asked for; an older turn still waiting to draw sees a
+// newer number and gives up, so the page on screen is always the last asked
+let turnSeq = 0;
+
+// The gear in the header opens Settings as a page of its own (magpie's
+// `.icon#prefs`), under the same header and the same turn as every other
+// page, rather than as a sheet over the page it was opened from. A second
+// press, with Settings already open, gives the page back.
+function toggleSettings() {
+  const open = isSettingsOpen();
+  if (open) leaveSettings();
+  else openSettings();
+}
+
+function isSettingsOpen() {
+  return !!document
+    .getElementById("view-settings")
+    ?.classList.contains("active");
+}
+
+function openSettings(tab) {
+  if (tab) setSetTab(tab, true);
+  switchView("settings");
+}
+
+// Esc, or a second press of the gear, gives the page back to the reader
+function leaveSettings() {
+  if (!isSettingsOpen()) return;
+  switchView(lastNavView || "sessions");
 }
 
 // manual: the reader asked for this probe, so the button that asked turns
@@ -615,6 +721,9 @@ async function refreshDashboard(manual) {
       renderDevice(dashboardData.device);
       lastRenderState.deviceJson = deviceStr;
     }
+    // the settings page's rows say what this snapshot found; they are only
+    // written while the page is the one on screen
+    if (isSettingsOpen()) renderSettings();
     return true;
   } catch (e) {
     handleFetchFailure();
@@ -2277,6 +2386,7 @@ function renderDevice(device) {
   const pairText = document.getElementById("headerPairText");
   const statStatus = document.getElementById("statWebPairingStatus");
   const statSub = document.getElementById("statWebPairingSub");
+  const pairTag = document.getElementById("pairStateTag");
 
   if (deviceIdElem) deviceIdElem.textContent = device.device_id || "-";
   if (deviceKeyElem) {
@@ -2294,6 +2404,10 @@ function renderDevice(device) {
       ? device.gateway_url.replace(/^https?:\/\//, "")
       : "已配对";
     if (pairText) pairText.textContent = `已绑定 ${gw}`;
+    if (pairTag) {
+      pairTag.textContent = "已绑定";
+      pairTag.className = "tag ok";
+    }
     if (statStatus) {
       statStatus.textContent = "已绑定";
       statStatus.style.color = "var(--green)";
@@ -2309,6 +2423,10 @@ function renderDevice(device) {
   } else {
     if (pairBtn) pairBtn.classList.add("off");
     if (pairText) pairText.textContent = "未绑定 Web 控制台";
+    if (pairTag) {
+      pairTag.textContent = "未绑定";
+      pairTag.className = "tag";
+    }
     if (statStatus) {
       statStatus.textContent = "未绑定";
       statStatus.style.color = "";
@@ -2325,64 +2443,6 @@ function setPairTile(cta) {
   if (!tile) return;
   tile.classList.toggle("cta", !!cta);
   tile.title = cta ? "点击关联云端 Web 控制台" : "已关联云端 Web 控制台";
-}
-
-function toggleTheme() {
-  const html = document.documentElement;
-  const isDark = html.classList.contains("dark");
-  const themeMeta = document.getElementById("themeColorMeta");
-  const apply = () => {
-    if (isDark) {
-      html.classList.remove("dark");
-      localStorage.setItem(STORE.theme, "light");
-      if (themeMeta) themeMeta.setAttribute("content", LAYOUT.themeBg.light);
-    } else {
-      html.classList.add("dark");
-      localStorage.setItem(STORE.theme, "dark");
-      if (themeMeta) themeMeta.setAttribute("content", LAYOUT.themeBg.dark);
-    }
-    updateThemeButtonUI();
-    // the window's own caption is the page's colour too, and is painted by
-    // the shell the next window opens with: leave the choice where it reads it
-    syncWindowTheme();
-  };
-  // the new theme fades in as one sheet: every surface is given the same
-  // colour transition for the length of the switch, then the rule goes
-  // away so hover states keep their own quick timings. The old colours
-  // have to be computed once after the class lands — a class and a theme
-  // changed in the same frame leave the browser nothing to fade from.
-  if (calmMotion()) {
-    apply();
-    return;
-  }
-  html.classList.add("theme-fade");
-  void getComputedStyle(document.body).backgroundColor;
-  requestAnimationFrame(apply);
-  clearTimeout(toggleTheme._timer);
-  toggleTheme._timer = setTimeout(
-    () => html.classList.remove("theme-fade"),
-    520,
-  );
-}
-
-function updateThemeButtonUI() {
-  const isDark = document.documentElement.classList.contains("dark");
-  const iconSpan = document.getElementById("themeIcon");
-  const themeMeta = document.getElementById("themeColorMeta");
-
-  if (themeMeta) {
-    themeMeta.setAttribute(
-      "content",
-      isDark ? LAYOUT.themeBg.dark : LAYOUT.themeBg.light,
-    );
-  }
-
-  if (!iconSpan) return;
-  if (isDark) {
-    iconSpan.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.2M12 19.8V22M4.22 4.22l1.56 1.56M18.22 18.22l1.56 1.56M2 12h2.2M19.8 12H22M4.22 19.78l1.56-1.56M18.22 5.78l1.56-1.56"/></svg>`;
-  } else {
-    iconSpan.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
-  }
 }
 
 async function shutdownRunner() {
@@ -2455,43 +2515,316 @@ function copyText(text) {
   }
 }
 
-function openSettingsModal() {
-  const modal = document.getElementById("settingsModal");
-  if (!modal) return;
-  modal.classList.add("open");
-  const isDark = document.documentElement.classList.contains("dark");
-  const optLight = document.getElementById("themeOptLight");
-  const optDark = document.getElementById("themeOptDark");
-  if (optLight && optDark) {
-    optLight.classList.toggle("on", !isDark);
-    optDark.classList.toggle("on", isDark);
+// ---- the settings page -----------------------------------------------------
+// magpie's Settings: a tab per part across the head, that part's rows under
+// it, and a box that searches every part at once while it holds words. The
+// page is not a sheet — the header, the rail and the footer stay put, and
+// the part's DOM is read where it already is.
+let settingsTab = "general";
+let settingsQuery = "";
+
+const SET_TAB_LABELS = {
+  general: "通用 · General",
+  appearance: "外观 · Appearance",
+  device: "设备与配对 · Device",
+  gateway: "网关 · Gateway",
+  about: "关于 · About",
+};
+
+function initSettingsPage() {
+  const saved = localStorage.getItem(STORE.settingsTab);
+  if (SET_TABS.includes(saved)) settingsTab = saved;
+  const tabs = document.getElementById("setTabs");
+  if (tabs)
+    tabs.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-set]");
+      if (b) setSetTab(b.dataset.set, true);
+    });
+  const q = document.getElementById("setQ");
+  if (q) {
+    q.addEventListener("input", () => searchSettings(q.value));
+    q.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && q.value) {
+        e.preventDefault();
+        e.stopPropagation();
+        q.value = "";
+        searchSettings("");
+      }
+    });
   }
-  const ep = document.getElementById("settingsEndpoint");
-  if (ep) {
-    ep.textContent = `http://${location.hostname || "127.0.0.1"}:${PORT} (内嵌高性能 HTTP / SSE)`;
+  setSetTab(settingsTab, false);
+}
+
+function setSetTab(tab, remember) {
+  if (!SET_TABS.includes(tab)) tab = "general";
+  settingsTab = tab;
+  if (remember) {
+    try {
+      localStorage.setItem(STORE.settingsTab, tab);
+    } catch (e) {}
+  }
+  SET_TABS.forEach((id) => {
+    const b = document.getElementById("setTab-" + id);
+    const page = document.getElementById("setPage-" + id);
+    const on = id === tab;
+    if (b) {
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    if (page) page.hidden = !on;
+  });
+}
+
+// The page's own text, so a search can say which row said the word
+const setText = (n) => (n ? n.textContent : "").toLowerCase();
+
+// While the box holds words, every part's rows that say them are shown under
+// the part's own name and the tabs step aside; emptied, the part comes back.
+function searchSettings(value) {
+  settingsQuery = value.trim().toLowerCase();
+  const page = document.getElementById("view-settings");
+  if (!page) return;
+  const none = document.getElementById("setNone");
+  if (!settingsQuery) {
+    page.classList.remove("set-searching");
+    page
+      .querySelectorAll(".set-miss")
+      .forEach((n) => n.classList.remove("set-miss"));
+    if (none) none.hidden = true;
+    setSetTab(settingsTab, false);
+    return;
+  }
+  page.classList.add("set-searching");
+  const words = settingsQuery.split(/\s+/);
+  let any = false;
+  SET_TABS.forEach((id) => {
+    const part = document.getElementById("setPage-" + id);
+    const tab = document.getElementById("setTab-" + id);
+    if (!part) return;
+    // the part's name counts as one of the words every row may answer to
+    const partText = setText(tab) + " " + (SET_TAB_LABELS[id] || "");
+    let hits = 0;
+    part.querySelectorAll(".row").forEach((row) => {
+      const says = partText + " " + setText(row);
+      const hit = words.every((w) => says.includes(w));
+      row.classList.toggle("set-miss", !hit);
+      if (hit) hits++;
+    });
+    part.querySelectorAll(".list").forEach((list) => {
+      const visible = [...list.children].some(
+        (c) => c.classList.contains("row") && !c.classList.contains("set-miss"),
+      );
+      list.classList.toggle("set-miss", !visible);
+    });
+    part.dataset.part = (tab ? tab.textContent : id) || id;
+    part.hidden = hits === 0;
+    if (hits > 0) any = true;
+  });
+  if (none) {
+    none.hidden = any;
+    none.textContent = `没有匹配“${value.trim()}”的设置`;
   }
 }
 
-function closeSettingsModal() {
-  const modal = document.getElementById("settingsModal");
-  if (modal) modal.classList.remove("open");
+// every pick on the page is one shape: the row's own options, one of them on
+function pickIn(segsId, match) {
+  const segs = document.getElementById(segsId);
+  if (!segs) return;
+  segs.querySelectorAll(".opt").forEach((b) => b.classList.remove("on"));
+  const on = match(segs);
+  if (on) on.classList.add("on");
+}
+
+// draws every value the rows carry from the state they describe
+function renderSettings() {
+  const dark = document.documentElement.classList.contains("dark");
+  const optLight = document.getElementById("themeOptLight");
+  const optDark = document.getElementById("themeOptDark");
+  if (optLight) optLight.classList.toggle("on", !dark);
+  if (optDark) optDark.classList.toggle("on", dark);
+
+  pickIn("pollSegs", (s) =>
+    s.querySelector(`.opt[data-ms="${pollIntervalMs()}"]`),
+  );
+  pickIn("sideNavSegs", (s) =>
+    s.querySelector(
+      `.opt[data-side="${document.documentElement.classList.contains("no-side") ? "off" : "on"}"]`,
+    ),
+  );
+  pickIn("motionSegs", (s) =>
+    s.querySelector(
+      `.opt[data-motion="${motionOff() ? "off" : "on"}"]`,
+    ),
+  );
+
+  const ep = document.getElementById("settingsEndpoint");
+  if (ep)
+    ep.textContent = `http://${location.hostname || "127.0.0.1"}:${PORT} (内嵌 HTTP / SSE)`;
+  const ver = document.getElementById("settingsVersion");
+  if (ver) ver.textContent = `AgentHub Runner v${LAYOUT.version || "dev"}`;
+
+  const gwUrl = document.getElementById("settingsGatewayUrl");
+  if (gwUrl)
+    gwUrl.textContent =
+      (dashboardData &&
+        dashboardData.gateway &&
+        dashboardData.gateway.base_url) ||
+      GATEWAY_URL;
+  const gwSub = document.getElementById("settingsGatewaySub");
+  if (gwSub) {
+    const gw = dashboardData && dashboardData.gateway;
+    // the source the daemon reports is a path or a credential-file name;
+    // the row says what it means, as the ledger's own sub does
+    let src = String((gw && gw.source) || "").trim();
+    if (src.includes("host-creds") || src.includes(".json"))
+      src = "动态检测网关";
+    // the console only says what it saw; a snapshot from before the first
+    // probe reads as one still on its way
+    gwSub.textContent = gw
+      ? gw.detected
+        ? `已探测 · ${src || "标准端点"}`
+        : "尚未探测到上游网关"
+      : "正在等待探测…";
+  }
+
+  // the console reads resources/ on every request only in a debug build;
+  // the tag says which build this window is running
+  const dev = !!LAYOUT.devAssets;
+  const hotTag = document.getElementById("hotReloadTag");
+  if (hotTag) {
+    hotTag.textContent = dev ? "开发构建 · 已开启" : "发布构建";
+    hotTag.classList.toggle("ok", dev);
+  }
+  const hotSub = document.getElementById("hotReloadSub");
+  if (hotSub)
+    hotSub.textContent = dev
+      ? "直接读取 resources/ 下的页面、样式与脚本，保存后窗口自己刷新（热重载）"
+      : "发布构建从二进制内嵌副本读取；用 cargo run 启动即为开发构建";
+
+  // the pairing form is filled from the device the daemon last reported
+  const gatewayInput = document.getElementById("gatewayInput");
+  if (gatewayInput && !gatewayInput.value) {
+    const savedGateway =
+      localStorage.getItem(STORE.customGateway) ||
+      (dashboardData &&
+        dashboardData.device &&
+        dashboardData.device.gateway_url) ||
+      (dashboardData && dashboardData.gateway && dashboardData.gateway.url) ||
+      "";
+    if (savedGateway) gatewayInput.value = savedGateway;
+  }
+  if (dashboardData && dashboardData.device) renderDevice(dashboardData.device);
+}
+
+// the automatic probe's cadence, the reader's to set (never under half a
+// second: the console's own rule for a self-refreshing surface)
+function pollIntervalMs() {
+  const saved = parseInt(localStorage.getItem(STORE.pollMs) || "", 10);
+  return [2000, 4000, 10000].includes(saved)
+    ? saved
+    : LAYOUT.dashboardPollMs || 4000;
+}
+
+let pollTimer = 0;
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(refreshDashboard, pollIntervalMs());
+}
+
+function setPollInterval(ms) {
+  try {
+    localStorage.setItem(STORE.pollMs, String(ms));
+  } catch (e) {}
+  startPolling();
+  pickIn("pollSegs", (s) => s.querySelector(`.opt[data-ms="${ms}"]`));
+  toast(`已改为每 ${Math.round(ms / 1000)} 秒自动探测`);
+}
+
+function setSideNavFromSettings(on) {
+  setSideNav(on, true);
+  pickIn("sideNavSegs", (s) =>
+    s.querySelector(`.opt[data-side="${on ? "on" : "off"}"]`),
+  );
+}
+
+function motionOff() {
+  try {
+    return localStorage.getItem(STORE.motion) === "off";
+  } catch (e) {
+    return false;
+  }
+}
+
+// the reader's own motion choice, over the system's: "off" reads every
+// scripted animation as already finished (calmMotion consults it)
+function setMotion(mode) {
+  try {
+    if (mode === "off") localStorage.setItem(STORE.motion, "off");
+    else localStorage.removeItem(STORE.motion);
+  } catch (e) {}
+  pickIn("motionSegs", (s) => s.querySelector(`.opt[data-motion="${mode}"]`));
+  toast(mode === "off" ? "已精简动效" : "已恢复完整动效");
 }
 
 function setAppTheme(theme) {
   const dark = theme === "dark";
-  document.documentElement.classList.toggle("dark", dark);
-  try {
-    localStorage.setItem(STORE.theme, dark ? "dark" : "light");
-  } catch (e) {}
-  updateThemeIcon(dark);
-  syncWindowTheme();
+  applyTheme(dark);
+  toast(`已切换至${dark ? "暗黑" : "明亮"}外观`);
+}
+
+// One theme switch, whichever control asked for it: the class, the stored
+// choice, the caption's copy and the row's own pick all move together.
+function applyTheme(dark) {
+  const html = document.documentElement;
+  const themeMeta = document.getElementById("themeColorMeta");
+  const apply = () => {
+    html.classList.toggle("dark", dark);
+    try {
+      localStorage.setItem(STORE.theme, dark ? "dark" : "light");
+    } catch (e) {}
+    if (themeMeta)
+      themeMeta.setAttribute(
+        "content",
+        dark ? LAYOUT.themeBg.dark : LAYOUT.themeBg.light,
+      );
+    const optLight = document.getElementById("themeOptLight");
+    const optDark = document.getElementById("themeOptDark");
+    if (optLight) optLight.classList.toggle("on", !dark);
+    if (optDark) optDark.classList.toggle("on", dark);
+    // the window's own caption is the page's colour too, and is painted by
+    // the shell the next window opens with: leave the choice where it reads it
+    syncWindowTheme();
+  };
+  // the new theme fades in as one sheet: every surface is given the same
+  // colour transition for the length of the switch, then the rule goes
+  // away so hover states keep their own quick timings. The old colours
+  // have to be computed once after the class lands — a class and a theme
+  // changed in the same frame leave the browser nothing to fade from.
+  if (calmMotion()) {
+    apply();
+    return;
+  }
+  html.classList.add("theme-fade");
+  void getComputedStyle(document.body).backgroundColor;
+  requestAnimationFrame(apply);
+  clearTimeout(applyTheme._timer);
+  applyTheme._timer = setTimeout(() => html.classList.remove("theme-fade"), 520);
+}
+
+// the theme row's two picks, redrawn from the theme the page is painted in
+function updateThemeChoice() {
+  const dark = document.documentElement.classList.contains("dark");
+  const themeMeta = document.getElementById("themeColorMeta");
+  if (themeMeta)
+    themeMeta.setAttribute(
+      "content",
+      dark ? LAYOUT.themeBg.dark : LAYOUT.themeBg.light,
+    );
   const optLight = document.getElementById("themeOptLight");
   const optDark = document.getElementById("themeOptDark");
-  if (optLight && optDark) {
-    optLight.classList.toggle("on", !dark);
-    optDark.classList.toggle("on", dark);
-  }
-  toast(`已切换至${dark ? "暗黑" : "明亮"}外观`);
+  if (optLight) optLight.classList.toggle("on", !dark);
+  if (optDark) optDark.classList.toggle("on", dark);
 }
 
 async function openDataDirectory() {
@@ -2505,30 +2838,6 @@ async function openDataDirectory() {
   } catch (e) {
     toast("无法连接本地 Runner 服务", "err");
   }
-}
-
-function openPairModal() {
-  const modal = document.getElementById("pairModal");
-  if (modal) modal.classList.add("open");
-  const gatewayInput = document.getElementById("gatewayInput");
-  if (gatewayInput && !gatewayInput.value) {
-    const savedGateway =
-      localStorage.getItem(STORE.customGateway) ||
-      (dashboardData &&
-        dashboardData.device &&
-        dashboardData.device.gateway_url) ||
-      (dashboardData && dashboardData.gateway && dashboardData.gateway.url) ||
-      "";
-    if (savedGateway) gatewayInput.value = savedGateway;
-  }
-  if (dashboardData && dashboardData.device) {
-    renderDevice(dashboardData.device);
-  }
-}
-
-function closePairModal() {
-  const modal = document.getElementById("pairModal");
-  if (modal) modal.classList.remove("open");
 }
 
 function copyDeviceId() {
@@ -2575,7 +2884,7 @@ async function submitDevicePairing(event) {
     const resData = await resp.json();
     if (resp.ok && (resData.ok === true || resData.status === "ok")) {
       if (codeInput) codeInput.value = "";
-      closePairModal();
+      renderSettings();
       await refreshDashboard();
       toast("已绑定到云端 AgentHub");
     } else {

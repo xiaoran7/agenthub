@@ -31,7 +31,8 @@
       themeBg: { light: '#f4f5f8', dark: '#1a1a1e' },
       storage: {
         theme: 'agenthub_theme', view: 'agenthub_view', layout: 'agenthub_layout', sideWidth: 'agenthub_side_w',
-        closedGroups: 'agenthub_closed_groups', customGateway: 'agenthub_custom_gateway', sideNav: 'agenthub_side_nav'
+        closedGroups: 'agenthub_closed_groups', customGateway: 'agenthub_custom_gateway', sideNav: 'agenthub_side_nav',
+        settingsTab: 'agenthub_settings_tab', pollMs: 'agenthub_poll_ms', motion: 'agenthub_motion'
       }
     }, window.AppLayout || {});
 
@@ -152,7 +153,7 @@
     </nav>
     </div>
     <div class="side-foot">
-      <button class="side-gw off" id="headerPairBtn" onclick="openPairModal()" title="云端 Web 控制台设备配对与绑定状态">
+      <button class="side-gw off" id="headerPairBtn" onclick="openSettings('device')" title="云端 Web 控制台设备配对与绑定状态">
         <i></i>
         <span id="headerPairText">未绑定 Web 控制台</span>
       </button>
@@ -178,13 +179,7 @@
     </div>
     <div class="nav-slot top-slot" id="navTopSlot"><span class="thumb" id="segThumb"></span></div>
     <div class="actions">
-      <button class="icon" onclick="refreshDashboard(true)" title="重新探测系统状态与会话" id="refreshBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
-      </button>
-      <button class="icon" onclick="toggleTheme()" title="切换亮暗主题外观" id="themeBtn">
-        <span id="themeIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span>
-      </button>
-      <button class="icon settings-btn" id="btnSettings" onclick="openSettingsModal()" title="系统设置与偏好 (Ctrl+,)" aria-label="系统设置与偏好">
+      <button class="icon settings-btn" id="btnSettings" onclick="toggleSettings()" title="设置 (Ctrl+,)" aria-label="设置">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -204,7 +199,7 @@
         <span class="v" id="statTotalSessions">-</span>
         <span class="sub" id="statSessionsBreakdown" title="Coding Assistant · Codex · 其他来源">Coding Assistant - · Codex -</span>
       </div>
-      <button class="blk clickable cta" id="pairTile" onclick="openPairModal()" title="点击关联云端 Web 控制台">
+      <button class="blk clickable cta" id="pairTile" onclick="openSettings('device')" title="点击关联云端 Web 控制台">
         <span class="k">云端 Web 绑定</span>
         <span class="v" id="statWebPairingStatus">未绑定</span>
         <span class="sub" id="statWebPairingSub">点击关联 Web 控制台</span>
@@ -225,7 +220,7 @@
       <input type="search" id="sessionSearchInput" class="inp" placeholder="搜索提示词、会话 ID 或工作区…" oninput="filterSessionsList()">
       <span class="tag" id="sessionCountBadge">0 个历史会话</span>
       <span class="grow"></span>
-      <button class="text action" onclick="refreshDashboard(true)" title="立即重新探测">
+      <button class="text action" onclick="refreshDashboard(true)" id="refreshBtn" title="立即重新探测">
         <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
         <span>刷新</span>
       </button>
@@ -691,10 +686,206 @@
             <span>群组亲和树传递</span>
           </div>
         </div>
-        <p>子智能体派生时继承父会话的 Affinity Tag，所有 Agent 并发或流式步骤共享一份高命中 Prompt Cache。</p>
+        <p>子智能体派生时继承父会话的 Affinity Tag，所有 Agent 并发或流式步骤共享一个高命中 Prompt Cache。</p>
         <div class="sc-cmd"><code>client.headers["x-session-affinity"] = rootSessionId</code></div>
       </div>
     </div>
+  </main>
+
+  <!-- View: settings, the same page model as magpie's: a tab per part at the
+       head of the page, the part's own rows under it, no sheet over the page -->
+  <main class="view view-settings" id="view-settings" tabindex="-1">
+    <div class="row-head set-head">
+      <div class="set-tabs" id="setTabs" role="tablist" aria-label="设置">
+        <button type="button" role="tab" id="setTab-general" data-set="general" aria-controls="setPage-general" aria-selected="true">通用</button>
+        <button type="button" role="tab" id="setTab-appearance" data-set="appearance" aria-controls="setPage-appearance" aria-selected="false">外观</button>
+        <button type="button" role="tab" id="setTab-device" data-set="device" aria-controls="setPage-device" aria-selected="false">设备与配对</button>
+        <button type="button" role="tab" id="setTab-gateway" data-set="gateway" aria-controls="setPage-gateway" aria-selected="false">网关</button>
+        <button type="button" role="tab" id="setTab-about" data-set="about" aria-controls="setPage-about" aria-selected="false">关于</button>
+      </div>
+      <input class="inp set-q" id="setQ" type="search" placeholder="查找设置…" aria-label="查找设置">
+    </div>
+    <p class="set-none" id="setNone" role="status" hidden></p>
+
+    <section class="set-page" id="setPage-general" role="tabpanel" aria-labelledby="setTab-general">
+      <div class="list prefs">
+        <div class="row pref">
+          <div class="who">
+            <div class="name">重新探测</div>
+            <div class="sub">立即重新读取本机的会话、智能体、模型与能力生态，不等下一轮自动探测</div>
+          </div>
+          <button type="button" class="text action" onclick="refreshDashboard(true)" id="setRefreshBtn">
+            <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg></span>
+            <span>立即刷新</span>
+          </button>
+        </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">自动探测间隔</div>
+            <div class="sub">控制台多久自己读取一次；会话与用量不在这里留下痕迹</div>
+          </div>
+          <div class="segs" id="pollSegs">
+            <button type="button" class="opt" data-ms="2000" onclick="setPollInterval(2000)">2 秒</button>
+            <button type="button" class="opt" data-ms="4000" onclick="setPollInterval(4000)">4 秒</button>
+            <button type="button" class="opt" data-ms="10000" onclick="setPollInterval(10000)">10 秒</button>
+          </div>
+        </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">侧边栏</div>
+            <div class="sub">在本机窗口足够宽时显示左侧导航，窄窗口中导航回到顶栏</div>
+          </div>
+          <div class="segs" id="sideNavSegs">
+            <button type="button" class="opt" data-side="on" onclick="setSideNavFromSettings(true)">显示</button>
+            <button type="button" class="opt" data-side="off" onclick="setSideNavFromSettings(false)">隐藏</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="set-page" id="setPage-appearance" role="tabpanel" aria-labelledby="setTab-appearance" hidden>
+      <div class="list prefs">
+        <div class="row pref">
+          <div class="who">
+            <div class="name">主题</div>
+            <div class="sub">切换整页一并在青空浅色与深色之间过渡，窗口标题栏同步取色</div>
+          </div>
+          <div class="segs theme-segs">
+            <button type="button" class="opt" id="themeOptLight" onclick="setAppTheme('light')">明亮</button>
+            <button type="button" class="opt" id="themeOptDark" onclick="setAppTheme('dark')">暗黑</button>
+          </div>
+        </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">动效</div>
+            <div class="sub">页面翻页、骨架与数字滚动的过渡；跟随系统“减少动态效果”时始终关闭</div>
+          </div>
+          <div class="segs" id="motionSegs">
+            <button type="button" class="opt" data-motion="on" onclick="setMotion('on')">完整</button>
+            <button type="button" class="opt" data-motion="off" onclick="setMotion('off')">精简</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="set-page" id="setPage-device" role="tabpanel" aria-labelledby="setTab-device" hidden>
+      <div class="list prefs">
+        <div class="row pref">
+          <div class="who">
+            <div class="name">本机设备 ID</div>
+            <div class="sub mono" id="modalDeviceId">-</div>
+          </div>
+          <button type="button" class="text action" onclick="copyDeviceId()">复制</button>
+        </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">硬件公钥</div>
+            <div class="sub mono" id="modalDeviceKey">-</div>
+          </div>
+        </div>
+        <div class="ok-box" id="pairedStatusBox" hidden>
+          <b>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            <span>已成功配对到云端 AgentHub</span>
+          </b>
+          <div class="sub" id="pairedGatewayInfo"></div>
+        </div>
+      </div>
+      <div class="list prefs mt">
+        <div class="row pref">
+          <div class="who"><div class="name">绑定到云端 Web 控制台</div><div class="sub">本机主动出站，不需要在路由器上开端口</div></div>
+          <span class="tag" id="pairStateTag">未绑定</span>
+        </div>
+        <form class="pref-form" id="pairForm" onsubmit="submitDevicePairing(event)">
+          <label for="gatewayInput">网关地址</label>
+          <input id="gatewayInput" type="text" placeholder="控制台地址，例如 https://agenthub.yourdomain.com">
+          <label for="bindingCodeInput">配对绑定码</label>
+          <input id="bindingCodeInput" type="text" placeholder="从 AgentHub Web 控制台获取的绑定码" required>
+          <div class="bar">
+            <span class="grow"></span>
+            <button type="submit" class="text action primary" id="pairSubmitBtn">
+              <span>立即配对绑定</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="set-page" id="setPage-gateway" role="tabpanel" aria-labelledby="setTab-gateway" hidden>
+      <div class="list prefs">
+        <div class="row pref">
+          <div class="who">
+            <div class="name">上游网关</div>
+            <div class="sub" id="settingsGatewaySub">尚未探测</div>
+          </div>
+          <button type="button" class="text action" onclick="switchView('gateway')">查看拓扑</button>
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">网关 BASE URL</div><div class="sub mono" id="settingsGatewayUrl">-</div></div>
+          <button type="button" class="text action" onclick="copyValue('settingsGatewayUrl', '网关地址')">复制</button>
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">亲和标头</div><div class="sub mono">x-session-affinity</div></div>
+          <button type="button" class="text action" onclick="copyText('x-session-affinity'); toast('已复制亲和标头')">复制</button>
+        </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">上游模型同步</div>
+            <div class="sub">从网关重新拉取一次可用模型清单</div>
+          </div>
+          <button type="button" class="text action" onclick="refreshModelsCatalog(event)" id="setRefreshModels">
+            <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg></span>
+            <span>同步模型</span>
+          </button>
+        </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">能力生态同步</div>
+            <div class="sub">重新扫描技能、MCP 服务与生命周期钩子</div>
+          </div>
+          <button type="button" class="text action" onclick="syncCapabilities(event)" id="setSyncCapabilities">
+            <span>重新探测</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="set-page" id="setPage-about" role="tabpanel" aria-labelledby="setTab-about" hidden>
+      <div class="list prefs">
+        <div class="row pref">
+          <div class="who"><div class="name">核心版本</div><div class="sub mono" id="settingsVersion">AgentHub Runner</div></div>
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">服务监听</div><div class="sub mono" id="settingsEndpoint">http://127.0.0.1:4200</div></div>
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">数据存储</div><div class="sub mono" id="settingsDataDir">~/.agenthub</div></div>
+          <button type="button" class="text action" onclick="openDataDirectory()" title="在本地文件资源管理器中打开数据目录">
+            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+            <span>打开目录</span>
+          </button>
+        </div>
+        <div class="row pref">
+          <div class="who">
+            <div class="name">控制台热重载</div>
+            <div class="sub" id="hotReloadSub">开发构建下直接读取 resources/，改动即刷新窗口</div>
+          </div>
+          <span class="tag" id="hotReloadTag">发布构建</span>
+        </div>
+      </div>
+      <div class="list prefs mt">
+        <div class="row pref danger">
+          <div class="who">
+            <div class="name">退出守护进程</div>
+            <div class="sub">注销系统托盘并安全释放监听端口，之后可关闭桌面窗口</div>
+          </div>
+          <button type="button" class="text action danger" onclick="shutdownRunner()">
+            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg></span>
+            <span>停止并退出</span>
+          </button>
+        </div>
+      </div>
+    </section>
   </main>
   </div>
 
@@ -703,125 +894,6 @@
     <span class="status" id="footPort"></span>
     <span class="status mono" id="footEndpoint"></span>
   </footer>
-
-  <!-- settings modal -->
-  <div id="settingsModal" class="modal">
-    <div class="dialog">
-      <div class="editor">
-        <div class="ehead">
-          <span class="ic accent">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
-          </span>
-          <b>AgentHub Runner 运行设置</b>
-          <span class="note">偏好设置 · 运行环境 · 守护状态</span>
-          <button class="icon push" onclick="closeSettingsModal()" title="关闭 (Esc)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
-          </button>
-        </div>
-
-        <label>核心版本</label>
-        <div>
-          <span class="code-box accent" id="settingsVersion">AgentHub Runner v2.4.99 (Windows x64)</span>
-        </div>
-
-        <label>服务监听</label>
-        <div>
-          <span class="code-box" id="settingsEndpoint">http://127.0.0.1:4200 (内嵌高性能 HTTP / SSE)</span>
-        </div>
-
-        <label>数据存储</label>
-        <div class="pair">
-          <span class="code-box" id="settingsDataDir">~/.agenthub</span>
-          <span class="side">
-            <button type="button" class="text action" onclick="openDataDirectory()" title="在本地文件资源管理器中打开数据目录">
-              <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
-              <span>打开目录</span>
-            </button>
-          </span>
-        </div>
-
-        <label>界面外观</label>
-        <div class="pair">
-          <div class="segs theme-segs">
-            <button type="button" class="seg-btn" id="themeOptLight" onclick="setAppTheme('light')"><span>明亮</span></button>
-            <button type="button" class="seg-btn" id="themeOptDark" onclick="setAppTheme('dark')"><span>暗黑</span></button>
-          </div>
-          <span class="hint" style="margin-left: 8px;">根据环境自适应高分屏渲染</span>
-        </div>
-
-        <label>守护进程</label>
-        <div class="full" style="grid-column: 2 / -1;">
-          <div style="display:flex; align-items:center; justify-content:space-between; padding: 12px 14px; border: var(--rule); border-radius: var(--r-s); background: var(--card-2);">
-            <div>
-              <b style="display:block; font-size:var(--fs-body); color:var(--fg);">退出守护进程</b>
-              <span style="font-size:var(--fs-note); color:var(--muted);">注销 Windows 系统托盘并安全释放 4200 端口</span>
-            </div>
-            <button type="button" class="text action" style="color:var(--red); border-color:var(--red-soft); background:var(--red-soft);" onclick="closeSettingsModal(); shutdownRunner();">
-              <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg></span>
-              <span>停止并退出</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="bar">
-          <span class="grow"></span>
-          <button type="button" class="text action primary" onclick="closeSettingsModal()">完成</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- device pairing -->
-  <div id="pairModal" class="modal">
-    <div class="dialog">
-      <div class="editor">
-        <div class="ehead">
-          <span class="ic accent">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          </span>
-          <b>设备身份与 AgentHub 配对</b>
-          <span class="note">本机 Ed25519 身份 · 主动出站绑定</span>
-          <button class="icon push" onclick="closePairModal()" title="关闭">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
-          </button>
-        </div>
-
-        <label>设备 ID</label>
-        <div class="pair">
-          <span class="code-box accent" id="modalDeviceId">-</span>
-          <span class="side"><button class="text accent" onclick="copyDeviceId()">复制</button></span>
-        </div>
-
-        <label>硬件公钥</label>
-        <div><span class="code-box" id="modalDeviceKey">-</span></div>
-
-        <div class="ok-box" id="pairedStatusBox" hidden>
-          <b>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-            <span>已成功配对到云端 AgentHub</span>
-          </b>
-          <div class="sub" id="pairedGatewayInfo"></div>
-        </div>
-
-        <form class="grid" id="pairForm" onsubmit="submitDevicePairing(event)">
-          <label for="gatewayInput">网关地址</label>
-          <input id="gatewayInput" type="text" placeholder="控制台地址，例如 https://agenthub.yourdomain.com">
-          <label for="bindingCodeInput">配对绑定码</label>
-          <input id="bindingCodeInput" type="text" placeholder="从 AgentHub Web 控制台获取的绑定码" required>
-          <div class="bar">
-            <span class="grow"></span>
-            <button type="button" class="text action" onclick="closePairModal()">取消</button>
-            <button type="submit" class="text action primary" id="pairSubmitBtn">
-              <span>立即配对绑定</span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </div>
 
   <!-- register MCP modal -->
   <div id="registerMcpModal" class="modal">

@@ -246,16 +246,20 @@ fn handle_connection(
     if path == "/dashboard.css" {
         // the sheet carries no build stamp itself; the page asks for a versioned
         // URL, so a release can never pair a new page with an old sheet
+        // a debug build reads these from disk on every request, so no copy
+        // may outlive the file it came from
         let cache = match query.get("v") {
+            _ if dev_assets() => "no-store",
             Some(v) if v == ASSETS_VERSION => "public, max-age=31536000, immutable",
             _ => "no-cache",
         };
+        let sheet = asset_text(DASHBOARD_CSS, "dashboard.css");
         send_response(
             &mut stream,
             200,
             "OK",
             "text/css; charset=utf-8",
-            DASHBOARD_CSS.as_bytes(),
+            sheet.as_bytes(),
             false,
             Some(cache),
         )?;
@@ -265,18 +269,47 @@ fn handle_connection(
     if path == "/dashboard.js" {
         // the script is versioned the same way as the sheet: the page and the
         // code it runs are always from one build
+        // a debug build reads these from disk on every request, so no copy
+        // may outlive the file it came from
         let cache = match query.get("v") {
+            _ if dev_assets() => "no-store",
             Some(v) if v == ASSETS_VERSION => "public, max-age=31536000, immutable",
             _ => "no-cache",
         };
+        let script = asset_text(DASHBOARD_JS, "dashboard.js");
         send_response(
             &mut stream,
             200,
             "OK",
             "text/javascript; charset=utf-8",
-            DASHBOARD_JS.as_bytes(),
+            script.as_bytes(),
             false,
             Some(cache),
+        )?;
+        return Ok(());
+    }
+
+    // the debug build's watcher: answer as soon as anything under resources/
+    // changes, or after twenty seconds, so the page's next ask hears it
+    if path == "/api/dev/wait" && dev_assets() {
+        let since = query.get("since").cloned().unwrap_or_default();
+        let mut stamp = assets_stamp();
+        for _ in 0..50 {
+            if !since.is_empty() && stamp != since {
+                break;
+            }
+            thread::sleep(Duration::from_millis(400));
+            stamp = assets_stamp();
+        }
+        let body = json!({ "stamp": stamp }).to_string();
+        send_response(
+            &mut stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            body.as_bytes(),
+            false,
+            Some("no-store"),
         )?;
         return Ok(());
     }
@@ -301,6 +334,16 @@ fn handle_connection(
     // versioned asset URL and the port it is actually served on stamped in, so
     // the console never carries a copy of a number the daemon already knows
     let page = render_index_html(port);
+    // under `cargo run` the page also watches the sheet and the script it
+    // was read from: an edit lands in the open window without a rebuild
+    let page = if dev_assets() {
+        page.replace(
+            "</body>",
+            &format!("<script>{DEV_RELOAD_JS}</script></body>"),
+        )
+    } else {
+        page
+    };
     send_response(
         &mut stream,
         200,
@@ -1466,6 +1509,67 @@ const DASHBOARD_CSS: &str = include_str!("../resources/dashboard.css");
 /// formatter can read it without parsing the page
 const DASHBOARD_JS: &str = include_str!("../resources/dashboard.js");
 
+/// A debug build (`cargo run`) reads the page, the sheet and the script from
+/// `resources/` on every request and watches them, as magpie's `make dev`
+/// does: an edit is in the open window at the next poll, with no rebuild and
+/// no restart. A release build serves the copies embedded above and carries
+/// no watcher at all.
+const DEV_RELOAD_JS: &str = r#"(async () => {
+  let seen = "";
+  for (;;) {
+    try {
+      const r = await fetch("/api/dev/wait?since=" + seen, { cache: "no-store" });
+      const j = await r.json();
+      if (seen && j.stamp !== seen) { location.reload(); return; }
+      seen = j.stamp;
+    } catch (e) { await new Promise((r) => setTimeout(r, 1000)); }
+  }
+})();"#;
+
+fn dev_assets() -> bool {
+    // a debug build reads the console from disk; the tests read the copies
+    // embedded in the test binary, so what they assert is what ships
+    cfg!(all(debug_assertions, not(test)))
+}
+
+/// The console's three files, as this build will serve them: from memory in a
+/// release, from disk in a debug build.
+fn asset_text(embedded: &'static str, name: &str) -> String {
+    if dev_assets() {
+        if let Ok(text) = std::fs::read_to_string(assets_dir().join(name)) {
+            return text;
+        }
+    }
+    embedded.to_owned()
+}
+
+fn assets_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources")
+}
+
+/// The newest modification time under `resources/`, as one string: a change
+/// to any of the console's files changes it, and the page reloads.
+fn assets_stamp() -> String {
+    let mut newest = std::time::SystemTime::UNIX_EPOCH;
+    if let Ok(entries) = std::fs::read_dir(assets_dir()) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    if let Ok(modified) = meta.modified() {
+                        if modified > newest {
+                            newest = modified;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    newest
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
 /// Bumped with every release; the page links the sheet and script under this
 /// name.
 const ASSETS_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1475,7 +1579,7 @@ const ASSETS_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// front of them so the window size, the poll cadence and the gateway port are
 /// declared once.
 fn app_layout_json(port: u16) -> String {
-    let layout = json!({
+    let mut layout = json!({
         "version": ASSETS_VERSION,
         "webPort": port,
         "gatewayPort": 3425,
@@ -1495,9 +1599,14 @@ fn app_layout_json(port: u16) -> String {
             "theme": "agenthub_theme", "view": "agenthub_view",
             "layout": "agenthub_layout", "sideWidth": "agenthub_side_w",
             "closedGroups": "agenthub_closed_groups",
-            "customGateway": "agenthub_custom_gateway", "sideNav": "agenthub_side_nav"
+            "customGateway": "agenthub_custom_gateway", "sideNav": "agenthub_side_nav",
+            "settingsTab": "agenthub_settings_tab", "pollMs": "agenthub_poll_ms",
+            "motion": "agenthub_motion"
         }
     });
+    if dev_assets() {
+        layout["devAssets"] = json!(true);
+    }
     layout.to_string()
 }
 
@@ -1508,17 +1617,24 @@ fn render_index_html(port: u16) -> String {
         r#"<script>window.AppLayout = {};</script>"#,
         app_layout_json(port)
     );
+    // in a release the page is the copy embedded in the binary; a debug build
+    // reads `resources/dashboard.html` so an edit shows without a rebuild
+    let page = asset_text(INDEX_HTML, "dashboard.html");
     // the page's fallback object opens its own script; the daemon's goes just
     // before it. The page ships with CRLF line endings, so anchor on text only.
     let marker = "// ---- the console's layout tokens";
-    let at = INDEX_HTML.find(marker).unwrap_or(0);
-    let head = INDEX_HTML[..at].rfind("<script>").unwrap_or(at);
-    let html = format!(
-        "{}  {layout}\n  {}",
-        &INDEX_HTML[..head],
-        &INDEX_HTML[head..]
-    );
-    html.replace("__ASSETS_VERSION__", ASSETS_VERSION)
+    let at = page.find(marker).unwrap_or(0);
+    let head = page[..at].rfind("<script>").unwrap_or(at);
+    let html = format!("{}  {layout}\n  {}", &page[..head], &page[head..]);
+    // a debug build asks for the sheet and the script under a name that
+    // changes with the files themselves, so a reload after an edit can never
+    // be answered from a copy of the one before it
+    let version = if dev_assets() {
+        format!("{ASSETS_VERSION}-{}", assets_stamp())
+    } else {
+        ASSETS_VERSION.to_owned()
+    };
+    html.replace("__ASSETS_VERSION__", &version)
 }
 
 /// 嵌入式 PWA Web App Manifest，用于驱动 Edge 桌面应用模式的主题色与窗口特征

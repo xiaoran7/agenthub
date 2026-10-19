@@ -178,6 +178,17 @@
     .seg button:active { transform: scale(.96); }
     .seg button.on { color: var(--fg); }
     .seg button:hover:not(.on) { color: var(--fg-2); }
+    /* a track of picks, in a row or a modal: magpie's .segs — the track, and
+       the picked option marked on the track itself (no sliding thumb here;
+       the sheet's switches are short and read as one strip) */
+    .segs { position: relative; display: inline-flex; padding: 2px; border-radius: 8px; background: var(--seg-track); align-self: flex-start; }
+    .segs .opt, .segs .seg-btn {
+      position: relative; z-index: 1; white-space: nowrap; height: 24px; padding: 0 11px;
+      border-radius: 6px; font-size: var(--fs-note); color: var(--muted);
+      transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+    }
+    .segs .opt:hover:not(.on), .segs .seg-btn:hover:not(.on) { color: var(--fg-2); }
+    .segs .opt.on, .segs .seg-btn.on { color: var(--fg); background: var(--seg-thumb); box-shadow: var(--seg-edge); }
     .actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
     .icon {
       width: 26px; height: 26px; border-radius: 7px;
@@ -889,6 +900,77 @@
         .settings-btn svg { transition: transform var(--dur-3) var(--ease-spring); }
         .settings-btn:hover svg { transform: rotate(45deg); }
         .theme-segs { display: inline-flex; }
+
+        /* ---- the settings page --------------------------------------------- */
+        /* magpie's Settings, on this console's page model: a tab per part at
+           the head of the page (the same small-caps tabs as its warm-ups), the
+           part's rows under it, and a box that searches every part at once.
+           The page scrolls in place; the head stays at its top. */
+        .set-head { position: sticky; top: 0; z-index: 2; min-height: 40px; flex-wrap: wrap; gap: 6px; background: var(--bg); border-bottom: 0; padding: 0 0 6px; }
+        .set-tabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; row-gap: 2px; min-width: 0; margin-left: -7px; }
+        .set-tabs button {
+          flex: none; white-space: nowrap; height: 26px; padding: 0 9px; border-radius: 7px;
+          font-size: var(--fs-note); font-weight: 600; color: var(--muted);
+          transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+        }
+        .set-tabs button:hover:not(.on) { color: var(--fg-2); background: color-mix(in srgb, var(--fg) 4%, transparent); }
+        .set-tabs button.on { color: var(--fg); background: var(--pill); }
+        .set-q { flex: 0 1 180px; margin-left: auto; min-width: 120px; height: 28px; }
+        .set-searching .set-tabs { display: none; }
+        .set-searching .set-q { flex: 1 1 100%; width: 100%; margin-left: 0; }
+        .set-searching .set-page::before {
+          content: attr(data-part); display: block; margin: 6px 2px 6px;
+          font-size: calc(var(--fs-note) - 1px); font-weight: 600;
+          letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
+        }
+        .set-none { margin: 24px 2px; font-size: var(--fs-body); color: var(--muted); text-align: center; }
+        .set-page { display: flex; flex-direction: column; flex: none; }
+        .set-page[hidden] { display: none; }
+        .set-miss { display: none !important; }
+        .set-page > .list:not(:last-child) { margin-bottom: 10px; }
+
+        /* one preference a row: what it is and why on the left, its control on
+           the right, as magpie's .row.pref — never a control without a label */
+        .list.prefs { background: var(--card); }
+        .row.pref { min-height: 54px; padding: 12px var(--inset); gap: 16px; align-items: center; }
+        .row.pref .who { flex: 1 1 auto; min-width: 0; }
+        .row.pref .name { font-weight: 550; font-size: var(--fs-body); }
+        .row.pref .sub {
+          margin-top: 2px; font-size: var(--fs-note); color: var(--muted); line-height: 1.45;
+          white-space: normal; overflow: visible; text-overflow: clip;
+        }
+        .row.pref .sub.mono { font-family: var(--code); font-size: calc(var(--fs-note) - 1px); word-break: break-all; }
+        .row.pref .segs { flex: none; margin-left: auto; }
+        .row.pref > .text.action { flex: none; }
+        /* the one row that ends the daemon reads in the red the rail's dot
+           turns to when the link is down */
+        .row.pref.danger .name { color: var(--red); }
+        .text.action.danger { color: var(--red); border-color: var(--red-soft); background: var(--red-soft); }
+        .text.action.danger:hover { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+
+        /* the pairing form, under the device's own facts */
+        .pref-form {
+          display: grid; grid-template-columns: 84px minmax(0, 1fr);
+          gap: 10px 14px; align-items: center;
+          padding: 14px var(--inset) 16px; border-top: var(--rule-2);
+        }
+        .pref-form label { font-size: var(--fs-note); color: var(--fg-2); text-align: right; }
+        .pref-form input {
+          height: 32px; padding: 0 10px; border-radius: var(--r-s);
+          border: 1px solid var(--line); background: var(--card-2);
+          font-size: var(--fs-body); outline: none; min-width: 0;
+          user-select: text; -webkit-user-select: text;
+        }
+        .pref-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+        .pref-form input::placeholder { color: var(--faint); }
+        .pref-form .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+        @container view-q (max-width: 560px) {
+          .pref-form { grid-template-columns: minmax(0, 1fr); }
+          .pref-form label { text-align: left; }
+          .row.pref { flex-wrap: wrap; row-gap: 8px; }
+          .row.pref .who { flex: 1 1 100%; }
+          .row.pref .segs, .row.pref > .text.action { margin-left: 0; }
+        }
 
         .gw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; margin-top: 0; }
         .gw-grid .list { margin: 0; }

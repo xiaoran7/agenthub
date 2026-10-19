@@ -2,6 +2,27 @@
 
 ## [2.4.99] - 2026-10-19
 
+### 内嵌控制台设置页化与开发热重载 (Console Settings Page & Dev Hot Reload)
+
+- **设置从弹窗改为独立页面 (Settings as a View, after magpie)**：
+  - `crates/runner/resources/dashboard.html` 中删除原“设置”与“设备配对”两个弹窗块，新增 `<main class="view" id="view-settings">`，与其余页面同处 `.view-slot`，共用顶栏、侧栏与页脚；
+  - 页面顶部 `.set-tabs` 五段标签（通用 / 外观 / 设备与配对 / 网关 / 关于）对应 `.set-page` 五个 `role="tabpanel"` 分区，右侧 `#setQ` 搜索框可跨全部分区即时过滤行（过滤中标签隐藏、命中的行按分区名分组显示，无命中时给出 `#setNone` 提示）；
+  - 顶栏齿轮 `#btnSettings` 改为开关语义：再次按下或按 `Esc` 回到进入设置前的页面（`lastNavView`），`Ctrl+,` 直接打开；设置打开时齿轮带 `.on` 高亮，方向键左右在两个标签间切换；
+- **原来裸露在外的操作收进设置页 (Bare Controls Moved into Settings)**：
+  - 顶栏移除独立的“刷新”与“主题切换”图标，仅保留齿轮；主题、动效、自动探测间隔（2/4/10 秒）、侧边栏显隐、立即重新探测、上游模型同步、能力生态同步、设备 ID/公钥与配对表单、版本/监听地址/数据目录/热重载状态/退出守护进程等全部改为设置页内的 `.row.pref` 设置行；
+  - `#headerPairBtn` 与工作区的 `#pairTile` 改为直达设置页的“设备与配对”分区；
+  - 会话视图工具条上的“刷新”按钮补回 `id="refreshBtn"`，恢复手动探测时的 loading 状态反馈；
+- **开发构建热重载 (Hot Reload for Debug Builds)**：
+  - `crates/runner/src/web_server.rs` 新增 `dev_assets()` / `asset_text()` / `assets_stamp()`：debug 构建直接读取 `resources/` 下的页面、样式与脚本（`cargo run` 即生效），release 构建与测试仍使用 `include_str!` 内嵌副本，测试断言与实际发版内容保持一致；
+  - `/dashboard.css`、`/dashboard.js` 在 dev 构建下以 `no-store` 返回，静态资源 URL 追加磁盘最新 mtime 作为版本号（`?v=2.4.99-<nanos>`），避免浏览器复用旧缓存；
+  - 新增长轮询端点 `GET /api/dev/wait?since=<stamp>`（最多约 20 秒），页面注入 `DEV_RELOAD_JS`，检测到 `resources/` 变更后自动 `location.reload()`；
+  - `/api/dashboard` 返回的布局对象在 dev 构建下附加 `devAssets: true`，设置页“关于”分区据此显示“开发构建 · 已开启”状态；
+- **页面切换竞态修复 (Page Turn Race Fix)**：
+  - `switchView()` 增加递增序号 `turnSeq`，`startViewTransition` 的绘制回调只在仍是最新一次切换时执行，避免快速连点时旧切换后绘制覆盖新页面；旧 transition 结束时也不再摘掉新切换的 `page-turn` class；
+  - 后台/隐藏窗口（`document.hidden`）以及 300ms 内 `transition.ready` 未就绪时改为直接切换 DOM，杜绝不可见窗口里翻页挂起导致设置按钮没反应；
+- **存储键补全**：`AppLayout.storage` 与 `app_layout_json` 补齐 `motion: agenthub_motion`，修复 `calmMotion()` 读到 `undefined` 键的问题；
+- **验证**：`cargo test --workspace` 245 项测试全部通过，`cargo clippy --workspace --all-targets` 无告警，浏览器实测设置页五个分区、搜索过滤、键盘快捷键、主题/动效/轮询切换与热重载刷新均正常。
+
 ### 代码审查缺陷修复与并发稳定性加固 (Code Review Fixes & Concurrency Hardening)
 
 - **Rust 运行器并发死锁修复 (Mutex Re-entrancy Deadlock Fix)**：
