@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" id="themeColorMeta">
   <meta name="color-scheme" content="light dark">
-  <link rel="manifest" href="/manifest.json">
+  <link rel="manifest" href="/manifest.json?v=2.5.3">
   <title>AgentHub Runner</title>
-  <link rel="icon" type="image/svg+xml" href="/icon.svg">
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
-  <link rel="apple-touch-icon" href="/icon-192.png">
-  <link rel="alternate icon" href="/favicon.ico">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=2.5.3">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg?v=2.5.3">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=2.5.3">
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=2.5.3">
+  <link rel="apple-touch-icon" href="/icon-192.png?v=2.5.3">
+  <link rel="shortcut icon" href="/favicon.ico?v=2.5.3">
   <script>
     // ---- the console's layout tokens, declared once --------------------------
     // The server stamps its own copy in before this one (AppLayout); these are
@@ -482,6 +483,11 @@
             <span>已成功配对到云端 AgentHub</span>
           </b>
           <div class="sub" id="pairedGatewayInfo"></div>
+          <div style="margin-top: 8px;">
+            <button type="button" class="text action danger" id="unpairSubmitBtn" onclick="submitDeviceUnpair()">
+              <span>解除配对绑定</span>
+            </button>
+          </div>
         </div>
         <form class="pref-form" id="pairForm" onsubmit="submitDevicePairing(event)">
           <label for="gatewayInput">网关地址</label>

@@ -1,58 +1,92 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
-    <radialGradient id="hubBg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#f8fafc"/>
-    </radialGradient>
-    <radialGradient id="centerOrb" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="45%" stop-color="#38bdf8"/>
+    <!-- Top Face (lighter highlight) -->
+    <linearGradient id="hubFacetTop" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0.48"/>
+    </linearGradient>
+    <!-- Left Face -->
+    <linearGradient id="hubFacetLeft" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.40"/>
+    </linearGradient>
+    <!-- Right Face -->
+    <linearGradient id="hubFacetRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284c7" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#0369a1" stop-opacity="0.45"/>
+    </linearGradient>
+
+    <!-- Electric Cyan-Azure Gradient for Spokes & Perimeter -->
+    <linearGradient id="hubSpokes" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="30%" stop-color="#38bdf8"/>
+      <stop offset="70%" stop-color="#0ea5e9"/>
       <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+
+    <!-- Central Glowing Core Orb -->
+    <radialGradient id="hubCoreOrb" cx="36%" cy="36%" r="64%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="30%" stop-color="#38bdf8"/>
+      <stop offset="75%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#0369a1"/>
     </radialGradient>
+
+    <!-- Subtle drop shadow for crisp boundary contrast on any wallpaper -->
+    <filter id="hubShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0284c7" flood-opacity="0.45"/>
+    </filter>
   </defs>
 
-  <!-- Crisp White Squircle Background (Tight margin for maximum content scale) -->
-  <rect width="504" height="504" x="4" y="4" rx="116" fill="url(#hubBg)" stroke="#e2e8f0" stroke-width="2.5"/>
+  <g filter="url(#hubShadow)">
+    <!-- Holographic 3D Facets (Top, Left, Right) -->
+    <polygon points="256,256 256,32 450,144" fill="url(#hubFacetTop)"/>
+    <polygon points="256,256 256,32 62,144" fill="url(#hubFacetTop)"/>
+    <polygon points="256,256 62,144 62,368 256,480" fill="url(#hubFacetLeft)"/>
+    <polygon points="256,256 450,144 450,368 256,480" fill="url(#hubFacetRight)"/>
 
-  <!-- Subtle Central Ambient Glow -->
-  <circle cx="256" cy="256" r="120" fill="#0ea5e9" opacity="0.20" />
-  <circle cx="256" cy="256" r="65" fill="#38bdf8" opacity="0.28" />
+    <!-- Subtle dark casing under strokes for contrast on bright/light screens -->
+    <g stroke="#0369a1" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity="0.65">
+      <line x1="256" y1="256" x2="256" y2="32" />
+      <line x1="256" y1="256" x2="450" y2="144" />
+      <line x1="256" y1="256" x2="450" y2="368" />
+      <line x1="256" y1="256" x2="256" y2="480" />
+      <line x1="256" y1="256" x2="62" y2="368" />
+      <line x1="256" y1="256" x2="62" y2="144" />
+      <polygon points="256,32 450,144 450,368 256,480 62,368 62,144" fill="none"/>
+    </g>
 
-  <!-- Radial spokes & Hexagon perimeter (Maximized Cube R=205, center (256, 256)) -->
-  <g stroke="#0284c7" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
-    <line x1="256" y1="256" x2="256" y2="51" />
-    <line x1="256" y1="256" x2="434" y2="153" />
-    <line x1="256" y1="256" x2="434" y2="359" />
-    <line x1="256" y1="256" x2="256" y2="461" />
-    <line x1="256" y1="256" x2="78" y2="359" />
-    <line x1="256" y1="256" x2="78" y2="153" />
+    <!-- Glowing Electric Spokes & Hexagon Perimeter -->
+    <g stroke="url(#hubSpokes)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="256" y1="256" x2="256" y2="32" />
+      <line x1="256" y1="256" x2="450" y2="144" />
+      <line x1="256" y1="256" x2="450" y2="368" />
+      <line x1="256" y1="256" x2="256" y2="480" />
+      <line x1="256" y1="256" x2="62" y2="368" />
+      <line x1="256" y1="256" x2="62" y2="144" />
+      <polygon points="256,32 450,144 450,368 256,480 62,368 62,144" fill="none"/>
+    </g>
 
-    <!-- Hexagon perimeter -->
-    <polygon points="256,51 434,153 434,359 256,461 78,359 78,153" fill="none"/>
+    <!-- 6 Outer Vertex Nodes (White body + Azure Rim + Cyan Center) -->
+    <g stroke="#0284c7" stroke-width="12" fill="#ffffff">
+      <circle cx="256" cy="32" r="30"/>
+      <circle cx="450" cy="144" r="30"/>
+      <circle cx="450" cy="368" r="30"/>
+      <circle cx="256" cy="480" r="30"/>
+      <circle cx="62" cy="368" r="30"/>
+      <circle cx="62" cy="144" r="30"/>
+    </g>
+    <g fill="#0284c7">
+      <circle cx="256" cy="32" r="12"/>
+      <circle cx="450" cy="144" r="12"/>
+      <circle cx="450" cy="368" r="12"/>
+      <circle cx="256" cy="480" r="12"/>
+      <circle cx="62" cy="368" r="12"/>
+      <circle cx="62" cy="144" r="12"/>
+    </g>
+
+    <!-- Central Glowing Core Orb with Specular Highlight -->
+    <circle cx="256" cy="256" r="56" fill="url(#hubCoreOrb)" stroke="#0369a1" stroke-width="8" />
+    <circle cx="246" cy="246" r="16" fill="#ffffff" />
   </g>
-
-  <!-- Outer Vertex Ring Nodes (Larger & thicker for high-DPI and 16x16 tray visibility) -->
-  <g stroke="#0284c7" stroke-width="10" fill="#ffffff">
-    <circle cx="256" cy="51" r="25"/>
-    <circle cx="434" cy="153" r="25"/>
-    <circle cx="434" cy="359" r="25"/>
-    <circle cx="256" cy="461" r="25"/>
-    <circle cx="78" cy="359" r="25"/>
-    <circle cx="78" cy="153" r="25"/>
-  </g>
-
-  <!-- Node Inner Accents -->
-  <g fill="#0ea5e9">
-    <circle cx="256" cy="51" r="7"/>
-    <circle cx="434" cy="153" r="7"/>
-    <circle cx="434" cy="359" r="7"/>
-    <circle cx="256" cy="461" r="7"/>
-    <circle cx="78" cy="359" r="7"/>
-    <circle cx="78" cy="153" r="7"/>
-  </g>
-
-  <!-- Glowing Central Core Orb (Enlarged Core) -->
-  <circle cx="256" cy="256" r="48" fill="#0ea5e9" opacity="0.45" />
-  <circle cx="256" cy="256" r="32" fill="url(#centerOrb)" />
-  <circle cx="256" cy="256" r="11" fill="#ffffff" />
 </svg>

@@ -186,7 +186,7 @@ fn handle_connection(
             "OK",
             "image/x-icon",
             FAVICON_ICO,
-            Some("public, max-age=86400"),
+            Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
     }
@@ -198,7 +198,7 @@ fn handle_connection(
             "OK",
             "image/svg+xml",
             ICON_SVG.as_bytes(),
-            Some("public, max-age=86400"),
+            Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
     }
@@ -210,7 +210,7 @@ fn handle_connection(
             "OK",
             "image/png",
             ICON_PNG,
-            Some("public, max-age=86400"),
+            Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
     }
@@ -222,7 +222,7 @@ fn handle_connection(
             "OK",
             "image/png",
             ICON_192_PNG,
-            Some("public, max-age=86400"),
+            Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
     }
@@ -234,7 +234,7 @@ fn handle_connection(
             "OK",
             "image/png",
             ICON_512_PNG,
-            Some("public, max-age=86400"),
+            Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
     }
@@ -246,7 +246,7 @@ fn handle_connection(
             "OK",
             "application/manifest+json",
             MANIFEST_JSON.as_bytes(),
-            Some("public, max-age=86400"),
+            Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
     }
@@ -681,9 +681,14 @@ impl ApiRequest<'_> {
                             }
                         };
 
-                        let gateway_url = req.gateway.trim().trim_end_matches('/');
+                        let mut gateway_url = req.gateway.trim().trim_end_matches('/').to_string();
+                        if !gateway_url.starts_with("http://")
+                            && !gateway_url.starts_with("https://")
+                        {
+                            gateway_url = format!("https://{}", gateway_url);
+                        }
                         let client = match crate::gateway::GatewayClient::new(
-                            gateway_url,
+                            &gateway_url,
                             Duration::from_secs(10),
                         ) {
                             Ok(c) => c,
@@ -708,6 +713,15 @@ impl ApiRequest<'_> {
                                     &binding_path,
                                     serde_json::to_string_pretty(&binding_info).unwrap_or_default(),
                                 );
+                                let _ = handler.handle(DaemonRequest::SetRemoteEnabled {
+                                    server_url: Some(gateway_url),
+                                });
+                                if let Ok(mut guard) = dashboard_summary_cache().write() {
+                                    *guard = None;
+                                }
+                                if let Ok(mut guard) = device_info_cache().write() {
+                                    *guard = None;
+                                }
                                 let resp = json!({
                                     "ok": true,
                                     "message": "设备已成功完成配对与网关注册！",
@@ -726,6 +740,27 @@ impl ApiRequest<'_> {
                         send_json_response(stream, 400, &err_json)?;
                     }
                 }
+            }
+            ("POST", "/api/device/unbind") => {
+                let home = std::env::var_os("USERPROFILE")
+                    .or_else(|| std::env::var_os("HOME"))
+                    .map(PathBuf::from);
+                if let Some(home) = home {
+                    let binding_path = home.join(".agenthub").join("binding.json");
+                    let _ = std::fs::remove_file(&binding_path);
+                }
+                let _ = handler.handle(DaemonRequest::SetRemoteEnabled { server_url: None });
+                if let Ok(mut guard) = dashboard_summary_cache().write() {
+                    *guard = None;
+                }
+                if let Ok(mut guard) = device_info_cache().write() {
+                    *guard = None;
+                }
+                let resp = json!({
+                    "ok": true,
+                    "message": "已成功解除与网关的绑定关系"
+                });
+                send_json_response(stream, 200, &resp)?;
             }
             _ => {
                 let err_json = json!({ "error": "not_found" });
@@ -1670,28 +1705,32 @@ const MANIFEST_JSON: &str = r##"{
   "short_name": "AgentHub",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f4f4f6",
-  "theme_color": "#f4f4f6",
+  "background_color": "#18181b",
+  "theme_color": "#18181b",
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "/icon-192.png?v=2.5.3",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/icon-512.png?v=2.5.3",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "/icon.png",
+      "src": "/icon.png?v=2.5.3",
       "sizes": "256x256",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "/icon.svg",
+      "src": "/icon.svg?v=2.5.3",
       "sizes": "any",
-      "type": "image/svg+xml"
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }"##;

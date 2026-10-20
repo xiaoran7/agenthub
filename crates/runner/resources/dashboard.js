@@ -3547,12 +3547,15 @@ async function submitDevicePairing(event) {
   const codeInput = document.getElementById("bindingCodeInput");
   const submitBtn = document.getElementById("pairSubmitBtn");
 
-  const gateway = (gatewayInput ? gatewayInput.value : "").trim();
+  let gateway = (gatewayInput ? gatewayInput.value : "").trim();
   const code = (codeInput ? codeInput.value : "").trim();
 
   if (!gateway) {
     toast("填写控制台地址，例如 https://agenthub.yourdomain.com", "err");
     return;
+  }
+  if (!gateway.startsWith("http://") && !gateway.startsWith("https://")) {
+    gateway = "https://" + gateway;
   }
   if (!code) {
     toast("填写 Web 控制台里生成的配对绑定码", "err");
@@ -3591,6 +3594,36 @@ async function submitDevicePairing(event) {
   } finally {
     submitBtn.disabled = false;
     submitBtn.innerHTML = origText;
+  }
+}
+
+async function submitDeviceUnpair() {
+  if (!confirm("确定要解除本机与云端网关的绑定关系吗？解除后本机将停止出站同步。")) return;
+  const unpairBtn = document.getElementById("unpairSubmitBtn");
+  const origText = unpairBtn ? unpairBtn.innerHTML : "";
+  if (unpairBtn) {
+    unpairBtn.disabled = true;
+    unpairBtn.innerHTML = "<span>正在解除绑定...</span>";
+  }
+  try {
+    const resp = await fetch("/api/device/unbind", {
+      method: "POST",
+    });
+    const resData = await resp.json();
+    if (resp.ok && (resData.ok === true || resData.status === "ok")) {
+      renderSettings();
+      await refreshDashboard();
+      toast("已解除与云端 AgentHub 的绑定");
+    } else {
+      toast("解绑失败：" + (resData.message || resData.error || "未知错误"), "err");
+    }
+  } catch (err) {
+    toast("解绑失败：" + err.message, "err");
+  } finally {
+    if (unpairBtn) {
+      unpairBtn.disabled = false;
+      unpairBtn.innerHTML = origText;
+    }
   }
 }
 

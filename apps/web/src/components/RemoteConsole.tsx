@@ -2157,7 +2157,10 @@ export function RemoteConsole({
             )}
             <div>
               {selectedSessionPath && selectedSessionPath.length > 0 && (
-                <nav className="remote-main-breadcrumb" aria-label="会话层级位置">
+                <nav
+                  className="remote-main-breadcrumb"
+                  aria-label="会话层级位置"
+                >
                   <button
                     type="button"
                     className="remote-main-breadcrumb-root"
@@ -2171,8 +2174,14 @@ export function RemoteConsole({
                   {selectedSessionPath.map((crumb, index) => {
                     const isLast = index === selectedSessionPath.length - 1;
                     return (
-                      <span className="remote-main-breadcrumb-item" key={crumb.key}>
-                        <span className="remote-main-breadcrumb-sep" aria-hidden="true">
+                      <span
+                        className="remote-main-breadcrumb-item"
+                        key={crumb.key}
+                      >
+                        <span
+                          className="remote-main-breadcrumb-sep"
+                          aria-hidden="true"
+                        >
                           /
                         </span>
                         <button

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- **修复设备绑定成功后 Web 控制台未显示设备的通讯链路缺陷（`crates/runner` / `services/api` / `apps/web`）**：
+  - **根因分析**：
+    1. **Runner 配对后未即时切换模式**：本机 Runner 接收 `/api/device/bind` 后仅写入 `~/.agenthub/binding.json`，未向正在运行的后台 `daemon` 调度 `DaemonRequest::SetRemoteEnabled { server_url: Some(gateway_url) }`，导致守护进程仍停留在 Local-only 模式，未建立到网关 `/v3/remote/ws` 的出站 WebSocket 连接；
+    2. **Runner 重启未继承持久化配置**：`main.rs` 在启动 `Command::Daemon` 和 `Command::Web` 时未解析持久化绑定文件，导致 Runner 重启后网关地址丢失；
+    3. **网关注册与会话映射割裂**：网关在收到设备注册后写入 `devices` 表，但 `/v3/remote/sessions` 仅单向查询 `remote.db` 中的 `content.runners(owner)`，在客户端完成首次 WebSocket Hello 握手前该设备在会话快照中不可见；
+    4. **Web 设置页缺乏配对感知轮询**：用户在 Web 控制台生成绑定码并在本地客户端配对成功后，Web 端未在绑定弹窗打开期间进行高频设备轮询，弹窗不会自动关闭且设备列表未实时刷新。
+  - **全链路修复**：
+    - **Runner 即时连网与解绑支持（`crates/runner/src/web_server.rs`）**：在 `/api/device/bind` 成功后立即触发 `handler.handle(DaemonRequest::SetRemoteEnabled { server_url: Some(gateway_url) })` 并清空看板缓存，同时补齐网关地址自动规范化（缺失前缀时默认补齐 `https://`）与 `POST /api/device/unbind` 解除绑定接口；
+    - **Runner 自启动持久化绑定恢复（`crates/runner/src/main.rs`）**：新增 `resolve_bound_gateway_server()` 解析 `~/.agenthub/binding.json`，在自启、托盘或无参数启动时自动继承已绑定的云端网关；
+    - **网关已注册设备投影（`services/api/src/remote-routes.ts`）**：`GET /v3/remote/sessions` 统一将已注册且未吊销的设备预先注册至 `content.register(owner, device_id)`，并将离线但已绑定的设备投影至 `runners` 返回结果，确保 Web 端立即呈现；
+    - **Web 端主动感知轮询（`apps/web/src/components/SettingsPage.tsx`）**：在绑定弹窗开启时以 2 秒间隔自动轮询设备列表，检测到新设备绑定成功后自动关闭弹窗并刷新设备列表；切换至设备标签页时自动刷新。
+
 - **用量页的 Token 总量改为全机口径（`crates/runner/src/usage_ledger.rs`）**：
   - **根因**：账本此前只读 Coding Assistant 的转录（实测 11.67B），而 magpie 的 25B 还含 ZCode 与 Codex，两个数字自然对不上；现按"对齐 magpie 全量"把本机其他智能体的用量并入同一账本，实测总量 **28.30B / 203,464 次请求 / $11,117.91**，其中 ZCode 14.27B、Claude Desktop 11.67B、Codex 2.37B、Coding Assistant 0.0002B；
   - **ZCode**：`model_usage` 一行一次调用，字段已分好 prompt / cache / completion 与两端时间，直接取用；早于该表的会话退回读 assistant 消息自带的 `tokens` 块。两条路径的 `input` 语义相反——`model_usage.input_tokens` **不含**缓存，消息的 `input` **包含**缓存（其 `total` 即 `input + output`）——所以减法只在消息路径做，否则 `model_usage` 会被压掉 2.44B；
@@ -53,7 +65,7 @@
   - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
 - **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
 - **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
-- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,139,438 字节，含 12,751,360 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`2e793fa8…c329`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 274 项全绿（214 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
+- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,159,001 字节，含 12,765,696 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`f19259d2…8824`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 277 项全绿（217 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 通过（`cargo fmt --all --check` 另有两处提示来自本会话之外的 `web_server.rs` 在途改动，未代为改写）；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
 
 ## [2.5.3] - 2026-10-20
 

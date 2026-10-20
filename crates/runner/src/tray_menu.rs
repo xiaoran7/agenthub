@@ -24,12 +24,11 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Graphics::Gdi::{
     ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CLIP_DEFAULT_PRECIS,
     CreateCompatibleDC, CreateDIBSection, CreateFontW, CreatePen, CreateSolidBrush,
-    DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
-    DeleteDC, DeleteObject, DrawTextW, Ellipse, FW_NORMAL, FW_SEMIBOLD, FillRect, GetDC,
-    GetMonitorInfoW, GetStockObject, GetTextExtentPoint32W, HDC, HFONT, HGDIOBJ, LineTo,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, MoveToEx, NULL_BRUSH,
-    OUT_DEFAULT_PRECIS, PS_SOLID, Polygon, ReleaseDC, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
+    DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, Ellipse, FW_NORMAL, FW_SEMIBOLD, FillRect,
+    GetDC, GetMonitorInfoW, GetTextExtentPoint32W, HDC, HFONT, HGDIOBJ, MONITOR_DEFAULTTONEAREST,
+    MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, PS_SOLID, ReleaseDC, SelectObject,
+    SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -37,26 +36,27 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetCursorPos, GetWindowRect, HWND_TOPMOST, RegisterClassW,
-    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow,
-    SetWindowPos, ShowWindow, ULW_ALPHA, UpdateLayeredWindow, WA_INACTIVE, WM_ACTIVATE,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WNDCLASSW,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, GetCursorPos, GetWindowRect, HCURSOR, HWND_TOPMOST, IDC_ARROW,
+    LoadCursorW, RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, ULW_ALPHA,
+    UpdateLayeredWindow, WA_INACTIVE, WM_ACTIVATE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 const POPUP_CLASS: &str = "AgentHubRunnerPopupClass\0";
 
 // The card, in logical pixels; one DPI scale sets the whole thing.
-const CARD_W: i32 = 292;
-const PAD_X: i32 = 15;
-const HEADER_H: i32 = 68;
-const ROW_H: i32 = 43;
-const SEP_H: i32 = 13;
-const FOOT_H: i32 = 11;
-const TEXT_X: i32 = 45;
-const RADIUS: i32 = 17;
+const CARD_W: i32 = 248;
+const PAD_X: i32 = 14;
+const HEADER_H: i32 = 44;
+const ROW_H: i32 = 36;
+const SEP_H: i32 = 9;
+const FOOT_H: i32 = 8;
+const TEXT_X: i32 = 14;
+const RADIUS: i32 = 10;
 /// Room for the shadow, so it is not clipped by the window.
-const SHADOW_PAD: i32 = 16;
+const SHADOW_PAD: i32 = 10;
 /// How long after the card appears a lost foreground is the tray flyout
 /// closing rather than the reader clicking somewhere else.
 const SETTLE: Duration = Duration::from_millis(400);
@@ -66,7 +66,6 @@ const C_BORDER: (u8, u8, u8) = (0xdc, 0xdc, 0xe4);
 const C_HAIRLINE: (u8, u8, u8) = (0xee, 0xee, 0xf2);
 const C_TEXT: (u8, u8, u8) = (0x1f, 0x1f, 0x24);
 const C_MUTED: (u8, u8, u8) = (0x8a, 0x8a, 0x93);
-const C_BRAND: (u8, u8, u8) = (0x02, 0x84, 0xc7);
 const C_GREEN: (u8, u8, u8) = (0x18, 0x9a, 0x58);
 const C_DANGER: (u8, u8, u8) = (0xd6, 0x45, 0x45);
 const C_HOVER: (u8, u8, u8) = (0xf2, 0xf2, 0xf7);
@@ -406,7 +405,11 @@ unsafe fn ensure_window(hinstance: HINSTANCE) -> HWND {
             cbWndExtra: 0,
             hInstance: hinstance,
             hIcon: 0 as _,
-            hCursor: 0 as _,
+            // the shell's menus show the arrow over their rows. A class with no
+            // cursor inherits whatever the app had set, and the tray thread
+            // holds the busy cursor from the click that got here, so the arrow
+            // has to be named explicitly.
+            hCursor: arrow_cursor(),
             hbrBackground: 0 as _,
             lpszMenuName: std::ptr::null(),
             lpszClassName: class.as_ptr(),
@@ -581,10 +584,23 @@ unsafe extern "system" fn popup_wnd_proc(
                 }
                 0
             }
+            // the arrow, always: the tray thread still holds the busy cursor
+            // from the press that opened the menu, and a class cursor only
+            // replaces it while the pointer moves over the class's window
+            WM_SETCURSOR => {
+                SetCursor(arrow_cursor());
+                1
+            }
             WM_ERASEBKGND => 1,
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
     }
+}
+
+/// The arrow, loaded once: a menu row is not a link or a wait.
+fn arrow_cursor() -> HCURSOR {
+    static ARROW: OnceLock<usize> = OnceLock::new();
+    *ARROW.get_or_init(|| unsafe { LoadCursorW(0 as _, IDC_ARROW) } as usize) as HCURSOR
 }
 
 unsafe fn repaint(hwnd: HWND) {
@@ -769,14 +785,17 @@ impl Frame {
             _ => C_HOVER,
         };
         let scale = layout.scale;
-        let inset = (2.0 * scale) as i32;
-        let top = layout.card_y + row.top + inset;
-        let bottom = layout.card_y + row.top + row.height - inset;
+        // the row's band, in window coordinates: the card's own margin on
+        // either side, so the highlight clears the border by as much on the
+        // left as on the right
+        let margin = layout.card_x + (5.0 * scale) as i32;
+        let bw = layout.card_w as f32 - 10.0 * scale;
+        let top = layout.card_y + row.top + scale.round() as i32;
+        let bottom = layout.card_y + row.top + row.height - scale.round() as i32;
         let bh = (bottom - top) as f32;
-        let bw = layout.card_w as f32 - 16.0 * scale;
-        let hcx = 8.0 * scale + bw / 2.0;
+        let hcx = margin as f32 + bw / 2.0;
         let hcy = top as f32 + bh / 2.0;
-        let hr = 12.0 * scale;
+        let hr = 7.0 * scale;
 
         let w = self.w;
         for y in y0.clamp(0, self.h)..y1.clamp(0, self.h) {
@@ -1155,6 +1174,24 @@ impl Gdi {
         }
     }
 
+    unsafe fn text_right(&self, s: &str, font: HFONT, c: (u8, u8, u8), rect: RECT) {
+        unsafe {
+            let old = SelectObject(self.hdc, font as HGDIOBJ);
+            SetBkMode(self.hdc, TRANSPARENT as i32);
+            SetTextColor(self.hdc, colorref(c));
+            let mut text: Vec<u16> = s.encode_utf16().collect();
+            let mut rect = rect;
+            DrawTextW(
+                self.hdc,
+                text.as_mut_ptr(),
+                text.len() as i32,
+                &mut rect,
+                DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_RIGHT,
+            );
+            SelectObject(self.hdc, old);
+        }
+    }
+
     unsafe fn text_width(&self, s: &str, font: HFONT) -> i32 {
         unsafe {
             let old = SelectObject(self.hdc, font as HGDIOBJ);
@@ -1200,45 +1237,16 @@ unsafe fn draw_content(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layo
         let card_w = layout.card_w;
         let card_h = layout.card_h;
 
-        let f_brand = font(s, 15.5, FW_SEMIBOLD, "Segoe UI");
-        let f_item = font(s, 16.0, FW_NORMAL, "Microsoft YaHei UI");
-        let f_meta = font(s, 12.5, FW_NORMAL, "Microsoft YaHei UI");
-        let f_ver = font(s, 12.5, FW_NORMAL, "Segoe UI");
+        let f_brand = font(s, 13.5, FW_SEMIBOLD, "Microsoft YaHei UI");
+        let f_item = font(s, 14.0, FW_NORMAL, "Microsoft YaHei UI");
+        let f_meta = font(s, 11.5, FW_NORMAL, "Microsoft YaHei UI");
+        let f_ver = font(s, 10.5, FW_NORMAL, "Segoe UI");
 
-        // the mark: the hexagon the icon is drawn from, at header size
-        let mx = card_x as f32 + (PAD_X as f32 + 11.0) * s;
-        let my = card_y as f32 + 21.0 * s;
-        draw_mark(&g, mx, my, 10.0 * s, s);
-
-        let brand_x = card_x + ((PAD_X + 31) as f32 * s) as i32;
-        g.text(
-            "AgentHub",
-            f_brand,
-            C_TEXT,
-            RECT {
-                left: brand_x,
-                top: card_y + (7.0 * s) as i32,
-                right: card_x + card_w,
-                bottom: card_y + (33.0 * s) as i32,
-            },
-        );
-        let brand_w = g.text_width("AgentHub", f_brand);
-        g.text(
-            &format!("v{}", menu.version),
-            f_ver,
-            C_MUTED,
-            RECT {
-                left: brand_x + brand_w + (6.0 * s) as i32,
-                top: card_y + (9.0 * s) as i32,
-                right: card_x + card_w,
-                bottom: card_y + (32.0 * s) as i32,
-            },
-        );
-
-        // the state line: a green dot and where the console is listening
-        let dot_x = card_x + ((PAD_X + 31) as f32 * s) as i32;
-        let dot_y = card_y + (48.0 * s) as i32;
-        let dot_r = 3.0 * s;
+        // one status line at the top, as the shell's own menus carry a title:
+        // a green dot, the product, and what state it is in
+        let dot_x = card_x + (PAD_X as f32 * s) as i32 + (2.0 * s) as i32;
+        let dot_y = card_y + ((HEADER_H / 2) as f32 * s) as i32;
+        let dot_r = 2.8 * s;
         let brush = CreateSolidBrush(colorref(C_GREEN));
         let old_brush = SelectObject(g.hdc, brush as HGDIOBJ);
         let pen = CreatePen(PS_SOLID, 0, colorref(C_GREEN));
@@ -1255,19 +1263,26 @@ unsafe fn draw_content(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layo
         DeleteObject(pen as HGDIOBJ);
         DeleteObject(brush as HGDIOBJ);
 
+        let header = RECT {
+            left: dot_x + (8.0 * s) as i32,
+            top: card_y,
+            right: card_x + card_w - (PAD_X as f32 * s) as i32,
+            bottom: card_y + (HEADER_H as f32 * s) as i32,
+        };
+        g.text("AgentHub", f_brand, C_TEXT, header);
+        let brand_w = g.text_width("AgentHub", f_brand);
         g.text(
-            &format!("运行中 · {}", menu.host),
+            "（就绪）",
             f_meta,
             C_MUTED,
             RECT {
-                left: dot_x + (9.0 * s) as i32,
-                top: card_y + (37.0 * s) as i32,
-                right: card_x + card_w - (PAD_X as f32 * s) as i32,
-                bottom: card_y + (60.0 * s) as i32,
+                left: header.left + brand_w,
+                ..header
             },
         );
+        g.text_right(&format!("v{}", menu.version), f_ver, C_MUTED, header);
 
-        // the hairline under the header
+        // the hairline under the title, as the shell's menus draw it
         g.fill(
             card_x + (PAD_X as f32 * s) as i32,
             card_y + card_h.min((HEADER_H as f32 * s) as i32) - 1,
@@ -1324,50 +1339,19 @@ unsafe fn draw_type(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layout,
             return;
         };
         let s = layout.scale;
-        let f_brand = font(s, 15.5, FW_SEMIBOLD, "Segoe UI");
-        let f_item = font(s, 16.0, FW_NORMAL, "Microsoft YaHei UI");
-        let f_meta = font(s, 12.5, FW_NORMAL, "Microsoft YaHei UI");
-        let f_ver = font(s, 12.5, FW_NORMAL, "Segoe UI");
+        let f_brand = font(s, 13.5, FW_SEMIBOLD, "Microsoft YaHei UI");
+        let f_item = font(s, 14.0, FW_NORMAL, "Microsoft YaHei UI");
+        let f_meta = font(s, 11.5, FW_NORMAL, "Microsoft YaHei UI");
+        let f_ver = font(s, 10.5, FW_NORMAL, "Segoe UI");
 
         let card_x = layout.card_x;
         let card_y = layout.card_y;
         let card_w = layout.card_w;
 
-        // the header's pieces, when the band reaches them
-        let mx = card_x as f32 + (PAD_X as f32 + 11.0) * s;
-        let my = card_y as f32 + 21.0 * s;
-        if intersects(y0, y1, my - 12.0 * s, my + 12.0 * s) {
-            draw_mark(&g, mx, my, 10.0 * s, s);
-        }
-        let brand_x = card_x + ((PAD_X + 31) as f32 * s) as i32;
-        if intersects(y0, y1, card_y as f32 + 7.0 * s, card_y as f32 + 33.0 * s) {
-            g.text(
-                "AgentHub",
-                f_brand,
-                C_TEXT,
-                RECT {
-                    left: brand_x,
-                    top: card_y + (7.0 * s) as i32,
-                    right: card_x + card_w,
-                    bottom: card_y + (33.0 * s) as i32,
-                },
-            );
-            let brand_w = g.text_width("AgentHub", f_brand);
-            g.text(
-                &format!("v{}", menu.version),
-                f_ver,
-                C_MUTED,
-                RECT {
-                    left: brand_x + brand_w + (6.0 * s) as i32,
-                    top: card_y + (9.0 * s) as i32,
-                    right: card_x + card_w,
-                    bottom: card_y + (32.0 * s) as i32,
-                },
-            );
-        }
-        let dot_x = card_x + ((PAD_X + 31) as f32 * s) as i32;
-        let dot_y = card_y + (48.0 * s) as i32;
-        let dot_r = 3.0 * s;
+        // the title line, when the band reaches it
+        let dot_x = card_x + (PAD_X as f32 * s) as i32 + (2.0 * s) as i32;
+        let dot_y = card_y + ((HEADER_H / 2) as f32 * s) as i32;
+        let dot_r = 2.8 * s;
         if intersects(y0, y1, dot_y as f32 - dot_r, dot_y as f32 + dot_r) {
             let brush = CreateSolidBrush(colorref(C_GREEN));
             let old_brush = SelectObject(g.hdc, brush as HGDIOBJ);
@@ -1385,18 +1369,25 @@ unsafe fn draw_type(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layout,
             DeleteObject(pen as HGDIOBJ);
             DeleteObject(brush as HGDIOBJ);
         }
-        if intersects(y0, y1, card_y as f32 + 37.0 * s, card_y as f32 + 60.0 * s) {
+        if intersects(y0, y1, card_y as f32, card_y as f32 + (HEADER_H as f32 * s)) {
+            let header = RECT {
+                left: dot_x + (8.0 * s) as i32,
+                top: card_y,
+                right: card_x + card_w - (PAD_X as f32 * s) as i32,
+                bottom: card_y + (HEADER_H as f32 * s) as i32,
+            };
+            g.text("AgentHub", f_brand, C_TEXT, header);
+            let brand_w = g.text_width("AgentHub", f_brand);
             g.text(
-                &format!("运行中 · {}", menu.host),
+                "（就绪）",
                 f_meta,
                 C_MUTED,
                 RECT {
-                    left: dot_x + (9.0 * s) as i32,
-                    top: card_y + (37.0 * s) as i32,
-                    right: card_x + card_w - (PAD_X as f32 * s) as i32,
-                    bottom: card_y + (60.0 * s) as i32,
+                    left: header.left + brand_w,
+                    ..header
                 },
             );
+            g.text_right(&format!("v{}", menu.version), f_ver, C_MUTED, header);
         }
         let hair = card_y + layout.card_h.min((HEADER_H as f32 * s) as i32) - 1;
         if intersects(y0, y1, hair as f32, hair as f32 + 1.0) {
@@ -1444,87 +1435,6 @@ unsafe fn draw_type(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layout,
 /// Whether rows `y0..y1` can hold anything drawn between `top` and `bottom`.
 fn intersects(y0: i32, y1: i32, top: f32, bottom: f32) -> bool {
     (y1 as f32) > top && (y0 as f32) < bottom
-}
-
-/// The icon's own hexagon, drawn small: six nodes on a ring, the spokes to the
-/// middle and the core, so the menu reads as the same product as the tray.
-unsafe fn draw_mark(g: &Gdi, cx: f32, cy: f32, r: f32, s: f32) {
-    unsafe {
-        let node = 2.3 * s;
-        let pts: Vec<(f32, f32)> = (0..6)
-            .map(|i| {
-                let a = (-90.0f32 + 60.0 * i as f32).to_radians();
-                (cx + r * a.cos(), cy + r * a.sin())
-            })
-            .collect();
-
-        let pen = CreatePen(
-            PS_SOLID,
-            (1.6 * s).round().max(1.0) as i32,
-            colorref(C_BRAND),
-        );
-        let old_pen = SelectObject(g.hdc, pen as HGDIOBJ);
-        let old_brush = SelectObject(g.hdc, GetStockObject(NULL_BRUSH));
-        for (x, y) in &pts {
-            MoveToEx(
-                g.hdc,
-                cx.round() as i32,
-                cy.round() as i32,
-                std::ptr::null_mut(),
-            );
-            LineTo(g.hdc, x.round() as i32, y.round() as i32);
-        }
-        let mut poly: Vec<POINT> = pts
-            .iter()
-            .map(|(x, y)| POINT {
-                x: x.round() as i32,
-                y: y.round() as i32,
-            })
-            .collect();
-        Polygon(g.hdc, poly.as_mut_ptr(), poly.len() as i32);
-        SelectObject(g.hdc, old_brush);
-        SelectObject(g.hdc, old_pen);
-        DeleteObject(pen as HGDIOBJ);
-
-        // nodes: a white disc inside a brand ring, their inner edge on the
-        // rim so the rim is not lost at this size
-        let white = CreateSolidBrush(colorref((0xff, 0xff, 0xff)));
-        let ring = CreatePen(
-            PS_SOLID,
-            (1.2 * s).round().max(1.0) as i32,
-            colorref(C_BRAND),
-        );
-        let old_brush = SelectObject(g.hdc, white as HGDIOBJ);
-        let old_pen = SelectObject(g.hdc, ring as HGDIOBJ);
-        for (x, y) in &pts {
-            Ellipse(
-                g.hdc,
-                (x - node).round() as i32,
-                (y - node).round() as i32,
-                (x + node).round() as i32,
-                (y + node).round() as i32,
-            );
-        }
-        // the core
-        let core = 2.7 * s;
-        let core_brush = CreateSolidBrush(colorref(C_BRAND));
-        let core_pen = CreatePen(PS_SOLID, 0, colorref(C_BRAND));
-        SelectObject(g.hdc, core_brush as HGDIOBJ);
-        SelectObject(g.hdc, core_pen as HGDIOBJ);
-        Ellipse(
-            g.hdc,
-            (cx - core).round() as i32,
-            (cy - core).round() as i32,
-            (cx + core).round() as i32,
-            (cy + core).round() as i32,
-        );
-        SelectObject(g.hdc, old_pen);
-        SelectObject(g.hdc, old_brush);
-        DeleteObject(core_pen as HGDIOBJ);
-        DeleteObject(core_brush as HGDIOBJ);
-        DeleteObject(ring as HGDIOBJ);
-        DeleteObject(white as HGDIOBJ);
-    }
 }
 
 #[cfg(test)]

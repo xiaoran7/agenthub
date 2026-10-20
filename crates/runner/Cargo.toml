@@ -29,6 +29,7 @@ ureq.workspace = true
 url.workspace = true
 uuid.workspace = true
 tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+zstd = "0.14.3"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

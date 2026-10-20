@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   ApiError,
@@ -568,7 +568,34 @@ export function SettingsPage({
     return () => {
       cancelled = true;
     };
-  }, [config]);
+  }, [config, activeSection]);
+
+  const knownDeviceIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (devices) {
+      for (const d of devices) {
+        knownDeviceIdsRef.current.add(d.device_id);
+      }
+    }
+  }, [devices]);
+
+  useEffect(() => {
+    if (!binding) return;
+    const interval = setInterval(() => {
+      void fetchDevices(config)
+        .then((next) => {
+          setDevices(next);
+          const hasNew = next.some(
+            (d) => !knownDeviceIdsRef.current.has(d.device_id),
+          );
+          if (hasNew) {
+            setBinding(undefined);
+          }
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [binding, config]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1341,6 +1368,11 @@ export function SettingsPage({
               )}
               {devices === undefined && (
                 <p className="settings-hint">正在读取已绑定设备…</p>
+              )}
+              {devices !== undefined && devices.length === 0 && (
+                <p className="settings-hint">
+                  暂无已绑定设备。请点击上方按钮生成绑定码，并在客户端中完成配对。
+                </p>
               )}
               {devices !== undefined && devices.length > 0 && (
                 <div className="device-management">

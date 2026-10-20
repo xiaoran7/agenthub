@@ -20,7 +20,7 @@ fn main() {
                 items: vec![
                     agenthub_runner::tray_menu::Item {
                         id: 1,
-                        label: "打开协同控制台",
+                        label: "显示协同控制台",
                         danger: false,
                         separator_before: false,
                     },

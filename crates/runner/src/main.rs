@@ -524,12 +524,13 @@ fn main() -> Result<()> {
             let identity = runtime_identity
                 .ok_or_else(|| anyhow::anyhow!("daemon_requires_device_identity"))?;
             let db = db.unwrap_or_else(resolve_default_db_path);
+            let server = resolve_bound_gateway_server();
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
                 database: db,
                 identity,
-                server: None,
+                server,
                 ipc_endpoint,
                 enable_web: web,
                 web_port: Some(web_port),
@@ -549,12 +550,13 @@ fn main() -> Result<()> {
             }
             let db = db.unwrap_or_else(resolve_default_db_path);
             let identity = runtime_identity.unwrap_or_else(resolve_or_create_default_identity);
+            let server = resolve_bound_gateway_server();
             agenthub_runner::daemon::run(agenthub_runner::daemon::DaemonConfig {
                 codex_binary,
                 workspaces: workspace,
                 database: db,
                 identity,
-                server: None,
+                server,
                 ipc_endpoint: None,
                 enable_web: true,
                 web_port: Some(port),
@@ -1280,6 +1282,31 @@ fn normalize(
         }
         Ok(observations)
     })
+}
+
+fn resolve_bound_gateway_server() -> Option<String> {
+    let home_dir = env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    let binding_path = home_dir.join(".agenthub").join("binding.json");
+    if !binding_path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&binding_path).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let registered = val
+        .get("registered")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !registered {
+        return None;
+    }
+    let gateway = val.get("gateway").and_then(|v| v.as_str())?.trim();
+    if gateway.is_empty() {
+        None
+    } else {
+        Some(gateway.to_string())
+    }
 }
 
 fn resolve_or_create_default_identity() -> DeviceIdentity {

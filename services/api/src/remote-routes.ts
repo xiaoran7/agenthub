@@ -236,6 +236,16 @@ export function registerRemoteRoutes(
 
   app.get("/v3/remote/sessions", async (request) => {
     const owner = await auth.authenticate(request);
+    const registeredDevices = await devices.listDevices(owner);
+    for (const reg of registeredDevices) {
+      if (!reg.revoked) {
+        try {
+          content.register(owner, reg.device_id);
+        } catch {
+          // Ignore runner_owner_conflict
+        }
+      }
+    }
     const runners = content.runners(owner);
     const allowed = new Set<string>();
     // One batched lookup: this runs on every console poll, so a per-runner
@@ -247,6 +257,17 @@ export function registerRemoteRoutes(
       const device = known.get(runner.runner_id);
       if (device?.owner_id === owner && !device.revoked_at)
         allowed.add(runner.runner_id);
+    }
+    // Include any active registered device that is not yet in content.runners
+    const runnerSet = new Set(runners.map((r) => r.runner_id));
+    for (const reg of registeredDevices) {
+      if (!reg.revoked && !runnerSet.has(reg.device_id)) {
+        runners.push({
+          runner_id: reg.device_id,
+          hello: null,
+        });
+        allowed.add(reg.device_id);
+      }
     }
     return {
       cursor: content.cursor(owner),

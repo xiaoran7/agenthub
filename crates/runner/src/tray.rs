@@ -222,7 +222,7 @@ mod windows_tray {
                                 items: vec![
                                     crate::tray_menu::Item {
                                         id: ID_TRAY_OPEN_DESKTOP,
-                                        label: "打开协同控制台",
+                                        label: "显示协同控制台",
                                         danger: false,
                                         separator_before: false,
                                     },
@@ -443,6 +443,38 @@ mod windows_tray {
         }
     }
 
+    /// Purges stale Chromium/Edge icon and favicon cache databases so that newly updated
+    /// transparent icons are immediately refreshed by the browser process and Windows taskbar,
+    /// preventing stale white-squircle favicon bitmaps from persisting.
+    fn clean_stale_icon_cache(profile_dir: &std::path::Path) {
+        let default_dir = profile_dir.join("Default");
+        let stale_files = [
+            "Favicons",
+            "Favicons-journal",
+            "HubApps Icons",
+            "HubApps Icons-journal",
+        ];
+        for name in &stale_files {
+            let p = default_dir.join(name);
+            if p.exists() {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+        for dir_name in &[
+            "JumpListIconsRecentClosed",
+            "JumpListIconsRecentWorkspacesV2",
+        ] {
+            let d = default_dir.join(dir_name);
+            if d.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(d) {
+                    for entry in entries.flatten() {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+    }
+
     pub fn open_desktop_window(url: &str) {
         use std::os::windows::process::CommandExt;
         use std::path::PathBuf;
@@ -468,6 +500,19 @@ mod windows_tray {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
             let profile_dir = home.join(".agenthub").join("app_profile");
+
+            // If an Edge window was already spawned, kill it first so file locks on Favicons
+            // are released and Edge doesn't silently delegate to an existing instance with the old icon.
+            if let Some(state) = TRAY_STATE.get() {
+                if let Ok(mut lock) = state.active_child.lock() {
+                    if let Some(mut old) = lock.take() {
+                        let _ = old.kill();
+                    }
+                }
+            }
+
+            // Clear stale Chromium/Edge favicon and icon caches before spawning
+            clean_stale_icon_cache(&profile_dir);
 
             let (pos_x, pos_y, win_w, win_h) = remember_window_rect(&home.join(".agenthub"));
             let prefs = profile_dir.join("Default").join("Preferences");
@@ -510,9 +555,6 @@ mod windows_tray {
                 }
                 if let Some(state) = TRAY_STATE.get() {
                     if let Ok(mut lock) = state.active_child.lock() {
-                        if let Some(mut old) = lock.take() {
-                            let _ = old.kill();
-                        }
                         *lock = Some(child);
                     }
                 }
