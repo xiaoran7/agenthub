@@ -862,7 +862,8 @@ export function SettingsPage({
         </nav>
 
         <form
-          className="settings-page-content"
+          key={activeEntry.key}
+          className="settings-page-content settings-section-fade"
           aria-label="设置内容"
           onSubmit={handleSubmit}
         >
@@ -919,6 +920,8 @@ export function SettingsPage({
                     <button
                       key={item.mode}
                       type="button"
+                      className="settings-theme-card"
+                      data-selected={isSelected}
                       onClick={() => {
                         setTheme(item.mode);
                         setCurrentTheme(item.mode);

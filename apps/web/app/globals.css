@@ -3430,6 +3430,48 @@ select {
   inset: 0;
   z-index: 40;
   overflow: hidden;
+  animation: settings-page-enter 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes settings-page-enter {
+  0% {
+    opacity: 0;
+    transform: scale(0.985) translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes settings-section-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.settings-section-fade {
+  animation: settings-section-fade 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity, transform;
+}
+
+/* Theme selector card micro-interactions */
+.settings-theme-card {
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.settings-theme-card:hover:not([data-selected="true"]) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+
+.settings-theme-card:active {
+  transform: scale(0.985);
 }
 
 .settings-page-header {

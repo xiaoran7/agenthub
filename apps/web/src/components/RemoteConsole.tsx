@@ -2251,7 +2251,7 @@ export function RemoteConsole({
             </div>
           )}
         {!selected ? (
-          <div className="remote-welcome">
+          <div key="welcome" className="remote-welcome remote-view-enter">
             <span className="remote-eyebrow">YOUR WORK IN FLOW</span>
             <h2>{loading ? "正在连接…" : "打开一个会话，继续刚才的工作。"}</h2>
             <p>
@@ -2297,7 +2297,7 @@ export function RemoteConsole({
             </div>
           </div>
         ) : (
-          <>
+          <div key={selected} className="remote-session-view remote-view-enter">
             {!session && <p className="remote-muted">正在等待电脑确认会话…</p>}
             {session && !connected && (
               <div className="remote-notice restoring">
@@ -3124,7 +3124,7 @@ export function RemoteConsole({
                 </div>
               </div>
             </form>
-          </>
+          </div>
         )}
       </main>
       <dialog ref={dialog} className="remote-launch">
