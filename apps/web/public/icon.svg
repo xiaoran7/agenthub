@@ -1,32 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
-    <!-- Top Face (Looking down at cube): Luminous electric cyan -->
+    <!-- Top Face: Electric cyan -->
     <linearGradient id="cubeTop" x1="0%" y1="100%" x2="0%" y2="0%">
       <stop offset="0%" stop-color="#0284c7"/>
       <stop offset="50%" stop-color="#0ea5e9"/>
       <stop offset="100%" stop-color="#38bdf8"/>
     </linearGradient>
-    <!-- Left Face: Vibrant electric azure -->
+    <!-- Left Face: Vibrant azure -->
     <linearGradient id="cubeLeft" x1="100%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#0369a1"/>
       <stop offset="100%" stop-color="#0284c7"/>
     </linearGradient>
-    <!-- Right Face: Deep cyber sapphire -->
+    <!-- Right Face: Deep sapphire -->
     <linearGradient id="cubeRight" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#075985"/>
       <stop offset="100%" stop-color="#0369a1"/>
     </linearGradient>
-    <!-- Laser bevel edge -->
-    <linearGradient id="laserBevel" x1="0%" y1="0%" x2="100%" y2="100%">
+    <!-- Internal Laser Bevel: Brilliant white-cyan highlight -->
+    <linearGradient id="internalLaser" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="50%" stop-color="#bae6fd"/>
+      <stop offset="40%" stop-color="#e0f2fe"/>
       <stop offset="100%" stop-color="#7dd3fc"/>
     </linearGradient>
+    <!-- Node Gradient -->
     <radialGradient id="nodeGrad" cx="35%" cy="35%" r="65%">
       <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="45%" stop-color="#7dd3fc"/>
+      <stop offset="40%" stop-color="#7dd3fc"/>
       <stop offset="100%" stop-color="#0284c7"/>
     </radialGradient>
+    <!-- Core Hub Gradient -->
     <radialGradient id="coreGrad" cx="35%" cy="35%" r="65%">
       <stop offset="0%" stop-color="#ffffff"/>
       <stop offset="35%" stop-color="#38bdf8"/>
@@ -35,47 +37,46 @@
     </radialGradient>
   </defs>
 
-  <!-- 3 Solid Isometric Cube Faces:
-       Center is (256, 256).
-       Top Face: (256, 48), (436, 152), (256, 256), (76, 152)
-       Left Face: (76, 152), (256, 256), (256, 464), (76, 360)
-       Right Face: (436, 152), (256, 256), (256, 464), (436, 360)
-  -->
+  <!-- 3 Solid Isometric Faces (100% solid, zero opacity, zero mud!) -->
   <polygon points="256,256 76,152 256,48 436,152" fill="url(#cubeTop)"/>
   <polygon points="256,256 76,152 76,360 256,464" fill="url(#cubeLeft)"/>
   <polygon points="256,256 436,152 436,360 256,464" fill="url(#cubeRight)"/>
 
-  <!-- 6 Precision Laser Bevel Spokes + Perimeter -->
-  <g stroke="url(#laserBevel)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
-    <!-- 3 Internal dividing cube edges (Y shape: center to Top-Left, Top-Right, Bottom) -->
+  <!-- Outer Silhouette Crisp Border (Deep cyber azure stroke=8, zero white halo!) -->
+  <polygon points="256,48 436,152 436,360 256,464 76,360 76,152"
+           fill="none" stroke="#0369a1" stroke-width="8" stroke-linejoin="round"/>
+
+  <!-- 3 Internal Facet Dividing Lines (High-contrast neon laser highlights, stroke=14) -->
+  <g stroke="url(#internalLaser)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
     <line x1="256" y1="256" x2="76" y2="152"/>
     <line x1="256" y1="256" x2="436" y2="152"/>
     <line x1="256" y1="256" x2="256" y2="464"/>
-    <!-- 3 Sub-spokes across the faces (completing the 6-agent network topology) -->
-    <line x1="256" y1="256" x2="256" y2="48" stroke-width="10" stroke-dasharray="none"/>
-    <line x1="256" y1="256" x2="76" y2="360" stroke-width="10" stroke-dasharray="none"/>
-    <line x1="256" y1="256" x2="436" y2="360" stroke-width="10" stroke-dasharray="none"/>
-    <!-- Outer perimeter -->
-    <polygon points="256,48 436,152 436,360 256,464 76,360 76,152" fill="none" stroke-width="14"/>
   </g>
 
-  <!-- 6 Outer Agent Nodes -->
-  <circle cx="256" cy="48" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
-  <circle cx="436" cy="152" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
-  <circle cx="436" cy="360" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
-  <circle cx="256" cy="464" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
-  <circle cx="76" cy="360" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
-  <circle cx="76" cy="152" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
+  <!-- 3 Secondary Internal Network Lines (stroke=8) -->
+  <g stroke="#38bdf8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.8">
+    <line x1="256" y1="256" x2="256" y2="48"/>
+    <line x1="256" y1="256" x2="76" y2="360"/>
+    <line x1="256" y1="256" x2="436" y2="360"/>
+  </g>
 
-  <!-- High-precision Specular Glints -->
-  <circle cx="252" cy="44" r="8" fill="#ffffff"/>
-  <circle cx="432" cy="148" r="8" fill="#ffffff"/>
-  <circle cx="432" cy="356" r="8" fill="#ffffff"/>
-  <circle cx="252" cy="460" r="8" fill="#ffffff"/>
-  <circle cx="72" cy="356" r="8" fill="#ffffff"/>
-  <circle cx="72" cy="148" r="8" fill="#ffffff"/>
+  <!-- 6 Outer Agent Crystal Nodes (Crisp deep azure rim, no fuzzy white halo!) -->
+  <circle cx="256" cy="48" r="26" fill="url(#nodeGrad)" stroke="#0284c7" stroke-width="5"/>
+  <circle cx="436" cy="152" r="26" fill="url(#nodeGrad)" stroke="#0284c7" stroke-width="5"/>
+  <circle cx="436" cy="360" r="26" fill="url(#nodeGrad)" stroke="#0284c7" stroke-width="5"/>
+  <circle cx="256" cy="464" r="26" fill="url(#nodeGrad)" stroke="#0284c7" stroke-width="5"/>
+  <circle cx="76" cy="360" r="26" fill="url(#nodeGrad)" stroke="#0284c7" stroke-width="5"/>
+  <circle cx="76" cy="152" r="26" fill="url(#nodeGrad)" stroke="#0284c7" stroke-width="5"/>
+
+  <!-- Specular Glints on Nodes -->
+  <circle cx="252" cy="44" r="7" fill="#ffffff"/>
+  <circle cx="432" cy="148" r="7" fill="#ffffff"/>
+  <circle cx="432" cy="356" r="7" fill="#ffffff"/>
+  <circle cx="252" cy="460" r="7" fill="#ffffff"/>
+  <circle cx="72" cy="356" r="7" fill="#ffffff"/>
+  <circle cx="72" cy="148" r="7" fill="#ffffff"/>
 
   <!-- Radiant Central Hub Node -->
-  <circle cx="256" cy="256" r="52" fill="url(#coreGrad)" stroke="#ffffff" stroke-width="6"/>
+  <circle cx="256" cy="256" r="52" fill="url(#coreGrad)" stroke="#ffffff" stroke-width="5"/>
   <circle cx="245" cy="245" r="16" fill="#ffffff" opacity="0.95"/>
 </svg>
