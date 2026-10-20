@@ -1,92 +1,81 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
-    <!-- Top Face (lighter highlight) -->
-    <linearGradient id="hubFacetTop" x1="0%" y1="100%" x2="0%" y2="0%">
-      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.22"/>
-      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0.48"/>
+    <!-- Top Face (Looking down at cube): Luminous electric cyan -->
+    <linearGradient id="cubeTop" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0284c7"/>
+      <stop offset="50%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
     </linearGradient>
-    <!-- Left Face -->
-    <linearGradient id="hubFacetLeft" x1="100%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#0ea5e9" stop-opacity="0.18"/>
-      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.40"/>
-    </linearGradient>
-    <!-- Right Face -->
-    <linearGradient id="hubFacetRight" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0284c7" stop-opacity="0.20"/>
-      <stop offset="100%" stop-color="#0369a1" stop-opacity="0.45"/>
-    </linearGradient>
-
-    <!-- Electric Cyan-Azure Gradient for Spokes & Perimeter -->
-    <linearGradient id="hubSpokes" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#7dd3fc"/>
-      <stop offset="30%" stop-color="#38bdf8"/>
-      <stop offset="70%" stop-color="#0ea5e9"/>
+    <!-- Left Face: Vibrant electric azure -->
+    <linearGradient id="cubeLeft" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0369a1"/>
       <stop offset="100%" stop-color="#0284c7"/>
     </linearGradient>
-
-    <!-- Central Glowing Core Orb -->
-    <radialGradient id="hubCoreOrb" cx="36%" cy="36%" r="64%">
+    <!-- Right Face: Deep cyber sapphire -->
+    <linearGradient id="cubeRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#075985"/>
+      <stop offset="100%" stop-color="#0369a1"/>
+    </linearGradient>
+    <!-- Laser bevel edge -->
+    <linearGradient id="laserBevel" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="30%" stop-color="#38bdf8"/>
-      <stop offset="75%" stop-color="#0ea5e9"/>
+      <stop offset="50%" stop-color="#bae6fd"/>
+      <stop offset="100%" stop-color="#7dd3fc"/>
+    </linearGradient>
+    <radialGradient id="nodeGrad" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="45%" stop-color="#7dd3fc"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </radialGradient>
+    <radialGradient id="coreGrad" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="35%" stop-color="#38bdf8"/>
+      <stop offset="75%" stop-color="#0284c7"/>
       <stop offset="100%" stop-color="#0369a1"/>
     </radialGradient>
-
-    <!-- Subtle drop shadow for crisp boundary contrast on any wallpaper -->
-    <filter id="hubShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0284c7" flood-opacity="0.45"/>
-    </filter>
   </defs>
 
-  <g filter="url(#hubShadow)">
-    <!-- Holographic 3D Facets (Top, Left, Right) -->
-    <polygon points="256,256 256,32 450,144" fill="url(#hubFacetTop)"/>
-    <polygon points="256,256 256,32 62,144" fill="url(#hubFacetTop)"/>
-    <polygon points="256,256 62,144 62,368 256,480" fill="url(#hubFacetLeft)"/>
-    <polygon points="256,256 450,144 450,368 256,480" fill="url(#hubFacetRight)"/>
+  <!-- 3 Solid Isometric Cube Faces:
+       Center is (256, 256).
+       Top Face: (256, 48), (436, 152), (256, 256), (76, 152)
+       Left Face: (76, 152), (256, 256), (256, 464), (76, 360)
+       Right Face: (436, 152), (256, 256), (256, 464), (436, 360)
+  -->
+  <polygon points="256,256 76,152 256,48 436,152" fill="url(#cubeTop)"/>
+  <polygon points="256,256 76,152 76,360 256,464" fill="url(#cubeLeft)"/>
+  <polygon points="256,256 436,152 436,360 256,464" fill="url(#cubeRight)"/>
 
-    <!-- Subtle dark casing under strokes for contrast on bright/light screens -->
-    <g stroke="#0369a1" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity="0.65">
-      <line x1="256" y1="256" x2="256" y2="32" />
-      <line x1="256" y1="256" x2="450" y2="144" />
-      <line x1="256" y1="256" x2="450" y2="368" />
-      <line x1="256" y1="256" x2="256" y2="480" />
-      <line x1="256" y1="256" x2="62" y2="368" />
-      <line x1="256" y1="256" x2="62" y2="144" />
-      <polygon points="256,32 450,144 450,368 256,480 62,368 62,144" fill="none"/>
-    </g>
-
-    <!-- Glowing Electric Spokes & Hexagon Perimeter -->
-    <g stroke="url(#hubSpokes)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
-      <line x1="256" y1="256" x2="256" y2="32" />
-      <line x1="256" y1="256" x2="450" y2="144" />
-      <line x1="256" y1="256" x2="450" y2="368" />
-      <line x1="256" y1="256" x2="256" y2="480" />
-      <line x1="256" y1="256" x2="62" y2="368" />
-      <line x1="256" y1="256" x2="62" y2="144" />
-      <polygon points="256,32 450,144 450,368 256,480 62,368 62,144" fill="none"/>
-    </g>
-
-    <!-- 6 Outer Vertex Nodes (White body + Azure Rim + Cyan Center) -->
-    <g stroke="#0284c7" stroke-width="12" fill="#ffffff">
-      <circle cx="256" cy="32" r="30"/>
-      <circle cx="450" cy="144" r="30"/>
-      <circle cx="450" cy="368" r="30"/>
-      <circle cx="256" cy="480" r="30"/>
-      <circle cx="62" cy="368" r="30"/>
-      <circle cx="62" cy="144" r="30"/>
-    </g>
-    <g fill="#0284c7">
-      <circle cx="256" cy="32" r="12"/>
-      <circle cx="450" cy="144" r="12"/>
-      <circle cx="450" cy="368" r="12"/>
-      <circle cx="256" cy="480" r="12"/>
-      <circle cx="62" cy="368" r="12"/>
-      <circle cx="62" cy="144" r="12"/>
-    </g>
-
-    <!-- Central Glowing Core Orb with Specular Highlight -->
-    <circle cx="256" cy="256" r="56" fill="url(#hubCoreOrb)" stroke="#0369a1" stroke-width="8" />
-    <circle cx="246" cy="246" r="16" fill="#ffffff" />
+  <!-- 6 Precision Laser Bevel Spokes + Perimeter -->
+  <g stroke="url(#laserBevel)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 3 Internal dividing cube edges (Y shape: center to Top-Left, Top-Right, Bottom) -->
+    <line x1="256" y1="256" x2="76" y2="152"/>
+    <line x1="256" y1="256" x2="436" y2="152"/>
+    <line x1="256" y1="256" x2="256" y2="464"/>
+    <!-- 3 Sub-spokes across the faces (completing the 6-agent network topology) -->
+    <line x1="256" y1="256" x2="256" y2="48" stroke-width="10" stroke-dasharray="none"/>
+    <line x1="256" y1="256" x2="76" y2="360" stroke-width="10" stroke-dasharray="none"/>
+    <line x1="256" y1="256" x2="436" y2="360" stroke-width="10" stroke-dasharray="none"/>
+    <!-- Outer perimeter -->
+    <polygon points="256,48 436,152 436,360 256,464 76,360 76,152" fill="none" stroke-width="14"/>
   </g>
+
+  <!-- 6 Outer Agent Nodes -->
+  <circle cx="256" cy="48" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
+  <circle cx="436" cy="152" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
+  <circle cx="436" cy="360" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
+  <circle cx="256" cy="464" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
+  <circle cx="76" cy="360" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
+  <circle cx="76" cy="152" r="26" fill="url(#nodeGrad)" stroke="#ffffff" stroke-width="5"/>
+
+  <!-- High-precision Specular Glints -->
+  <circle cx="252" cy="44" r="8" fill="#ffffff"/>
+  <circle cx="432" cy="148" r="8" fill="#ffffff"/>
+  <circle cx="432" cy="356" r="8" fill="#ffffff"/>
+  <circle cx="252" cy="460" r="8" fill="#ffffff"/>
+  <circle cx="72" cy="356" r="8" fill="#ffffff"/>
+  <circle cx="72" cy="148" r="8" fill="#ffffff"/>
+
+  <!-- Radiant Central Hub Node -->
+  <circle cx="256" cy="256" r="52" fill="url(#coreGrad)" stroke="#ffffff" stroke-width="6"/>
+  <circle cx="245" cy="245" r="16" fill="#ffffff" opacity="0.95"/>
 </svg>

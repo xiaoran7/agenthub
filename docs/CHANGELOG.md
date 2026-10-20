@@ -23,15 +23,22 @@
 
 - **托盘菜单改为紧凑的条目列表，右键不再转圈（`crates/runner/src/tray_menu.rs` / `tray.rs`）**：
   - **根因（光标）**：弹窗窗口类注册时 `hCursor` 为 0，Windows 于是沿用线程当前光标；托盘线程刚处理完右键，带的还是"忙碌"光标，所以菜单一出现指针就转。现注册 `IDC_ARROW` 并在 `WM_SETCURSOR` 里无条件 `SetCursor`，指针一进菜单即恢复箭头；
-  - **版式**：卡宽 292→248、行高 43→36、圆角 17→10、投影留白 16→10，默认 100% DPI 下整窗 268×198（原为 324×266）；头部由"品牌标+标题+状态两行"压成单行 `● AgentHub（就绪） … v2.5.3`，去掉自绘六边形标记；条目字号 16→14px、行内左边距 45→14；
+  - **版式**：卡宽 292→248、行高 43→36、圆角 17→10、投影留白 16→10，100% DPI 下条目区卡面 248×250、整窗 268×270（原为 292×320 / 324×352）；头部由"品牌标+标题+状态两行"压成单行 `● AgentHub（就绪） … v2.5.3`，去掉自绘六边形标记；条目字号 16→14px、标题 15.5→13.5px、行内左边距 45→14；
   - **悬停**：高亮条此前按窗口坐标定位，左侧贴着边框、右侧短 16px；改为按卡片内缩 5px 对齐，圆角 7px，进出两行仍只重绘各自行带；
   - 首项文案与托盘一致改为"显示协同控制台"。
 
-- **全平台图标高清化与纯透明背景重构（`crates/runner` / `apps/web`）**：
-  - **根因分析**：Windows 任务栏与托盘图标此前因包含不透明白色圆角方框（`<rect fill="url(#hubBg)">`）及中央弥散环境光斑，导致在深色任务栏或暗色壁纸下呈现毛刺未抗锯齿的白色方底和发虚蓝线，且六边形原半径 R=205 边距留白过大，在 16x16 / 24x24 / 32x32 等小尺寸光栅化时细节被二次插值模糊；
-  - **矢量资产透明高清重构（`icon.svg`）**：彻底移除不透明白色背板与环境光斑，实现 100% 纯透明背景；核心六边形半径扩展至 R=224 最大化视表面积；引入微光 3D 全息切面（顶部微亮高光 + 两侧透亮切面）赋予立体悬浮质感；轮廓与辐条采用 `#0369a1` 深色底包边（宽度 28px）叠加 `#7dd3fc`→`#38bdf8`→`#0ea5e9` 渐变荧光轮廓（宽度 20px），在纯黑、深灰及纯白背景下均保持锐利对比度；6 个外围节点采用双层环点结构，中央核心球体加入 3D 高光偏置点；
-  - **Windows 规范多尺寸 ICO 生成（`icon.ico`）**：通过 `sharp` 矢量直出光栅化与规范打包，生成完整覆盖 Windows 原生规范的 9 个分辨率帧（16x16、20x20、24x24、32x32、40x40、48x48、64x64、128x128 采用 32bpp BGRA DIB 带 Alpha 通道，256x256 采用压缩 PNG），确保在 100%、125%、150%、200% 等各种 DPI 的任务栏、通知区托盘与文件资源管理器中均为点对点清晰呈现；
-  - **全平台产物同步**：同步更新 `crates/runner/resources/` 与 `apps/web/public/` 下的 `icon.svg`、`icon.ico`、`icon.png`、`icon-192.png`、`icon-512.png` 及 `brand-icon.png`；重新编译嵌入 Windows 二进制资源，并更新发布归档。
+- **全平台图标高清化与立体科技棱镜重构（`crates/runner` / `apps/web`）**：
+  - **根因分析与视觉诊断**：
+    1. **半透明色块在浅色壁纸发灰发脏**：此前为消除白色方框，在六边形内部引入了低不透明度渐变（`stop-opacity="0.18"` ~ `0.45"`），在深色背景下表现为幽蓝微光，但在用户浅色/杂色桌面壁纸下发生色彩混合，劣化为灰暗浑浊的三角形泥灰杂块；
+    2. **SVG 高斯模糊滤镜导致低分辨率虚焦**：旧版使用了 `<filter id="hubShadow">`（`feDropShadow`），大图虽有柔光，但在缩放到桌面（32px/48px）或任务栏（24px/48px）时，高斯模糊直接退化为脏灰色的毛刺边缘，破坏了矢量线条的刀削锐利感；
+    3. **顶点节点比例失衡**：旧版 6 个外围节点采用外层白环、内层蓝心的双层圆环（外径 30px、线宽 12px），在小分辨率下呈现为厚重的“救生圈/甜甜圈”样式，视觉比例笨重；
+    4. **Chromium 独立窗口缓存锁定**：Edge `--app` 模式将首个有效 favicon 写入 `~/.agenthub/app_profile/Default/Favicons` SQLite 并受持久化缓存头锁定，导致更新无法即时透传。
+  - **立体科技棱镜与纯净矢量重构（`icon.svg`）**：
+    - **纯正青蓝宝石三维切面**：顶面采用电光青渐变（`#0284c7`→`#0ea5e9`→`#38bdf8`）、左面鲜艳电光蓝（`#0369a1`→`#0284c7`）、右面深邃深空蓝（`#075985`→`#0369a1`），100% 实体纯色渐变，彻底剔除半透明遮罩与任何模糊滤镜，浅色/深色背景下均具备极致对比度与通透感；
+    - **6 节点立体协同网络**：保留 AgentHub 核心语义（中央协调 Hub 连接 6 个外围 Agent 节点），在三维棱镜切面上融入内部对角分界与次轴激光亮线（`#ffffff`→`#bae6fd`→`#7dd3fc`）；
+    - **高光微球晶体节点**：外围 6 节点改用带纯白偏置高光点的微晶球核（`r=26`、高光 `r=8`），中央 Hub 球核带电光渐变与高光反射弧，比例协调科技感拉满；六边形外部 100% 纯透明，告别一切方框与脏色。
+  - **Windows 规范多尺寸 ICO 直出（`icon.ico`）**：通过 `sharp` 独立光栅化生成 16x16、20x20、24x24、32x32、40x40、48x48、64x64、128x128（32bpp BGRA DIB）以及 256x256（PNG 压缩）全套 9 个原生帧；
+  - **启动层缓存主动淘汰与全链路更新**：`tray.rs` 启动 Edge 前主动清理 `Default/Favicons*` 与 `HubApps Icons*`，`web_server.rs` 注入 `no-cache, must-revalidate` 头与版本校验后缀；全量同步更新 `crates/runner/resources/` 与 `apps/web/public/` 的 SVG、ICO 与 PNG 资产，重新打包 `agenthub-runner.exe` 与 Windows 发行归档。
 
 - **代码审查全量修复（删除、鉴权、缓存与重绘）**：
   - **会话删除不会再半途而废（`collectors/mod.rs`）**：`file-history/<id>`、`session-env/<id>` 与会话目录 `<id>` 同名，原先统一平移到 `trash/<basename>`，第二次 `rename` 撞上已存在的目录（os error 145），跨卷回退又对目录调用 `remove_file`（os error 5），结果是转录已挪走、接口却报失败。现由 `trash_target()` 在重名时带上来源目录名（`file-history-<id>`、`session-env-<id>`），`move_into()` 按类型复制/删除并在删除失败时撤回副本；移动循环抽成 `move_all_into()`，任一项失败即把已移动的项按逆序移回原位，并在错误里说明"已移动 N 个文件后，某文件失败，已全部放回"。新增 `deleting_a_session_that_has_two_folders_named_after_it` 与 `a_delete_that_fails_part_way_puts_the_session_back` 两个测试；
@@ -65,7 +72,7 @@
   - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
 - **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
 - **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
-- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,159,001 字节，含 12,765,696 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`f19259d2…8824`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 277 项全绿（217 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 通过（`cargo fmt --all --check` 另有两处提示来自本会话之外的 `web_server.rs` 在途改动，未代为改写）；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
+- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,159,001 字节，含 12,765,696 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`f19259d2…8824`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 277 项全绿（217 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
 
 ## [2.5.3] - 2026-10-20
 
