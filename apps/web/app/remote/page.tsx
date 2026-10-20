@@ -1,8 +1,5 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
 import { useCallback, useState } from "react";
 import { RemoteConsole } from "../../src/components/RemoteConsole";
 import { AccountGate } from "../../src/components/AccountGate";
