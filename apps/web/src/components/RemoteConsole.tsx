@@ -1633,62 +1633,18 @@ export function RemoteConsole({
           )}
         </div>
 
-        {selectedSessionPath && selectedSessionPath.length > 0 && (
-          <nav className="remote-breadcrumb" aria-label="会话位置">
-            <button
-              type="button"
-              className="remote-breadcrumb-root"
-              onClick={() => {
-                setSelected("");
-                if (isMobile) setMobileDrawerOpen(false);
-              }}
-            >
-              全部会话
-            </button>
-            {selectedSessionPath.map((crumb, index) => {
-              const isLast = index === selectedSessionPath.length - 1;
-              return (
-                <span className="remote-breadcrumb-item" key={crumb.key}>
-                  <span className="remote-breadcrumb-sep" aria-hidden="true">
-                    /
-                  </span>
-                  <button
-                    type="button"
-                    className="remote-breadcrumb-crumb"
-                    data-current={isLast}
-                    onClick={() => {
-                      if (isLast) return;
-                      if (isMobile) setMobileDrawerOpen(false);
-                      if (crumb.sessionKey !== undefined) {
-                        setSelected(crumb.sessionKey);
-                      } else {
-                        // Backing out to a folder: collapse everything below it
-                        // so the tree returns to that level instead of leaving
-                        // a deeper level open with nothing highlighted.
-                        setCollapsedDevices((prev) => ({
-                          ...prev,
-                          [crumb.key]: true,
-                        }));
-                        setSelected("");
-                      }
-                    }}
-                  >
-                    {crumb.label}
-                  </button>
-                </span>
-              );
-            })}
-          </nav>
-        )}
-
         {availableProviders.size > 1 && (
-          <div className="remote-filter-pill-row">
+          <div
+            className="remote-filter-pill-row"
+            role="tablist"
+            aria-label="按 Agent 过滤"
+          >
             <button
               type="button"
               className={`remote-filter-pill ${providerFilter === "all" ? "active" : ""}`}
               onClick={() => setProviderFilter("all")}
             >
-              全部
+              全部 Agent
             </button>
             {[...availableProviders].map(([kind, label]) => (
               <button
