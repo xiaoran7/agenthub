@@ -26,6 +26,8 @@ pub struct DaemonConfig {
     pub enable_web: bool,
     pub web_port: Option<u16>,
     pub open_browser: bool,
+    /// Human-readable name for this computer, shown in the console.
+    pub device_name: String,
 }
 
 #[derive(Clone)]
@@ -169,6 +171,7 @@ pub fn run(config: DaemonConfig) -> Result<()> {
         config.server,
         control.clone(),
         Some(channel),
+        &config.device_name,
     );
     control.stopped.store(true, Ordering::Relaxed);
     ipc_stopped.store(true, Ordering::Relaxed);

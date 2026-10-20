@@ -13,19 +13,85 @@
   "categories": ["productivity", "utilities"],
   "icons": [
     {
-      "src": "/icon-192.png?v=2.5.3",
+      "src": "/icon-28.png?v=2.5.7",
+      "sizes": "28x28",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-30.png?v=2.5.7",
+      "sizes": "30x30",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-36.png?v=2.5.7",
+      "sizes": "36x36",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-42.png?v=2.5.7",
+      "sizes": "42x42",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-48.png?v=2.5.7",
+      "sizes": "48x48",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-56.png?v=2.5.7",
+      "sizes": "56x56",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-64.png?v=2.5.7",
+      "sizes": "64x64",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-72.png?v=2.5.7",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-96.png?v=2.5.7",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-128.png?v=2.5.7",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png?v=2.5.7",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png?v=2.5.3",
+      "src": "/icon-256.png?v=2.5.7",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png?v=2.5.7",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.svg?v=2.5.3",
+      "src": "/icon.svg?v=2.5.7",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

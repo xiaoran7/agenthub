@@ -10,6 +10,7 @@ pub mod daemon;
 pub mod daemon_ipc;
 pub mod daemon_protocol;
 pub mod device;
+pub mod device_name;
 pub mod domain;
 pub mod gateway;
 pub mod model_catalog;
@@ -27,3 +28,5 @@ pub mod tray;
 pub mod tray_menu;
 pub mod usage_ledger;
 pub mod web_server;
+#[cfg(target_os = "windows")]
+pub mod window_icon;

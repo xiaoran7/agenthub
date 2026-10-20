@@ -135,14 +135,16 @@ export function cleanPath(path: string): string {
 }
 
 /**
- * Present a device with a friendly name. Known local machines get a stable
- * label; otherwise fall back to whatever the Host advertised, then to a short
- * id so the row is never blank.
+ * Present a device with a friendly name.
+ *
+ * The device id is a key, not a label: it stays in the backend and out of
+ * the tree. The name the Runner advertises is what the console shows. Only a
+ * Runner that has not advertised a name yet falls back to the id, and then
+ * only its last few characters, so two such machines stay tellable apart.
  */
 export function getDeviceLabel(
   runnerId: string,
   hello?: {
-    hostname?: unknown;
     device_name?: unknown;
   } | null,
 ): string {
@@ -153,14 +155,6 @@ export function getDeviceLabel(
     hello.device_name.trim() !== ""
   ) {
     return hello.device_name.trim();
-  }
-  if (
-    hello !== null &&
-    hello !== undefined &&
-    typeof hello.hostname === "string" &&
-    hello.hostname.trim() !== ""
-  ) {
-    return hello.hostname.trim();
   }
   return `电脑 · ${runnerId.slice(-6)}`;
 }

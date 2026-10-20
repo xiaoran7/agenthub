@@ -203,40 +203,51 @@ fn handle_connection(
         return Ok(());
     }
 
-    if path == "/icon.png" {
+    if path == "/icon.png" || path == "/icon-256.png" {
         send_response(
             &mut stream,
             200,
             "OK",
             "image/png",
-            ICON_PNG,
+            ICON_256_PNG,
             Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
     }
 
-    if path == "/icon-192.png" {
-        send_response(
-            &mut stream,
-            200,
-            "OK",
-            "image/png",
-            ICON_192_PNG,
-            Some("no-cache, must-revalidate"),
-        )?;
-        return Ok(());
-    }
-
-    if path == "/icon-512.png" {
-        send_response(
-            &mut stream,
-            200,
-            "OK",
-            "image/png",
-            ICON_512_PNG,
-            Some("no-cache, must-revalidate"),
-        )?;
-        return Ok(());
+    // Every physical size Windows/Chromium may ask for, served as a native
+    // PNG so the high-DPI taskbar never has to up- or down-sample a frame.
+    // 28 and 56 are the exact 175%-DPI metrics (SM_CXSMICON / SM_CXICON).
+    for (name, bytes) in [
+        ("/icon-16.png", ICON_16_PNG),
+        ("/icon-20.png", ICON_20_PNG),
+        ("/icon-24.png", ICON_24_PNG),
+        ("/icon-28.png", ICON_28_PNG),
+        ("/icon-30.png", ICON_30_PNG),
+        ("/icon-32.png", ICON_32_PNG),
+        ("/icon-36.png", ICON_36_PNG),
+        ("/icon-40.png", ICON_40_PNG),
+        ("/icon-42.png", ICON_42_PNG),
+        ("/icon-48.png", ICON_48_PNG),
+        ("/icon-56.png", ICON_56_PNG),
+        ("/icon-64.png", ICON_64_PNG),
+        ("/icon-72.png", ICON_72_PNG),
+        ("/icon-96.png", ICON_96_PNG),
+        ("/icon-128.png", ICON_128_PNG),
+        ("/icon-192.png", ICON_192_PNG),
+        ("/icon-512.png", ICON_512_PNG),
+    ] {
+        if path == name {
+            send_response(
+                &mut stream,
+                200,
+                "OK",
+                "image/png",
+                bytes,
+                Some("no-cache, must-revalidate"),
+            )?;
+            return Ok(());
+        }
     }
 
     if path == "/manifest.json" {
@@ -270,7 +281,7 @@ fn handle_connection(
         // may outlive the file it came from
         let cache = match query.get("v") {
             _ if dev_assets() => "no-store",
-            Some(v) if v == ASSETS_VERSION => "public, max-age=31536000, immutable",
+            Some(v) if v == ASSETS_VERSION => "no-cache, must-revalidate",
             _ => "no-cache",
         };
         let sheet = asset_text(DASHBOARD_CSS, "dashboard.css");
@@ -292,7 +303,7 @@ fn handle_connection(
         // may outlive the file it came from
         let cache = match query.get("v") {
             _ if dev_assets() => "no-store",
-            Some(v) if v == ASSETS_VERSION => "public, max-age=31536000, immutable",
+            Some(v) if v == ASSETS_VERSION => "no-cache, must-revalidate",
             _ => "no-cache",
         };
         let script = asset_text(DASHBOARD_JS, "dashboard.js");
@@ -782,7 +793,17 @@ fn build_dashboard_summary(
 ) -> serde_json::Value {
     if let Ok(guard) = dashboard_summary_cache().read() {
         if let Some((cached_at, ref val)) = *guard {
-            if cached_at.elapsed() < Duration::from_secs(12) {
+            let has_sessions = val
+                .get("sessions")
+                .and_then(serde_json::Value::as_array)
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
+            let ttl = if has_sessions {
+                Duration::from_secs(4)
+            } else {
+                Duration::from_millis(500)
+            };
+            if cached_at.elapsed() < ttl {
                 let mut v = val.clone();
                 v["port"] = json!(port);
                 return v;
@@ -791,6 +812,14 @@ fn build_dashboard_summary(
     }
 
     let discover_res = handler.handle(DaemonRequest::Discover);
+    let is_ready = matches!(
+        discover_res,
+        crate::daemon_protocol::DaemonResponse::Discovery(_)
+    );
+    let is_starting = matches!(
+        &discover_res,
+        crate::daemon_protocol::DaemonResponse::Error { code } if code == "daemon_starting"
+    );
     let models_res = handler.handle(DaemonRequest::GetModels);
     let status_res = handler.handle(DaemonRequest::GetStatus);
 
@@ -1270,6 +1299,8 @@ fn build_dashboard_summary(
     let capabilities = crate::collectors::capabilities::discover_capabilities(None);
 
     let summary = json!({
+        "ready": is_ready,
+        "status": if is_starting { "starting" } else if is_ready { "ready" } else { "idle" },
         "device_id": "local-dev",
         "port": port,
         "stats": {
@@ -1313,6 +1344,8 @@ fn build_dashboard_summary(
                     if !prev_sessions.is_empty() {
                         let mut v = prev_val.clone();
                         v["port"] = json!(port);
+                        v["ready"] = json!(is_ready);
+                        v["status"] = json!(if is_starting { "starting" } else { "ready" });
                         return v;
                     }
                 }
@@ -1320,8 +1353,28 @@ fn build_dashboard_summary(
         }
     }
 
-    if let Ok(mut guard) = dashboard_summary_cache().write() {
-        *guard = Some((Instant::now(), summary.clone()));
+    if is_ready && total_sessions > 0 {
+        if let Ok(mut guard) = dashboard_summary_cache().write() {
+            *guard = Some((Instant::now(), summary.clone()));
+        }
+    } else if is_ready && total_sessions == 0 {
+        let prev_had_sessions = dashboard_summary_cache()
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.as_ref().map(|(_, v)| {
+                    v.get("sessions")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if !prev_had_sessions {
+            if let Ok(mut guard) = dashboard_summary_cache().write() {
+                *guard = Some((Instant::now(), summary.clone()));
+            }
+        }
     }
     summary
 }
@@ -1554,11 +1607,26 @@ fn send_response(
     Ok(())
 }
 
-/// 嵌入式自包含静态图标资源（包含全尺寸 ICO 与高清晰度 PNG 簇）
+/// 嵌入式自包含静态图标资源（包含全尺寸 ICO 与高清晰度多分辨率 PNG 簇）
 const FAVICON_ICO: &[u8] = include_bytes!("../resources/icon.ico");
 const ICON_SVG: &str = include_str!("../resources/icon.svg");
-const ICON_PNG: &[u8] = include_bytes!("../resources/icon.png");
+const ICON_16_PNG: &[u8] = include_bytes!("../resources/icon-16.png");
+const ICON_20_PNG: &[u8] = include_bytes!("../resources/icon-20.png");
+const ICON_24_PNG: &[u8] = include_bytes!("../resources/icon-24.png");
+const ICON_28_PNG: &[u8] = include_bytes!("../resources/icon-28.png");
+const ICON_30_PNG: &[u8] = include_bytes!("../resources/icon-30.png");
+const ICON_32_PNG: &[u8] = include_bytes!("../resources/icon-32.png");
+const ICON_36_PNG: &[u8] = include_bytes!("../resources/icon-36.png");
+const ICON_40_PNG: &[u8] = include_bytes!("../resources/icon-40.png");
+const ICON_42_PNG: &[u8] = include_bytes!("../resources/icon-42.png");
+const ICON_48_PNG: &[u8] = include_bytes!("../resources/icon-48.png");
+const ICON_56_PNG: &[u8] = include_bytes!("../resources/icon-56.png");
+const ICON_64_PNG: &[u8] = include_bytes!("../resources/icon-64.png");
+const ICON_72_PNG: &[u8] = include_bytes!("../resources/icon-72.png");
+const ICON_96_PNG: &[u8] = include_bytes!("../resources/icon-96.png");
+const ICON_128_PNG: &[u8] = include_bytes!("../resources/icon-128.png");
 const ICON_192_PNG: &[u8] = include_bytes!("../resources/icon-192.png");
+const ICON_256_PNG: &[u8] = include_bytes!("../resources/icon-256.png");
 const ICON_512_PNG: &[u8] = include_bytes!("../resources/icon-512.png");
 
 /// 嵌入式自包含 CDS (Claude Design System) 单页前端
@@ -1631,7 +1699,7 @@ fn assets_stamp() -> String {
 
 /// Bumped with every release; the page links the sheet and script under this
 /// name.
-const ASSETS_VERSION: &str = env!("CARGO_PKG_VERSION");
+const ASSETS_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), ".1");
 
 /// The console's layout tokens, one place for both sides of the wire: the page
 /// keeps the same numbers as its fallback, and the daemon stamps this object in
@@ -1709,25 +1777,85 @@ const MANIFEST_JSON: &str = r##"{
   "theme_color": "#18181b",
   "icons": [
     {
-      "src": "/icon-192.png?v=2.5.3",
+      "src": "/icon-28.png?v=2.5.7",
+      "sizes": "28x28",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-30.png?v=2.5.7",
+      "sizes": "30x30",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-36.png?v=2.5.7",
+      "sizes": "36x36",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-42.png?v=2.5.7",
+      "sizes": "42x42",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-48.png?v=2.5.7",
+      "sizes": "48x48",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-56.png?v=2.5.7",
+      "sizes": "56x56",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-72.png?v=2.5.7",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-96.png?v=2.5.7",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-128.png?v=2.5.7",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png?v=2.5.7",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png?v=2.5.3",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon.png?v=2.5.3",
+      "src": "/icon-256.png?v=2.5.7",
       "sizes": "256x256",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.svg?v=2.5.3",
+      "src": "/icon-512.png?v=2.5.7",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.png?v=2.5.7",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg?v=2.5.7",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

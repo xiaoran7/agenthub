@@ -1032,6 +1032,19 @@ fn is_assistant_output(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// One transcript's metadata, memoised on the file's size and last write.
+///
+/// A finished conversation's transcript never changes again, and the store
+/// holds gigabytes of them, so re-reading every file on each poll cost the
+/// Runner tens of seconds. A file still being written is read again each
+/// time, because its size changes with every appended line.
+fn transcript_metadata_cache()
+-> &'static RwLock<HashMap<PathBuf, (u64, i64, Option<ClaudeTranscriptEntry>)>> {
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (u64, i64, Option<ClaudeTranscriptEntry>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 fn read_claude_transcript_metadata(
     path: &Path,
     program: &str,
@@ -1049,6 +1062,38 @@ fn read_claude_transcript_metadata(
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .and_then(|duration| i64::try_from(duration.as_millis()).ok());
+    if let Ok(guard) = transcript_metadata_cache().read()
+        && let Some((cached_len, cached_modified, entry)) = guard.get(path)
+        && *cached_len == file_metadata.len()
+        && Some(*cached_modified) == last_activity_at_ms
+    {
+        return Ok(entry.clone());
+    }
+    let file_len = file_metadata.len();
+    let entry = read_claude_transcript_metadata_uncached(path, program, last_activity_at_ms)?;
+    if let Ok(mut guard) = transcript_metadata_cache().write() {
+        // The store keeps years of transcripts; the map holds one small record
+        // per file, never the transcript itself.
+        if guard.len() > 8_000 {
+            guard.clear();
+        }
+        guard.insert(
+            path.to_path_buf(),
+            (file_len, last_activity_at_ms.unwrap_or(0), entry.clone()),
+        );
+    }
+    Ok(entry)
+}
+
+fn read_claude_transcript_metadata_uncached(
+    path: &Path,
+    program: &str,
+    last_activity_at_ms: Option<i64>,
+) -> Result<Option<ClaudeTranscriptEntry>, CollectorError> {
+    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
     let mut reader = BufReader::new(file);
     let mut session_id = None;
     let mut cwd = None;
@@ -1512,11 +1557,23 @@ fn claude_remote_sessions_cache()
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
+/// How long a scanned Claude transcript store stays usable.
+///
+/// A full scan reads every transcript, so it costs tens of seconds on a large
+/// store. The window has to be long enough that the next caller reuses the
+/// result instead of paying for the same scan again.
+const CLAUDE_REMOTE_SESSIONS_CACHE_TTL: Duration = Duration::from_secs(120);
+
 pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError>
 {
     if let Ok(guard) = claude_remote_sessions_cache().read() {
         if let Some((cached_at, ref entries)) = *guard {
-            if cached_at.elapsed() < Duration::from_secs(5) {
+            // The scan reads every transcript on disk, which costs tens of
+            // seconds on a large store, so the cache has to outlive one full
+            // scan. A five second window meant the next caller re-read the
+            // whole store again, and the refresh that republishes the
+            // discovered sessions doubled the work on every tick.
+            if cached_at.elapsed() < CLAUDE_REMOTE_SESSIONS_CACHE_TTL {
                 return Ok(entries.clone());
             }
         }

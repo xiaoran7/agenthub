@@ -1,19 +1,18 @@
 //! Native session control core. This is local IPC, not the legacy v2 wire format.
 //! A Host owns one long-lived app-server and never resumes arbitrary live processes.
 
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
-
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::collectors::{AcpAppServer, ClaudeProcessSession, CodexAppServer, ZCodeAppServer};
 use crate::domain::AgentType;
@@ -233,6 +232,188 @@ impl MultiProviderTransport {
             .get_mut(session_id)
             .ok_or_else(|| NativeError::rejected("claude_session_not_found"))
     }
+}
+
+/// The local store scan, kept on its own thread.
+///
+/// Reading every transcript on disk costs far longer than a provider round
+/// trip, and the Runner's main loop must stay responsive to commands while it
+/// happens. The scan therefore runs in the background and publishes its result
+/// through a cache; callers read whatever the last scan found.
+fn local_store_cache() -> &'static Mutex<LocalStoreCache> {
+    static CACHE: OnceLock<Mutex<LocalStoreCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(LocalStoreCache::default()))
+}
+
+#[derive(Default)]
+struct LocalStoreCache {
+    /// The last scan's result, and when it was taken.
+    items: Option<(Instant, Vec<Value>)>,
+    /// Set while a scan is running, so only one runs at a time.
+    scanning: bool,
+    /// The thread that owns the running scan.
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+/// How long a local store scan stays usable.
+///
+/// The scan reads every transcript on disk, so it must be long enough that a
+/// refresh reuses the result rather than paying for the same scan again.
+const LOCAL_STORE_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// Start a background scan of the local session stores, if one is not running.
+fn start_local_store_scan() {
+    let mut cache = match local_store_cache().lock() {
+        Ok(cache) => cache,
+        Err(_) => return,
+    };
+    if cache.scanning {
+        return;
+    }
+    if let Some((at, _)) = &cache.items
+        && at.elapsed() < LOCAL_STORE_CACHE_TTL
+    {
+        return;
+    }
+    cache.scanning = true;
+    cache.worker = Some(std::thread::spawn(move || {
+        let items = local_store_sessions();
+        if let Ok(mut cache) = local_store_cache().lock() {
+            cache.items = Some((Instant::now(), items));
+            cache.scanning = false;
+        }
+    }));
+}
+
+/// The local store sessions found by the last scan.
+///
+/// An empty list means the scan has not finished yet, not that the machine
+/// has no sessions, so the caller publishes what it has rather than claiming
+/// the store is empty.
+fn cached_local_store_sessions() -> Vec<Value> {
+    local_store_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.items.as_ref().map(|(_, items)| items.clone()))
+        .unwrap_or_default()
+}
+
+/// Sessions that live in local stores rather than in a provider's own server.
+///
+/// Codex, ZCode, Claude, Antigravity and Grok all keep their history on this
+/// machine, so the console has to read those stores directly. The scan is
+/// pure filesystem and SQLite work — it needs no provider connection — and on
+/// a large store it costs far longer than a provider round trip, so it runs
+/// on its own thread and its result is cached between refreshes.
+fn local_store_sessions() -> Vec<Value> {
+    let mut items = Vec::new();
+    if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database()
+        && let Ok(payload) = crate::collectors::collect_zcode_sessions_from(&db_path, true)
+        && let Ok(entries) =
+            serde_json::from_str::<Vec<crate::adapters::zcode::ZCodeSessionEntry>>(&payload)
+    {
+        for entry in entries.into_iter().take(5000) {
+            let pt = entry.input_tokens.unwrap_or(0);
+            let ct = entry.output_tokens.unwrap_or(0);
+            let tt = entry.total_tokens.unwrap_or(pt + ct);
+            let req_count = entry.request_count.unwrap_or(1).max(1);
+            items.push(json!({
+                "id": entry.session_id,
+                "session_id": entry.session_id,
+                "cwd": entry.cwd,
+                "workspace_path": entry.cwd,
+                "name": entry.title.clone().unwrap_or_else(|| entry.session_id.clone()),
+                "title": entry.title,
+                "provider": "zcode",
+                "agent_name": "zcode",
+                "model": entry.model,
+                "total_tokens": tt,
+                "prompt_tokens": pt,
+                "completion_tokens": ct,
+                "cache_read_tokens": entry.cache_read_tokens.unwrap_or(0),
+                "request_count": req_count,
+                "calls": req_count,
+                "last_activity_at_ms": entry.time_updated,
+                "time_updated": entry.time_updated,
+                "time_created": entry.time_created,
+                "resumable": true,
+                "status": { "type": "idle" }
+            }));
+        }
+    }
+
+    if let Ok(claude_entries) = crate::collectors::collect_claude_sessions_for_remote() {
+        for entry in claude_entries {
+            // Desktop and the CLI share one transcript tree; the entry point is
+            // what tells them apart, and they are distinct products in the
+            // console.
+            let provider = if entry.desktop {
+                "claude_desktop"
+            } else {
+                "claude_code"
+            };
+            items.push(json!({
+                "id": format!("claude_{}", entry.session_id),
+                "session_id": format!("claude_{}", entry.session_id),
+                "cwd": entry.cwd,
+                "workspace_path": entry.cwd,
+                "name": entry.title.clone().unwrap_or_else(|| entry.session_id.clone()),
+                "title": entry.title,
+                "provider": provider,
+                "agent_name": provider,
+                "model": entry.model,
+                "prompt_tokens": entry.prompt_tokens,
+                "completion_tokens": entry.completion_tokens,
+                "total_tokens": entry.prompt_tokens + entry.completion_tokens,
+                "cache_read_tokens": entry.cache_read_tokens,
+                "request_count": entry.request_count,
+                "calls": entry.request_count.max(1),
+                "last_activity_at_ms": entry.last_activity_at_ms,
+                // the conversation's subagents, folded into it: the console
+                // lists the conversation once and shows them under it, as
+                // magpie does
+                "subagents": entry.subagents,
+                "status": { "type": "idle" }
+            }));
+        }
+    }
+
+    if let Ok(antigravity_entries) = crate::collectors::collect_antigravity_sessions_for_remote() {
+        for (session_id, cwd, title, modified_at_ms) in antigravity_entries {
+            items.push(json!({
+                "id": format!("antigravity_{}", session_id),
+                "session_id": format!("antigravity_{}", session_id),
+                "cwd": cwd,
+                "workspace_path": cwd,
+                "name": title.clone().unwrap_or_else(|| session_id.clone()),
+                "title": title,
+                "provider": "antigravity",
+                "agent_name": "antigravity",
+                "last_activity_at_ms": modified_at_ms,
+                "status": { "type": "idle" }
+            }));
+        }
+    }
+
+    if let Ok(grok_entries) = crate::collectors::collect_grok_sessions_for_remote() {
+        for (session_id, cwd, title, model, time_ms) in grok_entries {
+            items.push(json!({
+                "id": format!("grok_{}", session_id),
+                "session_id": format!("grok_{}", session_id),
+                "cwd": cwd,
+                "workspace_path": cwd,
+                "name": title.clone().unwrap_or_else(|| session_id.clone()),
+                "title": title,
+                "provider": "grok_build",
+                "agent_name": "grok_build",
+                "model": model,
+                "last_activity_at_ms": time_ms,
+                "status": { "type": "idle" }
+            }));
+        }
+    }
+
+    items
 }
 
 impl NativeTransport for MultiProviderTransport {
@@ -1244,118 +1425,13 @@ impl NativeTransport for MultiProviderTransport {
                     }
                 }
                 if is_first_page {
-                    if let Ok(Some(db_path)) = crate::collectors::discover_zcode_database()
-                        && let Ok(payload) =
-                            crate::collectors::collect_zcode_sessions_from(&db_path, true)
-                        && let Ok(entries) = serde_json::from_str::<
-                            Vec<crate::adapters::zcode::ZCodeSessionEntry>,
-                        >(&payload)
-                        && let Some(items) = response["data"].as_array_mut()
-                    {
-                        for entry in entries.into_iter().take(5000) {
-                            let pt = entry.input_tokens.unwrap_or(0);
-                            let ct = entry.output_tokens.unwrap_or(0);
-                            let tt = entry.total_tokens.unwrap_or(pt + ct);
-                            let req_count = entry.request_count.unwrap_or(1).max(1);
-                            items.push(json!({
-                                "id": entry.session_id,
-                                "session_id": entry.session_id,
-                                "cwd": entry.cwd,
-                                "workspace_path": entry.cwd,
-                                "name": entry.title.clone().unwrap_or_else(|| entry.session_id.clone()),
-                                "title": entry.title,
-                                "provider": "zcode",
-                                "agent_name": "zcode",
-                                "model": entry.model,
-                                "total_tokens": tt,
-                                "prompt_tokens": pt,
-                                "completion_tokens": ct,
-                                "cache_read_tokens": entry.cache_read_tokens.unwrap_or(0),
-                                "request_count": req_count,
-                                "calls": req_count,
-                                "last_activity_at_ms": entry.time_updated,
-                                "time_updated": entry.time_updated,
-                                "time_created": entry.time_created,
-                                "resumable": true,
-                                "status": { "type": "idle" }
-                            }));
-                        }
-                    }
-                    if let Ok(claude_entries) =
-                        crate::collectors::collect_claude_sessions_for_remote()
-                        && let Some(items) = response["data"].as_array_mut()
-                    {
-                        for entry in claude_entries {
-                            // Desktop and the CLI share one transcript tree;
-                            // the entry point is what tells them apart, and
-                            // they are distinct products in the console.
-                            let provider = if entry.desktop {
-                                "claude_desktop"
-                            } else {
-                                "claude_code"
-                            };
-                            items.push(json!({
-                                "id": format!("claude_{}", entry.session_id),
-                                "session_id": format!("claude_{}", entry.session_id),
-                                "cwd": entry.cwd,
-                                "workspace_path": entry.cwd,
-                                "name": entry.title.clone().unwrap_or_else(|| entry.session_id.clone()),
-                                "title": entry.title,
-                                "provider": provider,
-                                "agent_name": provider,
-                                "model": entry.model,
-                                "prompt_tokens": entry.prompt_tokens,
-                                "completion_tokens": entry.completion_tokens,
-                                "total_tokens": entry.prompt_tokens + entry.completion_tokens,
-                                "cache_read_tokens": entry.cache_read_tokens,
-                                "request_count": entry.request_count,
-                                "calls": entry.request_count.max(1),
-                                "last_activity_at_ms": entry.last_activity_at_ms,
-                                // the conversation's subagents, folded into it:
-                                // the console lists the conversation once and
-                                // shows them under it, as magpie does
-                                "subagents": entry.subagents,
-                                "status": { "type": "idle" }
-                            }));
-                        }
-                    }
-                    if let Ok(antigravity_entries) =
-                        crate::collectors::collect_antigravity_sessions_for_remote()
-                        && let Some(items) = response["data"].as_array_mut()
-                    {
-                        for (session_id, cwd, title, modified_at_ms) in antigravity_entries {
-                            items.push(json!({
-                                "id": format!("antigravity_{}", session_id),
-                                "session_id": format!("antigravity_{}", session_id),
-                                "cwd": cwd,
-                                "workspace_path": cwd,
-                                "name": title.clone().unwrap_or_else(|| session_id.clone()),
-                                "title": title,
-                                "provider": "antigravity",
-                                "agent_name": "antigravity",
-                                "last_activity_at_ms": modified_at_ms,
-                                "status": { "type": "idle" }
-                            }));
-                        }
-                    }
-                    if let Ok(grok_entries) = crate::collectors::collect_grok_sessions_for_remote()
-                        && let Some(items) = response["data"].as_array_mut()
-                    {
-                        for (session_id, cwd, title, model, time_ms) in grok_entries {
-                            items.push(json!({
-                                "id": format!("grok_{}", session_id),
-                                "session_id": format!("grok_{}", session_id),
-                                "cwd": cwd,
-                                "workspace_path": cwd,
-                                "name": title.clone().unwrap_or_else(|| session_id.clone()),
-                                "title": title,
-                                "provider": "grok_build",
-                                "agent_name": "grok_build",
-                                "model": model,
-                                "last_activity_at_ms": time_ms,
-                                "status": { "type": "idle" }
-                            }));
-                        }
+                    // The local stores are scanned on their own thread: the
+                    // scan is slow on a large store, and this call sits on the
+                    // Runner's command path. The scan that is already running
+                    // publishes its result for the next refresh.
+                    start_local_store_scan();
+                    if let Some(items) = response["data"].as_array_mut() {
+                        items.extend(cached_local_store_sessions());
                     }
                 }
                 if let Some(items) = response["data"].as_array_mut() {

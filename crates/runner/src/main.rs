@@ -69,6 +69,13 @@ struct Cli {
 
     #[arg(
         long,
+        env = "AGENTHUB_DEVICE_NAME",
+        help = "Name for this computer shown in the console; defaults to the system computer name"
+    )]
+    device_name: Option<String>,
+
+    #[arg(
+        long,
         env = "AGENT_PLATFORM_AUTH_CACHE",
         help = "Encrypted local credential cache path"
     )]
@@ -501,6 +508,11 @@ fn main() -> Result<()> {
     let fingerprint_key_env = cli.fingerprint_key_env;
     let allow_credential_access = cli.allow_credential_access;
     let auth_cache = cli.auth_cache;
+    // The name is resolved once, here, where the identity path is known: a
+    // name given for this run wins, then the one saved on disk, then the
+    // system computer name.
+    let device_name =
+        agenthub_runner::device_name::resolve(cli.device_name.as_deref(), identity_path.as_deref());
 
     let command = cli.command.unwrap_or(Command::Web {
         codex_binary: PathBuf::from("codex"),
@@ -535,6 +547,7 @@ fn main() -> Result<()> {
                 enable_web: web,
                 web_port: Some(web_port),
                 open_browser,
+                device_name: device_name.clone(),
             })?;
         }
         Command::Web {
@@ -561,6 +574,7 @@ fn main() -> Result<()> {
                 enable_web: true,
                 web_port: Some(port),
                 open_browser,
+                device_name: device_name.clone(),
             })?;
         }
         Command::RemoteRun {
@@ -585,6 +599,7 @@ fn main() -> Result<()> {
                 enable_web: web,
                 web_port: Some(web_port),
                 open_browser,
+                device_name: device_name.clone(),
             })?;
         }
         Command::RemoteHost {

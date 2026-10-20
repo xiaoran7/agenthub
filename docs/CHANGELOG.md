@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+- **设置齿轮按钮靠最右对齐与资源缓存穿透（`crates/runner/resources/dashboard.css` / `src/web_server.rs`）**：
+  - **根因分析**：顶栏 `.top` 原先采用 3 列 CSS Grid（`grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);`）。在侧边栏展开状态下（`body.side-nav`），中间槽位 `.top-slot` 被设为 `display: none;` 从文档流中移除，导致 CSS Grid 自动放置算法将 `.actions` 顺延填充至第 2 列居中偏左。同时，内嵌服务器此前对静态资源下发了 `immutable` 强缓存响应头，导致 Edge `--app` 模式在热重载或重启时继续使用本地磁盘上的旧版 CSS；
+  - **修复**：将 `.top` 改为坚固的 Flex 布局（`display: flex; justify-content: space-between; align-items: center;`），并将右侧操作区显式声明为 `.actions { margin-left: auto !important; flex: none; }`，无论中间槽位是否显示，齿轮均 100% 绝对贴靠在顶栏最右侧边缘；同时将资源版本参数递增为 `v=2.5.3.1`，缓存响应策略由 `immutable` 调整为 `no-cache, must-revalidate`，确保客户端加载最新编译的样式。
+
+- **解决会话加载初期误判为空白状态及加载动画缺失问题（`crates/runner/resources/dashboard.html` / `dashboard.js` / `src/web_server.rs`）**：
+  - **根因分析**：
+    1. Runner 启动初期后台 `NativeSessionHost` 正在进行全盘转录初次扫描（`control.ready` 为 `false`），调用 `Discover` 返回 `DaemonResponse::Error { code: "daemon_starting" }`；
+    2. `build_dashboard_summary` 原先无条件将首个 0 会话响应以 12 秒 TTL 写入 `dashboard_summary_cache()`，且未向上层返回 `ready` / `status` 状态；
+    3. 前端在收到 0 会话响应时将空状态打击计数 `consecutiveEmptyResponses` 累加，且 `dashboard.html` 静态标签初始写死为 `0 个历史会话`，造成在真实会话完成解析前过早闪烁“还没有可读取的会话”空白提示；
+  - **修复**：
+    - 后端（`web_server.rs`）：在返回结果中注入 `ready` 和 `status` 字段；当会话数为 0 且缓存中有先前有效会话时自动复用；针对非空缓存将 TTL 降为 4 秒，空/启动状态仅允许 500ms 重查，且未完成初始化时不污染有效缓存；
+    - 前端（`dashboard.html` & `dashboard.js`）：将初始徽标文本改为 `正在加载…`；初次启动提供 5 次（间隔 800ms）的主动重试；当后端报告 `ready: false` 或 `status: "starting"` 时，保留骨架屏加载动画（Shimmer Skeleton），不将未完成状态计入空状态打击，并在后台完成后无缝呈现真实会话。
+
+- **支持会话子代理（Subagents）折叠与展开交互，且默认处于收起状态（`crates/runner/resources/dashboard.js` / `dashboard.css`）**：
+  - **交互设计**：
+    - 针对包含子代理的会话，默认处于折叠收起状态，避免大量子任务平铺冲淡主会话列表可读性；
+    - 将原本静态的 `<span>N 个子代理</span>` 升级为交互式按钮 `<button type="button" class="tag sub-count sm-toggle-subs">`，内置动态旋转指示箭头（SVG Chevron）；
+    - 支持两种便捷收起/展开方式：点击“N 个子代理”按钮，或直接点击会话行本身（自动规避复选框、删除按钮等操作区）；
+    - 展开状态下子代理列表清晰展示，收起状态下 `.subs.folded` 隐去列表，指示箭头平滑逆时针旋转 90 度呈收起状态；
+    - 展开偏好持久化：通过 `agenthub_expanded_subagents` 键在 `localStorage` 中记录用户主动展开的会话 ID，跨刷新与重绘保持记忆。
+
 - **修复设备绑定成功后 Web 控制台未显示设备的通讯链路缺陷（`crates/runner` / `services/api` / `apps/web`）**：
   - **根因分析**：
     1. **Runner 配对后未即时切换模式**：本机 Runner 接收 `/api/device/bind` 后仅写入 `~/.agenthub/binding.json`，未向正在运行的后台 `daemon` 调度 `DaemonRequest::SetRemoteEnabled { server_url: Some(gateway_url) }`，导致守护进程仍停留在 Local-only 模式，未建立到网关 `/v3/remote/ws` 的出站 WebSocket 连接；
@@ -27,18 +48,26 @@
   - **悬停**：高亮条此前按窗口坐标定位，左侧贴着边框、右侧短 16px；改为按卡片内缩 5px 对齐，圆角 7px，进出两行仍只重绘各自行带；
   - 首项文案与托盘一致改为"显示协同控制台"。
 
-- **全平台图标高清化与立体科技棱镜重构（`crates/runner` / `apps/web`）**：
-  - **根因分析与视觉诊断**：
-    1. **半透明色块在浅色壁纸发灰发脏**：此前为消除白色方框，在六边形内部引入了低不透明度渐变（`stop-opacity="0.18"` ~ `0.45"`），在深色背景下表现为幽蓝微光，但在用户浅色/杂色桌面壁纸下发生色彩混合，劣化为灰暗浑浊的三角形泥灰杂块；
-    2. **SVG 高斯模糊滤镜导致低分辨率虚焦**：旧版使用了 `<filter id="hubShadow">`（`feDropShadow`），大图虽有柔光，但在缩放到桌面（32px/48px）或任务栏（24px/48px）时，高斯模糊直接退化为脏灰色的毛刺边缘，破坏了矢量线条的刀削锐利感；
-    3. **顶点节点比例失衡**：旧版 6 个外围节点采用外层白环、内层蓝心的双层圆环（外径 30px、线宽 12px），在小分辨率下呈现为厚重的“救生圈/甜甜圈”样式，视觉比例笨重；
-    4. **Chromium 独立窗口缓存锁定**：Edge `--app` 模式将首个有效 favicon 写入 `~/.agenthub/app_profile/Default/Favicons` SQLite 并受持久化缓存头锁定，导致更新无法即时透传。
-  - **立体科技棱镜与纯净矢量重构（`icon.svg`）**：
-    - **纯正青蓝宝石三维切面**：顶面采用电光青渐变（`#0284c7`→`#0ea5e9`→`#38bdf8`）、左面鲜艳电光蓝（`#0369a1`→`#0284c7`）、右面深邃深空蓝（`#075985`→`#0369a1`），100% 实体纯色渐变，彻底剔除半透明遮罩与任何模糊滤镜，浅色/深色背景下均具备极致对比度与通透感；
-    - **6 节点立体协同网络**：保留 AgentHub 核心语义（中央协调 Hub 连接 6 个外围 Agent 节点），在三维棱镜切面上融入内部对角分界与次轴激光亮线（`#ffffff`→`#bae6fd`→`#7dd3fc`）；
-    - **高光微球晶体节点**：外围 6 节点改用带纯白偏置高光点的微晶球核（`r=26`、高光 `r=8`），中央 Hub 球核带电光渐变与高光反射弧，比例协调科技感拉满；六边形外部 100% 纯透明，告别一切方框与脏色。
-  - **Windows 规范多尺寸 ICO 直出（`icon.ico`）**：通过 `sharp` 独立光栅化生成 16x16、20x20、24x24、32x32、40x40、48x48、64x64、128x128（32bpp BGRA DIB）以及 256x256（PNG 压缩）全套 9 个原生帧；
-  - **启动层缓存主动淘汰与全链路更新**：`tray.rs` 启动 Edge 前主动清理 `Default/Favicons*` 与 `HubApps Icons*`，`web_server.rs` 注入 `no-cache, must-revalidate` 头与版本校验后缀；全量同步更新 `crates/runner/resources/` 与 `apps/web/public/` 的 SVG、ICO 与 PNG 资产，重新打包 `agenthub-runner.exe` 与 Windows 发行归档。
+- **全平台图标高清化与三维 AI 聚合魔方重构（`crates/runner` / `apps/web`）**：
+  - **视觉设计与品牌重构**：
+    - 全新引入三维等距（Isometric 3D）**AI 聚合立方魔方**（AI Aggregation Cube），取代先前的抽象几何棱镜：
+      - **顶立面（Top Face）**：深邃机甲哑光底板嵌 Claude Terracotta 赤陶太阳芒矢量徽记；
+      - **左立面（Left Face）**：银灰金属质感切面嵌 DeepSeek 彩虹浪涌动感徽记；
+      - **右立面（Right Face）**：玄武岩深灰切面嵌 OpenAI ChatGPT 经典六瓣花环徽记；
+      - **外骨骼机甲框架（Chassis）**：四角高精度倒角内凹机身与精密切削导角，象征 AgentHub 将 Claude、DeepSeek、OpenAI 等顶级 AI 智能体跨设备无缝协同汇聚。
+  - **极致纯净透明背景与射线轮廓追踪抠图（Radial Ray-Casting Silhouette Extraction）**：
+    - 针对原设计暗色背景与立方体左侧暗面凹槽微弱色差（暗槽灰度 ~25，外景 ~22），摒弃易泛洪漏渗的传统算法，采用自立方体几何中心 `(512, 512)` 呈 3600 根径向射线（0.1° 角分辨率）向外步进的反向轮廓扫描算法，精准锁定导角机甲外轮廓（灰度阈值 ≥38），完整保留机身卡槽与倒角细节；
+    - 结合 3×3 高斯亚像素边缘平滑（$\sigma = 0.5$）与外沿色溢消除算法，在纯白（`#ffffff`）、暗黑（`#181820`）及高饱和亮青（`#06b6d4`）背景下均无黑边（Zero Dark Halo）或背景杂色溢出，实现 100% 纯透明无边框坐落。
+  - **消除 Windows 11 高分屏缩放模糊与全链路高阶光栅化（任务栏图标发糊的真正根因）**：
+    - **根因定位（实测而非推断）**：本项目是 **Rust** 写的 `agenthub-runner`，它用 **Microsoft Edge 的 `--app` 模式**承载桌面控制台，并非 Electron/Tauri/Qt，因此 `icon:` 配置项、`npx @tauri-apps/cli icon`、`setWindowIcon` 等框架做法一概不适用。任务栏按钮图标最终由 **Windows 从 Chromium 上报的 favicon 位图**绘制，而 Chromium 的 `Favicons` SQLite 缓存**只会保存 16×16 与 32×32 两帧**（实测 `favicons` 表仅 1 行：`http://127.0.0.1:4200/icon-32.png`，`favicon_bitmaps` 表仅 16/32 两行），无论页面声明了多少尺寸。AgentHub 窗口实际落在 **1920×1080 @ 100% DPI** 主屏上（`GetDpiForWindow` = 96），任务栏槽位实测恰为 **24×24 物理像素**——于是系统只能把 32px 位图缩到 24px，插值把清晰的像素抹糊；
+    - **实测任务栏绘制规则**：用纯色探针图标（红/绿/蓝）分别写入 `WM_SETICON` 的 `ICON_BIG` 与 `ICON_SMALL` 槽位并 `PrintWindow` 抓取真实任务栏，确认任务栏**只读 `ICON_BIG`**（`WM_GETICON` wParam=1），完全忽略 `ICON_SMALL`；且 `ICON_BIG` 的槽位物理尺寸恒为 `24 × dpi / 96`（100% → 24、175% → 42）。进一步用 16/24/32/48px 探针复测：Windows **仅在图标自身像素尺寸恰好等于槽位尺寸时才 1:1 直绘**，其余尺寸一律重采样——这正是此前"多帧 ICO 仍然发糊"的原因，ICO 里多存几帧并不能让系统挑中它；
+    - **绕开 favicon，直接接管窗口图标（新增 `crates/runner/src/window_icon.rs`）**：Runner 在拉起 Edge 后启动一个看门狗线程，定位标题以 `AgentHub Runner` 开头的 `Chrome_WidgetWin_1` 窗口，按窗口当前所在显示器的 DPI 算出任务栏槽位尺寸（`24 * dpi / 96`），从自身内嵌 ICO 资源里 `LoadImageW` 出**与槽位等大的原生帧**（新增 24/30/36/42/48 五个槽位尺寸，分别对应 100%/125%/150%/175%/200% 缩放），再以 `WM_SETICON` 写回 `ICON_BIG`；看门狗每 400ms 比对窗口当前持有的句柄，一旦 Chromium 用自己的 favicon 抢回图标就再次覆写，因此不与 Chromium 抢写、也不会被其覆盖；
+    - **原生帧补齐（14 帧 ICO）**：ICO 扩充为 16、20、24、28、**30**、32、**36**、40、**42**、48、**56**、64、128、256 共 14 帧原生位图（32bpp BGRA DIB，256px 用 PNG 压缩），并新增同名 `icon-30.png` / `icon-36.png` 供浏览器按需点阵直取；`web_server.rs` 改为表驱动一次性下发全部尺寸路由；
+    - **Chromium 侧同样受益**：`dashboard.html` 显式声明 17 个 `<link rel="icon" sizes="…">`（含 28/30/36/42/56/72/96），Web App Manifest 与 `apps/web/app/layout.tsx` 的 `metadata.icons` 同步补齐全尺寸阶梯，浏览器按原生点阵网格取图，不再插值拉伸；
+    - **留白压缩与边缘去色溢**：旧版四周留白高达 9.4%（256px 下左右各 24px），魔方被压到画布 81%；现按内容包围盒重新裁切并只留 2.5% 透明边距，小尺寸下魔方占幅提升到 93%~100%，28px 档三个品牌徽记全部可辨；
+    - **边缘色溢消除（Zero Dark Halo）**：抠图残留的暗色源背景会在半透明边缘形成黑边。改用最近实心像素回填（distance-transform 最近邻）把前景本色扩散到边缘，且在**每一次重采样之后**再做一次回填——否则 Lanczos 振铃会把半透明像素的颜色压到 0（黑）而重新长出黑边。以「半透明像素与其最近不透明像素的颜色差 > 40」为判据，16/20/24/28/30/32/36/40/42/48/56/64/72/96/128/256/512 各档实测**色溢像素数均为 0**；
+    - **Lanczos 采样 + 微对比度非锐化掩模（Unsharp Masking）**：针对 ≤48px 的超小尺寸图标，在 RGB 通道施加微对比度锐化（`radius=0.8, percent=120, threshold=2`），确保缩到任务栏后三个品牌图形与导角机身依旧清晰；
+  - **启动层缓存主动淘汰与全链路更新**：`tray.rs` 启动 Edge 前主动清理 `Default/Favicons*` 与 `HubApps Icons*`，`web_server.rs` 注入 `no-cache, must-revalidate` 头与版本校验后缀 `v=2.5.7`。重新编译发布 `agenthub-runner.exe`（13,469,696 字节，内嵌 14 帧原生 ICO 资源）与 Windows 发行包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,743,543 字节，SHA-256: `9a8775191adc5aba11f54a22a54eb6e68ed76c1cb0c760c5854d5a934cc7d12c`）。实机验证：修复前 100% 主屏任务栏图标对 24px 原生帧的匹配 MAE 为 5.05~16.20（视候选源而定，整体明显发糊），修复后 `WM_GETICON(ICON_BIG)` 持有的位图经 `GetIconInfo` + `GetDIBits` 读回，与 `icon-24.png` 的 **RGB 与 alpha 通道 MAE 均为 0.0000**；`PrintWindow` 抓取真实任务栏像素与之比对 **MAE = 0.07**，切到 175% 副屏后 `ICON_BIG` 自动切换为 42×42 原生帧、该屏任务栏匹配 **MAE = 0.00**；连续 12 秒以 100ms 采样 `WM_GETICON`，句柄变更 0 次（无图标抖动回退）。
 
 - **代码审查全量修复（删除、鉴权、缓存与重绘）**：
   - **会话删除不会再半途而废（`collectors/mod.rs`）**：`file-history/<id>`、`session-env/<id>` 与会话目录 `<id>` 同名，原先统一平移到 `trash/<basename>`，第二次 `rename` 撞上已存在的目录（os error 145），跨卷回退又对目录调用 `remove_file`（os error 5），结果是转录已挪走、接口却报失败。现由 `trash_target()` 在重名时带上来源目录名（`file-history-<id>`、`session-env-<id>`），`move_into()` 按类型复制/删除并在删除失败时撤回副本；移动循环抽成 `move_all_into()`，任一项失败即把已移动的项按逆序移回原位，并在错误里说明"已移动 N 个文件后，某文件失败，已全部放回"。新增 `deleting_a_session_that_has_two_folders_named_after_it` 与 `a_delete_that_fails_part_way_puts_the_session_back` 两个测试；
@@ -72,7 +101,7 @@
   - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
 - **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
 - **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
-- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（4,972,689 字节，含 12,610,048 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`cd481355…5de7`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 277 项全绿（217 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
+- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,736,204 字节，含 13,458,944 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`745ceefa…1fea`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 277 项全绿（217 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
 
 ## [2.5.3] - 2026-10-20
 

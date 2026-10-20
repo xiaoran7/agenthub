@@ -111,14 +111,14 @@ async function init() {
   // the first probe can land while the daemon is still scanning its
   // transcripts; ask again before telling anyone there are no sessions
   const ok = await refreshDashboard();
-  if (!ok || (dashboardData && (dashboardData.sessions || []).length === 0)) {
+  if (!ok || (dashboardData && (dashboardData.ready === false || (dashboardData.sessions || []).length === 0))) {
     for (
       let i = 0;
-      i < (LAYOUT.firstProbeRetries || 0) &&
-      !(dashboardData && (dashboardData.sessions || []).length > 0);
+      i < (LAYOUT.firstProbeRetries || 5) &&
+      !(dashboardData && (dashboardData.sessions || []).length > 0 && dashboardData.ready !== false);
       i++
     ) {
-      await new Promise((r) => setTimeout(r, LAYOUT.firstProbeRetryMs || 1500));
+      await new Promise((r) => setTimeout(r, LAYOUT.firstProbeRetryMs || 800));
       await refreshDashboard();
     }
   }
@@ -644,11 +644,17 @@ async function refreshDashboard(manual) {
   refreshing = true;
   const refreshBtn = document.getElementById("refreshBtn");
   if (manual && refreshBtn) refreshBtn.classList.add("busy");
-  if (manual && lastGoodSessions.length === 0) {
+  if (manual) {
+    consecutiveEmptyResponses = 0;
+    sessionsRenderedAt = Date.now();
+  }
+  if ((manual || allSessionsData.length === 0) && lastGoodSessions.length === 0) {
     const container = document.getElementById("sessionsContainer");
     if (container && !container.querySelector(".skeleton-card")) {
       container.innerHTML = renderSkeletonCard(5);
     }
+    const badge = document.getElementById("sessionCountBadge");
+    if (badge && lastGoodSessions.length === 0) badge.textContent = "正在加载…";
   }
   const seq = ++renderSeq;
   try {
@@ -669,6 +675,7 @@ async function refreshDashboard(manual) {
     // a zero-length snapshot is kept off the rankings: the lists keep their last
     // good figures until sessions come back, instead of flapping to empty
     const sessions = dashboardData.sessions || [];
+    const isReady = dashboardData.ready !== false && dashboardData.status !== "starting";
     if (sessions.length > 0) {
       const sessionsStr = JSON.stringify(sessions);
       const sessionsChanged = sessionsStr !== lastRenderState.sessionsJson;
@@ -692,6 +699,14 @@ async function refreshDashboard(manual) {
       if (sessionsChanged) {
         renderSessions(sessions);
       }
+    } else if (!isReady) {
+      // Daemon is still starting/scanning transcripts: keep skeleton, do not count as empty strikes
+      if (lastGoodSessions.length === 0) {
+        renderSessions([], "loading");
+      }
+      setTimeout(() => {
+        if (allSessionsData.length === 0 && !refreshing) refreshDashboard();
+      }, 800);
     } else {
       // an empty answer only earns the empty state once it has held for a
       // while; a single zero snapshot is a probe, not a verdict
@@ -1069,9 +1084,13 @@ function renderSessions(sessions, mode = "data") {
           const subs = Array.isArray(item.subagents) ? item.subagents : [];
           const deletable = rawProvider === "claude_code" || rawProvider === "claude_desktop" || rawProvider === "claude";
           const picked = pickedSessions.has(rawId);
-          const subHtml = subs.length ? renderSubagents(subs) : "";
+          const subsClosed = !fullId || !expandedSubagents.has(fullId);
+          const subHtml = subs.length ? renderSubagents(subs, subsClosed) : "";
           const subCount = subs.length
-            ? `<span class="tag sub-count" title="这个会话派生出的子代理">${subs.length} 个子代理</span>`
+            ? `<button type="button" class="tag sub-count sm-toggle-subs" onclick="event.stopPropagation();toggleSubagents(this)" title="${subsClosed ? "展开子代理" : "收起子代理"}" aria-expanded="${!subsClosed}">
+                 <span>${subs.length} 个子代理</span>
+                 <svg class="sub-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+               </button>`
             : "";
           const deleteBtn = deletable
             ? `<button type="button" class="text icon sm-del" title="删除这个会话" aria-label="删除这个会话" onclick="event.stopPropagation();askDeleteSessions(this.closest('.row.sess').dataset.id)">
@@ -1083,7 +1102,7 @@ function renderSessions(sessions, mode = "data") {
             : `<span class="sm-check-space"></span>`;
 
           return `
-        <div class="row sess${subs.length ? " has-subs" : ""}" data-id="${fullId}" style="--i:${index};--n:${grp.items.length}" title="${providerLabel(rawProvider)}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}">
+        <div class="row sess${subs.length ? " has-subs" : ""}${subsClosed ? " subs-closed" : ""}" data-id="${fullId}" style="--i:${index};--n:${grp.items.length}" title="${providerLabel(rawProvider)}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}"${subs.length ? ` onclick="if(!event.target.closest('.sm-del, .sm-check, button, input, a')) toggleSubagents(this)"` : ""}>
           ${check}
           <div class="who">
             <div class="name" title="${prompt}">${prompt}</div>
@@ -1138,10 +1157,53 @@ function sessionRecencyValue(s) {
 // the sessions the reader ticked; a delete takes every one of them
 const pickedSessions = new Set();
 
+// subagents expanded states (subagents are collapsed by default; user-expanded sessions persist across renders and reloads)
+const expandedSubagents = new Set(
+  (() => {
+    try {
+      // Clean up legacy inverted key if present
+      localStorage.removeItem("agenthub_closed_subagents");
+    } catch (e) {}
+    try {
+      return JSON.parse(
+        localStorage.getItem(STORE.expandedSubagents || "agenthub_expanded_subagents") || "[]",
+      );
+    } catch (e) {
+      return [];
+    }
+  })(),
+);
+
+function toggleSubagents(el) {
+  const row = el.closest(".row.sess");
+  if (!row) return;
+  const id = row.getAttribute("data-id") || "";
+  const subs = row.nextElementSibling;
+  if (!subs || !subs.classList.contains("subs")) return;
+  const closing = !subs.classList.contains("folded");
+  subs.classList.toggle("folded", closing);
+  row.classList.toggle("subs-closed", closing);
+  const toggleBtn = row.querySelector(".sm-toggle-subs");
+  if (toggleBtn) {
+    toggleBtn.setAttribute("aria-expanded", String(!closing));
+    toggleBtn.setAttribute("title", closing ? "展开子代理" : "收起子代理");
+  }
+  if (id) {
+    if (closing) expandedSubagents.delete(id);
+    else expandedSubagents.add(id);
+    try {
+      localStorage.setItem(
+        STORE.expandedSubagents || "agenthub_expanded_subagents",
+        JSON.stringify([...expandedSubagents]),
+      );
+    } catch (e) {}
+  }
+}
+
 // one subagent a line, under its conversation: what it was for, which model
 // wrote it, and what it spent. A subagent another subagent started is indented
 // under that one, the way its meta file says it was spawned.
-function renderSubagents(subs) {
+function renderSubagents(subs, subsClosed = true) {
   const byId = new Map(subs.map((s) => [s.id, s]));
   const order = [];
   const depthOf = (s) => {
@@ -1161,7 +1223,7 @@ function renderSubagents(subs) {
     if (da !== db) return da - db;
     return (b.last_activity_at_ms || 0) - (a.last_activity_at_ms || 0);
   });
-  return `<div class="subs">${sorted
+  return `<div class="subs${subsClosed ? " folded" : ""}">${sorted
     .map((s) => {
       const depth = Math.min(3, depthOf(s));
       const kind = escapeHtml(s.kind || "子代理");

@@ -416,6 +416,7 @@ export class RemoteContentStore {
             "type",
             "provider",
             "host_generation",
+            "device_name",
             "workspaces",
             "sessions",
             "models",
@@ -432,6 +433,9 @@ export class RemoteContentStore {
           typeof payload.host_generation !== "string" ||
           !payload.host_generation ||
           payload.host_generation.length > 128 ||
+          (payload.device_name !== undefined &&
+            (typeof payload.device_name !== "string" ||
+              payload.device_name.length > 64)) ||
           payload.workspaces.some(
             (workspace) => !isRemoteWorkspaceId(workspace),
           ) ||

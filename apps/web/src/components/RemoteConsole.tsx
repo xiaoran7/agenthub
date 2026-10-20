@@ -33,6 +33,7 @@ import { saveConfig } from "../lib/config";
 import {
   buildSessionTree,
   cleanPath,
+  getDeviceLabel,
   getProviderInfo,
   workspaceLabel,
   workspaceTooltip,
@@ -1331,7 +1332,6 @@ export function RemoteConsole({
           runner_id: runner.runner_id,
           online: runner.online,
           hello: runner.hello as {
-            hostname?: unknown;
             device_name?: unknown;
           } | null,
         })),
@@ -1670,7 +1670,7 @@ export function RemoteConsole({
                   className="remote-device-header"
                   onClick={() => toggleNode(setCollapsedDevices, dev.runnerId)}
                   aria-expanded={!isDevCollapsed}
-                  title={dev.online ? dev.label : `${dev.label}（离线）`}
+                  title={`${dev.label}${dev.online ? "" : "（离线）"} · ${dev.runnerId}`}
                 >
                   <span
                     className={`remote-tree-caret ${
@@ -3172,7 +3172,7 @@ export function RemoteConsole({
                 .filter((item) => item.online)
                 .map((item) => (
                   <option value={item.runner_id} key={item.runner_id}>
-                    {item.runner_id}
+                    {getDeviceLabel(item.runner_id, item.hello)}
                   </option>
                 ))}
             </select>

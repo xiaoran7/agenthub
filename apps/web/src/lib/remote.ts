@@ -25,6 +25,8 @@ export interface RemoteRunner {
   revoked: boolean;
   hello: null | {
     host_generation: string;
+    /** Human-readable name for the computer, shown instead of its id. */
+    device_name?: string;
     pending_approvals?: RemotePendingApproval[];
     workspaces: string[];
     models?: {

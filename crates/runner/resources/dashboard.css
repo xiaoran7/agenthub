@@ -503,16 +503,16 @@
         /* the sidebar's button, where you are, and what is live; the header is a
            card of its own that lifts off the page as the content scrolls under it */
         .top {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+          display: flex;
           align-items: center;
+          justify-content: space-between;
           height: var(--top-h); gap: 8px; padding: 0 var(--inset);
           background: var(--bg); border-bottom: var(--rule);
           position: sticky; top: 0; z-index: 20; flex: none;
           transition: margin-left var(--dur-2) var(--ease);
         }
         .top-left {
-          display: flex; align-items: center; gap: 8px; min-width: 0; justify-self: start;
+          display: flex; align-items: center; gap: 8px; min-width: 0; flex: none;
         }
         .top .brand { font-size: var(--fs-title); font-weight: 650; letter-spacing: -.01em; }
         .top .brand .logo svg { width: 18px; height: 18px; }
@@ -541,11 +541,11 @@
 
         /* the header's page switch, when the sidebar is away: transparent track,
            elevated white card buttons on active/hover, larger and more touchable */
-        .top .top-slot {
-          justify-self: center;
+        .top .top-slot,
+        #navTopSlot {
           position: relative; left: auto; top: auto; transform: none;
           display: flex; align-items: center; justify-content: center;
-          height: 100%; min-width: 0;
+          height: 100%; min-width: 0; flex: 1;
           pointer-events: none;
         }
         .top .top-slot > #nav,
@@ -607,7 +607,13 @@
         #navTopSlot > #nav .nav-ic { flex: none; opacity: .65; }
         .top .top-slot > #nav button.on .nav-ic,
         #navTopSlot > #nav button.on .nav-ic { opacity: 1; }
-        .actions { justify-self: end; display: flex; align-items: center; gap: 3px; }
+        .actions {
+          display: flex;
+          align-items: center;
+          gap: 3px;
+          margin-left: auto !important;
+          flex: none;
+        }
 
         /* ---- the sidebar ------------------------------------------------------- */
         /* a width the reader dragged to wins over the window's own share */
@@ -798,7 +804,41 @@
           flex: none; font-variant-numeric: tabular-nums; color: var(--faint);
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%;
         }
-        #sessionsContainer .row.sess .sub .sub-count { margin-left: 7px; height: 17px; padding: 0 6px; font-size: calc(var(--fs-note) - 1.5px); }
+        #sessionsContainer .row.sess.has-subs {
+          cursor: pointer;
+        }
+        #sessionsContainer .row.sess .sub .sub-count {
+          margin-left: 7px;
+          height: 18px;
+          padding: 0 6px;
+          font-size: calc(var(--fs-note) - 1.5px);
+        }
+        #sessionsContainer .row.sess .sub .sub-count.sm-toggle-subs {
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+          border: none;
+          font-family: inherit;
+          vertical-align: middle;
+        }
+        #sessionsContainer .row.sess .sub .sub-count.sm-toggle-subs:hover {
+          background: color-mix(in srgb, var(--accent) 15%, transparent);
+          color: var(--accent);
+        }
+        #sessionsContainer .row.sess .sub-chev {
+          width: 10px;
+          height: 10px;
+          flex: none;
+          transition: transform var(--dur-2) var(--ease-spring);
+        }
+        #sessionsContainer .row.sess.subs-closed .sub-chev {
+          transform: rotate(-90deg);
+        }
+        #sessionsContainer .subs.folded {
+          display: none !important;
+        }
         /* the pick bar's own controls, in the tools row */
         .pick-all { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-note); color: var(--muted); cursor: pointer; }
         .pick-all input { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }

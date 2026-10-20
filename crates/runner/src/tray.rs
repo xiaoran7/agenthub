@@ -546,6 +546,11 @@ mod windows_tray {
             cmd.args(&args);
             cmd.creation_flags(CREATE_NO_WINDOW);
             if let Ok(child) = cmd.spawn() {
+                // Edge draws its taskbar button from the favicon it reports,
+                // and that only ever reaches 16px and 32px. A watcher hands
+                // the window a native-size icon so the shell has nothing to
+                // resample.
+                crate::window_icon::watch_desktop_window_icon();
                 // 将 Edge 子进程绑定至 Windows Job Object，当 Runner 进程终止时系统自动强杀，杜绝孤儿白屏
                 if let Some(job) = get_or_create_app_job() {
                     unsafe {

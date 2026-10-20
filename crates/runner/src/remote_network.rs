@@ -27,6 +27,23 @@ use tungstenite::{Message, WebSocket, stream::MaybeTlsStream};
 const LOCAL_HOST_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 const LOCAL_HOST_QUERY_TIMEOUT: Duration = Duration::from_secs(25);
 
+/// How long a provider may take to answer one request.
+///
+/// The remote Host answers `thread/list` from the provider's own app-server,
+/// which reads its state database and, on a busy machine, can take well over
+/// three seconds. A short timeout turned a slow-but-healthy provider into a
+/// hard failure that left the console with no sessions at all, so the budget
+/// matches the collector default the local console already uses.
+const PROVIDER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often the Runner re-reads the provider's session list and republishes
+/// it to the Gateway.
+///
+/// The `ready` frame is the only channel that carries discovered sessions, so
+/// a discovery failure — or a session created after the last one — stayed
+/// invisible in the web console for the life of the process.
+const DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
 fn send_local_command(
     sender: &SyncSender<LocalHostCommand>,
     mut command: LocalHostCommand,
@@ -337,6 +354,7 @@ pub fn run_with_control(
         Some(server),
         control,
         None,
+        &crate::device_name::resolve(None, None),
     )
 }
 
@@ -355,10 +373,38 @@ fn sanitize_remote_discovery(mut discovery: Option<Value>) -> Option<Value> {
     discovery
 }
 
+/// Re-read the provider's session list and publish it to the Gateway.
+///
+/// The `ready` frame is the only channel that carries discovered sessions, so
+/// every path that publishes one has to publish a *current* list. A discovery
+/// failure leaves the previous list in place rather than blanking the console.
+fn refresh_discovery_and_publish<T: NativeTransport>(
+    durable: &mut DurableHost<T>,
+    cached_models: &Option<Value>,
+    cached_discovery: &mut Option<Value>,
+    published_discovery: &mut Option<Value>,
+    device_name: &str,
+) -> Result<()> {
+    if let Ok(discovery) = durable.host.discover() {
+        let discovery = sanitize_remote_discovery(Some(discovery));
+        *cached_discovery = discovery.clone();
+        *published_discovery = discovery.clone();
+        let ready_payload = remote_ready_payload(
+            durable,
+            cached_models.as_ref(),
+            cached_discovery.as_ref(),
+            device_name,
+        );
+        durable.journal.enqueue_remote(&ready_payload)?;
+    }
+    Ok(())
+}
+
 fn remote_ready_payload<T: NativeTransport>(
     durable: &DurableHost<T>,
     models: Option<&Value>,
     discovery: Option<&Value>,
+    device_name: &str,
 ) -> Value {
     let mut workspaces = durable
         .host
@@ -368,7 +414,7 @@ fn remote_ready_payload<T: NativeTransport>(
         .collect::<Vec<_>>();
     for key in durable.host.discovered_workspaces().keys() {
         if key.starts_with("ws-") && !workspaces.contains(key) {
-            workspaces.push(key.clone());
+            workspaces.push(key.to_owned());
         }
     }
     let sessions = durable
@@ -393,6 +439,7 @@ fn remote_ready_payload<T: NativeTransport>(
         "type": "ready",
         "provider": "codex_app_server",
         "host_generation": durable.host.generation(),
+        "device_name": device_name,
         "workspaces": workspaces,
         "sessions": sessions,
         "models": models.cloned(),
@@ -412,6 +459,7 @@ pub fn run_with_local_control(
     server: Option<String>,
     control: Arc<RemoteControl>,
     local_channel: Option<LocalHostChannel>,
+    device_name: &str,
 ) -> Result<()> {
     let _cleanup = StopOnExit(control.clone());
     if control.stopped.load(Ordering::Relaxed) {
@@ -432,8 +480,9 @@ pub fn run_with_local_control(
             effective_workspaces.push(cwd);
         }
     }
-    let codex = CodexAppServer::start_interactive(binary, Duration::from_secs(3)).ok();
-    let zcode = crate::collectors::ZCodeAppServer::start_if_available(Duration::from_secs(3)).ok();
+    let codex = CodexAppServer::start_interactive(binary, PROVIDER_RESPONSE_TIMEOUT).ok();
+    let zcode =
+        crate::collectors::ZCodeAppServer::start_if_available(PROVIDER_RESPONSE_TIMEOUT).ok();
     let claude = crate::collectors::discover_claude_binary();
     if codex.is_none() && zcode.is_none() && !claude.exists() && url.is_some() {
         return Err(anyhow::anyhow!("native_host_start_failed"));
@@ -444,9 +493,17 @@ pub fn run_with_local_control(
     let mut durable = DurableHost::new(host, journal)?;
     let mut cached_models = durable.host.models().ok();
     let mut cached_discovery = sanitize_remote_discovery(durable.host.discover().ok());
+    // The last discovery actually published to the Gateway. A refresh that
+    // finds the same sessions must not enqueue another full snapshot.
+    let mut published_discovery = cached_discovery.clone();
+    let mut last_discovery_refresh = Instant::now();
     if url.is_some() {
-        let ready_payload =
-            remote_ready_payload(&durable, cached_models.as_ref(), cached_discovery.as_ref());
+        let ready_payload = remote_ready_payload(
+            &durable,
+            cached_models.as_ref(),
+            cached_discovery.as_ref(),
+            device_name,
+        );
         durable.journal.enqueue_remote(&ready_payload)?;
     }
     control.ready.store(true, Ordering::Release);
@@ -522,12 +579,13 @@ pub fn run_with_local_control(
                             .handle_local_command(command)
                             .map_err(|err| err.to_string());
                         if result.is_ok() && current_server.is_some() {
-                            let ready_payload = remote_ready_payload(
-                                &durable,
-                                cached_models.as_ref(),
-                                cached_discovery.as_ref(),
-                            );
-                            if let Err(error) = durable.journal.enqueue_remote(&ready_payload) {
+                            if let Err(error) = refresh_discovery_and_publish(
+                                &mut durable,
+                                &cached_models,
+                                &mut cached_discovery,
+                                &mut published_discovery,
+                                device_name,
+                            ) {
                                 let _ = respond_to.send(Err(error.to_string()));
                                 continue;
                             }
@@ -563,12 +621,13 @@ pub fn run_with_local_control(
                             .authorize_workspace(workspace)
                             .map_err(|e| e.code);
                         if result.is_ok() && current_server.is_some() {
-                            let ready_payload = remote_ready_payload(
-                                &durable,
-                                cached_models.as_ref(),
-                                cached_discovery.as_ref(),
-                            );
-                            if let Err(error) = durable.journal.enqueue_remote(&ready_payload) {
+                            if let Err(error) = refresh_discovery_and_publish(
+                                &mut durable,
+                                &cached_models,
+                                &mut cached_discovery,
+                                &mut published_discovery,
+                                device_name,
+                            ) {
                                 let _ = respond_to.send(Err(error.to_string()));
                                 continue;
                             }
@@ -588,7 +647,9 @@ pub fn run_with_local_control(
                     Ok(LocalHostCommand::Discover { respond_to }) => {
                         let result = durable.host.discover().map_err(|e| e.code);
                         if let Ok(discovery) = &result {
-                            cached_discovery = sanitize_remote_discovery(Some(discovery.clone()));
+                            let discovery = sanitize_remote_discovery(Some(discovery.clone()));
+                            cached_discovery = discovery.clone();
+                            published_discovery = discovery;
                         }
                         let _ = respond_to.send(result);
                     }
@@ -618,6 +679,7 @@ pub fn run_with_local_control(
                                 &durable,
                                 cached_models.as_ref(),
                                 cached_discovery.as_ref(),
+                                device_name,
                             );
                             durable.journal.enqueue_remote(&ready_payload)?;
                             current_server = Some(validated.clone());
@@ -672,6 +734,31 @@ pub fn run_with_local_control(
                 &send_tx,
                 &command_seq,
             )?;
+        }
+        // Re-read the provider's session list and republish it. The `ready`
+        // frame is the only channel that carries discovered sessions, so a
+        // startup discovery that failed — or a session created since the last
+        // refresh — otherwise stayed invisible in the web console for the life
+        // of the process. The republish is skipped when nothing changed, so
+        // the outbox does not grow on every tick.
+        if current_server.is_some()
+            && last_discovery_refresh.elapsed() >= DISCOVERY_REFRESH_INTERVAL
+        {
+            last_discovery_refresh = Instant::now();
+            if let Ok(discovery) = durable.host.discover() {
+                let discovery = sanitize_remote_discovery(Some(discovery));
+                if discovery != published_discovery {
+                    published_discovery = discovery.clone();
+                    cached_discovery = discovery;
+                    let ready_payload = remote_ready_payload(
+                        &durable,
+                        cached_models.as_ref(),
+                        cached_discovery.as_ref(),
+                        device_name,
+                    );
+                    durable.journal.enqueue_remote(&ready_payload)?;
+                }
+            }
         }
         if let Some(epoch) = active {
             for (seq, payload) in durable.journal.pending(offered, 32)? {
@@ -1063,6 +1150,62 @@ mod tests {
     #[derive(Default)]
     struct FakeTransport;
 
+    /// A transport whose `thread/list` answer the test controls, so a
+    /// discovery failure and a later success can both be reproduced.
+    struct ListTransport {
+        pages: std::sync::Mutex<Vec<Result<Value, crate::remote_host::NativeError>>>,
+    }
+
+    impl ListTransport {
+        fn new(pages: Vec<Result<Value, crate::remote_host::NativeError>>) -> Self {
+            Self {
+                pages: std::sync::Mutex::new(pages),
+            }
+        }
+    }
+
+    impl NativeTransport for ListTransport {
+        fn request(
+            &mut self,
+            method: &str,
+            _params: Value,
+        ) -> Result<Value, crate::remote_host::NativeError> {
+            if method != "thread/list" {
+                return Ok(json!({"data": []}));
+            }
+            let mut pages = self.pages.lock().unwrap();
+            if pages.is_empty() {
+                return Err(crate::remote_host::NativeError {
+                    code: "no_more_pages".to_owned(),
+                    outcome_unknown: false,
+                });
+            }
+            pages.remove(0)
+        }
+
+        fn respond(
+            &mut self,
+            _id: Value,
+            _result: Value,
+        ) -> Result<(), crate::remote_host::NativeError> {
+            Ok(())
+        }
+
+        fn drain(&mut self) -> Result<Vec<Value>, crate::remote_host::NativeError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn thread_page(id: &str, cwd: &std::path::Path) -> Value {
+        json!({"data": [{
+            "id": id,
+            "cwd": cwd,
+            "name": format!("Session {id}"),
+            "status": {"type": "idle"},
+            "total_tokens": 10
+        }]})
+    }
+
     impl NativeTransport for FakeTransport {
         fn request(
             &mut self,
@@ -1324,10 +1467,11 @@ mod tests {
             }]
         })));
 
-        let payload = remote_ready_payload(&durable, Some(&models), discovery.as_ref());
+        let payload = remote_ready_payload(&durable, Some(&models), discovery.as_ref(), "书房主机");
         let physical_path = workspace.to_string_lossy();
 
         assert_eq!(payload["type"], "ready");
+        assert_eq!(payload["device_name"], "书房主机");
         assert_eq!(payload["sessions"][0]["hub_session_id"], "hub-current");
         assert_eq!(payload["models"]["data"][0]["id"], "model-current");
         assert_ne!(payload["workspaces"][0], physical_path.as_ref());
@@ -1342,6 +1486,63 @@ mod tests {
         assert_eq!(durable.journal.enqueue_remote(&payload).unwrap(), 1);
         assert_eq!(durable.journal.snapshot().unwrap().cursor, 0);
         assert_eq!(durable.journal.pending(0, 10).unwrap(), vec![(1, payload)]);
+    }
+
+    /// A failed discovery must not blank the sessions the console already
+    /// shows, and a later successful discovery must publish its sessions.
+    ///
+    /// The `ready` frame is the only channel that carries discovered sessions,
+    /// so a startup discovery that failed left the web console with an empty
+    /// tree for the life of the process.
+    #[test]
+    fn a_failed_discovery_keeps_the_published_sessions_and_a_later_one_republishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().canonicalize().unwrap();
+        let transport = ListTransport::new(vec![
+            Ok(thread_page("native-one", &workspace)),
+            Err(crate::remote_host::NativeError {
+                code: "provider_transport_lost".to_owned(),
+                outcome_unknown: true,
+            }),
+            Ok(thread_page("native-two", &workspace)),
+        ]);
+        let host = NativeSessionHost::new(transport, vec![workspace.clone()]).unwrap();
+        let journal = RemoteJournal::open(dir.path().join("discovery.db")).unwrap();
+        let mut durable = DurableHost::new(host, journal).unwrap();
+
+        // The first discovery succeeds and is what the console would show.
+        let first = sanitize_remote_discovery(durable.host.discover().ok());
+        assert_eq!(
+            first
+                .as_ref()
+                .and_then(|value| value["candidates"].as_array())
+                .map(|items| items.len()),
+            Some(1),
+            "the first page is discovered"
+        );
+
+        // The next discovery fails, as it did when the provider was too slow
+        // for the Runner's response budget.
+        let failed = durable.host.discover();
+        assert!(
+            failed.is_err(),
+            "a failed discovery is reported as a failure, not as an empty history"
+        );
+
+        // A later discovery succeeds again and finds a different session.
+        let third = sanitize_remote_discovery(durable.host.discover().ok());
+        let ids = third
+            .as_ref()
+            .and_then(|value| value["candidates"].as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item["provider_session_id"].as_str())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert_eq!(ids, vec!["native-two".to_owned()]);
     }
 
     #[test]

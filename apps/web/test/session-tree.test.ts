@@ -224,21 +224,17 @@ test("workspace labels read as folder names and keep the full path as a hint", (
   );
 });
 
-test("device labels fall back from hostname to a short id", () => {
+test("device labels show the advertised name and never the device id", () => {
   assert.equal(
-    getDeviceLabel("dev_zzz", {
-      device_name: "工作机 (work-pc)",
-      hostname: "work-pc",
-    }),
+    getDeviceLabel("dev_zzz", { device_name: "工作机 (work-pc)" }),
     "工作机 (work-pc)",
-    "device_name takes precedence over hostname",
-  );
-  assert.equal(
-    getDeviceLabel("dev_zzz", { hostname: "studio-mac" }),
-    "studio-mac",
   );
   assert.equal(getDeviceLabel("dev_zzz", { device_name: "备用机" }), "备用机");
-  assert.equal(getDeviceLabel("dev_abcdef123456", null), "电脑 · 123456");
+  assert.equal(
+    getDeviceLabel("dev_abcdef123456", null),
+    "电脑 · 123456",
+    "a device that advertised no name falls back to the id's tail, so two of them stay apart",
+  );
 });
 
 test("an active item exposes the hub session key the console selects by", () => {
