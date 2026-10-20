@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+- **修复 Web 控制台看不到本机 Runner 已发布的会话（`services/api/src/remote-routes.ts` / `apps/web/src/lib/remote.ts` / `apps/web/src/components/RemoteConsole.tsx`）**：
+  - **根因分析**：
+    1. **控制台把身份写死成开发账号**：Web 端 `/v3/remote/*` 请求统一携带硬编码的 `x-user-id: local-user`，网关开启开发鉴权（`AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true`）时按该头解析 owner，解析出的 owner 与设备实际绑定的账号（`workspace_owner_id`）不一致，`content.runners(owner)` / `content.sessions(owner)` 查不到任何记录——于是 Runner 明明在发布 `ready` 帧，控制台侧边栏却是空的；
+    2. **网关远程路由只认鉴权器、不认账户会话**：`/v3/remote/*` 直接调用 `OwnerAuthenticator.authenticate()`，而账户路由的 `mutationIdentity()` 会优先读取账户会话 Cookie。两条路径的身份口径不一致，会话 Cookie 在远程路由上被完全忽略；
+  - **修复**：
+    - 网关侧（`services/api/src/remote-routes.ts`）：新增 `resolveOwner()`，与账户路由保持同一口径——优先用账户会话 Cookie 解析 `workspace_owner_id`，仅在无账户部署时回落到 `x-user-id` 开发头；`RemoteRouteOptions` 增加 `accounts` / `now` 注入点，`app.ts` 统一注入；
+    - 控制台侧（`apps/web/src/lib/remote.ts` / `RemoteConsole.tsx`）：删除硬编码的 `x-user-id: local-user`，改由已登录账户的 `user_id` 作为可选的开发回落传入，`remoteRequest` 与 `RemoteRequest` 签名同步扩展；
+  - **回归测试**（`services/api/test/remote.test.ts`）：新增 "the remote API resolves a session cookie to its owner and ignores the development header"，覆盖“带会话 Cookie 时快照按 Cookie 归属账号返回，且残留的开发头不会把请求改判给别的 owner”。
+
+- **修复会话行元信息溢出与审计范围切换器排版拥挤（`apps/web/src/components/remote.css` / `apps/web/app/globals.css`）**：
+  - **会话行元信息溢出**：`.remote-session-pill-tag`（模型胶囊）作为 flex item 存在 min-content 下限，`min-width: 0` 缺失导致它拒绝收缩，把整行元信息挤出所在列——行高从 59px 跳到 76px 且文字被截断；补上 `min-width: 0` 并为状态文案加 `white-space: nowrap` 后，所有会话行恢复统一 59px 且无溢出；
+  - **审计范围切换器拥挤**：`.audit-scope-switch` 原用等宽 `1fr` 双列，“当前工作区”这一较长的标签在窄屏被裁掉（83px 文本挤进 63px 按钮）；改为按内容取宽（`minmax(max-content, auto)`），并修正移动端规则——`.settings-page-content .settings-section-heading`（特指度 0,2,0）的 `display: flex` 覆盖了 `.audit-section-heading`（0,1,0）的 grid 布局，导致网格定位完全失效，现提升特指度并在窄屏让切换器独占一行；同时为标题行补 14px 间距，消除描述文字与控件的贴边。
+
+- **Web 控制台侧边栏现代化重构（`apps/web/src/components/RemoteConsole.tsx` / `remote.css` / `session-tree.ts`）**：
+  - **顶部紧凑操作栏**：将原本占据大块纵向空间的“+ 新建会话”卡片与常驻搜索框重构为紧凑现代化的双操作按钮组，支持平滑展开/收起搜索框及快捷清空；
+  - **移除“全部 Agent”并支持横向滚动**：将 `antigravity` 正式提升为一等公民 `ProviderKind`，移除“全部 Agent”全量选项并默认选中主引擎；胶囊滑轨配置纤细可见滚动条与圆角指示轨道，消除由于设备宽度或条目增多导致的内容截断；
+  - **精简导航文本与新增独立设备选择器**：彻底移除“设备 / Agent / 工作区”冗余面包屑文案；新增独立设备下拉选择器（展示电脑名称与实时在线圆点），点击可快速切换目标电脑；
+  - **层级拍平（工作区 -> 会话）与无连线视觉分层**：会话列表拍平为直接的二级结构（Workspace -> Session）；彻底移除全链路的垂直发丝引导导轨（`border-left`），改用自然留白、悬停微底色、工作区快速 `+` 新建按钮与状态指示圆点（`.remote-session-bullet`：绿色运行、黄色等待、灰色空闲、圆环历史）表达层次。
+
+- **Runner 守护进程与服务端 WebSocket 连接稳定性与心跳保活优化（`crates/runner/src/remote_network.rs` / `services/api/src/remote-routes.ts`）**：
+  - **协议级 Ping/Pong 及时应答**：在客户端主读循环中针对 incoming `Message::Ping(payload)` 立即回复 `socket.send(Message::Pong(payload))`，杜绝因反向代理或网关缺失协议帧应答引起的无端断连；
+  - **容错文本帧反序列化**：替换直接 `?` 报错退出的脆弱解析逻辑，捕获非标准格式消息，避免偶发非 JSON 帧击穿长连接传输轮次；
+  - **通道扩容与快速恢复**：将 `events` 同步通道扩容至 1024，防止扫描发现耗时造成事件回压；缩短重连退避间隔至 1000ms；将服务端心跳看门狗超时放宽至 60 秒，避免多工作区扫描峰值引发误断连。
+
+- **支持个人资料用户头像设置与管理（`packages/contracts` / `services/api` / `apps/web`）**：
+  - **跨包契约与校验**：在 `@agent-pulse/contracts` 中建立 `UserAvatar` 校验模型，严格限制数据 URL 格式、允许的图片 MIME 类型与字节上限；
+  - **数据库存储与迁移**：新增 `0016_user_avatars.sql` 迁移，在 SQLite 与 PostgreSQL 存储层落地用户头像持久化；
+  - **控制台头像交互**：在前端设置页提供头像上传预览、实时压缩、头像清除与持久化展示。
+
 - **设置齿轮按钮靠最右对齐与资源缓存穿透（`crates/runner/resources/dashboard.css` / `src/web_server.rs`）**：
   - **根因分析**：顶栏 `.top` 原先采用 3 列 CSS Grid（`grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);`）。在侧边栏展开状态下（`body.side-nav`），中间槽位 `.top-slot` 被设为 `display: none;` 从文档流中移除，导致 CSS Grid 自动放置算法将 `.actions` 顺延填充至第 2 列居中偏左。同时，内嵌服务器此前对静态资源下发了 `immutable` 强缓存响应头，导致 Edge `--app` 模式在热重载或重启时继续使用本地磁盘上的旧版 CSS；
   - **修复**：将 `.top` 改为坚固的 Flex 布局（`display: flex; justify-content: space-between; align-items: center;`），并将右侧操作区显式声明为 `.actions { margin-left: auto !important; flex: none; }`，无论中间槽位是否显示，齿轮均 100% 绝对贴靠在顶栏最右侧边缘；同时将资源版本参数递增为 `v=2.5.3.1`，缓存响应策略由 `immutable` 调整为 `no-cache, must-revalidate`，确保客户端加载最新编译的样式。

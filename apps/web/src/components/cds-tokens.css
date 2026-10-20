@@ -252,3 +252,167 @@
     transparent 100%
   );
 }
+
+/* ==========================================================================
+   CDS - ThinkingAccordion
+   The accordion was written with utility classes, but this project ships no
+   utility framework, so every rule is spelled out here instead.
+   ========================================================================== */
+
+.cds-thinking {
+  background: var(--cds-surface-1);
+  border: 1px solid var(--cds-border);
+  border-radius: 12px;
+  box-shadow: var(--cds-shadow-sm);
+  font-size: 12px;
+  margin: 10px 0;
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.cds-thinking:hover {
+  border-color: var(--cds-border-strong);
+}
+
+.cds-thinking-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px 4px 0;
+  user-select: none;
+}
+
+.cds-thinking-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex: 1;
+  font: inherit;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.cds-thinking-toggle:disabled {
+  cursor: default;
+}
+
+.cds-thinking-toggle:focus-visible {
+  outline: 2px solid var(--cds-clay);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+.cds-thinking-lead {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cds-thinking-dots {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.cds-thinking-dot {
+  background: var(--cds-clay, #d97757);
+  border-radius: 50%;
+  display: block;
+  height: 6px;
+  width: 6px;
+}
+
+.cds-thinking-dot-idle {
+  background: var(--cds-text-muted, #8a8a8a);
+}
+
+.cds-thinking-title {
+  color: var(--cds-text-primary, #151515);
+  font-weight: 600;
+}
+
+.cds-thinking-elapsed {
+  color: var(--cds-text-muted, #8a8a8a);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.cds-thinking-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cds-thinking-copy {
+  background: transparent;
+  border: 0;
+  color: var(--cds-text-secondary, #525252);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.cds-thinking-copy:hover {
+  background: var(--cds-fill-ghost-hover, rgba(0, 0, 0, 0.05));
+  color: var(--cds-text-primary, #151515);
+}
+
+.cds-thinking-copy:focus-visible {
+  outline: 2px solid var(--cds-clay);
+  outline-offset: 1px;
+}
+
+.cds-thinking-copied {
+  align-items: center;
+  color: var(--cds-green, #3b8a5a);
+  display: inline-flex;
+  font-weight: 600;
+  gap: 4px;
+}
+
+.cds-thinking-chevron {
+  color: var(--cds-text-muted, #8a8a8a);
+  transition: transform 0.2s ease;
+}
+
+.cds-thinking-chevron.open {
+  transform: rotate(180deg);
+}
+
+.cds-thinking-body {
+  display: grid;
+  transition: grid-template-rows 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cds-thinking-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cds-thinking-text {
+  background: var(--cds-surface-0);
+  border-top: 1px solid var(--cds-border);
+  color: var(--cds-text-secondary, #525252);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: break-word;
+  padding: 8px 14px 12px;
+  white-space: pre-wrap;
+}

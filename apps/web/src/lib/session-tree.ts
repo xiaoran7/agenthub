@@ -11,7 +11,8 @@
  * strict partition and no session can appear twice.
  */
 
-export type ProviderKind = "codex" | "zcode" | "claude" | "other";
+export type ProviderKind =
+  "codex" | "zcode" | "claude" | "antigravity" | "other";
 
 export interface ProviderDescriptor {
   type: ProviderKind;
@@ -23,8 +24,9 @@ export interface ProviderDescriptor {
 const PROVIDER_ORDER: Record<ProviderKind, number> = {
   codex: 0,
   claude: 1,
-  zcode: 2,
-  other: 3,
+  antigravity: 2,
+  zcode: 3,
+  other: 4,
 };
 
 /**
@@ -48,9 +50,9 @@ const PROVIDER_BY_NAME: Record<string, ProviderDescriptor> = {
   claude_code: { type: "claude", name: "Claude Code", badgeClass: "claude" },
   claude: { type: "claude", name: "Claude Code", badgeClass: "claude" },
   antigravity: {
-    type: "other",
+    type: "antigravity",
     name: "Antigravity",
-    badgeClass: "other",
+    badgeClass: "antigravity",
   },
   grok_build: { type: "other", name: "Grok", badgeClass: "other" },
   grok: { type: "other", name: "Grok", badgeClass: "other" },
@@ -85,9 +87,9 @@ export function getProviderInfo(
   }
   if (providerSessionId.startsWith("antigravity_")) {
     return {
-      type: "other",
+      type: "antigravity",
       name: "Antigravity",
-      badgeClass: "other",
+      badgeClass: "antigravity",
     };
   }
   if (providerSessionId.startsWith("grok_")) {

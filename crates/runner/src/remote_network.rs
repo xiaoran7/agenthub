@@ -400,6 +400,11 @@ fn refresh_discovery_and_publish<T: NativeTransport>(
     Ok(())
 }
 
+/// Builds the `ready` frame the Gateway stores as the authoritative session set.
+///
+/// The other half of this contract is `packages/contracts/src/remote.ts`
+/// (`parseRemoteReady`), which enforces the same allowlist on the Gateway
+/// side. Any change here has to land there too.
 fn remote_ready_payload<T: NativeTransport>(
     durable: &DurableHost<T>,
     models: Option<&Value>,
@@ -508,7 +513,7 @@ pub fn run_with_local_control(
     }
     control.ready.store(true, Ordering::Release);
     let command_seq = Arc::new(AtomicI64::new(durable.journal.received_command_seq()?));
-    let (events_tx, events) = mpsc::sync_channel(256);
+    let (events_tx, events) = mpsc::sync_channel(1024);
     let (mut send_tx, send_rx) = mpsc::sync_channel(64);
     let host_generation = durable.host.generation().to_owned();
     let remote_generation = Arc::new(AtomicU64::new(u64::from(url.is_some())));
@@ -1096,11 +1101,14 @@ fn network_loop(
                 }
                 match socket.read() {
                     Ok(Message::Text(text)) => {
-                        events.send(NetworkEvent::Frame(
-                            epoch,
-                            serde_json::from_str(text.as_str())?,
-                        ))?;
+                        if let Ok(frame) = serde_json::from_str(text.as_str()) {
+                            let _ = events.send(NetworkEvent::Frame(epoch, frame));
+                        }
                     }
+                    Ok(Message::Ping(payload)) => {
+                        let _ = socket.send(Message::Pong(payload));
+                    }
+                    Ok(Message::Pong(_)) => {}
                     Ok(Message::Close(_)) => break,
                     Err(tungstenite::Error::Io(error))
                         if matches!(
@@ -1132,7 +1140,7 @@ fn network_loop(
         if result.is_err() {
             eprintln!("{{\"code\":\"remote_transport_retry\"}}");
         }
-        for _ in 0..50 {
+        for _ in 0..10 {
             if control.stopped.load(Ordering::Relaxed)
                 || remote_generation.load(Ordering::SeqCst) != expected_generation
             {

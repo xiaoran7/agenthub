@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 
 import {
   ApiError,
@@ -24,12 +30,14 @@ import {
   requestEmailVerification,
   revokeOtherWebSessions,
   revokeWebSession,
+  updateAvatar,
   type AccountView,
   type AuditEvent,
   type AuditPage,
   type AuditScope,
   type WebSessionView,
 } from "../lib/account";
+import { AvatarError, fileToAvatarDataUrl } from "../lib/avatar";
 import {
   disableNotifications,
   enableNotifications,
@@ -542,6 +550,10 @@ export function SettingsPage({
   const [auditError, setAuditError] = useState<string>();
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditRevision, setAuditRevision] = useState(0);
+  const [avatarPreview, setAvatarPreview] = useState<string | undefined>(
+    account?.user.avatar_data_url,
+  );
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const sections = SETTINGS_SECTIONS.filter(
     (section) => !section.requiresAccount || account !== undefined,
@@ -665,6 +677,51 @@ export function SettingsPage({
       setAuditError(accountErrorMessage(cause));
     } finally {
       setAuditLoading(false);
+    }
+  }
+
+  async function pickAvatar(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Clear the input so picking the same file twice fires a change again.
+    event.target.value = "";
+    if (file === undefined) return;
+    setAccountError(undefined);
+    setAccountMessage(undefined);
+    let dataUrl: string;
+    try {
+      dataUrl = await fileToAvatarDataUrl(file);
+    } catch (cause) {
+      setAccountError(
+        cause instanceof AvatarError ? cause.message : "这张图片无法读取",
+      );
+      return;
+    }
+    setAccountAction("avatar");
+    try {
+      const stored = await updateAvatar(dataUrl);
+      setAvatarPreview(stored ?? undefined);
+      setAccountMessage("头像已更新。");
+      refreshAudit();
+    } catch (cause) {
+      setAccountError(accountErrorMessage(cause));
+    } finally {
+      setAccountAction(undefined);
+    }
+  }
+
+  async function clearAvatar() {
+    setAccountError(undefined);
+    setAccountMessage(undefined);
+    setAccountAction("avatar");
+    try {
+      await updateAvatar(null);
+      setAvatarPreview(undefined);
+      setAccountMessage("头像已移除。");
+      refreshAudit();
+    } catch (cause) {
+      setAccountError(accountErrorMessage(cause));
+    } finally {
+      setAccountAction(undefined);
     }
   }
 
@@ -1063,6 +1120,54 @@ export function SettingsPage({
                   <h3 id="account-settings">账户安全</h3>
                   <p>检查邮箱状态并管理所有网页登录会话。</p>
                 </div>
+              </div>
+              <div className="account-avatar-row">
+                <span className="settings-subheading">头像</span>
+                <div className="account-avatar-controls">
+                  <span className="account-avatar-preview" aria-hidden="true">
+                    {avatarPreview ? (
+                      <img
+                        src={avatarPreview}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      (
+                        account.user.display_name?.[0] ||
+                        account.user.email?.[0] ||
+                        "U"
+                      ).toUpperCase()
+                    )}
+                  </span>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    className="account-avatar-input"
+                    onChange={(event) => void pickAvatar(event)}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={accountAction === "avatar"}
+                    onClick={() => avatarInputRef.current?.click()}
+                  >
+                    {accountAction === "avatar" ? "上传中…" : "上传图片"}
+                  </button>
+                  {avatarPreview !== undefined && (
+                    <button
+                      type="button"
+                      className="secondary danger-button"
+                      disabled={accountAction === "avatar"}
+                      onClick={() => void clearAvatar()}
+                    >
+                      移除
+                    </button>
+                  )}
+                </div>
+                <p className="settings-hint">
+                  支持 PNG、JPEG、WebP 或 GIF，会自动缩放为方形头像。
+                </p>
               </div>
               <div className="account-security-status">
                 <span

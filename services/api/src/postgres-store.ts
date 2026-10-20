@@ -128,6 +128,10 @@ const MIGRATIONS = [
     version: 15,
     url: new URL("../migrations/0015_oauth_accounts.sql", import.meta.url),
   },
+  {
+    version: 16,
+    url: new URL("../migrations/0016_user_avatars.sql", import.meta.url),
+  },
 ];
 
 interface DeviceRow {
@@ -312,6 +316,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         email_verified_at,
         oauth_provider,
         oauth_sub,
+        avatar_data_url,
         created_at
       FROM agent_pulse_users
       WHERE lower(email) = ${email}
@@ -334,6 +339,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         email_verified_at,
         oauth_provider,
         oauth_sub,
+        avatar_data_url,
         created_at
       FROM agent_pulse_users
       WHERE oauth_provider = ${provider} AND oauth_sub = ${sub}
@@ -463,6 +469,32 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
 
   async accountView(userId: string): Promise<AccountView | undefined> {
     return postgresAccountView(this.#sql, userId);
+  }
+
+  async setAvatar(
+    userId: string,
+    avatarDataUrl: string | undefined,
+    updatedAt?: string,
+  ): Promise<boolean> {
+    const rows = await this.#sql<{ user_id: string }[]>`
+      UPDATE agent_pulse_users
+      SET avatar_data_url = ${avatarDataUrl ?? null},
+          updated_at = clock_timestamp()
+      WHERE user_id = ${userId} AND status = 'active'
+      RETURNING user_id::text
+    `;
+    if (rows.length === 0) return false;
+    await insertAuditEvent(this.#sql, {
+      scope: "account",
+      accountUserId: userId,
+      actorUserId: userId,
+      action: "account.avatar_updated",
+      targetType: "account",
+      targetId: userId,
+      metadata: { removed: avatarDataUrl === undefined ? 1 : 0 },
+      ...(updatedAt === undefined ? {} : { createdAt: updatedAt }),
+    });
+    return true;
   }
 
   async createWebSession(input: {
@@ -2869,6 +2901,7 @@ async function postgresAccountView(
       users.email_verified_at,
       users.oauth_provider,
       users.oauth_sub,
+      users.avatar_data_url,
       users.created_at,
       subscriptions.plan,
       subscriptions.status AS subscription_status,
@@ -2937,6 +2970,9 @@ function normalizeAccountUser(row: AccountUser): AccountUser {
     ...(row.oauth_sub === undefined || row.oauth_sub === null
       ? {}
       : { oauth_sub: row.oauth_sub }),
+    ...(row.avatar_data_url === undefined || row.avatar_data_url === null
+      ? {}
+      : { avatar_data_url: row.avatar_data_url }),
     created_at: isoTimestamp(row.created_at),
   };
 }

@@ -1,8 +1,9 @@
 import { createPublicKey, randomBytes, verify } from "node:crypto";
 import { parseRemoteCommand } from "@agent-pulse/contracts";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { AuthenticationError, type OwnerAuthenticator } from "./auth.js";
+import { currentSessionIdentity, type AccountStore } from "./accounts.js";
 import type { GatewayStore } from "./store.js";
 import { RemoteContentStore, RemoteStoreError } from "./remote-store.js";
 
@@ -17,6 +18,10 @@ interface Connection {
 
 export interface RemoteRouteOptions {
   isBackpressured?: (socket: WebSocket) => boolean;
+  /** Account store used to resolve a browser session cookie to its owner. */
+  accounts?: AccountStore | undefined;
+  /** Clock injection point for the session-expiry check. */
+  now?: (() => Date) | undefined;
 }
 
 export function registerRemoteRoutes(
@@ -29,6 +34,26 @@ export function registerRemoteRoutes(
   const connections = new Map<string, Connection>();
   const streams = new Set<() => void>();
   const sockets = new Set<WebSocket>();
+  const now = options.now ?? (() => new Date());
+  /**
+   * Resolves the owner of a console request.
+   *
+   * The account session cookie wins, exactly as it does for the account
+   * routes: the workspace owner is the scope every device, session and
+   * command belongs to. The development `x-user-id` header stays a fallback
+   * for a Gateway running without accounts.
+   */
+  const resolveOwner = async (request: FastifyRequest): Promise<string> => {
+    if (options.accounts !== undefined) {
+      const identity = await currentSessionIdentity(
+        options.accounts,
+        request,
+        now(),
+      );
+      if (identity !== undefined) return identity.workspace_owner_id;
+    }
+    return auth.authenticate(request);
+  };
   const requireDevice = async (
     owner: string,
     runner: string,
@@ -229,13 +254,13 @@ export function registerRemoteRoutes(
   });
   const watchdog = setInterval(() => {
     for (const connection of connections.values())
-      if (Date.now() - connection.lastSeen > 45_000)
+      if (Date.now() - connection.lastSeen > 60_000)
         connection.socket.close(1001, "heartbeat_timeout");
   }, 10_000);
   watchdog.unref();
 
   app.get("/v3/remote/sessions", async (request) => {
-    const owner = await auth.authenticate(request);
+    const owner = await resolveOwner(request);
     const registeredDevices = await devices.listDevices(owner);
     for (const reg of registeredDevices) {
       if (!reg.revoked) {
@@ -296,7 +321,7 @@ export function registerRemoteRoutes(
   app.get<{ Params: { runner: string; hub: string } }>(
     "/v3/remote/sessions/:runner/:hub",
     async (request) => {
-      const owner = await auth.authenticate(request);
+      const owner = await resolveOwner(request);
       const { runner, hub } = request.params;
       const binding = content.session(owner, runner, hub);
       if (!binding) {
@@ -322,7 +347,7 @@ export function registerRemoteRoutes(
   app.post<{ Params: { runner: string } }>(
     "/v3/remote/runners/:runner/commands",
     async (request, reply) => {
-      const owner = await auth.authenticate(request);
+      const owner = await resolveOwner(request);
       const { runner } = request.params;
       await requireDevice(owner, runner);
       const command = parseRemoteCommand(request.body);
@@ -377,7 +402,7 @@ export function registerRemoteRoutes(
   app.get<{ Querystring: { after?: string; runner?: string; hub?: string } }>(
     "/v3/remote/events",
     async (request) => {
-      const owner = await auth.authenticate(request);
+      const owner = await resolveOwner(request);
       const { after, runner, hub } = request.query;
       const cursor = Number(after ?? 0);
       if (!Number.isSafeInteger(cursor) || cursor < 0)
@@ -389,7 +414,7 @@ export function registerRemoteRoutes(
   app.get<{ Querystring: { after?: string } }>(
     "/v3/remote/stream",
     async (request, reply) => {
-      const owner = await auth.authenticate(request);
+      const owner = await resolveOwner(request);
       let cursor = Number(request.query.after ?? 0);
       if (!Number.isSafeInteger(cursor) || cursor < 0)
         throw new RemoteStoreError("invalid_cursor");
@@ -408,7 +433,7 @@ export function registerRemoteRoutes(
         busy = true;
         void (async () => {
           // Re-check the account cookie so revocation also closes content streams.
-          if ((await auth.authenticate(request)) !== owner) {
+          if ((await resolveOwner(request)) !== owner) {
             close();
             return;
           }

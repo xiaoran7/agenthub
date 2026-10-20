@@ -4,7 +4,12 @@ import type {
   RemotePendingApproval,
   RemotePendingQuestion,
 } from "@agent-pulse/contracts/remote";
-export type RemoteRequest = <T>(path: string, body?: unknown) => Promise<T>;
+export type RemoteRequest = <T>(
+  path: string,
+  body?: unknown,
+  timeoutMs?: number,
+  userId?: string,
+) => Promise<T>;
 export interface DiscoveryCandidate {
   provider_session_id: string;
   workspace_path: string;
@@ -86,7 +91,8 @@ export interface RemoteCommandRecord {
   command: RemoteCommand;
   receipt: {
     status: string;
-    code?: string;
+    /** The failure reason. Null on an accepted receipt. */
+    code?: string | null;
     result?: { turn?: { id: string } };
   } | null;
 }
@@ -252,10 +258,21 @@ export function latestContextUsage(
   return null;
 }
 
+/**
+ * Sends a request to the Gateway's remote API.
+ *
+ * Identity comes from the browser's account session cookie. The development
+ * `x-user-id` header is only a fallback for a Gateway running without
+ * accounts: it is read from the panel config, never hardcoded, because a
+ * fixed value silently resolves a *different* owner than the one the user
+ * signed in as — which is why the console used to show an empty session list
+ * while the Runner was publishing sessions under the real account.
+ */
 export async function remoteRequest<T>(
   path: string,
   body?: unknown,
   timeoutMs = 12000,
+  userId?: string,
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => {
@@ -269,7 +286,9 @@ export async function remoteRequest<T>(
       credentials: "same-origin",
       headers: {
         "content-type": "application/json",
-        "x-user-id": "local-user",
+        ...(userId === undefined || userId === ""
+          ? {}
+          : { "x-user-id": userId }),
       },
       signal: controller.signal,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -315,6 +334,30 @@ export function remoteError(error: unknown): string {
     workspace_not_authorized: "这个工作目录尚未在本机授权。",
     previous_execution_unconfirmed: "上次请求结果尚未确认，已阻止重复执行。",
     slash_not_supported: "暂不支持这个快捷命令，请使用对应按钮。",
+    invalid_command_identity: "请求编号或会话编号无效，请刷新后重试。",
+    host_lost: "这台电脑上的会话进程已退出，请重新连接。",
+    workspace_unavailable: "这个工作目录已经不可用。",
+    workspace_required: "请先选择一个工作目录。",
+    workspace_limit_exceeded: "工作目录数量已达上限。",
+    thread_list_malformed: "本机 Agent 返回的会话列表无法读取。",
+    session_already_bound: "这个会话已经绑定到另一台电脑。",
+    session_not_bound: "这个会话还没有绑定，请先恢复它。",
+    invalid_prompt: "发送的内容为空或过长。",
+    approval_session_mismatch: "这项审批属于另一个会话。",
+    approval_type_not_supported: "暂不支持这种审批请求。",
+    approval_decision_not_available: "这项审批已经处理过了。",
+    question_not_pending: "这项提问已处理或已过期。",
+    question_session_mismatch: "这项提问属于另一个会话。",
+    native_id_required: "缺少本机会话编号。",
+    native_id_mismatch: "本机会话编号与会话不匹配。",
+    native_session_already_bound: "这个本机会话已经绑定过了。",
+    resume_workspace_mismatch: "会话的工作目录与所选目录不一致。",
+    create_cannot_set_native_id: "新建会话时不能指定本机会话编号。",
+    invalid_model: "所选模型不可用。",
+    provider_not_available: "本机没有可用的 Agent 客户端。",
+    zcode_not_available: "本机没有安装 ZCode。",
+    claude_session_not_found: "本机找不到这个 Claude 会话。",
+    acp_session_not_found: "本机找不到这个 ACP 会话。",
   };
   return (
     messages[error instanceof Error ? error.message : ""] ??

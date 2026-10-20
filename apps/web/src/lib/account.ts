@@ -20,6 +20,8 @@ export interface AccountView {
     oauth_provider?: string;
     oauth_sub?: string;
     email_verified_at?: string;
+    /** The user's own picture, as a data URL. */
+    avatar_data_url?: string;
     created_at: string;
   };
   subscription: {
@@ -172,6 +174,27 @@ export async function logoutAccount(): Promise<void> {
   if (!response.ok) throw await accountError(response);
 }
 
+/**
+ * Replace the user's own picture, or clear it with `null`.
+ *
+ * The avatar travels as a data URL so the Gateway never has to serve an
+ * image file or hold a blob store.
+ */
+export async function updateAvatar(
+  dataUrl: string | null,
+): Promise<string | null> {
+  const response = await fetch("/v1/auth/avatar", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ data_url: dataUrl }),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) throw await accountError(response);
+  const body = (await response.json()) as { avatar_data_url: string | null };
+  return body.avatar_data_url;
+}
+
 export async function requestEmailVerification(): Promise<{
   accepted: boolean;
   verified: boolean;
@@ -265,6 +288,8 @@ export function accountErrorMessage(error: unknown): string {
     password_unchanged: "新密码不能与当前密码相同",
     invalid_password_reset: "重置链接无效或已经过期",
     invalid_display_name: "显示名称需要 1 到 80 个字符",
+    invalid_avatar: "头像格式无效，请选择 PNG、JPEG、WebP 或 GIF 图片",
+    avatar_too_large: "头像太大，请选择一张更小的图片",
     accounts_unavailable: "服务器尚未启用账户服务",
     email_delivery_unavailable: "服务器尚未配置验证邮件服务",
     email_delivery_failed: "验证邮件发送失败，请稍后重试",

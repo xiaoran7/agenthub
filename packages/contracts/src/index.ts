@@ -4,6 +4,12 @@ import {
   verify as verifySignature,
 } from "node:crypto";
 
+import { ContractError } from "./contract-error.js";
+import { expectKeys, expectObject } from "./expect.js";
+
+export { ContractError } from "./contract-error.js";
+export { expectKeys, expectObject } from "./expect.js";
+
 export const SYNC_PROTOCOL_VERSION = 1;
 export const MAX_SYNC_BATCH_EVENTS = 1_000;
 
@@ -198,16 +204,6 @@ export interface DeviceRegistration {
   device_id: string;
   public_key: string;
   signature: string;
-}
-
-export class ContractError extends Error {
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "ContractError";
-    this.code = code;
-  }
 }
 
 export function parseDeviceHeartbeat(value: unknown): DeviceHeartbeat {
@@ -954,30 +950,6 @@ function canonicalEvent(event: SyncEvent): SyncEvent {
   };
 }
 
-function expectObject(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ContractError("invalid_field", `${name} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): void {
-  for (const key of required) {
-    if (!(key in value)) {
-      throw new ContractError("missing_field", `missing field ${key}`);
-    }
-  }
-  const allowed = new Set([...required, ...optional]);
-  const unknown = Object.keys(value).find((key) => !allowed.has(key));
-  if (unknown !== undefined) {
-    throw new ContractError("unknown_field", `unknown field ${unknown}`);
-  }
-}
-
 function expectString(value: unknown, name: string, maxLength: number): string {
   if (
     typeof value !== "string" ||
@@ -1150,3 +1122,4 @@ function expectTimestamp(value: unknown, name: string): string {
 }
 
 export * from "./remote.js";
+export * from "./account.js";

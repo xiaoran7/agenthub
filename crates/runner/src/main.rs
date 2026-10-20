@@ -38,6 +38,7 @@ use agenthub_runner::{
 };
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
+use serde_json::json;
 
 #[derive(Debug, Parser)]
 #[command(name = "agenthub-runner")]
@@ -413,6 +414,13 @@ enum DeviceCommand {
     Show {
         #[arg(long)]
         identity: PathBuf,
+    },
+    /// Name this computer the way it should appear in the console.
+    Name {
+        #[arg(long)]
+        identity: PathBuf,
+        /// The name to show; pass an empty string to fall back to the system name.
+        name: String,
     },
     Bind {
         #[arg(long)]
@@ -984,6 +992,26 @@ fn main() -> Result<()> {
                     .with_context(|| format!("failed to load {}", identity.display()))?;
                 println!("{}", serde_json::to_string_pretty(&device_identity.info())?);
             }
+            DeviceCommand::Name { identity, name } => {
+                let name = name.trim();
+                agenthub_runner::device_name::write_configured_name(&identity, name).with_context(
+                    || {
+                        format!(
+                            "failed to write the device name beside {}",
+                            identity.display()
+                        )
+                    },
+                )?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "device_name": agenthub_runner::device_name::resolve(
+                            if name.is_empty() { None } else { Some(name) },
+                            Some(&identity),
+                        ),
+                    }))?
+                );
+            }
             DeviceCommand::Bind {
                 identity,
                 server,
@@ -1325,12 +1353,11 @@ fn resolve_bound_gateway_server() -> Option<String> {
 }
 
 fn resolve_or_create_default_identity() -> DeviceIdentity {
-    let home_dir = env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
+    let identity_path = default_identity_path();
+    let agenthub_dir = identity_path
+        .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let agenthub_dir = home_dir.join(".agenthub");
-    let identity_path = agenthub_dir.join("identity.json");
 
     if identity_path.exists() {
         if let Ok(identity) = DeviceIdentity::load(&identity_path) {
@@ -1343,6 +1370,15 @@ fn resolve_or_create_default_identity() -> DeviceIdentity {
         let _ = identity.save_new(&identity_path);
     }
     identity
+}
+
+/// The identity file the Runner uses when no path is given on the command line.
+fn default_identity_path() -> PathBuf {
+    let home_dir = env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home_dir.join(".agenthub").join("identity.json")
 }
 
 fn resolve_default_db_path() -> PathBuf {

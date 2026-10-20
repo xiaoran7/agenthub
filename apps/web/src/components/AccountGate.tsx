@@ -88,7 +88,7 @@ export function AccountGate({
             className="account-panel-inner"
             style={{ textAlign: "center", padding: "48px 24px" }}
           >
-            <p style={{ color: "var(--muted, #999)", fontSize: "14px" }}>
+            <p style={{ color: "#5b5d63", fontSize: "14px" }}>
               正在检测服务器初始化状态…
             </p>
           </div>

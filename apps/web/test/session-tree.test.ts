@@ -265,7 +265,7 @@ test("provider detection covers each managed engine", () => {
   assert.equal(getProviderInfo("gemini_1").type, "zcode");
   assert.equal(getProviderInfo("any", "gemini_cli").name, "Gemini CLI");
   assert.equal(getProviderInfo("claude_1").type, "claude");
-  assert.equal(getProviderInfo("antigravity_1").type, "other");
+  assert.equal(getProviderInfo("antigravity_1").type, "antigravity");
   assert.equal(getProviderInfo("grok_1").type, "other");
   assert.equal(getProviderInfo("any", "cursor").name, "Cursor");
   assert.equal(getProviderInfo("any", "cline").name, "Cline");

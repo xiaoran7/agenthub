@@ -8,6 +8,7 @@ import {
   parseDeviceRegistration,
   parseDeviceHeartbeat,
   parseSyncBatch,
+  parseAvatarPayload,
   presences,
   verifySyncBatch,
 } from "@agent-pulse/contracts";
@@ -224,13 +225,11 @@ export function createGatewayApp(
   if (options.remoteContent) {
     const content = options.remoteContent;
     void app.register(async (remoteApp) =>
-      registerRemoteRoutes(
-        remoteApp,
-        store,
-        authenticator,
-        content,
-        options.remoteRoutes,
-      ),
+      registerRemoteRoutes(remoteApp, store, authenticator, content, {
+        ...options.remoteRoutes,
+        accounts: options.accounts,
+        now,
+      }),
     );
   }
 
@@ -641,6 +640,25 @@ export function createGatewayApp(
     });
     if (!result.updated) throw new AuthenticationError();
     return reply.send({ changed: true, revoked: result.revoked_sessions });
+  });
+
+  app.patch("/v1/auth/avatar", async (request, reply) => {
+    const accounts = requireAccounts(options.accounts);
+    const identity = await requireSessionIdentity(accounts, request, now());
+    const body = accountBody(request.body);
+    assertOnlyFields(body, ["data_url"]);
+    // `null` clears the picture; anything else has to be a real image.
+    const avatar =
+      body.data_url === null
+        ? undefined
+        : parseAvatarPayload({ data_url: body.data_url });
+    const updated = await accounts.setAvatar(
+      identity.actor_user_id,
+      avatar?.data_url,
+      now().toISOString(),
+    );
+    if (!updated) throw new AuthenticationError();
+    return reply.send({ avatar_data_url: avatar?.data_url ?? null });
   });
 
   app.get("/v1/auth/sessions", async (request, reply) => {

@@ -68,11 +68,90 @@ export interface RemoteBinding {
   current_turn_id: string | null;
 }
 
+export interface RemoteReady {
+  type: "ready";
+  provider?: string;
+  host_generation: string;
+  /** Human-facing name for the computer; the device id stays a backend key. */
+  device_name?: string;
+  workspaces: string[];
+  sessions: RemoteBinding[];
+  models?: unknown;
+  discovery?: unknown;
+  pending_approvals?: RemotePendingApproval[];
+  pending_questions?: RemotePendingQuestion[];
+  attach_running?: boolean;
+}
+
 export function isRemoteWorkspaceId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^ws-[A-Za-z0-9_-]{1,24}-[0-9a-f]{16}$/u.test(value)
   );
+}
+
+/**
+ * Validates the `ready` frame the Runner publishes.
+ *
+ * The frame is the only channel that carries discovered sessions, so the
+ * allowlist is the cross-package contract: the Runner builds it
+ * (`crates/runner/src/remote_network.rs`) and the Gateway enforces it here.
+ */
+export function parseRemoteReady(value: unknown): RemoteReady {
+  const ready = object(value);
+  only(ready, [
+    "type",
+    "provider",
+    "host_generation",
+    "device_name",
+    "workspaces",
+    "sessions",
+    "models",
+    "discovery",
+    "pending_approvals",
+    "pending_questions",
+    "attach_running",
+  ]);
+  if (ready.type !== "ready") invalid();
+  if (ready.provider !== undefined) text(ready.provider, 64);
+  text(ready.host_generation, 128);
+  if (ready.device_name !== undefined) {
+    text(ready.device_name, 64);
+    // A blank label would render as an empty device name in the console.
+    if ((ready.device_name as string).trim() === "") invalid();
+  }
+  if (!Array.isArray(ready.workspaces)) invalid();
+  for (const workspace of ready.workspaces)
+    if (!isRemoteWorkspaceId(workspace)) invalid();
+  if (new Set(ready.workspaces).size !== ready.workspaces.length) invalid();
+  if (!Array.isArray(ready.sessions)) invalid();
+  const sessions = ready.sessions.map((item) => parseRemoteBinding(item));
+  for (const session of sessions)
+    if (session.host_generation !== ready.host_generation) invalid();
+  if (ready.pending_approvals !== undefined) {
+    if (!Array.isArray(ready.pending_approvals)) invalid();
+    const approvals = ready.pending_approvals.map((item) =>
+      parseRemotePendingApproval(item),
+    );
+    if (
+      new Set(approvals.map((approval) => approval.approval_id)).size !==
+      approvals.length
+    )
+      invalid();
+    for (const approval of approvals)
+      if (approval.host_generation !== ready.host_generation) invalid();
+  }
+  if (ready.pending_questions !== undefined) {
+    if (!Array.isArray(ready.pending_questions)) invalid();
+    for (const question of ready.pending_questions)
+      parseRemotePendingQuestion(question);
+  }
+  if (
+    ready.attach_running !== undefined &&
+    typeof ready.attach_running !== "boolean"
+  )
+    invalid();
+  return ready as unknown as RemoteReady;
 }
 
 export function parseRemoteCommand(value: unknown): RemoteCommand {

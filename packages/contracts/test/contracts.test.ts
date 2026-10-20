@@ -12,6 +12,7 @@ import {
   parseRemoteBinding,
   parseRemoteCommand,
   parseRemotePendingApproval,
+  parseRemoteReady,
   parseSyncBatch,
   unsignedAuthSyncBatchJson,
   unsignedDeviceHeartbeatJson,
@@ -396,6 +397,58 @@ test("remote send_prompt accepts a bounded per-turn reasoning effort", () => {
   ]) {
     assert.throws(
       () => parseRemoteCommand(unsafe),
+      (error: unknown) =>
+        error instanceof ContractError && error.code === "invalid_field",
+    );
+  }
+});
+
+test("the ready frame accepts a named device and rejects anything outside the contract", () => {
+  const workspace = "ws-project-0123456789abcdef";
+  const ready = {
+    type: "ready",
+    provider: "codex_app_server",
+    host_generation: "generation-one",
+    device_name: "书房主机",
+    workspaces: [workspace],
+    sessions: [
+      {
+        hub_session_id: "hub-one",
+        provider_session_id: "native-one",
+        workspace_path: workspace,
+        host_generation: "generation-one",
+        control_connected: true,
+        execution_state: "idle",
+        current_turn_id: null,
+      },
+    ],
+    pending_approvals: [],
+    pending_questions: [],
+    attach_running: false,
+  };
+  assert.deepEqual(parseRemoteReady(ready), ready);
+  for (const unsafe of [
+    // An unexpected key would let a Runner smuggle data past the contract.
+    { ...ready, private_path: "D:/private" },
+    // A blank label would render as an empty device name in the console.
+    { ...ready, device_name: "   " },
+    { ...ready, device_name: 42 },
+    // A physical path is not a workspace identifier.
+    { ...ready, workspaces: ["D:/private"] },
+    { ...ready, workspaces: [workspace, workspace] },
+    // A session from another generation cannot be projected.
+    {
+      ...ready,
+      sessions: [
+        {
+          ...ready.sessions[0],
+          host_generation: "generation-two",
+        },
+      ],
+    },
+  ]) {
+    assert.throws(
+      () => parseRemoteReady(unsafe),
       (error: unknown) =>
         error instanceof ContractError && error.code === "invalid_field",
     );

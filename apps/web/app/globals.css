@@ -3168,6 +3168,47 @@ select {
   display: grid;
 }
 
+.account-avatar-row {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.account-avatar-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.account-avatar-preview {
+  align-items: center;
+  background: var(--surface-hover, rgba(217, 119, 87, 0.15));
+  border-radius: 50%;
+  color: var(--primary, #d97757);
+  display: flex;
+  font-size: 18px;
+  font-weight: 700;
+  height: 56px;
+  justify-content: center;
+  overflow: hidden;
+  width: 56px;
+  flex-shrink: 0;
+}
+
+.account-avatar-preview img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+/* The picker is driven by the button, so the input itself stays out of sight. */
+.account-avatar-input {
+  display: none;
+}
+
 .billing-plan-card {
   align-items: center;
   border: 1px solid var(--border);
@@ -3290,9 +3331,10 @@ select {
   min-height: 36px;
 }
 
-.audit-section-heading {
+.settings-page-content .audit-section-heading {
   align-items: center;
   display: grid;
+  gap: 14px;
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
@@ -3301,7 +3343,9 @@ select {
   border: 1px solid var(--border-strong);
   border-radius: 7px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Size each segment to its label. Equal `1fr` columns squeezed the longer
+     label ("当前工作区") into a clipped box on a narrow screen. */
+  grid-template-columns: repeat(2, minmax(max-content, auto));
   overflow: hidden;
 }
 
@@ -3966,12 +4010,18 @@ select {
     justify-self: end;
   }
 
-  .audit-section-heading {
+  .settings-page-content .audit-section-heading {
+    /* `.settings-page-content .settings-section-heading` is a flex container, so
+       the grid placement below only applies once the display is switched. */
+    display: grid;
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .audit-scope-switch {
+  .settings-page-content .audit-scope-switch {
+    /* The switch sizes itself to its labels, so it cannot share the shrunken
+       text column. Give it its own row, starting under the text. */
     grid-column: 2;
+    grid-row: 2;
     justify-self: start;
     margin-top: 2px;
   }

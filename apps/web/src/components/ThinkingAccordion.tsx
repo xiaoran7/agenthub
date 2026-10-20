@@ -92,60 +92,69 @@ export function ThinkingAccordion({
   if (!thoughtText.trim() && !isThinking) return null;
 
   return (
-    <div
-      className={`cds-thinking-accordion my-2.5 rounded-xl border border-[var(--cds-border)] bg-[var(--cds-surface-1)] transition-colors hover:border-[var(--cds-border-strong)] overflow-hidden text-xs ${className}`}
-      style={{
-        boxShadow: "var(--cds-shadow-sm, 0 1px 2px rgba(0,0,0,0.04))",
-      }}
-    >
+    <div className={`cds-thinking ${className}`}>
       {/* 头部状态条 */}
-      <div
-        onClick={handleToggle}
-        className={`flex items-center justify-between px-3.5 py-2 select-none ${
-          isThinking ? "cursor-default" : "cursor-pointer"
-        }`}
-      >
-        <div className="flex items-center gap-2">
-          {isThinking ? (
-            <div className="inline-flex items-center gap-1">
-              <span
-                className="w-1.5 h-1.5 rounded-full bg-[var(--cds-clay,#d97757)]"
-                style={{ animation: "timeline-quiet-dot 1.4s infinite 0s" }}
-              />
-              <span
-                className="w-1.5 h-1.5 rounded-full bg-[var(--cds-clay,#d97757)]"
-                style={{ animation: "timeline-quiet-dot 1.4s infinite 0.18s" }}
-              />
-              <span
-                className="w-1.5 h-1.5 rounded-full bg-[var(--cds-clay,#d97757)]"
-                style={{ animation: "timeline-quiet-dot 1.4s infinite 0.36s" }}
-              />
-            </div>
-          ) : (
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--cds-text-muted,#8a8a8a)]" />
-          )}
+      <div className="cds-thinking-header">
+        <button
+          type="button"
+          onClick={handleToggle}
+          className="cds-thinking-toggle"
+          aria-expanded={isOpen}
+          disabled={isThinking}
+        >
+          <span className="cds-thinking-lead">
+            {isThinking ? (
+              <span className="cds-thinking-dots">
+                <span
+                  className="cds-thinking-dot"
+                  style={{ animation: "timeline-quiet-dot 1.4s infinite 0s" }}
+                />
+                <span
+                  className="cds-thinking-dot"
+                  style={{
+                    animation: "timeline-quiet-dot 1.4s infinite 0.18s",
+                  }}
+                />
+                <span
+                  className="cds-thinking-dot"
+                  style={{
+                    animation: "timeline-quiet-dot 1.4s infinite 0.36s",
+                  }}
+                />
+              </span>
+            ) : (
+              <span className="cds-thinking-dot cds-thinking-dot-idle" />
+            )}
 
-          <span className="font-semibold text-[var(--cds-text-primary,#151515)]">
-            {isThinking ? "Thinking…" : "Thought process"}
+            <span className="cds-thinking-title">
+              {isThinking ? "Thinking…" : "Thought process"}
+            </span>
+
+            {elapsedMs > 0 && (
+              <span className="cds-thinking-elapsed">
+                ({(elapsedMs / 1000).toFixed(1)}s)
+              </span>
+            )}
           </span>
 
-          {elapsedMs > 0 && (
-            <span className="font-mono text-[11px] text-[var(--cds-text-muted,#8a8a8a)]">
-              ({(elapsedMs / 1000).toFixed(1)}s)
-            </span>
+          {!isThinking && (
+            <ChevronDownIcon
+              size={13}
+              className={`cds-thinking-chevron${isOpen ? " open" : ""}`}
+            />
           )}
-        </div>
+        </button>
 
-        <div className="flex items-center gap-2">
+        <span className="cds-thinking-actions">
           {thoughtText.trim() && (
             <button
               type="button"
               onClick={handleCopy}
-              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-[var(--cds-text-secondary,#525252)] hover:bg-[var(--cds-fill-ghost-hover)] hover:text-[var(--cds-text-primary)] transition-colors"
+              className="cds-thinking-copy"
               title="复制为引用格式"
             >
               {didCopy ? (
-                <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                <span className="cds-thinking-copied">
                   <CheckIcon size={12} />
                   <span>已复制</span>
                 </span>
@@ -154,29 +163,18 @@ export function ThinkingAccordion({
               )}
             </button>
           )}
-
-          {!isThinking && (
-            <ChevronDownIcon
-              size={13}
-              className={`text-[var(--cds-text-muted)] transition-transform duration-200 ${
-                isOpen ? "rotate-180" : ""
-              }`}
-            />
-          )}
-        </div>
+        </span>
       </div>
 
       {/* 内容区域：纯 CSS Grid 0fr -> 1fr 弹性展开容器 */}
       <div
-        className="grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(.16,1,.3,1)]"
+        className="cds-thinking-body"
         style={{
           gridTemplateRows: isOpen ? "1fr" : "0fr",
         }}
       >
-        <div className="min-h-0 overflow-hidden">
-          <div className="px-3.5 pb-3 pt-2 text-[12px] leading-relaxed text-[var(--cds-text-secondary,#525252)] font-mono whitespace-pre-wrap break-words border-t border-[var(--cds-border)] bg-[var(--cds-surface-0)]/50">
-            {thoughtText}
-          </div>
+        <div className="cds-thinking-body-inner">
+          <div className="cds-thinking-text">{thoughtText}</div>
         </div>
       </div>
     </div>

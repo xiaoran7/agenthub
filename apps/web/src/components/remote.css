@@ -153,68 +153,89 @@
   letter-spacing: 0.04em;
 }
 
-/* CDS 高精度新建会话卡片按钮 */
-.remote-sidebar-new-btn {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
-  gap: 9px !important;
-  width: 100% !important;
-  padding: 9px 12px !important;
-  margin-bottom: 8px !important;
-  border-radius: var(--cds-panel-radius, 10px) !important;
-  border: 1px solid var(--cds-border, var(--remote-line)) !important;
-  background: var(--cds-surface-2, #ffffff) !important;
-  color: var(--cds-text-primary, var(--remote-ink)) !important;
-  font-size: 13.5px !important;
-  font-weight: 550 !important;
-  letter-spacing: -0.01em !important;
-  box-shadow: var(--cds-shadow-sm) !important;
-  cursor: pointer !important;
-  position: relative !important;
-  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1) !important;
+/* ================= 顶部精简现代操作栏 (Top Compact Actions) ================= */
+.remote-sidebar-top-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
 }
-.remote-sidebar-new-btn:hover {
-  background: var(--cds-surface-2, #ffffff) !important;
-  border-color: var(--cds-clay, #d97757) !important;
-  box-shadow:
-    0 0 0 1px var(--cds-clay, #d97757),
-    var(--cds-shadow-md) !important;
-  transform: translateY(-0.5px) !important;
-}
-.remote-sidebar-new-btn:active {
-  transform: translateY(0.5px) !important;
-  box-shadow: var(--cds-shadow-sm) !important;
-}
-.remote-sidebar-new-btn-icon {
+
+.remote-top-action-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
-  color: var(--cds-clay, #d97757);
-  flex-shrink: 0;
-  transition: transform 0.15s ease;
-}
-.remote-sidebar-new-btn:hover .remote-sidebar-new-btn-icon {
-  transform: scale(1.08);
-}
-.remote-sidebar-new-btn-badge {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-lg, 9px);
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--cds-clay, #d97757);
-  background: var(--cds-clay-light, rgba(217, 119, 87, 0.08));
-  border: 1px solid var(--cds-clay-soft, rgba(217, 119, 87, 0.2));
-  padding: 1px 6px;
-  border-radius: 999px;
-  letter-spacing: 0.02em;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* CDS 实时搜索框 */
+.remote-top-action-btn.primary {
+  background: var(--cds-clay, #d97757);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(217, 119, 87, 0.3);
+}
+
+.remote-top-action-btn.primary:hover {
+  background: var(--cds-clay-hover, #c86849);
+  transform: translateY(-0.5px);
+  box-shadow: 0 2px 6px rgba(217, 119, 87, 0.35);
+}
+
+.remote-top-action-btn.primary:active {
+  transform: translateY(0.5px);
+  box-shadow: none;
+}
+
+.remote-top-action-btn.secondary {
+  background: var(--cds-surface-1, var(--remote-surface));
+  border-color: var(--cds-border, var(--remote-line));
+  color: var(--cds-text-secondary, var(--remote-secondary));
+}
+
+.remote-top-action-btn.secondary:hover {
+  background: var(--cds-surface-2, #ffffff);
+  border-color: var(--cds-border-strong, var(--remote-line-strong));
+  color: var(--cds-text-primary, var(--remote-ink));
+  transform: translateY(-0.5px);
+}
+
+.remote-top-action-btn.secondary.active {
+  background: var(--cds-surface-2, #ffffff);
+  border-color: var(--cds-clay, #d97757);
+  color: var(--cds-clay, #d97757);
+}
+
+.remote-top-action-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* CDS 紧凑搜索框 */
+.remote-sidebar-search-compact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  min-height: 32px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-lg, 8px);
+  border: 1px solid var(--cds-clay, #d97757);
+  background: var(--cds-surface-2, #ffffff);
+  box-shadow: 0 0 0 2px var(--cds-clay-soft, rgba(217, 119, 87, 0.2));
+  box-sizing: border-box;
+}
+
 .remote-sidebar-search-box {
   display: flex;
   align-items: center;
@@ -244,7 +265,7 @@
   border: none !important;
   background: transparent !important;
   padding: 0 !important;
-  font-size: 13.5px !important;
+  font-size: 13px !important;
   color: var(--cds-text-primary, var(--remote-ink)) !important;
   outline: none !important;
   box-shadow: none !important;
@@ -290,24 +311,33 @@
   white-space: nowrap;
   margin: 0 8px 6px;
 }
-/* CDS 会话过滤胶囊行 (Segmented Pill Track) */
+
+/* CDS 会话过滤胶囊行 (Segmented Pill Track with visible scrollbar) */
 .remote-filter-pill-row {
   display: flex;
   align-items: center;
   gap: 4px;
   margin: 2px 0 8px;
-  padding: 2px;
+  padding: 3px 4px;
   background: var(--cds-segmented-track, rgba(0, 0, 0, 0.05));
   border-radius: 999px;
   overflow-x: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--cds-border-strong, rgba(0, 0, 0, 0.22)) transparent;
   box-sizing: border-box;
 }
 .remote-filter-pill-row::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+.remote-filter-pill-row::-webkit-scrollbar-track {
+  background: transparent;
+}
+.remote-filter-pill-row::-webkit-scrollbar-thumb {
+  background: var(--cds-border-strong, rgba(0, 0, 0, 0.25));
+  border-radius: 999px;
 }
 .remote-filter-pill {
-  flex: 1 0 auto;
+  flex-shrink: 0;
   white-space: nowrap;
   padding: 3px 10px !important;
   font-size: 11.5px !important;
@@ -332,6 +362,111 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08) !important;
 }
 
+/* ================= 设备选择器 (Device Selector) ================= */
+.remote-device-selector-wrap {
+  position: relative;
+  margin-bottom: 8px;
+}
+.remote-device-selector-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  min-height: 36px;
+  border-radius: var(--radius-xl, 10px);
+  border: 1px solid var(--cds-border, var(--remote-line));
+  background: var(--cds-surface-1, var(--remote-surface));
+  color: var(--cds-text-primary, var(--remote-ink));
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+.remote-device-selector-btn:hover {
+  background: var(--cds-surface-2, #ffffff);
+  border-color: var(--cds-border-strong, var(--remote-line-strong));
+}
+.remote-device-selector-icon {
+  color: var(--cds-text-muted, var(--remote-muted));
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.remote-device-selector-name {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+}
+.remote-status-text-compact {
+  font-size: 11.5px;
+  color: var(--cds-text-muted, var(--remote-muted));
+  font-weight: 500;
+  margin-right: 2px;
+}
+.remote-device-selector-arrow {
+  display: inline-flex;
+  color: var(--cds-text-muted);
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
+.remote-device-selector-arrow.open {
+  transform: rotate(180deg);
+}
+.remote-device-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--cds-surface-2, #ffffff);
+  border: 1px solid var(--cds-border, var(--remote-line));
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.remote-device-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--cds-text-primary, var(--remote-ink));
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+.remote-device-menu-item:hover {
+  background: var(--cds-alpha-1, var(--remote-hover));
+}
+.remote-device-menu-item.active {
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.1));
+  color: var(--cds-clay, #d97757);
+  font-weight: 600;
+}
+.remote-device-menu-item-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remote-device-menu-item-status {
+  font-size: 11px;
+  color: var(--cds-text-muted);
+}
+
 .remote-session-badge {
   font-size: 10px;
   padding: 1px 5px;
@@ -353,6 +488,11 @@
   background: rgba(59, 138, 90, 0.14);
   color: var(--remote-green);
   border: 1px solid rgba(59, 138, 90, 0.3);
+}
+.remote-session-badge.antigravity {
+  background: rgba(139, 92, 246, 0.14);
+  color: #8b5cf6;
+  border: 1px solid rgba(139, 92, 246, 0.3);
 }
 
 /* ================= 设备 -> Agent -> 会话 树状层级 ================= */
@@ -458,23 +598,23 @@
   border: 1px solid var(--cds-border, transparent);
 }
 
-/* 发丝引导轨 (CDS Continuous Hairline Guide Rails) */
+/* 分层指示（无竖线，以留白与状态圆点表达层次） */
 .remote-node-children {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-left: 10px;
-  padding-left: 8px;
-  border-left: 1px solid var(--cds-border, var(--remote-line));
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
 }
 
 .remote-node-sessions {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  margin-left: 10px;
-  padding-left: 8px;
-  border-left: 1px solid var(--cds-border, var(--remote-line));
+  margin-left: 0;
+  padding-left: 4px;
+  border-left: none;
   padding-bottom: 4px;
 }
 
@@ -511,6 +651,123 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  margin-bottom: 6px;
+}
+
+.remote-workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 6px 5px 8px;
+  border-radius: var(--radius-lg, 8px);
+  transition: background 0.12s ease;
+}
+
+.remote-workspace-header:hover {
+  background: var(--cds-alpha-1, var(--remote-hover));
+}
+
+.remote-workspace-title-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.remote-workspace-quick-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--cds-text-muted, var(--remote-muted));
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.14s ease;
+}
+
+.remote-workspace-quick-add:hover {
+  color: var(--cds-clay, #d97757);
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
+  border-color: var(--cds-clay-soft, rgba(217, 119, 87, 0.2));
+}
+
+.remote-workspace-empty-hint {
+  font-size: 12px;
+  color: var(--cds-text-muted, var(--remote-muted));
+  padding: 4px 10px 6px 14px;
+}
+
+.remote-tree-empty-card {
+  padding: 24px 16px;
+  text-align: center;
+  background: var(--cds-surface-1, var(--remote-surface));
+  border: 1px dashed var(--cds-border, var(--remote-line));
+  border-radius: 12px;
+  margin: 12px 4px;
+}
+
+.remote-tree-empty-text {
+  font-size: 13px;
+  color: var(--cds-text-muted, var(--remote-muted));
+  margin: 0 0 10px;
+}
+
+.remote-empty-new-btn {
+  font-size: 12px;
+  font-weight: 550;
+  padding: 5px 12px;
+  border-radius: 6px;
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
+  color: var(--cds-clay, #d97757);
+  border: 1px solid var(--cds-clay-soft, rgba(217, 119, 87, 0.25));
+  cursor: pointer;
+}
+
+/* 状态指示圆点（图三指示样式：运行中绿点，等待黄点，休眠灰点，历史圆环） */
+.remote-session-bullet {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  margin-right: 6px;
+  flex-shrink: 0;
+  background: var(--cds-text-muted, #9ca3af);
+  transition: all 0.15s ease;
+}
+
+.remote-session-bullet.running {
+  background: var(--remote-green, #22c55e);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+}
+
+.remote-session-bullet.waiting {
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+}
+
+.remote-session-bullet.idle {
+  background: var(--cds-text-muted, #9ca3af);
+}
+
+.remote-session-bullet.candidate {
+  background: transparent;
+  border: 1.5px solid var(--cds-text-muted, #9ca3af);
+  box-sizing: border-box;
 }
 
 .remote-agent-badge {
@@ -534,6 +791,10 @@
   color: var(--cds-clay, var(--remote-terracotta));
 }
 
+.remote-agent-badge.antigravity {
+  color: #8b5cf6;
+}
+
 .remote-agent-badge.other {
   color: var(--cds-text-muted, var(--remote-muted));
 }
@@ -553,11 +814,14 @@
 }
 
 /* ================= CDS 风格会话卡片 (.remote-session) ================= */
+/* The row is a grid: the clickable body in column one, the copy control and
+   the pending badge in column two. The body is a real button of its own so
+   the copy control never has to be nested inside another button. */
 .remote-sidebar .remote-session {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
   width: 100%;
   text-align: left;
   background: transparent;
@@ -565,10 +829,36 @@
   border-left: 3px solid transparent;
   margin: 2px 0;
   padding: 8px 10px;
-  cursor: pointer;
+  cursor: default;
   border-radius: var(--radius-lg, 10px);
   position: relative;
   transition: all 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* A candidate row is still a single button, so it keeps the stacked layout
+   instead of the two-column grid the active rows use. */
+.remote-sidebar .remote-session.candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.remote-sidebar .remote-session-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .remote-sidebar .remote-session:hover {
@@ -579,6 +869,12 @@
 
 .remote-sidebar .remote-session:active {
   transform: scale(0.99);
+}
+
+.remote-sidebar .remote-session-main:focus-visible {
+  outline: 2px solid var(--cds-clay, #d97757);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm, 4px);
 }
 
 .remote-sidebar .remote-session.selected {
@@ -624,8 +920,10 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  align-self: start;
+  /* The body column starts with the title line; nudge the icons onto it. */
+  margin-top: -1px;
 }
-
 .remote-session-action-btn {
   display: inline-flex;
   align-items: center;
@@ -644,6 +942,20 @@
 
 .remote-sidebar .remote-session:hover .remote-session-action-btn {
   opacity: 0.9;
+}
+
+/* A touch device has no hover, so the button would never become visible.
+   There it is always shown, dimmed until it is tapped. */
+@media (hover: none) {
+  .remote-session-action-btn {
+    opacity: 0.55;
+  }
+}
+
+.remote-session-action-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--cds-clay, #d97757);
+  outline-offset: 1px;
 }
 
 .remote-session-action-btn:hover {
@@ -693,12 +1005,16 @@
 
 .remote-state-text {
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .remote-session-pill-tag {
   display: inline-flex;
   align-items: center;
   padding: 0 4px;
+  /* A flex item defaults to a min-content floor, so the pill would refuse to
+     shrink and push the meta row past its column. */
+  min-width: 0;
   max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -877,14 +1193,16 @@
 }
 
 .remote-status-dot {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  background: var(--cds-text-muted, var(--remote-muted));
+  display: inline-block;
   flex-shrink: 0;
 }
 .remote-status-dot.online {
-  background: var(--remote-green, #3b8a5a);
-  box-shadow: 0 0 5px rgba(59, 138, 90, 0.5);
+  background: var(--cds-green, #3b8a5a);
+  box-shadow: 0 0 8px rgba(59, 138, 90, 0.4);
 }
 .remote-status-dot.offline {
   background: var(--cds-text-muted, var(--remote-muted));
@@ -916,6 +1234,16 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* A custom avatar replaces the initial, so the frame holds the picture. */
+.remote-account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
 }
 
 .remote-account-name {
@@ -1679,12 +2007,12 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   margin: 4px 0;
 }
 .remote-question-item {
-  background: #0d0e12;
-  border: 1px solid #1e222a;
+  background: var(--cds-surface-0, #f5f5f3);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.1));
   border-radius: 6px;
   padding: 8px 10px;
 }
-.remote-question-header {
+.remote-question-item-header {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1696,13 +2024,13 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   padding: 1px 5px;
   border-radius: 3px;
   background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
+  color: var(--cds-blue, #2563eb);
   text-transform: uppercase;
 }
 .remote-question-text {
   font-size: 12px;
   font-weight: 600;
-  color: #f1f5f9;
+  color: var(--cds-text-primary, #151515);
 }
 .remote-options-list {
   display: flex;
@@ -1712,8 +2040,8 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 .remote-option-item {
   padding: 5px 8px;
   border-radius: 4px;
-  background: #14171f;
-  border: 1px solid #232733;
+  background: var(--cds-surface-1, #fcfcfb);
+  border: 1px solid var(--cds-border, rgba(0, 0, 0, 0.1));
   font-size: 11.5px;
 }
 .remote-option-item.selected {
@@ -1725,16 +2053,16 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   align-items: center;
   justify-content: space-between;
   font-weight: 550;
-  color: #e2e8f0;
+  color: var(--cds-text-primary, #151515);
 }
 .remote-option-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #34d399;
+  color: var(--cds-green, #3b8a5a);
 }
 .remote-option-desc {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--cds-text-muted, #6b7280);
   margin-top: 1px;
 }
 .remote-console pre {
@@ -1853,6 +2181,47 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   border: 1px solid rgba(217, 119, 87, 0.3);
   padding: 2px 9px;
   border-radius: var(--df-radius-pill, 999px);
+}
+
+/* The pill that says the Host is still waiting for a decision. */
+.remote-approval-awaiting-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--cds-clay, #d97757);
+  background: var(--cds-clay-light, rgba(217, 119, 87, 0.1));
+  border: 1px solid rgba(217, 119, 87, 0.3);
+  padding: 2px 9px;
+  border-radius: var(--df-radius-pill, 999px);
+  white-space: nowrap;
+}
+
+/* A pulse that shows the decision is still outstanding. */
+.awaiting-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cds-clay, #d97757);
+  flex-shrink: 0;
+  animation: awaiting-pulse 1.6s ease-in-out infinite;
+}
+
+.awaiting-dot.question {
+  background: var(--cds-blue, #3b82f6);
+}
+
+@keyframes awaiting-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 .remote-approval-badge {
   font-size: 11px;
@@ -2064,7 +2433,9 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   border-radius: var(--radius-lg, 10px);
   color: var(--cds-text-primary, #f1f5f9);
 }
-.remote-approval > div,
+/* Only the button row is a right-aligned flex row. The other direct children
+   of the card are blocks: a blanket `> div` rule turned the header, the
+   description and the code boxes into rows as well. */
 .remote-approval-actions {
   display: flex;
   align-items: center;
@@ -2569,6 +2940,10 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   padding: 26px;
   width: min(520px, calc(100% - 32px));
   max-height: 90dvh;
+  /* The dialog is taller than a short viewport, so the content has to
+     scroll — without this the submit button falls off the bottom. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .remote-launch[open] {
   animation: remote-dialog-enter 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -2652,21 +3027,7 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: #94a3b8;
-}
-.remote-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #64748b;
-  display: inline-block;
-}
-.remote-status-dot.online {
-  background: #10b981;
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
-}
-.remote-status-dot.offline {
-  background: #64748b;
+  color: var(--cds-text-muted, var(--remote-muted));
 }
 .remote-action-btn {
   width: 100%;

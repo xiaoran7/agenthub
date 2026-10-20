@@ -535,6 +535,90 @@ test("password reset is non-enumerating, one-time, and revokes every session", a
   await app.close();
 });
 
+test("a user can set and clear their own avatar", async () => {
+  const { app } = accountApp();
+  const registered = await app.inject({
+    method: "POST",
+    url: "/v1/auth/register",
+    payload: {
+      email: "avatar@example.com",
+      password: "correct horse battery staple",
+      display_name: "Tanner",
+    },
+  });
+  assert.equal(registered.statusCode, 201);
+  const cookie = sessionCookie(registered);
+  const avatar = `data:image/png;base64,${Buffer.from("fake-png").toString("base64")}`;
+
+  const unauthenticated = await app.inject({
+    method: "PATCH",
+    url: "/v1/auth/avatar",
+    payload: { data_url: avatar },
+  });
+  assert.equal(unauthenticated.statusCode, 401);
+
+  const saved = await app.inject({
+    method: "PATCH",
+    url: "/v1/auth/avatar",
+    headers: { cookie },
+    payload: { data_url: avatar },
+  });
+  assert.equal(saved.statusCode, 200);
+  assert.equal(saved.json().avatar_data_url, avatar);
+
+  const me = await app.inject({
+    method: "GET",
+    url: "/v1/auth/me",
+    headers: { cookie },
+  });
+  assert.equal(me.json().user.avatar_data_url, avatar);
+
+  const cleared = await app.inject({
+    method: "PATCH",
+    url: "/v1/auth/avatar",
+    headers: { cookie },
+    payload: { data_url: null },
+  });
+  assert.equal(cleared.statusCode, 200);
+  assert.equal(cleared.json().avatar_data_url, null);
+
+  const afterClear = await app.inject({
+    method: "GET",
+    url: "/v1/auth/me",
+    headers: { cookie },
+  });
+  assert.equal(afterClear.json().user.avatar_data_url, undefined);
+  await app.close();
+});
+
+test("an avatar that is not an allowed image is rejected", async () => {
+  const { app } = accountApp();
+  const registered = await app.inject({
+    method: "POST",
+    url: "/v1/auth/register",
+    payload: {
+      email: "bad-avatar@example.com",
+      password: "correct horse battery staple",
+    },
+  });
+  const cookie = sessionCookie(registered);
+  for (const payload of [
+    { data_url: "https://example.com/avatar.png" },
+    { data_url: "data:text/plain;base64,aGk=" },
+    { data_url: "data:image/png;base64," },
+    { data_url: "x", path: "/tmp/avatar.png" },
+  ]) {
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/v1/auth/avatar",
+      headers: { cookie },
+      payload,
+    });
+    assert.equal(response.statusCode, 400, JSON.stringify(payload));
+  }
+  await app.close();
+});
+
 test("authenticated password change preserves only the current session", async () => {
   const { app } = accountApp();
   const payload = {

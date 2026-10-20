@@ -752,6 +752,47 @@ impl ApiRequest<'_> {
                     }
                 }
             }
+            ("POST", "/api/device/name") => {
+                #[derive(Deserialize)]
+                struct NameReq {
+                    name: String,
+                }
+                match serde_json::from_slice::<NameReq>(body) {
+                    Ok(req) => {
+                        let home = std::env::var_os("USERPROFILE")
+                            .or_else(|| std::env::var_os("HOME"))
+                            .map(PathBuf::from);
+                        let Some(home) = home else {
+                            let err_json = json!({ "error": "home_dir_unavailable" });
+                            send_json_response(stream, 500, &err_json)?;
+                            return Ok(());
+                        };
+                        let identity_path = home.join(".agenthub").join("identity.json");
+                        match crate::device_name::write_configured_name(
+                            &identity_path,
+                            req.name.trim(),
+                        ) {
+                            Ok(()) => {
+                                let name = crate::device_name::resolve(None, Some(&identity_path));
+                                send_json_response(
+                                    stream,
+                                    200,
+                                    &json!({ "ok": true, "device_name": name }),
+                                )?;
+                            }
+                            Err(err) => {
+                                let err_json =
+                                    json!({ "error": format!("write_device_name_failed: {err}") });
+                                send_json_response(stream, 500, &err_json)?;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let err_json = json!({ "error": format!("invalid_name_payload: {err}") });
+                        send_json_response(stream, 400, &err_json)?;
+                    }
+                }
+            }
             ("POST", "/api/device/unbind") => {
                 let home = std::env::var_os("USERPROFILE")
                     .or_else(|| std::env::var_os("HOME"))
@@ -1401,7 +1442,8 @@ fn get_device_info() -> serde_json::Value {
             "device_id": "unknown",
             "public_key": "",
             "paired": false,
-            "gateway_url": ""
+            "gateway_url": "",
+            "device_name": crate::device_name::fallback_device_name(),
         });
     };
 
@@ -1453,7 +1495,8 @@ fn get_device_info() -> serde_json::Value {
         "public_key": public_key,
         "paired": paired,
         "gateway_url": gateway_url,
-        "paired_at": paired_at
+        "paired_at": paired_at,
+        "device_name": crate::device_name::resolve(None, Some(&identity_path)),
     });
 
     if let Ok(mut guard) = device_info_cache().write() {

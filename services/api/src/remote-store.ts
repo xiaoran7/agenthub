@@ -3,11 +3,12 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
-  isRemoteWorkspaceId,
   parseRemoteBinding,
   parseRemotePendingApproval,
+  parseRemoteReady,
   type RemoteBinding,
   type RemoteCommand,
+  type RemoteReady,
 } from "@agent-pulse/contracts";
 
 export class RemoteStoreError extends Error {
@@ -410,74 +411,18 @@ export class RemoteContentStore {
           )
           .run(JSON.stringify(receipt), runner, receipt.client_cmd_id);
       } else if (payload.type === "ready") {
-        requireOnlyKeys(
-          payload,
-          [
-            "type",
-            "provider",
-            "host_generation",
-            "device_name",
-            "workspaces",
-            "sessions",
-            "models",
-            "discovery",
-            "pending_approvals",
-            "pending_questions",
-            "attach_running",
-          ],
-          "invalid_ready",
-        );
-        if (
-          !Array.isArray(payload.sessions) ||
-          !Array.isArray(payload.workspaces) ||
-          typeof payload.host_generation !== "string" ||
-          !payload.host_generation ||
-          payload.host_generation.length > 128 ||
-          (payload.device_name !== undefined &&
-            (typeof payload.device_name !== "string" ||
-              payload.device_name.length > 64)) ||
-          payload.workspaces.some(
-            (workspace) => !isRemoteWorkspaceId(workspace),
-          ) ||
-          new Set(payload.workspaces).size !== payload.workspaces.length
-        )
+        // The allowlist and the shape rules live in the shared contract, so
+        // the Runner's builder and the Gateway's enforcer cannot drift.
+        let ready: RemoteReady;
+        try {
+          ready = parseRemoteReady(payload);
+        } catch {
           throw new RemoteStoreError("invalid_ready");
-        if (payload.pending_approvals !== undefined) {
-          if (!Array.isArray(payload.pending_approvals))
-            throw new RemoteStoreError("invalid_ready");
-          const approvals = payload.pending_approvals.map((item) => {
-            try {
-              return parseRemotePendingApproval(item);
-            } catch {
-              throw new RemoteStoreError("invalid_ready");
-            }
-          });
-          if (
-            new Set(approvals.map((approval) => approval.approval_id)).size !==
-              approvals.length ||
-            approvals.some(
-              (approval) =>
-                approval.host_generation !== payload.host_generation,
-            )
-          )
-            throw new RemoteStoreError("invalid_ready");
         }
-        const sessions = payload.sessions.map((item) => {
-          try {
-            return parseRemoteBinding(item);
-          } catch {
-            throw new RemoteStoreError("invalid_ready");
-          }
-        });
-        if (
-          sessions.some(
-            (session) => session.host_generation !== payload.host_generation,
-          )
-        )
-          throw new RemoteStoreError("invalid_ready");
+        const sessions = ready.sessions;
         if (
           activeGeneration === undefined ||
-          payload.host_generation === activeGeneration
+          ready.host_generation === activeGeneration
         ) {
           // Read this runner's bindings once instead of scanning every session
           // the owner owns, then write all changes in a single statement.

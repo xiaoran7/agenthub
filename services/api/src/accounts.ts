@@ -51,6 +51,8 @@ export interface AccountUser {
   oauth_provider?: string;
   oauth_sub?: string;
   email_verified_at?: string;
+  /** The user's own picture, as a data URL. */
+  avatar_data_url?: string;
   created_at: string;
 }
 
@@ -157,6 +159,7 @@ export const auditActions = [
   "auth.password_reset_completed",
   "auth.password_changed",
   "workspace.switched",
+  "account.avatar_updated",
   "team.invitation_created",
   "team.invitation_revoked",
   "team.invitation_accepted",
@@ -256,6 +259,12 @@ export interface AccountStore {
     now?: string;
   }): Promise<AccountView>;
   accountView(userId: string): Promise<AccountView | undefined>;
+  /** Replace or clear the user's own picture. */
+  setAvatar(
+    userId: string,
+    avatarDataUrl: string | undefined,
+    updatedAt?: string,
+  ): Promise<boolean>;
   createWebSession(input: {
     sessionId: string;
     digest: string;
@@ -570,6 +579,30 @@ export class InMemoryAccountStore implements AccountStore {
     return user === undefined || subscription === undefined
       ? undefined
       : accountView(user, subscription);
+  }
+
+  async setAvatar(
+    userId: string,
+    avatarDataUrl: string | undefined,
+    updatedAt?: string,
+  ): Promise<boolean> {
+    const user = this.#users.get(userId);
+    if (user === undefined || user.status !== "active") return false;
+    if (avatarDataUrl === undefined) {
+      delete user.avatar_data_url;
+    } else {
+      user.avatar_data_url = avatarDataUrl;
+    }
+    this.#recordAudit({
+      scope: "account",
+      actor_user_id: userId,
+      action: "account.avatar_updated",
+      target_type: "account",
+      target_id: userId,
+      metadata: { removed: avatarDataUrl === undefined ? 1 : 0 },
+      created_at: updatedAt ?? new Date().toISOString(),
+    });
+    return true;
   }
 
   async createWebSession(input: {
@@ -1890,6 +1923,7 @@ const AUDIT_METADATA_KEYS = new Set([
   "agent_type",
   "task_status",
   "previous_status",
+  "removed",
 ]);
 
 export function auditMetadata(

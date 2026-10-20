@@ -56,6 +56,7 @@ export class SqliteAccountStore implements AccountStore {
         password_hash TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         email_verified_at TEXT,
+        avatar_data_url TEXT,
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_users_email ON agent_pulse_users(email);
@@ -78,6 +79,27 @@ export class SqliteAccountStore implements AccountStore {
         blocked_until TEXT
       );
     `);
+    this.#migrateAvatarColumn();
+  }
+
+  /**
+   * Adds the avatar column to a database written by an older build.
+   *
+   * `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so a store
+   * created before avatars existed has no `avatar_data_url` column and every
+   * query that mentions it would fail. `ALTER TABLE ADD COLUMN` is supported
+   * from SQLite 3.35 and errors if the column is already present, so the
+   * guard checks the current shape first.
+   */
+  #migrateAvatarColumn(): void {
+    const columns = this.#db
+      .prepare("PRAGMA table_info(agent_pulse_users)")
+      .all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "avatar_data_url")) {
+      this.#db.exec(
+        "ALTER TABLE agent_pulse_users ADD COLUMN avatar_data_url TEXT",
+      );
+    }
   }
 
   async hasAnyAdmin(): Promise<boolean> {
@@ -130,6 +152,7 @@ export class SqliteAccountStore implements AccountStore {
           password_hash: string;
           status: "active" | "suspended" | "deleted";
           email_verified_at: string | null;
+          avatar_data_url: string | null;
           created_at: string;
         }
       | undefined;
@@ -146,6 +169,9 @@ export class SqliteAccountStore implements AccountStore {
     if (row.email_verified_at !== null) {
       user.email_verified_at = row.email_verified_at;
     }
+    if (row.avatar_data_url !== null) {
+      user.avatar_data_url = row.avatar_data_url;
+    }
     return user;
   }
 
@@ -159,6 +185,7 @@ export class SqliteAccountStore implements AccountStore {
           display_name: string;
           status: "active" | "suspended" | "deleted";
           email_verified_at: string | null;
+          avatar_data_url: string | null;
           created_at: string;
         }
       | undefined;
@@ -174,6 +201,9 @@ export class SqliteAccountStore implements AccountStore {
     if (row.email_verified_at !== null) {
       user.email_verified_at = row.email_verified_at;
     }
+    if (row.avatar_data_url !== null) {
+      user.avatar_data_url = row.avatar_data_url;
+    }
     const subscription: SubscriptionRecord = {
       plan: "pro",
       status: "active",
@@ -183,6 +213,33 @@ export class SqliteAccountStore implements AccountStore {
       subscription,
       entitlements: entitlementsFor(subscription),
     };
+  }
+
+  async setAvatar(
+    userId: string,
+    avatarDataUrl: string | undefined,
+    updatedAt?: string,
+  ): Promise<boolean> {
+    const status = this.#db
+      .prepare("SELECT status FROM agent_pulse_users WHERE user_id = ?")
+      .get(userId) as { status: string } | undefined;
+    if (status === undefined || status.status !== "active") return false;
+    this.#db
+      .prepare(
+        "UPDATE agent_pulse_users SET avatar_data_url = ? WHERE user_id = ?",
+      )
+      .run(avatarDataUrl ?? null, userId);
+    await this.recordAuditEvent({
+      scope: "account",
+      accountUserId: userId,
+      actorUserId: userId,
+      action: "account.avatar_updated",
+      targetType: "account",
+      targetId: userId,
+      metadata: { removed: avatarDataUrl === undefined ? 1 : 0 },
+      createdAt: updatedAt ?? this.#now().toISOString(),
+    });
+    return true;
   }
 
   async createWebSession(input: {

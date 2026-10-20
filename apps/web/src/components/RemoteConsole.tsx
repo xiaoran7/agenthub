@@ -29,7 +29,7 @@ import { SettingsPage } from "./SettingsPage";
 import { ThinkingAccordion } from "./ThinkingAccordion";
 import { parseNotificationPresentedAt } from "../lib/notifications";
 import type { PanelConfig } from "../lib/config";
-import { saveConfig } from "../lib/config";
+import { loadConfig, saveConfig } from "../lib/config";
 import {
   buildSessionTree,
   cleanPath,
@@ -38,6 +38,7 @@ import {
   workspaceLabel,
   workspaceTooltip,
   type ProviderKind,
+  type TreeSessionItem,
 } from "../lib/session-tree";
 import "./remote.css";
 import "./remote-desktop.css";
@@ -532,7 +533,7 @@ const RemoteToolCard = memo(function RemoteToolCard({
             <div className="remote-question-card">
               {questionItems.map((q, qIdx) => (
                 <div key={qIdx} className="remote-question-item">
-                  <div className="remote-question-header">
+                  <div className="remote-question-item-header">
                     {q.header && (
                       <span className="remote-question-tag">{q.header}</span>
                     )}
@@ -795,6 +796,11 @@ export function RemoteConsole({
   const [submittingInterrupt, setSubmittingInterrupt] = useState(false);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The settings view needs the Gateway address even on the routes that do
+  // not pass one down, so the console falls back to the stored config itself.
+  const [panelConfig, setPanelConfig] = useState<PanelConfig | undefined>(
+    config,
+  );
   const [notificationPresentedAt, setNotificationPresentedAt] = useState<
     number | undefined
   >(undefined);
@@ -806,6 +812,23 @@ export function RemoteConsole({
   const attempts = useRef(new Map<string, RemoteCommand>());
   const autoResumedRef = useRef<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (config !== undefined) {
+      setPanelConfig(config);
+      return;
+    }
+    setPanelConfig(loadConfig(window.localStorage));
+  }, [config]);
+
+  // The console's requests carry the signed-in account's identity. Without
+  // it the Gateway falls back to the development header, which resolves a
+  // different owner than the one the devices are bound to — the console then
+  // shows an empty list even though the Runner is publishing sessions.
+  const requestWithIdentity = useMemo<RemoteRequest>(
+    () => (path, body) => request(path, body, 12000, account?.user.user_id),
+    [request, account?.user.user_id],
+  );
 
   // The service worker reports back when it actually presented a waiting
   // notification, so Settings can show a receipt instead of assuming delivery.
@@ -869,6 +892,37 @@ export function RemoteConsole({
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+
+  // The mobile drawer covers the console, so Escape has to close it and the
+  // keyboard must not wander into the content behind it.
+  const mobileDrawerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!isMobile || !mobileDrawerOpen) return;
+    const drawer = mobileDrawerRef.current;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileDrawerOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || drawer === null) return;
+      const focusable = drawer.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !drawer.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isMobile, mobileDrawerOpen]);
   const currentSidebarWidthRef = useRef(sidebarWidth);
   currentSidebarWidthRef.current = sidebarWidth;
   const isResizingRef = useRef(false);
@@ -923,9 +977,11 @@ export function RemoteConsole({
     window.addEventListener("mouseup", onMouseUp);
   };
 
-  const [providerFilter, setProviderFilter] = useState<ProviderKind | "all">(
-    "all",
-  );
+  const [providerFilter, setProviderFilter] = useState<ProviderKind>("codex");
+  const [selectedRunnerId, setSelectedRunnerId] = useState<string>("");
+  const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const deviceMenuRef = useRef<HTMLDivElement>(null);
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [agentType, setAgentType] = useState<
@@ -961,7 +1017,7 @@ export function RemoteConsole({
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        const value = await request<RemoteSnapshot>("/sessions");
+        const value = await requestWithIdentity<RemoteSnapshot>("/sessions");
         if (!stopped) {
           setSnapshot(value);
           setLoading(false);
@@ -987,7 +1043,7 @@ export function RemoteConsole({
       stopped = true;
       clearTimeout(timer);
     };
-  }, [request, onAuthenticationRequired]);
+  }, [requestWithIdentity, onAuthenticationRequired]);
   useEffect(() => {
     setEvents([]);
     setCommands([]);
@@ -1013,12 +1069,12 @@ export function RemoteConsole({
         // One request, not two. The session detail route already carries the
         // binding, the event cursor and the command history, so the event fetch
         // below only runs when the cursor has actually moved.
-        const detail = await request<RemoteSessionDetail>(
+        const detail = await requestWithIdentity<RemoteSessionDetail>(
           `/sessions/${encodeURIComponent(runnerId)}/${encodeURIComponent(hub)}`,
         );
         if (stopped) return;
         if (detail.cursor > cursor) {
-          const batch = await request<{ events: RemoteEvent[] }>(
+          const batch = await requestWithIdentity<{ events: RemoteEvent[] }>(
             `/events?runner=${encodeURIComponent(runnerId)}&hub=${encodeURIComponent(hub)}&after=${cursor}`,
           );
           if (stopped) return;
@@ -1044,7 +1100,7 @@ export function RemoteConsole({
       stopped = true;
       clearTimeout(timer);
     };
-  }, [request, selected]);
+  }, [requestWithIdentity, selected]);
   const items = useMemo(
     () => conversationItems(events, commands),
     [events, commands],
@@ -1172,7 +1228,7 @@ export function RemoteConsole({
       } satisfies RemoteCommand);
     attempts.current.set(attemptKey, command);
     try {
-      await request(
+      await requestWithIdentity(
         `/runners/${encodeURIComponent(target.runner_id)}/commands`,
         command,
       );
@@ -1230,7 +1286,10 @@ export function RemoteConsole({
       } satisfies RemoteCommand);
     attempts.current.set(attemptKey, command);
     try {
-      await request(`/runners/${encodeURIComponent(runner)}/commands`, command);
+      await requestWithIdentity(
+        `/runners/${encodeURIComponent(runner)}/commands`,
+        command,
+      );
       attempts.current.delete(attemptKey);
       setSelected(`${runner}/${command.hub_session_id}`);
       dialog.current?.close();
@@ -1280,7 +1339,7 @@ export function RemoteConsole({
       } satisfies RemoteCommand);
     attempts.current.set(attemptKey, command);
     try {
-      await request(
+      await requestWithIdentity(
         `/runners/${encodeURIComponent(targetRunnerId)}/commands`,
         command,
       );
@@ -1441,14 +1500,144 @@ export function RemoteConsole({
       .filter((dev): dev is NonNullable<typeof dev> => dev !== null);
   }, [deviceGroups, sessionSearchQuery]);
 
-  /** Agent folders that actually exist, for the filter row. */
+  /** All available providers for the filter pill row. */
   const availableProviders = useMemo(() => {
     const seen = new Map<ProviderKind, string>();
-    for (const device of deviceGroups)
-      for (const agent of device.workspaces)
-        seen.set(agent.provider, agent.label);
+    const defaultEngines: Array<[ProviderKind, string]> = [
+      ["codex", "Codex"],
+      ["claude", "Claude Code"],
+      ["antigravity", "Antigravity"],
+      ["zcode", "ZCode"],
+    ];
+    for (const [kind, label] of defaultEngines) {
+      seen.set(kind, label);
+    }
+    for (const s of snapshot.sessions) {
+      const disc = discovered.get(
+        `${s.runner_id}/${s.binding.provider_session_id}`,
+      );
+      const info = getProviderInfo(
+        s.binding.provider_session_id,
+        disc?.provider,
+      );
+      seen.set(info.type, info.name);
+    }
+    for (const r of snapshot.runners) {
+      for (const d of r.hello?.discovery?.candidates ?? []) {
+        const info = getProviderInfo(d.provider_session_id, d.provider);
+        seen.set(info.type, info.name);
+      }
+    }
     return seen;
-  }, [deviceGroups]);
+  }, [snapshot.sessions, snapshot.runners, discovered]);
+
+  const deviceList = useMemo(() => {
+    return snapshot.runners
+      .map((r) => ({
+        runnerId: r.runner_id,
+        label: getDeviceLabel(r.runner_id, r.hello),
+        online: r.online,
+        workspaces: r.hello?.workspaces ?? [],
+      }))
+      .sort((a, b) => {
+        if (a.online !== b.online) return a.online ? -1 : 1;
+        return a.label.localeCompare(b.label, "zh-Hans-CN");
+      });
+  }, [snapshot.runners]);
+
+  const activeRunnerId = useMemo(() => {
+    if (
+      selectedRunnerId &&
+      deviceList.some((d) => d.runnerId === selectedRunnerId)
+    ) {
+      return selectedRunnerId;
+    }
+    const firstOnline = deviceList.find((d) => d.online);
+    if (firstOnline) return firstOnline.runnerId;
+    return deviceList[0]?.runnerId ?? "";
+  }, [selectedRunnerId, deviceList]);
+
+  const activeDevice = useMemo(() => {
+    return deviceList.find((d) => d.runnerId === activeRunnerId);
+  }, [deviceList, activeRunnerId]);
+
+  const currentDeviceGroup = useMemo(() => {
+    return filteredDeviceGroups.find((d) => d.runnerId === activeRunnerId);
+  }, [filteredDeviceGroups, activeRunnerId]);
+
+  const currentAgentWorkspaces = useMemo(() => {
+    const agent = currentDeviceGroup?.workspaces.find(
+      (a) => a.provider === providerFilter,
+    );
+    return agent?.workspaces ?? [];
+  }, [currentDeviceGroup, providerFilter]);
+
+  const allWorkspacesForDevice = useMemo(() => {
+    const map = new Map<
+      string,
+      { id: string; label: string; items: TreeSessionItem[] }
+    >();
+    for (const ws of currentAgentWorkspaces) {
+      map.set(ws.id, { id: ws.id, label: ws.label, items: [...ws.items] });
+    }
+    if (!sessionSearchQuery.trim()) {
+      for (const wsPath of activeDevice?.workspaces ?? []) {
+        if (!map.has(wsPath)) {
+          map.set(wsPath, {
+            id: wsPath,
+            label: workspaceLabel(wsPath),
+            items: [],
+          });
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.items.length > 0 !== b.items.length > 0) {
+        return a.items.length > 0 ? -1 : 1;
+      }
+      return a.label.localeCompare(b.label, "zh-Hans-CN");
+    });
+  }, [currentAgentWorkspaces, sessionSearchQuery, activeDevice]);
+
+  useEffect(() => {
+    if (!deviceMenuOpen) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (
+        deviceMenuRef.current &&
+        !deviceMenuRef.current.contains(e.target as Node)
+      ) {
+        setDeviceMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onClickOutside);
+    return () => window.removeEventListener("mousedown", onClickOutside);
+  }, [deviceMenuOpen]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const s = snapshot.sessions.find((entry) => key(entry) === selected);
+    if (s && s.runner_id && s.runner_id !== selectedRunnerId) {
+      setSelectedRunnerId(s.runner_id);
+    }
+    if (s) {
+      const disc = discovered.get(
+        `${s.runner_id}/${s.binding.provider_session_id}`,
+      );
+      const info = getProviderInfo(
+        s.binding.provider_session_id,
+        disc?.provider,
+      );
+      if (info.type && info.type !== providerFilter) {
+        setProviderFilter(info.type);
+      }
+    }
+  }, [
+    selected,
+    snapshot.sessions,
+    selectedRunnerId,
+    discovered,
+    providerFilter,
+  ]);
 
   const pendingApprovalsBySessionKey = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1519,6 +1708,8 @@ export function RemoteConsole({
               ? "collapsed"
               : ""
         }`}
+        ref={mobileDrawerRef}
+        aria-hidden={isMobile && !mobileDrawerOpen ? true : undefined}
         style={
           isMobile
             ? undefined
@@ -1570,474 +1761,508 @@ export function RemoteConsole({
             )}
           </button>
         </div>
-        <button
-          className="remote-sidebar-new-btn"
-          onClick={() => {
-            const available = snapshot.runners.find(
-              (item) => item.online && item.hello?.workspaces.length,
-            );
-            setRunner(available?.runner_id ?? "");
-            setWorkspace(available?.hello?.workspaces[0] ?? "");
-            setNativeId("");
-            setModel("");
-            dialog.current?.showModal();
-          }}
-        >
-          <span className="remote-sidebar-new-btn-icon" aria-hidden="true">
+        <div className="remote-sidebar-top-actions">
+          <button
+            type="button"
+            className="remote-top-action-btn primary"
+            title="新建会话"
+            onClick={() => {
+              const available = snapshot.runners.find(
+                (item) => item.online && item.hello?.workspaces.length,
+              );
+              setRunner(activeRunnerId || available?.runner_id || "");
+              const rInfo = snapshot.runners.find(
+                (r) => r.runner_id === (activeRunnerId || available?.runner_id),
+              );
+              setWorkspace(rInfo?.hello?.workspaces[0] ?? "");
+              setNativeId("");
+              setModel("");
+              dialog.current?.showModal();
+            }}
+          >
+            <span className="remote-top-action-btn-icon" aria-hidden="true">
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </span>
+            <span>新建会话</span>
+          </button>
+
+          <button
+            type="button"
+            className={`remote-top-action-btn secondary ${
+              searchOpen || sessionSearchQuery ? "active" : ""
+            }`}
+            title={searchOpen ? "收起搜索" : "搜索会话"}
+            onClick={() => {
+              setSearchOpen((prev) => !prev);
+            }}
+          >
             <svg
-              width="14"
-              height="14"
+              className="remote-search-icon"
+              width="13"
+              height="13"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2.5"
+              strokeWidth="2"
+              aria-hidden="true"
             >
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-          </span>
-          <span>新建会话</span>
-          <span className="remote-sidebar-new-btn-badge">New</span>
-        </button>
+            <span>搜索</span>
+          </button>
+        </div>
 
-        <div className="remote-sidebar-search-box">
-          <svg
-            className="remote-search-icon"
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            aria-hidden="true"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            type="text"
-            className="remote-sidebar-search-input"
-            placeholder="搜索会话或工作区..."
-            value={sessionSearchQuery}
-            onChange={(e) => setSessionSearchQuery(e.target.value)}
-          />
-          {sessionSearchQuery && (
+        {(searchOpen || sessionSearchQuery) && (
+          <div className="remote-sidebar-search-compact">
+            <svg
+              className="remote-search-icon"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              type="text"
+              className="remote-sidebar-search-input"
+              placeholder="搜索会话或工作区..."
+              value={sessionSearchQuery}
+              autoFocus
+              onChange={(e) => setSessionSearchQuery(e.target.value)}
+            />
+            {sessionSearchQuery && (
+              <button
+                type="button"
+                className="remote-search-clear"
+                title="清空搜索"
+                onClick={() => setSessionSearchQuery("")}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+
+        <div
+          className="remote-filter-pill-row"
+          role="tablist"
+          aria-label="按 Agent 过滤"
+        >
+          {[...availableProviders].map(([kind, label]) => (
             <button
               type="button"
-              className="remote-search-clear"
-              title="清空搜索"
-              onClick={() => setSessionSearchQuery("")}
+              className={`remote-filter-pill ${providerFilter === kind ? "active" : ""}`}
+              key={kind}
+              onClick={() => setProviderFilter(kind)}
             >
-              ×
+              {label}
             </button>
+          ))}
+        </div>
+
+        <div className="remote-device-selector-wrap" ref={deviceMenuRef}>
+          <button
+            type="button"
+            className="remote-device-selector-btn"
+            onClick={() => setDeviceMenuOpen((prev) => !prev)}
+            aria-expanded={deviceMenuOpen}
+            title={`${activeDevice?.label ?? "未连接设备"} · 点击切换电脑`}
+          >
+            <span className="remote-device-selector-icon" aria-hidden="true">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
+              </svg>
+            </span>
+            <span className="remote-device-selector-name">
+              {activeDevice?.label ??
+                (activeRunnerId
+                  ? `电脑 · ${activeRunnerId.slice(-6)}`
+                  : "暂无在线电脑")}
+            </span>
+            <span
+              className={`remote-status-dot ${
+                activeDevice?.online ? "online" : "offline"
+              }`}
+              title={activeDevice?.online ? "电脑在线" : "电脑离线"}
+            />
+            <span className="remote-status-text-compact">
+              {activeDevice?.online ? "在线" : "离线"}
+            </span>
+            {deviceList.length > 1 && (
+              <span
+                className={`remote-device-selector-arrow ${
+                  deviceMenuOpen ? "open" : ""
+                }`}
+                aria-hidden="true"
+              >
+                <ChevronDownIcon size={12} />
+              </span>
+            )}
+          </button>
+
+          {deviceMenuOpen && deviceList.length > 1 && (
+            <div className="remote-device-menu">
+              {deviceList.map((dev) => (
+                <button
+                  type="button"
+                  className={`remote-device-menu-item ${
+                    dev.runnerId === activeRunnerId ? "active" : ""
+                  }`}
+                  key={dev.runnerId}
+                  onClick={() => {
+                    setSelectedRunnerId(dev.runnerId);
+                    setDeviceMenuOpen(false);
+                  }}
+                >
+                  <span
+                    className={`remote-status-dot ${
+                      dev.online ? "online" : "offline"
+                    }`}
+                  />
+                  <span className="remote-device-menu-item-name">
+                    {dev.label}
+                  </span>
+                  <span className="remote-device-menu-item-status">
+                    {dev.online ? "在线" : "离线"}
+                  </span>
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
-        {availableProviders.size > 1 && (
-          <div
-            className="remote-filter-pill-row"
-            role="tablist"
-            aria-label="按 Agent 过滤"
-          >
-            <button
-              type="button"
-              className={`remote-filter-pill ${providerFilter === "all" ? "active" : ""}`}
-              onClick={() => setProviderFilter("all")}
-            >
-              全部 Agent
-            </button>
-            {[...availableProviders].map(([kind, label]) => (
-              <button
-                type="button"
-                className={`remote-filter-pill ${providerFilter === kind ? "active" : ""}`}
-                key={kind}
-                onClick={() => setProviderFilter(kind)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="remote-nav-label">设备 / Agent / 工作区</div>
         <div className="remote-session-tree">
-          {filteredDeviceGroups.map((dev) => {
-            const isDevCollapsed =
-              !sessionSearchQuery && collapsedDevices[dev.runnerId] === true;
-            return (
-              <section className="remote-device-group" key={dev.runnerId}>
+          {allWorkspacesForDevice.length === 0 ? (
+            <div className="remote-tree-empty-card">
+              <p className="remote-tree-empty-text">
+                {sessionSearchQuery
+                  ? `未找到与 "${sessionSearchQuery}" 匹配的会话`
+                  : activeDevice?.online
+                    ? "暂无该 Agent 的会话"
+                    : "电脑已离线"}
+              </p>
+              {activeDevice?.online && !sessionSearchQuery && (
                 <button
                   type="button"
-                  className="remote-device-header"
-                  onClick={() => toggleNode(setCollapsedDevices, dev.runnerId)}
-                  aria-expanded={!isDevCollapsed}
-                  title={`${dev.label}${dev.online ? "" : "（离线）"} · ${dev.runnerId}`}
+                  className="remote-empty-new-btn"
+                  onClick={() => {
+                    setRunner(activeRunnerId);
+                    setWorkspace(activeDevice?.workspaces[0] ?? "");
+                    setNativeId("");
+                    setModel("");
+                    dialog.current?.showModal();
+                  }}
                 >
-                  <span
-                    className={`remote-tree-caret ${
-                      isDevCollapsed ? "collapsed" : ""
-                    }`}
-                    aria-hidden="true"
-                  >
-                    <ChevronDownIcon size={12} />
-                  </span>
-                  <span className="remote-device-title">{dev.label}</span>
-                  <span
-                    className={`remote-status-dot ${dev.online ? "online" : "offline"}`}
-                    title={dev.online ? "设备在线" : "设备离线"}
-                  />
-                  <span className="remote-node-count">{dev.totalCount}</span>
+                  + 新建会话
                 </button>
+              )}
+            </div>
+          ) : (
+            allWorkspacesForDevice.map((workspaceGroup) => {
+              const workspaceKey = `${activeRunnerId}/${providerFilter}/${workspaceGroup.id}`;
+              const isWorkspaceCollapsed =
+                !sessionSearchQuery &&
+                collapsedWorkspaces[workspaceKey] === true;
+              return (
+                <div className="remote-workspace-group" key={workspaceKey}>
+                  <div className="remote-workspace-header">
+                    <button
+                      type="button"
+                      className="remote-workspace-title-btn"
+                      onClick={() =>
+                        toggleNode(setCollapsedWorkspaces, workspaceKey)
+                      }
+                      aria-expanded={!isWorkspaceCollapsed}
+                      title={workspaceTooltip(workspaceGroup.id)}
+                    >
+                      <span
+                        className={`remote-tree-caret ${
+                          isWorkspaceCollapsed ? "collapsed" : ""
+                        }`}
+                        aria-hidden="true"
+                      >
+                        <ChevronDownIcon size={12} />
+                      </span>
+                      <svg
+                        className="remote-workspace-icon"
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                      </svg>
+                      <span className="remote-workspace-name">
+                        {workspaceGroup.label}
+                      </span>
+                      <span className="remote-node-count">
+                        {workspaceGroup.items.length}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="remote-workspace-quick-add"
+                      title={`在 ${workspaceGroup.label} 中新建会话`}
+                      aria-label={`在 ${workspaceGroup.label} 中新建会话`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRunner(activeRunnerId);
+                        setWorkspace(workspaceGroup.id);
+                        setNativeId("");
+                        setModel("");
+                        dialog.current?.showModal();
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
 
-                {!isDevCollapsed && (
-                  <div className="remote-node-children">
-                    {dev.workspaces.length === 0 ? (
-                      <p className="remote-tree-empty">
-                        {dev.online ? "暂无会话" : "电脑离线"}
-                      </p>
-                    ) : (
-                      dev.workspaces.map((agentGroup) => {
-                        const agentKey = `${dev.runnerId}/${agentGroup.provider}`;
-                        const isAgentCollapsed =
-                          !sessionSearchQuery &&
-                          collapsedAgents[agentKey] === true;
-                        return (
-                          <div className="remote-agent-group" key={agentKey}>
-                            <button
-                              type="button"
-                              className="remote-node-header"
-                              data-level="agent"
-                              onClick={() =>
-                                toggleNode(setCollapsedAgents, agentKey)
-                              }
-                              aria-expanded={!isAgentCollapsed}
-                              title={`${agentGroup.label} · ${agentGroup.totalCount} 个会话`}
-                            >
-                              <span
-                                className={`remote-tree-caret ${
-                                  isAgentCollapsed ? "collapsed" : ""
+                  {!isWorkspaceCollapsed && (
+                    <div className="remote-node-sessions">
+                      {workspaceGroup.items.length === 0 ? (
+                        <div className="remote-workspace-empty-hint">
+                          暂无会话，点击 + 开始
+                        </div>
+                      ) : (
+                        workspaceGroup.items.map((item) => {
+                          if (item.kind === "active") {
+                            const activeSession = snapshot.sessions.find(
+                              (entry) => key(entry) === item.sessionKey,
+                            );
+                            const isSelected = item.sessionKey === selected;
+                            const pendingCount =
+                              pendingApprovalsBySessionKey.get(
+                                item.sessionKey,
+                              ) ?? 0;
+                            return (
+                              <div
+                                className={`remote-session ${
+                                  isSelected ? "selected" : ""
                                 }`}
-                                aria-hidden="true"
+                                key={item.key}
                               >
-                                <ChevronDownIcon size={12} />
-                              </span>
-                              <span
-                                className={`remote-agent-badge ${agentGroup.badgeClass}`}
-                              >
-                                {agentGroup.label}
-                              </span>
-                              <span className="remote-node-count">
-                                {agentGroup.totalCount}
+                                <button
+                                  type="button"
+                                  className="remote-session-main"
+                                  onClick={() => {
+                                    if (activeSession === undefined) return;
+                                    if (isSelected) {
+                                      if (isMobile) setMobileDrawerOpen(false);
+                                      return;
+                                    }
+                                    setSelected(item.sessionKey);
+                                    setError("");
+                                    if (isMobile) setMobileDrawerOpen(false);
+                                    if (
+                                      activeSession.online &&
+                                      !activeSession.binding.control_connected
+                                    ) {
+                                      void submit(
+                                        {
+                                          action: "connect",
+                                          mode: "resume",
+                                          workspace_path:
+                                            activeSession.binding
+                                              .workspace_path,
+                                          provider_session_id:
+                                            activeSession.binding
+                                              .provider_session_id,
+                                        },
+                                        activeSession,
+                                      );
+                                    }
+                                  }}
+                                >
+                                  <span className="remote-session-top-line">
+                                    <span
+                                      className={`remote-session-bullet ${
+                                        item.session.execution_state ===
+                                        "running"
+                                          ? "running"
+                                          : item.session.execution_state ===
+                                                "awaiting_permission" ||
+                                              item.session.execution_state ===
+                                                "awaiting_input"
+                                            ? "waiting"
+                                            : "idle"
+                                      }`}
+                                      aria-hidden="true"
+                                    />
+                                    <span className="remote-session-title">
+                                      {item.title}
+                                    </span>
+                                  </span>
+                                  <span className="remote-session-meta">
+                                    <span
+                                      className={`remote-state-dot ${
+                                        item.session.execution_state ===
+                                        "running"
+                                          ? "running"
+                                          : item.session.execution_state ===
+                                                "awaiting_permission" ||
+                                              item.session.execution_state ===
+                                                "awaiting_input"
+                                            ? "waiting"
+                                            : "idle"
+                                      }`}
+                                      aria-hidden="true"
+                                    />
+                                    <span className="remote-state-text">
+                                      {states[item.session.execution_state] ??
+                                        "状态待确认"}
+                                    </span>
+                                    {item.model && (
+                                      <span
+                                        className="remote-session-pill-tag"
+                                        title={`模型: ${item.model}`}
+                                      >
+                                        {item.model.replace(/^models\//u, "")}
+                                      </span>
+                                    )}
+                                    {formatSessionTokens(item.totalTokens) && (
+                                      <span
+                                        className="remote-session-tokens"
+                                        title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
+                                      >
+                                        {formatSessionTokens(item.totalTokens)}
+                                      </span>
+                                    )}
+                                  </span>
+                                </button>
+                                <div className="remote-session-actions-hover">
+                                  {pendingCount > 0 && (
+                                    <span
+                                      className="remote-tree-badge-pending"
+                                      title={`有 ${pendingCount} 项待确认审批`}
+                                      aria-label={`有 ${pendingCount} 项待确认审批`}
+                                    >
+                                      !
+                                      {pendingCount > 1
+                                        ? ` ${pendingCount}`
+                                        : ""}
+                                    </span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className={`remote-session-action-btn ${
+                                      copiedSessionId === item.sessionKey
+                                        ? "copied"
+                                        : ""
+                                    }`}
+                                    title={
+                                      copiedSessionId === item.sessionKey
+                                        ? "已复制会话ID"
+                                        : "复制会话ID"
+                                    }
+                                    aria-label="复制会话ID"
+                                    onClick={(e) =>
+                                      handleCopySessionId(item.sessionKey, e)
+                                    }
+                                  >
+                                    {copiedSessionId === item.sessionKey ? (
+                                      <CheckIcon size={12} />
+                                    ) : (
+                                      <CopyIcon size={12} />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <button
+                              className="remote-session candidate"
+                              key={item.key}
+                              title={
+                                item.candidate.resumable === false
+                                  ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
+                                  : `点击恢复：${item.title}`
+                              }
+                              disabled={
+                                busy || item.candidate.resumable === false
+                              }
+                              onClick={() => {
+                                if (isMobile) setMobileDrawerOpen(false);
+                                void resumeCandidate(
+                                  item.runnerId,
+                                  item.workspaceId,
+                                  item.providerSessionId,
+                                );
+                              }}
+                            >
+                              <div className="remote-session-top-line">
+                                <span
+                                  className="remote-session-bullet candidate"
+                                  aria-hidden="true"
+                                />
+                                <span className="remote-session-title">
+                                  {item.title}
+                                </span>
+                              </div>
+                              <span className="remote-session-meta">
+                                <span className="remote-state-dot idle" />
+                                <span className="remote-state-text">
+                                  {item.candidate.resumable === false
+                                    ? "仅发现"
+                                    : "点击恢复"}
+                                </span>
+                                {item.model && (
+                                  <span
+                                    className="remote-session-pill-tag"
+                                    title={`模型: ${item.model}`}
+                                  >
+                                    {item.model.replace(/^models\//u, "")}
+                                  </span>
+                                )}
+                                {formatSessionTokens(item.totalTokens) && (
+                                  <span
+                                    className="remote-session-tokens"
+                                    title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
+                                  >
+                                    {formatSessionTokens(item.totalTokens)}
+                                  </span>
+                                )}
                               </span>
                             </button>
-
-                            {!isAgentCollapsed && (
-                              <div className="remote-node-children">
-                                {agentGroup.workspaces.map((workspaceGroup) => {
-                                  const workspaceKey = `${agentKey}/${workspaceGroup.id}`;
-                                  const isWorkspaceCollapsed =
-                                    !sessionSearchQuery &&
-                                    collapsedWorkspaces[workspaceKey] === true;
-                                  return (
-                                    <div
-                                      className="remote-workspace-group"
-                                      key={workspaceKey}
-                                    >
-                                      <button
-                                        type="button"
-                                        className="remote-node-header"
-                                        data-level="workspace"
-                                        onClick={() =>
-                                          toggleNode(
-                                            setCollapsedWorkspaces,
-                                            workspaceKey,
-                                          )
-                                        }
-                                        aria-expanded={!isWorkspaceCollapsed}
-                                        title={workspaceTooltip(
-                                          workspaceGroup.id,
-                                        )}
-                                      >
-                                        <span
-                                          className={`remote-tree-caret ${
-                                            isWorkspaceCollapsed
-                                              ? "collapsed"
-                                              : ""
-                                          }`}
-                                          aria-hidden="true"
-                                        >
-                                          <ChevronDownIcon size={12} />
-                                        </span>
-                                        <svg
-                                          className="remote-workspace-icon"
-                                          width="14"
-                                          height="14"
-                                          viewBox="0 0 24 24"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          strokeWidth="1.8"
-                                          aria-hidden="true"
-                                        >
-                                          <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                                        </svg>
-                                        <span className="remote-workspace-name">
-                                          {workspaceGroup.label}
-                                        </span>
-                                        <span className="remote-node-count">
-                                          {workspaceGroup.items.length}
-                                        </span>
-                                      </button>
-
-                                      {!isWorkspaceCollapsed && (
-                                        <div className="remote-node-sessions">
-                                          {workspaceGroup.items.map((item) => {
-                                            if (item.kind === "active") {
-                                              const activeSession =
-                                                snapshot.sessions.find(
-                                                  (entry) =>
-                                                    key(entry) ===
-                                                    item.sessionKey,
-                                                );
-                                              const isSelected =
-                                                item.sessionKey === selected;
-                                              const pendingCount =
-                                                pendingApprovalsBySessionKey.get(
-                                                  item.sessionKey,
-                                                ) ?? 0;
-                                              return (
-                                                <button
-                                                  className={`remote-session ${isSelected ? "selected" : ""}`}
-                                                  key={item.key}
-                                                  onClick={() => {
-                                                    if (
-                                                      activeSession ===
-                                                      undefined
-                                                    )
-                                                      return;
-                                                    if (isSelected) {
-                                                      if (isMobile)
-                                                        setMobileDrawerOpen(
-                                                          false,
-                                                        );
-                                                      return;
-                                                    }
-                                                    setSelected(
-                                                      item.sessionKey,
-                                                    );
-                                                    setError("");
-                                                    if (isMobile)
-                                                      setMobileDrawerOpen(
-                                                        false,
-                                                      );
-                                                    if (
-                                                      activeSession.online &&
-                                                      !activeSession.binding
-                                                        .control_connected
-                                                    ) {
-                                                      void submit(
-                                                        {
-                                                          action: "connect",
-                                                          mode: "resume",
-                                                          workspace_path:
-                                                            activeSession
-                                                              .binding
-                                                              .workspace_path,
-                                                          provider_session_id:
-                                                            activeSession
-                                                              .binding
-                                                              .provider_session_id,
-                                                        },
-                                                        activeSession,
-                                                      );
-                                                    }
-                                                  }}
-                                                >
-                                                  <div className="remote-session-top-line">
-                                                    <span className="remote-session-title">
-                                                      {item.title}
-                                                    </span>
-                                                    <div className="remote-session-actions-hover">
-                                                      {pendingCount > 0 && (
-                                                        <span
-                                                          className="remote-tree-badge-pending"
-                                                          title={`有 ${pendingCount} 项待确认审批`}
-                                                          aria-label={`有 ${pendingCount} 项待确认审批`}
-                                                        >
-                                                          !
-                                                          {pendingCount > 1
-                                                            ? ` ${pendingCount}`
-                                                            : ""}
-                                                        </span>
-                                                      )}
-                                                      <span
-                                                        role="button"
-                                                        tabIndex={0}
-                                                        className={`remote-session-action-btn ${copiedSessionId === item.sessionKey ? "copied" : ""}`}
-                                                        title={
-                                                          copiedSessionId ===
-                                                          item.sessionKey
-                                                            ? "已复制会话ID"
-                                                            : "复制会话ID"
-                                                        }
-                                                        onClick={(e) =>
-                                                          handleCopySessionId(
-                                                            item.sessionKey,
-                                                            e,
-                                                          )
-                                                        }
-                                                      >
-                                                        {copiedSessionId ===
-                                                        item.sessionKey ? (
-                                                          <CheckIcon
-                                                            size={12}
-                                                            className="text-emerald-600 dark:text-emerald-400"
-                                                          />
-                                                        ) : (
-                                                          <CopyIcon size={12} />
-                                                        )}
-                                                      </span>
-                                                    </div>
-                                                  </div>
-                                                  <span className="remote-session-meta">
-                                                    <span
-                                                      className={`remote-state-dot ${
-                                                        item.session
-                                                          .execution_state ===
-                                                        "running"
-                                                          ? "running"
-                                                          : item.session
-                                                                .execution_state ===
-                                                                "awaiting_permission" ||
-                                                              item.session
-                                                                .execution_state ===
-                                                                "awaiting_input"
-                                                            ? "waiting"
-                                                            : "idle"
-                                                      }`}
-                                                      aria-hidden="true"
-                                                    />
-                                                    <span className="remote-state-text">
-                                                      {states[
-                                                        item.session
-                                                          .execution_state
-                                                      ] ?? "状态待确认"}
-                                                    </span>
-                                                    {item.model && (
-                                                      <span
-                                                        className="remote-session-pill-tag"
-                                                        title={`模型: ${item.model}`}
-                                                      >
-                                                        {item.model.replace(
-                                                          /^models\//u,
-                                                          "",
-                                                        )}
-                                                      </span>
-                                                    )}
-                                                    {formatSessionTokens(
-                                                      item.totalTokens,
-                                                    ) && (
-                                                      <span
-                                                        className="remote-session-tokens"
-                                                        title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
-                                                      >
-                                                        {formatSessionTokens(
-                                                          item.totalTokens,
-                                                        )}
-                                                      </span>
-                                                    )}
-                                                  </span>
-                                                </button>
-                                              );
-                                            }
-
-                                            return (
-                                              <button
-                                                className="remote-session candidate"
-                                                key={item.key}
-                                                title={
-                                                  item.candidate.resumable ===
-                                                  false
-                                                    ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
-                                                    : `点击恢复：${item.title}`
-                                                }
-                                                disabled={
-                                                  busy ||
-                                                  item.candidate.resumable ===
-                                                    false
-                                                }
-                                                onClick={() => {
-                                                  if (isMobile)
-                                                    setMobileDrawerOpen(false);
-                                                  void resumeCandidate(
-                                                    item.runnerId,
-                                                    item.workspaceId,
-                                                    item.providerSessionId,
-                                                  );
-                                                }}
-                                              >
-                                                <div className="remote-session-top-line">
-                                                  <span className="remote-session-title">
-                                                    {item.title}
-                                                  </span>
-                                                </div>
-                                                <span className="remote-session-meta">
-                                                  <span className="remote-state-dot idle" />
-                                                  <span className="remote-state-text">
-                                                    {item.candidate
-                                                      .resumable === false
-                                                      ? "仅发现"
-                                                      : "点击恢复"}
-                                                  </span>
-                                                  {item.model && (
-                                                    <span
-                                                      className="remote-session-pill-tag"
-                                                      title={`模型: ${item.model}`}
-                                                    >
-                                                      {item.model.replace(
-                                                        /^models\//u,
-                                                        "",
-                                                      )}
-                                                    </span>
-                                                  )}
-                                                  {formatSessionTokens(
-                                                    item.totalTokens,
-                                                  ) && (
-                                                    <span
-                                                      className="remote-session-tokens"
-                                                      title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
-                                                    >
-                                                      {formatSessionTokens(
-                                                        item.totalTokens,
-                                                      )}
-                                                    </span>
-                                                  )}
-                                                </span>
-                                              </button>
-                                            );
-                                          })}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                )}
-              </section>
-            );
-          })}
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
-        {!filteredDeviceGroups.length && (
-          <p className="remote-muted">
-            {sessionSearchQuery
-              ? `未找到包含 "${sessionSearchQuery}" 的会话`
-              : "连接电脑后，在工作区中开始会话。"}
-          </p>
-        )}
         <div className="remote-sidebar-footer">
           <div className="remote-runner-status">
             <span
@@ -2050,11 +2275,19 @@ export function RemoteConsole({
           {account?.user ? (
             <div className="remote-account-card">
               <div className="remote-account-avatar" aria-hidden="true">
-                {(
-                  account.user.display_name?.[0] ||
-                  account.user.email?.[0] ||
-                  "U"
-                ).toUpperCase()}
+                {account.user.avatar_data_url ? (
+                  <img
+                    src={account.user.avatar_data_url}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  (
+                    account.user.display_name?.[0] ||
+                    account.user.email?.[0] ||
+                    "U"
+                  ).toUpperCase()
+                )}
               </div>
               <span className="remote-account-name" title={account.user.email}>
                 {account.user.display_name || account.user.email}
@@ -2240,7 +2473,7 @@ export function RemoteConsole({
         )}
         {latestFailure && (
           <div className="remote-notice" role="status">
-            {remoteError(new Error(latestFailure.receipt?.code))}
+            {remoteError(new Error(latestFailure.receipt?.code ?? ""))}
           </div>
         )}
         {turnFailure &&
@@ -3284,10 +3517,10 @@ export function RemoteConsole({
           </button>
         </form>
       </dialog>
-      {settingsOpen && config !== undefined && (
+      {settingsOpen && panelConfig !== undefined && (
         <SettingsPage
           account={account ?? undefined}
-          config={config}
+          config={panelConfig}
           notificationPresentedAt={notificationPresentedAt}
           onClose={() => setSettingsOpen(false)}
           onLoggedOut={() => {
@@ -3296,6 +3529,7 @@ export function RemoteConsole({
           }}
           onSave={(next) => {
             saveConfig(window.localStorage, next);
+            setPanelConfig(next);
             setSettingsOpen(false);
             refresh.current();
           }}

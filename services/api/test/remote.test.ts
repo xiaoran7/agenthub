@@ -9,6 +9,7 @@ import { WebSocket } from "ws";
 import { RemoteContentStore } from "../src/remote-store.js";
 import { createGatewayApp } from "../src/app.js";
 import { DevelopmentIdentityAuthenticator } from "../src/auth.js";
+import { InMemoryAccountStore, SessionAuthenticator } from "../src/accounts.js";
 import { InMemoryGatewayStore } from "../src/store.js";
 import type { RemoteCommand } from "@agent-pulse/contracts";
 
@@ -924,5 +925,77 @@ test("command history filters by the projected session id and upgrades old datab
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the remote API resolves a session cookie to its owner and ignores the development header", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  const accounts = new InMemoryAccountStore();
+  const devices = new InMemoryGatewayStore();
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    accounts,
+    authenticator: new SessionAuthenticator(accounts),
+    remoteContent: content,
+  });
+  try {
+    const registered = await app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      payload: {
+        email: "owner@example.com",
+        password: "correct horse battery staple",
+        display_name: "Owner",
+      },
+    });
+    assert.equal(registered.statusCode, 201);
+    const cookie = String(registered.headers["set-cookie"]).split(";", 1)[0]!;
+    const userId = registered.json().user.user_id as string;
+
+    // The device belongs to the signed-in account's workspace.
+    await devices.registerDevice(userId, runner, publicKey);
+    const address = await app.listen({ port: 0, host: "127.0.0.1" });
+    const { ws, next } = await connectRunner(
+      address,
+      keys.privateKey,
+      "host-one",
+    );
+    try {
+      ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
+      assert.equal((await next("ack")).seq, 1);
+
+      // The session cookie is the console's only identity, so the snapshot
+      // must be scoped to the cookie's owner.
+      const viaCookie = await app.inject({
+        method: "GET",
+        url: "/v3/remote/sessions",
+        headers: { cookie },
+      });
+      assert.equal(viaCookie.statusCode, 200);
+      const body = viaCookie.json();
+      assert.equal(body.runners.length, 1);
+      assert.equal(body.runners[0].runner_id, runner);
+      assert.equal(body.sessions.length, 1);
+
+      // A stale development header must not re-scope the request away from
+      // the signed-in owner.
+      const viaStaleHeader = await app.inject({
+        method: "GET",
+        url: "/v3/remote/sessions",
+        headers: { cookie, "x-user-id": "someone-else" },
+      });
+      assert.equal(viaStaleHeader.statusCode, 200);
+      assert.equal(viaStaleHeader.json().runners.length, 1);
+      assert.equal(viaStaleHeader.json().sessions.length, 1);
+    } finally {
+      ws.terminate();
+    }
+  } finally {
+    await app.close();
   }
 });

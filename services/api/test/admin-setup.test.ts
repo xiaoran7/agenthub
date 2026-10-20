@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { createGatewayApp } from "../src/app.js";
@@ -107,4 +108,49 @@ test("admin first-run setup lifecycle and rejection of subsequent registrations"
   );
   assert.ok(adminUser);
   assert.equal(adminUser.display_name, "SuperAdmin");
+});
+
+test("a database written before avatars existed gains the column on open", async (t) => {
+  const legacy = "./data/test-legacy-avatar.db";
+  try {
+    rmSync(legacy, { force: true });
+  } catch {}
+
+  // A store from the previous release: the users table has no avatar column.
+  const legacyDb = new DatabaseSync(legacy);
+  legacyDb.exec(`
+    CREATE TABLE agent_pulse_users (
+      user_id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      email_verified_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    INSERT INTO agent_pulse_users
+      (user_id, email, display_name, password_hash, created_at)
+    VALUES
+      ('user-1', 'legacy@example.com', 'Legacy', 'hash', '2026-01-01T00:00:00.000Z');
+  `);
+  legacyDb.close();
+
+  const accounts = new SqliteAccountStore(legacy);
+  t.after(() => {
+    try {
+      rmSync(legacy, { force: true });
+    } catch {}
+  });
+
+  const user = await accounts.findAccountByEmail("legacy@example.com");
+  assert.ok(user);
+  assert.equal(user.avatar_data_url, undefined);
+
+  const avatar = "data:image/png;base64,aGk=";
+  assert.equal(await accounts.setAvatar("user-1", avatar), true);
+  const updated = await accounts.findAccountByEmail("legacy@example.com");
+  assert.equal(updated?.avatar_data_url, avatar);
+  assert.equal(await accounts.setAvatar("user-1", undefined), true);
+  const cleared = await accounts.findAccountByEmail("legacy@example.com");
+  assert.equal(cleared?.avatar_data_url, undefined);
 });
