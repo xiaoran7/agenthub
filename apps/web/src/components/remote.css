@@ -1447,6 +1447,21 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   border-color: rgba(22, 163, 74, 0.35);
   background: rgba(22, 163, 74, 0.08);
 }
+/* The button's icon and label sit in a wrapper of their own, so the button's
+   `gap` never reaches them: space the pair here. */
+.remote-copy-badge,
+.remote-copy-action,
+.remote-copied-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.remote-copied-badge {
+  color: #16a34a;
+  font-weight: 600;
+}
 /* The command is the action being taken, monospaced;
    Output is distinct and collapsible/scrollable */
 .remote-tool-cmd {

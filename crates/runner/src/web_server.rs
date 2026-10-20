@@ -144,22 +144,36 @@ fn handle_connection(
         }
     }
 
+    // A browser page on another origin may not drive this daemon. Only the
+    // console the daemon serves itself may read its state or ask it to do
+    // anything: the server holds the reader's transcripts and can move or
+    // delete them, and a drive-by POST from any tab would otherwise be enough.
+    // A request with no `Origin` at all is not a browser — the tray, a CLI, a
+    // probe — and is served.
+    let origin = headers.get("origin").map(String::as_str);
+    if !origin_allowed(origin, headers.get("host").map(String::as_str)) {
+        send_response(
+            &mut stream,
+            403,
+            "Forbidden",
+            "text/plain; charset=utf-8",
+            b"origin not allowed",
+            None,
+        )?;
+        return Ok(());
+    }
+
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body)?;
     }
 
-    // CORS preflight
+    // The console is same-origin, so it never sends a preflight. One that
+    // arrives came from a page that was already turned away above; it gets a
+    // bare 204 with no grant, which is what stops the browser sending the
+    // request it was asking about.
     if method == "OPTIONS" {
-        send_response(
-            &mut stream,
-            204,
-            "No Content",
-            "text/plain",
-            b"",
-            true,
-            None,
-        )?;
+        send_response(&mut stream, 204, "No Content", "text/plain", b"", None)?;
         return Ok(());
     }
 
@@ -172,7 +186,6 @@ fn handle_connection(
             "OK",
             "image/x-icon",
             FAVICON_ICO,
-            false,
             Some("public, max-age=86400"),
         )?;
         return Ok(());
@@ -185,7 +198,6 @@ fn handle_connection(
             "OK",
             "image/svg+xml",
             ICON_SVG.as_bytes(),
-            false,
             Some("public, max-age=86400"),
         )?;
         return Ok(());
@@ -198,7 +210,6 @@ fn handle_connection(
             "OK",
             "image/png",
             ICON_PNG,
-            false,
             Some("public, max-age=86400"),
         )?;
         return Ok(());
@@ -211,7 +222,6 @@ fn handle_connection(
             "OK",
             "image/png",
             ICON_192_PNG,
-            false,
             Some("public, max-age=86400"),
         )?;
         return Ok(());
@@ -224,7 +234,6 @@ fn handle_connection(
             "OK",
             "image/png",
             ICON_512_PNG,
-            false,
             Some("public, max-age=86400"),
         )?;
         return Ok(());
@@ -237,7 +246,6 @@ fn handle_connection(
             "OK",
             "application/manifest+json",
             MANIFEST_JSON.as_bytes(),
-            false,
             Some("public, max-age=86400"),
         )?;
         return Ok(());
@@ -251,15 +259,7 @@ fn handle_connection(
         } else {
             "public, max-age=31536000, immutable"
         };
-        send_response(
-            &mut stream,
-            200,
-            "OK",
-            icon.mime,
-            icon.bytes,
-            false,
-            Some(cache),
-        )?;
+        send_response(&mut stream, 200, "OK", icon.mime, icon.bytes, Some(cache))?;
         return Ok(());
     }
 
@@ -280,7 +280,6 @@ fn handle_connection(
             "OK",
             "text/css; charset=utf-8",
             sheet.as_bytes(),
-            false,
             Some(cache),
         )?;
         return Ok(());
@@ -303,7 +302,6 @@ fn handle_connection(
             "OK",
             "text/javascript; charset=utf-8",
             script.as_bytes(),
-            false,
             Some(cache),
         )?;
         return Ok(());
@@ -328,7 +326,6 @@ fn handle_connection(
             "OK",
             "application/json; charset=utf-8",
             body.as_bytes(),
-            false,
             Some("no-store"),
         )?;
         return Ok(());
@@ -370,7 +367,6 @@ fn handle_connection(
         "OK",
         "text/html; charset=utf-8",
         page.as_bytes(),
-        false,
         Some("no-cache"),
     )?;
 
@@ -459,6 +455,16 @@ impl ApiRequest<'_> {
                             "error": error.to_string(),
                         })),
                     }
+                }
+                // the page refreshes the moment this answers, and both caches
+                // it reads from would otherwise still list what just went to
+                // the trash: a second delete of the same row would be told
+                // "no such session" although the first one worked
+                if !deleted.is_empty() {
+                    if let Ok(mut guard) = dashboard_summary_cache().write() {
+                        *guard = None;
+                    }
+                    crate::usage_ledger::forget_transcripts();
                 }
                 send_json_response(
                     stream,
@@ -1465,9 +1471,24 @@ fn send_json_response<T: Serialize>(
         "OK",
         "application/json",
         &body,
-        false,
         Some("no-cache, no-store, must-revalidate"),
     )
+}
+
+/// May a request from `origin` use this daemon? No origin is not a browser (a
+/// CLI, the tray, a probe) and is served. A page is served only from this very
+/// origin — the console the daemon serves itself — so the console's own reads
+/// and writes work and a page on any other origin is turned away.
+fn origin_allowed(origin: Option<&str>, host: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    let Some(host) = host else {
+        return false;
+    };
+    origin
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(&format!("http://{host}"))
 }
 
 fn send_response(
@@ -1476,11 +1497,10 @@ fn send_response(
     status_text: &str,
     content_type: &str,
     body: &[u8],
-    is_options: bool,
     cache_control: Option<&str>,
 ) -> anyhow::Result<()> {
     let mut header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
         status_code,
         status_text,
         content_type,
@@ -1488,9 +1508,6 @@ fn send_response(
     );
     if let Some(cc) = cache_control {
         header.push_str(&format!("Cache-Control: {}\r\n", cc));
-    }
-    if is_options {
-        header.push_str("Access-Control-Max-Age: 86400\r\n");
     }
     header.push_str("\r\n");
 
@@ -1841,6 +1858,39 @@ mod tests {
         ] {
             assert!(DASHBOARD_JS.contains(&format!("{id}:")), "{id}");
         }
+    }
+
+    #[test]
+    fn only_the_consoles_own_origin_may_drive_the_daemon() {
+        // a CLI, the tray, a probe: no Origin at all
+        assert!(origin_allowed(None, Some("127.0.0.1:4200")));
+        assert!(origin_allowed(None, None));
+        // the console the daemon serves itself
+        assert!(origin_allowed(
+            Some("http://127.0.0.1:4200"),
+            Some("127.0.0.1:4200")
+        ));
+        assert!(origin_allowed(
+            Some("http://localhost:4200/"),
+            Some("localhost:4200")
+        ));
+        // any other page, including one on a loopback port of its own
+        assert!(!origin_allowed(
+            Some("http://evil.example"),
+            Some("127.0.0.1:4200")
+        ));
+        assert!(!origin_allowed(
+            Some("http://127.0.0.1:3000"),
+            Some("127.0.0.1:4200")
+        ));
+        assert!(!origin_allowed(
+            Some("https://127.0.0.1:4200"),
+            Some("127.0.0.1:4200")
+        ));
+        // an Origin without a Host cannot be matched to this daemon
+        assert!(!origin_allowed(Some("http://127.0.0.1:4200"), None));
+        // "null" is what a sandboxed frame and a file:// page send
+        assert!(!origin_allowed(Some("null"), Some("127.0.0.1:4200")));
     }
 
     #[test]

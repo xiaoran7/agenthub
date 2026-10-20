@@ -947,6 +947,7 @@ function renderSessions(sessions, mode = "data") {
     if (mode === "pending" || mode === "loading") {
       container.innerHTML = renderSkeletonCard(5);
       if (badge) badge.textContent = "正在加载…";
+      syncSessionPickUi();
       return;
     }
     container.innerHTML = `
@@ -960,6 +961,11 @@ function renderSessions(sessions, mode = "data") {
       </div>
     `;
     if (badge) badge.textContent = "0 个历史会话";
+    // with no rows there is nothing left to select: a pick kept from the
+    // page before would otherwise show a count and a live delete button over
+    // an empty page, aimed at sessions that are already in the trash
+    pickedSessions.clear();
+    syncSessionPickUi();
     return;
   }
 
@@ -1283,7 +1289,13 @@ async function confirmDeleteSessions() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ids }),
     });
-    const data = resp.ok ? await resp.json() : { deleted: [], refused: [] };
+    if (!resp.ok) {
+      // nothing was done, so nothing the reader ticked is spent: leave the
+      // picks and the confirm dialog as they were, and say what happened
+      toast(`删除失败：服务返回 HTTP ${resp.status}`, "err");
+      return;
+    }
+    const data = (await resp.json()) || {};
     // a refused session stays picked, so the reader can retry it
     const kept = new Set(
       (data.refused || []).map((r) => String(r.id || "").replace(/^claude_/, "")),
@@ -1304,12 +1316,14 @@ async function confirmDeleteSessions() {
         "err",
       );
     }
+    syncSessionPickUi();
     refreshDashboard(true);
   } catch (e) {
+    // a network failure deleted nothing either: the picks survive the retry
     toast("删除失败：" + e.message, "err");
   } finally {
     if (btn) {
-      btn.disabled = false;
+      btn.disabled = pickedSessions.size === 0;
       btn.classList.remove("busy");
     }
   }

@@ -1590,6 +1590,10 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
     Ok(entries)
 }
 
+/// The most agents one conversation lists. A workflow run writes one file per
+/// agent, and a session can outgrow any cap; the cap keeps the newest work.
+const MAX_SUBAGENTS: usize = 500;
+
 /// The subagents a conversation spawned, from the folder beside its own
 /// transcript: `<session>/subagents/agent-<id>.jsonl`, and a workflow's agents
 /// at `<session>/subagents/workflows/<run>/agent-*.jsonl` (the run's
@@ -1607,7 +1611,7 @@ fn collect_claude_subagents(session_file: &Path) -> Vec<ClaudeSubagentEntry> {
     if !subagents.is_dir() {
         return Vec::new();
     }
-    let mut files: Vec<PathBuf> = Vec::new();
+    let mut files: Vec<(i64, PathBuf)> = Vec::new();
     if let Ok(entries) = fs::read_dir(&subagents) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -1615,7 +1619,7 @@ fn collect_claude_subagents(session_file: &Path) -> Vec<ClaudeSubagentEntry> {
             if name.starts_with("agent-")
                 && path.extension().and_then(|v| v.to_str()) == Some("jsonl")
             {
-                files.push(path);
+                push_subagent_file(&path, &mut files);
             }
         }
     }
@@ -1630,17 +1634,72 @@ fn collect_claude_subagents(session_file: &Path) -> Vec<ClaudeSubagentEntry> {
                 if name.starts_with("agent-")
                     && path.extension().and_then(|v| v.to_str()) == Some("jsonl")
                 {
-                    files.push(path);
+                    push_subagent_file(&path, &mut files);
                 }
             }
         }
     }
-    files.sort();
-    files.truncate(500);
+    // newest first, so a cap drops the oldest agents rather than the work the
+    // reader just watched run
+    files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    files.truncate(MAX_SUBAGENTS);
     files
         .into_iter()
-        .filter_map(|path| read_claude_subagent(&path))
+        .filter_map(|(_, path)| read_claude_subagent_cached(&path))
         .collect()
+}
+
+fn push_subagent_file(path: &Path, files: &mut Vec<(i64, PathBuf)>) {
+    let Ok(meta) = fs::metadata(path) else {
+        return;
+    };
+    if !meta.is_file() {
+        return;
+    }
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    files.push((modified, path.to_path_buf()));
+}
+
+/// One subagent's read, memoised on the file's size and last write: a finished
+/// agent's transcript never changes again, and the console asks for the list
+/// every few seconds. A file still being written is read again each time.
+fn subagent_cache() -> &'static RwLock<HashMap<PathBuf, (u64, i64, Option<ClaudeSubagentEntry>)>> {
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (u64, i64, Option<ClaudeSubagentEntry>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn read_claude_subagent_cached(path: &Path) -> Option<ClaudeSubagentEntry> {
+    let meta = fs::metadata(path).ok()?;
+    let len = meta.len();
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    if let Ok(guard) = subagent_cache().read()
+        && let Some((cached_len, cached_modified, entry)) = guard.get(path)
+        && *cached_len == len
+        && *cached_modified == modified
+    {
+        return entry.clone();
+    }
+    let entry = read_claude_subagent(path);
+    if let Ok(mut guard) = subagent_cache().write() {
+        // a store the reader keeps for years: the map holds one small record
+        // per agent, never a transcript
+        if guard.len() > 4 * MAX_SUBAGENTS {
+            guard.clear();
+        }
+        guard.insert(path.to_path_buf(), (len, modified, entry.clone()));
+    }
+    entry
 }
 
 /// One subagent's transcript: its meta file's own words, and the usage of
@@ -1848,22 +1907,20 @@ fn delete_claude_session_in(
         .unwrap_or_default();
     let trash = trash_root.join(format!("{stamp}-{session_id}"));
     fs::create_dir_all(&trash).map_err(io)?;
-    for path in &paths {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_owned());
-        let target = trash.join(name);
-        if let Err(source) = fs::rename(path, &target) {
-            // another volume: a copy then a remove is the same move
-            let copied = if path.is_dir() {
-                copy_dir(path, &target).is_ok()
-            } else {
-                fs::copy(path, &target).is_ok()
-            };
-            if !copied || fs::remove_file(path).is_err() {
-                return Err(io(source));
-            }
+    // The conversation's folder and Coding Assistant's own per-id folders all
+    // carry the session's id, so a bare file name would put them in the same
+    // place: the second move would find its target taken, fall back to a copy,
+    // and could never remove the original directory. Each item keeps its
+    // source folder in the name when a bare name is already in use, so every
+    // move lands on a place of its own.
+    for (moved, path) in paths.iter().enumerate() {
+        let target = trash_target(&trash, path);
+        if let Err(failure) = move_into(path, &target) {
+            return Err(io(std::io::Error::other(format!(
+                "moved {moved} of {} files, then {}: {failure}",
+                paths.len(),
+                path.display()
+            ))));
         }
     }
     if let Ok(mut guard) = claude_remote_sessions_cache().write() {
@@ -1872,23 +1929,95 @@ fn delete_claude_session_in(
     Ok(trash)
 }
 
+/// Where one of a session's files goes in its trash folder: its own name,
+/// qualified by the folder it came from when the name is already taken.
+fn trash_target(trash: &Path, path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".to_owned());
+    let mut target = trash.join(&name);
+    if target.exists() {
+        let parent = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_owned());
+        target = trash.join(format!("{parent}-{name}"));
+    }
+    target
+}
+
+/// Moves one file or folder into place, across volumes when it must.
+fn move_into(path: &Path, target: &Path) -> Result<(), std::io::Error> {
+    if fs::rename(path, target).is_ok() {
+        return Ok(());
+    }
+    // another volume: a copy then a remove is the same move
+    let copied = if path.is_dir() {
+        copy_dir(path, target)
+    } else {
+        fs::copy(path, target).map(|_| ())
+    };
+    copied?;
+    let removed = if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    };
+    if let Err(error) = removed {
+        // the copy is a duplicate of something still in the store: take it
+        // back out, so the trash never claims a session it did not get
+        if target.is_dir() {
+            let _ = fs::remove_dir_all(target);
+        } else {
+            let _ = fs::remove_file(target);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// How deep the write guard looks into a session's folder. A transcript's own
+/// nesting is a handful of levels; anything deeper is a link or a surprise,
+/// and the guard says "not writing" rather than walking it.
+const WRITE_GUARD_DEPTH: u32 = 16;
+
 fn written_within(path: &Path, now: SystemTime, window: Duration) -> bool {
-    let Ok(meta) = fs::metadata(path) else {
+    written_within_at(path, now, window, 0)
+}
+
+fn written_within_at(path: &Path, now: SystemTime, window: Duration, depth: u32) -> bool {
+    // `symlink_metadata` never follows a link: a junction back into the tree
+    // would otherwise make this recurse until the stack ran out
+    let Ok(meta) = fs::symlink_metadata(path) else {
         return false;
     };
-    if meta.is_file() {
-        return meta
-            .modified()
+    let age_is_fresh = || {
+        meta.modified()
             .ok()
             .and_then(|t| now.duration_since(t).ok())
-            .is_some_and(|age| age < window);
+            .is_some_and(|age| age < window)
+    };
+    if meta.file_type().is_symlink() {
+        // a link is not a file being written; what it points at is the
+        // store's business, and following it is how a cycle is walked
+        return false;
+    }
+    if !meta.is_dir() {
+        return age_is_fresh();
+    }
+    // a folder's own mtime moves when a child is added or removed, which is
+    // not a write to a transcript: only what is under it counts
+    if depth >= WRITE_GUARD_DEPTH {
+        return false;
     }
     let Ok(entries) = fs::read_dir(path) else {
         return false;
     };
     entries
         .flatten()
-        .any(|entry| written_within(&entry.path(), now, window))
+        .any(|entry| written_within_at(&entry.path(), now, window, depth + 1))
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -6309,6 +6438,81 @@ mod tests {
         assert!(delete_claude_session_in(&config, &trash, "missing").is_err());
         // and an id that could walk the tree is refused before any lookup
         assert!(delete_claude_session_in(&config, &trash, "../s1").is_err());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// Coding Assistant keeps `file-history/<id>` and `session-env/<id>` beside
+    /// the conversation's own `<id>` folder. All three carry the same name, and
+    /// a session with all three has to delete in one go: the moves must land
+    /// somewhere apart instead of the second one colliding with the first.
+    #[test]
+    fn deleting_a_session_that_has_two_folders_named_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("claude");
+        let project = config.join("projects").join("-p");
+        let session = project.join("s1");
+        fs::create_dir_all(session.join("subagents")).unwrap();
+        fs::write(project.join("s1.jsonl"), "{}\n").unwrap();
+        fs::write(session.join("subagents").join("agent-a.jsonl"), "{}\n").unwrap();
+        let history = config.join("file-history").join("s1");
+        fs::create_dir_all(&history).unwrap();
+        fs::write(history.join("old-version.txt"), "before\n").unwrap();
+        let env = config.join("session-env").join("s1");
+        fs::create_dir_all(&env).unwrap();
+        fs::write(env.join("env.json"), "{}").unwrap();
+        fs::create_dir_all(config.join("todos")).unwrap();
+        fs::write(config.join("todos").join("s1-agent-a.json"), "[]").unwrap();
+
+        // backdate every file past the write guard
+        let old = SystemTime::now() - Duration::from_secs(600);
+        let backdate = |path: &Path| {
+            let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_modified(old).unwrap();
+        };
+        for file in [
+            project.join("s1.jsonl"),
+            session.join("subagents").join("agent-a.jsonl"),
+            history.join("old-version.txt"),
+            env.join("env.json"),
+            config.join("todos").join("s1-agent-a.json"),
+        ] {
+            backdate(&file);
+        }
+
+        let trash = dir.path().join("trash");
+        let moved = delete_claude_session_in(&config, &trash, "s1").expect("all of it moves");
+        for gone in [&project.join("s1.jsonl"), &session, &history, &env] {
+            assert!(!gone.exists(), "{} is out of the store", gone.display());
+        }
+        // every moved piece is in the trash, none of them merged into another
+        assert!(moved.join("s1.jsonl").is_file());
+        assert!(moved.join("s1/subagents/agent-a.jsonl").is_file());
+        let names: Vec<String> = fs::read_dir(&moved)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            names.len(),
+            5,
+            "each of the five items landed on its own name: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "session-env-s1"),
+            "the env folder is kept under a name of its own: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "file-history-s1"),
+            "the history folder is kept under a name of its own: {names:?}"
+        );
+        assert!(
+            moved.join("session-env-s1/env.json").is_file(),
+            "the env file is inside it"
+        );
+        assert!(
+            names.iter().any(|n| n.ends_with("s1-agent-a.json")),
+            "the todo is kept: {names:?}"
+        );
         fs::remove_dir_all(dir).ok();
     }
 }

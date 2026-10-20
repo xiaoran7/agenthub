@@ -261,6 +261,16 @@ fn ledger_cache() -> &'static RwLock<LedgerCache> {
 /// nothing when the fastest poll is two seconds.
 const LEDGER_TTL: Duration = Duration::from_secs(5);
 
+/// Drops the memoised walk. A session moved to the trash is still on disk at
+/// its old path in the cache until the next park, and the fingerprint of a
+/// path that no longer exists never matches, so the calls of a deleted
+/// conversation would otherwise stay in the ledger for its TTL.
+pub fn forget_transcripts() {
+    if let Ok(mut guard) = ledger_cache().write() {
+        *guard = LedgerCache::default();
+    }
+}
+
 /// Every call in Coding Assistant's transcript store, newest first.
 ///
 /// A file whose size and modification time have not moved since the last walk
@@ -558,12 +568,12 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
             continue;
         }
         // The cheap prefilter keeps the JSON parser away from the many
-        // lifecycle lines a transcript also holds; prompts are read only for
-        // their moment, which the whole-turn floor is measured from.
+        // lifecycle lines a transcript also holds. A prompt is read for its
+        // moment alone, and a tool result can be megabytes of base64: the
+        // moment is taken off the line's bytes, never by parsing the line.
         if !contains(&line, b"\"type\":\"assistant\"") {
             if contains(&line, b"\"type\":\"user\"")
-                && let Ok(prompt) = serde_json::from_slice::<PromptLine>(&line)
-                && let Some(ms) = prompt.ms()
+                && let Some(ms) = line_timestamp_ms(&line)
             {
                 last_user_ms = last_user_ms.max(ms);
             }
@@ -678,34 +688,37 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
     Ok(calls)
 }
 
-/// A prompt or tool result as the whole-turn floor reads it: only its
-/// moment matters, never its text.
-#[derive(Debug, Deserialize)]
-struct PromptLine {
-    #[serde(default, rename = "type")]
-    kind: String,
-    #[serde(default)]
-    timestamp: Option<String>,
+/// A prompt or tool result's moment, taken off its bytes.
+///
+/// A user line is the prompt or a tool result, and a tool result carries the
+/// whole output of the command — screenshots as base64 run to megabytes. The
+/// whole-turn floor needs nothing from it but when it happened, so the line is
+/// scanned for `"timestamp":"…"` and that one field is parsed; the rest of the
+/// line is never handed to the JSON parser.
+fn line_timestamp_ms(line: &[u8]) -> Option<i64> {
+    const MARK: &[u8] = b"\"timestamp\":\"";
+    let at = find_bytes(line, MARK)? + MARK.len();
+    let rest = &line[at..];
+    let end = rest.iter().position(|b| *b == b'"')?;
+    let stamp = std::str::from_utf8(&rest[..end]).ok()?;
+    DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|d| d.timestamp_millis())
 }
 
-impl PromptLine {
-    fn ms(&self) -> Option<i64> {
-        if self.kind != "user" {
-            return None;
-        }
-        self.timestamp
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|d| d.timestamp_millis())
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
     }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Does the line hold this byte sequence? A small memchr so a scan of the
 /// store does not build a String for every line.
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
+    find_bytes(haystack, needle).is_some()
 }
 fn read_line_bounded<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Result<usize> {
     let mut total = 0;

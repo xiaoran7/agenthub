@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+- **代码审查全量修复（删除、鉴权、缓存与重绘）**：
+  - **会话删除不会再半途而废（`collectors/mod.rs`）**：`file-history/<id>`、`session-env/<id>` 与会话目录 `<id>` 同名，原先统一平移到 `trash/<basename>`，第二次 `rename` 撞上已存在的目录（os error 145），跨卷回退又对目录调用 `remove_file`（os error 5），结果是转录已挪走、接口却报失败。现由 `trash_target()` 在重名时带上来源目录名（`file-history-<id>`、`session-env-<id>`），`move_into()` 按类型复制/删除并在删除失败时撤回副本；错误信息改为"已移动 N 个文件后，某文件失败"。新增 `deleting_a_session_that_has_two_folders_named_after_it` 覆盖该场景；
+  - **防跨站驱动（`web_server.rs`）**：所有响应不再下发 `Access-Control-Allow-Origin: *` 与预检 `Max-Age`，新增 `origin_allowed()` 严格同源校验（`Origin` 必须等于 `http://{Host}`），在任何请求体被读取之前 403；无 `Origin` 的 CLI/托盘请求照常放行。`OPTIONS` 只回裸 `204`，不授予任何跨源权限。新增 `only_the_consoles_own_origin_may_drive_the_daemon` 单测；
+  - **删除后缓存立即失效（`web_server.rs` / `usage_ledger.rs`）**：删除成功时清空 12 秒的 `dashboard_summary_cache`，并新增 `usage_ledger::forget_transcripts()` 清空账本缓存，避免页面刷新后已删会话仍在、二次删除被告知"no such session"；
+  - **子代理读取加速（`collectors/mod.rs`）**：`read_claude_subagent_cached()` 以（文件长度, 最后写入）为键做进程内记忆，已完成的子代理转录不再每次轮询重读全部字节；超过 500 个时按修改时间保留**最新**的，而不是原先按路径字典序保留最早的；
+  - **写入守卫不再跟随链接（`collectors/mod.rs`）**：`written_within()` 改用 `symlink_metadata` 并加 16 层深度上限，指向上级目录的 junction 不会再把守护进程递归到爆栈；
+  - **用量账本不再解析巨型行（`usage_ledger.rs`）**：用户/tool-result 行只按字节扫描 `"timestamp":"…"` 取时刻，不再把数百 MB 的 base64 工具输出交给 JSON 解析器；
+  - **托盘菜单悬停只重绘一行（`tray_menu.rs`）**：卡片距离场、阴影、字型与 DIB 在菜单存活期间缓存（`Frame`），悬停切换只重算进入/离开的两条行带并只回传这些行；原先每次 `WM_MOUSEMOVE` 都重建整窗、逐像素求两次 SDF 并新建 DIB。新增三个单测覆盖"只动一行""离开即还原""换菜单才重绘"；
+  - **删除交互不再吞掉选择（`dashboard.js`）**：空列表渲染时清空已选并同步工具条；`POST /api/sessions/delete` 返回非 2xx 时提示 HTTP 状态、保留勾选与确认弹窗，不再静默关闭；
+  - **复制按钮补齐样式（`apps/web/src/components/remote.css`）**：`remote-copy-badge` / `remote-copy-action` / `remote-copied-badge` 此前无任何样式定义，图标与文字紧贴、已复制状态无颜色变化；现补齐 `inline-flex` 间距与翠绿加粗的已复制态。
+
 - **修复能力发现单测在干净 CI 环境断言失败（`crates/runner/src/collectors/capabilities.rs`）**：
   - 根因：`test_discover_capabilities_smoke` 此前硬编码断言 `caps.total_skills > 0 && caps.total_hooks > 0`，在未配置全局 `~/.claude` 或 `~/.agenthub` 的纯净 Linux/CI 容器中必定断言失败（`assertion failed: caps.total_skills > 0`）；
   - 修复：将烟雾测试调整为验证总数与列表集合一致性，并新增独立单元测试 `test_discover_capabilities_in_workspace`，基于隔离的 `tempdir` 构造 Mock 工作区并验证 Skills 与 MCP 服务发现逻辑闭环。

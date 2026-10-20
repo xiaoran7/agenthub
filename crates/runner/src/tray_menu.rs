@@ -195,6 +195,9 @@ struct State {
     /// opened the menu, so a deactivation in the first moments is that, not
     /// the reader clicking away.
     shown_at: Option<Instant>,
+    /// Bumped by every `show`, so the cached card is redrawn when a new menu
+    /// goes up and reused while the pointer moves over it.
+    session: u64,
 }
 
 thread_local! {
@@ -280,6 +283,7 @@ pub unsafe fn show(hinstance: HINSTANCE, menu: Menu, choice: fn(usize)) {
                 visible: false,
                 hidden_at: None,
                 shown_at: None,
+                session: 0,
             });
             state.hwnd = hwnd;
             state.menu = menu;
@@ -290,6 +294,7 @@ pub unsafe fn show(hinstance: HINSTANCE, menu: Menu, choice: fn(usize)) {
             state.hidden_at = None;
             state.shown_at = Some(Instant::now());
             state.layout = layout;
+            state.session = state.session.wrapping_add(1);
             // above the cursor as the shell's menus are, below it when there
             // is no room, never past the screen's edges
             let work = work_area(cursor);
@@ -597,73 +602,353 @@ unsafe fn repaint(hwnd: HWND) {
 }
 
 /// Draws the card and hands the bitmap to the layered window at `at`.
+///
+/// The card's distance field, its shadow and the type are drawn once and kept
+/// for as long as the menu is the same; a hover change only redoes that one
+/// row's band, so sweeping the pointer down the rows does not repaint the
+/// whole window.
 unsafe fn paint(hwnd: HWND, at: POINT) {
     unsafe {
-        let (image, w, h) = STATE.with(|s| {
+        STATE.with(|s| {
             let guard = s.borrow();
             let Some(st) = guard.as_ref() else {
-                return (Vec::new(), 0, 0);
+                return;
             };
-            (
-                render(&st.menu, &st.layout, st.hover),
-                st.layout.win_w,
-                st.layout.win_h,
-            )
+            FRAME.with(|f| {
+                let mut slot = f.borrow_mut();
+                if slot
+                    .as_ref()
+                    .is_none_or(|frame| frame.session != st.session)
+                {
+                    *slot = Some(Frame::new(st.session, &st.menu, &st.layout));
+                }
+                let Some(frame) = slot.as_mut() else {
+                    return;
+                };
+                frame.set_hover(st.hover, &st.layout, Some(&st.menu));
+                frame.present(hwnd, at);
+            });
         });
-        if image.is_empty() {
-            return;
+    }
+}
+
+thread_local! {
+    static FRAME: RefCell<Option<Frame>> = const { RefCell::new(None) };
+}
+
+/// The card's pixels for one layout and menu, straight RGBA, plus the DIB the
+/// layered window is fed from, kept between repaints.
+struct Frame {
+    /// Which `show` the frame was drawn for: the card is redrawn only when a
+    /// new menu is put up, never just because the pointer moved.
+    session: u64,
+    w: i32,
+    h: i32,
+    /// Signed distance to the card's rounded rect, per pixel, so the colour
+    /// pass never evaluates the shape a second time.
+    dist: Vec<f32>,
+    shadow: Vec<f32>,
+    /// The card and its type with no row hovered: what a hover row paints over.
+    base: Vec<u8>,
+    image: Vec<u8>,
+    hover: Option<usize>,
+    upload: Option<Upload>,
+    /// Rows of `image` the DIB has not taken yet.
+    dirty: Option<(i32, i32)>,
+}
+
+impl Frame {
+    fn new(session: u64, menu: &Menu, layout: &Layout) -> Self {
+        let w = layout.win_w;
+        let h = layout.win_h;
+        let scale = layout.scale;
+
+        let card_cx = layout.card_x as f32 + layout.card_w as f32 / 2.0;
+        let card_cy = layout.card_y as f32 + layout.card_h as f32 / 2.0;
+        let card_hw = layout.card_w as f32 / 2.0;
+        let card_hh = layout.card_h as f32 / 2.0;
+        let radius = RADIUS as f32 * scale;
+
+        let mut dist = vec![0f32; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                dist[(y * w + x) as usize] = sd_round_rect(
+                    x as f32 + 0.5,
+                    y as f32 + 0.5,
+                    card_cx,
+                    card_cy,
+                    card_hw,
+                    card_hh,
+                    radius,
+                );
+            }
         }
-
-        let mut bmi: BITMAPINFO = zeroed();
-        bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-        bmi.bmiHeader.biWidth = w;
-        bmi.bmiHeader.biHeight = -h;
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        let screen = GetDC(0 as _);
-        let mem = CreateCompatibleDC(screen);
-        let mut bits: *mut c_void = std::ptr::null_mut();
-        let dib = CreateDIBSection(
-            mem,
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            std::ptr::null_mut(),
-            0,
+        let mask: Vec<f32> = dist.iter().map(|d| (0.5 - d).clamp(0.0, 1.0)).collect();
+        let shadow = shadow_of(
+            &mask,
+            w,
+            h,
+            (9.0 * scale).round().max(1.0) as usize,
+            (3.0 * scale).round() as i32,
+            0.20,
         );
-        if dib.is_null() {
-            DeleteDC(mem);
-            ReleaseDC(0 as _, screen);
+
+        // start fully transparent: the window is layered, and anything the card
+        // does not cover must let the desktop through
+        let mut base = vec![0u8; (w * h * 4) as usize];
+        for (i, px) in base.chunks_exact_mut(4).enumerate() {
+            let (r, g, b, a) = card_color(dist[i], shadow[i]);
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+            px[3] = a;
+        }
+        // GDI antialiases glyphs against what is already on the card, so the
+        // type comes after the surfaces and the pixels are copied back
+        unsafe { draw_content(&mut base, w, h, menu, layout) };
+
+        let image = base.clone();
+        let upload = unsafe { Upload::new(w, h) };
+        // `dirty` covers the whole window only if there is a DIB that missed
+        // it; with no DIB nothing can be presented either way
+        let dirty = upload.as_ref().map(|_| (0, h));
+        Self {
+            session,
+            w,
+            h,
+            dist,
+            shadow,
+            base,
+            image,
+            hover: None,
+            upload,
+            dirty,
+        }
+    }
+
+    /// Points the card at `hover`, redoing only the bands that changed: the
+    /// row being left is put back as it was drawn, the row being entered gets
+    /// its colour and then its type over it.
+    fn set_hover(&mut self, hover: Option<usize>, layout: &Layout, menu: Option<&Menu>) {
+        if self.hover == hover {
             return;
         }
-        let old = SelectObject(mem, dib as HGDIOBJ);
-
-        // the layered window takes premultiplied BGRA
-        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
-        for (px, src) in dst.chunks_exact_mut(4).zip(image.chunks_exact(4)) {
-            let a = src[3] as u32;
-            px[0] = ((src[2] as u32 * a + 127) / 255) as u8;
-            px[1] = ((src[1] as u32 * a + 127) / 255) as u8;
-            px[2] = ((src[0] as u32 * a + 127) / 255) as u8;
-            px[3] = src[3];
+        let leaving = self.hover.and_then(|i| band_of(layout, i));
+        let entering = hover.and_then(|i| band_of(layout, i));
+        self.hover = hover;
+        if leaving.is_none() && entering.is_none() {
+            return;
         }
-
-        let blend = BLENDFUNCTION {
-            BlendOp: 0,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: 1,
+        if let Some((y0, y1)) = leaving {
+            // `base` is the card with the type already on it
+            self.restore_band(y0, y1);
+            self.mark_dirty(y0, y1);
+        }
+        let (Some((y0, y1)), Some(index), Some(menu)) = (entering, hover, menu) else {
+            return;
         };
-        let src_pt = POINT { x: 0, y: 0 };
-        let size = SIZE { cx: w, cy: h };
-        UpdateLayeredWindow(hwnd, screen, &at, &size, mem, &src_pt, 0, &blend, ULW_ALPHA);
+        self.paint_band(layout, index, y0, y1);
+        unsafe { draw_type(&mut self.image, self.w, self.h, menu, layout, y0, y1) };
+        self.mark_dirty(y0, y1);
+    }
 
-        SelectObject(mem, old);
-        DeleteObject(dib as HGDIOBJ);
-        DeleteDC(mem);
-        ReleaseDC(0 as _, screen);
+    /// Puts rows `y0..y1` back to the card as it was drawn, hover and all.
+    fn restore_band(&mut self, y0: i32, y1: i32) {
+        let w = self.w;
+        let band = (y0.clamp(0, self.h) * w * 4) as usize..(y1.clamp(0, self.h) * w * 4) as usize;
+        self.image[band.clone()].copy_from_slice(&self.base[band]);
+    }
+
+    /// Redoes rows `y0..y1` of the card with `index`'s row hovered.
+    fn paint_band(&mut self, layout: &Layout, index: usize, y0: i32, y1: i32) {
+        let Some(row) = layout.rows.get(index) else {
+            return;
+        };
+        let color = match row.row {
+            Row::Item { danger: true, .. } => C_HOVER_DANGER,
+            _ => C_HOVER,
+        };
+        let scale = layout.scale;
+        let inset = (2.0 * scale) as i32;
+        let top = layout.card_y + row.top + inset;
+        let bottom = layout.card_y + row.top + row.height - inset;
+        let bh = (bottom - top) as f32;
+        let bw = layout.card_w as f32 - 16.0 * scale;
+        let hcx = 8.0 * scale + bw / 2.0;
+        let hcy = top as f32 + bh / 2.0;
+        let hr = 12.0 * scale;
+
+        let w = self.w;
+        for y in y0.clamp(0, self.h)..y1.clamp(0, self.h) {
+            for x in 0..w {
+                let i = (y * w + x) as usize;
+                let (r, g, b, a) = card_color(self.dist[i], self.shadow[i]);
+                let o = i * 4;
+                self.image[o] = r;
+                self.image[o + 1] = g;
+                self.image[o + 2] = b;
+                self.image[o + 3] = a;
+                if a == 0 {
+                    continue;
+                }
+                let cov = (0.5 - self.dist[i]).clamp(0.0, 1.0);
+                let hd = sd_round_rect(
+                    x as f32 + 0.5,
+                    y as f32 + 0.5,
+                    hcx,
+                    hcy,
+                    bw / 2.0,
+                    bh / 2.0,
+                    hr,
+                );
+                let hcov = (0.5 - hd).clamp(0.0, 1.0) * cov;
+                let c = lerp((r, g, b), color, hcov);
+                self.image[o] = c.0;
+                self.image[o + 1] = c.1;
+                self.image[o + 2] = c.2;
+            }
+        }
+    }
+
+    fn mark_dirty(&mut self, y0: i32, y1: i32) {
+        self.dirty = Some(match self.dirty {
+            Some((a, b)) => (a.min(y0), b.max(y1)),
+            None => (y0, y1),
+        });
+    }
+
+    unsafe fn present(&mut self, hwnd: HWND, at: POINT) {
+        unsafe {
+            let Some(upload) = self.upload.as_ref() else {
+                return;
+            };
+            if let Some((y0, y1)) = self.dirty.take() {
+                upload.put(&self.image, y0, y1);
+            }
+            upload.present(hwnd, at, self.w, self.h);
+        }
+    }
+}
+
+/// The rows of the card a row index covers, window coordinates.
+fn band_of(layout: &Layout, index: usize) -> Option<(i32, i32)> {
+    let row = layout.rows.get(index)?;
+    Some((
+        layout.card_y + row.top,
+        layout.card_y + row.top + row.height,
+    ))
+}
+
+/// The card's colour at one pixel: the rounded rect's fill, its border, and
+/// the shadow under it, as straight RGBA.
+fn card_color(dist: f32, shadow: f32) -> (u8, u8, u8, u8) {
+    let cov = (0.5 - dist).clamp(0.0, 1.0);
+    let alpha = cov + shadow * (1.0 - cov);
+    if alpha <= 0.001 {
+        return (0, 0, 0, 0);
+    }
+    let border = (1.0 - (dist + 0.5).abs()).clamp(0.0, 1.0);
+    let rgb = lerp(C_CARD, C_BORDER, border);
+    (rgb.0, rgb.1, rgb.2, (alpha * 255.0).round() as u8)
+}
+
+/// A DIB section kept for the life of a frame, so repainting a band rewrites
+/// only that band's pixels instead of allocating and refilling the window.
+struct Upload {
+    hdc: HDC,
+    dib: windows_sys::Win32::Graphics::Gdi::HBITMAP,
+    old: HGDIOBJ,
+    bits: *mut u8,
+    w: i32,
+    h: i32,
+}
+
+impl Upload {
+    unsafe fn new(w: i32, h: i32) -> Option<Self> {
+        unsafe {
+            let mut bmi: BITMAPINFO = zeroed();
+            bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = w;
+            bmi.bmiHeader.biHeight = -h;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+            let screen = GetDC(0 as _);
+            let hdc = CreateCompatibleDC(screen);
+            ReleaseDC(0 as _, screen);
+            let mut bits: *mut c_void = std::ptr::null_mut();
+            let dib = CreateDIBSection(
+                hdc,
+                &bmi,
+                DIB_RGB_COLORS,
+                &mut bits,
+                std::ptr::null_mut(),
+                0,
+            );
+            if dib.is_null() {
+                DeleteDC(hdc);
+                return None;
+            }
+            let old = SelectObject(hdc, dib as HGDIOBJ);
+            Some(Self {
+                hdc,
+                dib,
+                old,
+                bits: bits as *mut u8,
+                w,
+                h,
+            })
+        }
+    }
+
+    /// Premultiplies rows `y0..y1` of the card into the DIB, which is what the
+    /// layered window reads.
+    unsafe fn put(&self, image: &[u8], y0: i32, y1: i32) {
+        unsafe {
+            let y0 = y0.clamp(0, self.h);
+            let y1 = y1.clamp(y0, self.h);
+            let start = (y0 * self.w * 4) as usize;
+            let end = (y1 * self.w * 4) as usize;
+            let dst = std::slice::from_raw_parts_mut(self.bits.add(start), end - start);
+            for (px, src) in dst
+                .chunks_exact_mut(4)
+                .zip(image[start..end].chunks_exact(4))
+            {
+                let a = src[3] as u32;
+                px[0] = ((src[2] as u32 * a + 127) / 255) as u8;
+                px[1] = ((src[1] as u32 * a + 127) / 255) as u8;
+                px[2] = ((src[0] as u32 * a + 127) / 255) as u8;
+                px[3] = src[3];
+            }
+        }
+    }
+
+    unsafe fn present(&self, hwnd: HWND, at: POINT, w: i32, h: i32) {
+        unsafe {
+            let blend = BLENDFUNCTION {
+                BlendOp: 0,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: 1,
+            };
+            let src_pt = POINT { x: 0, y: 0 };
+            let size = SIZE { cx: w, cy: h };
+            let screen = GetDC(0 as _);
+            UpdateLayeredWindow(
+                hwnd, screen, &at, &size, self.hdc, &src_pt, 0, &blend, ULW_ALPHA,
+            );
+            ReleaseDC(0 as _, screen);
+        }
+    }
+}
+
+impl Drop for Upload {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.hdc, self.old);
+            DeleteObject(self.dib as HGDIOBJ);
+            DeleteDC(self.hdc);
+        }
     }
 }
 
@@ -688,111 +973,6 @@ fn lerp(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
 
 /// The card as straight RGBA: the shadow, the card, the border and the hover
 /// row, then the type and the mark drawn over them by GDI.
-fn render(menu: &Menu, layout: &Layout, hover: Option<usize>) -> Vec<u8> {
-    let w = layout.win_w;
-    let h = layout.win_h;
-    let scale = layout.scale;
-    // start fully transparent: the window is layered, and anything the card
-    // does not cover must let the desktop through
-    let mut px = vec![0u8; (w * h * 4) as usize];
-
-    let card_cx = layout.card_x as f32 + layout.card_w as f32 / 2.0;
-    let card_cy = layout.card_y as f32 + layout.card_h as f32 / 2.0;
-    let card_hw = layout.card_w as f32 / 2.0;
-    let card_hh = layout.card_h as f32 / 2.0;
-    let radius = RADIUS as f32 * scale;
-
-    let hover_box = hover.and_then(|i| layout.rows.get(i)).map(|r| {
-        let inset = (2.0 * scale) as i32;
-        let top = layout.card_y + r.top + inset;
-        let bottom = layout.card_y + r.top + r.height - inset;
-        (
-            8.0 * scale,
-            top as f32,
-            layout.card_w as f32 - 16.0 * scale,
-            (bottom - top) as f32,
-        )
-    });
-    let hover_color = hover
-        .and_then(|i| layout.rows.get(i))
-        .map(|r| match r.row {
-            Row::Item { danger: true, .. } => C_HOVER_DANGER,
-            _ => C_HOVER,
-        })
-        .unwrap_or(C_HOVER);
-
-    let mut mask = vec![0f32; (w * h) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let d = sd_round_rect(
-                x as f32 + 0.5,
-                y as f32 + 0.5,
-                card_cx,
-                card_cy,
-                card_hw,
-                card_hh,
-                radius,
-            );
-            mask[(y * w + x) as usize] = (0.5 - d).clamp(0.0, 1.0);
-        }
-    }
-    let shadow = shadow_of(
-        &mask,
-        w,
-        h,
-        (9.0 * scale).round().max(1.0) as usize,
-        (3.0 * scale).round() as i32,
-        0.20,
-    );
-
-    for y in 0..h {
-        for x in 0..w {
-            let i = (y * w + x) as usize;
-            let cov = mask[i];
-            let sh = shadow[i];
-            let alpha = cov + sh * (1.0 - cov);
-            if alpha <= 0.001 {
-                continue;
-            }
-            let d = sd_round_rect(
-                x as f32 + 0.5,
-                y as f32 + 0.5,
-                card_cx,
-                card_cy,
-                card_hw,
-                card_hh,
-                radius,
-            );
-            let mut rgb = C_CARD;
-            let border = (1.0 - (d + 0.5).abs()).clamp(0.0, 1.0);
-            rgb = lerp(rgb, C_BORDER, border);
-            if let Some((bx, by, bw, bh)) = hover_box {
-                let hd = sd_round_rect(
-                    x as f32 + 0.5,
-                    y as f32 + 0.5,
-                    bx + bw / 2.0,
-                    by + bh / 2.0,
-                    bw / 2.0,
-                    bh / 2.0,
-                    12.0 * scale,
-                );
-                let hcov = (0.5 - hd).clamp(0.0, 1.0) * cov;
-                rgb = lerp(rgb, hover_color, hcov);
-            }
-            let o = i * 4;
-            px[o] = rgb.0;
-            px[o + 1] = rgb.1;
-            px[o + 2] = rgb.2;
-            px[o + 3] = (alpha * 255.0).round() as u8;
-        }
-    }
-
-    // GDI antialiases glyphs against what is already on the card, so the type
-    // comes after the surfaces and the pixels are copied back
-    unsafe { draw_content(&mut px, w, h, menu, layout) };
-    px
-}
-
 fn shadow_of(mask: &[f32], w: i32, h: i32, radius: usize, dy: i32, strength: f32) -> Vec<f32> {
     if radius == 0 {
         return vec![0.0; mask.len()];
@@ -920,9 +1100,19 @@ impl Gdi {
 
     /// Copies GDI's result back over the card's colour, keeping its alpha.
     unsafe fn finish(self, px: &mut [u8]) {
+        unsafe { self.finish_band(px, 0, px.len()) }
+    }
+
+    /// Copies the bytes `from..to` of GDI's result back, keeping the card's
+    /// alpha outside the drawn band. GDI wrote outside it too, but those pixels
+    /// still hold the colour they were given.
+    unsafe fn finish_band(self, px: &mut [u8], from: usize, to: usize) {
         unsafe {
             let src = std::slice::from_raw_parts(self.bits, px.len());
-            for (d, s) in px.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+            for (d, s) in px[from..to]
+                .chunks_exact_mut(4)
+                .zip(src[from..to].chunks_exact(4))
+            {
                 d[0] = s[2];
                 d[1] = s[1];
                 d[2] = s[0];
@@ -1098,15 +1288,8 @@ unsafe fn draw_content(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layo
                     );
                 }
                 Row::Item { label, danger, .. } => {
-                    let left = card_x + (TEXT_X as f32 * s) as i32;
-                    let rect = RECT {
-                        left,
-                        top: card_y + row.top,
-                        right: card_x + card_w - (PAD_X as f32 * s) as i32,
-                        bottom: card_y + row.top + row.height,
-                    };
                     let c = if danger { C_DANGER } else { C_TEXT };
-                    g.text(label, f_item, c, rect);
+                    g.text(label, f_item, c, item_rect(layout, row));
                 }
             }
         }
@@ -1117,6 +1300,150 @@ unsafe fn draw_content(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layo
             DeleteObject(f as HGDIOBJ);
         }
     }
+}
+
+/// Where an item's label sits on the card.
+fn item_rect(layout: &Layout, row: &RowGeom) -> RECT {
+    let s = layout.scale;
+    RECT {
+        left: layout.card_x + (TEXT_X as f32 * s) as i32,
+        top: layout.card_y + row.top,
+        right: layout.card_x + layout.card_w - (PAD_X as f32 * s) as i32,
+        bottom: layout.card_y + row.top + row.height,
+    }
+}
+
+/// Redraws the type that falls in rows `y0..y1` of `px`, leaving the rest of
+/// the card alone: what a hover repaint needs after it has recoloured a band.
+///
+/// # Safety
+/// `px` must be a straight-RGBA card of `w` x `h`, laid out as `layout`.
+unsafe fn draw_type(px: &mut [u8], w: i32, h: i32, menu: &Menu, layout: &Layout, y0: i32, y1: i32) {
+    unsafe {
+        let Some(g) = Gdi::new(px, w, h) else {
+            return;
+        };
+        let s = layout.scale;
+        let f_brand = font(s, 15.5, FW_SEMIBOLD, "Segoe UI");
+        let f_item = font(s, 16.0, FW_NORMAL, "Microsoft YaHei UI");
+        let f_meta = font(s, 12.5, FW_NORMAL, "Microsoft YaHei UI");
+        let f_ver = font(s, 12.5, FW_NORMAL, "Segoe UI");
+
+        let card_x = layout.card_x;
+        let card_y = layout.card_y;
+        let card_w = layout.card_w;
+
+        // the header's pieces, when the band reaches them
+        let mx = card_x as f32 + (PAD_X as f32 + 11.0) * s;
+        let my = card_y as f32 + 21.0 * s;
+        if intersects(y0, y1, my - 12.0 * s, my + 12.0 * s) {
+            draw_mark(&g, mx, my, 10.0 * s, s);
+        }
+        let brand_x = card_x + ((PAD_X + 31) as f32 * s) as i32;
+        if intersects(y0, y1, card_y as f32 + 7.0 * s, card_y as f32 + 33.0 * s) {
+            g.text(
+                "AgentHub",
+                f_brand,
+                C_TEXT,
+                RECT {
+                    left: brand_x,
+                    top: card_y + (7.0 * s) as i32,
+                    right: card_x + card_w,
+                    bottom: card_y + (33.0 * s) as i32,
+                },
+            );
+            let brand_w = g.text_width("AgentHub", f_brand);
+            g.text(
+                &format!("v{}", menu.version),
+                f_ver,
+                C_MUTED,
+                RECT {
+                    left: brand_x + brand_w + (6.0 * s) as i32,
+                    top: card_y + (9.0 * s) as i32,
+                    right: card_x + card_w,
+                    bottom: card_y + (32.0 * s) as i32,
+                },
+            );
+        }
+        let dot_x = card_x + ((PAD_X + 31) as f32 * s) as i32;
+        let dot_y = card_y + (48.0 * s) as i32;
+        let dot_r = 3.0 * s;
+        if intersects(y0, y1, dot_y as f32 - dot_r, dot_y as f32 + dot_r) {
+            let brush = CreateSolidBrush(colorref(C_GREEN));
+            let old_brush = SelectObject(g.hdc, brush as HGDIOBJ);
+            let pen = CreatePen(PS_SOLID, 0, colorref(C_GREEN));
+            let old_pen = SelectObject(g.hdc, pen as HGDIOBJ);
+            Ellipse(
+                g.hdc,
+                (dot_x as f32 - dot_r).round() as i32,
+                (dot_y as f32 - dot_r).round() as i32,
+                (dot_x as f32 + dot_r).round() as i32,
+                (dot_y as f32 + dot_r).round() as i32,
+            );
+            SelectObject(g.hdc, old_pen);
+            SelectObject(g.hdc, old_brush);
+            DeleteObject(pen as HGDIOBJ);
+            DeleteObject(brush as HGDIOBJ);
+        }
+        if intersects(y0, y1, card_y as f32 + 37.0 * s, card_y as f32 + 60.0 * s) {
+            g.text(
+                &format!("运行中 · {}", menu.host),
+                f_meta,
+                C_MUTED,
+                RECT {
+                    left: dot_x + (9.0 * s) as i32,
+                    top: card_y + (37.0 * s) as i32,
+                    right: card_x + card_w - (PAD_X as f32 * s) as i32,
+                    bottom: card_y + (60.0 * s) as i32,
+                },
+            );
+        }
+        let hair = card_y + layout.card_h.min((HEADER_H as f32 * s) as i32) - 1;
+        if intersects(y0, y1, hair as f32, hair as f32 + 1.0) {
+            g.fill(
+                card_x + (PAD_X as f32 * s) as i32,
+                hair,
+                card_w - 2 * (PAD_X as f32 * s) as i32,
+                1,
+                C_HAIRLINE,
+            );
+        }
+
+        // the rows in the band: their label, or a separator's hairline
+        for row in &layout.rows {
+            let top = card_y + row.top;
+            let bottom = top + row.height;
+            if !intersects(y0, y1, top as f32, bottom as f32) {
+                continue;
+            }
+            match row.row {
+                Row::Separator => g.fill(
+                    card_x + (PAD_X as f32 * s) as i32,
+                    top + row.height / 2,
+                    card_w - 2 * (PAD_X as f32 * s) as i32,
+                    1,
+                    C_HAIRLINE,
+                ),
+                Row::Item { label, danger, .. } => {
+                    let c = if danger { C_DANGER } else { C_TEXT };
+                    g.text(label, f_item, c, item_rect(layout, row));
+                }
+            }
+        }
+
+        // only the band was drawn: copy that much back, not the whole card
+        let from = (y0.clamp(0, h) * w * 4) as usize;
+        let to = (y1.clamp(0, h) * w * 4) as usize;
+        g.finish_band(px, from, to);
+        for f in [f_brand, f_item, f_meta, f_ver] {
+            DeleteObject(f as HGDIOBJ);
+        }
+    }
+}
+
+/// Whether rows `y0..y1` can hold anything drawn between `top` and `bottom`.
+fn intersects(y0: i32, y1: i32, top: f32, bottom: f32) -> bool {
+    (y1 as f32) > top && (y0 as f32) < bottom
 }
 
 /// The icon's own hexagon, drawn small: six nodes on a ring, the spokes to the
@@ -1197,5 +1524,115 @@ unsafe fn draw_mark(g: &Gdi, cx: f32, cy: f32, r: f32, s: f32) {
         DeleteObject(core_brush as HGDIOBJ);
         DeleteObject(ring as HGDIOBJ);
         DeleteObject(white as HGDIOBJ);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn menu() -> Menu {
+        Menu {
+            version: "2.5.2".into(),
+            host: "127.0.0.1:4200".into(),
+            items: vec![
+                Item {
+                    id: 1,
+                    label: "打开控制台",
+                    danger: false,
+                    separator_before: false,
+                },
+                Item {
+                    id: 2,
+                    label: "重启网关",
+                    danger: false,
+                    separator_before: true,
+                },
+                Item {
+                    id: 3,
+                    label: "退出",
+                    danger: true,
+                    separator_before: true,
+                },
+            ],
+        }
+    }
+
+    /// A hover repaints its own rows and nothing else: the card's shadow, its
+    /// type in the header and the other rows all keep the pixels they had.
+    #[test]
+    fn a_hover_repaints_only_its_own_row() {
+        let menu = menu();
+        let layout = Layout::new(&menu, 192);
+        let mut frame = Frame::new(1, &menu, &layout);
+        assert_eq!(frame.base.len(), (layout.win_w * layout.win_h * 4) as usize);
+        assert!(
+            frame.base.chunks_exact(4).any(|px| px[3] > 0),
+            "the card is drawn"
+        );
+
+        let before = frame.image.clone();
+        // an item row, not the separator above it: only items take a hover
+        let index = layout
+            .rows
+            .iter()
+            .position(|r| matches!(r.row, Row::Item { .. }))
+            .unwrap();
+        frame.set_hover(Some(index), &layout, Some(&menu));
+        let after = frame.image.clone();
+
+        let w = layout.win_w as usize;
+        let row = &layout.rows[index];
+        let top = (layout.card_y + row.top) as usize;
+        let bottom = (layout.card_y + row.top + row.height) as usize;
+        assert!(top < bottom);
+        let inset = (4.0 * layout.scale) as usize;
+        for y in 0..layout.win_h as usize {
+            let span = y * w * 4..(y + 1) * w * 4;
+            if y < top || y >= bottom {
+                assert_eq!(before[span.clone()], after[span], "row {y} is untouched");
+            } else if y >= top + inset && y < bottom - inset {
+                assert_ne!(before[span.clone()], after[span], "row {y} is repainted");
+            }
+        }
+
+        // leaving the row puts the card back exactly as it was drawn
+        frame.set_hover(None, &layout, Some(&menu));
+        assert_eq!(frame.image, before);
+    }
+
+    /// Moving straight from one row to the next leaves neither row hovered in
+    /// the wrong colour, and both rows are the card's own pixels again.
+    #[test]
+    fn moving_between_rows_puts_the_first_row_back() {
+        let menu = menu();
+        let layout = Layout::new(&menu, 96);
+        let mut frame = Frame::new(1, &menu, &layout);
+        let plain = frame.image.clone();
+
+        frame.set_hover(Some(0), &layout, Some(&menu));
+        frame.set_hover(Some(2), &layout, Some(&menu));
+        let w = layout.win_w as usize;
+        let first = &layout.rows[0];
+        let top = (layout.card_y + first.top) as usize;
+        let bottom = (layout.card_y + first.top + first.height) as usize;
+        assert_eq!(
+            frame.image[top * w * 4..bottom * w * 4],
+            plain[top * w * 4..bottom * w * 4],
+            "the row left behind is the card again"
+        );
+        frame.set_hover(None, &layout, Some(&menu));
+        assert_eq!(frame.image, plain);
+    }
+
+    /// A new menu redraws the card; the same one reuses it.
+    #[test]
+    fn the_frame_belongs_to_the_menu_it_was_drawn_for() {
+        let menu = menu();
+        let layout = Layout::new(&menu, 96);
+        let frame = Frame::new(7, &menu, &layout);
+        assert_eq!(frame.session, 7);
+        let other = Layout::new(&menu, 192);
+        assert_ne!(Layout::new(&menu, 96).win_w, other.win_w);
     }
 }
