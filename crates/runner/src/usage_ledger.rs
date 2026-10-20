@@ -17,9 +17,13 @@
 //! line's `entrypoint` (`claude-desktop`, `claude-desktop-3p`). Those calls
 //! are attributed to `claude_desktop`; everything else is `claude_code`.
 //!
-//! Codex and ZCode keep per-session totals rather than per-call rows, so they
-//! are folded in at day granularity by [`agent_totals`] and never appear as
-//! individual requests.
+//! ZCode and Codex are folded in from their own stores, so the page's total
+//! is the whole machine's usage rather than Coding Assistant's alone. ZCode's
+//! `model_usage` table is one row per call, complete with prompt, cache,
+//! completion and both timestamps; its older sessions, which predate that
+//! table, are read from their assistant messages instead. Codex writes no
+//! per-call rows at all — only a running total per session — so each rollout
+//! contributes one record holding its final `token_count`.
 
 use std::{
     collections::HashMap,
@@ -40,6 +44,9 @@ use crate::collectors::{CollectorError, home_dir};
 const LEDGER_FILE_LIMIT: usize = 4_000;
 /// One JSONL line beyond this is not a transcript record worth keeping.
 const LEDGER_LINE_LIMIT: usize = 8 * 1024 * 1024;
+/// How many Codex rollouts one scan may open. A rollout is a whole session,
+/// so this bounds a first paint the same way `LEDGER_FILE_LIMIT` does.
+const CODEX_ROLLOUT_LIMIT: usize = 4_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Period {
@@ -247,6 +254,10 @@ struct LedgerCache {
     walked_at: Option<Instant>,
     /// Each file's fingerprint and the calls it held at that walk.
     files: HashMap<PathBuf, (FileMark, Vec<LedgerRecord>)>,
+    /// Each Codex rollout's fingerprint and the one total it held. A rollout
+    /// is compressed: re-reading it costs a decompression of the whole
+    /// session, so it is kept the same way a transcript file is.
+    codex: HashMap<PathBuf, (FileMark, Option<LedgerRecord>)>,
     /// The merged, sorted answer the last walk produced.
     records: Vec<LedgerRecord>,
 }
@@ -286,6 +297,36 @@ pub fn claude_records() -> Vec<LedgerRecord> {
         }
     }
 
+    let mut records = claude_calls();
+    // The page's totals are the machine's totals, not one agent's: a reader
+    // who runs several CLIs would otherwise see a figure that matches none of
+    // the numbers they remember. Each other store is read from its own
+    // authority (see [`other_agent_calls`]).
+    records.extend(other_agent_calls());
+    // One message repeated across resumed sessions belongs to the session that
+    // wrote it first; later copies would double every figure.
+    records.sort_by_key(|r| std::cmp::Reverse(r.t));
+    dedupe(&mut records);
+    mark_retries(&mut records);
+    let merged = records.clone();
+    if let Ok(mut guard) = ledger_cache().write() {
+        // the per-file marks belong to the walks that produced them; the
+        // merge itself keeps no state of its own
+        let files = guard.files.clone();
+        let codex = guard.codex.clone();
+        *guard = LedgerCache {
+            walked_at: Some(Instant::now()),
+            files,
+            codex,
+            records: merged,
+        };
+    }
+    records
+}
+
+/// Coding Assistant's own calls, and the per-file marks that make the next
+/// walk cheap.
+fn claude_calls() -> Vec<LedgerRecord> {
     let Some(config_dir) = claude_config_dir() else {
         return Vec::new();
     };
@@ -319,21 +360,424 @@ pub fn claude_records() -> Vec<LedgerRecord> {
         records.extend(calls.iter().cloned());
         walked.insert(path, (mark, calls));
     }
-
-    // One message repeated across resumed sessions belongs to the session that
-    // wrote it first; later copies would double every figure.
-    records.sort_by_key(|r| std::cmp::Reverse(r.t));
-    dedupe(&mut records);
-    mark_retries(&mut records);
-    let merged = records.clone();
     if let Ok(mut guard) = ledger_cache().write() {
-        *guard = LedgerCache {
-            walked_at: Some(Instant::now()),
-            files: walked,
-            records: merged,
-        };
+        guard.files = walked;
     }
     records
+}
+
+/// The calls of the other CLIs on this machine, each read from its own
+/// authority rather than from a second-hand cache.
+///
+/// **ZCode** keeps a `model_usage` table with one row per model call, already
+/// carrying tokens, model, session and both ends of the turn — the best
+/// record any store here offers. Older sessions predate that table, so a
+/// session with no `model_usage` row falls back to its assistant messages'
+/// `tokens` block; the two never overlap (a message with a usage row and the
+/// message's own tokens are the same figure, which is why only one of them is
+/// summed).
+///
+/// **Codex** writes one rollout per session, compressed with zstd, and its
+/// last `token_count` event is the session's cumulative usage. Codex reports
+/// `input_tokens` inclusive of the cached part, so only the input and output
+/// are kept: adding `cached_input_tokens` again would count the same prompt
+/// twice.
+///
+/// Both are read best-effort: a store that is missing, locked or being
+/// written contributes nothing rather than failing the page.
+fn other_agent_calls() -> Vec<LedgerRecord> {
+    let mut records = Vec::new();
+    if let Some(home) = home_dir() {
+        records.extend(zcode_calls(&home));
+        records.extend(codex_calls(&home));
+    }
+    records
+}
+
+/// ZCode's calls, from `~/.zcode/cli/db/db.sqlite`.
+fn zcode_calls(home: &Path) -> Vec<LedgerRecord> {
+    let database = home.join(".zcode").join("cli").join("db").join("db.sqlite");
+    if !database.is_file() {
+        return Vec::new();
+    }
+    let Ok(connection) = rusqlite::Connection::open_with_flags(
+        &database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Vec::new();
+    };
+    let mut records = Vec::new();
+
+    // One row per model call, with everything the ledger needs already
+    // separate: prompt, cache, completion and both moments.
+    let usage = connection.prepare(
+        "select session_id, model_id, input_tokens, output_tokens,
+                cache_creation_input_tokens, cache_read_input_tokens,
+                started_at, completed_at, status, error_type
+           from model_usage",
+    );
+    if let Ok(mut statement) = usage {
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
+            ))
+        });
+        if let Ok(rows) = rows {
+            let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (
+                session,
+                model,
+                input,
+                output,
+                cache_write,
+                cache_read,
+                started,
+                completed,
+                status,
+                error,
+            ) in rows.flatten()
+            {
+                covered.insert(session.clone());
+                let Some(t) = completed.or(started) else {
+                    continue;
+                };
+                let failed = status != "completed";
+                records.push(zcode_record(
+                    &session,
+                    &model,
+                    input,
+                    output,
+                    cache_write,
+                    cache_read,
+                    started.unwrap_or(t),
+                    t,
+                    if failed {
+                        Some(error.unwrap_or_else(|| status.clone()))
+                    } else {
+                        None
+                    },
+                ));
+            }
+            // Older sessions have no usage rows: their assistant messages
+            // still carry the whole figure. Only the sessions the table did
+            // not cover are read from messages, so no call is counted twice.
+            if let Ok(rows) = read_zcode_messages(&connection, &covered) {
+                records.extend(rows);
+            }
+        }
+    }
+    records
+}
+
+/// Fills in the ZCode sessions `model_usage` predates, from each assistant
+/// message's own `tokens` block.
+fn read_zcode_messages(
+    connection: &rusqlite::Connection,
+    covered: &std::collections::HashSet<String>,
+) -> rusqlite::Result<Vec<LedgerRecord>> {
+    let mut statement = connection.prepare(
+        "select session_id, id, data from message
+          where data like '%\"tokens\":{%' and data like '%\"role\":\"assistant\"%'",
+    )?;
+    let mut records = Vec::new();
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let session: String = row.get(0)?;
+        if covered.contains(&session) {
+            continue;
+        }
+        let id: String = row.get(1)?;
+        let data: String = row.get(2)?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
+            continue;
+        };
+        if value.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(tokens) = value.get("tokens") else {
+            continue;
+        };
+        let number = |key: &str| tokens.get(key).and_then(|v| v.as_i64()).unwrap_or(0);
+        let cache = tokens.get("cache");
+        let cache_read = cache
+            .and_then(|c| c.get("read"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let cache_write = cache
+            .and_then(|c| c.get("write"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        // `input` already counts the cached prompt, and ZCode's own `total`
+        // is `input + output`. The record keeps the uncached part separate so
+        // `total_tokens()` does not count the cache twice. `model_usage` rows
+        // differ: their `input_tokens` is already uncached, hence the
+        // subtraction happens here and not in `zcode_record`.
+        let input = number("input").saturating_sub(cache_read);
+        let t = value
+            .get("time")
+            .and_then(|time| time.get("created"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        if t == 0 {
+            continue;
+        }
+        let model = value
+            .get("modelID")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_owned();
+        records.push(zcode_record(
+            &session,
+            &model,
+            input,
+            number("output"),
+            cache_write,
+            cache_read,
+            t,
+            t,
+            None,
+        ));
+        let _ = id;
+    }
+    Ok(records)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn zcode_record(
+    session: &str,
+    model: &str,
+    input: i64,
+    output: i64,
+    cache_write: i64,
+    cache_read: i64,
+    asked: i64,
+    t: i64,
+    error: Option<String>,
+) -> LedgerRecord {
+    let input = input.max(0) as u64;
+    let output = output.max(0) as u64;
+    let cache_write = cache_write.max(0) as u64;
+    let cache_read = cache_read.max(0) as u64;
+    let failed = error.is_some();
+    LedgerRecord {
+        t,
+        asked,
+        agent: "zcode",
+        model: if failed {
+            String::new()
+        } else {
+            model.to_owned()
+        },
+        session: session.to_owned(),
+        cwd: String::new(),
+        input,
+        output,
+        cache_read,
+        cache_write,
+        error,
+        cost: if failed {
+            0.0
+        } else {
+            calc_cost(
+                model,
+                input.saturating_add(cache_read).saturating_add(cache_write),
+                output,
+                cache_read,
+            )
+        },
+        retried: false,
+        recovered: false,
+    }
+}
+
+/// Codex's sessions, from the rollouts under `~/.codex`.
+///
+/// A rollout is one JSONL file per session, zstd-compressed once it is
+/// archived. Its `token_count` events carry the running total, so the last
+/// one is the session's usage; there is no per-turn model in the event, and
+/// the model is read from the rollout's session meta instead.
+fn codex_calls(home: &Path) -> Vec<LedgerRecord> {
+    let root = home.join(".codex");
+    let mut files = Vec::new();
+    for directory in ["sessions", "archived_sessions"] {
+        collect_rollouts(&root.join(directory), &mut files);
+    }
+    // Rollout names begin with their date, so name order is age order: keep
+    // the newest ones and skip the rest rather than read the whole archive.
+    files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    if files.len() > CODEX_ROLLOUT_LIMIT {
+        files.drain(..files.len() - CODEX_ROLLOUT_LIMIT);
+    }
+
+    // A rollout is a compressed whole session, so a walk that has already
+    // read one keeps it; only a rollout whose size or mtime moved is opened
+    // again. Without this, every poll would decompress the entire archive.
+    let previous = ledger_cache()
+        .read()
+        .map(|g| g.codex.clone())
+        .unwrap_or_default();
+    let mut walked = HashMap::with_capacity(files.len());
+    let mut records = Vec::new();
+    for path in files {
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        let mark = FileMark {
+            len: meta.len(),
+            modified_ms: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        };
+        let cached = previous.get(&path).and_then(|(old, record)| {
+            (old.len == mark.len && old.modified_ms == mark.modified_ms).then(|| record.clone())
+        });
+        let record = cached.unwrap_or_else(|| read_codex_rollout(&path));
+        if let Some(record) = &record {
+            records.push(record.clone());
+        }
+        walked.insert(path, (mark, record));
+    }
+    if let Ok(mut guard) = ledger_cache().write() {
+        guard.codex = walked;
+    }
+    records
+}
+
+fn collect_rollouts(directory: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            collect_rollouts(&path, files);
+            continue;
+        }
+        let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+        if name.starts_with("rollout-") && name.ends_with(".jsonl.zst") {
+            files.push(path);
+        }
+    }
+}
+
+/// One rollout's session total, read off its last `token_count` event.
+fn read_codex_rollout(path: &Path) -> Option<LedgerRecord> {
+    let bytes = fs::read(path).ok()?;
+    let text = zstd::decode_all(bytes.as_slice()).ok()?;
+    let mut model = String::new();
+    let mut session = path
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .unwrap_or_default()
+        .trim_end_matches(".jsonl")
+        .to_owned();
+    let mut last_total: Option<(i64, u64, u64)> = None;
+    for line in text.split(|b| *b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        // only the few line kinds that matter are parsed
+        let meta = line.starts_with(b"{\"timestamp\":")
+            && (contains(line, b"\"session_meta\"")
+                || contains(line, b"\"token_count\"")
+                || contains(line, b"\"turn_context\""));
+        if !meta {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        match value.get("type").and_then(|v| v.as_str()) {
+            Some("session_meta") => {
+                if let Some(payload) = value.get("payload") {
+                    if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                        session = id.to_owned();
+                    }
+                    if let Some(name) = payload
+                        .pointer("/base_instructions/provenance/model")
+                        .and_then(|v| v.as_str())
+                    {
+                        model = name.to_owned();
+                    }
+                }
+            }
+            // Rollouts written before the CLI recorded `provenance` name the
+            // model only on each turn, and the last turn is the one the
+            // session total was made with.
+            Some("turn_context") => {
+                if let Some(name) = value.pointer("/payload/model").and_then(|v| v.as_str()) {
+                    if !name.is_empty() {
+                        model = name.to_owned();
+                    }
+                }
+            }
+            Some("event_msg") => {
+                let payload = value.get("payload");
+                if payload.and_then(|p| p.get("type")).and_then(|v| v.as_str())
+                    != Some("token_count")
+                {
+                    continue;
+                }
+                let Some(total) = payload.and_then(|p| p.pointer("/info/total_token_usage")) else {
+                    continue;
+                };
+                let input = total
+                    .get("input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let output = total
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let at = value
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|d| d.timestamp_millis());
+                if let Some(at) = at {
+                    last_total = Some((at, input, output));
+                }
+            }
+            _ => {}
+        }
+    }
+    let (t, input, output) = last_total?;
+    // A rollout that never spent a token carries nothing the page can show:
+    // it would add a nameless row of zeros to the rankings.
+    if input == 0 && output == 0 {
+        return None;
+    }
+    // Codex counts the cached prompt inside `input_tokens`: splitting it out
+    // would both change the total and claim a cache hit the event never
+    // stated, so the call is recorded as plain input.
+    Some(LedgerRecord {
+        t,
+        asked: t,
+        agent: "codex",
+        model: model.clone(),
+        session,
+        cwd: String::new(),
+        input,
+        output,
+        cache_read: 0,
+        cache_write: 0,
+        error: None,
+        cost: calc_cost(&model, input, output, 0),
+        retried: false,
+        recovered: false,
+    })
 }
 
 fn dedupe(records: &mut Vec<LedgerRecord>) {
@@ -1641,5 +2085,152 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The other stores are read from their own authority: ZCode's
+    /// `model_usage` table (and its older messages), Codex's rollout totals.
+    /// Each store is built as the real one is shaped, so the test proves the
+    /// reader against the schema rather than against a mock of it.
+    #[test]
+    fn the_other_stores_are_read_from_their_own_records() {
+        let home = tempdir();
+        let zcode = home.join(".zcode").join("cli").join("db");
+        fs::create_dir_all(&zcode).unwrap();
+        let connection = rusqlite::Connection::open(zcode.join("db.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                "create table model_usage (
+                    session_id text, model_id text, input_tokens integer,
+                    output_tokens integer, cache_creation_input_tokens integer,
+                    cache_read_input_tokens integer, started_at integer,
+                    completed_at integer, status text, error_type text
+                 );
+                 create table message (session_id text, id text, data text);
+                 insert into model_usage values
+                    ('sess_new', 'gemini-3.8-flash-high', 100, 100, 0, 900, 1000, 2000, 'completed', null),
+                    ('sess_new', 'gemini-3.8-flash-high', 200, 50, 0, 1800, 3000, 4000, 'completed', null),
+                    ('sess_new', 'gemini-3.8-flash-high', 300, 10, 0, 0, 5000, 6000, 'error', 'rate_limit');
+                 insert into message values
+                    ('sess_old', 'm1', '{\"role\":\"assistant\",\"modelID\":\"gpt-5.6-sol\",\"time\":{\"created\":7000},\"tokens\":{\"input\":500,\"output\":20,\"cache\":{\"read\":400}}}');",
+            )
+            .unwrap();
+        drop(connection);
+
+        let calls = zcode_calls(&home);
+        // the covered session's usage rows are the calls; its messages are not
+        // read again, which is what would double its prompt
+        assert_eq!(calls.len(), 4, "two completed, one error, one old message");
+        let new: Vec<_> = calls.iter().filter(|c| c.session == "sess_new").collect();
+        assert_eq!(new.len(), 3);
+        let done: Vec<_> = new.iter().filter(|c| c.error.is_none()).collect();
+        assert_eq!(done.len(), 2);
+        // `model_usage.input_tokens` is already uncached: 100 stays 100 even
+        // though the same call read 900 from cache. The old message's `input`
+        // counts the cache, so it is the one that gets the subtraction.
+        assert_eq!(
+            done[0].input, 100,
+            "the uncached share of a 1,000-token prompt"
+        );
+        assert_eq!(done[0].cache_read, 900);
+        assert_eq!(done[0].total_tokens(), 1100);
+        assert!(new.iter().any(|c| c.error.as_deref() == Some("rate_limit")));
+        let old = calls.iter().find(|c| c.session == "sess_old").expect("old");
+        assert_eq!(old.model, "gpt-5.6-sol");
+        assert_eq!(old.input, 100, "500 inclusive of 400 cached");
+        assert_eq!(old.total_tokens(), 520, "input counts the cached part");
+        fs::remove_dir_all(&home).ok();
+    }
+
+    /// Codex reports `input_tokens` with the cached prompt already inside it,
+    /// and only the last `token_count` of a session is its total; adding the
+    /// cached share back would count the same prompt twice.
+    #[test]
+    fn a_codex_rollout_is_its_last_total() {
+        let home = tempdir();
+        let sessions = home.join(".codex").join("sessions").join("2026").join("10");
+        fs::create_dir_all(&sessions).unwrap();
+        let lines = [
+            r#"{"timestamp":"2026-10-01T10:00:00.000Z","type":"session_meta","payload":{"id":"01a15424"}}"#,
+            r#"{"timestamp":"2026-10-01T10:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.4"}}"#,
+            r#"{"timestamp":"2026-10-01T10:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":400,"cached_input_tokens":300,"output_tokens":10,"total_tokens":410}}}}"#,
+            r#"{"timestamp":"2026-10-01T10:00:08.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            r#"{"timestamp":"2026-10-01T10:00:09.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":900,"cached_input_tokens":700,"output_tokens":30,"total_tokens":930}}}}"#,
+        ];
+        let file = sessions.join("rollout-2026-10-01T10-00-00-01a15424.jsonl.zst");
+        let compressed = zstd::encode_all(lines.join("\n").as_bytes(), 3).unwrap();
+        fs::write(&file, compressed).unwrap();
+
+        // a rollout that spent nothing is not a call the page can show
+        let idle = sessions.join("rollout-2026-10-02T10-00-00-01a99999.jsonl.zst");
+        let lines = [
+            r#"{"timestamp":"2026-10-02T10:00:00.000Z","type":"session_meta","payload":{"id":"01a99999"}}"#,
+            r#"{"timestamp":"2026-10-02T10:00:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0}}}}"#,
+        ];
+        fs::write(
+            &idle,
+            zstd::encode_all(lines.join("\n").as_bytes(), 3).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            codex_calls(&home).len(),
+            1,
+            "only the session that spent tokens"
+        );
+
+        let calls = codex_calls(&home);
+        assert_eq!(calls.len(), 1, "one session, one total");
+        let call = &calls[0];
+        assert_eq!(call.session, "01a15424");
+        assert_eq!(
+            call.model, "gpt-5.6-sol",
+            "a rollout with no provenance is named by its last turn"
+        );
+        assert_eq!(call.total_tokens(), 930, "the last total, counted once");
+        assert_eq!(call.t, 1_790_848_809_000, "the last event's moment");
+        fs::remove_dir_all(&home).ok();
+    }
+
+    /// A rollout is a whole compressed session, so the walk keeps what it
+    /// read instead of decompressing the archive on every poll — but only for
+    /// as long as the file is the one it read.
+    #[test]
+    fn a_codex_rollout_is_read_once_and_reread_when_it_grows() {
+        let home = tempdir();
+        let sessions = home.join(".codex").join("sessions").join("2026").join("10");
+        fs::create_dir_all(&sessions).unwrap();
+        let file = sessions.join("rollout-2026-10-01T10-00-00-01a15424.jsonl.zst");
+        let meta = r#"{"timestamp":"2026-10-01T10:00:00.000Z","type":"session_meta","payload":{"id":"01a15424","base_instructions":{"provenance":{"model":"gpt-5.6-sol"}}}}"#;
+        let count = |input: u64, at: &str| {
+            format!(
+                r#"{{"timestamp":"{at}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":10}}}}}}}}"#
+            )
+        };
+        let write = |body: &str| {
+            fs::write(&file, zstd::encode_all(body.as_bytes(), 3).unwrap()).unwrap();
+        };
+
+        write(&[meta, &count(400, "2026-10-01T10:00:05.000Z")].join("\n"));
+        assert_eq!(codex_calls(&home)[0].total_tokens(), 410);
+        let kept = ledger_cache()
+            .read()
+            .unwrap()
+            .codex
+            .get(&file)
+            .and_then(|(_, record)| record.clone())
+            .expect("the walk kept the rollout it read");
+        assert_eq!(kept.total_tokens(), 410);
+
+        // a session that wrote more is read again rather than answered from
+        // the copy of its earlier state
+        write(
+            &[
+                meta,
+                &count(400, "2026-10-01T10:00:05.000Z"),
+                &count(900, "2026-10-01T10:00:09.000Z"),
+            ]
+            .join("\n"),
+        );
+        assert_eq!(codex_calls(&home)[0].total_tokens(), 910);
+        fs::remove_dir_all(&home).ok();
     }
 }

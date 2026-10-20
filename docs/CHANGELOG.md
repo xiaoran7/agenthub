@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+- **用量页的 Token 总量改为全机口径（`crates/runner/src/usage_ledger.rs`）**：
+  - **根因**：账本此前只读 Coding Assistant 的转录（实测 11.67B），而 magpie 的 25B 还含 ZCode 与 Codex，两个数字自然对不上；现按"对齐 magpie 全量"把本机其他智能体的用量并入同一账本，实测总量 **28.30B / 203,464 次请求 / $11,117.91**，其中 ZCode 14.27B、Claude Desktop 11.67B、Codex 2.37B、Coding Assistant 0.0002B；
+  - **ZCode**：`model_usage` 一行一次调用，字段已分好 prompt / cache / completion 与两端时间，直接取用；早于该表的会话退回读 assistant 消息自带的 `tokens` 块。两条路径的 `input` 语义相反——`model_usage.input_tokens` **不含**缓存，消息的 `input` **包含**缓存（其 `total` 即 `input + output`）——所以减法只在消息路径做，否则 `model_usage` 会被压掉 2.44B；
+  - **Codex**：每次会话一个 zstd 压缩的 rollout，末尾 `token_count` 的 `total_token_usage` 即累计值，只取最后一次以免把累计当增量重复相加；`input_tokens` 本就含 `cached_input_tokens`，故只记 input 与 output，不再加回缓存。早于 `provenance` 的 rollout 从最后一次 `turn_context.model` 取名（原先 1.19B 落在空模型名桶里），一分未花的 rollout 直接跳过，排名不再出现零值行；
+  - **轮询成本**：rollout 是整段压缩会话（本机 200 个共 525 MB），新增按（长度, 修改时间）记忆的 `LedgerCache.codex`，未变化的 rollout 不再解压；新增 `a_codex_rollout_is_read_once_and_reread_when_it_grows` 断言"读过的不重读、变长的会重读"。实测冷启动 12.5 s、账本 TTL 内 1.25 s；
+  - **语义**：失败（`error`/`rate_limit`）的调用计入总量但不进模型排行，与转录路径一致。
+
+- **托盘菜单改为紧凑的条目列表，右键不再转圈（`crates/runner/src/tray_menu.rs` / `tray.rs`）**：
+  - **根因（光标）**：弹窗窗口类注册时 `hCursor` 为 0，Windows 于是沿用线程当前光标；托盘线程刚处理完右键，带的还是"忙碌"光标，所以菜单一出现指针就转。现注册 `IDC_ARROW` 并在 `WM_SETCURSOR` 里无条件 `SetCursor`，指针一进菜单即恢复箭头；
+  - **版式**：卡宽 292→248、行高 43→36、圆角 17→10、投影留白 16→10，默认 100% DPI 下整窗 268×198（原为 324×266）；头部由"品牌标+标题+状态两行"压成单行 `● AgentHub（就绪） … v2.5.3`，去掉自绘六边形标记；条目字号 16→14px、行内左边距 45→14；
+  - **悬停**：高亮条此前按窗口坐标定位，左侧贴着边框、右侧短 16px；改为按卡片内缩 5px 对齐，圆角 7px，进出两行仍只重绘各自行带；
+  - 首项文案与托盘一致改为"显示协同控制台"。
+
+- **全平台图标高清化与纯透明背景重构（`crates/runner` / `apps/web`）**：
+  - **根因分析**：Windows 任务栏与托盘图标此前因包含不透明白色圆角方框（`<rect fill="url(#hubBg)">`）及中央弥散环境光斑，导致在深色任务栏或暗色壁纸下呈现毛刺未抗锯齿的白色方底和发虚蓝线，且六边形原半径 R=205 边距留白过大，在 16x16 / 24x24 / 32x32 等小尺寸光栅化时细节被二次插值模糊；
+  - **矢量资产透明高清重构（`icon.svg`）**：彻底移除不透明白色背板与环境光斑，实现 100% 纯透明背景；核心六边形半径扩展至 R=224 最大化视表面积；引入微光 3D 全息切面（顶部微亮高光 + 两侧透亮切面）赋予立体悬浮质感；轮廓与辐条采用 `#0369a1` 深色底包边（宽度 28px）叠加 `#7dd3fc`→`#38bdf8`→`#0ea5e9` 渐变荧光轮廓（宽度 20px），在纯黑、深灰及纯白背景下均保持锐利对比度；6 个外围节点采用双层环点结构，中央核心球体加入 3D 高光偏置点；
+  - **Windows 规范多尺寸 ICO 生成（`icon.ico`）**：通过 `sharp` 矢量直出光栅化与规范打包，生成完整覆盖 Windows 原生规范的 9 个分辨率帧（16x16、20x20、24x24、32x32、40x40、48x48、64x64、128x128 采用 32bpp BGRA DIB 带 Alpha 通道，256x256 采用压缩 PNG），确保在 100%、125%、150%、200% 等各种 DPI 的任务栏、通知区托盘与文件资源管理器中均为点对点清晰呈现；
+  - **全平台产物同步**：同步更新 `crates/runner/resources/` 与 `apps/web/public/` 下的 `icon.svg`、`icon.ico`、`icon.png`、`icon-192.png`、`icon-512.png` 及 `brand-icon.png`；重新编译嵌入 Windows 二进制资源，并更新发布归档。
+
 - **代码审查全量修复（删除、鉴权、缓存与重绘）**：
   - **会话删除不会再半途而废（`collectors/mod.rs`）**：`file-history/<id>`、`session-env/<id>` 与会话目录 `<id>` 同名，原先统一平移到 `trash/<basename>`，第二次 `rename` 撞上已存在的目录（os error 145），跨卷回退又对目录调用 `remove_file`（os error 5），结果是转录已挪走、接口却报失败。现由 `trash_target()` 在重名时带上来源目录名（`file-history-<id>`、`session-env-<id>`），`move_into()` 按类型复制/删除并在删除失败时撤回副本；移动循环抽成 `move_all_into()`，任一项失败即把已移动的项按逆序移回原位，并在错误里说明"已移动 N 个文件后，某文件失败，已全部放回"。新增 `deleting_a_session_that_has_two_folders_named_after_it` 与 `a_delete_that_fails_part_way_puts_the_session_back` 两个测试；
   - **防跨站驱动（`web_server.rs`）**：所有响应不再下发 `Access-Control-Allow-Origin: *` 与预检 `Max-Age`，新增 `origin_allowed()` 严格同源校验（`Origin` 必须等于 `http://{Host}`），在任何请求体被读取之前 403；无 `Origin` 的 CLI/托盘请求照常放行。`OPTIONS` 只回裸 `204`，不授予任何跨源权限。除 `only_the_consoles_own_origin_may_drive_the_daemon` 单测外，新增 `a_foreign_origin_cannot_post_to_the_daemon` 真正起服务并用 HTTP 断言：外来 `Origin` 与 `"null"` 均 403，控制台自身源与无 `Origin` 请求 200，且响应不含任何 CORS 授权头；
@@ -34,7 +53,7 @@
   - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
 - **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
 - **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
-- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（4,765,318 字节，含 12,056,576 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`8b64ddcf…8d34`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 274 项全绿（214 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
+- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,139,438 字节，含 12,751,360 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`2e793fa8…c329`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 274 项全绿（214 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
 
 ## [2.5.3] - 2026-10-20
 
