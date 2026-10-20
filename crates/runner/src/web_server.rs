@@ -1947,4 +1947,64 @@ mod tests {
 
         stopped.store(true, Ordering::Relaxed);
     }
+
+    /// A page on another origin must not be able to drive the daemon, and the
+    /// gate has to sit before the body is read: a drive-by `POST` is refused
+    /// whatever it asks for. Requests with no `Origin` (the tray, a CLI) are
+    /// still served, and so is the console's own origin.
+    #[test]
+    fn a_foreign_origin_cannot_post_to_the_daemon() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let handler = Arc::new(MockHandler);
+        let config = WebServerConfig {
+            port: 14300,
+            open_browser: false,
+        };
+        let port = serve(config, handler, stopped.clone()).expect("server should bind");
+        let url = format!("http://127.0.0.1:{}/api/capabilities/sync", port);
+
+        let foreign = ureq::post(&url)
+            .header("Origin", "https://evil.example")
+            .send_empty();
+        let refused = match foreign {
+            Err(ureq::Error::StatusCode(code)) => code,
+            Ok(resp) => resp.status().as_u16(),
+            Err(other) => panic!("unexpected transport error: {other}"),
+        };
+        assert_eq!(refused, 403, "another page may not drive the daemon");
+
+        // a sandboxed frame or a file:// page sends the literal "null"
+        let nulled = ureq::post(&url).header("Origin", "null").send_empty();
+        let code = match nulled {
+            Err(ureq::Error::StatusCode(code)) => code,
+            Ok(resp) => resp.status().as_u16(),
+            Err(other) => panic!("unexpected transport error: {other}"),
+        };
+        assert_eq!(code, 403, "\"null\" is not this console");
+
+        // the console's own origin, and a caller that sends no origin at all
+        for origin in [Some(format!("http://127.0.0.1:{port}")), None] {
+            let mut req = ureq::post(&url);
+            if let Some(origin) = origin {
+                req = req.header("Origin", &origin);
+            }
+            let resp = req
+                .send_empty()
+                .expect("the console and the tray are served");
+            assert_eq!(resp.status().as_u16(), 200);
+        }
+
+        // no response hands a foreign page a grant to skip the check next time
+        let resp = ureq::get(&format!("http://127.0.0.1:{port}/api/status"))
+            .header("Origin", "https://evil.example")
+            .call();
+        if let Ok(resp) = resp {
+            assert!(
+                resp.headers().get("access-control-allow-origin").is_none(),
+                "no CORS grant may be sent"
+            );
+        }
+
+        stopped.store(true, Ordering::Relaxed);
+    }
 }

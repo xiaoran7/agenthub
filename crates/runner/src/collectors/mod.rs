@@ -1674,6 +1674,16 @@ fn subagent_cache() -> &'static RwLock<HashMap<PathBuf, (u64, i64, Option<Claude
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+/// Drops every memoised subagent read. A deleted session's files leave the
+/// store, and a stale record under their old path would only be read by
+/// accident; a cleared map is cheaper than tracking which session each path
+/// belonged to, and the next poll fills it again.
+fn forget_subagents() {
+    if let Ok(mut guard) = subagent_cache().write() {
+        guard.clear();
+    }
+}
+
 fn read_claude_subagent_cached(path: &Path) -> Option<ClaudeSubagentEntry> {
     let meta = fs::metadata(path).ok()?;
     let len = meta.len();
@@ -1913,20 +1923,45 @@ fn delete_claude_session_in(
     // and could never remove the original directory. Each item keeps its
     // source folder in the name when a bare name is already in use, so every
     // move lands on a place of its own.
-    for (moved, path) in paths.iter().enumerate() {
-        let target = trash_target(&trash, path);
-        if let Err(failure) = move_into(path, &target) {
-            return Err(io(std::io::Error::other(format!(
-                "moved {moved} of {} files, then {}: {failure}",
-                paths.len(),
-                path.display()
-            ))));
-        }
-    }
+    move_all_into(&trash, &paths).map_err(io)?;
+    forget_subagents();
     if let Ok(mut guard) = claude_remote_sessions_cache().write() {
         *guard = None;
     }
     Ok(trash)
+}
+
+/// Moves every one of a session's files into its trash folder, or none of
+/// them: a move that fails part way puts back what it already moved. A delete
+/// that reports failure has to leave the session whole, or the page would keep
+/// the row, the retry would find no transcript, and the reader would have lost
+/// a conversation their agent still points at.
+fn move_all_into(trash: &Path, paths: &[PathBuf]) -> std::io::Result<()> {
+    let mut done: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let target = trash_target(trash, path);
+        if let Err(failure) = move_into(path, &target) {
+            let unreturned: Vec<String> = done
+                .iter()
+                .rev()
+                .filter(|(from, to)| move_into(to, from).is_err())
+                .map(|(from, _)| from.display().to_string())
+                .collect();
+            let restored = if unreturned.is_empty() {
+                " and put it all back".to_owned()
+            } else {
+                format!(" and could not put back {}", unreturned.join(", "))
+            };
+            return Err(std::io::Error::other(format!(
+                "moved {} of {} files, then {}: {failure}{restored}",
+                done.len(),
+                paths.len(),
+                path.display()
+            )));
+        }
+        done.push((path.clone(), target));
+    }
+    Ok(())
 }
 
 /// Where one of a session's files goes in its trash folder: its own name,
@@ -6403,6 +6438,53 @@ mod tests {
         fs::remove_dir_all(dir).ok();
     }
 
+    /// The console asks for the session list every few seconds, and the store
+    /// holds tens of megabytes of finished subagent transcripts. A file whose
+    /// length and last write have not moved is answered from memory; one that
+    /// grows is read again.
+    #[test]
+    fn a_finished_subagent_is_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("agent-ccc.jsonl");
+        let line = r#"{"type":"assistant","message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1,"output_tokens":42}}}"#;
+        // the moment is pinned, so each write does not give the file a new one:
+        // the memo's key is (length, moment), and the test is about that key
+        // and not about how fast two writes happen to land
+        let stamp = SystemTime::now() - Duration::from_secs(600);
+        let write_at = |text: &str| {
+            fs::write(&file, text).unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(stamp)
+                .unwrap();
+        };
+
+        write_at(&format!("{line}\n"));
+        let first = read_claude_subagent_cached(&file).expect("first read");
+        assert_eq!(first.completion_tokens, 42);
+
+        // same length, same moment: the memo answers even though the bytes
+        // now say something else
+        write_at(&format!("{line}\n").replace("42", "99"));
+        let cached = read_claude_subagent_cached(&file).expect("cached read");
+        assert_eq!(
+            cached.completion_tokens, 42,
+            "a file that has not moved is not read again"
+        );
+
+        // a longer file has moved: it is read again, whatever its moment
+        write_at(&format!(
+            "{line}\n{}\n",
+            r#"{"type":"assistant","message":{"id":"m2","model":"claude-sonnet-5","usage":{"input_tokens":1,"output_tokens":8}}}"#
+        ));
+        let reread = read_claude_subagent_cached(&file).expect("second read");
+        assert_eq!(reread.request_count, 2, "a grown transcript is read again");
+        assert_eq!(reread.completion_tokens, 50);
+        fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn deleting_a_session_moves_its_files_to_the_trash() {
         let dir = tempfile::tempdir().unwrap();
@@ -6513,6 +6595,46 @@ mod tests {
             names.iter().any(|n| n.ends_with("s1-agent-a.json")),
             "the todo is kept: {names:?}"
         );
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// A delete that cannot finish must not leave the session half moved: the
+    /// transcript that already went to the trash comes back, so the row the
+    /// page still shows can be deleted again.
+    #[test]
+    fn a_delete_that_fails_part_way_puts_the_session_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        let transcript = dir.path().join("s1.jsonl");
+        fs::write(&transcript, "{}\n").unwrap();
+        let folder = dir.path().join("s1");
+        fs::create_dir_all(folder.join("subagents")).unwrap();
+        fs::write(folder.join("subagents").join("agent-a.jsonl"), "{}\n").unwrap();
+        // a source that has gone between the listing and the move
+        let vanished = store.join("session-env").join("s1");
+        let trash = dir.path().join("trash").join("1-s1");
+        fs::create_dir_all(&trash).unwrap();
+
+        let paths = vec![transcript.clone(), folder.clone(), vanished];
+        let failure = move_all_into(&trash, &paths).expect_err("the missing one stops the move");
+
+        assert!(transcript.is_file(), "the transcript is back where it was");
+        assert!(
+            folder.join("subagents").join("agent-a.jsonl").is_file(),
+            "the folder is back with its subagents"
+        );
+        let left: Vec<String> = fs::read_dir(&trash)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            left.is_empty(),
+            "nothing is left claimed by the trash: {left:?}"
+        );
+        let message = failure.to_string();
+        assert!(message.contains("put it all back"), "{message}");
+        assert!(message.contains("moved 2 of 3"), "{message}");
         fs::remove_dir_all(dir).ok();
     }
 }

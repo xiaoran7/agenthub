@@ -40,12 +40,6 @@ import {
 } from "../lib/session-tree";
 import "./remote.css";
 import "./remote-desktop.css";
-import {
-  getStoredTheme,
-  setTheme,
-  initThemeListener,
-  type ThemeMode,
-} from "../lib/theme";
 
 const empty: RemoteSnapshot = { cursor: 0, runners: [], sessions: [] };
 
@@ -232,63 +226,6 @@ function ToolIcon({ kind }: { kind: ToolKind }) {
       aria-hidden="true"
     >
       {TOOL_PATHS[kind]}
-    </svg>
-  );
-}
-
-function SunIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-    </svg>
-  );
-}
-
-function MoonIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-    </svg>
-  );
-}
-
-function MonitorIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect width="20" height="14" x="2" y="3" rx="2" />
-      <line x1="8" x2="16" y1="21" y2="21" />
-      <line x1="12" x2="12" y1="17" y2="21" />
     </svg>
   );
 }
@@ -896,15 +833,6 @@ export function RemoteConsole({
   });
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [currentTheme, setCurrentTheme] = useState<ThemeMode>(() =>
-    getStoredTheme(),
-  );
-
-  useEffect(() => {
-    return initThemeListener((mode) => {
-      setCurrentTheme(mode);
-    });
-  }, []);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -1679,71 +1607,75 @@ export function RemoteConsole({
           )}
         </div>
 
-        <nav className="remote-breadcrumb" aria-label="会话位置">
-          <button
-            type="button"
-            className="remote-breadcrumb-root"
-            data-current={selectedSessionPath === undefined}
-            onClick={() => {
-              setSelected("");
-              if (isMobile) setMobileDrawerOpen(false);
-            }}
-          >
-            全部会话
-          </button>
-          {selectedSessionPath?.map((crumb, index) => {
-            const isLast = index === selectedSessionPath.length - 1;
-            return (
-              <span className="remote-breadcrumb-item" key={crumb.key}>
-                <span className="remote-breadcrumb-sep" aria-hidden="true">
-                  /
-                </span>
-                <button
-                  type="button"
-                  className="remote-breadcrumb-crumb"
-                  data-current={isLast}
-                  onClick={() => {
-                    if (isLast) return;
-                    if (isMobile) setMobileDrawerOpen(false);
-                    if (crumb.sessionKey !== undefined) {
-                      setSelected(crumb.sessionKey);
-                    } else {
-                      // Backing out to a folder: collapse everything below it
-                      // so the tree returns to that level instead of leaving
-                      // a deeper level open with nothing highlighted.
-                      setCollapsedDevices((prev) => ({
-                        ...prev,
-                        [crumb.key]: true,
-                      }));
-                      setSelected("");
-                    }
-                  }}
-                >
-                  {crumb.label}
-                </button>
-              </span>
-            );
-          })}
-        </nav>
-        <div className="remote-filter-pill-row">
-          <button
-            type="button"
-            className={`remote-filter-pill ${providerFilter === "all" ? "active" : ""}`}
-            onClick={() => setProviderFilter("all")}
-          >
-            全部
-          </button>
-          {[...availableProviders].map(([kind, label]) => (
+        {selectedSessionPath && selectedSessionPath.length > 0 && (
+          <nav className="remote-breadcrumb" aria-label="会话位置">
             <button
               type="button"
-              className={`remote-filter-pill ${providerFilter === kind ? "active" : ""}`}
-              key={kind}
-              onClick={() => setProviderFilter(kind)}
+              className="remote-breadcrumb-root"
+              onClick={() => {
+                setSelected("");
+                if (isMobile) setMobileDrawerOpen(false);
+              }}
             >
-              {label}
+              全部会话
             </button>
-          ))}
-        </div>
+            {selectedSessionPath.map((crumb, index) => {
+              const isLast = index === selectedSessionPath.length - 1;
+              return (
+                <span className="remote-breadcrumb-item" key={crumb.key}>
+                  <span className="remote-breadcrumb-sep" aria-hidden="true">
+                    /
+                  </span>
+                  <button
+                    type="button"
+                    className="remote-breadcrumb-crumb"
+                    data-current={isLast}
+                    onClick={() => {
+                      if (isLast) return;
+                      if (isMobile) setMobileDrawerOpen(false);
+                      if (crumb.sessionKey !== undefined) {
+                        setSelected(crumb.sessionKey);
+                      } else {
+                        // Backing out to a folder: collapse everything below it
+                        // so the tree returns to that level instead of leaving
+                        // a deeper level open with nothing highlighted.
+                        setCollapsedDevices((prev) => ({
+                          ...prev,
+                          [crumb.key]: true,
+                        }));
+                        setSelected("");
+                      }
+                    }}
+                  >
+                    {crumb.label}
+                  </button>
+                </span>
+              );
+            })}
+          </nav>
+        )}
+
+        {availableProviders.size > 1 && (
+          <div className="remote-filter-pill-row">
+            <button
+              type="button"
+              className={`remote-filter-pill ${providerFilter === "all" ? "active" : ""}`}
+              onClick={() => setProviderFilter("all")}
+            >
+              全部
+            </button>
+            {[...availableProviders].map(([kind, label]) => (
+              <button
+                type="button"
+                className={`remote-filter-pill ${providerFilter === kind ? "active" : ""}`}
+                key={kind}
+                onClick={() => setProviderFilter(kind)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="remote-nav-label">设备 / Agent / 工作区</div>
         <div className="remote-session-tree">
           {filteredDeviceGroups.map((dev) => {
@@ -2125,49 +2057,6 @@ export function RemoteConsole({
           </p>
         )}
         <div className="remote-sidebar-footer">
-          <div className="remote-theme-segmented-wrap">
-            <span className="remote-theme-label">THEME</span>
-            <div
-              className="remote-theme-segmented"
-              role="radiogroup"
-              aria-label="外观主题切换"
-            >
-              {[
-                {
-                  mode: "light" as const,
-                  label: "浅色",
-                  icon: <SunIcon size={14} />,
-                  title: "温润纸张 (Warm Paper)",
-                },
-                {
-                  mode: "dark" as const,
-                  label: "深色",
-                  icon: <MoonIcon size={14} />,
-                  title: "黑曜石暖炭 (Obsidian Charcoal)",
-                },
-                {
-                  mode: "system" as const,
-                  label: "系统",
-                  icon: <MonitorIcon size={14} />,
-                  title: "跟随系统设置",
-                },
-              ].map((t) => (
-                <button
-                  key={t.mode}
-                  type="button"
-                  className={`remote-theme-segment-btn ${currentTheme === t.mode ? "active" : ""}`}
-                  onClick={() => {
-                    setTheme(t.mode);
-                    setCurrentTheme(t.mode);
-                  }}
-                  title={t.title}
-                >
-                  <span className="remote-theme-icon">{t.icon}</span>
-                  <span>{t.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="remote-runner-status">
             <span
               className={`remote-status-dot ${snapshot.runners.some((item) => item.online) ? "online" : "offline"}`}
@@ -2176,7 +2065,7 @@ export function RemoteConsole({
               {snapshot.runners.filter((item) => item.online).length} 台电脑在线
             </span>
           </div>
-          {account?.user && (
+          {account?.user ? (
             <div className="remote-account-card">
               <div className="remote-account-avatar" aria-hidden="true">
                 {(
@@ -2208,6 +2097,21 @@ export function RemoteConsole({
                   </button>
                 )}
               </div>
+            </div>
+          ) : (
+            <div
+              className="remote-account-actions"
+              style={{ marginTop: "4px" }}
+            >
+              <button
+                className="remote-account-btn"
+                onClick={() => setSettingsOpen(true)}
+                type="button"
+                style={{ width: "100%", justifyContent: "center" }}
+                title="设置"
+              >
+                设置
+              </button>
             </div>
           )}
         </div>

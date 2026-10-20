@@ -1453,23 +1453,46 @@ mod tests {
     #[test]
     fn a_transcript_tells_only_the_whole_turn() {
         // A message's first line is its first content block, not its first
-        // token: the blocks land together. A reply of 17k tokens written
-        // "in 77 ms" was already written when its first line arrived, so the
-        // span between its lines is no writing window and tells no speed.
+        // token: the blocks land together. The line span of a burst like the
+        // 17k-token / 77 ms one seen in the store is no writing window at all,
+        // and the turn under a second is refused by the duration floor before
+        // any speed is computed.
         let mut burst = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 17_145);
         burst.asked = 1_000_000 - 77;
-        assert_eq!(burst.floor_ms(), None, "under a second: mostly wait");
+        assert_eq!(
+            burst.floor_ms(),
+            None,
+            "a turn under a second is mostly wait"
+        );
+        assert!(
+            burst.output >= FLOOR_MIN_OUTPUT,
+            "the burst is refused for its duration, not for its token count"
+        );
 
         // The whole turn is what the file can time, and it is a floor.
         let mut turn = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 5_000);
         turn.asked = 1_000_000 - 20_000;
         assert_eq!(turn.floor_ms(), Some(20_000), "5,000 tokens in 20 s");
 
-        // Faster than any real stream over the whole turn: the transcript
-        // timed something other than the writing.
-        let mut too_fast = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 5_000);
-        too_fast.asked = 1_000_000 - 400; // 12,500 tok/s
-        assert_eq!(too_fast.floor_ms(), None);
+        // A turn long enough to be timed, still faster than any real stream:
+        // the same 17k reply over 1.5 s reads 11,430 tok/s, and only the
+        // speed cap rejects it.
+        let mut too_fast = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 17_145);
+        too_fast.asked = 1_000_000 - 1_500; // 11,430 tok/s
+        assert_eq!(
+            too_fast.floor_ms(),
+            None,
+            "past the duration floor, refused by the 10,000 tok/s cap"
+        );
+
+        // Just under the cap at the same length is told.
+        let mut fast = record(1_000_000, "claude_code", "claude-sonnet-5", 0, 14_000);
+        fast.asked = 1_000_000 - 1_500; // 9,333 tok/s
+        assert_eq!(
+            fast.floor_ms(),
+            Some(1_500),
+            "the cap is a ceiling, not a target"
+        );
     }
 
     #[test]

@@ -274,6 +274,91 @@ function InstallIcon({
   );
 }
 
+function SunIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="5" />
+      <line x1="12" y1="1" x2="12" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="23" />
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+      <line x1="1" y1="12" x2="3" y2="12" />
+      <line x1="21" y1="12" x2="23" y2="12" />
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+    </svg>
+  );
+}
+
+function MoonIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  );
+}
+
+function MonitorIcon({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+    </svg>
+  );
+}
+
 interface SettingsSectionEntry {
   key: SettingsSectionKey;
   label: string;
@@ -811,21 +896,21 @@ export function SettingsPage({
                       title: "跟随系统",
                       desc: "自动同步操作系统与浏览器的明暗设置",
                       badge: "Auto",
-                      border: "var(--remote-line)",
+                      icon: <MonitorIcon size={16} />,
                     },
                     {
                       mode: "light",
                       title: "温润纸张",
                       desc: "天然柔和米白（Warm Paper），极度舒适的阅读质感",
                       badge: "Warm Paper",
-                      border: "#E8E4DD",
+                      icon: <SunIcon size={16} />,
                     },
                     {
                       mode: "dark",
                       title: "黑曜石暖炭",
                       desc: "黑曜石温暖暗色（Obsidian Charcoal），沉浸且不刺眼",
                       badge: "Obsidian",
-                      border: "#3D3B37",
+                      icon: <MoonIcon size={16} />,
                     },
                   ] as const
                 ).map((item) => {
@@ -842,8 +927,8 @@ export function SettingsPage({
                         display: "flex",
                         flexDirection: "column",
                         alignItems: "flex-start",
-                        gap: "6px",
-                        padding: "14px",
+                        gap: "8px",
+                        padding: "16px",
                         textAlign: "left",
                         background: isSelected
                           ? "var(--remote-selected)"
@@ -851,9 +936,12 @@ export function SettingsPage({
                         border: isSelected
                           ? "2px solid var(--remote-terracotta)"
                           : "1px solid var(--remote-line)",
-                        borderRadius: "var(--radius-md, 10px)",
+                        borderRadius: "var(--radius-md, 12px)",
                         cursor: "pointer",
-                        transition: "all 0.15s ease",
+                        boxShadow: isSelected
+                          ? "0 2px 8px rgba(217, 119, 87, 0.15)"
+                          : "none",
+                        transition: "all 0.16s cubic-bezier(0.16, 1, 0.3, 1)",
                       }}
                     >
                       <div
@@ -864,15 +952,34 @@ export function SettingsPage({
                           width: "100%",
                         }}
                       >
-                        <strong
+                        <div
                           style={{
-                            fontSize: "14px",
-                            color: "var(--remote-ink)",
-                            fontWeight: 650,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
                           }}
                         >
-                          {item.title}
-                        </strong>
+                          <span
+                            style={{
+                              color: isSelected
+                                ? "var(--remote-terracotta)"
+                                : "var(--remote-secondary)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            {item.icon}
+                          </span>
+                          <strong
+                            style={{
+                              fontSize: "14px",
+                              color: "var(--remote-ink)",
+                              fontWeight: 650,
+                            }}
+                          >
+                            {item.title}
+                          </strong>
+                        </div>
                         <span
                           style={{
                             fontSize: "10px",

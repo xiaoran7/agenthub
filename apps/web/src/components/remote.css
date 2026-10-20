@@ -802,7 +802,7 @@
   padding: 0 1px;
 }
 
-/* ================= CDS 侧边栏底部与外观分段器 ================= */
+/* ================= CDS 侧边栏底部 ================= */
 .remote-sidebar-footer {
   margin-top: auto;
   color: var(--cds-text-muted, var(--remote-muted));
@@ -812,64 +812,6 @@
   gap: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--cds-border, var(--remote-line));
-}
-
-.remote-theme-segmented-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.remote-theme-label {
-  font-size: 10px;
-  color: var(--cds-text-muted, var(--remote-muted));
-  font-family: var(--font-mono);
-  letter-spacing: 0.05em;
-  font-weight: 600;
-}
-
-.remote-theme-segmented {
-  display: flex;
-  align-items: center;
-  background: var(--cds-segmented-track, rgba(0, 0, 0, 0.06));
-  padding: 2px;
-  border-radius: var(--radius-md, 6px);
-  gap: 2px;
-}
-
-.remote-theme-segment-btn {
-  flex: 1;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 4px !important;
-  padding: 4px 6px !important;
-  font-size: 11px !important;
-  border: 1px solid transparent !important;
-  border-radius: 5px !important;
-  background: transparent !important;
-  color: var(--cds-text-secondary, var(--remote-muted)) !important;
-  cursor: pointer !important;
-  line-height: 1.4 !important;
-  transition: all 0.15s ease !important;
-  box-shadow: none !important;
-}
-
-.remote-theme-segment-btn:hover {
-  color: var(--cds-text-primary, var(--remote-ink)) !important;
-  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.04)) !important;
-}
-
-.remote-theme-segment-btn.active {
-  background: var(--cds-segmented-thumb, #ffffff) !important;
-  color: var(--cds-clay, #d97757) !important;
-  border-color: var(--cds-border, rgba(0, 0, 0, 0.08)) !important;
-  font-weight: 600 !important;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08) !important;
-}
-
-.remote-theme-icon {
-  font-size: 10px;
 }
 
 .remote-runner-status {
