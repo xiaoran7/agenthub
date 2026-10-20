@@ -33,7 +33,14 @@
   - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
 - **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
 - **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
-- **构建与发版**：重新编译 `cargo build --release -p agenthub-runner` 并重打包 `AgentHub-Runner-v2.5.2-windows-x64.zip`（4,729,879 字节，含 12,002,304 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`），刷新 `AgentHub-v2.5.2-SHA256.txt`（`dfc4f4d3…9b21`）；旧包先删后打，产物目录仍只保留最新一版。验证：`cargo test --workspace` 214 项库测试 + 60 项集成测试全绿，`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
+- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（4,765,318 字节，含 12,056,576 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`1a1e0ba2…2f4c`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 274 项全绿（214 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
+
+## [2.5.3] - 2026-10-20
+
+- **会话删除不再"删一半"（`crates/runner/src/collectors/mod.rs`）**：`file-history/<id>`、`session-env/<id>` 与会话目录 `<id>` 同名，多个来源平移进同一个 `trash/<basename>` 时第二次 `rename` 撞上已存在的非空目录（os error 145），跨卷回退又对目录调用 `remove_file`（os error 5），导致转录已被挪走、接口却报失败。现按来源限定重名目标，移动循环抽成 `move_all_into()` 并在任一项失败时按逆序把已移动的项放回，成功后才丢弃子代理、账本与仪表盘缓存。
+- **防跨站驱动（`crates/runner/src/web_server.rs`）**：响应不再下发 `Access-Control-Allow-Origin: *`，`origin_allowed()` 在读取请求体之前要求 `Origin` 等于 `http://{Host}`，其余一律 403；无 `Origin` 的托盘与 CLI 请求照常放行，`OPTIONS` 只回裸 `204`。
+- **子代理读取按（长度, 修改时间）记忆（`crates/runner/src/collectors/mod.rs`）**：已完成的子代理转录不再每 5 秒轮询重读约 81 MB，超过 500 个时保留最新的一批。
+- **整轮下限单测与实现门槛对齐（`crates/runner/src/usage_ledger.rs`）**：修正 17k token / 77 ms 用例的断言理由（实为时长门槛所拒），并补一条真正触发 10,000 tok/s 上限的用例。
 
 ## [2.5.2] - 2026-10-19
 

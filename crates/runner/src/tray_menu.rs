@@ -1533,7 +1533,7 @@ mod tests {
 
     fn menu() -> Menu {
         Menu {
-            version: "2.5.2".into(),
+            version: "2.5.3".into(),
             host: "127.0.0.1:4200".into(),
             items: vec![
                 Item {
