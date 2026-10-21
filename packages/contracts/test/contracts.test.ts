@@ -58,6 +58,23 @@ function signedRegistration(bindingCode: string): Record<string, unknown> {
   };
 }
 
+function signedHeartbeat(): DeviceHeartbeat {
+  const batch = parseSyncBatch(fixture);
+  const heartbeat: DeviceHeartbeat = {
+    protocol_version: 1,
+    device_id: batch.device_id,
+    public_key: batch.public_key,
+    sent_at: "2026-07-25T00:00:01.000Z",
+    signature: "",
+  };
+  heartbeat.signature = sign(
+    null,
+    Buffer.from(unsignedDeviceHeartbeatJson(heartbeat), "utf8"),
+    fixturePrivateKey,
+  ).toString("hex");
+  return heartbeat;
+}
+
 test("remote workspaces accept only daemon-issued identifiers", () => {
   const workspace = "ws-project-0123456789abcdef";
   const command = {
@@ -372,6 +389,22 @@ test("device registration requires proof of private key possession", () => {
     (error: unknown) =>
       error instanceof ContractError && error.code === "invalid_signature",
   );
+});
+
+test("device registration and heartbeat accept optional device_name", () => {
+  const registration = signedRegistration("code");
+  const parsed = parseDeviceRegistration({
+    ...registration,
+    device_name: "xiaotang",
+  });
+  assert.equal(parsed.device_name, "xiaotang");
+
+  const heartbeat = signedHeartbeat();
+  const parsedHeartbeat = parseDeviceHeartbeat({
+    ...heartbeat,
+    device_name: "xiaotang",
+  });
+  assert.equal(parsedHeartbeat.device_name, "xiaotang");
 });
 
 test("remote send_prompt accepts a bounded per-turn reasoning effort", () => {

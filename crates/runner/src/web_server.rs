@@ -729,7 +729,44 @@ impl ApiRequest<'_> {
                             }
                         };
 
-                        match client.bind(&identity, req.binding_code.trim()) {
+                        let dev_name = crate::device_name::resolve(None, Some(&identity_path));
+                        let mut identity = identity;
+                        let bind_res =
+                            client.bind(&identity, req.binding_code.trim(), Some(&dev_name));
+                        let bind_res = match bind_res {
+                            Err(crate::gateway::GatewayError::Rejected {
+                                error_code: Some(ref code),
+                                ..
+                            }) if code == "device_revoked" => {
+                                eprintln!(
+                                    "[agenthub-runner] Device identity was revoked by gateway, regenerating fresh identity and retrying bind..."
+                                );
+                                let new_identity = crate::device::DeviceIdentity::generate();
+                                match new_identity.overwrite(&identity_path) {
+                                    Ok(()) => {
+                                        identity = new_identity;
+                                        client.bind(
+                                            &identity,
+                                            req.binding_code.trim(),
+                                            Some(&dev_name),
+                                        )
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[agenthub-runner] Failed to overwrite revoked device identity: {}",
+                                            e
+                                        );
+                                        Err(crate::gateway::GatewayError::Rejected {
+                                            status: 403,
+                                            error_code: Some("device_revoked".to_string()),
+                                        })
+                                    }
+                                }
+                            }
+                            other => other,
+                        };
+
+                        match bind_res {
                             Ok(binding) => {
                                 let binding_info = json!({
                                     "device_id": binding.device_id,
@@ -760,11 +797,39 @@ impl ApiRequest<'_> {
                             }
                             Err(err) => {
                                 let friendly_message = match &err {
-                                    crate::gateway::GatewayError::Rejected { status } if *status == 403 => {
-                                        "配对码无效或已过期（有效期10分钟）。请在 Web 控制台重新生成最新的配对码。".to_string()
-                                    }
-                                    crate::gateway::GatewayError::Rejected { status } => {
-                                        format!("网关拒绝绑定请求（HTTP 状态码 {}）", status)
+                                    crate::gateway::GatewayError::Rejected { status, error_code } => {
+                                        match error_code.as_deref() {
+                                            Some("invalid_binding_code") => {
+                                                "配对码无效或已过期（有效期10分钟）。请在 Web 控制台重新生成最新的配对码。".to_string()
+                                            }
+                                            Some("binding_code_used") => {
+                                                "该配对码已被使用，请在 Web 控制台生成新的配对码。".to_string()
+                                            }
+                                            Some("device_revoked") => {
+                                                "当前设备已被网关撤销，自动重新生成身份凭据失败，请重试或重置身份。".to_string()
+                                            }
+                                            Some("device_not_registered") => {
+                                                "设备尚未在网关注册，请确认配对流程。".to_string()
+                                            }
+                                            Some("device_key_mismatch") => {
+                                                "设备公钥与网关记录不匹配。".to_string()
+                                            }
+                                            Some("device_not_owned") => {
+                                                "该设备不属于当前用户账号。".to_string()
+                                            }
+                                            Some("device_conflict") => {
+                                                "设备已被其他账号绑定或存在冲突。".to_string()
+                                            }
+                                            Some(code) => {
+                                                format!("网关拒绝配对请求（{}，HTTP {}）", code, status)
+                                            }
+                                            None if *status == 403 => {
+                                                "配对码无效或已被拒绝（HTTP 403）。请在 Web 控制台检查并重新生成配对码。".to_string()
+                                            }
+                                            None => {
+                                                format!("网关拒绝绑定请求（HTTP 状态码 {}）", status)
+                                            }
+                                        }
                                     }
                                     crate::gateway::GatewayError::Timeout => {
                                         "连接网关超时，请检查网络或网关地址是否正确。".to_string()

@@ -1887,6 +1887,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           "binding code is invalid or expired",
         );
       }
+      const isFreshClaim = binding.claimed_device_id === null;
       if (
         binding.claimed_device_id !== null &&
         binding.claimed_device_id !== deviceId
@@ -1941,9 +1942,6 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       if (device === undefined) {
         throw new Error("registered device could not be loaded");
       }
-      if (device.revoked_at !== null) {
-        throw new GatewayStoreError("device_revoked", "device is revoked");
-      }
       if (
         device.public_key !== publicKey ||
         device.owner_id !== binding.owner_id
@@ -1952,6 +1950,20 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           "device_conflict",
           "device is already registered with different credentials",
         );
+      }
+      const wasRevoked = device.revoked_at !== null;
+      if (wasRevoked) {
+        if (!isFreshClaim) {
+          throw new GatewayStoreError("device_revoked", "device is revoked");
+        }
+        await sql`
+          UPDATE agent_platform_devices
+          SET
+            revoked_at = NULL,
+            last_seen_at = clock_timestamp()
+          WHERE device_id = ${deviceId}
+        `;
+        device.revoked_at = null;
       }
       if (binding.claimed_device_id === null) {
         await sql`
@@ -1971,6 +1983,16 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           targetId: deviceId,
           metadata: {},
           createdAt: isoTimestamp(device.created_at),
+        });
+      } else if (isFreshClaim && wasRevoked) {
+        await insertWorkspaceAuditIfVisible(sql, {
+          workspaceOwnerId: binding.owner_id,
+          actorUserId: binding.issued_by ?? undefined,
+          action: "device.reactivated",
+          targetType: "device",
+          targetId: deviceId,
+          metadata: {},
+          createdAt: isoTimestamp(new Date()),
         });
       }
       return { device: registeredDevice(device), created };
@@ -2011,6 +2033,7 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     deviceId: string,
     publicKey: string,
     actorUserId?: string,
+    allowReactivate = false,
   ): Promise<DeviceRegistrationResult> {
     return this.#sql.begin(async (sql) => {
       const inserted = await sql<DeviceRow[]>`
@@ -2051,14 +2074,25 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
       if (row === undefined) {
         throw new Error("registered device could not be loaded");
       }
-      if (row.revoked_at !== null) {
-        throw new GatewayStoreError("device_revoked", "device is revoked");
-      }
       if (row.public_key !== publicKey || row.owner_id !== ownerId) {
         throw new GatewayStoreError(
           "device_conflict",
           "device is already registered with different credentials",
         );
+      }
+      const wasRevoked = row.revoked_at !== null;
+      if (wasRevoked) {
+        if (!allowReactivate) {
+          throw new GatewayStoreError("device_revoked", "device is revoked");
+        }
+        await sql`
+          UPDATE agent_platform_devices
+          SET
+            revoked_at = NULL,
+            last_seen_at = clock_timestamp()
+          WHERE device_id = ${deviceId}
+        `;
+        row.revoked_at = null;
       }
       if (created) {
         await insertWorkspaceAuditIfVisible(sql, {
@@ -2069,6 +2103,16 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           targetId: deviceId,
           metadata: {},
           createdAt: isoTimestamp(row.created_at),
+        });
+      } else if (allowReactivate && wasRevoked) {
+        await insertWorkspaceAuditIfVisible(sql, {
+          workspaceOwnerId: ownerId,
+          actorUserId,
+          action: "device.reactivated",
+          targetType: "device",
+          targetId: deviceId,
+          metadata: {},
+          createdAt: isoTimestamp(new Date()),
         });
       }
       return { device: registeredDevice(row), created };

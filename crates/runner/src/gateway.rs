@@ -35,7 +35,10 @@ pub enum GatewayError {
     #[error("gateway TLS connection failed")]
     TlsFailed,
     #[error("gateway rejected the request with HTTP status {status}")]
-    Rejected { status: u16 },
+    Rejected {
+        status: u16,
+        error_code: Option<String>,
+    },
     #[error("gateway returned an invalid response")]
     InvalidResponse,
     #[error("gateway response belongs to another device")]
@@ -61,6 +64,13 @@ impl GatewayError {
             Self::Sync(_) => "gateway_sync_failed",
         }
     }
+
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Rejected { error_code, .. } => error_code.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -78,6 +88,8 @@ pub struct DeviceHeartbeat {
     public_key: String,
     sent_at: DateTime<Utc>,
     signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -96,7 +108,10 @@ struct UnsignedDeviceHeartbeat<'a> {
 }
 
 impl DeviceHeartbeat {
-    pub fn signed(identity: &DeviceIdentity) -> Result<Self, GatewayError> {
+    pub fn signed_with_name(
+        identity: &DeviceIdentity,
+        device_name: Option<String>,
+    ) -> Result<Self, GatewayError> {
         let public_key = identity.public_key_hex();
         let sent_at = Utc::now();
         let unsigned = UnsignedDeviceHeartbeat {
@@ -112,7 +127,12 @@ impl DeviceHeartbeat {
             public_key,
             sent_at,
             signature: hex::encode(identity.sign(&bytes).to_bytes()),
+            device_name,
         })
+    }
+
+    pub fn signed(identity: &DeviceIdentity) -> Result<Self, GatewayError> {
+        Self::signed_with_name(identity, None)
     }
 }
 
@@ -128,6 +148,8 @@ struct DeviceRegistration<'a> {
     device_id: &'a str,
     public_key: String,
     signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_name: Option<&'a str>,
 }
 
 /// Signing input for the registration proof of possession: the same fields in
@@ -174,6 +196,7 @@ impl GatewayClient {
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentHub-Runner/",
                 env!("CARGO_PKG_VERSION")
             ))
+            .http_status_as_error(false)
             // Following a redirect could resend the request to an address the
             // HTTPS/loopback policy never validated.
             .max_redirects(0);
@@ -200,6 +223,7 @@ impl GatewayClient {
         &self,
         identity: &DeviceIdentity,
         binding_code: &str,
+        device_name: Option<&str>,
     ) -> Result<DeviceBinding, GatewayError> {
         if binding_code.is_empty()
             || binding_code.len() > MAX_BINDING_CODE_LENGTH
@@ -220,6 +244,7 @@ impl GatewayClient {
             device_id: identity.device_id(),
             signature: hex::encode(identity.sign(&signing_bytes).to_bytes()),
             public_key,
+            device_name,
         };
         let response: DeviceBindingResponse =
             self.post_json("/v1/devices/register", &registration)?;
@@ -240,8 +265,13 @@ impl GatewayClient {
         self.post_json("/v1/device-auth", batch)
     }
 
-    pub fn heartbeat(&self, identity: &DeviceIdentity) -> Result<HeartbeatResponse, GatewayError> {
-        let heartbeat = DeviceHeartbeat::signed(identity)?;
+    pub fn heartbeat_with_name(
+        &self,
+        identity: &DeviceIdentity,
+        device_name: Option<&str>,
+    ) -> Result<HeartbeatResponse, GatewayError> {
+        let heartbeat =
+            DeviceHeartbeat::signed_with_name(identity, device_name.map(str::to_string))?;
         let response: HeartbeatResponse = self.post_json("/v1/devices/heartbeat", &heartbeat)?;
         if response.protocol_version != HEARTBEAT_PROTOCOL_VERSION {
             return Err(GatewayError::InvalidResponse);
@@ -250,6 +280,10 @@ impl GatewayClient {
             return Err(GatewayError::DeviceMismatch);
         }
         Ok(response)
+    }
+
+    pub fn heartbeat(&self, identity: &DeviceIdentity) -> Result<HeartbeatResponse, GatewayError> {
+        self.heartbeat_with_name(identity, None)
     }
 
     fn post_json<T: Serialize, R: DeserializeOwned>(
@@ -263,6 +297,20 @@ impl GatewayClient {
             .post(&url)
             .send_json(body)
             .map_err(classify_transport_error)?;
+        let status = response.status().as_u16();
+        if status >= 400 {
+            let error_code = response
+                .body_mut()
+                .read_json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .or_else(|| v.get("code"))
+                        .and_then(|e| e.as_str())
+                        .map(|s| s.to_string())
+                });
+            return Err(GatewayError::Rejected { status, error_code });
+        }
         response
             .body_mut()
             .read_json()
@@ -321,7 +369,10 @@ fn validate_base_url(value: &str) -> Result<String, GatewayError> {
 
 fn classify_transport_error(error: ureq::Error) -> GatewayError {
     match error {
-        ureq::Error::StatusCode(status) => GatewayError::Rejected { status },
+        ureq::Error::StatusCode(status) => GatewayError::Rejected {
+            status,
+            error_code: None,
+        },
         ureq::Error::Timeout(_) => GatewayError::Timeout,
         ureq::Error::Io(error) if error.kind() == std::io::ErrorKind::InvalidData => {
             GatewayError::TlsFailed
@@ -402,8 +453,28 @@ mod tests {
     fn error_codes_are_stable_and_do_not_include_transport_details() {
         assert_eq!(GatewayError::Timeout.code(), "gateway_timeout");
         assert_eq!(
-            GatewayError::Rejected { status: 403 }.code(),
+            GatewayError::Rejected {
+                status: 403,
+                error_code: None,
+            }
+            .code(),
             "gateway_rejected"
+        );
+        assert_eq!(
+            GatewayError::Rejected {
+                status: 403,
+                error_code: Some("device_revoked".to_string()),
+            }
+            .error_code(),
+            Some("device_revoked")
+        );
+        assert_eq!(
+            GatewayError::Rejected {
+                status: 403,
+                error_code: None,
+            }
+            .error_code(),
+            None
         );
         assert_eq!(
             GatewayError::InvalidResponse.code(),

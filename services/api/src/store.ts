@@ -143,6 +143,7 @@ export interface GatewayStore {
     deviceId: string,
     publicKey: string,
     actorUserId?: string,
+    allowReactivate?: boolean,
   ): Promise<DeviceRegistrationResult>;
   ingestBatch(batch: SyncBatch): Promise<IngestResult>;
   ingestAuthBatch(batch: AuthSyncBatch): Promise<AuthIngestResult>;
@@ -184,7 +185,7 @@ export class OneTimeBindingCodes {
     this.#available = new Map(codes);
   }
 
-  claim(code: string, deviceId: string): string {
+  claim(code: string, deviceId: string): { ownerId: string; isFresh: boolean } {
     const existing = this.#claims.get(code);
     if (existing !== undefined) {
       if (existing.deviceId !== deviceId) {
@@ -193,7 +194,7 @@ export class OneTimeBindingCodes {
           "binding code has already been used",
         );
       }
-      return existing.ownerId;
+      return { ownerId: existing.ownerId, isFresh: false };
     }
     const ownerId = this.#available.get(code);
     if (ownerId === undefined) {
@@ -204,7 +205,7 @@ export class OneTimeBindingCodes {
     }
     this.#available.delete(code);
     this.#claims.set(code, { deviceId, ownerId });
-    return ownerId;
+    return { ownerId, isFresh: true };
   }
 
   /**
@@ -318,6 +319,7 @@ export class InMemoryGatewayStore implements GatewayStore {
         deviceId,
         publicKey,
         binding.issuedBy,
+        false,
       );
     }
     if (Date.parse(binding.expiresAt) <= this.#now().getTime()) {
@@ -333,6 +335,7 @@ export class InMemoryGatewayStore implements GatewayStore {
         deviceId,
         publicKey,
         binding.issuedBy,
+        true,
       );
     } catch (error) {
       delete binding.claimedDeviceId;
@@ -398,17 +401,31 @@ export class InMemoryGatewayStore implements GatewayStore {
     deviceId: string,
     publicKey: string,
     actorUserId?: string,
+    allowReactivate = false,
   ): Promise<DeviceRegistrationResult> {
     const existing = this.#devices.get(deviceId);
     if (existing !== undefined) {
-      if (existing.revoked_at !== undefined) {
-        throw new GatewayStoreError("device_revoked", "device is revoked");
-      }
       if (existing.public_key !== publicKey || existing.owner_id !== ownerId) {
         throw new GatewayStoreError(
           "device_conflict",
           "device is already registered with different credentials",
         );
+      }
+      if (existing.revoked_at !== undefined) {
+        if (!allowReactivate) {
+          throw new GatewayStoreError("device_revoked", "device is revoked");
+        }
+        delete existing.revoked_at;
+        existing.last_seen_at = this.#now().toISOString();
+        await this.#recordWorkspaceAudit({
+          workspaceOwnerId: ownerId,
+          actorUserId,
+          action: "device.reactivated",
+          targetType: "device",
+          targetId: deviceId,
+          metadata: {},
+          createdAt: existing.last_seen_at,
+        });
       }
       return { device: existing, created: false };
     }

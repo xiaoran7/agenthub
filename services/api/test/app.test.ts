@@ -250,7 +250,11 @@ test("signed auth snapshots are stored without exposing token material", async (
 test("persistent binding codes expire and revoked devices keep history but cannot sync", async () => {
   let now = new Date("2026-07-28T10:00:00Z");
   const store = new InMemoryGatewayStore(() => now);
-  const codes = ["generated-binding-code-a", "generated-binding-code-b"];
+  const codes = [
+    "generated-binding-code-a",
+    "generated-binding-code-b",
+    "generated-binding-code-c",
+  ];
   const app = createGatewayApp({
     store,
     authenticator: new DevelopmentIdentityAuthenticator(),
@@ -396,6 +400,31 @@ test("persistent binding codes expire and revoked devices keep history but canno
   });
   assert.equal(expiredRegistration.statusCode, 403);
   assert.equal(expiredRegistration.json().error, "invalid_binding_code");
+
+  // A revoked device can be reactivated with a fresh binding code
+  const freshBinding = await app.inject({
+    method: "POST",
+    url: "/v1/device-bindings",
+    headers: { "x-user-id": "user-1" },
+    payload: { expires_in_seconds: 60 },
+  });
+  assert.equal(freshBinding.statusCode, 201);
+  const reactivated = await app.inject({
+    method: "POST",
+    url: "/v1/devices/register",
+    payload: registrationPayload("generated-binding-code-c"),
+  });
+  assert.equal(reactivated.statusCode, 200);
+  assert.equal(reactivated.json().registered, true);
+
+  const reactivatedDevices = await app.inject({
+    method: "GET",
+    url: "/v1/devices",
+    headers: { "x-user-id": "user-1" },
+  });
+  assert.equal(reactivatedDevices.json().devices[0].revoked, false);
+  assert.equal(reactivatedDevices.json().devices[0].online, true);
+
   await app.close();
 });
 

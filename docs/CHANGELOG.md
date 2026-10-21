@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+- **双端设备连接状态同步、友好设备名称与已撤销设备非破坏性重连激活（`contracts`, `services/api`, `crates/runner`, `apps/web`）**：
+  - **双端在线状态实时一致（解决“明明连接了还是显示未连接”）**：
+    - **问题根因**：Web 控制台依据 PostgreSQL/SQLite 中 `agent_platform_devices` 的 `last_seen_at` 判定在线（45秒内有 HTTP 注册或心跳即亮绿灯），而本地 Runner 状态栏与设置页基于真实的 WebSocket 长连接双向流（`/v3/remote/ws` 的 challenge/hello/hello_ack 握手）判定。原先 `remote_network.rs` 中的 `SetRemoteEnabled` 遇到当前服务地址与已配置地址相同时存在短路退出逻辑（`if current_server == validated { return Ok(true); }`），导致用户重新绑定或配对后未重启 `network_loop`、未递增 generation，未触发 WebSocket 重连；
+    - **全链路重绑与重连**：清除短路分支，无论是否相同网关地址均无条件推进 generation、重新绑定日志库并启动最新 `network_loop` 进行双向长连接流建联，使 Runner 本地与 Web 控制台状态无缝秒级一致；
+  - **设备人类友好名称穿透与展示（解决“不要显示编号看不懂的，人类要看名字”）**：
+    - **契约与上报打通**：在 `DeviceRegistration` 与 `DeviceHeartbeat` 协议中新增可选的 `device_name` 字段；Runner 在配对（`client.bind`）与定期心跳时自动携带本地配置或系统主机名；
+    - **网关自动沉淀与下发**：网关在处理设备注册与心跳时通过 `RemoteContentStore.recordDeviceName` 将其更新到 `remote_runners.hello`，供 Web 控制台获取设备列表时返回真实的 `display_name`；
+    - **Web 控制台呈现优化**：废弃直接暴露生硬十六进制长哈希编号（`dev_68f670f3…`），统一优先展示人类可读的真实设备名称（如 `xiaotang`、`办公电脑`）；在尚无名称的中间过渡态，展示为温和的 `电脑 · <后六位>`，将完整设备 ID 置于气泡浮窗（Tooltip）中；
+  - **撤销设备非破坏性重连激活（解决“撤销不代表以后不用了”）**：
+    - **问题根因**：原先网关的 `registerDeviceWithBindingCode` 与 `registerDevice` 在检查到设备记录已存在且 `revoked_at !== null` 时，无条件阻断并抛出 `403 device_revoked`，导致用户撤销设备后在 Web 控制台生成全新配对码重新连接时被彻底拒之门外；
+    - **安全重连激活**：凭有效、未过期的新鲜配对码发起配对，充分证明拥有者已授权并持有设备私钥；网关现在安全重置 `revoked_at = NULL` 并刷新 `last_seen_at`，记入 `device.reactivated` 审计日志，无缝恢复同步；撤销期间的历史数据依然完整保留；
+    - **清晰透明文案**：Web 控制台撤销确认弹窗更新为：“确定撤销设备「…」吗？现有历史数据会完整保留。撤销后随时可在设备端使用新配对码重新连接激活。”
+  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `058ece30388ae31103f0bef5842841541c41744c5929d6c9eb330b91d7691db8`）。
+
+- **Runner 本地控制台用量趋势“速度”指标图表重构为标准分组条形图（`crates/runner`）**：
+  - **根除四不像混合底柱与悬空天线连线**：
+    - **问题根因**：原先在 `speed` 指标下，错误将该时间段所有模型混算的全量平均速度绘制为浅灰色实体底柱（`var(--pill)`），并对速度高于该底柱的模型自顶端画出引线（`stem`）并在空旷处悬挂横条（`mark`），而速度低于底柱的模型则被深埋在灰色底柱内；当鼠标悬停在特定模型时，该模型无调用的时间段依然立满其他模型的浅灰色底柱，违背条形图基本直觉；
+    - **标准分组条形图（Grouped Bar Chart）**：彻底清除虚假全量灰色底柱与引线逻辑。在速度模式下，每个时间槽内仅遍历该时段真正有调用产出的活跃模型，并排渲染专属颜色的条形柱；单模型调用时居中饱满呈现，多模型调用时并排自适应分配宽度与间隙，柱子高度精准对应其实际速度（tok/s）；
+    - **无调用时段绝对静默与干净联动**：当模型在特定时间段无调用时，该时段不绘制该模型的柱子；右侧排行榜悬停联动（`emphasize`）时，目标模型在全周期的速度起伏一目了然；时间槽悬停提示框（Tooltip）保持列出各活跃模型速度与当前时段加权综合速度。
+
 - **Web 远程控制台双按钮级联浮窗选择器重构（`apps/web`）**：
   - **根除横向滚动药丸过滤条与原生滚动条**：彻底废弃原先存在水平滚动溢出、显示生硬滚动条且在不同设备上宽度不对齐的 `.remote-filter-pill-row` 组件，消除视觉杂乱与排版不对齐；
   - **双按钮现代并排选择器（`.remote-selectors-bar`）**：设计并实现左侧“电脑选择器”与右侧“Agent 选择器”等宽并排双按钮，高度严格锁定为 32px，内置微图标、截断文本、在线状态圆点、活跃会话数量徽标与动态折叠箭头，配合 CSS 变量无缝适配明暗主题；

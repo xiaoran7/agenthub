@@ -680,18 +680,19 @@ pub fn run_with_local_control(
                                 Some(server_url) => Some(validate_server(&server_url)?),
                                 None => None,
                             };
-                            if validated.is_some() && current_server == validated {
-                                return Ok(true);
-                            }
                             let next_generation =
                                 remote_generation.fetch_add(1, Ordering::SeqCst) + 1;
                             control.connected.store(false, Ordering::Relaxed);
                             active = None;
                             let Some(validated) = validated else {
                                 current_server = None;
+                                let _ = durable.journal.unbind_server();
                                 return Ok(false);
                             };
-                            durable.journal.rebind_server_if_local(&validated)?;
+                            durable.journal.rebind_device_and_server(
+                                remote_identity.device_id(),
+                                &validated,
+                            )?;
                             let ready_payload = remote_ready_payload(
                                 &durable,
                                 cached_models.as_ref(),

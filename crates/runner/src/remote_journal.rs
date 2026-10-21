@@ -195,6 +195,30 @@ impl RemoteJournal {
         Ok(())
     }
 
+    pub fn unbind_server(&mut self) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "UPDATE remote_identity SET server='local://agenthub' WHERE singleton=1",
+            [],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn rebind_device_and_server(
+        &mut self,
+        new_device_id: &str,
+        new_server: &str,
+    ) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "UPDATE remote_identity SET device_id=?1, server=?2 WHERE singleton=1",
+            params![new_device_id, new_server],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn begin_command(&mut self, command: &RemoteCommand) -> Result<BeginCommand> {
         let transaction = self.connection.transaction()?;
         let previous: Option<(String, Option<String>)> = transaction

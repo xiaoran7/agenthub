@@ -77,6 +77,7 @@ export interface DeviceHeartbeat {
   public_key: string;
   sent_at: string;
   signature: string;
+  device_name?: string;
 }
 
 export const authStates = [
@@ -204,17 +205,16 @@ export interface DeviceRegistration {
   device_id: string;
   public_key: string;
   signature: string;
+  device_name?: string;
 }
 
 export function parseDeviceHeartbeat(value: unknown): DeviceHeartbeat {
   const object = expectObject(value, "device heartbeat");
-  expectKeys(object, [
-    "protocol_version",
-    "device_id",
-    "public_key",
-    "sent_at",
-    "signature",
-  ]);
+  expectKeys(
+    object,
+    ["protocol_version", "device_id", "public_key", "sent_at", "signature"],
+    ["device_name"],
+  );
   const heartbeat: DeviceHeartbeat = {
     protocol_version: expectProtocolVersion(object.protocol_version),
     device_id: expectDeviceId(object.device_id),
@@ -222,6 +222,13 @@ export function parseDeviceHeartbeat(value: unknown): DeviceHeartbeat {
     sent_at: expectTimestamp(object.sent_at, "sent_at"),
     signature: expectHex(object.signature, "signature", 128),
   };
+  if (object.device_name !== undefined) {
+    heartbeat.device_name = expectString(
+      object.device_name,
+      "device_name",
+      128,
+    );
+  }
   verifyDeviceSignature(
     heartbeat.device_id,
     heartbeat.public_key,
@@ -261,13 +268,24 @@ function verifyDeviceSignature(
 
 export function parseDeviceRegistration(value: unknown): DeviceRegistration {
   const object = expectObject(value, "device registration");
-  expectKeys(object, ["binding_code", "device_id", "public_key", "signature"]);
-  const registration = {
+  expectKeys(
+    object,
+    ["binding_code", "device_id", "public_key", "signature"],
+    ["device_name"],
+  );
+  const registration: DeviceRegistration = {
     binding_code: expectString(object.binding_code, "binding_code", 128),
     device_id: expectDeviceId(object.device_id),
     public_key: expectHex(object.public_key, "public_key", 64),
     signature: expectHex(object.signature, "signature", 128),
   };
+  if (object.device_name !== undefined) {
+    registration.device_name = expectString(
+      object.device_name,
+      "device_name",
+      128,
+    );
+  }
   if (
     deviceIdForPublicKey(registration.public_key) !== registration.device_id
   ) {

@@ -2878,9 +2878,9 @@ function sv(tag, attrs, style) {
 }
 
 // The trend: one column per bucket of the period, its parts stacked in the
-// ranking's colours (tokens, cost and calls add up; a speed does not, so each
-// model is a mark at its own speed on the bucket's track, as magpie draws
-// #860). The ranking beside it is the legend and the other reading.
+// ranking's colours (tokens, cost and calls add up; speeds do not, so they are
+// drawn as grouped bars per active model at their true speed). The ranking
+// beside it is the legend and the other reading.
 function drawLedgerTrend() {
   const box = document.getElementById("ledChart");
   if (!box || !usageDigest) return;
@@ -3000,41 +3000,25 @@ function drawLedgerTrend() {
       y0 += v;
     };
     if (speed) {
-      // the bucket's own speed as a track, each model a mark at its own
-      if (totals[i] > 0) {
-        draw("\0all", "var(--pill)", totals[i]);
-        segs[segs.length - 1].classList.add("all");
-      }
-      for (const c of top) {
-        const v = ledFloor(partOf(p, c.id));
-        if (!(v > 0)) continue;
-        if (v > totals[i]) {
-          const topY = Y(totals[i]);
-          const stem = sv(
-            "line",
-            {
-              x1: x + bw / 2,
-              x2: x + bw / 2,
-              y1: topY,
-              y2: Math.min(Y(v) + 1.5, topY),
-              class: "col stem",
-              "data-k": c.id,
-              "data-color": c.color,
-            },
-            { stroke: c.color, strokeWidth: 1, strokeOpacity: ".45" },
-          );
-          g.append(stem);
-          segs.push(stem);
-        }
+      // Grouped bars: each active model in this bucket gets its own bar at its true speed
+      const active = top
+        .map((c) => ({ ...c, v: ledFloor(partOf(p, c.id)) }))
+        .filter((c) => c.v > 0);
+      const K = active.length;
+      if (K === 0) return;
+      if (K === 1) {
+        const c = active[0];
+        const barW = bw;
+        const barX = M.l + slot * (i + 0.5) - barW / 2;
         const r = sv(
           "rect",
           {
-            x,
-            width: bw,
-            y: Y(v) - 1.5,
-            height: 3,
-            rx: 1.5,
-            class: "col mark",
+            x: barX,
+            width: barW,
+            y: Y(c.v),
+            height: Math.max(0.5, Y(0) - Y(c.v)),
+            rx: 1,
+            class: "col",
             "data-k": c.id,
             "data-color": c.color,
           },
@@ -3042,6 +3026,31 @@ function drawLedgerTrend() {
         );
         g.append(r);
         segs.push(r);
+      } else {
+        const gap = Math.min(2, Math.max(1, slot * 0.04));
+        const totalW = Math.min(slot * 0.85, bw * 1.4);
+        const barW = Math.max(2, (totalW - gap * (K - 1)) / K);
+        const groupW = K * barW + (K - 1) * gap;
+        const startX = M.l + slot * (i + 0.5) - groupW / 2;
+        active.forEach((c, idx) => {
+          const barX = startX + idx * (barW + gap);
+          const r = sv(
+            "rect",
+            {
+              x: barX,
+              width: barW,
+              y: Y(c.v),
+              height: Math.max(0.5, Y(0) - Y(c.v)),
+              rx: 1,
+              class: "col",
+              "data-k": c.id,
+              "data-color": c.color,
+            },
+            { fill: c.color },
+          );
+          g.append(r);
+          segs.push(r);
+        });
       }
       return;
     }

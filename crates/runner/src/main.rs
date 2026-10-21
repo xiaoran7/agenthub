@@ -1035,8 +1035,9 @@ fn main() -> Result<()> {
                     nonzero_duration("gateway timeout", timeout_seconds)?,
                     gateway_ca_cert.as_deref(),
                 )?;
+                let dev_name = agenthub_runner::device_name::resolve(None, Some(&identity));
                 let binding = client
-                    .bind(&device_identity, &binding_code)
+                    .bind(&device_identity, &binding_code, Some(&dev_name))
                     .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
                 println!("{}", serde_json::to_string_pretty(&binding)?);
             }

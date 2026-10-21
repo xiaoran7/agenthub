@@ -1169,20 +1169,29 @@ export function createGatewayApp(
         registration.public_key,
       );
     } else {
-      const ownerId = bindingCodes.claim(
+      const claimResult = bindingCodes.claim(
         registration.binding_code,
         registration.device_id,
       );
       try {
         result = await store.registerDevice(
-          ownerId,
+          claimResult.ownerId,
           registration.device_id,
           registration.public_key,
+          undefined,
+          claimResult.isFresh,
         );
       } catch (error) {
         bindingCodes.release(registration.binding_code, registration.device_id);
         throw error;
       }
+    }
+    if (registration.device_name && options.remoteContent) {
+      options.remoteContent.recordDeviceName(
+        result.device.owner_id,
+        registration.device_id,
+        registration.device_name,
+      );
     }
     return reply.status(result.created ? 201 : 200).send({
       device_id: result.device.device_id,
@@ -1242,6 +1251,13 @@ export function createGatewayApp(
       heartbeat,
       receivedAt.toISOString(),
     );
+    if (heartbeat.device_name && options.remoteContent) {
+      options.remoteContent.recordDeviceName(
+        result.owner_id,
+        heartbeat.device_id,
+        heartbeat.device_name,
+      );
+    }
     return reply.send({
       protocol_version: heartbeat.protocol_version,
       device_id: heartbeat.device_id,

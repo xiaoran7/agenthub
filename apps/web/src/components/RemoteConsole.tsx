@@ -1560,7 +1560,10 @@ export function RemoteConsole({
       const key = `${s.runner_id}/${s.binding.provider_session_id}`;
       countedKeys.add(key);
       const disc = discovered.get(key);
-      const info = getProviderInfo(s.binding.provider_session_id, disc?.provider);
+      const info = getProviderInfo(
+        s.binding.provider_session_id,
+        disc?.provider,
+      );
       const existing = map.get(info.type);
       map.set(info.type, {
         type: info.type,
@@ -1588,9 +1591,7 @@ export function RemoteConsole({
 
     // 3. 该电脑 Runner hello 自身声明的默认 provider（如果有且未被加入）
     const runnerHello = activeRunner?.hello as
-      | Record<string, unknown>
-      | null
-      | undefined;
+      Record<string, unknown> | null | undefined;
     if (
       runnerHello &&
       typeof runnerHello.provider === "string" &&
@@ -1744,12 +1745,7 @@ export function RemoteConsole({
         setProviderFilter(info.type);
       }
     }
-  }, [
-    selected,
-    snapshot.sessions,
-    selectedRunnerId,
-    discovered,
-  ]);
+  }, [selected, snapshot.sessions, selectedRunnerId, discovered]);
 
   const pendingApprovalsBySessionKey = useMemo(() => {
     const counts = new Map<string, number>();
@@ -2116,7 +2112,10 @@ export function RemoteConsole({
                   }
                 >
                   <span className="remote-selector-btn-left">
-                    <span className="remote-selector-btn-icon" aria-hidden="true">
+                    <span
+                      className="remote-selector-btn-icon"
+                      aria-hidden="true"
+                    >
                       <svg
                         width="15"
                         height="15"
@@ -2174,7 +2173,9 @@ export function RemoteConsole({
                 </div>
                 <div className="remote-popover-list">
                   {availableAgentsForCurrentDevice.length === 0 ? (
-                    <div className="remote-popover-empty">当前电脑未检测到 Agent</div>
+                    <div className="remote-popover-empty">
+                      当前电脑未检测到 Agent
+                    </div>
                   ) : (
                     availableAgentsForCurrentDevice.map((agent) => (
                       <button
@@ -2582,7 +2583,11 @@ export function RemoteConsole({
               className={`remote-status-dot ${snapshot.runners.some((item) => !item.revoked && item.online) ? "online" : "offline"}`}
             />
             <span>
-              {snapshot.runners.filter((item) => !item.revoked && item.online).length} 台电脑在线
+              {
+                snapshot.runners.filter((item) => !item.revoked && item.online)
+                  .length
+              }{" "}
+              台电脑在线
             </span>
           </div>
           {account?.user ? (

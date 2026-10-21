@@ -197,6 +197,7 @@ export class SqliteGatewayStore implements GatewayStore {
         deviceId,
         publicKey,
         binding.issued_by ?? undefined,
+        false,
       );
     }
     if (Date.parse(binding.expires_at) <= this.now().getTime()) {
@@ -218,6 +219,7 @@ export class SqliteGatewayStore implements GatewayStore {
         deviceId,
         publicKey,
         binding.issued_by ?? undefined,
+        true,
       );
     } catch (err) {
       this.db
@@ -294,17 +296,26 @@ export class SqliteGatewayStore implements GatewayStore {
     deviceId: string,
     publicKey: string,
     _actorUserId?: string,
+    allowReactivate = false,
   ): Promise<DeviceRegistrationResult> {
     const existing = await this.getRegisteredDevice(deviceId);
     if (existing !== undefined) {
-      if (existing.revoked_at !== undefined) {
-        throw new GatewayStoreError("device_revoked", "device is revoked");
-      }
       if (existing.public_key !== publicKey || existing.owner_id !== ownerId) {
         throw new GatewayStoreError(
           "device_conflict",
           "device is already registered with different credentials",
         );
+      }
+      if (existing.revoked_at !== undefined) {
+        if (!allowReactivate) {
+          throw new GatewayStoreError("device_revoked", "device is revoked");
+        }
+        this.db
+          .prepare(
+            "UPDATE registered_devices SET revoked_at = NULL, last_seen_at = ? WHERE device_id = ?",
+          )
+          .run(this.now().toISOString(), deviceId);
+        delete existing.revoked_at;
       }
       return { device: existing, created: false };
     }

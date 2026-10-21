@@ -37,6 +37,7 @@ struct LocalHandler {
     client: LocalHostClient,
     identity: DeviceIdentity,
     control: Arc<RemoteControl>,
+    identity_path: Option<PathBuf>,
 }
 
 impl DaemonRequestHandler for LocalHandler {
@@ -77,16 +78,22 @@ impl DaemonRequestHandler for LocalHandler {
                 .authorize_workspace(workspace)
                 .map(DaemonResponse::Workspace)
                 .unwrap_or_else(error_response),
-            DaemonRequest::SetRemoteEnabled { server_url } => self
-                .client
-                .set_remote_enabled(server_url, self.identity.clone())
-                .and_then(|enabled| {
-                    self.client
-                        .status()
-                        .map(|(_, _, _, connected)| (enabled, connected))
-                })
-                .map(|(enabled, connected)| DaemonResponse::RemoteState { enabled, connected })
-                .unwrap_or_else(error_response),
+            DaemonRequest::SetRemoteEnabled { server_url } => {
+                let identity = self
+                    .identity_path
+                    .as_ref()
+                    .and_then(|p| crate::device::DeviceIdentity::load(p).ok())
+                    .unwrap_or_else(|| self.identity.clone());
+                self.client
+                    .set_remote_enabled(server_url, identity)
+                    .and_then(|enabled| {
+                        self.client
+                            .status()
+                            .map(|(_, _, _, connected)| (enabled, connected))
+                    })
+                    .map(|(enabled, connected)| DaemonResponse::RemoteState { enabled, connected })
+                    .unwrap_or_else(error_response)
+            }
             DaemonRequest::GetStatus => self
                 .client
                 .status()
@@ -137,6 +144,7 @@ pub fn run(config: DaemonConfig) -> Result<()> {
         client,
         identity: config.identity.clone(),
         control: control.clone(),
+        identity_path: Some(config.identity_path.clone()),
     });
     let ipc_endpoint = endpoint.clone();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -227,6 +235,7 @@ mod tests {
             client,
             identity: DeviceIdentity::generate(),
             control: Arc::new(RemoteControl::default()),
+            identity_path: None,
         };
 
         assert!(matches!(

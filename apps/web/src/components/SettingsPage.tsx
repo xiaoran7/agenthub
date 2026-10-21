@@ -898,11 +898,22 @@ export function SettingsPage({
     }
   }
 
+  function deviceFriendlyName(device: DeviceRecord): string {
+    if (device.display_name && device.display_name.trim().length > 0) {
+      return device.display_name.trim();
+    }
+    const shortTail = device.device_id.startsWith("dev_")
+      ? device.device_id.slice(-6)
+      : deviceShortId(device.device_id);
+    return `电脑 · ${shortTail}`;
+  }
+
   async function revoke(device: DeviceRecord) {
+    const name = deviceFriendlyName(device);
     if (
       device.revoked ||
       !window.confirm(
-        `撤销设备 ${deviceShortId(device.device_id)}？现有历史会保留，但该设备将无法继续同步。`,
+        `确定撤销设备「${name}」吗？\n\n现有历史数据会完整保留。撤销后随时可在设备端使用新配对码重新连接激活。`,
       )
     ) {
       return;
@@ -1508,9 +1519,12 @@ export function SettingsPage({
                           data-online={device.online && !device.revoked}
                         />
                         <span>
-                          <span className="mono" title={device.device_id}>
-                            {device.display_name ??
-                              deviceShortId(device.device_id)}
+                          <span
+                            className="mono"
+                            title={`设备 ID: ${device.device_id}`}
+                            style={{ fontWeight: 500 }}
+                          >
+                            {deviceFriendlyName(device)}
                           </span>
                           <small>
                             {device.revoked

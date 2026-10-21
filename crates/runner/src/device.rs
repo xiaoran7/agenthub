@@ -118,6 +118,35 @@ impl DeviceIdentity {
         Ok(())
     }
 
+    pub fn overwrite(&self, path: impl AsRef<Path>) -> Result<(), DeviceIdentityError> {
+        let path = path.as_ref();
+        let persisted = PersistedDeviceIdentity {
+            version: IDENTITY_VERSION,
+            device_id: self.device_id.clone(),
+            public_key: self.public_key_hex(),
+            private_key: hex::encode(self.signing_key.to_bytes()),
+            created_at: self.created_at,
+        };
+        let mut serialized = serde_json::to_vec_pretty(&persisted)?;
+        serialized.push(b'\n');
+
+        let directory = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        let mut temp_file = tempfile::Builder::new()
+            .prefix(".identity-")
+            .suffix(".tmp")
+            .tempfile_in(directory)?;
+        temp_file.write_all(&serialized)?;
+        temp_file.as_file().sync_all()?;
+        temp_file
+            .persist(path)
+            .map_err(|error| DeviceIdentityError::Io(error.error))?;
+        sync_directory(directory);
+        Ok(())
+    }
+
     pub fn info(&self) -> DeviceIdentityInfo {
         DeviceIdentityInfo {
             version: IDENTITY_VERSION,
@@ -252,5 +281,19 @@ mod tests {
             DeviceIdentity::load(path),
             Err(DeviceIdentityError::DeviceIdMismatch)
         ));
+    }
+
+    #[test]
+    fn identity_file_can_be_explicitly_overwritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("identity.json");
+        let first = DeviceIdentity::generate();
+        first.save_new(&path).unwrap();
+        assert_eq!(DeviceIdentity::load(&path).unwrap().info(), first.info());
+
+        let second = DeviceIdentity::generate();
+        second.overwrite(&path).unwrap();
+        assert_eq!(DeviceIdentity::load(&path).unwrap().info(), second.info());
+        assert_ne!(first.info().device_id, second.info().device_id);
     }
 }

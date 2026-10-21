@@ -168,6 +168,7 @@ export const auditActions = [
   "subscription.updated",
   "device.binding_created",
   "device.registered",
+  "device.reactivated",
   "device.revoked",
   "task.created",
   "task.canceled",

@@ -151,6 +151,30 @@ export class RemoteContentStore {
     }
     return names;
   }
+  recordDeviceName(owner: string, runner: string, deviceName: string): void {
+    const trimmed = deviceName.trim();
+    if (!trimmed) return;
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO remote_runners(runner,owner) VALUES (?,?)",
+      )
+      .run(runner, owner);
+    const row = this.db
+      .prepare("SELECT hello FROM remote_runners WHERE runner=?")
+      .get(runner) as { hello: string | null } | undefined;
+    let helloObj: Record<string, unknown> = {};
+    if (row?.hello) {
+      try {
+        helloObj = JSON.parse(String(row.hello)) as Record<string, unknown>;
+      } catch {
+        helloObj = {};
+      }
+    }
+    helloObj.device_name = trimmed;
+    this.db
+      .prepare("UPDATE remote_runners SET hello=? WHERE runner=?")
+      .run(JSON.stringify(helloObj), runner);
+  }
   sessions(owner: string): RemoteSession[] {
     return this.db
       .prepare(
