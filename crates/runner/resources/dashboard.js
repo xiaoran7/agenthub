@@ -649,8 +649,10 @@ async function refreshDashboard(manual) {
   if (refreshing) return false;
   refreshing = true;
   const refreshBtn = document.getElementById("refreshBtn");
-  if (manual && refreshBtn) refreshBtn.classList.add("busy");
+  const setRefreshBtn = document.getElementById("setRefreshBtn");
   if (manual) {
+    if (refreshBtn) refreshBtn.classList.add("busy");
+    if (setRefreshBtn) setRefreshBtn.classList.add("busy");
     consecutiveEmptyResponses = 0;
     sessionsRenderedAt = Date.now();
   }
@@ -662,6 +664,27 @@ async function refreshDashboard(manual) {
     const badge = document.getElementById("sessionCountBadge");
     if (badge && lastGoodSessions.length === 0) badge.textContent = "正在加载…";
   }
+
+  // Workspaces skeleton on initial load or manual refresh if not yet populated
+  const wsContainer = document.getElementById("workspacesList");
+  if (wsContainer && (!dashboardData || !dashboardData.workspaces || dashboardData.workspaces.length === 0)) {
+    if (!wsContainer.querySelector(".skeleton-card")) {
+      wsContainer.innerHTML = renderWorkspaceSkeleton(5);
+    }
+    const wsBadge = document.getElementById("workspacesCountBadge");
+    if (wsBadge && (!dashboardData || !dashboardData.workspaces)) wsBadge.textContent = "正在加载…";
+  }
+
+  // Agents skeleton on initial load or manual refresh if not yet populated
+  const agentsContainer = document.getElementById("agentsGrid");
+  if (agentsContainer && (!dashboardData || !dashboardData.agents || dashboardData.agents.length === 0)) {
+    if (!agentsContainer.querySelector(".skeleton-card")) {
+      agentsContainer.innerHTML = renderAgentSkeleton(4);
+    }
+    const agBadge = document.getElementById("agentsCountBadge");
+    if (agBadge && (!dashboardData || !dashboardData.agents)) agBadge.textContent = "正在加载…";
+  }
+
   const seq = ++renderSeq;
   try {
     const resp = await fetch("/api/dashboard", { cache: "no-store" });
@@ -677,12 +700,18 @@ async function refreshDashboard(manual) {
     dashboardData = data;
     renderStats(dashboardData.stats, dashboardData.gateway);
 
-    // the sessions feed the workspace and model rankings, so publish them first.
-    // a zero-length snapshot is kept off the rankings: the lists keep their last
-    // good figures until sessions come back, instead of flapping to empty
+    // Agents: unconditionally render when agents change or upon arrival
+    const agentsStr = JSON.stringify(dashboardData.agents || []);
+    if (agentsStr !== lastRenderState.agentsJson) {
+      renderAgents(dashboardData.agents);
+      lastRenderState.agentsJson = agentsStr;
+    }
+
+    // Sessions handling
     const sessions = dashboardData.sessions || [];
     const isReady = dashboardData.ready !== false && dashboardData.status !== "starting";
     const sessionsLoading = dashboardData.sessions_loading === true || !isReady;
+    let sessionsChanged = false;
 
     if (sessionsLoading) {
       // Transcript scanning (Claude, Claude Desktop, Grok, etc.) or daemon startup is in progress:
@@ -695,23 +724,10 @@ async function refreshDashboard(manual) {
       }, 250);
     } else if (sessions.length > 0) {
       const sessionsStr = JSON.stringify(sessions);
-      const sessionsChanged = sessionsStr !== lastRenderState.sessionsJson;
+      sessionsChanged = sessionsStr !== lastRenderState.sessionsJson;
       lastGoodSessions = sessions;
       allSessionsData = sessions;
       lastRenderState.sessionsJson = sessionsStr;
-
-      // Dirty-check DOM updates
-      const agentsStr = JSON.stringify(dashboardData.agents || []);
-      if (agentsStr !== lastRenderState.agentsJson) {
-        renderAgents(dashboardData.agents);
-        lastRenderState.agentsJson = agentsStr;
-      }
-
-      const wsStr = JSON.stringify(dashboardData.workspaces || []);
-      if (wsStr !== lastRenderState.workspacesJson || sessionsChanged) {
-        renderWorkspaces(dashboardData.workspaces);
-        lastRenderState.workspacesJson = wsStr;
-      }
 
       if (sessionsChanged) {
         renderSessions(sessions);
@@ -726,6 +742,14 @@ async function refreshDashboard(manual) {
       if (lastGoodSessions.length === 0) {
         renderSessions([], settled ? "empty" : "pending");
       }
+    }
+
+    // Workspaces: unconditionally render when workspaces or sessions change,
+    // decoupled from whether sessions.length > 0
+    const wsStr = JSON.stringify(dashboardData.workspaces || []);
+    if (wsStr !== lastRenderState.workspacesJson || sessionsChanged) {
+      renderWorkspaces(dashboardData.workspaces);
+      lastRenderState.workspacesJson = wsStr;
     }
 
     const capStr = JSON.stringify(dashboardData.capabilities || {});
@@ -749,6 +773,7 @@ async function refreshDashboard(manual) {
   } finally {
     refreshing = false;
     if (refreshBtn) refreshBtn.classList.remove("busy");
+    if (setRefreshBtn) setRefreshBtn.classList.remove("busy");
   }
 }
 
@@ -894,9 +919,14 @@ function getModelIcon(name, size = 18) {
   return iconMark(modelIconName(name), size, name);
 }
 
-function renderAgents(agents) {
+function renderAgents(agents, mode = "data") {
   const container = document.getElementById("agentsGrid");
   const countBadge = document.getElementById("agentsCountBadge");
+  if (mode === "loading") {
+    if (countBadge) countBadge.textContent = "正在加载…";
+    if (container) container.innerHTML = renderAgentSkeleton(4);
+    return;
+  }
   if (countBadge) {
     const count = agents ? agents.length : 0;
     countBadge.textContent = `${count} 个智能体`;
@@ -937,6 +967,57 @@ function renderAgents(agents) {
     `;
     })
     .join("");
+}
+
+function renderAgentSkeleton(bars = 4) {
+  const nameWidths = ["120px", "140px", "110px", "130px"];
+  const descWidths = ["65%", "75%", "50%", "60%"];
+  const rows = [];
+  for (let i = 0; i < bars; i++) {
+    const isLast = i === bars - 1;
+    rows.push(`
+      <div class="row" style="display: flex; align-items: center; gap: 14px; min-height: 52px; ${isLast ? "" : "border-bottom: var(--rule-2);"}">
+        <div class="skeleton-bar" style="width: 26px; height: 26px; border-radius: 6px; flex: none;"></div>
+        <div class="who" style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="skeleton-bar" style="width: ${nameWidths[i % nameWidths.length]}; height: 15px;"></div>
+            <div class="skeleton-bar" style="width: 60px; height: 15px; border-radius: 4px;"></div>
+            <div class="skeleton-bar" style="width: 48px; height: 15px; border-radius: 4px;"></div>
+          </div>
+          <div class="skeleton-bar" style="width: ${descWidths[i % descWidths.length]}; height: 11px;"></div>
+        </div>
+        <div class="skeleton-bar" style="width: 64px; height: 20px; border-radius: 4px; flex: none;"></div>
+      </div>
+    `);
+  }
+  return `<div class="skeleton-card" style="padding: 0 16px; gap: 0;" aria-busy="true" aria-label="正在加载智能体…">${rows.join("")}</div>`;
+}
+
+function renderWorkspaceSkeleton(bars = 5) {
+  const nameWidths = ["48%", "60%", "42%", "55%", "38%"];
+  const pathWidths = ["75%", "65%", "80%", "70%", "60%"];
+  const rows = [];
+  for (let i = 0; i < bars; i++) {
+    const isLast = i === bars - 1;
+    rows.push(`
+      <div class="row stat" style="display: grid; grid-template-columns: 32px minmax(0, 1fr) 112px 92px; align-items: center; gap: 16px; min-height: 56px; ${isLast ? "" : "border-bottom: var(--rule-2);"}">
+        <div class="skeleton-bar" style="width: 32px; height: 32px; border-radius: var(--r-s);"></div>
+        <div style="min-width: 0; display: flex; flex-direction: column; gap: 6px;">
+          <div class="skeleton-bar" style="width: ${nameWidths[i % nameWidths.length]}; height: 16px;"></div>
+          <div class="skeleton-bar" style="width: ${pathWidths[i % pathWidths.length]}; height: 11px;"></div>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
+          <div class="skeleton-bar" style="width: 58px; height: 16px;"></div>
+          <div class="skeleton-bar" style="width: 44px; height: 11px;"></div>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
+          <div class="skeleton-bar" style="width: 52px; height: 14px;"></div>
+          <div class="skeleton-bar" style="width: 40px; height: 11px;"></div>
+        </div>
+      </div>
+    `);
+  }
+  return `<div class="skeleton-card" style="padding: 0 16px; gap: 0;" aria-busy="true" aria-label="正在加载工作区…">${rows.join("")}</div>`;
 }
 
 // Shimmer skeleton loading placeholder matching user specifications
@@ -993,12 +1074,23 @@ function renderSessions(sessions, mode = "data") {
     return;
   }
 
-  if (badge)
-    badge.textContent = `${dedupedSessions.length.toLocaleString()} 个历史会话`;
+  const isSearching = Boolean(
+    document.getElementById("sessionSearchInput")?.value?.trim(),
+  );
+  const allBase = isSearching
+    ? dedupeSessions(lastGoodSessions.length ? lastGoodSessions : allSessionsData)
+    : [];
+
+  if (badge) {
+    if (isSearching && allBase.length > 0) {
+      badge.textContent = `${dedupedSessions.length.toLocaleString()} / ${allBase.length.toLocaleString()} 个历史会话`;
+    } else {
+      badge.textContent = `${dedupedSessions.length.toLocaleString()} 个历史会话`;
+    }
+  }
 
   // Sort sessions chronologically descending (newest activity first)
   const sortedSessions = [...dedupedSessions].sort(sessionRecency);
-  const total = sortedSessions.length;
 
   // Group sessions by workspace while preserving recency order
   const groups = {};
@@ -1014,6 +1106,14 @@ function renderSessions(sessions, mode = "data") {
     }
     groups[key].items.push(s);
   });
+
+  const origWorkspaceCounts = {};
+  if (isSearching && allBase.length > 0) {
+    allBase.forEach((s) => {
+      const key = s.workspace_path || s.cwd || "默认工作区";
+      origWorkspaceCounts[key] = (origWorkspaceCounts[key] || 0) + 1;
+    });
+  }
 
   // Sort workspace groups by their latest session's activity timestamp descending
   const groupKeys = Object.keys(groups).sort((k1, k2) => {
@@ -1035,6 +1135,13 @@ function renderSessions(sessions, mode = "data") {
       const safeName = escapeHtml(grp.name);
       const count = grp.items.length;
       const closed = collapsedGroups.has(k);
+      const origCount = origWorkspaceCounts[k] || count;
+      let countLabel = `${count} 个会话`;
+      let countTitle = `${count} 个会话`;
+      if (isSearching && origCount > count) {
+        countLabel = `${count} / ${origCount} 个会话`;
+        countTitle = `筛选出 ${count} 个会话，该工作区共 ${origCount} 个`;
+      }
 
       const itemsHtml = grp.items
         .map((item, index) => {
@@ -1134,7 +1241,7 @@ function renderSessions(sessions, mode = "data") {
           </span>
           <span class="gname" title="${safeName}">${safeName}</span>
           <span class="gpath" title="${safePath}">${safePath}</span>
-          <span class="gcount" title="${count} 个会话${count !== total ? "，共 " + total + " 个" : ""}">${count}${count !== total ? " / " + total : ""}</span>
+          <span class="gcount" title="${escapeHtml(countTitle)}">${escapeHtml(countLabel)}</span>
           <span class="chev">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           </span>
@@ -1456,11 +1563,13 @@ function filterSessionsList() {
     .toLowerCase()
     .trim();
   const badge = document.getElementById("sessionCountBadge");
-  const base = dedupeSessions(lastGoodSessions);
+  const base = dedupeSessions(
+    lastGoodSessions.length ? lastGoodSessions : allSessionsData,
+  );
   if (!q) {
     if (badge && base.length)
       badge.textContent = `${base.length.toLocaleString()} 个历史会话`;
-    renderSessions(lastGoodSessions);
+    renderSessions(lastGoodSessions.length ? lastGoodSessions : allSessionsData);
     return;
   }
   const filtered = base.filter((s) => {
@@ -1522,7 +1631,7 @@ function costCell(cost) {
 // 模型 and 用量 views cannot report two different numbers for one model.
 // A model the daemon has not priced reads as a dash, not a local guess.
 async function refreshModelsCatalog(event) {
-  const btn = document.getElementById("btnRefreshModels");
+  const btn = document.getElementById("setRefreshModels") || document.getElementById("btnRefreshModels");
   if (btn) {
     btn.disabled = true;
     btn.classList.add("busy");
@@ -1573,9 +1682,14 @@ function getWorkspaceAvatarHtml(ws) {
   return `<div class="ws-avatar color-${colorIndex}" title="${isGit ? 'Git 项目工作区' : '项目工作区'}">${iconSvg}</div>`;
 }
 
-function renderWorkspaces(workspaces) {
+function renderWorkspaces(workspaces, mode = "data") {
   const container = document.getElementById("workspacesList");
   const countBadge = document.getElementById("workspacesCountBadge");
+  if (mode === "loading") {
+    if (countBadge) countBadge.textContent = "正在加载…";
+    if (container) container.innerHTML = renderWorkspaceSkeleton(5);
+    return;
+  }
   if (countBadge) {
     const count = workspaces ? workspaces.length : 0;
     countBadge.textContent = `${count} 个工作区`;
@@ -2553,7 +2667,7 @@ function drawUsageLoading() {
   }
 
   const wrap = document.getElementById("ledWrap");
-  if (wrap) wrap.innerHTML = `<div class="led-none">正在读取用量…</div>`;
+  if (wrap) wrap.innerHTML = renderSkeletonCard(4);
   const sessions = document.getElementById("usageSessions");
   if (sessions) sessions.innerHTML = renderSkeletonCard(4);
   const ctx = document.getElementById("usageContext");

@@ -982,9 +982,12 @@ export function RemoteConsole({
   const [providerFilter, setProviderFilter] = useState<ProviderKind>("claude");
   const [selectedRunnerId, setSelectedRunnerId] = useState<string>("");
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const deviceMenuRef = useRef<HTMLDivElement>(null);
   const deviceMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
+  const agentMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [agentType, setAgentType] = useState<
@@ -1503,38 +1506,6 @@ export function RemoteConsole({
       .filter((dev): dev is NonNullable<typeof dev> => dev !== null);
   }, [deviceGroups, sessionSearchQuery]);
 
-  /** All available providers for the filter pill row. */
-  const availableProviders = useMemo(() => {
-    const seen = new Map<ProviderKind, string>();
-    const defaultEngines: Array<[ProviderKind, string]> = [
-      ["codex", "Codex"],
-      ["claude", "Claude Code"],
-      ["antigravity", "Antigravity"],
-      ["zcode", "ZCode"],
-    ];
-    for (const [kind, label] of defaultEngines) {
-      seen.set(kind, label);
-    }
-    for (const s of snapshot.sessions) {
-      const disc = discovered.get(
-        `${s.runner_id}/${s.binding.provider_session_id}`,
-      );
-      const info = getProviderInfo(
-        s.binding.provider_session_id,
-        disc?.provider,
-      );
-      seen.set(info.type, info.name);
-    }
-    for (const r of snapshot.runners) {
-      if (r.revoked) continue;
-      for (const d of r.hello?.discovery?.candidates ?? []) {
-        const info = getProviderInfo(d.provider_session_id, d.provider);
-        seen.set(info.type, info.name);
-      }
-    }
-    return seen;
-  }, [snapshot.sessions, snapshot.runners, discovered]);
-
   const deviceList = useMemo(() => {
     return snapshot.runners
       .filter((r) => !r.revoked)
@@ -1566,6 +1537,114 @@ export function RemoteConsole({
     return deviceList.find((d) => d.runnerId === activeRunnerId);
   }, [deviceList, activeRunnerId]);
 
+  /**
+   * Available Agents derived from the currently selected computer's runtime.
+   * "先选电脑再有 agent（根据所选电脑 runtime 返回结果列出选项）"
+   */
+  const availableAgentsForCurrentDevice = useMemo(() => {
+    const map = new Map<
+      ProviderKind,
+      { type: ProviderKind; name: string; count: number }
+    >();
+
+    if (!activeRunnerId) {
+      return [
+        { type: "claude" as ProviderKind, name: "Claude Code", count: 0 },
+        { type: "codex" as ProviderKind, name: "Codex", count: 0 },
+        { type: "antigravity" as ProviderKind, name: "Antigravity", count: 0 },
+        { type: "zcode" as ProviderKind, name: "ZCode", count: 0 },
+      ];
+    }
+
+    const countedKeys = new Set<string>();
+
+    // 1. 该电脑当前的活跃会话
+    for (const s of snapshot.sessions) {
+      if (s.runner_id !== activeRunnerId) continue;
+      const key = `${s.runner_id}/${s.binding.provider_session_id}`;
+      countedKeys.add(key);
+      const disc = discovered.get(key);
+      const info = getProviderInfo(s.binding.provider_session_id, disc?.provider);
+      const existing = map.get(info.type);
+      map.set(info.type, {
+        type: info.type,
+        name: info.name,
+        count: (existing?.count ?? 0) + 1,
+      });
+    }
+
+    // 2. 该电脑 Runner runtime 探测上报的 candidates
+    const activeRunner = snapshot.runners.find(
+      (r) => r.runner_id === activeRunnerId && !r.revoked,
+    );
+    for (const c of activeRunner?.hello?.discovery?.candidates ?? []) {
+      const key = `${activeRunnerId}/${c.provider_session_id}`;
+      if (countedKeys.has(key)) continue;
+      countedKeys.add(key);
+      const info = getProviderInfo(c.provider_session_id, c.provider);
+      const existing = map.get(info.type);
+      map.set(info.type, {
+        type: info.type,
+        name: info.name,
+        count: (existing?.count ?? 0) + 1,
+      });
+    }
+
+    // 3. 如果当前电脑没有任何发现的历史会话（例如全新电脑），回退到通用支持列表
+    if (map.size === 0) {
+      return [
+        { type: "claude" as ProviderKind, name: "Claude Code", count: 0 },
+        { type: "codex" as ProviderKind, name: "Codex", count: 0 },
+        { type: "antigravity" as ProviderKind, name: "Antigravity", count: 0 },
+        { type: "zcode" as ProviderKind, name: "ZCode", count: 0 },
+      ];
+    }
+
+    const orderMap: Record<ProviderKind, number> = {
+      claude: 0,
+      codex: 1,
+      antigravity: 2,
+      zcode: 3,
+      other: 4,
+    };
+
+    return Array.from(map.values()).sort((a, b) => {
+      const diff = (orderMap[a.type] ?? 99) - (orderMap[b.type] ?? 99);
+      if (diff !== 0) return diff;
+      return a.name.localeCompare(b.name, "zh-Hans-CN");
+    });
+  }, [activeRunnerId, snapshot.runners, snapshot.sessions, discovered]);
+
+  const currentAgentInfo = useMemo(() => {
+    const found = availableAgentsForCurrentDevice.find(
+      (a) => a.type === providerFilter,
+    );
+    if (found) return found;
+    const fallbackNames: Record<ProviderKind, string> = {
+      claude: "Claude Code",
+      codex: "Codex",
+      antigravity: "Antigravity",
+      zcode: "ZCode",
+      other: "Other Agent",
+    };
+    return {
+      type: providerFilter,
+      name: fallbackNames[providerFilter] ?? providerFilter,
+      count: 0,
+    };
+  }, [availableAgentsForCurrentDevice, providerFilter]);
+
+  // 级联规则：切换电脑后，若选中的 Agent 在新电脑上不存在，自动切换为新电脑支持的第 1 个 Agent
+  useEffect(() => {
+    if (availableAgentsForCurrentDevice.length === 0) return;
+    const exists = availableAgentsForCurrentDevice.some(
+      (a) => a.type === providerFilter,
+    );
+    if (!exists) {
+      setProviderFilter(availableAgentsForCurrentDevice[0].type);
+    }
+  }, [availableAgentsForCurrentDevice, providerFilter]);
+
   const currentDeviceGroup = useMemo(() => {
     return filteredDeviceGroups.find((d) => d.runnerId === activeRunnerId);
   }, [filteredDeviceGroups, activeRunnerId]);
@@ -1593,31 +1672,45 @@ export function RemoteConsole({
   }, [currentAgentWorkspaces]);
 
   useEffect(() => {
-    if (!deviceMenuOpen) return;
+    if (!deviceMenuOpen && !agentMenuOpen) return;
     const onClickOutside = (e: MouseEvent) => {
       if (
+        deviceMenuOpen &&
         deviceMenuRef.current &&
         !deviceMenuRef.current.contains(e.target as Node)
       ) {
         setDeviceMenuOpen(false);
       }
+      if (
+        agentMenuOpen &&
+        agentMenuRef.current &&
+        !agentMenuRef.current.contains(e.target as Node)
+      ) {
+        setAgentMenuOpen(false);
+      }
     };
     window.addEventListener("mousedown", onClickOutside);
     return () => window.removeEventListener("mousedown", onClickOutside);
-  }, [deviceMenuOpen]);
+  }, [deviceMenuOpen, agentMenuOpen]);
 
-  // Escape closes the device menu and hands the focus back to the button
+  // Escape closes any open menu and hands the focus back to the button
   // that opened it, so the keyboard never ends up on a closed popup.
   useEffect(() => {
-    if (!deviceMenuOpen) return;
+    if (!deviceMenuOpen && !agentMenuOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setDeviceMenuOpen(false);
-      deviceMenuButtonRef.current?.focus();
+      if (deviceMenuOpen) {
+        setDeviceMenuOpen(false);
+        deviceMenuButtonRef.current?.focus();
+      }
+      if (agentMenuOpen) {
+        setAgentMenuOpen(false);
+        agentMenuButtonRef.current?.focus();
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [deviceMenuOpen]);
+  }, [deviceMenuOpen, agentMenuOpen]);
 
   useEffect(() => {
     if (!selected) return;
@@ -1851,107 +1944,239 @@ export function RemoteConsole({
           </div>
         )}
 
-        <div
-          className="remote-filter-pill-row"
-          role="tablist"
-          aria-label="按 Agent 过滤"
-        >
-          {[...availableProviders].map(([kind, label]) => (
+        <div className="remote-selectors-bar">
+          {/* 电脑选择器 */}
+          <div className="remote-selector-dropdown" ref={deviceMenuRef}>
             <button
               type="button"
-              role="tab"
-              aria-selected={providerFilter === kind}
-              className={`remote-filter-pill ${providerFilter === kind ? "active" : ""}`}
-              key={kind}
-              onClick={() => setProviderFilter(kind)}
+              className={`remote-selector-btn ${deviceMenuOpen ? "active" : ""}`}
+              ref={deviceMenuButtonRef}
+              onClick={() => {
+                setDeviceMenuOpen((prev) => !prev);
+                setAgentMenuOpen(false);
+              }}
+              aria-expanded={deviceMenuOpen}
+              aria-haspopup="menu"
+              title={`${activeDevice?.label ?? "未连接设备"} · 点击切换电脑`}
             >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className="remote-device-selector-wrap" ref={deviceMenuRef}>
-          <button
-            type="button"
-            className="remote-device-selector-btn"
-            ref={deviceMenuButtonRef}
-            onClick={() => setDeviceMenuOpen((prev) => !prev)}
-            aria-expanded={deviceMenuOpen}
-            aria-haspopup="menu"
-            title={`${activeDevice?.label ?? "未连接设备"} · 点击切换电脑`}
-          >
-            <span className="remote-device-selector-icon" aria-hidden="true">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                <line x1="8" y1="21" x2="16" y2="21" />
-                <line x1="12" y1="17" x2="12" y2="21" />
-              </svg>
-            </span>
-            <span className="remote-device-selector-name">
-              {activeDevice?.label ??
-                (activeRunnerId
-                  ? `电脑 · ${activeRunnerId.slice(-6)}`
-                  : "暂无在线电脑")}
-            </span>
-            <span
-              className={`remote-status-dot ${
-                activeDevice?.online ? "online" : "offline"
-              }`}
-              title={activeDevice?.online ? "电脑在线" : "电脑离线"}
-            />
-            <span className="remote-status-text-compact">
-              {activeDevice?.online ? "在线" : "离线"}
-            </span>
-            {deviceList.length > 1 && (
-              <span
-                className={`remote-device-selector-arrow ${
-                  deviceMenuOpen ? "open" : ""
-                }`}
-                aria-hidden="true"
-              >
-                <ChevronDownIcon size={12} />
+              <span className="remote-selector-btn-left">
+                <span className="remote-selector-btn-icon" aria-hidden="true">
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <line x1="8" y1="21" x2="16" y2="21" />
+                    <line x1="12" y1="17" x2="12" y2="21" />
+                  </svg>
+                </span>
+                <span className="remote-selector-btn-text">
+                  {activeDevice?.label ??
+                    (activeRunnerId
+                      ? `电脑 · ${activeRunnerId.slice(-6)}`
+                      : "选择电脑")}
+                </span>
               </span>
-            )}
-          </button>
-
-          {deviceMenuOpen && deviceList.length > 1 && (
-            <div className="remote-device-menu" role="menu">
-              {deviceList.map((dev) => (
-                <button
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={dev.runnerId === activeRunnerId}
-                  className={`remote-device-menu-item ${
-                    dev.runnerId === activeRunnerId ? "active" : ""
+              <span className="remote-selector-btn-right">
+                <span
+                  className={`remote-status-dot ${
+                    activeDevice?.online ? "online" : "offline"
                   }`}
-                  key={dev.runnerId}
-                  onClick={() => {
-                    setSelectedRunnerId(dev.runnerId);
-                    setDeviceMenuOpen(false);
-                  }}
+                  title={activeDevice?.online ? "电脑在线" : "电脑离线"}
+                />
+                <span
+                  className={`remote-selector-arrow ${
+                    deviceMenuOpen ? "open" : ""
+                  }`}
+                  aria-hidden="true"
                 >
+                  <ChevronDownIcon size={12} />
+                </span>
+              </span>
+            </button>
+
+            {deviceMenuOpen && (
+              <div
+                className="remote-selector-popover remote-device-popover"
+                role="menu"
+              >
+                <div className="remote-popover-header">选择电脑</div>
+                <div className="remote-popover-list">
+                  {deviceList.length === 0 ? (
+                    <div className="remote-popover-empty">暂无可用电脑</div>
+                  ) : (
+                    deviceList.map((dev) => (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={dev.runnerId === activeRunnerId}
+                        className={`remote-popover-item ${
+                          dev.runnerId === activeRunnerId ? "selected" : ""
+                        }`}
+                        key={dev.runnerId}
+                        onClick={() => {
+                          setSelectedRunnerId(dev.runnerId);
+                          setDeviceMenuOpen(false);
+                        }}
+                      >
+                        <span
+                          className={`remote-status-dot ${
+                            dev.online ? "online" : "offline"
+                          }`}
+                        />
+                        <span className="remote-popover-item-name">
+                          {dev.label}
+                        </span>
+                        <span className="remote-popover-item-badge">
+                          {dev.online ? "在线" : "离线"}
+                        </span>
+                        {dev.runnerId === activeRunnerId && (
+                          <svg
+                            className="remote-popover-check"
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Agent 选择器 (级联于当前电脑) */}
+          <div className="remote-selector-dropdown" ref={agentMenuRef}>
+            <button
+              type="button"
+              className={`remote-selector-btn ${agentMenuOpen ? "active" : ""}`}
+              ref={agentMenuButtonRef}
+              onClick={() => {
+                setAgentMenuOpen((prev) => !prev);
+                setDeviceMenuOpen(false);
+              }}
+              aria-expanded={agentMenuOpen}
+              aria-haspopup="menu"
+              title={`${currentAgentInfo.name} · 点击切换 Agent`}
+            >
+              <span className="remote-selector-btn-left">
+                <span className="remote-selector-btn-icon" aria-hidden="true">
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" />
+                    <rect x="4" y="8" width="16" height="12" rx="2" />
+                    <circle cx="9" cy="13" r="1" fill="currentColor" />
+                    <circle cx="15" cy="13" r="1" fill="currentColor" />
+                    <line x1="9" y1="17" x2="15" y2="17" />
+                  </svg>
+                </span>
+                <span className="remote-selector-btn-text">
+                  {currentAgentInfo.name}
+                </span>
+              </span>
+              <span className="remote-selector-btn-right">
+                {currentAgentInfo.count > 0 && (
                   <span
-                    className={`remote-status-dot ${
-                      dev.online ? "online" : "offline"
-                    }`}
-                  />
-                  <span className="remote-device-menu-item-name">
-                    {dev.label}
+                    className="remote-selector-count-badge"
+                    title={`${currentAgentInfo.count} 个会话`}
+                  >
+                    {currentAgentInfo.count}
                   </span>
-                  <span className="remote-device-menu-item-status">
-                    {dev.online ? "在线" : "离线"}
+                )}
+                <span
+                  className={`remote-selector-arrow ${
+                    agentMenuOpen ? "open" : ""
+                  }`}
+                  aria-hidden="true"
+                >
+                  <ChevronDownIcon size={12} />
+                </span>
+              </span>
+            </button>
+
+            {agentMenuOpen && (
+              <div
+                className="remote-selector-popover remote-agent-popover"
+                role="menu"
+              >
+                <div className="remote-popover-header">
+                  <span>选择 Agent</span>
+                  <span className="remote-popover-sub">
+                    {activeDevice?.label
+                      ? `来自 ${activeDevice.label}`
+                      : "当前电脑"}
                   </span>
-                </button>
-              ))}
-            </div>
-          )}
+                </div>
+                <div className="remote-popover-list">
+                  {availableAgentsForCurrentDevice.map((agent) => (
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={providerFilter === agent.type}
+                      className={`remote-popover-item ${
+                        providerFilter === agent.type ? "selected" : ""
+                      }`}
+                      key={agent.type}
+                      onClick={() => {
+                        setProviderFilter(agent.type);
+                        setAgentMenuOpen(false);
+                      }}
+                    >
+                      <span
+                        className="remote-popover-agent-indicator"
+                        data-agent={agent.type}
+                      />
+                      <span className="remote-popover-item-name">
+                        {agent.name}
+                      </span>
+                      {agent.count > 0 ? (
+                        <span className="remote-popover-item-badge active-count">
+                          {agent.count}
+                        </span>
+                      ) : (
+                        <span className="remote-popover-item-badge">0</span>
+                      )}
+                      {providerFilter === agent.type && (
+                        <svg
+                          className="remote-popover-check"
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="remote-session-tree">
