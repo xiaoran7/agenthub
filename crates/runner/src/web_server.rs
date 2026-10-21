@@ -699,8 +699,10 @@ impl ApiRequest<'_> {
                         let identity = match crate::device::DeviceIdentity::load(&identity_path) {
                             Ok(id) => id,
                             Err(err) => {
-                                let err_json =
-                                    json!({ "error": format!("load_identity_failed: {}", err) });
+                                let err_json = json!({
+                                    "error": format!("load_identity_failed: {}", err),
+                                    "message": format!("加载本机身份凭证失败：{}", err)
+                                });
                                 send_json_response(stream, 500, &err_json)?;
                                 return Ok(());
                             }
@@ -718,8 +720,10 @@ impl ApiRequest<'_> {
                         ) {
                             Ok(c) => c,
                             Err(err) => {
-                                let err_json =
-                                    json!({ "error": format!("invalid_gateway_url: {}", err) });
+                                let err_json = json!({
+                                    "error": format!("invalid_gateway_url: {}", err),
+                                    "message": format!("网关地址不合法：{}", err)
+                                });
                                 send_json_response(stream, 400, &err_json)?;
                                 return Ok(());
                             }
@@ -755,13 +759,43 @@ impl ApiRequest<'_> {
                                 send_json_response(stream, 200, &resp)?;
                             }
                             Err(err) => {
-                                let err_json = json!({ "error": format!("bind_failed: {}", err) });
+                                let friendly_message = match &err {
+                                    crate::gateway::GatewayError::Rejected { status } if *status == 403 => {
+                                        "配对码无效或已过期（有效期10分钟）。请在 Web 控制台重新生成最新的配对码。".to_string()
+                                    }
+                                    crate::gateway::GatewayError::Rejected { status } => {
+                                        format!("网关拒绝绑定请求（HTTP 状态码 {}）", status)
+                                    }
+                                    crate::gateway::GatewayError::Timeout => {
+                                        "连接网关超时，请检查网络或网关地址是否正确。".to_string()
+                                    }
+                                    crate::gateway::GatewayError::Unreachable => {
+                                        "无法连接到网关，请检查地址是否正确或网关是否在线。".to_string()
+                                    }
+                                    crate::gateway::GatewayError::TlsFailed => {
+                                        "与网关的 TLS/HTTPS 安全握手失败，请检查网关证书。".to_string()
+                                    }
+                                    crate::gateway::GatewayError::InvalidBindingCode => {
+                                        "配对码格式无效（不能为空或含有非法字符）。".to_string()
+                                    }
+                                    crate::gateway::GatewayError::InvalidUrl | crate::gateway::GatewayError::InsecureUrl => {
+                                        "网关地址格式不合法，请使用完整且规范的 https 地址。".to_string()
+                                    }
+                                    _ => format!("绑定失败：{}", err),
+                                };
+                                let err_json = json!({
+                                    "error": format!("bind_failed: {}", err),
+                                    "message": friendly_message
+                                });
                                 send_json_response(stream, 400, &err_json)?;
                             }
                         }
                     }
                     Err(err) => {
-                        let err_json = json!({ "error": format!("invalid_bind_payload: {}", err) });
+                        let err_json = json!({
+                            "error": format!("invalid_bind_payload: {}", err),
+                            "message": format!("请求参数解析失败：{}", err)
+                        });
                         send_json_response(stream, 400, &err_json)?;
                     }
                 }

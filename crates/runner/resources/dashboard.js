@@ -3968,7 +3968,7 @@ async function submitDevicePairing(event) {
       toast("已绑定到云端 AgentHub");
     } else {
       toast(
-        "配对失败：" + (resData.message || "网关拒绝绑定或绑定码无效"),
+        "配对失败：" + (resData.message || resData.error || "网关拒绝绑定或绑定码无效"),
         "err",
       );
     }
