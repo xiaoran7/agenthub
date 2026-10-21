@@ -386,7 +386,12 @@ export function conversationItems(
     for (const [index, entry] of history.entries()) {
       const role = entry.role;
       const kind = entry.kind;
-      const value = typeof entry.text === "string" ? entry.text : "";
+      const value =
+        typeof entry.text === "string"
+          ? entry.text
+          : typeof entry.content === "string"
+            ? entry.content
+            : "";
       if (kind !== "message" && kind !== "tool" && kind !== "status") continue;
       if (!value && kind !== "tool") continue;
       const item: ConversationItem = {

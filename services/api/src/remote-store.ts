@@ -193,13 +193,26 @@ export class RemoteContentStore {
     const discoveryCandidates = (
       hello.discovery as { candidates?: Array<{ workspace_path?: string }> }
     )?.candidates;
+    const norm = (p: string): string =>
+      p
+        .replace(/^\\\\\?\\/u, "")
+        .replace(/[\\/]+/gu, "/")
+        .replace(/\/+$/u, "")
+        .toLowerCase();
+    const target = norm(workspace);
     const isDiscovered =
       Array.isArray(discoveryCandidates) &&
-      discoveryCandidates.some((c) => c.workspace_path === workspace);
+      discoveryCandidates.some(
+        (c) =>
+          typeof c.workspace_path === "string" &&
+          norm(c.workspace_path) === target,
+      );
     if (
       !isDiscovered &&
       (!Array.isArray(hello.workspaces) ||
-        !hello.workspaces.includes(workspace))
+        !hello.workspaces.some(
+          (w) => typeof w === "string" && norm(w) === target,
+        ))
     )
       return "workspace_not_authorized";
     return "ready";

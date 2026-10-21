@@ -129,6 +129,9 @@ pub fn run(config: DaemonConfig) -> Result<()> {
     })?;
 
     let (client, channel) = create_local_host_channel();
+    // Warm up local transcript scanning immediately in the background so
+    // sessions across Claude, Codex, Grok, etc. are ready concurrently.
+    crate::remote_host::warm_up_local_store_scan();
     let ipc_control = ipc_stopped.clone();
     let ipc_handler: Arc<dyn DaemonRequestHandler> = Arc::new(LocalHandler {
         client,

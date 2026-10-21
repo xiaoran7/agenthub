@@ -5,27 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" id="themeColorMeta">
   <meta name="color-scheme" content="light dark">
-  <link rel="manifest" href="/manifest.json?v=2.5.7">
+  <link rel="manifest" href="/manifest.json?v=__ASSETS_VERSION__">
   <title>AgentHub Runner</title>
-  <link rel="icon" type="image/png" sizes="28x28" href="/icon-28.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="30x30" href="/icon-30.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="36x36" href="/icon-36.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="42x42" href="/icon-42.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="56x56" href="/icon-56.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="64x64" href="/icon-64.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="72x72" href="/icon-72.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="96x96" href="/icon-96.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="40x40" href="/icon-40.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="24x24" href="/icon-24.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="20x20" href="/icon-20.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="16x16" href="/icon-16.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="128x128" href="/icon-128.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="256x256" href="/icon-256.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=2.5.7">
-  <link rel="icon" type="image/png" sizes="any" href="/icon.png?v=2.5.7">
-  <link rel="apple-touch-icon" href="/icon-192.png?v=2.5.7">
+  <link rel="icon" type="image/png" sizes="28x28" href="/icon-28.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="30x30" href="/icon-30.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="36x36" href="/icon-36.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="42x42" href="/icon-42.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="56x56" href="/icon-56.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="64x64" href="/icon-64.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="72x72" href="/icon-72.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="96x96" href="/icon-96.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="40x40" href="/icon-40.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="24x24" href="/icon-24.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="20x20" href="/icon-20.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="16x16" href="/icon-16.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="128x128" href="/icon-128.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="256x256" href="/icon-256.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=__ASSETS_VERSION__">
+  <link rel="icon" type="image/png" sizes="any" href="/icon.png?v=__ASSETS_VERSION__">
+  <link rel="apple-touch-icon" href="/icon-192.png?v=__ASSETS_VERSION__">
   <script>
     // ---- the console's layout tokens, declared once --------------------------
     // The server stamps its own copy in before this one (AppLayout); these are
@@ -118,19 +118,6 @@
   <!-- the pages, in groups; the gateway and the pairing state at the foot -->
   <aside class="sidebar" id="side">
     <div class="side-top">
-      <span class="brand" id="brandSide">
-        <span class="logo">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.8"/>
-            <circle cx="5" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-            <circle cx="19" cy="5" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-            <circle cx="5" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-            <circle cx="19" cy="19" r="1.9" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M9.8 9.8 6.4 6.4M14.2 9.8l3.4-3.4M9.8 14.2l-3.4 3.4M14.2 14.2l3.4 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-          </svg>
-        </span>
-        <span>AgentHub</span>
-      </span>
       <button class="icon side-toggle rail-toggle" onclick="toggleSideNav()" title="隐藏侧边栏 (Ctrl+Shift+S)" aria-label="隐藏侧边栏">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <rect class="st-pane" x="2.5" y="3.5" width="19" height="17" rx="2.4" stroke="currentColor" stroke-width="1.6"/>

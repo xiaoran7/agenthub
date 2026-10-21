@@ -293,8 +293,15 @@ export function registerRemoteRoutes(
     );
     for (const runner of runners) {
       const device = known.get(runner.runner_id);
-      if (device?.owner_id === owner && !device.revoked_at)
+      if (device?.owner_id === owner && !device.revoked_at) {
         allowed.add(runner.runner_id);
+      } else {
+        const conn = connections.get(runner.runner_id);
+        if (conn) {
+          conn.socket.close(1008, "device_revoked");
+          connections.delete(runner.runner_id);
+        }
+      }
     }
     // Include any active registered device that is not yet in content.runners
     const runnerSet = new Set(runners.map((r) => r.runner_id));
@@ -309,26 +316,29 @@ export function registerRemoteRoutes(
     }
     return {
       cursor: content.cursor(owner),
-      runners: runners.map((runner) => ({
-        ...runner,
-        online:
-          connections.has(runner.runner_id) && allowed.has(runner.runner_id),
-        revoked: !allowed.has(runner.runner_id),
-      })),
-      sessions: content.sessions(owner).map((session) => {
-        const conn = connections.get(session.runner_id);
-        return {
-          ...session,
-          online: !!conn && allowed.has(session.runner_id),
-          binding: {
-            ...session.binding,
-            control_connected:
-              session.binding.control_connected &&
-              conn?.generation === session.binding.host_generation &&
-              allowed.has(session.runner_id),
-          },
-        };
-      }),
+      runners: runners
+        .filter((runner) => allowed.has(runner.runner_id))
+        .map((runner) => ({
+          ...runner,
+          online: connections.has(runner.runner_id),
+          revoked: false,
+        })),
+      sessions: content
+        .sessions(owner)
+        .filter((session) => allowed.has(session.runner_id))
+        .map((session) => {
+          const conn = connections.get(session.runner_id);
+          return {
+            ...session,
+            online: !!conn,
+            binding: {
+              ...session.binding,
+              control_connected:
+                session.binding.control_connected &&
+                conn?.generation === session.binding.host_generation,
+            },
+          };
+        }),
     };
   });
   app.get<{ Params: { runner: string; hub: string } }>(

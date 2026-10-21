@@ -66,7 +66,7 @@ const LAYOUT = window.AppLayout || {};
 const STORE = Object.assign({}, LAYOUT.storage);
 const PORT = String(location.port || LAYOUT.webPort || 4200);
 // where the upstream gateway listens, when nothing on this machine says otherwise
-const GATEWAY_URL = `http://127.0.0.1:${LAYOUT.gatewayPort}`;
+const GATEWAY_URL = `http://${location.hostname || "127.0.0.1"}:${LAYOUT.gatewayPort || 4000}`;
 const TOAST_MS = { ok: 2400, err: 4200 };
 
 // whether the reader asked for less motion — in the system, or in the
@@ -546,7 +546,13 @@ function switchView(viewId, silent) {
     if (viewId === "settings") renderSettings();
     // the usage page's charts need a laid-out card to measure: a page drawn
     // while hidden has no width, so the digest is drawn as it comes into view
-    if (viewId === "usage") drawUsage();
+    if (viewId === "usage") {
+      if (!usageDigest && !usageLoading) {
+        loadUsage(true);
+      } else {
+        drawUsage();
+      }
+    }
   };
   // a turn only draws when the window is painting frames: a tucked-away
   // console (or one in a background tab) would hold the switch until it is
@@ -676,7 +682,18 @@ async function refreshDashboard(manual) {
     // good figures until sessions come back, instead of flapping to empty
     const sessions = dashboardData.sessions || [];
     const isReady = dashboardData.ready !== false && dashboardData.status !== "starting";
-    if (sessions.length > 0) {
+    const sessionsLoading = dashboardData.sessions_loading === true || !isReady;
+
+    if (sessionsLoading) {
+      // Transcript scanning (Claude, Claude Desktop, Grok, etc.) or daemon startup is in progress:
+      // never show partial sessions (e.g. Codex-only before Claude finishes scanning)
+      if (lastGoodSessions.length === 0) {
+        renderSessions([], "loading");
+      }
+      setTimeout(() => {
+        if (!refreshing) refreshDashboard();
+      }, 250);
+    } else if (sessions.length > 0) {
       const sessionsStr = JSON.stringify(sessions);
       const sessionsChanged = sessionsStr !== lastRenderState.sessionsJson;
       lastGoodSessions = sessions;
@@ -699,14 +716,6 @@ async function refreshDashboard(manual) {
       if (sessionsChanged) {
         renderSessions(sessions);
       }
-    } else if (!isReady) {
-      // Daemon is still starting/scanning transcripts: keep skeleton, do not count as empty strikes
-      if (lastGoodSessions.length === 0) {
-        renderSessions([], "loading");
-      }
-      setTimeout(() => {
-        if (allSessionsData.length === 0 && !refreshing) refreshDashboard();
-      }, 800);
     } else {
       // an empty answer only earns the empty state once it has held for a
       // while; a single zero snapshot is a probe, not a verdict
@@ -2039,29 +2048,57 @@ function renderDevice(device) {
   }
 
   if (device.paired) {
-    if (pairBtn) pairBtn.classList.remove("off");
     const gw = device.gateway_url
       ? device.gateway_url.replace(/^https?:\/\//, "")
       : "已配对";
-    if (pairText) pairText.textContent = `已绑定 ${gw}`;
-    if (pairTag) {
-      pairTag.textContent = "已绑定";
-      pairTag.className = "tag ok";
+    const isConnected = !!device.connected;
+
+    if (pairBtn) {
+      pairBtn.classList.remove("off");
+      pairBtn.classList.toggle("connected", isConnected);
+      pairBtn.classList.toggle("disconnected", !isConnected);
+      pairBtn.title = isConnected
+        ? `Web 控制台已连接 (${gw})`
+        : `Web 控制台未连接 (${gw})，请检查网络或服务端服务`;
     }
-    if (statStatus) {
-      statStatus.textContent = "已绑定";
-      statStatus.style.color = "var(--green)";
+
+    if (isConnected) {
+      if (pairText) pairText.textContent = `已连接 ${gw}`;
+      if (pairTag) {
+        pairTag.textContent = "已连接";
+        pairTag.className = "tag ok";
+      }
+      if (statStatus) {
+        statStatus.textContent = "已连接";
+        statStatus.style.color = "var(--green)";
+      }
+      if (statSub) statSub.textContent = gw;
+    } else {
+      if (pairText) pairText.textContent = `未连接 (${gw})`;
+      if (pairTag) {
+        pairTag.textContent = "未连接";
+        pairTag.className = "tag warn";
+      }
+      if (statStatus) {
+        statStatus.textContent = "未连接";
+        statStatus.style.color = "var(--red)";
+      }
+      if (statSub) statSub.textContent = `${gw} (未建立连接或离线)`;
     }
-    if (statSub) statSub.textContent = gw;
+
     setPairTile(false);
     if (pairedBox) {
       pairedBox.style.display = "block";
       if (pairedInfo) {
-        pairedInfo.textContent = `网关: ${device.gateway_url || "-"} · 配对时间: ${device.paired_at || "-"}`;
+        pairedInfo.textContent = `网关: ${device.gateway_url || "-"} · 状态: ${isConnected ? "在线连接" : "离线未连"} · 配对时间: ${device.paired_at || "-"}`;
       }
     }
   } else {
-    if (pairBtn) pairBtn.classList.add("off");
+    if (pairBtn) {
+      pairBtn.classList.remove("connected", "disconnected");
+      pairBtn.classList.add("off");
+      pairBtn.title = "点击绑定 Web 控制台";
+    }
     if (pairText) pairText.textContent = "未绑定 Web 控制台";
     if (pairTag) {
       pairTag.textContent = "未绑定";
@@ -2180,6 +2217,9 @@ let ledStatus = "";
 let ledQuery = "";
 let usageDigest = null;
 let usageLoading = false;
+let usageFetchingPeriod = "";
+let usageAbortController = null;
+const usageMemoryCache = new Map();
 let usageSeq = 0;
 let usageTimer = 0;
 let usageEvery = 30000;
@@ -2315,7 +2355,22 @@ function setUsagePeriod(period) {
   usagePeriod = period;
   remember("usagePeriod", period);
   pickUsageSegs();
-  loadUsage(true);
+
+  const cached = usageMemoryCache.get(period);
+  if (cached && cached.data) {
+    // SWR hit: instant switch with zero flicker
+    usageDigest = cached.data;
+    drawUsage();
+    // Background revalidate if older than 15s
+    if (Date.now() - cached.ts > 15000) {
+      loadUsage(false);
+    }
+  } else {
+    // SWR miss: show rich skeleton animations
+    usageDigest = null;
+    drawUsageLoading();
+    loadUsage(true);
+  }
 }
 
 function setUsageEvery(ms) {
@@ -2365,16 +2420,30 @@ function fillSegs(id, options, current, attr) {
 }
 
 async function loadUsage(manual) {
-  if (usageLoading) return;
+  const periodToFetch = usagePeriod;
+  if (usageLoading && usageFetchingPeriod === periodToFetch) return;
+
+  if (usageAbortController) {
+    try {
+      usageAbortController.abort();
+    } catch (e) {}
+  }
+  usageAbortController = new AbortController();
+
   usageLoading = true;
+  usageFetchingPeriod = periodToFetch;
   const seq = ++usageSeq;
   const btn = document.getElementById("usageReload");
   if (btn) btn.classList.add("busy");
-  if (manual && !usageDigest) drawUsageLoading();
+
+  if (!usageDigest) {
+    drawUsageLoading();
+  }
+
   try {
     const resp = await fetch(
-      `/api/usage/ledger?period=${encodeURIComponent(usagePeriod)}&limit=1000`,
-      { cache: "no-store" },
+      `/api/usage/ledger?period=${encodeURIComponent(periodToFetch)}&limit=1000`,
+      { cache: "no-store", signal: usageAbortController.signal },
     );
     if (!resp.ok) {
       toast(`读取用量失败（HTTP ${resp.status}）`, "err");
@@ -2382,19 +2451,89 @@ async function loadUsage(manual) {
     }
     const data = await resp.json();
     if (seq !== usageSeq) return;
-    usageDigest = data;
-    drawUsage();
+
+    usageMemoryCache.set(periodToFetch, { data, ts: Date.now() });
+
+    if (periodToFetch === usagePeriod) {
+      usageDigest = data;
+      drawUsage();
+    }
   } catch (e) {
+    if (e.name === "AbortError") return;
     toast("读取用量失败：" + e.message, "err");
   } finally {
-    usageLoading = false;
-    if (btn) btn.classList.remove("busy");
+    if (seq === usageSeq) {
+      usageLoading = false;
+      usageFetchingPeriod = "";
+      if (btn) btn.classList.remove("busy");
+    }
   }
 }
 
 function drawUsageLoading() {
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = val;
+  };
+  const sk = (w, h = 22) =>
+    `<span class="skeleton-bar" style="width: ${w}; height: ${h}px; display: inline-block;"></span>`;
+  set("ukCalls", sk("64px"));
+  set("ukCallsSub", sk("100px", 12));
+  set("ukTokens", sk("72px"));
+  set("ukTokensSub", sk("130px", 12));
+  set("ukCost", sk("58px"));
+  set("ukCostSub", sk("88px", 12));
+  set("ukCache", sk("50px"));
+  set("ukCacheSub", sk("110px", 12));
+  const meter = document.getElementById("ukCacheMeter");
+  if (meter) meter.style.width = "0%";
+  set("ukSpeed", sk("68px"));
+  set("ukSpeedSub", sk("100px", 12));
+
+  const chart = document.getElementById("ledChart");
+  if (chart) {
+    chart.innerHTML = `
+      <div class="skeleton-chart-box" aria-busy="true">
+        <div class="skeleton-chart-bars">
+          <div class="skeleton-bar" style="height: 38%;"></div>
+          <div class="skeleton-bar" style="height: 65%;"></div>
+          <div class="skeleton-bar" style="height: 42%;"></div>
+          <div class="skeleton-bar" style="height: 85%;"></div>
+          <div class="skeleton-bar" style="height: 52%;"></div>
+          <div class="skeleton-bar" style="height: 92%;"></div>
+          <div class="skeleton-bar" style="height: 70%;"></div>
+          <div class="skeleton-bar" style="height: 48%;"></div>
+        </div>
+      </div>
+    `;
+  }
+
+  const rank = document.getElementById("ledRank");
+  if (rank) {
+    rank.innerHTML = `
+      <div class="skeleton-card" style="padding: 12px; gap: 10px;" aria-busy="true">
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 88%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 72%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 80%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 58%;"></div></div>
+      </div>
+    `;
+  }
+
+  const heatScroll = document.getElementById("ledHeatScroll");
+  if (heatScroll && !heatScroll.children.length) {
+    heatScroll.innerHTML = `<div class="skeleton-card" style="height: 80px; width: 100%; margin: 8px 0;" aria-busy="true"></div>`;
+  }
+
+  const wrap = document.getElementById("ledWrap");
+  if (wrap) wrap.innerHTML = `<div class="led-none">正在读取用量…</div>`;
+  const sessions = document.getElementById("usageSessions");
+  if (sessions) sessions.innerHTML = renderSkeletonCard(4);
+  const ctx = document.getElementById("usageContext");
+  if (ctx) ctx.innerHTML = renderSkeletonCard(4);
+
   const note = document.getElementById("usageNote");
-  if (note) note.textContent = "正在读取 Coding Assistant 的会话记录…";
+  if (note) note.textContent = "正在读取 Coding Assistant 与 Claude 的会话记录…";
 }
 
 function drawUsage() {

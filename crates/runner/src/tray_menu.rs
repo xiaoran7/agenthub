@@ -1443,7 +1443,7 @@ mod tests {
 
     fn menu() -> Menu {
         Menu {
-            version: "2.5.3".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
             host: "127.0.0.1:4200".into(),
             items: vec![
                 Item {

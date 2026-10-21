@@ -225,9 +225,8 @@
     .side-edge { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 1; cursor: col-resize; touch-action: none; }
     .side-edge:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
     body.side-drag, body.side-drag * { cursor: col-resize !important; }
-    .side-top { flex: none; display: flex; align-items: center; gap: 6px; height: var(--top-h); padding: 0 10px 0 14px; }
+    .side-top { flex: none; display: flex; align-items: center; justify-content: flex-end; height: var(--top-h); padding: 0 12px; }
     .side-top .rail-toggle { margin-left: auto; }
-    .side-top .brand { font-size: var(--fs-title); }
     .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; }
     .side-foot { flex: none; max-height: 55%; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; border-top: .5px solid var(--line-2); }
     :is(.side-scroll, .side-foot) { scrollbar-width: thin; }
@@ -279,10 +278,21 @@
       .side-l { display: inline; }
     }
     /* the gateway, under the pages: where it listens; a click opens its page */
-    .side-gw { display: flex; align-items: center; gap: 8px; height: 26px; margin-top: 2px; padding: 0 9px; border-radius: 6px; font-size: var(--fs-note); color: var(--muted); text-align: left; white-space: nowrap; }
+    .side-gw { display: flex; align-items: center; gap: 8px; height: 26px; margin-top: 2px; padding: 0 9px; border-radius: 6px; font-size: var(--fs-note); color: var(--muted); text-align: left; white-space: nowrap; transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease); }
     .side-gw:hover { background: var(--pill); color: var(--fg-2); }
-    .side-gw > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
-    .side-gw.off > i { background: var(--faint); box-shadow: none; }
+    .side-gw > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); transition: background var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease); }
+    .side-gw.connected > i,
+    .side-gw:not(.off):not(.disconnected) > i {
+      animation: pulse-dot 2.5s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { box-shadow: 0 0 0 2.5px var(--green-soft); transform: scale(1); }
+      50% { box-shadow: 0 0 0 4.5px var(--green-soft); transform: scale(1.1); }
+    }
+    .side-gw.off > i { background: var(--faint); box-shadow: none; animation: none; }
+    .side-gw.disconnected > i { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); animation: none; }
+    .side-gw.disconnected { color: var(--muted); }
+    .side-gw.disconnected:hover { color: var(--fg-2); }
     .side-gw > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
     .crumb { display: flex; align-items: baseline; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: var(--fs-title); }
     .crumb > span { color: var(--muted); }
@@ -632,9 +642,7 @@
         /* the toggle really takes the sidebar away: no rail, no gutter, the header
            carries the brand and the page names instead */
         html.no-side .sidebar { display: none; }
-        .side-top { height: var(--top-h); padding: 0 20px; }
-        .side-top .brand { font-size: var(--fs-title); font-weight: 650; letter-spacing: -.01em; }
-        .side-top .brand .logo svg { width: 20px; height: 20px; }
+        .side-top { height: var(--top-h); padding: 0 14px; justify-content: flex-end; }
         .side-scroll { padding: 4px 12px 12px; }
         .side-slot { padding: 6px 12px 12px; }
         .side-foot { padding: 10px 12px 12px; }
@@ -681,6 +689,27 @@
         :root.dark .skeleton-bar {
           background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.05) 75%);
           background-size: 200% 100%;
+        }
+        .skeleton-chart-box {
+          width: 100%;
+          height: 180px;
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-end;
+          padding: 12px 14px;
+        }
+        .skeleton-chart-bars {
+          display: flex;
+          align-items: flex-end;
+          gap: 12px;
+          height: 140px;
+          width: 100%;
+          padding-bottom: 4px;
+        }
+        .skeleton-chart-bars > .skeleton-bar {
+          flex: 1;
+          min-width: 8px;
+          border-radius: 4px 4px 0 0;
         }
         .side-gw { height: 32px; padding: 0 10px; border-radius: var(--r-s); font-size: var(--fs-note); gap: 9px; }
 

@@ -1164,7 +1164,7 @@ fn conversation_item(role: &str, kind: &str, label: &str, content: &str, status:
         trimmed.to_owned()
     };
     json!({ "role": role, "kind": kind, "label": label, "status": status,
-        "content": final_content })
+        "content": final_content, "text": final_content })
 }
 
 /// Summarizes a tool call as `Name: key argument` so collapsed rows stay

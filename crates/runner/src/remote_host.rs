@@ -285,6 +285,47 @@ fn start_local_store_scan() {
     }));
 }
 
+/// Pre-warms the local store scan in the background so sessions from Claude,
+/// ZCode, Grok, etc. are loaded by the time the first request arrives.
+pub fn warm_up_local_store_scan() {
+    start_local_store_scan();
+}
+
+/// Returns true if the initial local store scan has produced cached results.
+pub fn is_local_store_ready() -> bool {
+    local_store_cache()
+        .lock()
+        .ok()
+        .map(|cache| cache.items.is_some())
+        .unwrap_or(false)
+}
+
+/// Returns true if a local store scan is currently executing.
+pub fn is_local_store_scanning() -> bool {
+    local_store_cache()
+        .lock()
+        .ok()
+        .map(|cache| cache.scanning)
+        .unwrap_or(false)
+}
+
+/// Wait for the initial local store scan to finish if it hasn't completed yet, up to `timeout`.
+/// This prevents returning only partial provider results (like Codex-only) on cold start.
+pub fn ensure_initial_local_store_scan(timeout: Duration) {
+    start_local_store_scan();
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        let (ready, scanning) = match local_store_cache().lock() {
+            Ok(cache) => (cache.items.is_some(), cache.scanning),
+            Err(_) => return,
+        };
+        if ready && !scanning {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
 /// The local store sessions found by the last scan.
 ///
 /// An empty list means the scan has not finished yet, not that the machine
@@ -571,12 +612,20 @@ impl NativeTransport for MultiProviderTransport {
             "thread/read" if is_claude => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("claude_");
-                let (cwd, title) =
-                    if let Ok(Some((c, t))) = crate::collectors::find_claude_session_info(raw_id) {
-                        (c, t)
-                    } else {
-                        (PathBuf::from("."), None)
-                    };
+                let (cwd, title) = if let Ok(Some((c, t))) =
+                    crate::collectors::find_claude_session_info(raw_id)
+                    && !c.as_os_str().is_empty()
+                    && c != Path::new(".")
+                {
+                    (c, t)
+                } else if let Some(param_cwd) = params["cwd"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && *s != ".")
+                {
+                    (PathBuf::from(param_cwd), None)
+                } else {
+                    (PathBuf::from("."), None)
+                };
                 self.claude_cached_cwds
                     .insert(session_id.to_string(), cwd.clone());
                 Ok(json!({
@@ -601,15 +650,25 @@ impl NativeTransport for MultiProviderTransport {
                 let cwd = self
                     .claude_cached_cwds
                     .get(session_id)
+                    .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
                     .cloned()
+                    .or_else(|| {
+                        params["cwd"]
+                            .as_str()
+                            .filter(|s| !s.is_empty() && *s != ".")
+                            .map(PathBuf::from)
+                    })
                     .or_else(|| {
                         let raw_id = session_id.trim_start_matches("claude_");
                         crate::collectors::find_claude_session_info(raw_id)
                             .ok()
                             .flatten()
                             .map(|(c, _)| c)
+                            .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
                     })
                     .unwrap_or_else(|| PathBuf::from("."));
+                self.claude_cached_cwds
+                    .insert(session_id.to_string(), cwd.clone());
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -648,7 +707,28 @@ impl NativeTransport for MultiProviderTransport {
                     }));
                 }
 
-                let cwd = self.claude_cached_cwds.get(&session_id).cloned();
+                let cwd = self
+                    .claude_cached_cwds
+                    .get(&session_id)
+                    .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+                    .cloned()
+                    .or_else(|| {
+                        params["cwd"]
+                            .as_str()
+                            .filter(|s| !s.is_empty() && *s != ".")
+                            .map(PathBuf::from)
+                    })
+                    .or_else(|| {
+                        crate::collectors::find_claude_session_info(&raw_id)
+                            .ok()
+                            .flatten()
+                            .map(|(c, _)| c)
+                            .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+                    });
+                if let Some(ref c) = cwd {
+                    self.claude_cached_cwds
+                        .insert(session_id.clone(), c.clone());
+                }
                 let model = params["model"]
                     .as_str()
                     .map(str::trim)
@@ -1425,10 +1505,10 @@ impl NativeTransport for MultiProviderTransport {
                     }
                 }
                 if is_first_page {
-                    // The local stores are scanned on their own thread: the
-                    // scan is slow on a large store, and this call sits on the
-                    // Runner's command path. The scan that is already running
-                    // publishes its result for the next refresh.
+                    // Ensure the initial local store scan has completed before returning,
+                    // so providers (like Codex) and local stores (Claude, Grok, ZCode) are
+                    // synchronized and returned together without partial display.
+                    ensure_initial_local_store_scan(Duration::from_millis(2000));
                     start_local_store_scan();
                     if let Some(items) = response["data"].as_array_mut() {
                         items.extend(cached_local_store_sessions());
@@ -2808,9 +2888,10 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         return Err(NativeError::rejected("native_session_already_bound"));
                     }
                     // Read does not take control. Never resume a known active thread.
-                    let history = self
-                        .transport
-                        .request("thread/read", json!({"threadId": id, "includeTurns": true}))?;
+                    let history = self.transport.request(
+                        "thread/read",
+                        json!({"threadId": id, "includeTurns": true, "cwd": cwd}),
+                    )?;
                     let thread = &history["thread"];
                     if thread["id"].as_str() != Some(id) {
                         return Err(NativeError::rejected("native_id_mismatch"));
@@ -2821,11 +2902,16 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     ) {
                         return Err(NativeError::rejected("external_session_not_resumable"));
                     }
-                    if let Some(orig_str) = thread["cwd"].as_str() {
-                        let orig_clean = orig_str.trim_start_matches(r"\\?\");
+                    if let Some(orig_str) = thread["cwd"]
+                        .as_str()
+                        .filter(|s| !s.is_empty() && *s != ".")
+                    {
+                        let orig_clean = orig_str.trim_start_matches(r"\\?\").replace('/', "\\");
                         let cwd_str = cwd.to_string_lossy();
-                        let cwd_clean = cwd_str.trim_start_matches(r"\\?\");
-                        if !orig_clean.eq_ignore_ascii_case(cwd_clean) {
+                        let cwd_clean = cwd_str.trim_start_matches(r"\\?\").replace('/', "\\");
+                        let orig_trimmed = orig_clean.trim_end_matches('\\');
+                        let cwd_trimmed = cwd_clean.trim_end_matches('\\');
+                        if !orig_trimmed.eq_ignore_ascii_case(cwd_trimmed) {
                             let orig_canon = dunce::canonicalize(PathBuf::from(orig_str)).ok();
                             if orig_canon.as_ref() != Some(&cwd) {
                                 return Err(NativeError::rejected("resume_workspace_mismatch"));
@@ -2992,8 +3078,11 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     binding.current_turn_id = None;
                 }
                 let is_newly_created = self.newly_created.remove(hub_id);
-                let mut turn_params = json!({"threadId": session.provider_session_id,
-                    "input": [{"type": "text", "text": text, "text_elements": []}]});
+                let mut turn_params = json!({
+                    "threadId": session.provider_session_id,
+                    "cwd": session.workspace_path.to_string_lossy(),
+                    "input": [{"type": "text", "text": text, "text_elements": []}]
+                });
                 if is_newly_created {
                     turn_params["sessionExists"] = json!(false);
                 }

@@ -260,12 +260,13 @@ fn handle_connection(
     }
 
     if path == "/manifest.json" {
+        let manifest = render_manifest_json();
         send_response(
             &mut stream,
             200,
             "OK",
             "application/manifest+json",
-            MANIFEST_JSON.as_bytes(),
+            manifest.as_bytes(),
             Some("no-cache, must-revalidate"),
         )?;
         return Ok(());
@@ -847,7 +848,13 @@ fn build_dashboard_summary(
                 .and_then(serde_json::Value::as_array)
                 .map(|a| !a.is_empty())
                 .unwrap_or(false);
-            let ttl = if has_sessions {
+            let sessions_loading = val
+                .get("sessions_loading")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let ttl = if sessions_loading {
+                Duration::from_millis(250)
+            } else if has_sessions {
                 Duration::from_secs(4)
             } else {
                 Duration::from_millis(500)
@@ -871,6 +878,14 @@ fn build_dashboard_summary(
     );
     let models_res = handler.handle(DaemonRequest::GetModels);
     let status_res = handler.handle(DaemonRequest::GetStatus);
+    let (remote_enabled, remote_connected) = match &status_res {
+        crate::daemon_protocol::DaemonResponse::Status {
+            remote_enabled,
+            remote_connected,
+            ..
+        } => (*remote_enabled, *remote_connected),
+        _ => (false, false),
+    };
 
     let mut total_sessions = 0;
     let mut claude_count = 0;
@@ -1347,9 +1362,19 @@ fn build_dashboard_summary(
     let total_agents_count = agents.as_array().map(|a| a.len()).unwrap_or(0);
     let capabilities = crate::collectors::capabilities::discover_capabilities(None);
 
+    let mut device_info = get_device_info(identity_path);
+    if let Some(obj) = device_info.as_object_mut() {
+        obj.insert("remote_enabled".to_string(), json!(remote_enabled));
+        obj.insert("connected".to_string(), json!(remote_connected));
+    }
+    let sessions_loading = is_starting
+        || !crate::remote_host::is_local_store_ready()
+        || crate::remote_host::is_local_store_scanning();
+
     let summary = json!({
         "ready": is_ready,
         "status": if is_starting { "starting" } else if is_ready { "ready" } else { "idle" },
+        "sessions_loading": sessions_loading,
         "device_id": "local-dev",
         "port": port,
         "stats": {
@@ -1380,7 +1405,7 @@ fn build_dashboard_summary(
         },
         "sessions": discovered_sessions,
         "usage": usage_summary,
-        "device": get_device_info(identity_path)
+        "device": device_info
     });
 
     if total_sessions == 0 {
@@ -1395,6 +1420,10 @@ fn build_dashboard_summary(
                         v["port"] = json!(port);
                         v["ready"] = json!(is_ready);
                         v["status"] = json!(if is_starting { "starting" } else { "ready" });
+                        v["sessions_loading"] = json!(sessions_loading);
+                        if let Some(dev) = summary.get("device") {
+                            v["device"] = dev.clone();
+                        }
                         return v;
                     }
                 }
@@ -1829,91 +1858,100 @@ const MANIFEST_JSON: &str = r##"{
   "theme_color": "#18181b",
   "icons": [
     {
-      "src": "/icon-28.png?v=2.5.7",
+      "src": "/icon-28.png?v=__ASSETS_VERSION__",
       "sizes": "28x28",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-30.png?v=2.5.7",
+      "src": "/icon-30.png?v=__ASSETS_VERSION__",
       "sizes": "30x30",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-36.png?v=2.5.7",
+      "src": "/icon-36.png?v=__ASSETS_VERSION__",
       "sizes": "36x36",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-42.png?v=2.5.7",
+      "src": "/icon-42.png?v=__ASSETS_VERSION__",
       "sizes": "42x42",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-48.png?v=2.5.7",
+      "src": "/icon-48.png?v=__ASSETS_VERSION__",
       "sizes": "48x48",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-56.png?v=2.5.7",
+      "src": "/icon-56.png?v=__ASSETS_VERSION__",
       "sizes": "56x56",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-72.png?v=2.5.7",
+      "src": "/icon-72.png?v=__ASSETS_VERSION__",
       "sizes": "72x72",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-96.png?v=2.5.7",
+      "src": "/icon-96.png?v=__ASSETS_VERSION__",
       "sizes": "96x96",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-128.png?v=2.5.7",
+      "src": "/icon-128.png?v=__ASSETS_VERSION__",
       "sizes": "128x128",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-192.png?v=2.5.7",
+      "src": "/icon-192.png?v=__ASSETS_VERSION__",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-256.png?v=2.5.7",
+      "src": "/icon-256.png?v=__ASSETS_VERSION__",
       "sizes": "256x256",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png?v=2.5.7",
+      "src": "/icon-512.png?v=__ASSETS_VERSION__",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.png?v=2.5.7",
+      "src": "/icon.png?v=__ASSETS_VERSION__",
       "sizes": "256x256",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.svg?v=2.5.7",
+      "src": "/icon.svg?v=__ASSETS_VERSION__",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     }
   ]
 }"##;
+
+fn render_manifest_json() -> String {
+    let version = if dev_assets() {
+        format!("{ASSETS_VERSION}-{}", assets_stamp())
+    } else {
+        ASSETS_VERSION.to_owned()
+    };
+    MANIFEST_JSON.replace("__ASSETS_VERSION__", &version)
+}
 
 #[cfg(test)]
 mod tests {

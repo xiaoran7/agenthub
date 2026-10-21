@@ -90,6 +90,51 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
+  min-height: 32px;
+}
+.remote-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.remote-header-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md, 6px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--cds-text-secondary, var(--remote-secondary));
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  padding: 0;
+  user-select: none;
+}
+.remote-header-icon-btn:hover {
+  background: var(--cds-alpha-1, var(--remote-hover));
+  color: var(--cds-text-primary, var(--remote-ink));
+  border-color: var(--cds-border, var(--remote-line));
+}
+.remote-header-icon-btn:active {
+  transform: scale(0.96);
+}
+.remote-header-icon-btn.primary {
+  background: var(--cds-clay, #d97757);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(217, 119, 87, 0.25);
+}
+.remote-header-icon-btn.primary:hover {
+  background: var(--cds-clay-hover, #c86849);
+  color: #ffffff;
+  box-shadow: 0 2px 5px rgba(217, 119, 87, 0.35);
+}
+.remote-header-icon-btn.active {
+  background: var(--cds-surface-2, #ffffff);
+  border-color: var(--cds-clay, #d97757);
+  color: var(--cds-clay, #d97757);
 }
 .remote-icon-btn {
   background: transparent !important;
@@ -598,24 +643,24 @@
   border: 1px solid var(--cds-border, transparent);
 }
 
-/* 分层指示（发丝导轨与缩进表达层次） */
+/* 分层指示（扁平简洁现代列表，移除丑陋发丝导轨） */
 .remote-node-children {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-left: 10px;
-  padding-left: 8px;
-  border-left: 1px solid var(--cds-border, var(--remote-line));
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
 }
 
 .remote-node-sessions {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-left: 10px;
-  padding-left: 8px;
-  border-left: 1px solid var(--cds-border, var(--remote-line));
-  padding-bottom: 4px;
+  gap: 3px;
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+  padding-bottom: 2px;
 }
 
 .remote-node-header {
@@ -623,10 +668,10 @@
   align-items: center;
   gap: 7px;
   width: 100%;
-  min-height: 36px;
-  padding: 6px 8px;
+  min-height: 32px;
+  padding: 4px 6px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent !important;
   text-align: left;
   cursor: pointer;
@@ -650,8 +695,8 @@
 .remote-workspace-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 4px;
+  margin-bottom: 8px;
 }
 
 .remote-workspace-header {
@@ -659,8 +704,8 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 6px 8px 6px 10px;
-  border-radius: var(--radius-lg, 8px);
+  padding: 4px 6px 4px 6px;
+  border-radius: var(--radius-md, 6px);
   transition: background 0.12s ease;
 }
 

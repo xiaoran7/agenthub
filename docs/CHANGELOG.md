@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+- **远程控制台 UI 现代组件升级与会话通信深度修复（`apps/web` / `services/api` / `crates/runner`）**：
+  - **已注销设备安全隔离与连接清理**：网关 API 在检测到设备被注销时立即以 RFC 6455 状态码 `1008`（`device_revoked`）主动关闭活跃 WebSocket 连接，并在 `/v3/remote/sessions` 中彻底过滤已被注销的 runner，Web 控制台全面剔除已注销设备的展示、统计计数与新建弹窗选项；
+  - **顶部操作栏重构为现代紧凑图标按钮**：移除占空间的“新建会话”与“搜索”文字大按钮，改为原生融入 `.remote-sidebar-header` 的 28px 现代微交互图标按钮，节省大量顶部空间并提升交互效率；
+  - **会话列表消除繁杂折线并强制显式 Agent 选择**：移除历史遗留的文件树虚线边框（`border-left`）与多层缩进，改为扁平现代分组卡片布局；严格过滤无会话的空白工作区占位；彻底移除“全部 Agent”标签，强制显式选择目标 Agent，并默认选中第一个可用 Agent（`claude`）；
+  - **全链路会话转录解析与双向回复修复**：
+    - `conversation.rs` 序列化转录历史消息时同时输出 `"text"` 与 `"content"` 字段，配合 `remote.ts` 双向容错提取，彻底解决历史会话加载显示“无法解析会话”的问题；
+    - `remote_host.rs` 补齐 `thread/read`、`thread/resume` 与 `turn/start` (`turn_params`) 中的 `cwd` 参数传递，并强化 Windows 路径规范化（剥离 `\\?\`、统一反斜杠、忽略 `.` 占位符引发的虚假路径不匹配），彻底根治远程会话无法恢复与发送回复失败的故障；
+    - 分发包同步更新 Windows 预编译可执行文件与 SHA-256 校验和。
+
+- **Runner 桌面端核心体验与加载机制升级（`crates/runner`）**：
+  - **用量加载与多周期切换骨架屏（Fix 1）**：在用量视图（`#view-usage`）中，切换时间范围（“今天”、“7天”、“30天”、“全部”）时，实现响应式骨架加载屏（Skeleton Loading），全面覆盖 5 项 KPI 指标卡片（请求数、Token、预估花费、缓存命中、输出速度）、趋势柱状图（`.skeleton-chart-box` 带有动态梯度 shimmers）以及模型排行列表，避免日期切换后界面数据冻结或无响应感；
+  - **跨 Provider 会话完全同步加载，杜绝残缺闪烁（Fix 2）**：`MultiProviderTransport` 引入 `ensure_initial_local_store_scan(timeout)` 并由守护进程并发预热扫描；`/api/dashboard` 新增 `sessions_loading` 状态判定，在 Claude Code / Claude Desktop / Grok / ZCode 本地会话转录扫描未全部就绪前，严格保持骨架屏加载状态，杜绝 Codex 会话先行刷出而 Claude 会话滞后追加的不一致体验；
+  - **侧边栏顶部品牌信息精简（Fix 3）**：移除侧边栏顶部（`.side-top`）冗余的 AgentHub 图标与文字标题，与原生窗口标题栏图标自然呼应，并保持折叠侧边栏操作按钮右对齐整洁排版；
+  - **左下角真实反映网关 WebSocket 实时连接状态（Fix 4）**：改造 `#headerPairBtn` 状态机与后端 `/api/summary`，从 `remote_connected` 真实状态读取，精确呈现“未绑定 Web 控制台”（灰色离线）、“已连接平台”（绿色呼吸脉冲灯，pulse-dot 动画）与“已绑定但未连接/离线”（红色警示灯），杜绝未连接却虚假显示已连接的问题；
+  - **全仓硬编码审计与消除（Fix 5）**：消除 `dashboard.html` 与 `MANIFEST_JSON` 中写死的 `?v=2.5.7` 资源查询，统一改为由 `CARGO_PKG_VERSION` / `assets_stamp()` 动态注入的 `__ASSETS_VERSION__`；消除托盘菜单硬编码版本号；消除前端固定本地 IP 绑定；
+  - **引入内存缓存与 SWR 重新验证机制（Fix 6）**：前端建立 `usageMemoryCache` 内存映射，切换回已加载的时间周期时毫秒级瞬时恢复视图无缝切换，并对超过 15 秒的数据静默发起后台 revalidation；支持 AbortController 请求取消，防止快速连点引发的数据竞态；
+  - **构建与分发打包**：基于最新改动完成 Release 编译 `cargo build --release -p agenthub-runner`（产出 `agenthub-runner.exe` 13,521,920 字节），并打包更新 Windows 分发包 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（5,759,065 字节，含 `agenthub-runner.exe`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`、`README.md`），同步更新 SHA-256 校验清单文件 `Deliverables/AgentHub/AgentHub-v2.5.3-SHA256.txt`（`a1b182645eee4d270a67bbdc97b1d94392452429c5a184a1921fd91ccbe94f0c`）。
+
 - **修复代码审查发现的 22 项缺陷（`crates/runner` / `services/api` / `apps/web` / `packages/contracts`）**：
   - **HIGH · 自定义设备名称永远到不了远程控制台**（`crates/runner/src/device_name.rs` / `main.rs` / `daemon.rs` / `remote_network.rs` / `web_server.rs`）：
     - **根因**：设备名在 `main.rs` 启动时**解析一次**便以 `String` 按值传入 `DaemonConfig` → `daemon.rs` → `run_with_local_control` → `remote_ready_payload`，进程生命周期内不再变化；而 `ready` 帧是设备名**唯一**的传输通道，网关把它落进 `remote_runners.hello`，控制台正是从那里读 `device_name`。于是改名对已运行的 Runner 永远无效。三处读写位置还各自为政：`device name --identity <p>` 写到 `--identity` 旁（Windows 包内为 `%LOCALAPPDATA%\AgentHub`）、`POST /api/device/name` 写死 `~/.agenthub`、启动读取用的是 `cli.identity`（未传 `--identity` 时为 `None`）——路径不一致，改名静默失效；

@@ -979,9 +979,7 @@ export function RemoteConsole({
     window.addEventListener("mouseup", onMouseUp);
   };
 
-  const [providerFilter, setProviderFilter] = useState<ProviderKind | "all">(
-    "all",
-  );
+  const [providerFilter, setProviderFilter] = useState<ProviderKind>("claude");
   const [selectedRunnerId, setSelectedRunnerId] = useState<string>("");
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1373,12 +1371,14 @@ export function RemoteConsole({
 
   const discovered = useMemo(() => {
     const candidates = new Map<string, DiscoveryCandidate>();
-    for (const r of snapshot.runners)
+    for (const r of snapshot.runners) {
+      if (r.revoked) continue;
       for (const candidate of r.hello?.discovery?.candidates ?? [])
         candidates.set(
           `${r.runner_id}/${candidate.provider_session_id}`,
           candidate,
         );
+    }
     return candidates;
   }, [snapshot.runners]);
 
@@ -1386,13 +1386,15 @@ export function RemoteConsole({
     () =>
       buildSessionTree({
         discovered,
-        devices: snapshot.runners.map((runner) => ({
-          runner_id: runner.runner_id,
-          online: runner.online,
-          hello: runner.hello as {
-            device_name?: unknown;
-          } | null,
-        })),
+        devices: snapshot.runners
+          .filter((runner) => !runner.revoked)
+          .map((runner) => ({
+            runner_id: runner.runner_id,
+            online: runner.online,
+            hello: runner.hello as {
+              device_name?: unknown;
+            } | null,
+          })),
         activeSessions: snapshot.sessions.map((item) => ({
           runner_id: item.runner_id,
           hub_session_id: item.binding.hub_session_id,
@@ -1405,19 +1407,21 @@ export function RemoteConsole({
           control_connected: item.binding.control_connected,
           execution_state: item.binding.execution_state,
         })),
-        candidates: snapshot.runners.flatMap((runner) =>
-          (runner.hello?.discovery?.candidates ?? []).map((candidate) => ({
-            runner_id: runner.runner_id,
-            provider_session_id: candidate.provider_session_id,
-            workspace_path: candidate.workspace_path,
-            title: candidate.title,
-            provider: candidate.provider,
-            resumable: candidate.resumable,
-            model: candidate.model,
-            total_tokens: candidate.total_tokens,
-            last_activity_at_ms: candidate.last_activity_at_ms,
-          })),
-        ),
+        candidates: snapshot.runners
+          .filter((runner) => !runner.revoked)
+          .flatMap((runner) =>
+            (runner.hello?.discovery?.candidates ?? []).map((candidate) => ({
+              runner_id: runner.runner_id,
+              provider_session_id: candidate.provider_session_id,
+              workspace_path: candidate.workspace_path,
+              title: candidate.title,
+              provider: candidate.provider,
+              resumable: candidate.resumable,
+              model: candidate.model,
+              total_tokens: candidate.total_tokens,
+              last_activity_at_ms: candidate.last_activity_at_ms,
+            })),
+          ),
         providerFilter,
       }),
     [snapshot.sessions, snapshot.runners, providerFilter, discovered],
@@ -1522,6 +1526,7 @@ export function RemoteConsole({
       seen.set(info.type, info.name);
     }
     for (const r of snapshot.runners) {
+      if (r.revoked) continue;
       for (const d of r.hello?.discovery?.candidates ?? []) {
         const info = getProviderInfo(d.provider_session_id, d.provider);
         seen.set(info.type, info.name);
@@ -1532,6 +1537,7 @@ export function RemoteConsole({
 
   const deviceList = useMemo(() => {
     return snapshot.runners
+      .filter((r) => !r.revoked)
       .map((r) => ({
         runnerId: r.runner_id,
         label: getDeviceLabel(r.runner_id, r.hello),
@@ -1565,29 +1571,6 @@ export function RemoteConsole({
   }, [filteredDeviceGroups, activeRunnerId]);
 
   const currentAgentWorkspaces = useMemo(() => {
-    if (providerFilter === "all") {
-      // "All" shows every agent of this device, so the workspaces of all of
-      // them are merged under their own id.
-      const merged = new Map<
-        string,
-        { id: string; label: string; items: TreeSessionItem[] }
-      >();
-      for (const agent of currentDeviceGroup?.workspaces ?? []) {
-        for (const ws of agent.workspaces) {
-          const existing = merged.get(ws.id);
-          if (existing === undefined) {
-            merged.set(ws.id, {
-              id: ws.id,
-              label: ws.label,
-              items: [...ws.items],
-            });
-          } else {
-            existing.items.push(...ws.items);
-          }
-        }
-      }
-      return [...merged.values()];
-    }
     const agent = currentDeviceGroup?.workspaces.find(
       (a) => a.provider === providerFilter,
     );
@@ -1600,26 +1583,14 @@ export function RemoteConsole({
       { id: string; label: string; items: TreeSessionItem[] }
     >();
     for (const ws of currentAgentWorkspaces) {
-      map.set(ws.id, { id: ws.id, label: ws.label, items: [...ws.items] });
-    }
-    if (!sessionSearchQuery.trim()) {
-      for (const wsPath of activeDevice?.workspaces ?? []) {
-        if (!map.has(wsPath)) {
-          map.set(wsPath, {
-            id: wsPath,
-            label: workspaceLabel(wsPath),
-            items: [],
-          });
-        }
+      if (ws.items.length > 0) {
+        map.set(ws.id, { id: ws.id, label: ws.label, items: [...ws.items] });
       }
     }
     return Array.from(map.values()).sort((a, b) => {
-      if (a.items.length > 0 !== b.items.length > 0) {
-        return a.items.length > 0 ? -1 : 1;
-      }
       return a.label.localeCompare(b.label, "zh-Hans-CN");
     });
-  }, [currentAgentWorkspaces, sessionSearchQuery, activeDevice]);
+  }, [currentAgentWorkspaces]);
 
   useEffect(() => {
     if (!deviceMenuOpen) return;
@@ -1778,103 +1749,105 @@ export function RemoteConsole({
           <div className="remote-brand">
             AgentHub <span>Remote</span>
           </div>
-          <button
-            type="button"
-            className="remote-icon-btn"
-            title={isMobile ? "关闭菜单" : "收起侧边栏"}
-            aria-label={isMobile ? "关闭菜单" : "收起侧边栏"}
-            onClick={
-              isMobile ? () => setMobileDrawerOpen(false) : toggleSidebar
-            }
-          >
-            {isMobile ? (
+          <div className="remote-header-actions">
+            <button
+              type="button"
+              className={`remote-header-icon-btn ${
+                searchOpen || sessionSearchQuery ? "active" : ""
+              }`}
+              title={searchOpen ? "收起搜索" : "搜索会话"}
+              aria-label="搜索会话"
+              onClick={() => setSearchOpen((prev) => !prev)}
+            >
               <svg
-                width="18"
-                height="18"
+                width="14"
+                height="14"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2"
+                aria-hidden="true"
               >
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
-            ) : (
+            </button>
+
+            <button
+              type="button"
+              className="remote-header-icon-btn primary"
+              title="新建会话"
+              aria-label="新建会话"
+              onClick={() => {
+                const available = snapshot.runners.find(
+                  (item) =>
+                    !item.revoked &&
+                    item.online &&
+                    item.hello?.workspaces.length,
+                );
+                setRunner(activeRunnerId || available?.runner_id || "");
+                const rInfo = snapshot.runners.find(
+                  (r) =>
+                    !r.revoked &&
+                    r.runner_id === (activeRunnerId || available?.runner_id),
+                );
+                setWorkspace(rInfo?.hello?.workspaces[0] ?? "");
+                setNativeId("");
+                setModel("");
+                dialog.current?.showModal();
+              }}
+            >
               <svg
-                width="18"
-                height="18"
+                width="14"
+                height="14"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2"
-              >
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <line x1="9" y1="3" x2="9" y2="21" />
-                <path d="M15 9l-3 3 3 3" />
-              </svg>
-            )}
-          </button>
-        </div>
-        <div className="remote-sidebar-top-actions">
-          <button
-            type="button"
-            className="remote-top-action-btn primary"
-            title="新建会话"
-            onClick={() => {
-              const available = snapshot.runners.find(
-                (item) => item.online && item.hello?.workspaces.length,
-              );
-              setRunner(activeRunnerId || available?.runner_id || "");
-              const rInfo = snapshot.runners.find(
-                (r) => r.runner_id === (activeRunnerId || available?.runner_id),
-              );
-              setWorkspace(rInfo?.hello?.workspaces[0] ?? "");
-              setNativeId("");
-              setModel("");
-              dialog.current?.showModal();
-            }}
-          >
-            <span className="remote-top-action-btn-icon" aria-hidden="true">
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
+                strokeWidth="2.4"
+                aria-hidden="true"
               >
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
-            </span>
-            <span>新建会话</span>
-          </button>
+            </button>
 
-          <button
-            type="button"
-            className={`remote-top-action-btn secondary ${
-              searchOpen || sessionSearchQuery ? "active" : ""
-            }`}
-            title={searchOpen ? "收起搜索" : "搜索会话"}
-            onClick={() => {
-              setSearchOpen((prev) => !prev);
-            }}
-          >
-            <svg
-              className="remote-search-icon"
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              aria-hidden="true"
+            <button
+              type="button"
+              className="remote-header-icon-btn"
+              title={isMobile ? "关闭菜单" : "收起侧边栏"}
+              aria-label={isMobile ? "关闭菜单" : "收起侧边栏"}
+              onClick={
+                isMobile ? () => setMobileDrawerOpen(false) : toggleSidebar
+              }
             >
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <span>搜索</span>
-          </button>
+              {isMobile ? (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              ) : (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="9" y1="3" x2="9" y2="21" />
+                  <path d="M15 9l-3 3 3 3" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
 
         {(searchOpen || sessionSearchQuery) && (
@@ -1918,15 +1891,6 @@ export function RemoteConsole({
           role="tablist"
           aria-label="按 Agent 过滤"
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={providerFilter === "all"}
-            className={`remote-filter-pill ${providerFilter === "all" ? "active" : ""}`}
-            onClick={() => setProviderFilter("all")}
-          >
-            全部 Agent
-          </button>
           {[...availableProviders].map(([kind, label]) => (
             <button
               type="button"
@@ -2335,10 +2299,10 @@ export function RemoteConsole({
         <div className="remote-sidebar-footer">
           <div className="remote-runner-status">
             <span
-              className={`remote-status-dot ${snapshot.runners.some((item) => item.online) ? "online" : "offline"}`}
+              className={`remote-status-dot ${snapshot.runners.some((item) => !item.revoked && item.online) ? "online" : "offline"}`}
             />
             <span>
-              {snapshot.runners.filter((item) => item.online).length} 台电脑在线
+              {snapshot.runners.filter((item) => !item.revoked && item.online).length} 台电脑在线
             </span>
           </div>
           {account?.user ? (
@@ -3473,7 +3437,7 @@ export function RemoteConsole({
             >
               <option value="">选择在线电脑</option>
               {snapshot.runners
-                .filter((item) => item.online)
+                .filter((item) => !item.revoked && item.online)
                 .map((item) => (
                   <option value={item.runner_id} key={item.runner_id}>
                     {getDeviceLabel(item.runner_id, item.hello)}
