@@ -1758,12 +1758,14 @@ export function RemoteConsole({
               onClick={() => setSearchOpen((prev) => !prev)}
             >
               <svg
-                width="14"
-                height="14"
+                width="15"
+                height="15"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
                 aria-hidden="true"
               >
                 <circle cx="11" cy="11" r="8" />
@@ -1773,7 +1775,7 @@ export function RemoteConsole({
 
             <button
               type="button"
-              className="remote-header-icon-btn primary"
+              className="remote-header-icon-btn"
               title="新建会话"
               aria-label="新建会话"
               onClick={() => {
@@ -1796,54 +1798,19 @@ export function RemoteConsole({
               }}
             >
               <svg
-                width="14"
-                height="14"
+                width="15"
+                height="15"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2.4"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
                 aria-hidden="true"
               >
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
-            </button>
-
-            <button
-              type="button"
-              className="remote-header-icon-btn"
-              title={isMobile ? "关闭菜单" : "收起侧边栏"}
-              aria-label={isMobile ? "关闭菜单" : "收起侧边栏"}
-              onClick={
-                isMobile ? () => setMobileDrawerOpen(false) : toggleSidebar
-              }
-            >
-              {isMobile ? (
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              ) : (
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                  <line x1="9" y1="3" x2="9" y2="21" />
-                  <path d="M15 9l-3 3 3 3" />
-                </svg>
-              )}
             </button>
           </div>
         </div>
