@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, OnceLock, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -21,6 +21,11 @@ use serde_json::json;
 pub struct WebServerConfig {
     pub port: u16,
     pub open_browser: bool,
+    /// The identity file the device name lives beside.
+    ///
+    /// The rename endpoint has to write the same file the Runner reads, so the
+    /// path is carried in rather than assumed to be the default one.
+    pub identity_path: PathBuf,
 }
 
 impl Default for WebServerConfig {
@@ -28,6 +33,7 @@ impl Default for WebServerConfig {
         Self {
             port: 4200,
             open_browser: true,
+            identity_path: crate::device_name::default_identity_path(),
         }
     }
 }
@@ -79,6 +85,7 @@ pub fn serve(
 
     let server_stopped = stopped.clone();
     let server_handler = handler.clone();
+    let identity_path = config.identity_path.clone();
 
     thread::Builder::new()
         .name("agenthub-web-server".into())
@@ -88,8 +95,9 @@ pub fn serve(
                     Ok((stream, _)) => {
                         let h = server_handler.clone();
                         let s = server_stopped.clone();
+                        let id = identity_path.clone();
                         thread::spawn(move || {
-                            let _ = handle_connection(stream, h, s, actual_port);
+                            let _ = handle_connection(stream, h, s, actual_port, id);
                         });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -110,6 +118,7 @@ fn handle_connection(
     handler: Arc<dyn DaemonRequestHandler>,
     stopped: Arc<AtomicBool>,
     port: u16,
+    identity_path: PathBuf,
 ) -> anyhow::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -353,6 +362,7 @@ fn handle_connection(
             handler,
             stopped,
             port,
+            identity_path,
         };
         req.route()?;
         return Ok(());
@@ -411,6 +421,8 @@ struct ApiRequest<'a> {
     handler: Arc<dyn DaemonRequestHandler>,
     stopped: Arc<AtomicBool>,
     port: u16,
+    /// The identity file the device name lives beside.
+    identity_path: PathBuf,
 }
 
 impl ApiRequest<'_> {
@@ -424,11 +436,12 @@ impl ApiRequest<'_> {
             handler,
             stopped,
             port,
+            identity_path,
         } = self;
         let _ = body;
         match (method, path) {
             ("GET", "/api/dashboard") => {
-                let data = build_dashboard_summary(&handler, port);
+                let data = build_dashboard_summary(&handler, port, &identity_path);
                 send_json_response(stream, 200, &data)?;
             }
             // the usage page's per-request ledger: one record per model call,
@@ -759,15 +772,9 @@ impl ApiRequest<'_> {
                 }
                 match serde_json::from_slice::<NameReq>(body) {
                     Ok(req) => {
-                        let home = std::env::var_os("USERPROFILE")
-                            .or_else(|| std::env::var_os("HOME"))
-                            .map(PathBuf::from);
-                        let Some(home) = home else {
-                            let err_json = json!({ "error": "home_dir_unavailable" });
-                            send_json_response(stream, 500, &err_json)?;
-                            return Ok(());
-                        };
-                        let identity_path = home.join(".agenthub").join("identity.json");
+                        // Written beside the identity the Runner actually uses,
+                        // so the running process picks the name up on its next
+                        // publish instead of reading a different file.
                         match crate::device_name::write_configured_name(
                             &identity_path,
                             req.name.trim(),
@@ -831,6 +838,7 @@ fn dashboard_summary_cache() -> &'static RwLock<Option<(Instant, serde_json::Val
 fn build_dashboard_summary(
     handler: &Arc<dyn DaemonRequestHandler>,
     port: u16,
+    identity_path: &Path,
 ) -> serde_json::Value {
     if let Ok(guard) = dashboard_summary_cache().read() {
         if let Some((cached_at, ref val)) = *guard {
@@ -1372,7 +1380,7 @@ fn build_dashboard_summary(
         },
         "sessions": discovered_sessions,
         "usage": usage_summary,
-        "device": get_device_info()
+        "device": get_device_info(identity_path)
     });
 
     if total_sessions == 0 {
@@ -1425,7 +1433,7 @@ fn device_info_cache() -> &'static RwLock<Option<(Instant, serde_json::Value)>> 
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
-fn get_device_info() -> serde_json::Value {
+fn get_device_info(identity_path: &Path) -> serde_json::Value {
     if let Ok(guard) = device_info_cache().read() {
         if let Some((cached_at, ref val)) = *guard {
             if cached_at.elapsed() < Duration::from_secs(5) {
@@ -1434,10 +1442,7 @@ fn get_device_info() -> serde_json::Value {
         }
     }
 
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from);
-    let Some(home) = home else {
+    let Some(home) = crate::device_name::home_dir() else {
         return json!({
             "device_id": "unknown",
             "public_key": "",
@@ -1447,17 +1452,21 @@ fn get_device_info() -> serde_json::Value {
         });
     };
 
-    let agenthub_dir = home.join(".agenthub");
-    let identity_path = agenthub_dir.join("identity.json");
+    // The binding lives beside the identity, wherever the Runner was told to
+    // keep it.
+    let agenthub_dir = identity_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".agenthub"));
     let binding_path = agenthub_dir.join("binding.json");
 
     let mut device_id = "unknown".to_string();
     let mut public_key = "".to_string();
 
-    if let Ok(identity) = crate::device::DeviceIdentity::load(&identity_path) {
+    if let Ok(identity) = crate::device::DeviceIdentity::load(identity_path) {
         device_id = identity.device_id().to_string();
         public_key = identity.public_key_hex();
-    } else if let Ok(content) = std::fs::read_to_string(&identity_path) {
+    } else if let Ok(content) = std::fs::read_to_string(identity_path) {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(id) = val.get("device_id").and_then(|v| v.as_str()) {
                 device_id = id.to_string();
@@ -1496,7 +1505,7 @@ fn get_device_info() -> serde_json::Value {
         "paired": paired,
         "gateway_url": gateway_url,
         "paired_at": paired_at,
-        "device_name": crate::device_name::resolve(None, Some(&identity_path)),
+        "device_name": crate::device_name::resolve(None, Some(identity_path)),
     });
 
     if let Ok(mut guard) = device_info_cache().write() {
@@ -2123,6 +2132,7 @@ mod tests {
         let config = WebServerConfig {
             port: 14200,
             open_browser: false,
+            identity_path: crate::device_name::default_identity_path(),
         };
 
         let bound_port = serve(config, handler, stopped.clone()).expect("server should bind");
@@ -2169,6 +2179,7 @@ mod tests {
         let config = WebServerConfig {
             port: 14300,
             open_browser: false,
+            identity_path: crate::device_name::default_identity_path(),
         };
         let port = serve(config, handler, stopped.clone()).expect("server should bind");
         let url = format!("http://127.0.0.1:{}/api/capabilities/sync", port);

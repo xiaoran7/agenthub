@@ -5,20 +5,21 @@
  * Gateway receives a square thumbnail rather than the multi-megabyte original
  * a phone camera would produce. The Gateway still enforces the size cap: this
  * is a courtesy, not the authority.
+ *
+ * The cap and the media-type allowlist come from the shared contract, so the
+ * browser and the Gateway cannot drift apart on what is acceptable.
  */
+
+import {
+  MAX_AVATAR_BYTES,
+  avatarMediaTypes,
+  utf8ByteLength,
+} from "@agent-pulse/contracts/avatar-rules";
 
 /** The edge length the avatar is scaled to. */
 export const AVATAR_SIZE = 256;
 
-/** The Gateway's cap on the encoded data URL. */
-export const MAX_AVATAR_BYTES = 64 * 1024;
-
-const ALLOWED_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-]);
+const ALLOWED_TYPES = new Set<string>(avatarMediaTypes);
 
 export class AvatarError extends Error {
   constructor(message: string) {
@@ -64,9 +65,17 @@ export async function fileToAvatarDataUrl(file: File): Promise<string> {
   // against white — rather than rejecting an image the user could reasonably
   // expect to work.
   const dataUrl =
-    png.length <= MAX_AVATAR_BYTES ? png : canvas.toDataURL("image/jpeg", 0.88);
+    utf8ByteLength(png) <= MAX_AVATAR_BYTES
+      ? png
+      : canvas.toDataURL("image/jpeg", 0.88);
   if (dataUrl.length === 0) {
     throw new AvatarError("当前浏览器无法处理这张图片");
+  }
+  // The JPEG fallback is not guaranteed to be smaller than the PNG, so it is
+  // checked as well; otherwise the Gateway would reject it after the browser
+  // had already accepted the picture.
+  if (utf8ByteLength(dataUrl) > MAX_AVATAR_BYTES) {
+    throw new AvatarError("这张图片太大了，请换一张小一点的");
   }
   return dataUrl;
 }

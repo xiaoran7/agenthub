@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+- **修复代码审查发现的 22 项缺陷（`crates/runner` / `services/api` / `apps/web` / `packages/contracts`）**：
+  - **HIGH · 自定义设备名称永远到不了远程控制台**（`crates/runner/src/device_name.rs` / `main.rs` / `daemon.rs` / `remote_network.rs` / `web_server.rs`）：
+    - **根因**：设备名在 `main.rs` 启动时**解析一次**便以 `String` 按值传入 `DaemonConfig` → `daemon.rs` → `run_with_local_control` → `remote_ready_payload`，进程生命周期内不再变化；而 `ready` 帧是设备名**唯一**的传输通道，网关把它落进 `remote_runners.hello`，控制台正是从那里读 `device_name`。于是改名对已运行的 Runner 永远无效。三处读写位置还各自为政：`device name --identity <p>` 写到 `--identity` 旁（Windows 包内为 `%LOCALAPPDATA%\AgentHub`）、`POST /api/device/name` 写死 `~/.agenthub`、启动读取用的是 `cli.identity`（未传 `--identity` 时为 `None`）——路径不一致，改名静默失效；
+    - **修复**：新增 `DeviceNameSource`，把"名字从哪来"与"名字是什么"分开；`resolve()` 改为**磁盘上已存的名字优先**于命令行名字（改名端点写的就是它，改名必须对运行中的进程生效）；三处路径统一到 Runner 真实使用的 identity 路径（`web_server.rs` 的 `WebServerConfig` 携带 `identity_path`，`get_device_info()` 改从该路径读 binding）；`remote_network.rs` 每次发布 `ready` 帧前**重新解析**名字，并按 5 秒独立节流比对，改名后至多 5 秒即被重新发布（原先只能等 60 秒的发现刷新窗口）；
+  - **HIGH · `providerFilter` 默认值是 `"codex"`，导致侧边栏对其余 provider 全部为空**（`apps/web/src/components/RemoteConsole.tsx`）：
+    - **根因**：`session-tree.ts` 的 `buildSessionTree` 会硬丢弃 provider 与过滤条件不符的条目。默认值 `"codex"` 意味着 Claude / Antigravity / ZCode / Grok 的会话一条都进不了树；这是 `d1b2c48` 引入的回归（提交前为 `"all"` 且带"全部 Agent"胶囊），而该提交同时删掉了"全部 Agent"胶囊，用户再也无法切回"显示全部"——这正是"runtime 有 session、网页端没有"的直接成因；
+    - **修复**：默认值恢复为 `"all"`，补回"全部 Agent"胶囊并给每个胶囊加 `role="tab"` / `aria-selected`；`currentAgentWorkspaces` 在 `"all"` 下合并各 agent 的工作区；
+  - **MEDIUM · `/remote` 页面完全不带身份**（`apps/web/app/remote/page.tsx`）：页面不传 `account` prop，`account?.user.user_id` 恒为 `undefined`，开发鉴权部署下 `DevelopmentIdentityAuthenticator` 直接抛 401。改为先加载账户再渲染 `RemoteConsole`；`requestWithIdentity` 同步回落到 `config?.userId`；
+  - **MEDIUM · 设置页设备列表读的是另一个 owner**（`apps/web/src/lib/api.ts` / `notifications.ts` / `SettingsPage.tsx`）：`fetchDevices` 等函数发的是写死的 `config.userId`（默认 `"local-user"`），而控制台发的是登录账户的 `user_id`——同页两个身份口径，导致设备列表永远为空或读到别人的设备。现由 API 层显式接收 `GatewayIdentity`，设置页用 `account?.user.user_id ?? config.userId`；
+  - **MEDIUM · `--cds-green` / `--cds-blue` 从未定义**（`apps/web/src/components/cds-tokens.css`）：`remote.css` 的三处状态色因此在深色主题下退回浅色硬编码值。已在 `cds-tokens.css` 中定义为 `var(--remote-green, …)` / `var(--remote-blue, …)` 的别名，随浅色/深色主题自动切换（实测深色下解析为 `#4ade80` / `#60a5fa`）；
+  - **MEDIUM · 跨 owner 回落**（`services/api/src/remote-routes.ts`）：`resolveOwner()` 在账户已配置时，Cookie 失效后仍会回落到部署级 owner，导致已登出的控制台**静默读到另一个 scope 的设备**而不是提示重新登录。现检测到 Cookie 但解析不出身份时直接 401；回归测试 "an expired session cookie is not answered from the deployment owner" 覆盖该路径（去掉修复即失败）；
+  - **MEDIUM · Ping/Pong 分支多余且形状错误**（`crates/runner/src/remote_network.rs`）：tungstenite 0.30.0 收到 Ping 会自动排队 Pong，自发 Pong 会**替换**掉那个自动应答；且网关从不发协议级 Ping（用的是 JSON `heartbeat` + `lastSeen` 看门狗）。改为不处理，由 tungstenite 自动应答；
+  - **MEDIUM · 重连退避被从 5 秒砍到 1 秒**（同文件）：`0..10` 恢复为 `0..50`；
+  - **MEDIUM · 头像大小规则其实没有共享**（`packages/contracts/src/account.ts` / `apps/web/src/lib/avatar.ts`）：`MAX_AVATAR_BYTES` 在两处各写一份，而 `exports` 只暴露 `"."` 与 `"./remote"`，浏览器**无法** import 契约模块；JPEG 回落分支也从不做体积校验。现抽出无 import 的叶子模块 `packages/contracts/src/avatar-rules.ts`（`MAX_AVATAR_BYTES` / `avatarMediaTypes` / `utf8ByteLength`），`account.ts` 与浏览器共用同一份，JPEG 回落同样按字节上限校验；
+  - **MEDIUM · 浏览器端契约 import 链断裂**（`packages/contracts/package.json`）：Turbopack 把 `@agent-pulse/contracts` 当外部包解析，契约包内部 `.js` 后缀的相对 import 无法映射回 TypeScript 源文件，导致 `/remote` 页面 500（`Module not found: Can't resolve './expect.js'`）。叶子模块方案同时解决了这一条；
+  - **LOW · 无障碍缺口**（`apps/web/src/components/RemoteConsole.tsx` / `SettingsPage.tsx`）：移动端抽屉加了 `inert`（`aria-hidden` 不会把控件移出 Tab 序列）；设备下拉补上 `role="menu"` / `role="menuitemradio"` / `aria-checked` / `aria-haspopup`，并新增 Escape 关闭并**把焦点还给触发按钮**的处理；头像文件输入框由 `display:none` 改为 `.sr-only` + `<label htmlFor>`，保留原生焦点与标签关联；
+  - **LOW · `avatarPreview` 不随 `account` 重新同步**（`SettingsPage.tsx`）：原为只求值一次的 lazy initializer，切换账号后屏幕上仍是上一个用户的头像 data URL 且可再次上传；改为随 `account.user.avatar_data_url` 同步；
+  - **LOW · 死状态与树形排版**（`RemoteConsole.tsx` / `remote.css` / `session-tree.ts`）：删除从未被读取的 `collapsedDevices` / `collapsedAgents`；恢复树节点被压掉的缩进与导轨（10px + 8px + 1px 竖线）与工作区分组间距；`shortId` 正则补上遗漏的 `antigravity_` 前缀（此前每个未命名 Antigravity 会话都显示同一个 `"antigrav"`）；设置页设备列表改为显示网关下发的 `display_name`（`RemoteContentStore.deviceNames()` + `GET /v1/devices` 附加该字段）而非截断的设备 ID；
+  - **LOW · 畸形帧不再静默丢弃**（`remote_network.rs`）：`events.send` 失败即 break，恢复"消费者已死就停"的信号。
+
 - **修复 Web 控制台看不到本机 Runner 已发布的会话（`services/api/src/remote-routes.ts` / `apps/web/src/lib/remote.ts` / `apps/web/src/components/RemoteConsole.tsx`）**：
   - **根因分析**：
     1. **控制台把身份写死成开发账号**：Web 端 `/v3/remote/*` 请求统一携带硬编码的 `x-user-id: local-user`，网关开启开发鉴权（`AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true`）时按该头解析 owner，解析出的 owner 与设备实际绑定的账号（`workspace_owner_id`）不一致，`content.runners(owner)` / `content.sessions(owner)` 查不到任何记录——于是 Runner 明明在发布 `ready` 帧，控制台侧边栏却是空的；

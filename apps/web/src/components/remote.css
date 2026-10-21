@@ -598,23 +598,23 @@
   border: 1px solid var(--cds-border, transparent);
 }
 
-/* 分层指示（无竖线，以留白与状态圆点表达层次） */
+/* 分层指示（发丝导轨与缩进表达层次） */
 .remote-node-children {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-left: 0;
-  padding-left: 0;
-  border-left: none;
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--cds-border, var(--remote-line));
 }
 
 .remote-node-sessions {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  margin-left: 0;
-  padding-left: 4px;
-  border-left: none;
+  gap: 4px;
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--cds-border, var(--remote-line));
   padding-bottom: 4px;
 }
 
@@ -650,7 +650,7 @@
 .remote-workspace-group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
   margin-bottom: 6px;
 }
 
@@ -659,7 +659,7 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 5px 6px 5px 8px;
+  padding: 6px 8px 6px 10px;
   border-radius: var(--radius-lg, 8px);
   transition: background 0.12s ease;
 }

@@ -8,7 +8,10 @@ import test from "node:test";
 import { WebSocket } from "ws";
 import { RemoteContentStore } from "../src/remote-store.js";
 import { createGatewayApp } from "../src/app.js";
-import { DevelopmentIdentityAuthenticator } from "../src/auth.js";
+import {
+  BearerTokenAuthenticator,
+  DevelopmentIdentityAuthenticator,
+} from "../src/auth.js";
 import { InMemoryAccountStore, SessionAuthenticator } from "../src/accounts.js";
 import { InMemoryGatewayStore } from "../src/store.js";
 import type { RemoteCommand } from "@agent-pulse/contracts";
@@ -995,6 +998,83 @@ test("the remote API resolves a session cookie to its owner and ignores the deve
     } finally {
       ws.terminate();
     }
+
+    // A signed-out console must be asked to sign in again, not silently
+    // answered from the deployment owner's scope.
+    const loggedOut = await app.inject({
+      method: "POST",
+      url: "/v1/auth/logout",
+      headers: { cookie },
+    });
+    assert.equal(loggedOut.statusCode, 204);
+    const afterLogout = await app.inject({
+      method: "GET",
+      url: "/v3/remote/sessions",
+      headers: { cookie },
+    });
+    assert.equal(afterLogout.statusCode, 401);
+  } finally {
+    await app.close();
+  }
+});
+
+test("an expired session cookie is not answered from the deployment owner", async () => {
+  const accounts = new InMemoryAccountStore();
+  const devices = new InMemoryGatewayStore();
+  const content = new RemoteContentStore(":memory:");
+  // The legacy self-host profile: a deployment-wide bearer token plus
+  // accounts. The web proxy forwards both the cookie and the token, so a
+  // signed-out browser still authenticates at the Gateway — the cookie must
+  // still decide the scope, or the console shows the wrong owner's devices.
+  const accessToken = "t".repeat(48);
+  const app = createGatewayApp({
+    store: devices,
+    accounts,
+    authenticator: new BearerTokenAuthenticator(
+      "deployment-owner",
+      accessToken,
+    ),
+    remoteContent: content,
+  });
+  try {
+    const registered = await app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      payload: {
+        email: "owner@example.com",
+        password: "correct horse battery staple",
+        display_name: "Owner",
+      },
+    });
+    assert.equal(registered.statusCode, 201);
+    const cookie = String(registered.headers["set-cookie"]).split(";", 1)[0]!;
+    const userId = registered.json().user.user_id as string;
+    await devices.registerDevice(userId, runner, "a".repeat(64));
+
+    const bearer = { authorization: `Bearer ${accessToken}` };
+    // Without a cookie the deployment owner is the only identity there is.
+    const withoutCookie = await app.inject({
+      method: "GET",
+      url: "/v3/remote/sessions",
+      headers: bearer,
+    });
+    assert.equal(withoutCookie.statusCode, 200);
+    assert.equal(withoutCookie.json().runners.length, 0);
+
+    // A cookie that no longer resolves must not silently re-scope the request
+    // to the deployment owner.
+    const loggedOut = await app.inject({
+      method: "POST",
+      url: "/v1/auth/logout",
+      headers: { cookie },
+    });
+    assert.equal(loggedOut.statusCode, 204);
+    const withStaleCookie = await app.inject({
+      method: "GET",
+      url: "/v3/remote/sessions",
+      headers: { cookie, ...bearer },
+    });
+    assert.equal(withStaleCookie.statusCode, 401);
   } finally {
     await app.close();
   }

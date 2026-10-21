@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -15,6 +16,7 @@ import {
   fetchDevices,
   revokeDevice,
   type DeviceBinding,
+  type GatewayIdentity,
 } from "../lib/api";
 import type { PanelConfig } from "../lib/config";
 import { normalizeGatewayBase, normalizeUserId } from "../lib/config";
@@ -516,6 +518,13 @@ export function SettingsPage({
   );
   const [gatewayBase, setGatewayBase] = useState(config.gatewayBase);
   const [userId, setUserId] = useState(config.userId);
+  // The signed-in account is the real identity; the panel config's id is only
+  // the fallback for a Gateway running without accounts. Reading another
+  // owner's devices is impossible when the request carries the account.
+  const identity = useMemo<GatewayIdentity>(
+    () => ({ userId: account?.user.user_id ?? config.userId }),
+    [account?.user.user_id, config.userId],
+  );
   const [error, setError] = useState<string | undefined>(undefined);
   const [devices, setDevices] = useState<DeviceRecord[] | undefined>(undefined);
   const { state: installState, install: onInstall } = usePwaInstall();
@@ -553,6 +562,12 @@ export function SettingsPage({
   const [avatarPreview, setAvatarPreview] = useState<string | undefined>(
     account?.user.avatar_data_url,
   );
+  // The preview is a local copy so an upload can show the new picture right
+  // away, but it has to follow the account when that changes — otherwise
+  // signing in as somebody else would still show the previous user's picture.
+  useEffect(() => {
+    setAvatarPreview(account?.user.avatar_data_url);
+  }, [account?.user.avatar_data_url]);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const sections = SETTINGS_SECTIONS.filter(
@@ -570,7 +585,7 @@ export function SettingsPage({
 
   useEffect(() => {
     let cancelled = false;
-    void fetchDevices(config)
+    void fetchDevices(config, identity)
       .then((next) => {
         if (!cancelled) setDevices(next);
       })
@@ -580,7 +595,7 @@ export function SettingsPage({
     return () => {
       cancelled = true;
     };
-  }, [config, activeSection]);
+  }, [config, identity, activeSection]);
 
   const knownDeviceIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -594,7 +609,7 @@ export function SettingsPage({
   useEffect(() => {
     if (!binding) return;
     const interval = setInterval(() => {
-      void fetchDevices(config)
+      void fetchDevices(config, identity)
         .then((next) => {
           setDevices(next);
           const hasNew = next.some(
@@ -607,11 +622,11 @@ export function SettingsPage({
         .catch(() => {});
     }, 2000);
     return () => clearInterval(interval);
-  }, [binding, config]);
+  }, [binding, config, identity]);
 
   useEffect(() => {
     let cancelled = false;
-    void readNotificationState(config)
+    void readNotificationState(config, identity)
       .catch((): NotificationState => "unavailable")
       .then((state) => {
         if (!cancelled) {
@@ -621,7 +636,7 @@ export function SettingsPage({
     return () => {
       cancelled = true;
     };
-  }, [config]);
+  }, [config, identity]);
 
   useEffect(() => {
     if (account === undefined) return;
@@ -820,8 +835,8 @@ export function SettingsPage({
     try {
       setNotifications(
         notifications === "on"
-          ? await disableNotifications(config)
-          : await enableNotifications(config),
+          ? await disableNotifications(config, identity)
+          : await enableNotifications(config, identity),
       );
     } catch (cause) {
       setNotificationError(
@@ -862,7 +877,7 @@ export function SettingsPage({
     setDeviceActionError(undefined);
     setBindingCopied(false);
     try {
-      setBinding(await createDeviceBinding(config));
+      setBinding(await createDeviceBinding(config, identity));
     } catch (cause) {
       setDeviceActionError(describeApiError(cause));
     } finally {
@@ -895,8 +910,8 @@ export function SettingsPage({
     setRevokingDevice(device.device_id);
     setDeviceActionError(undefined);
     try {
-      await revokeDevice(config, device.device_id);
-      setDevices(await fetchDevices(config));
+      await revokeDevice(config, identity, device.device_id);
+      setDevices(await fetchDevices(config, identity));
     } catch (cause) {
       setDeviceActionError(describeApiError(cause));
     } finally {
@@ -1142,18 +1157,18 @@ export function SettingsPage({
                   <input
                     ref={avatarInputRef}
                     type="file"
+                    id="accountAvatarInput"
                     accept="image/png,image/jpeg,image/webp,image/gif"
-                    className="account-avatar-input"
+                    className="sr-only"
                     onChange={(event) => void pickAvatar(event)}
                   />
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={accountAction === "avatar"}
-                    onClick={() => avatarInputRef.current?.click()}
+                  <label
+                    className="secondary account-avatar-input-label"
+                    htmlFor="accountAvatarInput"
+                    aria-disabled={accountAction === "avatar"}
                   >
                     {accountAction === "avatar" ? "上传中…" : "上传图片"}
-                  </button>
+                  </label>
                   {avatarPreview !== undefined && (
                     <button
                       type="button"
@@ -1494,7 +1509,8 @@ export function SettingsPage({
                         />
                         <span>
                           <span className="mono" title={device.device_id}>
-                            {deviceShortId(device.device_id)}
+                            {device.display_name ??
+                              deviceShortId(device.device_id)}
                           </span>
                           <small>
                             {device.revoked

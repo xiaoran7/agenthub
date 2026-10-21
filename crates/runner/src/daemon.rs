@@ -27,7 +27,9 @@ pub struct DaemonConfig {
     pub web_port: Option<u16>,
     pub open_browser: bool,
     /// Human-readable name for this computer, shown in the console.
-    pub device_name: String,
+    pub device_name: crate::device_name::DeviceNameSource,
+    /// The identity file this Runner was started with.
+    pub identity_path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -159,6 +161,7 @@ pub fn run(config: DaemonConfig) -> Result<()> {
         let web_cfg = crate::web_server::WebServerConfig {
             port: config.web_port.unwrap_or(4200),
             open_browser: config.open_browser,
+            identity_path: config.identity_path.clone(),
         };
         let _ = crate::web_server::serve(web_cfg, ipc_handler.clone(), ipc_stopped.clone());
     }

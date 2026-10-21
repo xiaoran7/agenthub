@@ -3,7 +3,11 @@ import { parseRemoteCommand } from "@agent-pulse/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { AuthenticationError, type OwnerAuthenticator } from "./auth.js";
-import { currentSessionIdentity, type AccountStore } from "./accounts.js";
+import {
+  currentSessionDigest,
+  currentSessionIdentity,
+  type AccountStore,
+} from "./accounts.js";
 import type { GatewayStore } from "./store.js";
 import { RemoteContentStore, RemoteStoreError } from "./remote-store.js";
 
@@ -42,6 +46,12 @@ export function registerRemoteRoutes(
    * routes: the workspace owner is the scope every device, session and
    * command belongs to. The development `x-user-id` header stays a fallback
    * for a Gateway running without accounts.
+   *
+   * A cookie that no longer resolves is a signed-out console, not a
+   * credential-free one: falling through to the deployment owner would answer
+   * the request from a different scope than the one the browser is signed in
+   * to, so an expired session would quietly show another scope's devices
+   * instead of asking the user to sign in again.
    */
   const resolveOwner = async (request: FastifyRequest): Promise<string> => {
     if (options.accounts !== undefined) {
@@ -51,6 +61,9 @@ export function registerRemoteRoutes(
         now(),
       );
       if (identity !== undefined) return identity.workspace_owner_id;
+      if (currentSessionDigest(request) !== undefined) {
+        throw new AuthenticationError();
+      }
     }
     return auth.authenticate(request);
   };

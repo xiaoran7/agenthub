@@ -44,6 +44,14 @@ const PROVIDER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 /// invisible in the web console for the life of the process.
 const DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How often the Runner checks whether the device label changed.
+///
+/// The label travels in the same `ready` frame as the sessions, so a rename
+/// is only published on a republish. Waiting for the full discovery interval
+/// would leave the console showing the old name for up to a minute after the
+/// user renamed this computer.
+const DEVICE_NAME_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
 fn send_local_command(
     sender: &SyncSender<LocalHostCommand>,
     mut command: LocalHostCommand,
@@ -354,7 +362,7 @@ pub fn run_with_control(
         Some(server),
         control,
         None,
-        &crate::device_name::resolve(None, None),
+        &crate::device_name::DeviceNameSource::default(),
     )
 }
 
@@ -383,7 +391,7 @@ fn refresh_discovery_and_publish<T: NativeTransport>(
     cached_models: &Option<Value>,
     cached_discovery: &mut Option<Value>,
     published_discovery: &mut Option<Value>,
-    device_name: &str,
+    device_name: &crate::device_name::DeviceNameSource,
 ) -> Result<()> {
     if let Ok(discovery) = durable.host.discover() {
         let discovery = sanitize_remote_discovery(Some(discovery));
@@ -409,7 +417,7 @@ fn remote_ready_payload<T: NativeTransport>(
     durable: &DurableHost<T>,
     models: Option<&Value>,
     discovery: Option<&Value>,
-    device_name: &str,
+    device_name: &crate::device_name::DeviceNameSource,
 ) -> Value {
     let mut workspaces = durable
         .host
@@ -444,7 +452,7 @@ fn remote_ready_payload<T: NativeTransport>(
         "type": "ready",
         "provider": "codex_app_server",
         "host_generation": durable.host.generation(),
-        "device_name": device_name,
+        "device_name": device_name.resolve(),
         "workspaces": workspaces,
         "sessions": sessions,
         "models": models.cloned(),
@@ -464,7 +472,7 @@ pub fn run_with_local_control(
     server: Option<String>,
     control: Arc<RemoteControl>,
     local_channel: Option<LocalHostChannel>,
-    device_name: &str,
+    device_name: &crate::device_name::DeviceNameSource,
 ) -> Result<()> {
     let _cleanup = StopOnExit(control.clone());
     if control.stopped.load(Ordering::Relaxed) {
@@ -501,7 +509,11 @@ pub fn run_with_local_control(
     // The last discovery actually published to the Gateway. A refresh that
     // finds the same sessions must not enqueue another full snapshot.
     let mut published_discovery = cached_discovery.clone();
+    // The label last published in the `ready` frame, so a rename is detected
+    // even when the session list is unchanged.
+    let mut published_device_name = device_name.resolve();
     let mut last_discovery_refresh = Instant::now();
+    let mut last_device_name_refresh = Instant::now();
     if url.is_some() {
         let ready_payload = remote_ready_payload(
             &durable,
@@ -763,6 +775,26 @@ pub fn run_with_local_control(
                     );
                     durable.journal.enqueue_remote(&ready_payload)?;
                 }
+            }
+        }
+        // The label travels in the same `ready` frame as the sessions, so a
+        // rename is only published on a republish. It is checked on its own
+        // shorter interval, so the console does not keep showing the old name
+        // for a minute after this computer was renamed.
+        if current_server.is_some()
+            && last_device_name_refresh.elapsed() >= DEVICE_NAME_REFRESH_INTERVAL
+        {
+            last_device_name_refresh = Instant::now();
+            let current_name = device_name.resolve();
+            if current_name != published_device_name {
+                published_device_name = current_name;
+                let ready_payload = remote_ready_payload(
+                    &durable,
+                    cached_models.as_ref(),
+                    cached_discovery.as_ref(),
+                    device_name,
+                );
+                durable.journal.enqueue_remote(&ready_payload)?;
             }
         }
         if let Some(epoch) = active {
@@ -1102,13 +1134,16 @@ fn network_loop(
                 match socket.read() {
                     Ok(Message::Text(text)) => {
                         if let Ok(frame) = serde_json::from_str(text.as_str()) {
-                            let _ = events.send(NetworkEvent::Frame(epoch, frame));
+                            if events.send(NetworkEvent::Frame(epoch, frame)).is_err() {
+                                // The consumer is gone, so there is nothing left
+                                // to deliver frames to.
+                                break;
+                            }
                         }
                     }
-                    Ok(Message::Ping(payload)) => {
-                        let _ = socket.send(Message::Pong(payload));
-                    }
-                    Ok(Message::Pong(_)) => {}
+                    // tungstenite queues the Pong reply itself; answering here
+                    // would replace that reply with a second one.
+                    Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
                     Ok(Message::Close(_)) => break,
                     Err(tungstenite::Error::Io(error))
                         if matches!(
@@ -1140,7 +1175,7 @@ fn network_loop(
         if result.is_err() {
             eprintln!("{{\"code\":\"remote_transport_retry\"}}");
         }
-        for _ in 0..10 {
+        for _ in 0..50 {
             if control.stopped.load(Ordering::Relaxed)
                 || remote_generation.load(Ordering::SeqCst) != expected_generation
             {
@@ -1475,7 +1510,10 @@ mod tests {
             }]
         })));
 
-        let payload = remote_ready_payload(&durable, Some(&models), discovery.as_ref(), "书房主机");
+        let device_name =
+            crate::device_name::DeviceNameSource::new(Some("书房主机".to_owned()), None);
+        let payload =
+            remote_ready_payload(&durable, Some(&models), discovery.as_ref(), &device_name);
         let physical_path = workspace.to_string_lossy();
 
         assert_eq!(payload["type"], "ready");

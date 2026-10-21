@@ -78,6 +78,10 @@
   --cds-segmented-track: rgba(0, 0, 0, 0.06);
   --cds-segmented-thumb: #ffffff;
 
+  /* 语义状态色：别名到 globals.css 的 --remote-* ，随浅色/深色主题自动切换 */
+  --cds-green: var(--remote-green, #16a34a);
+  --cds-blue: var(--remote-blue, #2563eb);
+
   /* 8. 圆角阶梯 (Radius Hierarchy) */
   --radius-xs: 2px;
   --radius-sm: 4px;

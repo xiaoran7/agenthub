@@ -1251,7 +1251,18 @@ export function createGatewayApp(
 
   app.get("/v1/devices", async (request, reply) => {
     const ownerId = await authenticator.authenticate(request);
-    return reply.send({ devices: await store.listDevices(ownerId) });
+    const devices = await store.listDevices(ownerId);
+    // A device id is a key, not a label. The name the Runner advertises is
+    // what the settings list shows, so the id never has to.
+    const names = options.remoteContent?.deviceNames(ownerId);
+    return reply.send({
+      devices: names
+        ? devices.map((device) => ({
+            ...device,
+            display_name: names.get(device.device_id),
+          }))
+        : devices,
+    });
   });
 
   app.get("/v1/device-auth", async (request, reply) => {

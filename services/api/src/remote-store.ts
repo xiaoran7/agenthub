@@ -135,6 +135,22 @@ export class RemoteContentStore {
           : null,
       }));
   }
+  /**
+   * The label each Runner advertises, keyed by device id.
+   *
+   * The name arrives in the `ready` frame, so it is only known for a Runner
+   * that has published one.
+   */
+  deviceNames(owner: string): Map<string, string> {
+    const names = new Map<string, string>();
+    for (const runner of this.runners(owner)) {
+      const name = runner.hello?.device_name;
+      if (typeof name === "string" && name.trim() !== "") {
+        names.set(runner.runner_id, name.trim());
+      }
+    }
+    return names;
+  }
   sessions(owner: string): RemoteSession[] {
     return this.db
       .prepare(

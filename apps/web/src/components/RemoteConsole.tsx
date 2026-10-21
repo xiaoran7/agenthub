@@ -824,10 +824,12 @@ export function RemoteConsole({
   // The console's requests carry the signed-in account's identity. Without
   // it the Gateway falls back to the development header, which resolves a
   // different owner than the one the devices are bound to — the console then
-  // shows an empty list even though the Runner is publishing sessions.
+  // shows an empty list even though the Runner is publishing sessions. The
+  // panel config's id is only the fallback for a Gateway without accounts.
   const requestWithIdentity = useMemo<RemoteRequest>(
-    () => (path, body) => request(path, body, 12000, account?.user.user_id),
-    [request, account?.user.user_id],
+    () => (path, body) =>
+      request(path, body, 12000, account?.user.user_id ?? config?.userId),
+    [request, account?.user.user_id, config?.userId],
   );
 
   // The service worker reports back when it actually presented a waiting
@@ -977,11 +979,14 @@ export function RemoteConsole({
     window.addEventListener("mouseup", onMouseUp);
   };
 
-  const [providerFilter, setProviderFilter] = useState<ProviderKind>("codex");
+  const [providerFilter, setProviderFilter] = useState<ProviderKind | "all">(
+    "all",
+  );
   const [selectedRunnerId, setSelectedRunnerId] = useState<string>("");
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const deviceMenuRef = useRef<HTMLDivElement>(null);
+  const deviceMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [agentType, setAgentType] = useState<
@@ -1357,12 +1362,6 @@ export function RemoteConsole({
 
   // Each tree level collapses independently, so the open path down to the
   // selected session survives switching agents or devices.
-  const [collapsedDevices, setCollapsedDevices] = useState<
-    Record<string, boolean>
-  >({});
-  const [collapsedAgents, setCollapsedAgents] = useState<
-    Record<string, boolean>
-  >({});
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<
     Record<string, boolean>
   >({});
@@ -1566,6 +1565,29 @@ export function RemoteConsole({
   }, [filteredDeviceGroups, activeRunnerId]);
 
   const currentAgentWorkspaces = useMemo(() => {
+    if (providerFilter === "all") {
+      // "All" shows every agent of this device, so the workspaces of all of
+      // them are merged under their own id.
+      const merged = new Map<
+        string,
+        { id: string; label: string; items: TreeSessionItem[] }
+      >();
+      for (const agent of currentDeviceGroup?.workspaces ?? []) {
+        for (const ws of agent.workspaces) {
+          const existing = merged.get(ws.id);
+          if (existing === undefined) {
+            merged.set(ws.id, {
+              id: ws.id,
+              label: ws.label,
+              items: [...ws.items],
+            });
+          } else {
+            existing.items.push(...ws.items);
+          }
+        }
+      }
+      return [...merged.values()];
+    }
     const agent = currentDeviceGroup?.workspaces.find(
       (a) => a.provider === providerFilter,
     );
@@ -1613,6 +1635,19 @@ export function RemoteConsole({
     return () => window.removeEventListener("mousedown", onClickOutside);
   }, [deviceMenuOpen]);
 
+  // Escape closes the device menu and hands the focus back to the button
+  // that opened it, so the keyboard never ends up on a closed popup.
+  useEffect(() => {
+    if (!deviceMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setDeviceMenuOpen(false);
+      deviceMenuButtonRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [deviceMenuOpen]);
+
   useEffect(() => {
     if (!selected) return;
     const s = snapshot.sessions.find((entry) => key(entry) === selected);
@@ -1627,7 +1662,12 @@ export function RemoteConsole({
         s.binding.provider_session_id,
         disc?.provider,
       );
-      if (info.type && info.type !== providerFilter) {
+      // "All" already shows every agent, so a selection never narrows it.
+      if (
+        providerFilter !== "all" &&
+        info.type &&
+        info.type !== providerFilter
+      ) {
         setProviderFilter(info.type);
       }
     }
@@ -1655,6 +1695,9 @@ export function RemoteConsole({
   /**
    * The folder path to the selected session, so the user can always see where
    * they are in a four-level tree and step back out of it.
+   *
+   * The tree is shown as a device selector plus an agent filter, so a
+   * breadcrumb step navigates one of those rather than expanding a node.
    */
   const selectedSessionPath = useMemo(() => {
     if (!selected) return undefined;
@@ -1666,14 +1709,22 @@ export function RemoteConsole({
               continue;
             }
             return [
-              { key: device.runnerId, label: device.label },
+              {
+                key: device.runnerId,
+                label: device.label,
+                runnerId: device.runnerId,
+              },
               {
                 key: `${device.runnerId}/${agent.provider}`,
                 label: agent.label,
+                runnerId: device.runnerId,
+                provider: agent.provider,
               },
               {
                 key: `${device.runnerId}/${agent.provider}/${workspace.id}`,
                 label: workspace.label,
+                runnerId: device.runnerId,
+                provider: agent.provider,
               },
               {
                 key: item.key,
@@ -1710,6 +1761,9 @@ export function RemoteConsole({
         }`}
         ref={mobileDrawerRef}
         aria-hidden={isMobile && !mobileDrawerOpen ? true : undefined}
+        // `inert` also takes the closed drawer's controls out of the tab
+        // order, which `aria-hidden` alone does not do.
+        inert={isMobile && !mobileDrawerOpen ? true : undefined}
         style={
           isMobile
             ? undefined
@@ -1864,9 +1918,20 @@ export function RemoteConsole({
           role="tablist"
           aria-label="按 Agent 过滤"
         >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={providerFilter === "all"}
+            className={`remote-filter-pill ${providerFilter === "all" ? "active" : ""}`}
+            onClick={() => setProviderFilter("all")}
+          >
+            全部 Agent
+          </button>
           {[...availableProviders].map(([kind, label]) => (
             <button
               type="button"
+              role="tab"
+              aria-selected={providerFilter === kind}
               className={`remote-filter-pill ${providerFilter === kind ? "active" : ""}`}
               key={kind}
               onClick={() => setProviderFilter(kind)}
@@ -1880,8 +1945,10 @@ export function RemoteConsole({
           <button
             type="button"
             className="remote-device-selector-btn"
+            ref={deviceMenuButtonRef}
             onClick={() => setDeviceMenuOpen((prev) => !prev)}
             aria-expanded={deviceMenuOpen}
+            aria-haspopup="menu"
             title={`${activeDevice?.label ?? "未连接设备"} · 点击切换电脑`}
           >
             <span className="remote-device-selector-icon" aria-hidden="true">
@@ -1926,10 +1993,12 @@ export function RemoteConsole({
           </button>
 
           {deviceMenuOpen && deviceList.length > 1 && (
-            <div className="remote-device-menu">
+            <div className="remote-device-menu" role="menu">
               {deviceList.map((dev) => (
                 <button
                   type="button"
+                  role="menuitemradio"
+                  aria-checked={dev.runnerId === activeRunnerId}
                   className={`remote-device-menu-item ${
                     dev.runnerId === activeRunnerId ? "active" : ""
                   }`}
@@ -2427,10 +2496,12 @@ export function RemoteConsole({
                             if (crumb.sessionKey !== undefined) {
                               setSelected(crumb.sessionKey);
                             } else {
-                              setCollapsedDevices((prev) => ({
-                                ...prev,
-                                [crumb.key]: true,
-                              }));
+                              if (crumb.runnerId !== undefined) {
+                                setSelectedRunnerId(crumb.runnerId);
+                              }
+                              if (crumb.provider !== undefined) {
+                                setProviderFilter(crumb.provider);
+                              }
                               setSelected("");
                             }
                           }}

@@ -2025,6 +2025,10 @@ function renderDevice(device) {
   const pairTag = document.getElementById("pairStateTag");
 
   if (deviceIdElem) deviceIdElem.textContent = device.device_id || "-";
+  const deviceNameInput = document.getElementById("deviceNameInput");
+  if (deviceNameInput && document.activeElement !== deviceNameInput) {
+    deviceNameInput.value = device.device_name || "";
+  }
   if (deviceKeyElem) {
     const pk = device.public_key || "";
     deviceKeyElem.textContent =
@@ -3600,6 +3604,43 @@ function copyDeviceId() {
   if (idElem && idElem.textContent && idElem.textContent !== "-") {
     copyText(idElem.textContent);
     toast("已复制设备 ID");
+  }
+}
+
+async function submitDeviceName() {
+  const input = document.getElementById("deviceNameInput");
+  const saveBtn = document.getElementById("deviceNameSaveBtn");
+  if (!input) return;
+  const name = input.value.trim();
+  if (!name) {
+    toast("请填写这台电脑的名字", "err");
+    return;
+  }
+  const origText = saveBtn ? saveBtn.innerHTML : "";
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = "<span>保存中...</span>";
+  }
+  try {
+    const resp = await fetch("/api/device/name", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name }),
+    });
+    const resData = await resp.json();
+    if (resp.ok && resData.ok === true) {
+      toast("设备名称已更新");
+      await refreshDashboard();
+    } else {
+      toast("改名失败：" + (resData.error || "未知错误"), "err");
+    }
+  } catch (err) {
+    toast("改名失败：" + err.message, "err");
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = origText;
+    }
   }
 }
 

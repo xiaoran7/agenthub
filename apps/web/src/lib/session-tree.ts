@@ -289,7 +289,7 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
     );
     if (providerFilter !== "all" && providerFilter !== provider.type) continue;
     const shortId = session.provider_session_id.replace(
-      /^(sess_|claude_|gemini_)/u,
+      /^(sess_|claude_|gemini_|antigravity_)/u,
       "",
     );
     items.push({
@@ -324,7 +324,7 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
     );
     if (providerFilter !== "all" && providerFilter !== provider.type) continue;
     const shortId = candidate.provider_session_id.replace(
-      /^(sess_|claude_|gemini_)/u,
+      /^(sess_|claude_|gemini_|antigravity_)/u,
       "",
     );
     items.push({

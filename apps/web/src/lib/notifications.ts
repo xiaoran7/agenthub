@@ -2,6 +2,7 @@ import {
   deletePushSubscription,
   fetchPushKey,
   savePushSubscription,
+  type GatewayIdentity,
 } from "./api";
 import type { PanelConfig } from "./config";
 
@@ -71,6 +72,7 @@ export function decodeApplicationServerKey(
 
 export async function readNotificationState(
   config: PanelConfig,
+  identity: GatewayIdentity,
 ): Promise<NotificationState> {
   if (!isPushCapable()) {
     return "unavailable";
@@ -79,7 +81,7 @@ export async function readNotificationState(
     return "denied";
   }
   try {
-    await fetchPushKey(config);
+    await fetchPushKey(config, identity);
   } catch {
     return "disabled";
   }
@@ -91,12 +93,13 @@ export async function readNotificationState(
 
 export async function enableNotifications(
   config: PanelConfig,
+  identity: GatewayIdentity,
 ): Promise<NotificationState> {
   if (!isPushCapable()) {
     return "unavailable";
   }
   const applicationServerKey = decodeApplicationServerKey(
-    await fetchPushKey(config),
+    await fetchPushKey(config, identity),
   );
   // Ask for permission only once the gateway confirmed it can actually send:
   // a permission prompt that leads to no notifications burns the one chance
@@ -117,7 +120,7 @@ export async function enableNotifications(
       applicationServerKey,
     }));
   try {
-    await savePushSubscription(config, subscription.toJSON());
+    await savePushSubscription(config, identity, subscription.toJSON());
   } catch (error) {
     // Never leave a browser subscribed to a gateway that does not know about
     // it: that subscription would sit dead until the user cleared site data.
@@ -131,6 +134,7 @@ export async function enableNotifications(
 
 export async function disableNotifications(
   config: PanelConfig,
+  identity: GatewayIdentity,
 ): Promise<NotificationState> {
   if (!isPushCapable()) {
     return "unavailable";
@@ -141,7 +145,7 @@ export async function disableNotifications(
   if (subscription != null) {
     // Drop the server record first; if unsubscribing fails afterwards the
     // gateway simply has nothing to send to.
-    await deletePushSubscription(config, subscription.endpoint);
+    await deletePushSubscription(config, identity, subscription.endpoint);
     await subscription.unsubscribe();
   }
   return "off";

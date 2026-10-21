@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./remote": "./src/remote.ts"
+    "./remote": "./src/remote.ts",
+    "./account": "./src/account.ts",
+    "./avatar-rules": "./src/avatar-rules.ts"
   },
   "scripts": {
     "generate:test-vector": "tsx scripts/generate-test-vector.ts",

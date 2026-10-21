@@ -516,11 +516,17 @@ fn main() -> Result<()> {
     let fingerprint_key_env = cli.fingerprint_key_env;
     let allow_credential_access = cli.allow_credential_access;
     let auth_cache = cli.auth_cache;
-    // The name is resolved once, here, where the identity path is known: a
-    // name given for this run wins, then the one saved on disk, then the
-    // system computer name.
-    let device_name =
-        agenthub_runner::device_name::resolve(cli.device_name.as_deref(), identity_path.as_deref());
+    // The device name is read from the file beside the identity, which is
+    // also where the rename endpoint writes it. The source is kept rather
+    // than the resolved string so a rename takes effect on the running
+    // process instead of only after a restart.
+    let device_name_path = identity_path
+        .clone()
+        .unwrap_or_else(agenthub_runner::device_name::default_identity_path);
+    let device_name = agenthub_runner::device_name::DeviceNameSource::new(
+        cli.device_name.clone(),
+        Some(device_name_path.clone()),
+    );
 
     let command = cli.command.unwrap_or(Command::Web {
         codex_binary: PathBuf::from("codex"),
@@ -556,6 +562,7 @@ fn main() -> Result<()> {
                 web_port: Some(web_port),
                 open_browser,
                 device_name: device_name.clone(),
+                identity_path: device_name_path.clone(),
             })?;
         }
         Command::Web {
@@ -583,6 +590,7 @@ fn main() -> Result<()> {
                 web_port: Some(port),
                 open_browser,
                 device_name: device_name.clone(),
+                identity_path: device_name_path.clone(),
             })?;
         }
         Command::RemoteRun {
@@ -608,6 +616,7 @@ fn main() -> Result<()> {
                 web_port: Some(web_port),
                 open_browser,
                 device_name: device_name.clone(),
+                identity_path: device_name_path.clone(),
             })?;
         }
         Command::RemoteHost {

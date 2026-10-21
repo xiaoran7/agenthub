@@ -3204,9 +3204,10 @@ select {
   width: 100%;
 }
 
-/* The picker is driven by the button, so the input itself stays out of sight. */
-.account-avatar-input {
-  display: none;
+/* The file input is visually hidden but stays focusable; the label beside it
+   is what the user clicks, and the native picker opens from the input. */
+.account-avatar-input-label {
+  cursor: pointer;
 }
 
 .billing-plan-card {

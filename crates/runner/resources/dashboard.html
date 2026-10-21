@@ -472,6 +472,17 @@
       <div class="list prefs">
         <div class="row pref">
           <div class="who">
+            <div class="name">本机设备名称</div>
+            <div class="sub">云端控制台里显示的名字，不改变设备 ID</div>
+          </div>
+          <span class="grow"></span>
+          <input id="deviceNameInput" type="text" maxlength="64" placeholder="例如 书房主机" aria-label="本机设备名称" style="max-width: 190px;">
+          <button type="button" class="text action" id="deviceNameSaveBtn" onclick="submitDeviceName()">
+            <span>保存</span>
+          </button>
+        </div>
+        <div class="row pref">
+          <div class="who">
             <div class="name">本机设备 ID</div>
             <div class="sub mono" id="modalDeviceId">-</div>
           </div>

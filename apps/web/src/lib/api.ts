@@ -1,6 +1,18 @@
 import type { PanelConfig } from "./config";
 import type { DeviceRecord, SessionRef } from "./types";
 
+/**
+ * The identity a gateway request carries.
+ *
+ * The signed-in account's id is the real identity; the panel config's id is
+ * only the fallback for a Gateway running without accounts. Passing the
+ * identity explicitly keeps every call site from silently falling back to the
+ * fallback and reading another owner's devices.
+ */
+export interface GatewayIdentity {
+  userId: string;
+}
+
 export class ApiError extends Error {
   /** HTTP status; 0 means the request never reached the gateway. */
   readonly status: number;
@@ -82,11 +94,14 @@ export function describeApiError(error: unknown): string {
   return `网关返回错误（${error.status} ${error.code}）`;
 }
 
-async function fetchJson<T>(url: string, userId: string): Promise<T> {
+async function fetchJson<T>(
+  url: string,
+  identity: GatewayIdentity,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: { "x-user-id": userId },
+      headers: { "x-user-id": identity.userId },
       cache: "no-store",
     });
   } catch {
@@ -100,7 +115,7 @@ async function fetchJson<T>(url: string, userId: string): Promise<T> {
 
 async function sendJson(
   url: string,
-  userId: string,
+  identity: GatewayIdentity,
   method: "POST" | "DELETE",
   body: unknown,
 ): Promise<void> {
@@ -108,7 +123,10 @@ async function sendJson(
   try {
     response = await fetch(url, {
       method,
-      headers: { "x-user-id": userId, "content-type": "application/json" },
+      headers: {
+        "x-user-id": identity.userId,
+        "content-type": "application/json",
+      },
       body: JSON.stringify(body),
       cache: "no-store",
     });
@@ -137,50 +155,48 @@ async function errorCode(response: Response): Promise<string> {
   return "http_error";
 }
 
-export async function fetchPushKey(config: PanelConfig): Promise<string> {
+export async function fetchPushKey(
+  config: PanelConfig,
+  identity: GatewayIdentity,
+): Promise<string> {
   const body = await fetchJson<{ public_key: string }>(
     pushKeyUrl(config.gatewayBase),
-    config.userId,
+    identity,
   );
   return body.public_key;
 }
 
 export async function savePushSubscription(
   config: PanelConfig,
+  identity: GatewayIdentity,
   subscription: PushSubscriptionJSON,
 ): Promise<void> {
-  await sendJson(
-    pushSubscriptionsUrl(config.gatewayBase),
-    config.userId,
-    "POST",
-    {
-      endpoint: subscription.endpoint,
-      keys: {
-        p256dh: subscription.keys?.p256dh,
-        auth: subscription.keys?.auth,
-      },
+  await sendJson(pushSubscriptionsUrl(config.gatewayBase), identity, "POST", {
+    endpoint: subscription.endpoint,
+    keys: {
+      p256dh: subscription.keys?.p256dh,
+      auth: subscription.keys?.auth,
     },
-  );
+  });
 }
 
 export async function deletePushSubscription(
   config: PanelConfig,
+  identity: GatewayIdentity,
   endpoint: string,
 ): Promise<void> {
-  await sendJson(
-    pushSubscriptionsUrl(config.gatewayBase),
-    config.userId,
-    "DELETE",
-    { endpoint },
-  );
+  await sendJson(pushSubscriptionsUrl(config.gatewayBase), identity, "DELETE", {
+    endpoint,
+  });
 }
 
 export async function fetchDevices(
   config: PanelConfig,
+  identity: GatewayIdentity,
 ): Promise<DeviceRecord[]> {
   const body = await fetchJson<{ devices: DeviceRecord[] }>(
     devicesUrl(config.gatewayBase),
-    config.userId,
+    identity,
   );
   return body.devices;
 }
@@ -192,13 +208,14 @@ export interface DeviceBinding {
 
 export async function createDeviceBinding(
   config: PanelConfig,
+  identity: GatewayIdentity,
 ): Promise<DeviceBinding> {
   let response: Response;
   try {
     response = await fetch(deviceBindingsUrl(config.gatewayBase), {
       method: "POST",
       headers: {
-        "x-user-id": config.userId,
+        "x-user-id": identity.userId,
         "content-type": "application/json",
       },
       body: JSON.stringify({ expires_in_seconds: 600 }),
@@ -215,13 +232,14 @@ export async function createDeviceBinding(
 
 export async function revokeDevice(
   config: PanelConfig,
+  identity: GatewayIdentity,
   deviceId: string,
 ): Promise<void> {
   let response: Response;
   try {
     response = await fetch(deviceUrl(config.gatewayBase, deviceId), {
       method: "DELETE",
-      headers: { "x-user-id": config.userId },
+      headers: { "x-user-id": identity.userId },
       cache: "no-store",
     });
   } catch {
