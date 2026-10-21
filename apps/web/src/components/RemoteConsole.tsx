@@ -1641,7 +1641,10 @@ export function RemoteConsole({
       (a) => a.type === providerFilter,
     );
     if (!exists) {
-      setProviderFilter(availableAgentsForCurrentDevice[0].type);
+      const first = availableAgentsForCurrentDevice[0];
+      if (first) {
+        setProviderFilter(first.type);
+      }
     }
   }, [availableAgentsForCurrentDevice, providerFilter]);
 
