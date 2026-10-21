@@ -1633,9 +1633,7 @@ export function RemoteConsole({
         s.binding.provider_session_id,
         disc?.provider,
       );
-      // "All" already shows every agent, so a selection never narrows it.
       if (
-        providerFilter !== "all" &&
         info.type &&
         info.type !== providerFilter
       ) {
