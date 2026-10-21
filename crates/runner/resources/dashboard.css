@@ -899,6 +899,106 @@
           width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
           background: var(--card-2); border: var(--rule); color: var(--muted); font-size: calc(var(--fs-note) - 3px); letter-spacing: .02em;
         }
+
+        /* Workspace avatar badge: modern squircle with friendly project/git icon */
+        .ws-avatar {
+          width: 32px; height: 32px; border-radius: var(--r-s);
+          display: inline-flex; align-items: center; justify-content: center;
+          flex: none; position: relative;
+          transition: transform var(--dur-2) var(--ease-spring), box-shadow var(--dur-2) var(--ease);
+        }
+        .row.stat:hover .ws-avatar { transform: scale(1.06); }
+        .ws-avatar svg { width: 17px; height: 17px; }
+        .ws-avatar.color-0 { background: color-mix(in srgb, #3b82f6 14%, var(--card)); color: #3b82f6; border: 1px solid color-mix(in srgb, #3b82f6 24%, transparent); }
+        .ws-avatar.color-1 { background: color-mix(in srgb, #10b981 14%, var(--card)); color: #10b981; border: 1px solid color-mix(in srgb, #10b981 24%, transparent); }
+        .ws-avatar.color-2 { background: color-mix(in srgb, #8b5cf6 14%, var(--card)); color: #8b5cf6; border: 1px solid color-mix(in srgb, #8b5cf6 24%, transparent); }
+        .ws-avatar.color-3 { background: color-mix(in srgb, #f59e0b 14%, var(--card)); color: #f59e0b; border: 1px solid color-mix(in srgb, #f59e0b 24%, transparent); }
+        .ws-avatar.color-4 { background: color-mix(in srgb, #06b6d4 14%, var(--card)); color: #06b6d4; border: 1px solid color-mix(in srgb, #06b6d4 24%, transparent); }
+        .ws-avatar.color-5 { background: color-mix(in srgb, #ec4899 14%, var(--card)); color: #ec4899; border: 1px solid color-mix(in srgb, #ec4899 24%, transparent); }
+
+        /* ---- Workspaces List specific rock-solid column alignment ---- */
+        #workspacesList .row.stat {
+          display: grid;
+          grid-template-columns: 32px minmax(0, 1fr) 112px 92px;
+          align-items: center;
+          gap: 16px;
+          min-height: 56px;
+        }
+        #workspacesList .row.stat .ws-avatar { grid-column: 1; align-self: center; }
+        #workspacesList .row.stat .who { grid-column: 2; min-width: 0; }
+        #workspacesList .row.stat .share { display: none; }
+        #workspacesList .row.stat .num {
+          grid-column: 3;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          justify-content: center;
+          min-width: 112px;
+          font-variant-numeric: tabular-nums;
+        }
+        #workspacesList .row.stat .num b {
+          font: 650 var(--fs-body)/1.35 var(--num);
+          letter-spacing: -.01em;
+          color: var(--fg);
+        }
+        #workspacesList .row.stat .num small {
+          font-size: calc(var(--fs-note) - 1px);
+          color: var(--muted);
+          line-height: 1.35;
+          margin-top: 2px;
+        }
+        #workspacesList .row.stat .ws-time-col {
+          grid-column: 4;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          justify-content: center;
+          min-width: 92px;
+          white-space: nowrap;
+        }
+        #workspacesList .row.stat .ws-time-val {
+          font-size: var(--fs-note);
+          color: var(--fg-2);
+          line-height: 1.35;
+          font-variant-numeric: tabular-nums;
+          font-weight: 500;
+        }
+        #workspacesList .row.stat .ws-time-lbl {
+          font-size: calc(var(--fs-note) - 1px);
+          color: var(--muted);
+          line-height: 1.35;
+          margin-top: 2px;
+        }
+
+        @container view-q (min-width: 860px) {
+          #workspacesList .row.stat {
+            grid-template-columns: 32px minmax(0, 1fr) minmax(90px, 1.2fr) 112px 92px;
+          }
+          #workspacesList .row.stat .share {
+            grid-column: 3;
+            display: block;
+          }
+          #workspacesList .row.stat .num {
+            grid-column: 4;
+          }
+          #workspacesList .row.stat .ws-time-col {
+            grid-column: 5;
+          }
+        }
+
+        @container view-q (max-width: 520px) {
+          #workspacesList .row.stat {
+            grid-template-columns: 32px minmax(0, 1fr) 96px;
+            gap: 10px;
+          }
+          #workspacesList .row.stat .ws-time-col {
+            display: none;
+          }
+          #workspacesList .row.stat .num {
+            grid-column: 3;
+            min-width: 96px;
+          }
+        }
         .row .name-line .tag.ok { height: 19px; font-size: calc(var(--fs-note) - 1.5px); padding: 0 6px; }
         .row .tag { height: 22px; font-size: calc(var(--fs-note) - 0.5px); padding: 0 9px; }
         .row .tag.mono { font-size: calc(var(--fs-note) - 1.5px); }
@@ -1020,12 +1120,78 @@
         .pref-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
         .pref-form input::placeholder { color: var(--faint); }
         .pref-form .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+
+        /* Modern inline-edit group for device settings */
+        .inline-edit-group {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          flex: none;
+        }
+        .inline-edit-wrap {
+          display: inline-flex;
+          align-items: center;
+          position: relative;
+          height: 32px;
+          background: var(--card-2);
+          border: 1px solid var(--line);
+          border-radius: var(--r-s);
+          padding: 0 10px 0 32px;
+          transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-3) var(--ease-spring), background var(--dur-2) var(--ease);
+        }
+        .inline-edit-wrap:hover {
+          border-color: var(--muted);
+        }
+        .inline-edit-wrap:focus-within {
+          border-color: var(--accent);
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+          background: var(--card);
+        }
+        .inline-edit-ic {
+          position: absolute;
+          left: 10px;
+          width: 14px;
+          height: 14px;
+          color: var(--muted);
+          pointer-events: none;
+          transition: color var(--dur-2) var(--ease);
+        }
+        .inline-edit-wrap:focus-within .inline-edit-ic {
+          color: var(--accent);
+        }
+        .inline-edit-input {
+          border: none;
+          outline: none;
+          background: transparent;
+          height: 100%;
+          width: 160px;
+          font-size: var(--fs-body);
+          color: var(--fg);
+          font-family: inherit;
+          padding: 0;
+          user-select: text;
+          -webkit-user-select: text;
+        }
+        .inline-edit-input::placeholder {
+          color: var(--faint);
+        }
+        .inline-edit-btn {
+          height: 32px;
+          border-radius: var(--r-s);
+          padding: 0 14px;
+          font-weight: 500;
+          font-size: var(--fs-note);
+        }
+
         @container view-q (max-width: 560px) {
           .pref-form { grid-template-columns: minmax(0, 1fr); }
           .pref-form label { text-align: left; }
           .row.pref { flex-wrap: wrap; row-gap: 8px; }
           .row.pref .who { flex: 1 1 100%; }
           .row.pref .segs, .row.pref > .text.action { margin-left: 0; }
+          .row.pref .inline-edit-group { width: 100%; }
+          .row.pref .inline-edit-wrap { flex: 1 1 auto; width: auto; }
+          .row.pref .inline-edit-input { width: 100%; }
         }
 
 
@@ -1129,8 +1295,7 @@
           #sessionsContainer .group-head .gpath { display: none; }
           .stats { grid-template-columns: 1fr 1fr; }
           .row.stat,
-          #modelsGrid .row.stat,
-          #workspacesList .row.stat { grid-template-columns: 22px minmax(0, 1fr) 104px auto; }
+          #modelsGrid .row.stat { grid-template-columns: 22px minmax(0, 1fr) 104px auto; }
           .row.stat .share { display: none; }
           .row.stat .num { grid-column: 3; }
           .row.stat .cost { grid-column: 4; }

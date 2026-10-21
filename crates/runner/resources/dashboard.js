@@ -1549,6 +1549,30 @@ async function refreshModelsCatalog(event) {
   }
 }
 
+function getWorkspaceAvatarHtml(ws) {
+  const name = ws.name || pathLeaf(ws.path) || "workspace";
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) & 0xffffffff;
+  }
+  const colorIndex = Math.abs(hash) % 6;
+  const isGit = Boolean(ws.is_git);
+
+  const iconSvg = isGit
+    ? `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="5" cy="5.5" r="2.2"/>
+        <circle cx="5" cy="14.5" r="2.2"/>
+        <circle cx="15" cy="9" r="2.2"/>
+        <path d="M5 7.7v4.6M7 5.5h2.5a3.5 3.5 0 0 1 3.5 3.5"/>
+      </svg>`
+    : `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2.5 5.5a2 2 0 0 1 2-2h3.2a2 2 0 0 1 1.4.6l1.3 1.4h5.1a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2v-9z"/>
+        <path d="m7.5 11.5-2-2 2-2m5-2 2 2-2 2"/>
+      </svg>`;
+
+  return `<div class="ws-avatar color-${colorIndex}" title="${isGit ? 'Git 项目工作区' : '项目工作区'}">${iconSvg}</div>`;
+}
+
 function renderWorkspaces(workspaces) {
   const container = document.getElementById("workspacesList");
   const countBadge = document.getElementById("workspacesCountBadge");
@@ -1613,7 +1637,7 @@ function renderWorkspaces(workspaces) {
       const count = ws.sessions_count || 0;
 
       return `<div class="row stat" title="${safePath}">
-        <span class="ic"><span class="mono ws-ini">${escapeHtml(pathLeaf(ws.path).slice(0, 2).toUpperCase())}</span></span>
+        ${getWorkspaceAvatarHtml(ws)}
         <div class="who">
           <div class="name-line">
             <span class="name" title="${safeName}">${safeName}</span>
@@ -1628,7 +1652,10 @@ function renderWorkspaces(workspaces) {
           <b>${tokens > 0 ? fmtN(tokens) : "—"}</b>
           <small>${count} 会话</small>
         </div>
-        <div class="cost">${relativeTime}</div>
+        <div class="ws-time-col">
+          <span class="ws-time-val">${relativeTime}</span>
+          <span class="ws-time-lbl">最后活跃</span>
+        </div>
       </div>`;
     })
     .join("");

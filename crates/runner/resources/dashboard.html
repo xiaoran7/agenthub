@@ -463,10 +463,18 @@
             <div class="sub">云端控制台里显示的名字，不改变设备 ID</div>
           </div>
           <span class="grow"></span>
-          <input id="deviceNameInput" type="text" maxlength="64" placeholder="例如 书房主机" aria-label="本机设备名称" style="max-width: 190px;">
-          <button type="button" class="text action" id="deviceNameSaveBtn" onclick="submitDeviceName()">
-            <span>保存</span>
-          </button>
+          <div class="inline-edit-group">
+            <div class="inline-edit-wrap">
+              <svg class="inline-edit-ic" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2.5" y="3.5" width="15" height="11" rx="2"/>
+                <path d="M7 17.5h6M10 14.5v3"/>
+              </svg>
+              <input id="deviceNameInput" class="inline-edit-input" type="text" maxlength="64" placeholder="例如 书房主机" aria-label="本机设备名称" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();submitDeviceName();}">
+            </div>
+            <button type="button" class="text action primary inline-edit-btn" id="deviceNameSaveBtn" onclick="submitDeviceName()">
+              <span>保存</span>
+            </button>
+          </div>
         </div>
         <div class="row pref">
           <div class="who">
