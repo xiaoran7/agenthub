@@ -1718,8 +1718,16 @@ export function RemoteConsole({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [deviceMenuOpen, agentMenuOpen]);
 
+  const lastSelectedForSyncRef = useRef<string>("");
+
   useEffect(() => {
-    if (!selected) return;
+    if (!selected) {
+      lastSelectedForSyncRef.current = "";
+      return;
+    }
+    if (selected === lastSelectedForSyncRef.current) return;
+    lastSelectedForSyncRef.current = selected;
+
     const s = snapshot.sessions.find((entry) => key(entry) === selected);
     if (s && s.runner_id && s.runner_id !== selectedRunnerId) {
       setSelectedRunnerId(s.runner_id);
@@ -1732,10 +1740,7 @@ export function RemoteConsole({
         s.binding.provider_session_id,
         disc?.provider,
       );
-      if (
-        info.type &&
-        info.type !== providerFilter
-      ) {
+      if (info.type) {
         setProviderFilter(info.type);
       }
     }
@@ -1744,7 +1749,6 @@ export function RemoteConsole({
     snapshot.sessions,
     selectedRunnerId,
     discovered,
-    providerFilter,
   ]);
 
   const pendingApprovalsBySessionKey = useMemo(() => {
@@ -2041,6 +2045,9 @@ export function RemoteConsole({
                         }`}
                         key={dev.runnerId}
                         onClick={() => {
+                          if (dev.runnerId !== activeRunnerId) {
+                            setSelected("");
+                          }
                           setSelectedRunnerId(dev.runnerId);
                           setDeviceMenuOpen(false);
                         }}
@@ -2179,6 +2186,9 @@ export function RemoteConsole({
                         }`}
                         key={agent.type}
                         onClick={() => {
+                          if (agent.type !== providerFilter) {
+                            setSelected("");
+                          }
                           setProviderFilter(agent.type);
                           setAgentMenuOpen(false);
                         }}

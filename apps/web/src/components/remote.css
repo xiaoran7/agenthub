@@ -3624,9 +3624,12 @@ details[open] > .remote-tool-summary > .remote-disclosure {
     max-height: none !important;
     z-index: 101;
     background: var(--cds-surface-0, #f5f5f3) !important;
+    visibility: hidden;
+    pointer-events: none;
     will-change: transform;
     transform: translate3d(-100%, 0, 0);
-    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1),
+                visibility 0.28s;
     box-shadow: 6px 0 28px rgba(0, 0, 0, 0.45);
     border-right: 1px solid var(--cds-border, var(--remote-line));
     border-bottom: none;
@@ -3638,6 +3641,8 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   }
 
   .remote-sidebar.drawer-open {
+    visibility: visible;
+    pointer-events: auto;
     transform: translate3d(0, 0, 0);
   }
 
@@ -3812,6 +3817,16 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   /* The hairline above the composer spans the phone, not the measure. */
   .remote-composer-card::before {
     width: 100%;
+  }
+
+  .remote-composer-card {
+    width: calc(100% - 20px) !important;
+    margin: 12px auto max(10px, env(safe-area-inset-bottom)) !important;
+    padding: 10px 12px 10px 14px !important;
+  }
+
+  .remote-composer-hint {
+    display: none !important;
   }
 
   .remote-composer-input-wrapper textarea {
