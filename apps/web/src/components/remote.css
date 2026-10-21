@@ -373,9 +373,9 @@
 .remote-selectors-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   box-sizing: border-box;
 }
 
@@ -390,11 +390,11 @@
   align-items: center !important;
   justify-content: space-between !important;
   width: 100% !important;
-  height: 32px !important;
-  min-height: 32px !important;
-  max-height: 32px !important;
-  padding: 0 8px !important;
-  border-radius: var(--radius-lg, 8px) !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  max-height: 38px !important;
+  padding: 0 11px !important;
+  border-radius: var(--radius-lg, 10px) !important;
   border: 1px solid var(--cds-border, var(--remote-line)) !important;
   background: var(--cds-surface-1, var(--remote-surface)) !important;
   color: var(--cds-text-primary, var(--remote-ink)) !important;
@@ -404,21 +404,29 @@
   user-select: none !important;
 }
 
-.remote-selector-btn:hover {
+.remote-selector-btn:hover:not(:disabled) {
   background: var(--cds-surface-2, #ffffff) !important;
   border-color: var(--cds-border-strong, var(--remote-line-strong)) !important;
 }
 
-.remote-selector-btn.active {
+.remote-selector-btn.active:not(:disabled) {
   background: var(--cds-surface-2, #ffffff) !important;
   border-color: var(--cds-clay, #d97757) !important;
   box-shadow: 0 0 0 2px var(--cds-clay-soft, rgba(217, 119, 87, 0.15)) !important;
 }
 
+.remote-selector-btn:disabled,
+.remote-selector-btn.disabled {
+  opacity: 0.55 !important;
+  cursor: not-allowed !important;
+  background: var(--cds-surface-1, var(--remote-surface)) !important;
+  border-color: var(--cds-border, var(--remote-line)) !important;
+}
+
 .remote-selector-btn-left {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
   flex: 1;
 }
@@ -429,12 +437,12 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
 }
 
 .remote-selector-btn-text {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--cds-text-primary, var(--remote-ink));
   white-space: nowrap;
@@ -446,22 +454,22 @@
 .remote-selector-btn-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   flex-shrink: 0;
-  margin-left: 3px;
+  margin-left: 4px;
 }
 
 .remote-selector-count-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
   color: var(--cds-clay, #d97757);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   font-family: var(--font-mono);
   line-height: 1;
@@ -483,13 +491,13 @@
 /* ================= 浮窗下拉菜单 (Selector Popover) ================= */
 .remote-selector-popover {
   position: absolute;
-  top: calc(100% + 5px);
+  top: calc(100% + 6px);
   z-index: 100;
   background: var(--cds-surface-2, #ffffff);
   border: 1px solid var(--cds-border, var(--remote-line));
-  border-radius: 10px;
-  padding: 5px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12), 0 3px 8px rgba(0, 0, 0, 0.05);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -509,34 +517,34 @@
 
 .remote-device-popover {
   left: 0;
-  width: 220px;
+  width: 230px;
 }
 
 .remote-agent-popover {
   right: 0;
-  width: 205px;
+  width: 215px;
 }
 
 .remote-popover-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px 6px;
-  font-size: 10.5px;
+  padding: 6px 10px 7px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--cds-text-muted, var(--remote-muted));
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border-bottom: 1px solid var(--cds-border, rgba(0, 0, 0, 0.06));
-  margin-bottom: 3px;
+  margin-bottom: 4px;
 }
 
 .remote-popover-sub {
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 400;
   text-transform: none;
   color: var(--cds-text-muted, var(--remote-muted));
-  max-width: 110px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -551,8 +559,8 @@
 }
 
 .remote-popover-empty {
-  padding: 12px 8px;
-  font-size: 12px;
+  padding: 14px 10px;
+  font-size: 12.5px;
   color: var(--cds-text-muted, var(--remote-muted));
   text-align: center;
 }
@@ -560,17 +568,17 @@
 .remote-popover-item {
   display: flex !important;
   align-items: center !important;
-  gap: 7px !important;
+  gap: 8px !important;
   width: 100% !important;
-  height: 32px !important;
-  min-height: 32px !important;
-  padding: 0 8px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 10px !important;
   margin: 0 !important;
-  border-radius: 6px !important;
+  border-radius: 8px !important;
   border: 1px solid transparent !important;
   background: transparent !important;
   color: var(--cds-text-primary, var(--remote-ink)) !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   cursor: pointer !important;
   text-align: left !important;
   transition: all 0.12s ease !important;
@@ -594,12 +602,12 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .remote-popover-item-badge {
-  font-size: 10.5px;
-  padding: 1px 6px;
+  font-size: 11px;
+  padding: 1.5px 7px;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.05);
   color: var(--cds-text-muted, var(--remote-muted));
