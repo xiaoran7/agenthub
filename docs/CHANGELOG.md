@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+- **Web 端会话树层级视觉重构、渐进式加载与会话恢复底层自愈（`apps/web`）**：
+  - **恢复会话底层 Bug 根治（解决“点击已脱离连接的会话无反应、无法恢复控制”）**：
+    - **问题根因**：Web 控制台向 `/v3/remote/runners/:runner/commands` 提交 `connect` 命令时，固定使用了数据库快照中持久化的旧 `target.binding.host_generation`。当目标 Runner 发生过重启、断网重连或重新建联时，服务端已切换为当前最新的 `conn.generation`，因代际不符直接抛出 `host_generation_mismatch` 拒绝执行。此外，会话项在 `isSelected = true` 或在 `autoResumedRef` 缓存击中时存在早退短路逻辑，导致用户显式点击时无法重试建联；
+    - **动态实时代际解析与强制重连**：`submit` 函数在构造命令时，优先从在线 `snapshot.runners` 中实时解析当前的 `activeGeneration = targetRunner?.hello?.host_generation ?? target.binding.host_generation`，彻底消除 `host_generation_mismatch`；在用户点击未连接控制的主动会话时，主动清理 `autoResumedRef` 缓存并派发恢复指令，支持用户显式发起重试接入；
+  - **会话树视觉层级与全局按钮污染彻底修复**：
+    - **全局按钮隔离与像素级对齐**：使用 `:not(...)` 显式隔离全局 `.remote-console button` 的白色背景、边框和内边距对树节点操作按钮的破坏性污染；工作区标题折叠按钮与快速新建 `+` 图标（22×22px）实现严格的 Flex 垂直居中对齐；
+    - **树形层级指引线**：在工作区会话容器 `.remote-node-sessions` 左侧添加 1.5px 柔和树状缩进引导线（`margin-left: 8px; padding-left: 10px`），形成清晰自然的文件目录树层次感；
+    - **移除工作区数字编号**：移除工作区标题右侧多余的 `(1)` 计数徽标，保持纯净简洁的目录名展示；
+  - **渐进式会话分步加载（解决“长列表一次性全量倾倒渲染”）**：
+    - 每个工作区初始默认展示 5 条最新活跃会话；当会话超过 5 条时，末尾展示精致的次级操作按钮“展开更多（还有 X 条）”，点击每次递增展示 5 条；在会话搜索过滤时自动展开全部匹配项；
+  - **文案精简化与去极客散列化**：
+    - **无标题友好文案**：当会话无原生标题时，使用友好可读的「新会话 · 971b」替代冷冰冰的原始长十六进制散列；
+    - **清除多余状态圆点与噪音文案**：将会话卡片内上下重复渲染的第二枚 `.remote-state-dot` 彻底移除；常态下消除“状态待确认”（unknown）的无谓噪音文字；仅在“运行中”、“待审批”或“未连接”等关键生命周期通过轻量彩标（`.remote-session-badge`）呈现；
+  - **新建会话弹窗（`.remote-launch`）视觉与排版对齐**：
+    - 重构关闭按钮为悬浮圆形微按钮，与弹窗标题完美水平居中对齐；规范表单项与统一高度（40px）的下拉选择框，重构底部操作区域与提交按钮；
+  - **会话主视窗视觉中轴线全量对齐（解决“离线横幅两头拉扯、空状态文字孤悬左上角、视觉中心割裂”）**：
+    - **顶部横幅对齐收拢**：将全局 `.remote-notice` 宽度收拢对齐至阅读栏宽（`width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px)); margin: 14px auto 0`），与底部输入框卡片边缘严格像素级齐平；修复 `.remote-notice.restoring`（离线/恢复横幅）中的 `space-between` 两极分裂，重构为居中成团（`justify-content: center; gap: 10px`），使加载旋转圈、提示文案与重试操作紧凑平衡地锚定在顶部中轴线上；
+    - **中部空状态重构与全局居中**：将会话内容容器 `.remote-timeline` 升级为 Flex 弹性列布局，空状态 `.remote-timeline-empty` 在视窗正中央（水平与垂直双向居中）呈现精致的会话图标、会话标题与动态状态描述，消除光秃秃单行小字悬在左上角的违和感；根据设备离线、连接恢复中或就绪状态自适应切换清晰简洁的提示文案；
+    - **提示关闭按钮隔离**：为所有提示横幅的关闭按钮添加 `:not([aria-label="关闭提示"])` 隔离与纯净样式，杜绝全局按钮的突兀白底黑框污染。
+
 - **远程网络断线重连与双向流序号断崖自愈（`services/api`, `crates/runner`）**：
   - **Runner 出站事件流断崖自愈（解决“服务端重置或切换网关后本地死循环报 server_seq < acked 无法连接”）**：
     - **问题根因**：当服务端数据库被重置、换机、迁移或恢复备份时，服务端对当前 Runner 的接收水位 `received_seq` 可能归零（或落后于 Runner 已本地确认的 `acked`）。原先 `remote_network.rs` 在 `NetworkEvent::Connected` 遇到 `server_seq < acked` 时无条件执行 `reject_remote_epoch`，导致 Runner 每隔 6 秒重连并持续被自身拒绝；且由于 `acked` 之前的数据帧已按契约从本地 `remote_outbox` 中清除，盲目重传后续帧会导致服务端抛出 `sequence_gap`；

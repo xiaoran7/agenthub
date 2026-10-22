@@ -14,8 +14,13 @@
   line-height: 1.6;
 }
 
-.remote-console button,
-.remote-launch button {
+.remote-console
+  button:not(.remote-workspace-title-btn):not(.remote-workspace-quick-add):not(
+    .remote-workspace-more-btn
+  ):not(.remote-session-main):not(.remote-session-action-btn):not(
+    .remote-header-icon-btn
+  ):not([aria-label="关闭提示"]),
+.remote-launch button:not(.remote-modal-close) {
   background: var(--remote-surface);
   border-color: var(--remote-line);
   border-radius: var(--radius-sm, 6px);
@@ -23,7 +28,13 @@
   transition: all 0.12s ease;
 }
 
-.remote-console button:hover:not(:disabled) {
+.remote-console
+  button:not(.remote-workspace-title-btn):not(.remote-workspace-quick-add):not(
+    .remote-workspace-more-btn
+  ):not(.remote-session-main):not(.remote-session-action-btn):not(
+    .remote-header-icon-btn
+  ):not([aria-label="关闭提示"]):hover:not(:disabled),
+.remote-launch button:not(.remote-modal-close):hover:not(:disabled) {
   background: var(--remote-hover);
   border-color: var(--remote-line-strong);
 }
@@ -707,6 +718,14 @@
 
 .remote-timeline {
   padding: 26px 32px 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.remote-notice {
+  width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px));
+  max-width: none;
+  margin: 14px auto 0;
 }
 
 .remote-private-note {

@@ -266,6 +266,12 @@ export interface TreeInput {
   providerFilter: ProviderKind | "all";
 }
 
+export function formatFallbackTitle(shortId: string): string {
+  const clean = shortId.replace(/^[-_]+/u, "");
+  const tag = clean.slice(0, 4);
+  return tag ? `新会话 · ${tag}` : "新会话";
+}
+
 /**
  * Build the device -> agent -> workspace -> session tree.
  *
@@ -300,7 +306,7 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
       workspaceId: session.workspace_path,
       // The agent folder above already names the Provider, so an untitled
       // session falls back to its short id rather than repeating it.
-      title: session.title ?? shortId.slice(0, 8),
+      title: session.title ?? formatFallbackTitle(shortId),
       model: disc?.model,
       totalTokens: disc?.total_tokens,
       lastActivityAtMs: disc?.last_activity_at_ms,
@@ -333,7 +339,7 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
       runnerId: candidate.runner_id,
       providerSessionId: candidate.provider_session_id,
       workspaceId: candidate.workspace_path,
-      title: candidate.title ?? shortId.slice(0, 8),
+      title: candidate.title ?? formatFallbackTitle(shortId),
       model: candidate.model ?? disc?.model,
       totalTokens: candidate.total_tokens ?? disc?.total_tokens,
       lastActivityAtMs:

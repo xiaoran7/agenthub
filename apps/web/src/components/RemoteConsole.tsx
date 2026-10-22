@@ -33,6 +33,7 @@ import { loadConfig, saveConfig } from "../lib/config";
 import {
   buildSessionTree,
   cleanPath,
+  formatFallbackTitle,
   getDeviceLabel,
   getProviderInfo,
   workspaceLabel,
@@ -1170,7 +1171,12 @@ export function RemoteConsole({
       busy
     )
       return;
-    const sessionKey = `${key(session)}/${session.binding.host_generation}`;
+    const targetRunner = snapshot.runners.find(
+      (r) => r.runner_id === session.runner_id,
+    );
+    const activeGeneration =
+      targetRunner?.hello?.host_generation ?? session.binding.host_generation;
+    const sessionKey = `${key(session)}/${activeGeneration}`;
     if (autoResumedRef.current.has(sessionKey)) return;
     autoResumedRef.current.add(sessionKey);
     void submit(
@@ -1187,6 +1193,7 @@ export function RemoteConsole({
     session?.online,
     session?.binding.control_connected,
     session?.binding.host_generation,
+    snapshot.runners,
     busy,
   ]);
 
@@ -1219,17 +1226,23 @@ export function RemoteConsole({
       setSubmittingInterrupt(true);
     }
     setError("");
+    const targetRunner = snapshot.runners.find(
+      (item) => item.runner_id === target.runner_id,
+    );
+    const activeGeneration =
+      targetRunner?.hello?.host_generation ?? target.binding.host_generation;
     const attemptKey = JSON.stringify([
       target.runner_id,
       target.binding.hub_session_id,
       action,
+      activeGeneration,
     ]);
     const command =
       attempts.current.get(attemptKey) ??
       ({
         client_cmd_id: safeRandomUUID(),
         hub_session_id: target.binding.hub_session_id,
-        host_generation: target.binding.host_generation,
+        host_generation: activeGeneration,
         command: action,
       } satisfies RemoteCommand);
     attempts.current.set(attemptKey, command);
@@ -1245,8 +1258,7 @@ export function RemoteConsole({
       }
       refresh.current();
     } catch (err) {
-      if (err instanceof Error && err.name === "RemoteRequestRejected")
-        attempts.current.delete(attemptKey);
+      attempts.current.delete(attemptKey);
       setError(remoteError(err));
     } finally {
       setBusy(false);
@@ -1365,6 +1377,10 @@ export function RemoteConsole({
   // selected session survives switching agents or devices.
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<
     Record<string, boolean>
+  >({});
+  // Progressive session loading: initial limit per workspace with incremental "load more"
+  const [workspaceVisibleCounts, setWorkspaceVisibleCounts] = useState<
+    Record<string, number>
   >({});
 
   const toggleNode = (
@@ -2289,6 +2305,15 @@ export function RemoteConsole({
               const isWorkspaceCollapsed =
                 !sessionSearchQuery &&
                 collapsedWorkspaces[workspaceKey] === true;
+              const INITIAL_VISIBLE_COUNT = 5;
+              const STEP_COUNT = 5;
+              const visibleLimit = sessionSearchQuery
+                ? workspaceGroup.items.length
+                : (workspaceVisibleCounts[workspaceKey] ??
+                  INITIAL_VISIBLE_COUNT);
+              const visibleItems = workspaceGroup.items.slice(0, visibleLimit);
+              const hasMore = workspaceGroup.items.length > visibleLimit;
+              const remainingCount = workspaceGroup.items.length - visibleLimit;
               return (
                 <div className="remote-workspace-group" key={workspaceKey}>
                   <div className="remote-workspace-header">
@@ -2323,9 +2348,6 @@ export function RemoteConsole({
                       </svg>
                       <span className="remote-workspace-name">
                         {workspaceGroup.label}
-                      </span>
-                      <span className="remote-node-count">
-                        {workspaceGroup.items.length}
                       </span>
                     </button>
                     <button
@@ -2366,209 +2388,296 @@ export function RemoteConsole({
                           暂无会话，点击新建开始
                         </div>
                       ) : (
-                        workspaceGroup.items.map((item) => {
-                          if (item.kind === "active") {
-                            const activeSession = snapshot.sessions.find(
-                              (entry) => key(entry) === item.sessionKey,
-                            );
-                            const isSelected = item.sessionKey === selected;
-                            const pendingCount =
-                              pendingApprovalsBySessionKey.get(
-                                item.sessionKey,
-                              ) ?? 0;
-                            return (
-                              <div
-                                className={`remote-session ${
-                                  isSelected ? "selected" : ""
-                                }`}
-                                key={item.key}
-                              >
-                                <button
-                                  type="button"
-                                  className="remote-session-main"
-                                  onClick={() => {
-                                    if (activeSession === undefined) return;
-                                    if (isSelected) {
-                                      if (isMobile) setMobileDrawerOpen(false);
-                                      return;
-                                    }
-                                    setSelected(item.sessionKey);
-                                    setError("");
-                                    if (isMobile) setMobileDrawerOpen(false);
-                                    if (
-                                      activeSession.online &&
-                                      !activeSession.binding.control_connected
-                                    ) {
-                                      void submit(
-                                        {
-                                          action: "connect",
-                                          mode: "resume",
-                                          workspace_path:
-                                            activeSession.binding
-                                              .workspace_path,
-                                          provider_session_id:
-                                            activeSession.binding
-                                              .provider_session_id,
-                                        },
-                                        activeSession,
-                                      );
-                                    }
-                                  }}
+                        <>
+                          {visibleItems.map((item) => {
+                            if (item.kind === "active") {
+                              const activeSession = snapshot.sessions.find(
+                                (entry) => key(entry) === item.sessionKey,
+                              );
+                              const isSelected = item.sessionKey === selected;
+                              const pendingCount =
+                                pendingApprovalsBySessionKey.get(
+                                  item.sessionKey,
+                                ) ?? 0;
+                              return (
+                                <div
+                                  className={`remote-session ${
+                                    isSelected ? "selected" : ""
+                                  }`}
+                                  key={item.key}
                                 >
-                                  <span className="remote-session-top-line">
-                                    <span
-                                      className={`remote-session-bullet ${
-                                        item.session.execution_state ===
-                                        "running"
-                                          ? "running"
-                                          : item.session.execution_state ===
-                                                "awaiting_permission" ||
-                                              item.session.execution_state ===
-                                                "awaiting_input"
-                                            ? "waiting"
-                                            : "idle"
-                                      }`}
-                                      aria-hidden="true"
-                                    />
-                                    <span className="remote-session-title">
-                                      {item.title}
-                                    </span>
-                                  </span>
-                                  <span className="remote-session-meta">
-                                    <span
-                                      className={`remote-state-dot ${
-                                        item.session.execution_state ===
-                                        "running"
-                                          ? "running"
-                                          : item.session.execution_state ===
-                                                "awaiting_permission" ||
-                                              item.session.execution_state ===
-                                                "awaiting_input"
-                                            ? "waiting"
-                                            : "idle"
-                                      }`}
-                                      aria-hidden="true"
-                                    />
-                                    <span className="remote-state-text">
-                                      {states[item.session.execution_state] ??
-                                        "状态待确认"}
-                                    </span>
-                                    {item.model && (
-                                      <span
-                                        className="remote-session-pill-tag"
-                                        title={`模型: ${item.model}`}
-                                      >
-                                        {item.model.replace(/^models\//u, "")}
-                                      </span>
-                                    )}
-                                    {formatSessionTokens(item.totalTokens) && (
-                                      <span
-                                        className="remote-session-tokens"
-                                        title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
-                                      >
-                                        {formatSessionTokens(item.totalTokens)}
-                                      </span>
-                                    )}
-                                  </span>
-                                </button>
-                                <div className="remote-session-actions-hover">
-                                  {pendingCount > 0 && (
-                                    <span
-                                      className="remote-tree-badge-pending"
-                                      title={`有 ${pendingCount} 项待确认审批`}
-                                      aria-label={`有 ${pendingCount} 项待确认审批`}
-                                    >
-                                      !
-                                      {pendingCount > 1
-                                        ? ` ${pendingCount}`
-                                        : ""}
-                                    </span>
-                                  )}
                                   <button
                                     type="button"
-                                    className={`remote-session-action-btn ${
-                                      copiedSessionId === item.sessionKey
-                                        ? "copied"
-                                        : ""
-                                    }`}
-                                    title={
-                                      copiedSessionId === item.sessionKey
-                                        ? "已复制会话ID"
-                                        : "复制会话ID"
-                                    }
-                                    aria-label="复制会话ID"
-                                    onClick={(e) =>
-                                      handleCopySessionId(item.sessionKey, e)
-                                    }
+                                    className="remote-session-main"
+                                    onClick={() => {
+                                      if (activeSession === undefined) return;
+                                      if (isSelected) {
+                                        if (isMobile)
+                                          setMobileDrawerOpen(false);
+                                        if (
+                                          activeSession.online &&
+                                          !activeSession.binding
+                                            .control_connected &&
+                                          !busy
+                                        ) {
+                                          const targetRunner =
+                                            snapshot.runners.find(
+                                              (r) =>
+                                                r.runner_id ===
+                                                activeSession.runner_id,
+                                            );
+                                          const activeGen =
+                                            targetRunner?.hello
+                                              ?.host_generation ??
+                                            activeSession.binding
+                                              .host_generation;
+                                          autoResumedRef.current.delete(
+                                            `${key(activeSession)}/${activeSession.binding.host_generation}`,
+                                          );
+                                          autoResumedRef.current.delete(
+                                            `${key(activeSession)}/${activeGen}`,
+                                          );
+                                          void submit(
+                                            {
+                                              action: "connect",
+                                              mode: "resume",
+                                              workspace_path:
+                                                activeSession.binding
+                                                  .workspace_path,
+                                              provider_session_id:
+                                                activeSession.binding
+                                                  .provider_session_id,
+                                            },
+                                            activeSession,
+                                          );
+                                        }
+                                        return;
+                                      }
+                                      setSelected(item.sessionKey);
+                                      setError("");
+                                      if (isMobile) setMobileDrawerOpen(false);
+                                      if (
+                                        activeSession.online &&
+                                        !activeSession.binding.control_connected
+                                      ) {
+                                        const targetRunner =
+                                          snapshot.runners.find(
+                                            (r) =>
+                                              r.runner_id ===
+                                              activeSession.runner_id,
+                                          );
+                                        const activeGen =
+                                          targetRunner?.hello
+                                            ?.host_generation ??
+                                          activeSession.binding.host_generation;
+                                        autoResumedRef.current.delete(
+                                          `${key(activeSession)}/${activeSession.binding.host_generation}`,
+                                        );
+                                        autoResumedRef.current.delete(
+                                          `${key(activeSession)}/${activeGen}`,
+                                        );
+                                        void submit(
+                                          {
+                                            action: "connect",
+                                            mode: "resume",
+                                            workspace_path:
+                                              activeSession.binding
+                                                .workspace_path,
+                                            provider_session_id:
+                                              activeSession.binding
+                                                .provider_session_id,
+                                          },
+                                          activeSession,
+                                        );
+                                      }
+                                    }}
                                   >
-                                    {copiedSessionId === item.sessionKey ? (
-                                      <CheckIcon size={12} />
-                                    ) : (
-                                      <CopyIcon size={12} />
-                                    )}
+                                    <span className="remote-session-top-line">
+                                      <span
+                                        className={`remote-session-bullet ${
+                                          !item.session.control_connected &&
+                                          activeSession?.online
+                                            ? "reconnecting"
+                                            : item.session.execution_state ===
+                                                "running"
+                                              ? "running"
+                                              : item.session.execution_state ===
+                                                    "awaiting_permission" ||
+                                                  item.session
+                                                    .execution_state ===
+                                                    "awaiting_input"
+                                                ? "waiting"
+                                                : "idle"
+                                        }`}
+                                        aria-hidden="true"
+                                      />
+                                      <span className="remote-session-title">
+                                        {item.title}
+                                      </span>
+                                    </span>
+                                    <span className="remote-session-meta">
+                                      {!item.session.control_connected &&
+                                      activeSession?.online ? (
+                                        <span className="remote-session-badge reconnecting">
+                                          {busy && isSelected
+                                            ? "正在恢复..."
+                                            : "未连接"}
+                                        </span>
+                                      ) : item.session.execution_state ===
+                                        "running" ? (
+                                        <span className="remote-session-badge running">
+                                          正在工作
+                                        </span>
+                                      ) : item.session.execution_state ===
+                                        "awaiting_permission" ? (
+                                        <span className="remote-session-badge waiting">
+                                          待审批
+                                        </span>
+                                      ) : item.session.execution_state ===
+                                        "awaiting_input" ? (
+                                        <span className="remote-session-badge waiting">
+                                          待输入
+                                        </span>
+                                      ) : null}
+                                      {item.model && (
+                                        <span
+                                          className="remote-session-pill-tag"
+                                          title={`模型: ${item.model}`}
+                                        >
+                                          {item.model.replace(/^models\//u, "")}
+                                        </span>
+                                      )}
+                                      {formatSessionTokens(
+                                        item.totalTokens,
+                                      ) && (
+                                        <span
+                                          className="remote-session-tokens"
+                                          title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
+                                        >
+                                          {formatSessionTokens(
+                                            item.totalTokens,
+                                          )}
+                                        </span>
+                                      )}
+                                    </span>
                                   </button>
+                                  <div className="remote-session-actions-hover">
+                                    {pendingCount > 0 && (
+                                      <span
+                                        className="remote-tree-badge-pending"
+                                        title={`有 ${pendingCount} 项待确认审批`}
+                                        aria-label={`有 ${pendingCount} 项待确认审批`}
+                                      >
+                                        !
+                                        {pendingCount > 1
+                                          ? ` ${pendingCount}`
+                                          : ""}
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className={`remote-session-action-btn ${
+                                        copiedSessionId === item.sessionKey
+                                          ? "copied"
+                                          : ""
+                                      }`}
+                                      title={
+                                        copiedSessionId === item.sessionKey
+                                          ? "已复制会话ID"
+                                          : "复制会话ID"
+                                      }
+                                      aria-label="复制会话ID"
+                                      onClick={(e) =>
+                                        handleCopySessionId(item.sessionKey, e)
+                                      }
+                                    >
+                                      {copiedSessionId === item.sessionKey ? (
+                                        <CheckIcon size={12} />
+                                      ) : (
+                                        <CopyIcon size={12} />
+                                      )}
+                                    </button>
+                                  </div>
                                 </div>
-                              </div>
-                            );
-                          }
+                              );
+                            }
 
-                          return (
-                            <button
-                              className="remote-session candidate"
-                              key={item.key}
-                              title={
-                                item.candidate.resumable === false
-                                  ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
-                                  : `点击恢复：${item.title}`
-                              }
-                              disabled={
-                                busy || item.candidate.resumable === false
-                              }
-                              onClick={() => {
-                                if (isMobile) setMobileDrawerOpen(false);
-                                void resumeCandidate(
-                                  item.runnerId,
-                                  item.workspaceId,
-                                  item.providerSessionId,
-                                );
-                              }}
-                            >
-                              <div className="remote-session-top-line">
-                                <span
-                                  className="remote-session-bullet candidate"
-                                  aria-hidden="true"
-                                />
-                                <span className="remote-session-title">
-                                  {item.title}
-                                </span>
-                              </div>
-                              <span className="remote-session-meta">
-                                <span className="remote-state-dot idle" />
-                                <span className="remote-state-text">
-                                  {item.candidate.resumable === false
-                                    ? "仅发现"
-                                    : "点击恢复"}
-                                </span>
-                                {item.model && (
+                            return (
+                              <button
+                                className="remote-session candidate"
+                                key={item.key}
+                                title={
+                                  item.candidate.resumable === false
+                                    ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
+                                    : `点击恢复：${item.title}`
+                                }
+                                disabled={
+                                  busy || item.candidate.resumable === false
+                                }
+                                onClick={() => {
+                                  if (isMobile) setMobileDrawerOpen(false);
+                                  void resumeCandidate(
+                                    item.runnerId,
+                                    item.workspaceId,
+                                    item.providerSessionId,
+                                  );
+                                }}
+                              >
+                                <div className="remote-session-top-line">
                                   <span
-                                    className="remote-session-pill-tag"
-                                    title={`模型: ${item.model}`}
-                                  >
-                                    {item.model.replace(/^models\//u, "")}
+                                    className="remote-session-bullet candidate"
+                                    aria-hidden="true"
+                                  />
+                                  <span className="remote-session-title">
+                                    {item.title}
                                   </span>
-                                )}
-                                {formatSessionTokens(item.totalTokens) && (
-                                  <span
-                                    className="remote-session-tokens"
-                                    title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
-                                  >
-                                    {formatSessionTokens(item.totalTokens)}
+                                </div>
+                                <span className="remote-session-meta">
+                                  <span className="remote-session-badge candidate">
+                                    可接管
                                   </span>
-                                )}
-                              </span>
-                            </button>
-                          );
-                        })
+                                  {item.model && (
+                                    <span
+                                      className="remote-session-pill-tag"
+                                      title={`模型: ${item.model}`}
+                                    >
+                                      {item.model.replace(/^models\//u, "")}
+                                    </span>
+                                  )}
+                                  {formatSessionTokens(item.totalTokens) && (
+                                    <span
+                                      className="remote-session-tokens"
+                                      title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
+                                    >
+                                      {formatSessionTokens(item.totalTokens)}
+                                    </span>
+                                  )}
+                                </span>
+                              </button>
+                            );
+                          })}
+                          {hasMore && (
+                            <div className="remote-workspace-more-row">
+                              <button
+                                type="button"
+                                className="remote-workspace-more-btn"
+                                onClick={() => {
+                                  setWorkspaceVisibleCounts((prev) => ({
+                                    ...prev,
+                                    [workspaceKey]:
+                                      (prev[workspaceKey] ??
+                                        INITIAL_VISIBLE_COUNT) + STEP_COUNT,
+                                  }));
+                                }}
+                              >
+                                <ChevronDownIcon size={12} />
+                                <span>
+                                  展开更多（还有 {remainingCount} 条）
+                                </span>
+                              </button>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
@@ -2860,7 +2969,6 @@ export function RemoteConsole({
           </div>
         ) : (
           <div key={selected} className="remote-session-view remote-view-enter">
-            {!session && <p className="remote-muted">正在等待电脑确认会话…</p>}
             {session && !connected && (
               <div className="remote-notice restoring">
                 <span className="remote-notice-spinner" />
@@ -2967,11 +3075,52 @@ export function RemoteConsole({
                   </article>
                 );
               })}
-              {!items.length && session && (
-                <p className="remote-muted remote-timeline-empty">
-                  会话已建立，可以发送第一条消息。
-                </p>
-              )}
+              {!session ? (
+                <div className="remote-timeline-empty">
+                  <span className="remote-notice-spinner" />
+                  <p className="remote-timeline-empty-desc">
+                    正在等待电脑确认会话…
+                  </p>
+                </div>
+              ) : !items.length ? (
+                <div className="remote-timeline-empty">
+                  <div
+                    className="remote-timeline-empty-glyph"
+                    aria-hidden="true"
+                  >
+                    <svg
+                      width="26"
+                      height="26"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                  </div>
+                  <h3 className="remote-timeline-empty-title">
+                    {discovered.get(
+                      `${session.runner_id}/${session.binding.provider_session_id}`,
+                    )?.title ||
+                      formatFallbackTitle(
+                        session.binding.provider_session_id.replace(
+                          /^(sess_|claude_|gemini_|antigravity_)/u,
+                          "",
+                        ),
+                      )}
+                  </h3>
+                  <p className="remote-timeline-empty-desc">
+                    {!session.online
+                      ? "电脑处于离线状态，上线后即可在此开始对话。"
+                      : !connected
+                        ? "正在恢复接入 Agent，稍候即可发送消息。"
+                        : "会话已就绪，可以在下方发送第一条指令。"}
+                  </p>
+                </div>
+              ) : null}
               {approvals.map((approval) => {
                 const isSubmittingThis =
                   submittingApproval?.id === approval.approval_id;
@@ -3700,6 +3849,7 @@ export function RemoteConsole({
             <h2>在电脑上开始</h2>
             <button
               type="button"
+              className="remote-modal-close"
               aria-label="关闭"
               onClick={() => dialog.current?.close()}
             >
@@ -3826,15 +3976,18 @@ export function RemoteConsole({
               <option value="workspace-write">允许修改工作区</option>
             </select>
           </label>
-          <p>
+          <p className="remote-launch-note">
             执行发生在所选电脑。会话内容将同步到你的 Hub，供其他设备查看和继续。
           </p>
-          <button
-            className="remote-primary"
-            disabled={busy || !workspace || !runner}
-          >
-            {nativeId ? "恢复会话" : "创建会话"}
-          </button>
+          <div className="remote-modal-actions">
+            <button
+              type="submit"
+              className="remote-primary remote-modal-submit"
+              disabled={busy || !workspace || !runner}
+            >
+              {busy ? "正在启动…" : nativeId ? "恢复会话" : "创建会话"}
+            </button>
+          </div>
         </form>
       </dialog>
       {settingsOpen && panelConfig !== undefined && (

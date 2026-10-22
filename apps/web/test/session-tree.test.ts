@@ -316,3 +316,16 @@ test("session tree items preserve token counts, model and activity timestamps", 
   assert.equal(candItem.totalTokens, 5800);
   assert.equal(candItem.lastActivityAtMs, 1700000005000);
 });
+
+test("untitled sessions fall back to user-friendly titles rather than raw hex hashes", () => {
+  const tree = buildSessionTree({
+    discovered: new Map(),
+    devices: [host("dev_a", true)],
+    activeSessions: [active("dev_a", "sess_971bd511-xxxx", "D:\\Work")],
+    candidates: [candidate("dev_a", "sess_a82fe102-yyyy", "D:\\Work")],
+    providerFilter: "all",
+  });
+  const items = tree[0]!.workspaces[0]!.workspaces[0]!.items;
+  assert.equal(items[0]!.title, "新会话 · 971b");
+  assert.equal(items[1]!.title, "新会话 · a82f");
+});
