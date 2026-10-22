@@ -166,13 +166,13 @@ export function registerRemoteRoutes(
               throw new RemoteStoreError("invalid_device_signature");
             content.register(device.owner_id, device.device_id);
             const marks = content.watermarks(device.device_id);
-            const received = Number(frame.received_command_seq);
-            if (
-              !Number.isSafeInteger(received) ||
-              received < 0 ||
-              received > marks.command_seq
-            )
+            let received = Number(frame.received_command_seq);
+            if (!Number.isSafeInteger(received) || received < 0) {
               throw new RemoteStoreError("command_journal_mismatch");
+            }
+            if (received > marks.command_seq) {
+              received = marks.command_seq;
+            }
             if (received < marks.command_ack) {
               content.acknowledgeCommands(device.device_id, received, true);
             }

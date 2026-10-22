@@ -215,6 +215,13 @@ impl RemoteJournal {
             "UPDATE remote_identity SET device_id=?1, server=?2 WHERE singleton=1",
             params![new_device_id, new_server],
         )?;
+        transaction.execute("DELETE FROM remote_outbox", [])?;
+        transaction.execute("DELETE FROM sqlite_sequence WHERE name='remote_outbox'", [])?;
+        transaction.execute(
+            "UPDATE remote_watermarks SET sent=0, acked=0 WHERE singleton=1",
+            [],
+        )?;
+        transaction.execute("UPDATE remote_inbound SET received=0 WHERE singleton=1", [])?;
         transaction.commit()?;
         Ok(())
     }
@@ -618,6 +625,34 @@ impl RemoteJournal {
             [seq],
         )?;
         transaction.execute("DELETE FROM remote_outbox WHERE seq<=?1", [seq])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn reset_watermarks_and_outbox(&mut self, server_seq: i64) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute("DELETE FROM remote_outbox", [])?;
+        transaction.execute("DELETE FROM sqlite_sequence WHERE name='remote_outbox'", [])?;
+        if server_seq > 0 {
+            transaction.execute(
+                "INSERT INTO sqlite_sequence (name, seq) VALUES ('remote_outbox', ?1)",
+                [server_seq],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE remote_watermarks SET sent=?1, acked=?1 WHERE singleton=1",
+            [server_seq],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn reset_inbound_command_seq(&mut self, seq: i64) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "UPDATE remote_inbound SET received=?1 WHERE singleton=1",
+            [seq],
+        )?;
         transaction.commit()?;
         Ok(())
     }

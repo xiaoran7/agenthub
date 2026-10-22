@@ -751,6 +751,9 @@ pub fn run_with_local_control(
                 &mut offered,
                 &send_tx,
                 &command_seq,
+                cached_models.as_ref(),
+                cached_discovery.as_ref(),
+                device_name,
             )?;
         }
         // Re-read the provider's session list and republish it. The `ready`
@@ -828,31 +831,37 @@ fn handle_network_event<T: NativeTransport>(
     offered: &mut i64,
     send_tx: &SyncSender<NetworkSend>,
     command_seq: &AtomicI64,
+    cached_models: Option<&Value>,
+    cached_discovery: Option<&Value>,
+    device_name: &crate::device_name::DeviceNameSource,
 ) -> Result<()> {
     match event {
         NetworkEvent::Connected(epoch, server_seq) if epoch >> 32 == current_remote_generation => {
             let (sent, acked) = durable.journal.watermarks()?;
             if server_seq < acked {
-                reject_remote_epoch(
-                    control,
-                    active,
-                    epoch,
-                    &format!("server_seq {server_seq} < acked {acked}"),
+                eprintln!(
+                    "[Runner] Server sequence rewound: server_seq {server_seq} < acked {acked}. Resetting outbox stream to re-sync."
                 );
-                return Ok(());
-            }
-            if server_seq > sent {
-                for s in (sent + 1)..=server_seq {
-                    let _ = durable.journal.mark_sent(s);
+                durable.journal.reset_watermarks_and_outbox(server_seq)?;
+                let _ = durable.journal.reset_inbound_command_seq(0);
+                command_seq.store(0, Ordering::Relaxed);
+                let ready_payload =
+                    remote_ready_payload(durable, cached_models, cached_discovery, device_name);
+                durable.journal.enqueue_remote(&ready_payload)?;
+            } else {
+                if server_seq > sent {
+                    for s in (sent + 1)..=server_seq {
+                        let _ = durable.journal.mark_sent(s);
+                    }
                 }
-            }
-            match durable.journal.acknowledge(server_seq) {
-                Ok(()) => {}
-                Err(crate::remote_journal::JournalError::InvalidAck) => {
-                    reject_remote_epoch(control, active, epoch, "journal ack invalid");
-                    return Ok(());
+                match durable.journal.acknowledge(server_seq) {
+                    Ok(()) => {}
+                    Err(crate::remote_journal::JournalError::InvalidAck) => {
+                        reject_remote_epoch(control, active, epoch, "journal ack invalid");
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error.into()),
                 }
-                Err(error) => return Err(error.into()),
             }
             *offered = server_seq;
             *active = Some(epoch);
@@ -1105,6 +1114,12 @@ fn network_loop(
                     "[Runner Handshake] Server returned non-hello_ack: {:?}",
                     ack
                 );
+                if ack["type"] == "error" && ack["code"] == "command_journal_mismatch" {
+                    eprintln!(
+                        "[Runner Handshake] Server reported command_journal_mismatch, resetting received_command_seq to 0"
+                    );
+                    command_seq.store(0, Ordering::Relaxed);
+                }
                 bail!("remote_handshake_rejected");
             }
             events.send(NetworkEvent::Connected(
@@ -1304,6 +1319,7 @@ mod tests {
         command_seq: &AtomicI64,
         epoch: u64,
     ) {
+        let device_name = crate::device_name::DeviceNameSource::default();
         handle_network_event(
             NetworkEvent::Connected(epoch, 0),
             epoch >> 32,
@@ -1313,6 +1329,9 @@ mod tests {
             offered,
             send_tx,
             command_seq,
+            None,
+            None,
+            &device_name,
         )
         .unwrap();
         assert_eq!(*active, Some(epoch));
@@ -1323,6 +1342,7 @@ mod tests {
     fn remote_protocol_faults_fence_only_the_transport_epoch() {
         let generation = 7_u64;
         let epoch = generation << 32 | 1;
+        let device_name = crate::device_name::DeviceNameSource::default();
         for frame in [
             json!({"type":"ack","seq":1}),
             json!({"type":"command","seq":2,"command":{}}),
@@ -1351,6 +1371,9 @@ mod tests {
                 &mut offered,
                 &send_tx,
                 &command_seq,
+                None,
+                None,
+                &device_name,
             )
             .unwrap();
 
@@ -1372,6 +1395,7 @@ mod tests {
     fn handshake_watermark_mismatch_does_not_stop_the_local_host() {
         let generation = 3_u64;
         let epoch = generation << 32 | 1;
+        let device_name = crate::device_name::DeviceNameSource::default();
         let (_dir, mut durable, control, send_tx, _send_rx, command_seq) = remote_test_host();
         let host_generation = durable.host.generation().to_owned();
         let mut active = None;
@@ -1386,6 +1410,9 @@ mod tests {
             &mut offered,
             &send_tx,
             &command_seq,
+            None,
+            None,
+            &device_name,
         )
         .unwrap();
 
@@ -1394,6 +1421,55 @@ mod tests {
         assert!(durable.host.is_alive());
         assert_eq!(durable.host.generation(), host_generation);
         assert_eq!(control.rejected_epoch.load(Ordering::SeqCst), epoch);
+    }
+
+    #[test]
+    fn server_sequence_rewound_resynchronizes_outbox_stream() {
+        let generation = 5_u64;
+        let epoch = generation << 32 | 1;
+        let device_name = crate::device_name::DeviceNameSource::default();
+        let (_dir, mut durable, control, send_tx, _send_rx, command_seq) = remote_test_host();
+        let mut active = None;
+        let mut offered = 0;
+
+        // Simulate local state having advanced previously (e.g. against older server instance)
+        durable
+            .journal
+            .enqueue_remote(&json!({"type":"test"}))
+            .unwrap();
+        durable.journal.mark_sent(1).unwrap();
+        durable.journal.acknowledge(1).unwrap();
+        let (_, acked) = durable.journal.watermarks().unwrap();
+        assert_eq!(acked, 1);
+
+        // Server reconnects with server_seq = 0 (server database was reset / lower than acked)
+        handle_network_event(
+            NetworkEvent::Connected(epoch, 0),
+            generation,
+            &mut durable,
+            &control,
+            &mut active,
+            &mut offered,
+            &send_tx,
+            &command_seq,
+            None,
+            None,
+            &device_name,
+        )
+        .unwrap();
+
+        assert_eq!(active, Some(epoch));
+        assert!(control.connected.load(Ordering::Relaxed));
+        assert_eq!(offered, 0);
+
+        // Watermarks should be reset and a fresh ready frame queued at seq 1
+        let (sent, acked) = durable.journal.watermarks().unwrap();
+        assert_eq!(sent, 0);
+        assert_eq!(acked, 0);
+        let pending = durable.journal.pending(0, 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, 1);
+        assert_eq!(pending[0].1["type"], "ready");
     }
 
     #[test]

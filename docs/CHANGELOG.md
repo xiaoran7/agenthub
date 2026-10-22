@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+- **远程网络断线重连与双向流序号断崖自愈（`services/api`, `crates/runner`）**：
+  - **Runner 出站事件流断崖自愈（解决“服务端重置或切换网关后本地死循环报 server_seq < acked 无法连接”）**：
+    - **问题根因**：当服务端数据库被重置、换机、迁移或恢复备份时，服务端对当前 Runner 的接收水位 `received_seq` 可能归零（或落后于 Runner 已本地确认的 `acked`）。原先 `remote_network.rs` 在 `NetworkEvent::Connected` 遇到 `server_seq < acked` 时无条件执行 `reject_remote_epoch`，导致 Runner 每隔 6 秒重连并持续被自身拒绝；且由于 `acked` 之前的数据帧已按契约从本地 `remote_outbox` 中清除，盲目重传后续帧会导致服务端抛出 `sequence_gap`；
+    - **自动重置与权威快照自愈**：在 `server_seq < acked` 时，Runner 识别到服务端事件流已重置或回退，自动调用 `reset_watermarks_and_outbox(server_seq)` 矫正本地水位与自增序列，同时将入站命令序号归零，并立即入队一份包含全量工作区、模型和会话能力的最新权威 `ready` 快照（`seq = server_seq + 1`），让服务端与客户端在首帧通信中秒级无缝对齐并恢复双向通信；
+  - **入站命令日记账容错对齐（解决“Runner 入站序号超前时服务端报错 command_journal_mismatch 拒连”）**：
+    - **服务端平滑对齐**：在 `services/api` 的 `/v3/remote/ws` 握手校验中，当 Runner 上报的 `received_command_seq > marks.command_seq`（如 Runner 历史曾连接过已废弃的旧库环境），服务端不再抛出致命的 `command_journal_mismatch` 异常强退连接，而是将有效基准平滑夹持至服务端当前实际具有的最高 `command_seq`，让新连接安全平稳建立；
+    - **Runner 端容错重置**：Runner 握手若收到历史服务端残留的 `command_journal_mismatch` 报错，自动将本地 `received_command_seq` 归零，打破死锁循环；
+  - **设备/网关重绑彻底净化（`rebind_device_and_server`）**：
+    - 在用户于本地控制台重新配对、激活或修改网关地址时，主动重置本地远程水位（`sent=0, acked=0`）、入站序号（`received=0`）及旧出站队列，避免新旧服务器之间的流状态交叉污染；
+  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `64aa822aa45449d6d7e8a3dc445eda00c31cfb7adcf3a8673f47f7152036069d`）。
+
 - **双端设备连接状态同步、友好设备名称与已撤销设备非破坏性重连激活（`contracts`, `services/api`, `crates/runner`, `apps/web`）**：
   - **双端在线状态实时一致（解决“明明连接了还是显示未连接”）**：
     - **问题根因**：Web 控制台依据 PostgreSQL/SQLite 中 `agent_platform_devices` 的 `last_seen_at` 判定在线（45秒内有 HTTP 注册或心跳即亮绿灯），而本地 Runner 状态栏与设置页基于真实的 WebSocket 长连接双向流（`/v3/remote/ws` 的 challenge/hello/hello_ack 握手）判定。原先 `remote_network.rs` 中的 `SetRemoteEnabled` 遇到当前服务地址与已配置地址相同时存在短路退出逻辑（`if current_server == validated { return Ok(true); }`），导致用户重新绑定或配对后未重启 `network_loop`、未递增 generation，未触发 WebSocket 重连；
