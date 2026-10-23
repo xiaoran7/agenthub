@@ -770,6 +770,56 @@ test("a new Host generation replaces the old socket without stale close unregist
   }
 });
 
+test("a connected Runner is online in the device list even without HTTP heartbeats", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  // `web`/`daemon` only open the v3 stream and never call the HTTP heartbeat
+  // endpoint, so `last_seen_at` stays at pairing time. Advancing the clock past
+  // the staleness window reproduces that: the store alone says offline while
+  // the Runner is connected.
+  let now = new Date("2026-07-28T00:00:00Z");
+  const devices = new InMemoryGatewayStore(() => now);
+  await devices.registerDevice("owner", runner, publicKey);
+  now = new Date("2026-07-28T00:05:00Z");
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const readOnline = async (): Promise<boolean> => {
+    const listed = await app.inject({
+      url: "/v1/devices",
+      headers: { "x-user-id": "owner" },
+    });
+    return listed.json().devices[0].online as boolean;
+  };
+  assert.equal(await readOnline(), false, "a stale heartbeat alone is offline");
+  const connection = await connectRunner(address, keys.privateKey, "host-one");
+  try {
+    assert.equal(await readOnline(), true, "the live stream is the presence");
+    const closed = new Promise<void>((resolve) =>
+      connection.ws.once("close", () => resolve()),
+    );
+    connection.ws.terminate();
+    await closed;
+    // The stream closing has to take presence with it, otherwise a dead
+    // Runner would keep reading as online until the process restarts.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (!(await readOnline())) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail("a closed stream must clear presence");
+  } finally {
+    connection.ws.terminate();
+    await app.close();
+  }
+});
+
 test("a restarted Host supersedes commands addressed to its previous generation", async () => {
   const keys = generateKeyPairSync("ed25519");
   const publicKey = keys.publicKey

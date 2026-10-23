@@ -21,6 +21,7 @@ import fastifyRawBody from "fastify-raw-body";
 import fastifyWebsocket from "@fastify/websocket";
 import { registerRemoteRoutes } from "./remote-routes.js";
 import type { RemoteRouteOptions } from "./remote-routes.js";
+import { RunnerPresence } from "./presence.js";
 import type { RemoteContentStore } from "./remote-store.js";
 
 import {
@@ -131,6 +132,8 @@ export interface GatewayAppOptions {
   billingProvider?: BillingProvider;
   singleAdmin?: boolean;
   remoteContent?: RemoteContentStore;
+  /** Live Runner presence shared with the v1 device list. */
+  presence?: RunnerPresence;
   remoteRoutes?: RemoteRouteOptions;
   loginRateLimitSecret?: Buffer;
   trustProxy?: boolean;
@@ -150,6 +153,10 @@ export function createGatewayApp(
   const broker = options.broker ?? new ChangeBroker();
   const authenticator = options.authenticator ?? new RejectingAuthenticator();
   const loginRateLimitSecret = options.loginRateLimitSecret ?? randomBytes(32);
+  // One presence set for both surfaces: the v3 stream marks a Runner online,
+  // and the v1 device list reads the same answer.
+  const presence =
+    options.remoteRoutes?.presence ?? options.presence ?? new RunnerPresence();
   if (options.accounts !== undefined) {
     store.setAuditRecorder?.(options.accounts);
   }
@@ -229,6 +236,7 @@ export function createGatewayApp(
         ...options.remoteRoutes,
         accounts: options.accounts,
         now,
+        presence,
       }),
     );
   }
@@ -1272,12 +1280,16 @@ export function createGatewayApp(
     // what the settings list shows, so the id never has to.
     const names = options.remoteContent?.deviceNames(ownerId);
     return reply.send({
-      devices: names
-        ? devices.map((device) => ({
-            ...device,
-            display_name: names.get(device.device_id),
-          }))
-        : devices,
+      devices: devices.map((device) => ({
+        ...device,
+        // A Runner that holds the v3 stream is online even when its HTTP
+        // heartbeat stopped: `daemon`/`web` only open the WebSocket, so
+        // `last_seen_at` is pairing time and the two surfaces disagreed.
+        online: device.revoked
+          ? false
+          : device.online || presence.isOnline(device.device_id),
+        ...(names ? { display_name: names.get(device.device_id) } : {}),
+      })),
     });
   });
 

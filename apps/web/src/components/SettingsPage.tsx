@@ -601,6 +601,19 @@ export function SettingsPage({
     };
   }, [config, identity, activeSection]);
 
+  // Online state is a live stream fact, not a stored one. Without a refresh a
+  // Runner that reconnects while this panel is open keeps its old dot until
+  // the section is reopened.
+  useEffect(() => {
+    if (activeSection !== "devices") return;
+    const interval = setInterval(() => {
+      void fetchDevices(config, identity)
+        .then((next) => setDevices(next))
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeSection, config, identity]);
+
   const knownDeviceIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (devices) {

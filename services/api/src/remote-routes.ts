@@ -8,6 +8,7 @@ import {
   currentSessionIdentity,
   type AccountStore,
 } from "./accounts.js";
+import { RunnerPresence } from "./presence.js";
 import type { GatewayStore } from "./store.js";
 import { RemoteContentStore, RemoteStoreError } from "./remote-store.js";
 
@@ -26,6 +27,8 @@ export interface RemoteRouteOptions {
   accounts?: AccountStore | undefined;
   /** Clock injection point for the session-expiry check. */
   now?: (() => Date) | undefined;
+  /** Live stream presence, shared with the device list. */
+  presence?: RunnerPresence | undefined;
 }
 
 export function registerRemoteRoutes(
@@ -39,6 +42,8 @@ export function registerRemoteRoutes(
   const streams = new Set<() => void>();
   const sockets = new Set<WebSocket>();
   const now = options.now ?? (() => new Date());
+  const presence = options.presence ?? new RunnerPresence();
+  const isOnline = (runner: string): boolean => presence.isOnline(runner);
   /**
    * Resolves the owner of a console request.
    *
@@ -195,6 +200,7 @@ export function registerRemoteRoutes(
               lastSeen: Date.now(),
             };
             connections.set(connection.runner, connection);
+            presence.markOnline(connection.runner);
             clearTimeout(timeout);
             transmit(connection, {
               type: "hello_ack",
@@ -274,8 +280,12 @@ export function registerRemoteRoutes(
     socket.on("close", () => {
       clearTimeout(timeout);
       sockets.delete(socket);
-      if (connection && connections.get(connection.runner) === connection)
+      // A replaced socket closes after its successor is already registered;
+      // only the current connection may clear presence.
+      if (connection && connections.get(connection.runner) === connection) {
         connections.delete(connection.runner);
+        presence.markOffline(connection.runner);
+      }
     });
   });
   const watchdog = setInterval(() => {
@@ -314,6 +324,7 @@ export function registerRemoteRoutes(
           conn.socket.close(1008, "device_revoked");
           connections.delete(runner.runner_id);
         }
+        presence.markOffline(runner.runner_id);
       }
     }
     // Include any active registered device that is not yet in content.runners
@@ -333,7 +344,7 @@ export function registerRemoteRoutes(
         .filter((runner) => allowed.has(runner.runner_id))
         .map((runner) => ({
           ...runner,
-          online: connections.has(runner.runner_id),
+          online: isOnline(runner.runner_id),
           revoked: false,
         })),
       sessions: content
@@ -343,7 +354,7 @@ export function registerRemoteRoutes(
           const conn = connections.get(session.runner_id);
           return {
             ...session,
-            online: !!conn,
+            online: isOnline(session.runner_id),
             binding: {
               ...session.binding,
               control_connected:

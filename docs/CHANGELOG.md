@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- **Web 设置页设备在线状态与真实长连接对齐（`services/api`, `apps/web`）**：
+  - **问题现象**：本地控制台 `/api/status` 明确 `remote_connected: true`，Web「设置 → 设备」里同一台电脑却显示「离线」；
+  - **问题根因**：`/v1/devices` 的 `online` 只由数据库中 `last_seen_at` 推导（PostgreSQL 45 秒、SQLite 300 秒窗口）。该字段仅由 `/v1/devices/register`、`/v1/devices/heartbeat`、`/v1/sync/batches` 推进，而 `web`/`daemon` 模式的 Runner 走的是 `/v3/remote/ws` 长连接，从不调用 HTTP 心跳接口，配对完成后 `last_seen_at` 便冻结在配对时刻，于是连接一直正常、在线状态却永远过期。控制台本身读的是内存中的连接表（`connections`），两个界面因此长期各说各话；
+  - **单一在线事实（`services/api/src/presence.ts`）**：新增 `RunnerPresence`，在 v3 握手成功时标记在线、socket 关闭时清除；`/v1/devices` 的 `online` 改为「长连接在线，或该存储后端自己的最近活跃判定」，已撤销设备一律离线。被新连接替换的旧 socket 关闭时不会误清后继连接的在线状态；
+  - **会话列表同步收敛（`services/api/src/remote-routes.ts`）**：`/v3/remote/sessions` 的 runner/session `online` 改读同一份 presence，避免同一页面里设备选择器与设置页给出相反结论；
+  - **设置页实时刷新（`apps/web/src/components/SettingsPage.tsx`）**：设备分区停留时每 5 秒拉取一次设备列表，Runner 重连或掉线后指示灯自行更新，不必退出重进；
+
 - **Web 控制台交互视觉体验修复与 Runner 会话恢复自愈（`apps/web`, `crates/runner`）**：
   - **侧边栏复制会话按钮与交互一致性（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/remote.css`）**：
     - **修复小图标被压缩消失**：排查发现全局 `.remote-console button` 的 `8px 13px` 内边距作用到了 `22×22px` 的 `.remote-session-action-btn` 上，导致内部 SVG 宽度被挤压为 0 呈现为空白小灰块；在全局样式排除选择器中加入 `:not(.remote-session-action-btn)`，强制 `padding: 0 !important` 与 `display: block` SVG；
