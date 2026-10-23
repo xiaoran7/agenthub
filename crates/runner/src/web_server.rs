@@ -566,6 +566,9 @@ impl ApiRequest<'_> {
                 }
             }
             ("POST", "/api/models/refresh") => {
+                // Both caches answer this button: the live upstream catalog
+                // and the gateway profile that reads the same endpoint.
+                crate::claude_gateway::invalidate_claude_gateway_cache();
                 let catalog_models = crate::model_catalog::fetch_catalog_models(true);
                 let resp = crate::model_catalog::catalog_models_to_json(&catalog_models);
                 send_json_response(stream, 200, &resp)?;

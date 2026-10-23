@@ -2578,19 +2578,46 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     }
 
     /// Actual provider model/list response, with no invented availability or fallback catalog.
+    ///
+    /// `data` stays the flat list the console has always consumed. `agents`
+    /// carries the same answer split by the engine that can run each model, so
+    /// the launch dialog can offer only the ids the chosen engine accepts: an
+    /// id read from one engine's config is a provider rejection on another.
     pub fn models(&mut self) -> Result<Value, NativeError> {
+        let mut data = Vec::new();
         if let Ok(resp) = self.transport.request("model/list", json!({"limit": 100})) {
-            if resp
-                .get("data")
-                .and_then(Value::as_array)
-                .map(|a| !a.is_empty())
-                .unwrap_or(false)
-            {
-                return Ok(resp);
+            if let Some(list) = resp.get("data").and_then(Value::as_array) {
+                data.extend(list.iter().cloned());
             }
         }
-        let models = crate::model_catalog::fetch_catalog_models(false);
-        Ok(crate::model_catalog::catalog_models_to_json(&models))
+        let mut agents = serde_json::Map::new();
+        if !data.is_empty() {
+            // The app-server's own catalog is Codex's: it is the only engine
+            // whose list arrives over RPC rather than from a config file.
+            agents.insert("codex".into(), json!(data));
+        }
+        let mut seen: std::collections::HashSet<String> = data
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .map(str::to_ascii_lowercase)
+            .collect();
+        for (agent, models) in crate::model_catalog::agent_model_catalogs() {
+            for model in &models {
+                let id = model.get("id").and_then(Value::as_str).unwrap_or("");
+                if !id.is_empty() && seen.insert(id.to_ascii_lowercase()) {
+                    data.push(model.clone());
+                }
+            }
+            agents.insert(agent.into(), json!(models));
+        }
+        if data.is_empty() {
+            let catalog = crate::model_catalog::fetch_catalog_models(false);
+            data = crate::model_catalog::catalog_models_to_json(&catalog)["data"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+        }
+        Ok(json!({ "data": data, "agents": agents }))
     }
 
     pub fn discover(&mut self) -> Result<Value, NativeError> {

@@ -40,6 +40,7 @@ import {
   type WebSessionView,
 } from "../lib/account";
 import { AvatarError, fileToAvatarDataUrl } from "../lib/avatar";
+import { Confirm } from "./Confirm";
 import {
   disableNotifications,
   enableNotifications,
@@ -544,6 +545,9 @@ export function SettingsPage({
   const [deviceActionError, setDeviceActionError] = useState<
     string | undefined
   >(undefined);
+  const [pendingRevoke, setPendingRevoke] = useState<DeviceRecord | undefined>(
+    undefined,
+  );
   const [revokingDevice, setRevokingDevice] = useState<string | undefined>(
     undefined,
   );
@@ -908,16 +912,20 @@ export function SettingsPage({
     return `电脑 · ${shortTail}`;
   }
 
-  async function revoke(device: DeviceRecord) {
-    const name = deviceFriendlyName(device);
-    if (
-      device.revoked ||
-      !window.confirm(
-        `确定撤销设备「${name}」吗？\n\n现有历史数据会完整保留。撤销后随时可在设备端使用新配对码重新连接激活。`,
-      )
-    ) {
-      return;
-    }
+  /**
+   * A revoke is asked for on the console's own dialog, not by the operating
+   * system: the question names the device and says what survives, which
+   * `window.confirm` could only do as an unstyled wall of text.
+   */
+  function askRevoke(device: DeviceRecord) {
+    if (device.revoked) return;
+    setPendingRevoke(device);
+  }
+
+  async function confirmRevoke() {
+    const device = pendingRevoke;
+    if (device === undefined) return;
+    setPendingRevoke(undefined);
     setRevokingDevice(device.device_id);
     setDeviceActionError(undefined);
     try {
@@ -1541,7 +1549,7 @@ export function SettingsPage({
                         disabled={
                           device.revoked || revokingDevice === device.device_id
                         }
-                        onClick={() => void revoke(device)}
+                        onClick={() => askRevoke(device)}
                       >
                         {device.revoked
                           ? "已撤销"
@@ -1663,6 +1671,21 @@ export function SettingsPage({
           )}
         </form>
       </div>
+      <Confirm
+        open={pendingRevoke !== undefined}
+        title={
+          pendingRevoke === undefined
+            ? "撤销这台设备？"
+            : `撤销「${deviceFriendlyName(pendingRevoke)}」？`
+        }
+        description={
+          "现有历史数据会完整保留。撤销后随时可在设备端使用新配对码重新连接激活。"
+        }
+        confirmLabel="撤销设备"
+        cancelLabel="保留"
+        onConfirm={() => void confirmRevoke()}
+        onCancel={() => setPendingRevoke(undefined)}
+      />
     </div>
   );
 }

@@ -845,6 +845,23 @@
     </div>
   </div>
 
+  <!-- one question, asked on the console's own surface -->
+  <div id="askModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="askTitle" aria-describedby="askNote">
+    <div class="dialog narrow">
+      <div class="editor center">
+        <span class="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8.5v5"/><circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none"/><path d="M10.3 4.2 2.9 17a2 2 0 0 0 1.7 3h14.8a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0Z"/></svg>
+        </span>
+        <span class="center-title" id="askTitle"></span>
+        <p class="center-note" id="askNote"></p>
+        <div class="bar center-bar">
+          <button type="button" class="text action" id="askCancelBtn">取消</button>
+          <button type="button" class="text action danger" id="askConfirmBtn">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- shutdown -->
   <div id="shutdownModal" class="modal">
     <div class="dialog narrow">

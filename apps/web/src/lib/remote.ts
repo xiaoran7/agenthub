@@ -42,6 +42,12 @@ export interface RemoteRunner {
         display_name?: string;
         name?: string;
       }>;
+      /**
+       * The same catalog split by the engine that can run each model. An id
+       * read from one engine's config is rejected by another, so the launch
+       * dialog offers only the chosen engine's own list.
+       */
+      agents?: Record<string, Array<{ id: string; display_name?: string }>>;
     };
     discovery?: {
       candidates: DiscoveryCandidate[];

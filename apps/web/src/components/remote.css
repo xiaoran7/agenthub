@@ -642,6 +642,12 @@
   background: #d97757;
 }
 
+/* Desktop shares the clay family with the CLI but sits a shade deeper and
+   browner, so the two Anthropic entry points stay apart at a glance. */
+.remote-popover-agent-indicator[data-agent="claude_desktop"] {
+  background: #9a6a3f;
+}
+
 .remote-popover-agent-indicator[data-agent="codex"] {
   background: #10a37f;
 }
@@ -684,6 +690,17 @@
   background: rgba(139, 92, 246, 0.14);
   color: #8b5cf6;
   border: 1px solid rgba(139, 92, 246, 0.3);
+}
+.remote-session-badge.claude-desktop {
+  background: rgba(154, 106, 63, 0.14);
+  color: #9a6a3f;
+  border: 1px solid rgba(154, 106, 63, 0.3);
+}
+[data-theme="dark"] .remote-session-badge.claude-desktop,
+:root[data-theme="dark"] .remote-session-badge.claude-desktop {
+  background: rgba(200, 160, 120, 0.16);
+  color: #d8b28c;
+  border-color: rgba(200, 160, 120, 0.28);
 }
 
 /* ================= 设备 -> Agent -> 会话 树状层级 ================= */
@@ -1258,6 +1275,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  /* The meta line sits in the row's second column, which is sized `auto` for
+     the hover actions. Without this floor a long model id would widen that
+     column and squeeze the title instead of being ellipsized itself. */
+  min-width: 0;
   width: 100%;
   margin-top: 0;
   color: var(--cds-text-muted, var(--remote-muted));
@@ -3406,13 +3427,24 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   background: var(--cds-alpha-2, var(--remote-hover)) !important;
   color: var(--cds-text-primary, var(--remote-ink)) !important;
 }
-.remote-launch label {
+.remote-launch label,
+.remote-launch-field {
   display: grid;
   gap: 6px;
   font-size: 13px;
   font-weight: 550;
   color: var(--cds-text-secondary, var(--remote-secondary));
   margin-top: 16px;
+}
+.remote-launch-label {
+  display: block;
+  line-height: 1.3;
+}
+.remote-launch-hint {
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--cds-text-muted, var(--remote-muted));
 }
 .remote-launch select,
 .remote-launch input {
@@ -4193,5 +4225,353 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   }
   .remote-tree-badge-pending {
     animation: none !important;
+  }
+}
+
+/* ================= CDS Select (replaces the native <select>) ================= */
+.cds-select-trigger {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  min-width: 0;
+  padding: 0 10px 0 12px !important;
+  background: var(--cds-surface-1, var(--remote-surface)) !important;
+  border: 1px solid var(--cds-border, var(--remote-line)) !important;
+  border-radius: var(--radius-lg, 10px) !important;
+  color: var(--cds-text-primary, var(--remote-ink)) !important;
+  font: inherit !important;
+  font-size: 13px !important;
+  font-weight: 550 !important;
+  text-align: left !important;
+  cursor: pointer !important;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease !important;
+  box-sizing: border-box !important;
+}
+
+.cds-select-block {
+  width: 100% !important;
+  height: 40px !important;
+  min-height: 40px !important;
+}
+
+.cds-select-compact {
+  height: 34px !important;
+  min-height: 34px !important;
+  max-width: 190px;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: var(--cds-text-secondary, var(--remote-secondary)) !important;
+}
+
+.cds-select-trigger:hover:not(:disabled) {
+  background: var(--cds-surface-2, #ffffff) !important;
+  border-color: var(--cds-border-strong, var(--remote-line-strong)) !important;
+}
+
+.cds-select-trigger.open {
+  background: var(--cds-surface-2, #ffffff) !important;
+  border-color: var(--cds-clay, #d97757) !important;
+  box-shadow: 0 0 0 2px var(--cds-clay-soft, rgba(217, 119, 87, 0.18)) !important;
+}
+
+.cds-select-trigger:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+}
+
+.cds-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cds-select-chevron {
+  flex-shrink: 0;
+  color: var(--cds-text-muted, var(--remote-muted));
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cds-select-chevron.open {
+  transform: rotate(180deg);
+}
+
+.cds-select-menu {
+  position: fixed;
+  z-index: 400;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  background: var(--cds-surface-popover, #ffffff);
+  border: 1px solid var(--cds-border, var(--remote-line));
+  border-radius: 12px;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.16),
+    0 3px 8px rgba(0, 0, 0, 0.06);
+  animation: cdsSelectMenuIn 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+}
+
+@keyframes cdsSelectMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.cds-select-option {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  min-height: 34px !important;
+  padding: 7px 10px !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  color: var(--cds-text-primary, var(--remote-ink)) !important;
+  font-size: 13px !important;
+  font-weight: 450 !important;
+  text-align: left !important;
+  cursor: pointer !important;
+  box-shadow: none !important;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease !important;
+}
+
+.cds-select-option.active:not(:disabled) {
+  background: var(--cds-alpha-1, var(--remote-hover)) !important;
+}
+
+.cds-select-option.selected {
+  color: var(--cds-clay, #d97757) !important;
+  font-weight: 600 !important;
+}
+
+.cds-select-option.selected.active {
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12)) !important;
+}
+
+.cds-select-option:disabled {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+}
+
+.cds-select-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cds-select-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cds-select-option-desc {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--cds-text-muted, var(--remote-muted));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cds-select-check {
+  flex-shrink: 0;
+  color: var(--cds-clay, #d97757);
+}
+
+.cds-select-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  background: var(--cds-alpha-1, rgba(0, 0, 0, 0.05));
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+
+.cds-select-tag[data-tone="claude"] {
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
+  color: var(--cds-clay, #d97757);
+}
+
+.cds-select-tag[data-tone="claude-desktop"] {
+  background: rgba(180, 130, 90, 0.14);
+  color: #9a6a3f;
+}
+
+[data-theme="dark"] .cds-select-tag[data-tone="claude-desktop"],
+:root[data-theme="dark"] .cds-select-tag[data-tone="claude-desktop"] {
+  background: rgba(200, 160, 120, 0.16);
+  color: #d8b28c;
+}
+
+.cds-select-tag[data-tone="codex"] {
+  background: rgba(59, 138, 90, 0.13);
+  color: var(--remote-green, #3b8a5a);
+}
+
+.cds-select-tag[data-tone="zcode"] {
+  background: rgba(62, 121, 214, 0.13);
+  color: var(--remote-blue, #3e79d6);
+}
+
+.cds-select-tag[data-tone="antigravity"] {
+  background: rgba(139, 92, 246, 0.13);
+  color: #8b5cf6;
+}
+
+/* ================= CDS Confirm (replaces window.confirm) ================= */
+.cds-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: cdsConfirmFadeIn 0.16s ease-out;
+}
+
+.cds-confirm {
+  width: min(400px, 100%);
+  padding: 22px 22px 18px;
+  background: var(--cds-surface-popover, var(--remote-surface));
+  border: 1px solid var(--cds-border, var(--remote-line));
+  border-radius: 14px;
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.24),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+  animation: cdsConfirmEnter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes cdsConfirmFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cdsConfirmEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.cds-confirm-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--cds-text-primary, var(--remote-ink));
+}
+
+.cds-confirm-desc {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--cds-text-secondary, var(--remote-secondary));
+  white-space: pre-line;
+}
+
+.cds-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.cds-confirm-btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid var(--cds-border, var(--remote-line));
+  background: var(--cds-surface-1, var(--remote-surface));
+  color: var(--cds-text-primary, var(--remote-ink));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.cds-confirm-btn:hover:not(:disabled) {
+  background: var(--cds-alpha-1, var(--remote-hover));
+  border-color: var(--cds-border-strong, var(--remote-line-strong));
+}
+
+.cds-confirm-btn:focus-visible {
+  outline: 2px solid var(--cds-clay, #d97757);
+  outline-offset: 2px;
+}
+
+.cds-confirm-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.cds-confirm-primary {
+  background: var(--cds-clay, #d97757);
+  border-color: transparent;
+  color: #fff;
+}
+
+.cds-confirm-primary:hover:not(:disabled) {
+  background: var(--cds-clay-hover, #cc5a36);
+  border-color: transparent;
+}
+
+/* The token flips to a light red in dark mode, which is a text colour: on a
+   filled button it needs a dark label, and the hover shade has to stay in the
+   same family rather than fall back to a light-mode value. */
+.cds-confirm-primary.danger {
+  background: var(--remote-red, #dc2626);
+  color: #fff;
+}
+
+.cds-confirm-primary.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--remote-red, #dc2626) 85%, #000);
+}
+
+[data-theme="dark"] .cds-confirm-primary.danger,
+:root[data-theme="dark"] .cds-confirm-primary.danger {
+  color: #1c1c1a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cds-confirm-backdrop,
+  .cds-confirm {
+    animation: none;
   }
 }

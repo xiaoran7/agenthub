@@ -304,6 +304,7 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     openSettings();
   } else if (e.key === "Escape") {
+    closeAsk(false);
     closeDeleteSessions();
     closeRegisterMcpModal();
     leaveSettings();
@@ -2070,6 +2071,51 @@ async function syncCapabilities(event) {
   }
 }
 
+// One question, asked on the console's own surface.
+//
+// `window.confirm` is the browser's dialog: unstyled, modal to the whole
+// window, and on Windows it freezes the renderer until it is answered. A
+// question about the product is asked in the product's own voice, and the
+// caller gets a promise it can await like any other async step.
+let askResolve = null;
+
+function askQuestion(title, note, confirmLabel) {
+  const modal = document.getElementById("askModal");
+  if (!modal) return Promise.resolve(false);
+  document.getElementById("askTitle").textContent = title;
+  document.getElementById("askNote").textContent = note || "";
+  document.getElementById("askConfirmBtn").textContent = confirmLabel || "确定";
+  modal.classList.add("open");
+  setTimeout(() => document.getElementById("askCancelBtn")?.focus(), 30);
+  // A question that is replaced before it is answered is answered "no", so
+  // its caller never waits forever.
+  if (askResolve) askResolve(false);
+  return new Promise((resolve) => {
+    askResolve = resolve;
+  });
+}
+
+function closeAsk(answer) {
+  const modal = document.getElementById("askModal");
+  if (modal) modal.classList.remove("open");
+  const resolve = askResolve;
+  askResolve = null;
+  if (resolve) resolve(answer);
+}
+
+// The dialog's two buttons and its backdrop are bound once, at load.
+document.addEventListener("DOMContentLoaded", () => {
+  document
+    .getElementById("askConfirmBtn")
+    ?.addEventListener("click", () => closeAsk(true));
+  document
+    .getElementById("askCancelBtn")
+    ?.addEventListener("click", () => closeAsk(false));
+  document.getElementById("askModal")?.addEventListener("click", (e) => {
+    if (e.target && e.target.id === "askModal") closeAsk(false);
+  });
+});
+
 function openRegisterMcpModal() {
   const modal = document.getElementById("registerMcpModal");
   if (!modal) return;
@@ -2264,13 +2310,12 @@ function setPairTile(cta) {
 }
 
 async function shutdownRunner() {
-  if (
-    !confirm(
-      "确定要退出 AgentHub Runner 吗？\n退出后右下角托盘图标和本地服务将一并终止。",
-    )
-  ) {
-    return;
-  }
+  const confirmed = await askQuestion(
+    "退出 AgentHub Runner？",
+    "退出后右下角托盘图标和本地服务将一并终止；正在执行的会话会中断。",
+    "退出",
+  );
+  if (!confirmed) return;
   const modal = document.getElementById("shutdownModal");
   if (modal) modal.classList.add("open");
 
@@ -3990,7 +4035,12 @@ async function submitDevicePairing(event) {
 }
 
 async function submitDeviceUnpair() {
-  if (!confirm("确定要解除本机与云端网关的绑定关系吗？解除后本机将停止出站同步。")) return;
+  const confirmed = await askQuestion(
+    "解除与云端网关的绑定？",
+    "解除后本机将停止出站同步，Web 控制台不再显示这台电脑；重新配对即可恢复。",
+    "解除绑定",
+  );
+  if (!confirmed) return;
   const unpairBtn = document.getElementById("unpairSubmitBtn");
   const origText = unpairBtn ? unpairBtn.innerHTML : "";
   if (unpairBtn) {

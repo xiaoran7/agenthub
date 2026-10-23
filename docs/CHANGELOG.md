@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+- **Web 控制台与本地控制台统一组件语言：原生下拉框、系统弹窗与编号化文案全量替换（`apps/web`, `crates/runner/resources`）**：
+  - **下拉选择全面组件化（`apps/web/src/components/Select.tsx`）**：
+    - **问题现象**：新建会话弹窗（`工作区`）与输入框的推理深度仍使用 `<select>`，在 Windows 上弹出的是操作系统自带的原生菜单，字体、圆角、主题与控制台其余部分完全脱节；工作区选项直接暴露内部标识 `ws-agent_hub-e6174d5db55c0532`；
+    - **单一下拉实现**：新增 `Select` 组件，触发器 + listbox 弹层，复用设备/Agent 级联菜单的 `--cds-surface-popover`、`--cds-border`、阴影与 12px 圆角；弹层经 `createPortal` 挂到 `document.body` 并以 `position: fixed` 定位，避免被弹窗自身的滚动容器裁切；上下空间不足时自动向上翻转，随滚动/缩放重新测量；
+    - **自适应宽度**：弹层先按选项文本估算最小宽度，挂载后再按真实排版测量最宽一行（标题的 `scrollWidth`，即使已显示省略号仍是全文宽度），上限 `MAX_MENU_WIDTH`，并按视口左右留白 12px 夹持，长会话标题因此完整可读而不是被字段宽度截断；
+    - **完整键盘与无障碍**：`ArrowUp/Down`（在可用项间循环）、`Home/End`、`Enter/Space` 提交、`Escape` 关闭并把焦点交还触发器、`Tab` 关闭、点击外部关闭；`role="combobox"/"listbox"/"option"`、`aria-expanded`、`aria-selected`、`aria-controls` 齐备；
+  - **系统原生弹窗替换（`apps/web/src/components/Confirm.tsx`, `crates/runner/resources/dashboard.*`）**：
+    - **Web 控制台**：`SettingsPage` 撤销设备改用新的 `Confirm` 组件（`role="alertdialog"`、焦点默认落在“保留”、`Escape` 等同于取消、点击遮罩取消），不再调用 `window.confirm`；
+    - **本地控制台**：`dashboard.js` 的退出 Runner 与解除网关绑定改用新增的页内 `askModal`（复用既有 `.modal/.dialog` 版式与 `.round` 警示图标），`askQuestion()` 返回 Promise 供调用方 `await`；`Escape` 与点击遮罩都视为取消，被新问题顶替的旧问题自动按“否”结算，不会留下悬挂的 Promise；
+    - **本地控制台复选框**：会话列表的「全选」与逐行勾选原先只设 `accent-color`，方框尺寸、圆角与描边仍由操作系统绘制；改为 `appearance: none` + 自绘勾选/半选（仍保留原生 `<input type="checkbox">` 的键盘、表单值与 `:indeterminate` 语义），浅色与暗色各自取 `--accent` / `--accent-fg`；
+  - **会话标题去编号化（`apps/web/src/lib/session-tree.ts`）**：
+    - **无标题会话**：`formatFallbackTitle` 不再拼接会话 id 前四位（`新会话 · 971b`），统一显示为「新会话」；id 是内部键，对阅读侧边栏的人没有意义；
+    - **解析层同步**：`buildSessionTree` 与时间线空状态不再计算 `shortId`，调用点一并收敛；
+  - **新建会话弹窗字段文案（`apps/web/src/components/RemoteConsole.tsx`）**：
+    - **工作区**：下拉展示文件夹名（`workspaceLabel`），重名时才在第二行补一段 id 尾巴以便区分，原始 `ws-*` 不再出现在任何选项主文案里；
+    - **会话**：接管列表的每项带引擎标签（`Coding Assistant` / `Claude Desktop` / `ZCode` / …），无标题会话显示「未命名会话」并把原始 id 放进 tooltip；
+    - **模型**：按所选引擎读取本机上报的模型清单（`models.agents`），不再跨引擎串用；
+  - **Coding Assistant 与 Claude Desktop 分流（`apps/web/src/lib/session-tree.ts`, `src/components/remote.css`）**：
+    - **问题根因**：`PROVIDER_BY_NAME` 缺少 `claude_desktop` 键，Desktop 会话落到 `claude_` 前缀兜底分支，被错误归入 Coding Assistant 目录；
+    - **修复与视觉区分**：补齐 `claude_desktop` 描述符并加入 `ProviderKind`/`PROVIDER_ORDER`；新增 `claude-desktop` 的徽标、标签与 Agent 指示点配色（浅色为棕调、暗色为暖砂色），与 Coding Assistant 的陶土色在同一色系内可分辨；
+  - **模型清单不再硬编码（`crates/runner/src/model_catalog.rs`, `remote_host.rs`, `web_server.rs`）**：
+    - **删除内置兜底**：移除 `builtin_fallback_models()`（曾写死 `claude-opus-5`、`claude-sonnet-5-5` 等 id）。上游不可达且无缓存时返回空列表 —— 凭空给出别人账户不一定提供的模型，比不给更糟；
+    - **按引擎输出目录**：新增 `agent_model_catalogs()`，从 Claude 网关配置与 ZCode 的 `~/.zcode/v2/config.json` 读取真实模型；`NativeSessionHost::models()` 的 `data` 保持历史扁平结构，同时新增 `agents`（按引擎分组，Codex 取自 `model/list` RPC），`data` 中每条都来自某个引擎目录，不再有无所属的条目；
+    - **刷新按钮**：`POST /api/models/refresh` 同时失效网关配置缓存与上游模型缓存，两个缓存回答同一个按钮；
+  - **回归测试**：`model_catalog_is_returned_from_native_protocol_without_fallback` 改为校验 `agents.codex` 与 `data` 的归属关系（不再断言整包 JSON 恒等），并新增“`data` 中每一项都能在某个引擎目录中找到”的断言；`session-tree` 的无标题用例改为断言纯「新会话」；`npm.cmd test` 75 项、`cargo test --workspace` 全量、`cargo clippy -D warnings`、`cargo fmt --check`、`npm.cmd run typecheck` 与 `npm.cmd run format:check` 均通过。
+
 - **Runner 入站命令日志与网关命令代际对齐，根治“进入网页端就识别不到设备/会话”（`crates/runner`, `services/api`）**：
   - **问题现象**：Web 控制台里设备与全部会话消失，本地控制台 `/api/status` 恒为 `remote_enabled: true, remote_connected: false`，Runner 每 6 秒重连一次且永远握手失败。生产实测网关上 `dev_68f6…` 的 `received=106`、`command_seq=1`，重连时反复重投同一条 `seq=1` 的 `connect` 命令；
   - **根因（两侧各自遗留一半状态）**：
@@ -249,7 +275,7 @@
   - 根因：`test_discover_capabilities_smoke` 此前硬编码断言 `caps.total_skills > 0 && caps.total_hooks > 0`，在未配置全局 `~/.claude` 或 `~/.agenthub` 的纯净 Linux/CI 容器中必定断言失败（`assertion failed: caps.total_skills > 0`）；
   - 修复：将烟雾测试调整为验证总数与列表集合一致性，并新增独立单元测试 `test_discover_capabilities_in_workspace`，基于隔离的 `tempdir` 构造 Mock 工作区并验证 Skills 与 MCP 服务发现逻辑闭环。
 
-- **Web 控制台 UI/UX 重构与交互精简（`/ui-design`）**：全站移除 Emoji，改用 2.2px 线宽内联 SVG 图标；拔除 `.remote-session-tree` 顶部渐变遮罩与 `.settings-page` 硬编码暗色变量，恢复浅/暗主题自然继承；输入框 42~46px、按钮 38~48px，补齐 GPU 加速微动效与 WCAG AA 对比度，统一 Claude Terracotta 品牌色；侧边栏外观主题切换收拢至设置页（外观与主题，带 SVG 矢量图标预览与卡片微动效），彻底移除侧栏页脚堆叠控件；顶部面包屑仅在进入子层级（`selectedSessionPath.length > 0`）时动态呈现，会话过滤胶囊行仅在存在多厂商（`availableProviders.size > 1`）时呈现，彻底根除根视图下"全部会话"与单厂商"全部"垂直堆叠的重复按钮问题。
+- **Web 控制台 UI/UX 重构与交互精简（`/ui-design`）**：全站移除 Emoji，改用 2.2px 线宽内联 SVG 图标；拔除 `.remote-session-tree` 顶部渐变遮罩与 `.settings-page` 硬编码暗色变量，恢复浅/暗主题自然继承；输入框 42~~46px、按钮 38~~48px，补齐 GPU 加速微动效与 WCAG AA 对比度，统一 Claude Terracotta 品牌色；侧边栏外观主题切换收拢至设置页（外观与主题，带 SVG 矢量图标预览与卡片微动效），彻底移除侧栏页脚堆叠控件；顶部面包屑仅在进入子层级（`selectedSessionPath.length > 0`）时动态呈现，会话过滤胶囊行仅在存在多厂商（`availableProviders.size > 1`）时呈现，彻底根除根视图下"全部会话"与单厂商"全部"垂直堆叠的重复按钮问题。
 - **Remote 控台的转场与路由修复（`apps/web`）**：面包屑从侧栏移到主区头部并删除侧栏重复项；移除客户端路由段的多余导出，修复 Next.js 构建；会话切换、欢迎页、设置弹窗与标签分区、新建会话对话框、消息卡片与审批/提问卡片统一加入进场动画，欢迎页快捷胶囊补齐悬停抬升与点击反馈，全部在 `prefers-reduced-motion` 下自动降级。
 - **文档无损精简与事实对齐**：精简 `AGENTS.md`、`README*.md`、`llms*.txt` 与 `docs/*.md`（含验收记录、宣发模板与 `RELEASE_NOTES_*.md` 原位瘦身），`docs/CHANGELOG.md` 100% 保留全部历史版本头；统一 UTF-8 无 BOM 与纯 LF，清理过期测试计数、旧入口命令与相对时间词。
 - **输出速度只报整轮下限，不再出现 3,000+ tok/s 的假数字（`crates/runner/src/usage_ledger.rs`）**：

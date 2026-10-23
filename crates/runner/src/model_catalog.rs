@@ -167,6 +167,11 @@ pub fn discover_active_upstream() -> Option<(String, String, String)> {
 }
 
 /// Fetches the live model catalog from active upstream or local disk cache.
+///
+/// A machine with no reachable upstream and no cached answer has no catalog to
+/// report. It returns an empty list rather than a built-in set of model ids:
+/// those ids are a guess about someone else's account, and offering a model the
+/// upstream does not serve is worse than offering none.
 pub fn fetch_catalog_models(force_refresh: bool) -> Vec<LiveCatalogModel> {
     // Check in-memory cache (30s TTL)
     if !force_refresh {
@@ -205,8 +210,8 @@ pub fn fetch_catalog_models(force_refresh: bool) -> Vec<LiveCatalogModel> {
         }
     }
 
-    // Fallback to built-in models
-    builtin_fallback_models()
+    // No upstream, no cache: report nothing rather than inventing ids.
+    Vec::new()
 }
 
 /// Probes `/v1/models` and `/models` using ureq agent.
@@ -393,66 +398,76 @@ fn parse_models_response(val: &Value, provider_name: &str) -> Vec<LiveCatalogMod
     out
 }
 
-/// Fallback built-in flagship models when completely offline.
-pub fn builtin_fallback_models() -> Vec<LiveCatalogModel> {
-    vec![
-        LiveCatalogModel {
-            id: "claude-opus-5".into(),
-            name: "claude-opus-5".into(),
-            display_name: "Claude Opus 5".into(),
-            context_length: 200_000,
-            context_window_str: "200K".into(),
-            max_output_tokens: Some(8192),
-            input_modalities: vec!["text".into(), "image".into()],
-            output_modalities: vec!["text".into()],
-            supports_reasoning: true,
-            supports_tools: true,
-            supports_vision: true,
-            upstream_provider: "Anthropic".into(),
-        },
-        LiveCatalogModel {
-            id: "claude-sonnet-5-5".into(),
-            name: "claude-sonnet-5-5".into(),
-            display_name: "Claude Sonnet 5.5".into(),
-            context_length: 1_000_000,
-            context_window_str: "1M".into(),
-            max_output_tokens: Some(16384),
-            input_modalities: vec!["text".into(), "image".into()],
-            output_modalities: vec!["text".into()],
-            supports_reasoning: true,
-            supports_tools: true,
-            supports_vision: true,
-            upstream_provider: "Anthropic".into(),
-        },
-        LiveCatalogModel {
-            id: "claude-fable-5".into(),
-            name: "claude-fable-5".into(),
-            display_name: "Claude Fable 5".into(),
-            context_length: 200_000,
-            context_window_str: "200K".into(),
-            max_output_tokens: Some(8192),
-            input_modalities: vec!["text".into(), "image".into()],
-            output_modalities: vec!["text".into()],
-            supports_reasoning: true,
-            supports_tools: true,
-            supports_vision: true,
-            upstream_provider: "Anthropic".into(),
-        },
-        LiveCatalogModel {
-            id: "claude-haiku-5-5".into(),
-            name: "claude-haiku-5-5".into(),
-            display_name: "Claude Haiku 5.5".into(),
-            context_length: 200_000,
-            context_window_str: "200K".into(),
-            max_output_tokens: Some(8192),
-            input_modalities: vec!["text".into(), "image".into()],
-            output_modalities: vec!["text".into()],
-            supports_reasoning: false,
-            supports_tools: true,
-            supports_vision: true,
-            upstream_provider: "Anthropic".into(),
-        },
-    ]
+/// Model catalogs keyed by the agent engine that can actually run them.
+///
+/// The console picks one engine and then asks which models it can run, so the
+/// catalog keeps each engine's own answer instead of flattening every id into
+/// one list: the Claude gateway and ZCode read different configuration files,
+/// serve different id spaces, and an id from one is a guaranteed provider
+/// rejection on the other.
+///
+/// Codex is not here: its list is a `model/list` RPC answered by the running
+/// app-server, not a file, and `NativeSessionHost::models` asks it directly.
+pub fn agent_model_catalogs() -> Vec<(&'static str, Vec<Value>)> {
+    let mut out = Vec::new();
+
+    if let Some(profile) = crate::claude_gateway::discover_claude_gateway() {
+        let models: Vec<Value> = profile
+            .models
+            .iter()
+            .map(|m| {
+                json!({
+                    "id": m.name,
+                    "name": m.name,
+                    "display_name": m.label.clone().unwrap_or_else(|| m.name.clone()),
+                    "supports_1m": m.supports_1m,
+                    "upstream_provider": profile.source,
+                })
+            })
+            .collect();
+        if !models.is_empty() {
+            out.push(("claude_code", models));
+        }
+    }
+
+    if let Some(providers) = crate::collectors::zcode_app_server::load_zcode_v2_provider_registry()
+    {
+        let mut models = Vec::new();
+        let mut seen = HashSet::new();
+        for provider in &providers {
+            let provider_label = provider
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let Some(list) = provider.get("models").and_then(Value::as_array) else {
+                continue;
+            };
+            for model in list {
+                let Some(id) = model.get("modelId").and_then(Value::as_str) else {
+                    continue;
+                };
+                if id.is_empty() || !seen.insert(id.to_ascii_lowercase()) {
+                    continue;
+                }
+                models.push(json!({
+                    "id": id,
+                    "name": id,
+                    "display_name": model
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .filter(|label| !label.is_empty())
+                        .unwrap_or(id),
+                    "context_length": model.get("contextWindow").cloned().unwrap_or(json!(0)),
+                    "upstream_provider": provider_label,
+                }));
+            }
+        }
+        if !models.is_empty() {
+            out.push(("zcode", models));
+        }
+    }
+
+    out
 }
 
 /// Converts LiveCatalogModel into the JSON format expected by daemon protocol / Web API.

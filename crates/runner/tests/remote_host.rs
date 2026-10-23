@@ -959,7 +959,29 @@ fn model_catalog_is_returned_from_native_protocol_without_fallback() {
     let (_, fake, mut host) = setup();
     let result = json!({"data":[{"id":"native-dynamic-model"}],"nextCursor":null});
     fake.expect("model/list", result.clone());
-    assert_eq!(host.models().unwrap(), result);
+    let models = host.models().unwrap();
+    // `data` stays the flat list the console has always read, and the
+    // app-server's answer is Codex's own catalog. The `agents` map also
+    // carries whatever engines this machine's config files describe, so the
+    // assertions are on the one entry the fake supplied rather than on the
+    // whole map, which is host-dependent by design.
+    assert_eq!(
+        models["agents"]["codex"],
+        json!([{"id":"native-dynamic-model"}])
+    );
+    assert_eq!(models["data"][0], json!({"id":"native-dynamic-model"}));
+    // Nothing invented: every id in `data` also appears in one of the
+    // per-engine lists, and an engine with no catalog is simply absent.
+    let data = models["data"].as_array().unwrap();
+    let listed: Vec<&Value> = models["agents"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|list| list.as_array().unwrap())
+        .collect();
+    for model in data {
+        assert!(listed.contains(&model), "unattributed model {model}");
+    }
 }
 
 #[test]

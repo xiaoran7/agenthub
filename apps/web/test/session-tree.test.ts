@@ -317,7 +317,7 @@ test("session tree items preserve token counts, model and activity timestamps", 
   assert.equal(candItem.lastActivityAtMs, 1700000005000);
 });
 
-test("untitled sessions fall back to user-friendly titles rather than raw hex hashes", () => {
+test("untitled sessions fall back to a plain name with no id fragment", () => {
   const tree = buildSessionTree({
     discovered: new Map(),
     devices: [host("dev_a", true)],
@@ -326,6 +326,6 @@ test("untitled sessions fall back to user-friendly titles rather than raw hex ha
     providerFilter: "all",
   });
   const items = tree[0]!.workspaces[0]!.workspaces[0]!.items;
-  assert.equal(items[0]!.title, "新会话 · 971b");
-  assert.equal(items[1]!.title, "新会话 · a82f");
+  assert.equal(items[0]!.title, "新会话");
+  assert.equal(items[1]!.title, "新会话");
 });

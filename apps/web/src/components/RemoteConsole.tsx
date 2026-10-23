@@ -24,6 +24,7 @@ import {
   type DiscoveryCandidate,
 } from "../lib/remote";
 import { MarkdownView } from "./MarkdownView";
+import { Select } from "./Select";
 import { RemoteContextCapacity } from "./RemoteContextCapacity";
 import { SettingsPage } from "./SettingsPage";
 import { ThinkingAccordion } from "./ThinkingAccordion";
@@ -32,7 +33,6 @@ import type { PanelConfig } from "../lib/config";
 import { loadConfig, saveConfig } from "../lib/config";
 import {
   buildSessionTree,
-  cleanPath,
   formatFallbackTitle,
   getDeviceLabel,
   getProviderInfo,
@@ -67,6 +67,43 @@ const states: Record<string, string> = {
 };
 const key = (session: RemoteSession) =>
   `${session.runner_id}/${session.binding.hub_session_id}`;
+
+/** The launch dialog's fixed choices. Everything else is derived from the Host. */
+const EFFORT_OPTIONS = [
+  { value: "default", label: "默认思考" },
+  { value: "low", label: "低推理 (快速)" },
+  { value: "medium", label: "中推理 (标准)" },
+  { value: "high", label: "高推理 (深度)" },
+  { value: "max", label: "超高推理 (最大)" },
+] as const;
+
+const SANDBOX_OPTIONS = [
+  { value: "read-only", label: "只读" },
+  { value: "workspace-write", label: "允许修改工作区" },
+] as const;
+
+/**
+ * The engines the Runner can launch, in the order the console offers them.
+ *
+ * `catalog` names the key the Host's `models.agents` map uses for that engine;
+ * the model list is read from there rather than guessed.
+ */
+const LAUNCH_AGENTS = [
+  { value: "zcode", label: "ZCode", catalog: ["zcode"] },
+  { value: "codex", label: "Codex", catalog: ["codex"] },
+  {
+    value: "claude_code",
+    label: "Coding Assistant",
+    catalog: ["claude_code", "claude"],
+  },
+  { value: "antigravity", label: "Antigravity", catalog: [] },
+  { value: "grok_build", label: "Grok", catalog: [] },
+] as const;
+
+const LAUNCH_AGENT_OPTIONS = LAUNCH_AGENTS.map(({ value, label }) => ({
+  value,
+  label,
+}));
 
 function formatSessionTokens(tokens?: number | null): string | null {
   if (tokens === null || tokens === undefined || tokens <= 0) return null;
@@ -1006,6 +1043,115 @@ export function RemoteConsole({
   const session = snapshot.sessions.find((item) => key(item) === selected);
   const runnerInfo = snapshot.runners.find((item) => item.runner_id === runner);
   const connected = !!session?.online && !!session.binding.control_connected;
+
+  /** Every online computer, for the launch dialog's first field. */
+  const onlineDeviceOptions = useMemo(
+    () =>
+      snapshot.runners
+        .filter((item) => !item.revoked && item.online)
+        .map((item) => ({
+          value: item.runner_id,
+          label: getDeviceLabel(item.runner_id, item.hello),
+        })),
+    [snapshot.runners],
+  );
+
+  /**
+   * Workspaces read as their folder name, with the full path on a second line.
+   *
+   * The Host lists workspaces by opaque `ws-` id or by absolute path; neither
+   * belongs in a menu a person reads. The id/path stays as the option's value,
+   * and the path is kept visible underneath because two checkouts can share a
+   * folder name.
+   */
+  const launchWorkspaceOptions = useMemo(() => {
+    const paths = runnerInfo?.hello?.workspaces ?? [];
+    const labels = paths.map(workspaceLabel);
+    const seen = new Map<string, number>();
+    for (const label of labels) seen.set(label, (seen.get(label) ?? 0) + 1);
+    return paths.map((path, index) => {
+      const label = labels[index] ?? path;
+      // Two checkouts can share a folder name. Only then does the id's own
+      // tail earn a place on screen, and it goes on the muted second line.
+      const tail = path.startsWith("ws-")
+        ? (path.match(/-([0-9a-f]{16})$/u)?.[1] ?? "").slice(0, 6)
+        : "";
+      const duplicated = (seen.get(label) ?? 0) > 1 && tail !== "";
+      return {
+        value: path,
+        label,
+        ...(duplicated ? { description: `…${tail}` } : {}),
+      };
+    });
+  }, [runnerInfo]);
+
+  /**
+   * Sessions already on disk in the chosen workspace that this dialog can
+   * take over. They are labelled with their own engine and tagged so two
+   * engines with the same title stay tellable apart.
+   */
+  const launchSessionOptions = useMemo(() => {
+    const normalize = (path: string) =>
+      path
+        .replace(/^\\\\\?\\/u, "")
+        .replaceAll("\\", "/")
+        .toLowerCase();
+    const target = normalize(workspace);
+    const candidates = (runnerInfo?.hello?.discovery?.candidates ?? []).filter(
+      (item) => normalize(item.workspace_path) === target,
+    );
+    return [
+      { value: "", label: "创建新会话" },
+      ...candidates.map((item) => {
+        const provider = getProviderInfo(
+          item.provider_session_id,
+          item.provider,
+        );
+        return {
+          value: item.provider_session_id,
+          label: item.title ?? "未命名会话",
+          title: item.title ?? item.provider_session_id,
+          tag: provider.name,
+          tagTone: provider.badgeClass,
+        };
+      }),
+    ];
+  }, [runnerInfo, workspace]);
+
+  /**
+   * The chosen engine's own models.
+   *
+   * `models.agents` is the Host's per-engine answer. A Host that predates it
+   * only sends the flat `data` list, and that list belongs to whichever
+   * provider answered — so it is offered for Codex, whose `model/list` RPC is
+   * exactly that list, and nowhere else.
+   */
+  const launchModelOptions = useMemo(() => {
+    const hostModels = runnerInfo?.hello?.models;
+    const engine = LAUNCH_AGENTS.find((item) => item.value === agentType);
+    let models: Array<{ id: string; display_name?: string }> = [];
+    for (const key of engine?.catalog ?? []) {
+      const list = hostModels?.agents?.[key];
+      if (list !== undefined && list.length > 0) {
+        models = list;
+        break;
+      }
+    }
+    if (models.length === 0 && agentType === "codex") {
+      models = (hostModels?.data ?? []).map((item) => ({
+        id: item.id,
+        display_name:
+          item.display_name ?? item.displayName ?? item.name ?? item.id,
+      }));
+    }
+    return [
+      { value: "", label: "沿用原生设置" },
+      ...models.map((item) => ({
+        value: item.id,
+        label: item.display_name ?? item.id,
+      })),
+    ];
+  }, [runnerInfo, agentType]);
   const canSend =
     connected &&
     ["idle", "completed"].includes(session?.binding.execution_state ?? "");
@@ -3104,13 +3250,7 @@ export function RemoteConsole({
                   <h3 className="remote-timeline-empty-title">
                     {discovered.get(
                       `${session.runner_id}/${session.binding.provider_session_id}`,
-                    )?.title ||
-                      formatFallbackTitle(
-                        session.binding.provider_session_id.replace(
-                          /^(sess_|claude_|gemini_|antigravity_)/u,
-                          "",
-                        ),
-                      )}
+                    )?.title || formatFallbackTitle()}
                   </h3>
                   <p className="remote-timeline-empty-desc">
                     {!session.online
@@ -3776,21 +3916,14 @@ export function RemoteConsole({
                     className="remote-effort-selector"
                     title="设置本轮思考推理深度 (Claude Code / Codex)"
                   >
-                    <select
+                    <Select
+                      variant="compact"
+                      label="推理思考深度"
                       value={effort}
-                      onChange={(e) =>
-                        setEffort(e.target.value as typeof effort)
-                      }
-                      className="remote-effort-select"
                       disabled={!connected || busy}
-                      aria-label="推理思考深度"
-                    >
-                      <option value="default">默认思考</option>
-                      <option value="low">低推理 (快速)</option>
-                      <option value="medium">中推理 (标准)</option>
-                      <option value="high">高推理 (深度)</option>
-                      <option value="max">超高推理 (最大)</option>
-                    </select>
+                      options={EFFORT_OPTIONS}
+                      onChange={(next) => setEffort(next as typeof effort)}
+                    />
                   </div>
                   <RemoteContextCapacity events={events} />
                   {session?.binding.current_turn_id && (
@@ -3856,126 +3989,85 @@ export function RemoteConsole({
               ×
             </button>
           </header>
-          <label>
-            电脑
-            <select
+          <div className="remote-launch-field">
+            <span className="remote-launch-label">电脑</span>
+            <Select
+              label="电脑"
               value={runner}
-              onChange={(event) => {
-                setRunner(event.target.value);
+              placeholder="选择在线电脑"
+              options={onlineDeviceOptions}
+              onChange={(next) => {
+                setRunner(next);
                 setWorkspace(
-                  snapshot.runners.find(
-                    (item) => item.runner_id === event.target.value,
-                  )?.hello?.workspaces[0] ?? "",
+                  snapshot.runners.find((item) => item.runner_id === next)
+                    ?.hello?.workspaces[0] ?? "",
                 );
                 setNativeId("");
+                setModel("");
               }}
-            >
-              <option value="">选择在线电脑</option>
-              {snapshot.runners
-                .filter((item) => !item.revoked && item.online)
-                .map((item) => (
-                  <option value={item.runner_id} key={item.runner_id}>
-                    {getDeviceLabel(item.runner_id, item.hello)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            工作区
-            <select
+            />
+          </div>
+          <div className="remote-launch-field">
+            <span className="remote-launch-label">工作区</span>
+            <Select
+              label="工作区"
               value={workspace}
-              onChange={(event) => {
-                setWorkspace(event.target.value);
+              placeholder="选择已授权目录"
+              options={launchWorkspaceOptions}
+              onChange={(next) => {
+                setWorkspace(next);
                 setNativeId("");
               }}
-            >
-              <option value="">选择已授权目录</option>
-              {runnerInfo?.hello?.workspaces.map((path) => (
-                <option value={path} key={path}>
-                  {cleanPath(path)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            会话
-            <select
+            />
+          </div>
+          <div className="remote-launch-field">
+            <span className="remote-launch-label">会话</span>
+            <Select
+              label="会话"
               value={nativeId}
-              onChange={(event) => setNativeId(event.target.value)}
-            >
-              <option value="">创建新会话</option>
-              {runnerInfo?.hello?.discovery?.candidates
-                .filter(
-                  (item) =>
-                    item.workspace_path
-                      .replace(/^\\\\\?\\/u, "")
-                      .replaceAll("\\", "/")
-                      .toLowerCase() ===
-                    workspace
-                      .replace(/^\\\\\?\\/u, "")
-                      .replaceAll("\\", "/")
-                      .toLowerCase(),
-                )
-                .map((item) => {
-                  const provider = getProviderInfo(item.provider_session_id);
-                  return (
-                    <option
-                      key={item.provider_session_id}
-                      value={item.provider_session_id}
-                    >
-                      [{provider.name}] 接管：
-                      {item.title ?? item.provider_session_id}
-                    </option>
-                  );
-                })}
-            </select>
-          </label>
+              options={launchSessionOptions}
+              onChange={setNativeId}
+            />
+          </div>
           {!nativeId && (
-            <label>
-              Agent 引擎
-              <select
+            <div className="remote-launch-field">
+              <span className="remote-launch-label">Agent 引擎</span>
+              <Select
+                label="Agent 引擎"
                 value={agentType}
-                onChange={(event) =>
-                  setAgentType(event.target.value as typeof agentType)
-                }
-              >
-                <option value="zcode">ZCode (Gemini 3.8 / 全功能)</option>
-                <option value="codex">Codex</option>
-                <option value="claude_code">Claude Code</option>
-                <option value="antigravity">Antigravity</option>
-                <option value="grok_build">Grok Build</option>
-              </select>
-            </label>
+                options={LAUNCH_AGENT_OPTIONS}
+                onChange={(next) => {
+                  setAgentType(next as typeof agentType);
+                  // A model id belongs to one engine; carrying it across a
+                  // switch would hand the new engine an id it cannot run.
+                  setModel("");
+                }}
+              />
+            </div>
           )}
-          <label>
-            模型
-            <select
+          <div className="remote-launch-field">
+            <span className="remote-launch-label">模型</span>
+            <Select
+              label="模型"
               value={model}
-              onChange={(event) => setModel(event.target.value)}
-            >
-              <option value="">沿用原生设置</option>
-              {runnerInfo?.hello?.models?.data.map((item) => (
-                <option key={item.id} value={item.model ?? item.id}>
-                  {item.displayName ||
-                    item.display_name ||
-                    item.name ||
-                    item.id}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            文件权限
-            <select
+              options={launchModelOptions}
+              onChange={setModel}
+            />
+            {launchModelOptions.length <= 1 && (
+              <span className="remote-launch-hint">
+                所选电脑没有上报这个引擎的模型清单，将沿用原生设置。
+              </span>
+            )}
+          </div>
+          <div className="remote-launch-field">
+            <span className="remote-launch-label">文件权限</span>
+            <Select
+              label="文件权限"
               value={sandbox}
-              onChange={(event) =>
-                setSandbox(event.target.value as typeof sandbox)
-              }
-            >
-              <option value="read-only">只读</option>
-              <option value="workspace-write">允许修改工作区</option>
-            </select>
-          </label>
+              options={SANDBOX_OPTIONS}
+              onChange={(next) => setSandbox(next as typeof sandbox)}
+            />
+          </div>
           <p className="remote-launch-note">
             执行发生在所选电脑。会话内容将同步到你的 Hub，供其他设备查看和继续。
           </p>

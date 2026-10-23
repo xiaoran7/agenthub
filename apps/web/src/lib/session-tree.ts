@@ -12,7 +12,7 @@
  */
 
 export type ProviderKind =
-  "codex" | "zcode" | "claude" | "antigravity" | "other";
+  "codex" | "zcode" | "claude" | "claude_desktop" | "antigravity" | "other";
 
 export interface ProviderDescriptor {
   type: ProviderKind;
@@ -24,9 +24,10 @@ export interface ProviderDescriptor {
 const PROVIDER_ORDER: Record<ProviderKind, number> = {
   codex: 0,
   claude: 1,
-  antigravity: 2,
-  zcode: 3,
-  other: 4,
+  claude_desktop: 2,
+  antigravity: 3,
+  zcode: 4,
+  other: 5,
 };
 
 /**
@@ -49,6 +50,15 @@ const PROVIDER_BY_NAME: Record<string, ProviderDescriptor> = {
   gemini_cli: { type: "zcode", name: "Gemini CLI", badgeClass: "zcode" },
   claude_code: { type: "claude", name: "Claude Code", badgeClass: "claude" },
   claude: { type: "claude", name: "Claude Code", badgeClass: "claude" },
+  // Desktop and the CLI share one transcript tree, so the Runner tags each
+  // entry with the entry point that wrote it. Without this entry every
+  // Desktop conversation fell through to the id prefix and was filed as a
+  // Coding Assistant session.
+  claude_desktop: {
+    type: "claude_desktop",
+    name: "Claude Desktop",
+    badgeClass: "claude-desktop",
+  },
   antigravity: {
     type: "antigravity",
     name: "Antigravity",
@@ -130,10 +140,6 @@ export function workspaceLabel(workspaceId: string): string {
  */
 export function workspaceTooltip(workspaceId: string): string {
   return stripPathPrefix(workspaceId);
-}
-
-export function cleanPath(path: string): string {
-  return stripPathPrefix(path);
 }
 
 /**
@@ -266,10 +272,16 @@ export interface TreeInput {
   providerFilter: ProviderKind | "all";
 }
 
-export function formatFallbackTitle(shortId: string): string {
-  const clean = shortId.replace(/^[-_]+/u, "");
-  const tag = clean.slice(0, 4);
-  return tag ? `新会话 · ${tag}` : "新会话";
+/**
+ * An untitled conversation is just "新会话".
+ *
+ * It used to append the first four characters of the provider session id, which
+ * read as a serial number: the id is an internal key and has no meaning to the
+ * person reading the sidebar. Two untitled sessions in the same workspace now
+ * share a title, which is honest — neither of them has a name yet.
+ */
+export function formatFallbackTitle(): string {
+  return "新会话";
 }
 
 /**
@@ -294,19 +306,13 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
       disc?.provider,
     );
     if (providerFilter !== "all" && providerFilter !== provider.type) continue;
-    const shortId = session.provider_session_id.replace(
-      /^(sess_|claude_|gemini_|antigravity_)/u,
-      "",
-    );
     items.push({
       kind: "active",
       key: providerKey,
       runnerId: session.runner_id,
       providerSessionId: session.provider_session_id,
       workspaceId: session.workspace_path,
-      // The agent folder above already names the Provider, so an untitled
-      // session falls back to its short id rather than repeating it.
-      title: session.title ?? formatFallbackTitle(shortId),
+      title: session.title ?? formatFallbackTitle(),
       model: disc?.model,
       totalTokens: disc?.total_tokens,
       lastActivityAtMs: disc?.last_activity_at_ms,
@@ -329,17 +335,13 @@ export function buildSessionTree(input: TreeInput): DeviceGroup[] {
       candidate.provider ?? disc?.provider,
     );
     if (providerFilter !== "all" && providerFilter !== provider.type) continue;
-    const shortId = candidate.provider_session_id.replace(
-      /^(sess_|claude_|gemini_|antigravity_)/u,
-      "",
-    );
     items.push({
       kind: "candidate",
       key: providerKey,
       runnerId: candidate.runner_id,
       providerSessionId: candidate.provider_session_id,
       workspaceId: candidate.workspace_path,
-      title: candidate.title ?? formatFallbackTitle(shortId),
+      title: candidate.title ?? formatFallbackTitle(),
       model: candidate.model ?? disc?.model,
       totalTokens: candidate.total_tokens ?? disc?.total_tokens,
       lastActivityAtMs:

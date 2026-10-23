@@ -915,7 +915,57 @@
         }
         /* the pick bar's own controls, in the tools row */
         .pick-all { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-note); color: var(--muted); cursor: pointer; }
-        .pick-all input { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+        /* One checkbox drawn from the console's own tokens.
+           `accent-color` leaves the box's size, corner radius and border to
+           the operating system, which is the one control on the page that does
+           not follow the sheet. `appearance: none` keeps the native element —
+           so keyboard, form value, `:indeterminate` and screen readers all keep
+           working — and only takes over how it is painted. */
+        .pick-all input,
+        #sessionsContainer .row.sess .sm-check {
+          -webkit-appearance: none;
+          appearance: none;
+          flex: none;
+          position: relative;
+          width: 14px;
+          height: 14px;
+          margin: 0;
+          border: 1.5px solid var(--line);
+          border-radius: 4px;
+          background: var(--card);
+          cursor: pointer;
+          transition: background var(--dur-1), border-color var(--dur-1);
+        }
+        .pick-all input:hover,
+        #sessionsContainer .row.sess .sm-check:hover { border-color: var(--accent); }
+        .pick-all input:checked,
+        .pick-all input:indeterminate,
+        #sessionsContainer .row.sess .sm-check:checked {
+          background: var(--accent);
+          border-color: var(--accent);
+        }
+        .pick-all input:checked::after,
+        #sessionsContainer .row.sess .sm-check:checked::after {
+          content: "";
+          position: absolute;
+          left: 3.5px;
+          top: 0.5px;
+          width: 4px;
+          height: 8px;
+          border: solid var(--accent-fg);
+          border-width: 0 1.8px 1.8px 0;
+          transform: rotate(42deg);
+        }
+        .pick-all input:indeterminate::after {
+          content: "";
+          position: absolute;
+          left: 2px;
+          top: 5px;
+          width: 7px;
+          height: 1.8px;
+          border-radius: 1px;
+          background: var(--accent-fg);
+        }
         .sm-ask-list { grid-column: 1 / -1; margin: 2px 0 0; padding: 0; list-style: none; text-align: left; max-height: 160px; overflow-y: auto; width: 100%; }
         .sm-ask-list li { padding: 4px 2px; font-size: var(--fs-note); color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-top: var(--rule-2); }
         .sm-ask-list li:first-child { border-top: 0; }
