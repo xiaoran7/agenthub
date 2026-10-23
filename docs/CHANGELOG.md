@@ -26,6 +26,7 @@
     - **删除内置兜底**：移除 `builtin_fallback_models()`（曾写死 `claude-opus-5`、`claude-sonnet-5-5` 等 id）。上游不可达且无缓存时返回空列表 —— 凭空给出别人账户不一定提供的模型，比不给更糟；
     - **按引擎输出目录**：新增 `agent_model_catalogs()`，从 Claude 网关配置与 ZCode 的 `~/.zcode/v2/config.json` 读取真实模型；`NativeSessionHost::models()` 的 `data` 保持历史扁平结构，同时新增 `agents`（按引擎分组，Codex 取自 `model/list` RPC），`data` 中每条都来自某个引擎目录，不再有无所属的条目；
     - **刷新按钮**：`POST /api/models/refresh` 同时失效网关配置缓存与上游模型缓存，两个缓存回答同一个按钮；
+  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（内含新版 `agenthub-runner.exe`，已内嵌新的控制台脚本，SHA256: `f314bd6b43676ccaab9205da0ea11eaac0834d230872189f4e3ce728e71b3785`）；Web 端已构建镜像并部署至东京生产环境。
   - **回归测试**：`model_catalog_is_returned_from_native_protocol_without_fallback` 改为校验 `agents.codex` 与 `data` 的归属关系（不再断言整包 JSON 恒等），并新增“`data` 中每一项都能在某个引擎目录中找到”的断言；`session-tree` 的无标题用例改为断言纯「新会话」；`npm.cmd test` 75 项、`cargo test --workspace` 全量、`cargo clippy -D warnings`、`cargo fmt --check`、`npm.cmd run typecheck` 与 `npm.cmd run format:check` 均通过。
 
 - **Runner 入站命令日志与网关命令代际对齐，根治“进入网页端就识别不到设备/会话”（`crates/runner`, `services/api`）**：
