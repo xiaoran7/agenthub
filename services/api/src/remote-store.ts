@@ -241,6 +241,67 @@ export class RemoteContentStore {
       return "workspace_not_authorized";
     return "ready";
   }
+  /**
+   * Drops queued commands that a previous Host generation will never apply.
+   *
+   * A command is addressed to one Host generation: `RemoteAction` carries the
+   * generation it was written for and the Host rejects anything else. When a
+   * Runner restarts it publishes a new generation, so every command still
+   * waiting for the old one is dead weight — yet the pump keeps re-delivering
+   * it on every reconnect, and a Host whose inbound journal predates the
+   * Gateway's can spend its whole life rejecting that frame.
+   *
+   * Only a suffix is removed: everything up to the last applied or
+   * current-generation command stays, so the sequence the two sides share
+   * remains contiguous. `command_seq` and `command_ack` are pulled back to
+   * match, and the Runner is told the new high-water mark in `hello_ack`.
+   */
+  supersedeStaleCommands(
+    runner: string,
+    generation: string,
+  ): { commandSeq: number; dropped: number } {
+    return this.transaction(() => {
+      // Only the un-receipted tail can still be waiting, so only it is parsed.
+      // A long-lived Runner accumulates a large command log; scanning all of it
+      // on every reconnect would make the handshake cost grow without bound.
+      const applied = this.db
+        .prepare(
+          "SELECT COALESCE(MAX(seq),0) AS seq FROM remote_commands WHERE runner=? AND receipt IS NOT NULL",
+        )
+        .get(runner) as { seq: number };
+      const pending = this.db
+        .prepare(
+          "SELECT seq,body FROM remote_commands WHERE runner=? AND receipt IS NULL ORDER BY seq",
+        )
+        .all(runner) as Array<{ seq: number; body: string }>;
+      let keepThrough = Number(applied.seq);
+      for (const row of pending) {
+        let addressedTo: unknown;
+        try {
+          addressedTo = (JSON.parse(row.body) as RemoteCommand).host_generation;
+        } catch {
+          // An unparseable body cannot be proven stale, so it is kept and the
+          // truncation point does not move past it.
+          addressedTo = undefined;
+        }
+        if (addressedTo === generation) keepThrough = Number(row.seq);
+      }
+      const dropped = pending.filter((row) => Number(row.seq) > keepThrough);
+      if (dropped.length > 0) {
+        // The dropped rows are a suffix, so what remains is still a contiguous
+        // 1..keepThrough history the Runner can replay without a gap.
+        this.db
+          .prepare("DELETE FROM remote_commands WHERE runner=? AND seq>?")
+          .run(runner, keepThrough);
+        this.db
+          .prepare(
+            "UPDATE remote_runners SET command_seq=?, command_ack=MIN(command_ack,?) WHERE runner=?",
+          )
+          .run(keepThrough, keepThrough, runner);
+      }
+      return { commandSeq: keepThrough, dropped: dropped.length };
+    });
+  }
   submit(
     owner: string,
     runner: string,

@@ -290,7 +290,36 @@ impl RemoteJournal {
             .optional()?;
         if let Some((stored_id, stored)) = inbound {
             if stored_id != command.client_cmd_id || stored != serialized {
-                return Err(JournalError::InvalidAck);
+                // The Gateway re-issued a sequence whose previous occupant this
+                // journal had already *completed*. That happens when its command
+                // journal was rebuilt (database reset, server move, or a
+                // re-pair) and its sequence restarted while this journal still
+                // remembered the old commands — the watermark was rewound but
+                // the rows above it were not. The sequence, not the vanished
+                // command, is what the two sides now agree on, so the newer
+                // command replaces the row. Without this every reconnect
+                // re-delivers the same frame, fails the same comparison, and
+                // fences the transport for the life of the process.
+                //
+                // Two neighbouring cases must keep failing instead:
+                // - a mismatch at or below the applied watermark, which is a
+                //   real protocol fault about commands already acknowledged;
+                // - a stored intent with no receipt, which may have already
+                //   executed, so a different command at that sequence could
+                //   silently double-execute.
+                let completed = transaction
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM remote_commands WHERE cmd_id=?1 AND receipt_json IS NOT NULL)",
+                        [&stored_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                if seq <= received || !completed {
+                    return Err(JournalError::InvalidAck);
+                }
+                transaction.execute(
+                    "UPDATE remote_inbound_commands SET cmd_id=?2,command_json=?3 WHERE seq=?1",
+                    params![seq, command.client_cmd_id, serialized],
+                )?;
             }
         } else {
             if seq <= received {
@@ -647,12 +676,20 @@ impl RemoteJournal {
         Ok(())
     }
 
+    /// Moves the applied-command watermark to `seq` and forgets everything above it.
+    ///
+    /// Used when the Gateway's command journal is authoritative about a shorter
+    /// history than this Host remembers — a rebuilt Gateway database, a moved
+    /// server, or a re-pair. Commands above the new watermark were written for a
+    /// journal that no longer exists, so keeping their rows would only make the
+    /// next command at those sequences look like a conflict.
     pub fn reset_inbound_command_seq(&mut self, seq: i64) -> Result<()> {
         let transaction = self.connection.transaction()?;
         transaction.execute(
             "UPDATE remote_inbound SET received=?1 WHERE singleton=1",
             [seq],
         )?;
+        transaction.execute("DELETE FROM remote_inbound_commands WHERE seq>?1", [seq])?;
         transaction.commit()?;
         Ok(())
     }
@@ -1405,5 +1442,132 @@ impl<T: NativeTransport> DurableHost<T> {
                 Err(JournalError::HostLost(error.code))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod inbound_journal_tests {
+    use super::*;
+
+    fn command(id: &str, generation: &str) -> RemoteCommand {
+        RemoteCommand {
+            client_cmd_id: id.into(),
+            hub_session_id: "hub-one".into(),
+            host_generation: Some(generation.into()),
+            command: crate::remote_host::RemoteAction::Connect {
+                mode: crate::remote_host::ConnectMode::Resume,
+                workspace_path: "ws-example-0123456789abcdef".into(),
+                provider_session_id: Some("claude_native-one".into()),
+                model: None,
+                sandbox: crate::remote_host::CodexSandbox::ReadOnly,
+                approval_policy: crate::remote_host::CodexApprovalPolicy::Untrusted,
+                agent_type: None,
+            },
+        }
+    }
+
+    fn receipt(id: &str) -> CommandReceipt {
+        CommandReceipt {
+            client_cmd_id: id.into(),
+            hub_session_id: "hub-one".into(),
+            status: "accepted".into(),
+            code: None,
+            result: None,
+        }
+    }
+
+    fn open() -> (tempfile::TempDir, RemoteJournal) {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = RemoteJournal::open(dir.path().join("remote.db")).unwrap();
+        (dir, journal)
+    }
+
+    /// Applies `seq` end to end so the journal records both the intent and the
+    /// receipt, exactly as a live command does.
+    fn apply(journal: &mut RemoteJournal, seq: i64, command: &RemoteCommand) {
+        assert!(matches!(
+            journal.begin_inbound_command(seq, command).unwrap(),
+            BeginInboundCommand::New
+        ));
+        journal
+            .finish_inbound_command(seq, &receipt(&command.client_cmd_id), &[])
+            .unwrap();
+    }
+
+    #[test]
+    fn a_reissued_sequence_from_a_rebuilt_gateway_replaces_the_old_command() {
+        // The state a rebuilt Gateway leaves behind: the applied watermark was
+        // rewound, but the rows of the commands it no longer knows about stayed.
+        // Sequence 1 then arrives carrying a different command, and rejecting it
+        // fenced the transport on every reconnect.
+        let (_dir, mut journal) = open();
+        let stale = command("cmd-stale", "generation-old");
+        apply(&mut journal, 1, &stale);
+        journal
+            .connection
+            .execute("UPDATE remote_inbound SET received=0 WHERE singleton=1", [])
+            .expect("emulate the watermark a rebuilt Gateway leaves behind");
+
+        let current = command("cmd-current", "generation-new");
+        assert!(matches!(
+            journal.begin_inbound_command(1, &current).unwrap(),
+            BeginInboundCommand::New
+        ));
+        journal
+            .finish_inbound_command(1, &receipt("cmd-current"), &[])
+            .unwrap();
+        assert_eq!(journal.received_command_seq().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_reissued_sequence_never_overrides_an_unconfirmed_intent() {
+        // An intent without a receipt may already have run. Replacing it would
+        // let a different command at the same sequence execute a second time,
+        // so the mismatch must keep failing even above the watermark.
+        let (_dir, mut journal) = open();
+        journal
+            .begin_inbound_command(1, &command("cmd-stale", "generation-old"))
+            .unwrap();
+        assert!(matches!(
+            journal.begin_inbound_command(1, &command("cmd-other", "generation-new")),
+            Err(JournalError::InvalidAck)
+        ));
+    }
+
+    #[test]
+    fn a_different_command_inside_the_applied_range_still_fails() {
+        // A mismatch the Host has already acknowledged is a real protocol
+        // fault, not a rebuilt journal, and must keep fencing the transport.
+        let (_dir, mut journal) = open();
+        apply(&mut journal, 1, &command("cmd-one", "generation-one"));
+        let conflict = command("cmd-other", "generation-one");
+        assert!(matches!(
+            journal.begin_inbound_command(1, &conflict),
+            Err(JournalError::InvalidAck)
+        ));
+    }
+
+    #[test]
+    fn resetting_the_inbound_sequence_forgets_rows_above_it() {
+        let (_dir, mut journal) = open();
+        apply(&mut journal, 1, &command("cmd-one", "generation-one"));
+        apply(&mut journal, 2, &command("cmd-two", "generation-one"));
+        apply(&mut journal, 3, &command("cmd-three", "generation-one"));
+        assert_eq!(journal.received_command_seq().unwrap(), 3);
+
+        journal.reset_inbound_command_seq(1).unwrap();
+        assert_eq!(journal.received_command_seq().unwrap(), 1);
+
+        // Replaying the forgotten sequences applies them again instead of
+        // colliding with rows from the vanished journal.
+        let replayed = command("cmd-replayed", "generation-two");
+        assert!(matches!(
+            journal.begin_inbound_command(2, &replayed).unwrap(),
+            BeginInboundCommand::New
+        ));
+        journal
+            .finish_inbound_command(2, &receipt("cmd-replayed"), &[])
+            .unwrap();
+        assert_eq!(journal.received_command_seq().unwrap(), 2);
     }
 }

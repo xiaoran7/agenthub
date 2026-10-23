@@ -165,6 +165,14 @@ export function registerRemoteRoutes(
             if (!verify(null, signed, key, Buffer.from(frame.signature, "hex")))
               throw new RemoteStoreError("invalid_device_signature");
             content.register(device.owner_id, device.device_id);
+            // A restarted Host publishes a new generation, and a command is
+            // addressed to exactly one generation. Commands still waiting for
+            // the previous one can never be applied, so they are dropped here
+            // instead of being re-delivered on every reconnect.
+            content.supersedeStaleCommands(
+              device.device_id,
+              frame.host_generation,
+            );
             const marks = content.watermarks(device.device_id);
             let received = Number(frame.received_command_seq);
             if (!Number.isSafeInteger(received) || received < 0) {
@@ -192,6 +200,11 @@ export function registerRemoteRoutes(
               type: "hello_ack",
               version: 3,
               received_seq: marks.received,
+              // The highest command this journal still holds. A Runner that has
+              // applied more than this is remembering a journal that no longer
+              // exists, so it has to pull its own watermark back instead of
+              // rejecting every replayed command as already-seen.
+              command_seq: marks.command_seq,
             });
             pump(connection);
             return;

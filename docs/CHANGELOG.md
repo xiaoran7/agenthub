@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+- **Runner 入站命令日志与网关命令代际对齐，根治“进入网页端就识别不到设备/会话”（`crates/runner`, `services/api`）**：
+  - **问题现象**：Web 控制台里设备与全部会话消失，本地控制台 `/api/status` 恒为 `remote_enabled: true, remote_connected: false`，Runner 每 6 秒重连一次且永远握手失败。生产实测网关上 `dev_68f6…` 的 `received=106`、`command_seq=1`，重连时反复重投同一条 `seq=1` 的 `connect` 命令；
+  - **根因（两侧各自遗留一半状态）**：
+    - **网关侧**：`86a205c` 新增的“命令序号夹持”只把 Runner 上报的 `received_command_seq` 夹到 `command_seq`，却没有清理 Runner 侧已经应用的 `remote_inbound_commands` 行。命令日志回退（数据库重置、换机、重新配对）后，第 1 行仍是旧世代 `48dd0ec2…` 的已执行命令；
+    - **Runner 侧**：`begin_inbound_command` 对同一 `seq` 上「client_cmd_id 或命令体不同」一律返回 `InvalidAck`；该错误经 `handle_network_event` 走到 `reject_remote_epoch`，把当前 transport epoch 永久标记为拒绝，于是每次重连都在同一帧上失败，形成死循环；
+  - **修复（Runner）**：
+    - `begin_inbound_command` 仅在旧行为**已拿到 receipt**（确知已执行完毕、不会重复执行）时才允许新命令替换该 `seq` 的行；**未完成意图（无 receipt）仍严格拒绝**，避免同一序号上的不同命令被二次执行；等于或低于已应用水位的不一致仍按协议故障拒绝；
+    - `reset_inbound_command_seq` 同时删除高于新水位的 `remote_inbound_commands` 行，使回退后的序号能重新落地而不是撞上幽灵行；
+    - `NetworkEvent::Connected` 新增第三字段承载网关的 `command_seq`；网关命令日志短于本地已应用水位时自动回退本地入站水位，旧网关不下发该字段时保持本地水位不变；
+  - **修复（网关）**：新增 `RemoteContentStore.supersedeStaleCommands`，在 WebSocket 握手校验通过后、读取水位之前，丢弃“未收到 receipt 且 `host_generation` 不等于当前世代”的**尾部**命令（保留已应用历史与当前世代命令，序列仍连续），并把 `command_seq`/`command_ack` 同步回退；`hello_ack` 增加 `command_seq` 字段供 Runner 对齐；
+  - **回归测试**：Runner 新增 4 个入站日志用例（网关重建后重发序号可替换、未确认意图不可覆盖、已应用区间不一致仍拒绝、回退水位后重放可落地）与 2 个握手用例（网关命令日志变短则回退、旧网关不下发该字段则保持）；网关新增 2 个用例（重启后旧世代命令不再重投、已有 receipt 的历史不被截断）；
+  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `4d56af375770d16621e79d0faf8b251821bec29e10e3c50b7615d2a30f70939f`）。
+
 - **Web 端会话树层级视觉重构、渐进式加载与会话恢复底层自愈（`apps/web`）**：
   - **恢复会话底层 Bug 根治（解决“点击已脱离连接的会话无反应、无法恢复控制”）**：
     - **问题根因**：Web 控制台向 `/v3/remote/runners/:runner/commands` 提交 `connect` 命令时，固定使用了数据库快照中持久化的旧 `target.binding.host_generation`。当目标 Runner 发生过重启、断网重连或重新建联时，服务端已切换为当前最新的 `conn.generation`，因代际不符直接抛出 `host_generation_mismatch` 拒绝执行。此外，会话项在 `isSelected = true` 或在 `autoResumedRef` 缓存击中时存在早退短路逻辑，导致用户显式点击时无法重试建联；

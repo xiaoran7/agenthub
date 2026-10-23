@@ -770,6 +770,89 @@ test("a new Host generation replaces the old socket without stale close unregist
   }
 });
 
+test("a restarted Host supersedes commands addressed to its previous generation", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  const devices = new InMemoryGatewayStore();
+  await devices.registerDevice("owner", runner, publicKey);
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const first = await connectRunner(address, keys.privateKey, "host-one");
+  try {
+    first.ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
+    assert.equal((await first.next("ack")).seq, 1);
+    // Two commands are queued for the Host that is about to restart.
+    for (const id of ["cmd-stale-one", "cmd-stale-two"])
+      content.submit("owner", runner, {
+        ...command,
+        client_cmd_id: id,
+        host_generation: "host-one",
+      });
+    assert.equal(content.watermarks(runner).command_seq, 2);
+    first.ws.terminate();
+
+    // The restarted Host signs in with a new generation. The queued commands
+    // name the old one, so they can never be applied and must not be replayed.
+    const second = await connectRunner(address, keys.privateKey, "host-two");
+    try {
+      second.ws.send(
+        JSON.stringify({ type: "data", seq: 1, payload: ready([]) }),
+      );
+      assert.equal((await second.next("ack")).seq, 1);
+      second.ws.send(JSON.stringify({ type: "heartbeat" }));
+      assert.equal((await second.next("heartbeat_ack")).type, "heartbeat_ack");
+      assert.equal(
+        content
+          .commandHistory("owner", runner, "hub-one")
+          .filter((row) => row.receipt === null).length,
+        0,
+        "a stale command must not be delivered to the new generation",
+      );
+      assert.equal(content.watermarks(runner).command_seq, 0);
+
+      // A command written for the live generation is still delivered.
+      const current = {
+        ...command,
+        client_cmd_id: "cmd-current",
+        host_generation: "host-two",
+      } satisfies RemoteCommand;
+      content.submit("owner", runner, current);
+      second.ws.send(JSON.stringify({ type: "heartbeat" }));
+      assert.deepEqual((await second.next("command")).command, current);
+    } finally {
+      second.ws.terminate();
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("a restarted Host keeps commands that already have a receipt", () => {
+  const content = new RemoteContentStore(":memory:");
+  try {
+    content.submit("owner", runner, command);
+    content.receive("owner", runner, 1, { type: "receipt", receipt });
+
+    // `command_seq` never moves backwards past history the console already
+    // showed as applied, so the receipt stays readable.
+    assert.deepEqual(content.supersedeStaleCommands(runner, "host-two"), {
+      commandSeq: 1,
+      dropped: 0,
+    });
+    assert.equal(content.commandHistory("owner", runner, "hub-one").length, 1);
+  } finally {
+    content.close();
+  }
+});
+
 test("connect commands require the current ready generation and workspace authorization", async () => {
   const keys = generateKeyPairSync("ed25519");
   const publicKey = keys.publicKey

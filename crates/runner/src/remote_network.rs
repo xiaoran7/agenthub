@@ -304,7 +304,9 @@ pub fn create_local_host_channel() -> (LocalHostClient, LocalHostChannel) {
 }
 
 enum NetworkEvent {
-    Connected(u64, i64),
+    /// Transport epoch, the Gateway's received-event watermark, and the highest
+    /// command its journal still holds (`None` when the Gateway does not say).
+    Connected(u64, i64, Option<i64>),
     Sent(u64, i64),
     Frame(u64, Value),
     Offline(u64),
@@ -836,19 +838,46 @@ fn handle_network_event<T: NativeTransport>(
     device_name: &crate::device_name::DeviceNameSource,
 ) -> Result<()> {
     match event {
-        NetworkEvent::Connected(epoch, server_seq) if epoch >> 32 == current_remote_generation => {
+        NetworkEvent::Connected(epoch, server_seq, server_command_seq)
+            if epoch >> 32 == current_remote_generation =>
+        {
             let (sent, acked) = durable.journal.watermarks()?;
             if server_seq < acked {
                 eprintln!(
                     "[Runner] Server sequence rewound: server_seq {server_seq} < acked {acked}. Resetting outbox stream to re-sync."
                 );
                 durable.journal.reset_watermarks_and_outbox(server_seq)?;
-                let _ = durable.journal.reset_inbound_command_seq(0);
-                command_seq.store(0, Ordering::Relaxed);
+                // An older Gateway does not report its command watermark, and
+                // guessing zero would discard replay protection for commands it
+                // still holds; the journal is then left as it is.
+                if let Some(server_command_seq) = server_command_seq {
+                    durable
+                        .journal
+                        .reset_inbound_command_seq(server_command_seq)?;
+                    command_seq.store(server_command_seq, Ordering::Relaxed);
+                }
                 let ready_payload =
                     remote_ready_payload(durable, cached_models, cached_discovery, device_name);
                 durable.journal.enqueue_remote(&ready_payload)?;
             } else {
+                // The Gateway's journal can be shorter than this Host's applied
+                // watermark even when the event stream is intact: the command
+                // journal and the event log are separate tables, and only the
+                // former is truncated when stale commands are superseded. Pull
+                // the inbound watermark back so replayed commands at those
+                // sequences are applied instead of rejected as already-seen.
+                if let Some(server_command_seq) = server_command_seq
+                    && let Ok(applied) = durable.journal.received_command_seq()
+                    && applied > server_command_seq
+                {
+                    eprintln!(
+                        "[Runner] Gateway command journal rewound: applied {applied} > server {server_command_seq}. Resetting inbound sequence."
+                    );
+                    durable
+                        .journal
+                        .reset_inbound_command_seq(server_command_seq)?;
+                    command_seq.store(server_command_seq, Ordering::Relaxed);
+                }
                 if server_seq > sent {
                     for s in (sent + 1)..=server_seq {
                         let _ = durable.journal.mark_sent(s);
@@ -1122,11 +1151,23 @@ fn network_loop(
                 }
                 bail!("remote_handshake_rejected");
             }
+            // `command_seq` is the Gateway's own high-water mark. An older
+            // Gateway does not send it, and then the local watermark stands.
+            let server_command_seq = ack["command_seq"].as_i64();
+            if let Some(server_command_seq) = server_command_seq
+                && command_seq.load(Ordering::Relaxed) > server_command_seq
+            {
+                eprintln!(
+                    "[Runner Handshake] Gateway command journal is shorter than the applied watermark ({} > {server_command_seq}); rewinding inbound sequence",
+                    command_seq.load(Ordering::Relaxed)
+                );
+            }
             events.send(NetworkEvent::Connected(
                 epoch,
                 ack["received_seq"]
                     .as_i64()
                     .ok_or_else(|| anyhow::anyhow!("invalid_remote_ack"))?,
+                server_command_seq,
             ))?;
             set_timeouts(&mut socket, Duration::from_millis(50))?;
             let mut heartbeat = Instant::now();
@@ -1321,7 +1362,7 @@ mod tests {
     ) {
         let device_name = crate::device_name::DeviceNameSource::default();
         handle_network_event(
-            NetworkEvent::Connected(epoch, 0),
+            NetworkEvent::Connected(epoch, 0, None),
             epoch >> 32,
             durable,
             control,
@@ -1402,7 +1443,7 @@ mod tests {
         let mut offered = 0;
 
         handle_network_event(
-            NetworkEvent::Connected(epoch, 1),
+            NetworkEvent::Connected(epoch, 1, None),
             generation,
             &mut durable,
             &control,
@@ -1444,7 +1485,7 @@ mod tests {
 
         // Server reconnects with server_seq = 0 (server database was reset / lower than acked)
         handle_network_event(
-            NetworkEvent::Connected(epoch, 0),
+            NetworkEvent::Connected(epoch, 0, None),
             generation,
             &mut durable,
             &control,
@@ -1470,6 +1511,76 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].0, 1);
         assert_eq!(pending[0].1["type"], "ready");
+    }
+
+    #[test]
+    fn a_shorter_gateway_command_journal_rewinds_the_inbound_watermark() {
+        let generation = 6_u64;
+        let epoch = generation << 32 | 1;
+        let device_name = crate::device_name::DeviceNameSource::default();
+        let (_dir, mut durable, control, send_tx, _send_rx, command_seq) = remote_test_host();
+        let mut active = None;
+        let mut offered = 0;
+
+        // This Host has applied commands up to 3 against a Gateway journal that
+        // has since been rebuilt and now holds none of them.
+        durable
+            .journal
+            .reset_inbound_command_seq(3)
+            .expect("rewind to an applied watermark");
+        command_seq.store(3, Ordering::Relaxed);
+
+        handle_network_event(
+            NetworkEvent::Connected(epoch, 0, Some(0)),
+            generation,
+            &mut durable,
+            &control,
+            &mut active,
+            &mut offered,
+            &send_tx,
+            &command_seq,
+            None,
+            None,
+            &device_name,
+        )
+        .unwrap();
+
+        // The event stream was intact, so the transport stays up; only the
+        // inbound side moves back to what the Gateway can actually replay.
+        assert_eq!(active, Some(epoch));
+        assert!(control.connected.load(Ordering::Relaxed));
+        assert_eq!(durable.journal.received_command_seq().unwrap(), 0);
+        assert_eq!(command_seq.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn an_older_gateway_without_a_command_watermark_keeps_the_local_one() {
+        let generation = 4_u64;
+        let epoch = generation << 32 | 1;
+        let device_name = crate::device_name::DeviceNameSource::default();
+        let (_dir, mut durable, control, send_tx, _send_rx, command_seq) = remote_test_host();
+        let mut active = None;
+        let mut offered = 0;
+        durable.journal.reset_inbound_command_seq(2).unwrap();
+        command_seq.store(2, Ordering::Relaxed);
+
+        handle_network_event(
+            NetworkEvent::Connected(epoch, 0, None),
+            generation,
+            &mut durable,
+            &control,
+            &mut active,
+            &mut offered,
+            &send_tx,
+            &command_seq,
+            None,
+            None,
+            &device_name,
+        )
+        .unwrap();
+
+        assert_eq!(durable.journal.received_command_seq().unwrap(), 2);
+        assert_eq!(command_seq.load(Ordering::Relaxed), 2);
     }
 
     #[test]
