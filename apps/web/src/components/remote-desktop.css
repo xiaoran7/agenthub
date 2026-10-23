@@ -1049,21 +1049,17 @@
   width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px));
   max-width: none;
   margin-bottom: 22px;
-  border: 1px solid var(--remote-composer-border, var(--remote-line));
+  border: none !important;
   border-radius: var(--radius-xl, 20px);
   background: var(--remote-composer-bg, var(--remote-surface));
   box-shadow: var(--remote-composer-shadow, 0 8px 26px rgba(0, 0, 0, 0.08));
-  transition:
-    border-color 0.16s ease,
-    box-shadow 0.16s ease;
+  transition: box-shadow 0.16s ease;
 }
 
 .remote-composer-card:focus-within {
-  border-color: var(--remote-terracotta);
+  border: none !important;
   background: var(--remote-composer-bg, var(--remote-surface));
-  box-shadow:
-    var(--remote-composer-shadow, 0 10px 28px rgba(0, 0, 0, 0.12)),
-    0 0 0 1px var(--remote-terracotta);
+  box-shadow: var(--remote-composer-shadow, 0 10px 28px rgba(0, 0, 0, 0.12));
 }
 
 .remote-context {
@@ -1155,10 +1151,15 @@
   line-height: 1.5;
 }
 
-.remote-composer-input-wrapper textarea {
+.remote-composer-input-wrapper textarea,
+.remote-composer-input-wrapper textarea:focus,
+.remote-composer-input-wrapper textarea:focus-visible {
   color: var(--remote-ink);
   font-size: 14.5px;
   line-height: 1.6;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 /* Placeholder and hint */

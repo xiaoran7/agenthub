@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+- **Web 控制台交互视觉体验修复与 Runner 会话恢复自愈（`apps/web`, `crates/runner`）**：
+  - **侧边栏复制会话按钮与交互一致性（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/remote.css`）**：
+    - **修复小图标被压缩消失**：排查发现全局 `.remote-console button` 的 `8px 13px` 内边距作用到了 `22×22px` 的 `.remote-session-action-btn` 上，导致内部 SVG 宽度被挤压为 0 呈现为空白小灰块；在全局样式排除选择器中加入 `:not(.remote-session-action-btn)`，强制 `padding: 0 !important` 与 `display: block` SVG；
+    - **候选未连接会话支持复制**：将候选会话（`.remote-session.candidate`）与活跃会话的卡片布局统一为双列网格结构，候选会话同样增加悬浮复制 ID 按钮，抹平行为差异；
+  - **Runner 幂等恢复与 Claude Desktop 判定加固（`crates/runner`, `apps/web/src/lib/remote.ts`）**：
+    - **根治单机重连误报“已绑定到另一台电脑”**：在 `crates/runner/src/remote_host.rs` 的 `NativeSessionHost::connect` 中增加针对 `ConnectMode::Resume` 的幂等判定；当会话已有本地活动绑定且 `provider_session_id` 匹配时直接返回既有连接收据，避免多端或重连时因旧状态未释放误判 `session_already_bound`；
+    - **修正错误提示文案**：在 `remote.ts` 中将 `session_already_bound` 翻译修正为清晰明确的「该会话已在当前设备上处于连接状态」；
+    - **全量行扫描识别 Claude Desktop 会话**：在 `crates/runner/src/collectors/mod.rs` 中，将 `entrypoint.starts_with("claude-desktop")` 的提取从仅检查 assistant 消息行提升到全量 transcript 行，确保即使尚未生成 assistant 消息或在首轮前也能准确归类为 Claude Desktop 而非错误回退至 Claude Code；
+  - **新建会话弹窗防穿透遮罩（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/remote.css`）**：
+    - 将原生 `<dialog>` 弹窗重构为显式受控状态与 `.remote-modal-backdrop` 全屏遮罩层（带毛玻璃模糊与背景色），彻底解决弹窗展示后仍能点击底层页面内容的交互穿透问题；
+    - 遮罩层点击与 Escape 按键支持安全退出，弹层内部阻止冒泡，彻底避免原生 `<dialog.showModal()>` 的 Top Layer 与 Portalled Select 下拉层级互斥问题；
+  - **推理深度下拉菜单方向与动画修正（`apps/web/src/components/Select.tsx`, `apps/web/src/components/remote.css`）**：
+    - 为 `Select` 组件扩展 `placement?: "auto" | "top" | "bottom"` 属性，底部输入框思考深度选择显式传入 `placement="top"`；
+    - 解决 CSS `@keyframes` 动画中 `transform: translateY(0)` 覆盖内联 `transform: translateY(-100%)` 导致向上展开时依然遮挡按钮的 Bug；改为以 `bottom: ${rect.bottom}px; top: auto;` 定位，并新增专属的 `@keyframes cdsSelectMenuInAbove` 向上展开动画；
+  - **输入框边框与焦点轮廓全面精简（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
+    - 移除 `.remote-composer-card` 的外边框以及焦点时的外轮廓；
+    - 移除 `.remote-composer-card::before` 顶部分割线（保留纯透明到背景色的柔和渐变过渡）；
+    - 移除内部 textarea 获得焦点时的橙色描边（`outline: none !important; box-shadow: none !important; border: none !important;`），实现通透干净的现代输入框质感；
+  - **全量测试与类型检查通过**：`npm.cmd test` 75 项通过、`npm.cmd run typecheck` 0 错误、`cargo test --package agenthub-runner` 295 项测试全部通过。
+
 - **Web 控制台与本地控制台统一组件语言：原生下拉框、系统弹窗与编号化文案全量替换（`apps/web`, `crates/runner/resources`）**：
   - **下拉选择全面组件化（`apps/web/src/components/Select.tsx`）**：
     - **问题现象**：新建会话弹窗（`工作区`）与输入框的推理深度仍使用 `<select>`，在 Windows 上弹出的是操作系统自带的原生菜单，字体、圆角、主题与控制台其余部分完全脱节；工作区选项直接暴露内部标识 `ws-agent_hub-e6174d5db55c0532`；

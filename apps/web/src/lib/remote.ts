@@ -346,7 +346,7 @@ export function remoteError(error: unknown): string {
     workspace_required: "请先选择一个工作目录。",
     workspace_limit_exceeded: "工作目录数量已达上限。",
     thread_list_malformed: "本机 Agent 返回的会话列表无法读取。",
-    session_already_bound: "这个会话已经绑定到另一台电脑。",
+    session_already_bound: "该会话已在当前设备上处于连接状态。",
     session_not_bound: "这个会话还没有绑定，请先恢复它。",
     invalid_prompt: "发送的内容为空或过长。",
     approval_session_mismatch: "这项审批属于另一个会话。",

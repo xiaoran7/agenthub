@@ -2842,12 +2842,25 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             if *mode == ConnectMode::Attach {
                 return Err(NativeError::rejected("attach_not_supported"));
             }
-            if let Some(existing) = self.sessions.get(hub_id)
-                && (existing.control_connected
-                    || *mode != ConnectMode::Resume
-                    || provider_session_id.as_ref() != Some(&existing.provider_session_id))
-            {
-                return Err(NativeError::rejected("session_already_bound"));
+            if let Some(existing) = self.sessions.get(hub_id) {
+                if *mode != ConnectMode::Resume
+                    || provider_session_id.as_ref() != Some(&existing.provider_session_id)
+                {
+                    return Err(NativeError::rejected("session_already_bound"));
+                }
+                if existing.control_connected {
+                    // Already connected to this exact native session; return existing binding idempotently.
+                    return Ok(json!({
+                        "binding": existing,
+                        "provider_response": {
+                            "thread": {
+                                "id": existing.provider_session_id,
+                                "cwd": existing.workspace_path,
+                                "status": { "type": "idle" }
+                            }
+                        }
+                    }));
+                }
             }
             let ws_str = workspace_path.to_string_lossy();
             let cwd = self

@@ -1036,7 +1036,7 @@ export function RemoteConsole({
     "read-only",
   );
   const [nativeId, setNativeId] = useState("");
-  const dialog = useRef<HTMLDialogElement>(null);
+  const [launchModalOpen, setLaunchModalOpen] = useState(false);
   const timeline = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const refresh = useRef(() => {});
@@ -1456,7 +1456,7 @@ export function RemoteConsole({
       );
       attempts.current.delete(attemptKey);
       setSelected(`${runner}/${command.hub_session_id}`);
-      dialog.current?.close();
+      setLaunchModalOpen(false);
       refresh.current();
     } catch (err) {
       if (err instanceof Error && err.name === "RemoteRequestRejected")
@@ -1601,6 +1601,17 @@ export function RemoteConsole({
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!launchModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setLaunchModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [launchModalOpen]);
 
   const handleCopySessionId = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2055,7 +2066,7 @@ export function RemoteConsole({
                 setWorkspace(rInfo?.hello?.workspaces[0] ?? "");
                 setNativeId("");
                 setModel("");
-                dialog.current?.showModal();
+                setLaunchModalOpen(true);
               }}
             >
               <svg
@@ -2423,7 +2434,7 @@ export function RemoteConsole({
                     setWorkspace(activeDevice?.workspaces[0] ?? "");
                     setNativeId("");
                     setModel("");
-                    dialog.current?.showModal();
+                    setLaunchModalOpen(true);
                   }}
                 >
                   <svg
@@ -2507,7 +2518,7 @@ export function RemoteConsole({
                         setWorkspace(workspaceGroup.id);
                         setNativeId("");
                         setModel("");
-                        dialog.current?.showModal();
+                        setLaunchModalOpen(true);
                       }}
                     >
                       <svg
@@ -2749,57 +2760,91 @@ export function RemoteConsole({
                             }
 
                             return (
-                              <button
+                              <div
                                 className="remote-session candidate"
                                 key={item.key}
-                                title={
-                                  item.candidate.resumable === false
-                                    ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
-                                    : `点击恢复：${item.title}`
-                                }
-                                disabled={
-                                  busy || item.candidate.resumable === false
-                                }
-                                onClick={() => {
-                                  if (isMobile) setMobileDrawerOpen(false);
-                                  void resumeCandidate(
-                                    item.runnerId,
-                                    item.workspaceId,
-                                    item.providerSessionId,
-                                  );
-                                }}
                               >
-                                <div className="remote-session-top-line">
-                                  <span
-                                    className="remote-session-bullet candidate"
-                                    aria-hidden="true"
-                                  />
-                                  <span className="remote-session-title">
-                                    {item.title}
+                                <button
+                                  type="button"
+                                  className="remote-session-main"
+                                  title={
+                                    item.candidate.resumable === false
+                                      ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
+                                      : `点击恢复：${item.title}`
+                                  }
+                                  disabled={
+                                    busy || item.candidate.resumable === false
+                                  }
+                                  onClick={() => {
+                                    if (isMobile) setMobileDrawerOpen(false);
+                                    void resumeCandidate(
+                                      item.runnerId,
+                                      item.workspaceId,
+                                      item.providerSessionId,
+                                    );
+                                  }}
+                                >
+                                  <div className="remote-session-top-line">
+                                    <span
+                                      className="remote-session-bullet candidate"
+                                      aria-hidden="true"
+                                    />
+                                    <span className="remote-session-title">
+                                      {item.title}
+                                    </span>
+                                  </div>
+                                  <span className="remote-session-meta">
+                                    <span className="remote-session-badge candidate">
+                                      可接管
+                                    </span>
+                                    {item.model && (
+                                      <span
+                                        className="remote-session-pill-tag"
+                                        title={`模型: ${item.model}`}
+                                      >
+                                        {item.model.replace(/^models\//u, "")}
+                                      </span>
+                                    )}
+                                    {formatSessionTokens(item.totalTokens) && (
+                                      <span
+                                        className="remote-session-tokens"
+                                        title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
+                                      >
+                                        {formatSessionTokens(item.totalTokens)}
+                                      </span>
+                                    )}
                                   </span>
+                                </button>
+                                <div className="remote-session-actions-hover">
+                                  <button
+                                    type="button"
+                                    className={`remote-session-action-btn ${
+                                      copiedSessionId === item.providerSessionId
+                                        ? "copied"
+                                        : ""
+                                    }`}
+                                    title={
+                                      copiedSessionId === item.providerSessionId
+                                        ? "已复制会话ID"
+                                        : "复制会话ID"
+                                    }
+                                    aria-label="复制会话ID"
+                                    onClick={(e) =>
+                                      handleCopySessionId(
+                                        item.providerSessionId,
+                                        e,
+                                      )
+                                    }
+                                  >
+                                    {copiedSessionId ===
+                                    item.providerSessionId ? (
+                                      <CheckIcon size={12} />
+                                    ) : (
+                                      <CopyIcon size={12} />
+                                    )}
+                                  </button>
                                 </div>
-                                <span className="remote-session-meta">
-                                  <span className="remote-session-badge candidate">
-                                    可接管
-                                  </span>
-                                  {item.model && (
-                                    <span
-                                      className="remote-session-pill-tag"
-                                      title={`模型: ${item.model}`}
-                                    >
-                                      {item.model.replace(/^models\//u, "")}
-                                    </span>
-                                  )}
-                                  {formatSessionTokens(item.totalTokens) && (
-                                    <span
-                                      className="remote-session-tokens"
-                                      title={`Token 用量: ${item.totalTokens?.toLocaleString()}`}
-                                    >
-                                      {formatSessionTokens(item.totalTokens)}
-                                    </span>
-                                  )}
-                                </span>
-                              </button>
+                              </div>
                             );
                           })}
                           {hasMore && (
@@ -3092,7 +3137,7 @@ export function RemoteConsole({
                     setWorkspace(available?.hello?.workspaces[0] ?? "");
                     setNativeId("");
                     setModel("");
-                    dialog.current?.showModal();
+                    setLaunchModalOpen(true);
                   },
                 },
                 {
@@ -3918,6 +3963,7 @@ export function RemoteConsole({
                   >
                     <Select
                       variant="compact"
+                      placement="top"
                       label="推理思考深度"
                       value={effort}
                       disabled={!connected || busy}
@@ -3971,117 +4017,132 @@ export function RemoteConsole({
           </div>
         )}
       </main>
-      <dialog ref={dialog} className="remote-launch">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void launch();
-          }}
+      {launchModalOpen && (
+        <div
+          className="remote-modal-backdrop"
+          role="presentation"
+          onClick={() => setLaunchModalOpen(false)}
         >
-          <header>
-            <h2>在电脑上开始</h2>
-            <button
-              type="button"
-              className="remote-modal-close"
-              aria-label="关闭"
-              onClick={() => dialog.current?.close()}
-            >
-              ×
-            </button>
-          </header>
-          <div className="remote-launch-field">
-            <span className="remote-launch-label">电脑</span>
-            <Select
-              label="电脑"
-              value={runner}
-              placeholder="选择在线电脑"
-              options={onlineDeviceOptions}
-              onChange={(next) => {
-                setRunner(next);
-                setWorkspace(
-                  snapshot.runners.find((item) => item.runner_id === next)
-                    ?.hello?.workspaces[0] ?? "",
-                );
-                setNativeId("");
-                setModel("");
+          <div
+            className="remote-launch"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remote-launch-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void launch();
               }}
-            />
-          </div>
-          <div className="remote-launch-field">
-            <span className="remote-launch-label">工作区</span>
-            <Select
-              label="工作区"
-              value={workspace}
-              placeholder="选择已授权目录"
-              options={launchWorkspaceOptions}
-              onChange={(next) => {
-                setWorkspace(next);
-                setNativeId("");
-              }}
-            />
-          </div>
-          <div className="remote-launch-field">
-            <span className="remote-launch-label">会话</span>
-            <Select
-              label="会话"
-              value={nativeId}
-              options={launchSessionOptions}
-              onChange={setNativeId}
-            />
-          </div>
-          {!nativeId && (
-            <div className="remote-launch-field">
-              <span className="remote-launch-label">Agent 引擎</span>
-              <Select
-                label="Agent 引擎"
-                value={agentType}
-                options={LAUNCH_AGENT_OPTIONS}
-                onChange={(next) => {
-                  setAgentType(next as typeof agentType);
-                  // A model id belongs to one engine; carrying it across a
-                  // switch would hand the new engine an id it cannot run.
-                  setModel("");
-                }}
-              />
-            </div>
-          )}
-          <div className="remote-launch-field">
-            <span className="remote-launch-label">模型</span>
-            <Select
-              label="模型"
-              value={model}
-              options={launchModelOptions}
-              onChange={setModel}
-            />
-            {launchModelOptions.length <= 1 && (
-              <span className="remote-launch-hint">
-                所选电脑没有上报这个引擎的模型清单，将沿用原生设置。
-              </span>
-            )}
-          </div>
-          <div className="remote-launch-field">
-            <span className="remote-launch-label">文件权限</span>
-            <Select
-              label="文件权限"
-              value={sandbox}
-              options={SANDBOX_OPTIONS}
-              onChange={(next) => setSandbox(next as typeof sandbox)}
-            />
-          </div>
-          <p className="remote-launch-note">
-            执行发生在所选电脑。会话内容将同步到你的 Hub，供其他设备查看和继续。
-          </p>
-          <div className="remote-modal-actions">
-            <button
-              type="submit"
-              className="remote-primary remote-modal-submit"
-              disabled={busy || !workspace || !runner}
             >
-              {busy ? "正在启动…" : nativeId ? "恢复会话" : "创建会话"}
-            </button>
+              <header>
+                <h2 id="remote-launch-title">在电脑上开始</h2>
+                <button
+                  type="button"
+                  className="remote-modal-close"
+                  aria-label="关闭"
+                  onClick={() => setLaunchModalOpen(false)}
+                >
+                  ×
+                </button>
+              </header>
+              <div className="remote-launch-field">
+                <span className="remote-launch-label">电脑</span>
+                <Select
+                  label="电脑"
+                  value={runner}
+                  placeholder="选择在线电脑"
+                  options={onlineDeviceOptions}
+                  onChange={(next) => {
+                    setRunner(next);
+                    setWorkspace(
+                      snapshot.runners.find((item) => item.runner_id === next)
+                        ?.hello?.workspaces[0] ?? "",
+                    );
+                    setNativeId("");
+                    setModel("");
+                  }}
+                />
+              </div>
+              <div className="remote-launch-field">
+                <span className="remote-launch-label">工作区</span>
+                <Select
+                  label="工作区"
+                  value={workspace}
+                  placeholder="选择已授权目录"
+                  options={launchWorkspaceOptions}
+                  onChange={(next) => {
+                    setWorkspace(next);
+                    setNativeId("");
+                  }}
+                />
+              </div>
+              <div className="remote-launch-field">
+                <span className="remote-launch-label">会话</span>
+                <Select
+                  label="会话"
+                  value={nativeId}
+                  options={launchSessionOptions}
+                  onChange={setNativeId}
+                />
+              </div>
+              {!nativeId && (
+                <div className="remote-launch-field">
+                  <span className="remote-launch-label">Agent 引擎</span>
+                  <Select
+                    label="Agent 引擎"
+                    value={agentType}
+                    options={LAUNCH_AGENT_OPTIONS}
+                    onChange={(next) => {
+                      setAgentType(next as typeof agentType);
+                      // A model id belongs to one engine; carrying it across a
+                      // switch would hand the new engine an id it cannot run.
+                      setModel("");
+                    }}
+                  />
+                </div>
+              )}
+              <div className="remote-launch-field">
+                <span className="remote-launch-label">模型</span>
+                <Select
+                  label="模型"
+                  value={model}
+                  options={launchModelOptions}
+                  onChange={setModel}
+                />
+                {launchModelOptions.length <= 1 && (
+                  <span className="remote-launch-hint">
+                    所选电脑没有上报这个引擎的模型清单，将沿用原生设置。
+                  </span>
+                )}
+              </div>
+              <div className="remote-launch-field">
+                <span className="remote-launch-label">文件权限</span>
+                <Select
+                  label="文件权限"
+                  value={sandbox}
+                  options={SANDBOX_OPTIONS}
+                  onChange={(next) => setSandbox(next as typeof sandbox)}
+                />
+              </div>
+              <p className="remote-launch-note">
+                执行发生在所选电脑。会话内容将同步到你的
+                Hub，供其他设备查看和继续。
+              </p>
+              <div className="remote-modal-actions">
+                <button
+                  type="submit"
+                  className="remote-primary remote-modal-submit"
+                  disabled={busy || !workspace || !runner}
+                >
+                  {busy ? "正在启动…" : nativeId ? "恢复会话" : "创建会话"}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
-      </dialog>
+        </div>
+      )}
       {settingsOpen && panelConfig !== undefined && (
         <SettingsPage
           account={account ?? undefined}

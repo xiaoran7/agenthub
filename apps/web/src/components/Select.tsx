@@ -77,6 +77,8 @@ interface SelectProps {
   disabled?: boolean;
   /** `compact` is the composer's inline variant; `block` fills its container. */
   variant?: "block" | "compact";
+  /** Explicitly prefer menu opening direction: "top", "bottom", or "auto". */
+  placement?: "auto" | "top" | "bottom";
   className?: string;
   title?: string;
 }
@@ -84,6 +86,7 @@ interface SelectProps {
 interface Rect {
   left: number;
   top: number;
+  bottom: number;
   width: number;
   /** True when the menu opens upward because there is no room below. */
   above: boolean;
@@ -97,6 +100,7 @@ export function Select({
   placeholder,
   disabled = false,
   variant = "block",
+  placement = "auto",
   className = "",
   title,
 }: SelectProps) {
@@ -127,7 +131,12 @@ export function Select({
     const box = button.getBoundingClientRect();
     const menuHeight = Math.min(options.length * 40 + 12, 320);
     const below = window.innerHeight - box.bottom;
-    const above = below < menuHeight + 12 && box.top > menuHeight + 12;
+    const above =
+      placement === "top"
+        ? true
+        : placement === "bottom"
+          ? false
+          : below < menuHeight + 12 && box.top > menuHeight + 12;
 
     // The menu is as wide as its widest row needs, never narrower than the
     // trigger and never wider than the window: a session title is far longer
@@ -147,11 +156,12 @@ export function Select({
     );
     setRect({
       left,
-      top: above ? box.top - 6 : box.bottom + 6,
+      top: box.bottom + 6,
+      bottom: Math.max(VIEWPORT_GUTTER, window.innerHeight - box.top + 6),
       width,
       above,
     });
-  }, [options.length, options]);
+  }, [options.length, options, placement]);
 
   const close = useCallback((restoreFocus: boolean) => {
     setOpen(false);
@@ -350,7 +360,7 @@ export function Select({
           <div
             ref={menuRef}
             id={listId}
-            className="cds-select-menu"
+            className={`cds-select-menu ${rect.above ? "above" : ""}`}
             role="listbox"
             aria-label={label}
             tabIndex={-1}
@@ -358,8 +368,8 @@ export function Select({
               left: `${rect.left}px`,
               width: `${rect.width}px`,
               ...(rect.above
-                ? { top: `${rect.top}px`, transform: "translateY(-100%)" }
-                : { top: `${rect.top}px` }),
+                ? { bottom: `${rect.bottom}px`, top: "auto" }
+                : { top: `${rect.top}px`, bottom: "auto" }),
             }}
             onKeyDown={onKeyDown}
           >

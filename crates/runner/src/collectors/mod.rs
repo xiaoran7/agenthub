@@ -1129,15 +1129,16 @@ fn read_claude_transcript_metadata_uncached(
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if value.get("type").and_then(Value::as_str) == Some("assistant") {
-            has_output = true;
-            if value
+        if !desktop
+            && value
                 .get("entrypoint")
                 .and_then(Value::as_str)
                 .is_some_and(|e| e.starts_with("claude-desktop"))
-            {
-                desktop = true;
-            }
+        {
+            desktop = true;
+        }
+        if value.get("type").and_then(Value::as_str) == Some("assistant") {
+            has_output = true;
             let message_id = value
                 .pointer("/message/id")
                 .and_then(Value::as_str)
