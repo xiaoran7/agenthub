@@ -55,3 +55,14 @@ docker compose --env-file deploy/docker.env -f deploy/docker-compose.production.
   1. `curl -fsS http://127.0.0.1:3001/health` 返回 `{"status":"ok"}`；
   2. 访问 `https://your-domain/` 完成首次单管理员初始化（或口令登录），未授权直访 `/v1/devices` 返回 401；
   3. 本机 `agenthub-runner` 通过 HTTPS/WSS 完成一次性配对码绑定，流式输出、审批与中断实时同步，重启服务后数据不丢失。
+
+## 4. Windows Runner 开机自启
+
+Runner 是单文件可执行程序，没有安装器，开机自启靠启动文件夹里的一个快捷方式，而不是服务或计划任务：它需要登录后的用户会话才能显示托盘图标，并以当前用户身份读写 `~/.agenthub/` 与各 Provider 的转录目录。
+
+- **放置位置**：`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\AgentHub Runner.lnk`（`shell:startup`）。放在这里而不是 `HKCU\...\Run`，是为了让用户在「设置 → 应用 → 启动」里能像普通程序一样随时关掉它。
+- **快捷方式目标**：`agenthub-runner.exe web --port 4200 --open-browser false --hide-console true`，工作目录设为一个已授权的项目目录（默认 `.` 会解析成它，需是真实存在的目录，否则启动即 `workspace_unavailable`）。
+- **为什么不需要 `.vbs` 包装**：Runner 编译为 Windows GUI 子系统（`#![windows_subsystem = "windows"]`），双击或从快捷方式启动时不会创建控制台窗口；`--hide-console true` 只是额外隐藏从终端启动时继承来的窗口。`--open-browser false` 让登录时不弹窗，托盘图标与「显示协同控制台」菜单仍然可用。
+- **重复启动是安全的**：Runner 用命名管道做单实例保护，第二个实例在 IPC 阶段即返回 `daemon_already_running` 并退出，不会抢占 4200 端口，也不会打断已在运行的实例。
+- **验证方式**：`Get-CimInstance Win32_Process -Filter "Name='agenthub-runner.exe'"` 应只有一条记录；`curl -s http://127.0.0.1:4200/api/status` 的 `remote_connected` 为 `true`；托盘图标存在但进程没有可见窗口（`MainWindowHandle` 为 0）。
+- **退出与重启**：托盘菜单「退出 AgentHub」或 `POST /api/shutdown` 会安全关闭；下次登录自动再起。

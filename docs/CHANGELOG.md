@@ -8,6 +8,14 @@
   - **单一在线事实（`services/api/src/presence.ts`）**：新增 `RunnerPresence`，在 v3 握手成功时标记在线、socket 关闭时清除；`/v1/devices` 的 `online` 改为「长连接在线，或该存储后端自己的最近活跃判定」，已撤销设备一律离线。被新连接替换的旧 socket 关闭时不会误清后继连接的在线状态；
   - **会话列表同步收敛（`services/api/src/remote-routes.ts`）**：`/v3/remote/sessions` 的 runner/session `online` 改读同一份 presence，避免同一页面里设备选择器与设置页给出相反结论；
   - **设置页实时刷新（`apps/web/src/components/SettingsPage.tsx`）**：设备分区停留时每 5 秒拉取一次设备列表，Runner 重连或掉线后指示灯自行更新，不必退出重进；
+  - **回归测试**：新增网关用例——`last_seen_at` 已过期时，建立 v3 长连接后设备列表必须显示在线；断开后必须恢复离线（`services/api/test/remote.test.ts`）。`npm.cmd test --workspace @agent-pulse/api` 64 项通过、`npm.cmd test --workspace @agent-pulse/web` 75 项通过、两侧 `typecheck` 与根目录 `format:check` 均通过。
+
+- **Windows Runner 开机自启（`docs/DEPLOYMENT.md`）**：
+  - **自启项**：在启动文件夹 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` 创建 `AgentHub Runner.lnk`，目标 `C:\Users\tanner\Desktop\agenthub-runner.exe web --port 4200 --open-browser false --hide-console true`，工作目录 `D:\Claudespace\Project\agenthub`（与手工启动时一致，`.` 解析为该目录，是唯一被授权的 workspace）。登录后静默进入托盘，不弹窗口、不占用前台；
+  - **为何用启动文件夹而非 `.vbs` 或计划任务**：Runner 已是 Windows GUI 子系统程序（`#![windows_subsystem = "windows"]`），本身不创建控制台窗口，无需 `WScript.Shell.Run(..., 0, False)` 包裹；启动文件夹又比计划任务更容易被用户在「设置 → 应用 → 启动」里自行关闭；
+  - **单实例安全**：验证重复启动被命名管道守卫拦下（`daemon_already_running`），不会抢占 4200 端口或打断已运行实例；
+  - **实测**：通过 `POST /api/shutdown` 停止原进程后由快捷方式冷启动，1 秒内控制台就绪，`/api/status` 显示 `remote_enabled: true`、`remote_connected: true`，`/api/dashboard` 返回 500 条会话与 32 个工作区；进程 `MainWindowHandle = 0`（无可见窗口），枚举到隐藏的 `AgentHubRunnerTrayClass` 托盘窗口；再次经快捷方式启动后进程数仍为 1；
+  - **文档**：`docs/DEPLOYMENT.md` 新增「Windows Runner 开机自启」一节，记录位置、参数、单实例语义与验收命令。
 
 - **Web 控制台交互视觉体验修复与 Runner 会话恢复自愈（`apps/web`, `crates/runner`）**：
   - **侧边栏复制会话按钮与交互一致性（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/remote.css`）**：
