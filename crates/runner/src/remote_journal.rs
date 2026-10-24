@@ -1406,6 +1406,7 @@ pub struct DurableHost<T: NativeTransport> {
 impl<T: NativeTransport> DurableHost<T> {
     pub fn new(mut host: NativeSessionHost<T>, journal: RemoteJournal) -> Result<Self> {
         host.restore_detached(journal.bindings()?);
+        host.keep_alive_restored_sessions();
         let detached = host.sessions();
         for binding in &detached {
             persist_binding(&journal.connection, binding)?;

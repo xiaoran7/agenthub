@@ -1040,6 +1040,7 @@ export function RemoteConsole({
   const timeline = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const refresh = useRef(() => {});
+  const refreshSessionDetail = useRef(() => {});
   const session = snapshot.sessions.find((item) => key(item) === selected);
   const runnerInfo = snapshot.runners.find((item) => item.runner_id === runner);
   const connected = !!session?.online && !!session.binding.control_connected;
@@ -1219,6 +1220,7 @@ export function RemoteConsole({
     const poll = async () => {
       if (stopped || inFlight) return;
       inFlight = true;
+      let latestDetail: RemoteSessionDetail | null = null;
       try {
         // One request, not two. The session detail route already carries the
         // binding, the event cursor and the command history, so the event fetch
@@ -1227,6 +1229,7 @@ export function RemoteConsole({
           `/sessions/${encodeURIComponent(runnerId)}/${encodeURIComponent(hub)}`,
         );
         if (stopped) return;
+        latestDetail = detail;
         if (detail.cursor > lastPolledGlobalCursor) {
           while (true) {
             const batch = await requestWithIdentity<{ events: RemoteEvent[] }>(
@@ -1242,21 +1245,47 @@ export function RemoteConsole({
           }
           lastPolledGlobalCursor = detail.cursor;
         }
-        // `session` is derived from the 1.5 s snapshot poll, which is where
-        // `control_connected` is refreshed; the copy on `detail` would be a
-        // second source of truth for the same field.
         setCommands(detail.commands);
+        const resolvedBinding = detail.binding;
+        if (resolvedBinding) {
+          setSnapshot((prev) => {
+            const idx = prev.sessions.findIndex(
+              (s) =>
+                s.runner_id === runnerId && s.binding.hub_session_id === hub,
+            );
+            if (
+              idx >= 0 &&
+              prev.sessions[idx]?.binding.control_connected !==
+                resolvedBinding.control_connected
+            ) {
+              const updated = [...prev.sessions];
+              updated[idx] = {
+                ...updated[idx]!,
+                binding: resolvedBinding,
+              };
+              return { ...prev, sessions: updated };
+            }
+            return prev;
+          });
+        }
       } catch (err) {
         if (!stopped) setError(remoteError(err));
       } finally {
         inFlight = false;
-        if (!stopped) timer = setTimeout(() => void poll(), SESSION_POLL_MS);
+        const hasPending = latestDetail?.commands?.some((c) => !c.receipt);
+        const nextDelay = hasPending ? 200 : SESSION_POLL_MS;
+        if (!stopped) timer = setTimeout(() => void poll(), nextDelay);
       }
+    };
+    refreshSessionDetail.current = () => {
+      clearTimeout(timer);
+      void poll();
     };
     void poll();
     return () => {
       stopped = true;
       clearTimeout(timer);
+      refreshSessionDetail.current = () => {};
     };
   }, [requestWithIdentity, selected]);
   const items = useMemo(
@@ -1408,6 +1437,7 @@ export function RemoteConsole({
         if (textareaRef.current) textareaRef.current.style.height = "auto";
       }
       refresh.current();
+      refreshSessionDetail.current();
     } catch (err) {
       attempts.current.delete(attemptKey);
       setError(remoteError(err));
@@ -1463,6 +1493,7 @@ export function RemoteConsole({
       setSelected(`${runner}/${command.hub_session_id}`);
       setLaunchModalOpen(false);
       refresh.current();
+      refreshSessionDetail.current();
     } catch (err) {
       if (err instanceof Error && err.name === "RemoteRequestRejected")
         attempts.current.delete(attemptKey);
@@ -1515,6 +1546,7 @@ export function RemoteConsole({
       attempts.current.delete(attemptKey);
       setSelected(`${targetRunnerId}/${command.hub_session_id}`);
       refresh.current();
+      refreshSessionDetail.current();
     } catch (err) {
       if (err instanceof Error && err.name === "RemoteRequestRejected")
         attempts.current.delete(attemptKey);

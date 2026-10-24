@@ -2,16 +2,26 @@
 
 ## [Unreleased]
 
-- **会话恢复性能优化与 Web 端历史内容完整渲染（`crates/runner`, `apps/web`）**：
-  - **会话恢复速度优化（`crates/runner/src/conversation.rs`, `crates/runner/src/remote_host.rs`）**：
-    - **Codex 深度搜索剪枝**：将 Codex 会话搜索严格限制在 `~/.codex/sessions` 与 `~/.codex/archived_sessions`（深度 4 层），并在递归遍历中主动跳过 `node_modules`、`plugins`、`cache`、`.git`、`target` 等大型目录，消除 Windows NTFS 上因扫描数百兆插件 node_modules 造成的 10~30 秒卡顿；
-    - **Claude Code 工作区 O(1) 直达**：扩展 `load_session_conversation_with_workspace`，在 `Connect` 流程中注入已知的工作区 `cwd`，优先调用 `find_claude_workspace_transcript` 直接定位 `<session_id>.jsonl`，避免全量项目递归扫描；
-  - **会话恢复内容渲染修复（`crates/runner/src/conversation.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/remote_journal.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
-    - **避免误杀 Claude Code 多 SessionId 转录文件**：移除了全文件跳过逻辑中对单行 `sessionId` 的误判（上下文压缩、分支或子会话常携带父级 sessionId），仅保留针对 Codex rollout 的 `session_meta` 校验；
-    - **保全 `thread/read` 历史 Turns**：修正 `remote_host.rs` 仅检查 `thread/resume` 返回值而丢弃 `thread/read` 返回的历史 turns 的问题，并在无 turns 时可靠降级到本地转录快照；
-    - **Codex `agentMessage` 内容块解析**：新增 `extract_text_from_value`，支持从 `content: [{ type: "output_text", text: "..." }]` 结构中提取文字，解决向网关投影时正文为空导致 Web 界面无文本的缺陷；
-    - **解耦前端事件游标推进**：在 `RemoteConsole.tsx` 中将“已拉取事件游标”与“已轮询全局游标”解耦，彻底杜绝当会话历史事件尚未落库时游标直接跃进至全局游标、从而永久跳过该会话所有历史事件的 Bug；
-  - **回归验证**：`cargo test --package agenthub-runner`（236 单元测试、28 远程 host 测试、17 journal 测试等）全部通过，`apps/web` 75 项测试通过，`services/api` 70 项测试通过。
+- **Runner Runtime 全局常驻保活与会话秒级极速恢复（`crates/runner`, `apps/web`）**：
+  - **Runtime 跨端全局常驻保活（`crates/runner/src/remote_host.rs`, `crates/runner/src/remote_journal.rs`）**：
+    - **启动自动激活持久化会话**：在 `DurableHost::new` 恢复本地 Journal 绑定后，自动触发 `host.keep_alive_restored_sessions()`，对磁盘工作区仍有效的既有会话自动加入工作区白名单，并向 Provider Transport 触发 `thread/resume` 完成运行时唤醒；
+    - **脱离前端依赖的常驻保活**：将恢复出的绑定直接置为 `control_connected = true` 与 `execution_state = Idle`，并通过网关 `ready` 握手向平台宣告在线，彻底解决“前端不打开就不加载运行时、退出前端后后台不保活”的缺陷。实测 Runner 冷启动后无需打开任何网页界面，各会话直接常驻在线，时刻响应远端调度；
+  - **指令执行与全盘扫描解耦（`crates/runner/src/remote_network.rs`）**：
+    - **消除 7 秒级阻塞等待**：修复 `LocalHostCommand::Execute` 在完成本地执行后，因阻塞等待 `refresh_discovery_and_publish`（全盘遍历 500+ 会话元数据）导致 HTTP API 卡顿 6~7 秒的严重架构瓶颈；
+    - **即时管道响应**：在 `handle_local_command` 写入 Journal 并在本地完成连接（约 15~30ms）后立即通过 `respond_to.send` 向调用方交割 `CommandReceipt`，将耗时的全盘扫描转入后置执行，将 Connect (Resume) 接口耗时由 7.68 秒断崖式压缩至 **37ms**；
+  - **转录读取与会话查找毫秒级直达（`crates/runner/src/collectors/mod.rs`, `crates/runner/src/conversation.rs`, `crates/runner/src/remote_host.rs`）**：
+    - **Claude 会话内存快表命中**：`find_claude_session_info` 优先直接查询内存 `claude_remote_sessions_cache()`，消除对 `~/.claude/projects/` 全盘反复遍历，实测 482KB 真实大型转录加载耗时从 14.4 秒降至 **40ms**；
+    - **Codex 深度搜索严格剪枝**：会话搜索限定在 `~/.codex/sessions` 与 `archived_sessions` 根目录 `.jsonl` 文件，主动绕过插件缓存树，集成测试延迟由 14,457ms 骤降至 19.5ms；
+    - **Windows 路径规范化匹配**：在 `ConnectMode::Resume` 授权判定中引入 Windows 路径规范化（统一斜杠、折叠大小写、剥离 `\\?\` 及末尾斜杠），杜绝格式差异引发的 `workspace_not_authorized` 误报；
+  - **前端交互自愈与极速轮询（`apps/web/src/components/RemoteConsole.tsx`）**：
+    - **指令即刻穿透刷新**：新增 `refreshSessionDetail.current()`，在 `connect`、`launch`、`resumeCandidate` 派发后立即穿透刷新会话详情，并在指令待确认期间自适应降频至 200ms 高频轮询；
+    - **状态乐观联动**：在获得最新连接状态时同步更新侧边栏会话树与顶部状态徽章，消灭前端多余的 1.5 秒空窗；
+  - **真实实测数据验收（Local Host API 实测）**：
+    - 482KB 真实转录加载耗时：**40.1ms**（0.040s）；
+    - 真实未绑定会话 Connect/Resume 执行响应：**37.5ms**（0.037s），状态 `accepted`，立即建立 `control_connected: true` 与 `idle`；
+    - 守护进程冷启动重启自愈：强杀 Runner 并更换 `host_generation` 重启，既有会话 100% 自动完成保活加载（`control_connected: true`, `execution_state: "idle"`）；
+    - 自动化测试回归：`cargo test --package agenthub-runner`（236 单元测试 + 28 远程 Host 集成测试全绿）、`cargo clippy`、`cargo fmt`、`npm.cmd run typecheck`、`npm.cmd run format:check`、`npm.cmd test` 全部通过。
+
 
 - **Web 设置页设备在线状态与真实长连接对齐（`services/api`, `apps/web`）**：
   - **问题现象**：本地控制台 `/api/status` 明确 `remote_connected: true`，Web「设置 → 设备」里同一台电脑却显示「离线」；

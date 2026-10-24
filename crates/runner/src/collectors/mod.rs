@@ -1524,13 +1524,27 @@ pub fn collect_grok_sessions_for_remote()
 pub fn find_claude_session_info(
     session_id: &str,
 ) -> Result<Option<(PathBuf, Option<String>)>, CollectorError> {
+    let target_id = session_id.trim_start_matches("claude_");
+    if let Ok(guard) = claude_remote_sessions_cache().read() {
+        if let Some((_, ref entries)) = *guard {
+            if let Some(entry) = entries.iter().find(|e| {
+                let e_id = e.session_id.trim_start_matches("claude_");
+                e_id == target_id
+            }) {
+                let cwd = PathBuf::from(&entry.cwd);
+                let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+                return Ok(Some((cwd, entry.title.clone())));
+            }
+        }
+    }
+
     let config_dir = discover_claude_config_dir()?;
     let projects_dir = config_dir.join("projects");
     if !projects_dir.is_dir() {
         return Ok(None);
     }
     let program = "Claude transcript lookup".to_owned();
-    let target_filename = format!("{}.jsonl", session_id);
+    let target_filename = format!("{}.jsonl", target_id);
     for project in fs::read_dir(&projects_dir).map_err(|source| CollectorError::Io {
         program: program.clone(),
         source,

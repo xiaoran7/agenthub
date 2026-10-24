@@ -612,22 +612,32 @@ impl NativeTransport for MultiProviderTransport {
             "thread/read" if is_claude => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("claude_");
-                let (cwd, title) = if let Ok(Some((c, t))) =
-                    crate::collectors::find_claude_session_info(raw_id)
-                    && !c.as_os_str().is_empty()
-                    && c != Path::new(".")
+                let (cwd, title) = if let Some(cached) = self
+                    .claude_cached_cwds
+                    .get(session_id)
+                    .or_else(|| self.claude_cached_cwds.get(raw_id))
+                    .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
                 {
-                    (c, t)
+                    (cached.clone(), None)
                 } else if let Some(param_cwd) = params["cwd"]
                     .as_str()
                     .filter(|s| !s.is_empty() && *s != ".")
                 {
-                    (PathBuf::from(param_cwd), None)
+                    let p = PathBuf::from(param_cwd);
+                    let canon = dunce::canonicalize(&p).unwrap_or(p);
+                    (canon, None)
+                } else if let Ok(Some((c, t))) = crate::collectors::find_claude_session_info(raw_id)
+                    && !c.as_os_str().is_empty()
+                    && c != Path::new(".")
+                {
+                    (c, t)
                 } else {
                     (PathBuf::from("."), None)
                 };
                 self.claude_cached_cwds
                     .insert(session_id.to_string(), cwd.clone());
+                self.claude_cached_cwds
+                    .insert(raw_id.to_string(), cwd.clone());
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -639,6 +649,7 @@ impl NativeTransport for MultiProviderTransport {
             }
             "thread/resume" if is_claude => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
+                let raw_id = session_id.trim_start_matches("claude_");
                 if let Some(m) = params["model"]
                     .as_str()
                     .map(str::trim)
@@ -650,16 +661,19 @@ impl NativeTransport for MultiProviderTransport {
                 let cwd = self
                     .claude_cached_cwds
                     .get(session_id)
+                    .or_else(|| self.claude_cached_cwds.get(raw_id))
                     .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
                     .cloned()
                     .or_else(|| {
                         params["cwd"]
                             .as_str()
                             .filter(|s| !s.is_empty() && *s != ".")
-                            .map(PathBuf::from)
+                            .map(|s| {
+                                let p = PathBuf::from(s);
+                                dunce::canonicalize(&p).unwrap_or(p)
+                            })
                     })
                     .or_else(|| {
-                        let raw_id = session_id.trim_start_matches("claude_");
                         crate::collectors::find_claude_session_info(raw_id)
                             .ok()
                             .flatten()
@@ -669,6 +683,8 @@ impl NativeTransport for MultiProviderTransport {
                     .unwrap_or_else(|| PathBuf::from("."));
                 self.claude_cached_cwds
                     .insert(session_id.to_string(), cwd.clone());
+                self.claude_cached_cwds
+                    .insert(raw_id.to_string(), cwd.clone());
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -909,7 +925,21 @@ impl NativeTransport for MultiProviderTransport {
             "thread/read" if is_antigravity => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("antigravity_");
-                let (cwd, title) = if let Ok(Some((c, t))) =
+                let (cwd, title) = if let Some(cached) = self
+                    .antigravity_cached_cwds
+                    .get(session_id)
+                    .or_else(|| self.antigravity_cached_cwds.get(raw_id))
+                    .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+                {
+                    (cached.clone(), None)
+                } else if let Some(param_cwd) = params["cwd"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && *s != ".")
+                {
+                    let p = PathBuf::from(param_cwd);
+                    let canon = dunce::canonicalize(&p).unwrap_or(p);
+                    (canon, None)
+                } else if let Ok(Some((c, t))) =
                     crate::collectors::find_antigravity_session_info(raw_id)
                 {
                     (c, t)
@@ -918,6 +948,8 @@ impl NativeTransport for MultiProviderTransport {
                 };
                 self.antigravity_cached_cwds
                     .insert(session_id.to_string(), cwd.clone());
+                self.antigravity_cached_cwds
+                    .insert(raw_id.to_string(), cwd.clone());
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -1099,14 +1131,29 @@ impl NativeTransport for MultiProviderTransport {
             "thread/read" if is_grok => {
                 let session_id = params["threadId"].as_str().unwrap_or("");
                 let raw_id = session_id.trim_start_matches("grok_");
-                let (cwd, title) =
-                    if let Ok(Some((c, t))) = crate::collectors::find_grok_session_info(raw_id) {
-                        (c, t)
-                    } else {
-                        (PathBuf::from("."), None)
-                    };
+                let (cwd, title) = if let Some(cached) = self
+                    .grok_cached_cwds
+                    .get(session_id)
+                    .or_else(|| self.grok_cached_cwds.get(raw_id))
+                    .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+                {
+                    (cached.clone(), None)
+                } else if let Some(param_cwd) = params["cwd"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && *s != ".")
+                {
+                    let p = PathBuf::from(param_cwd);
+                    let canon = dunce::canonicalize(&p).unwrap_or(p);
+                    (canon, None)
+                } else if let Ok(Some((c, t))) = crate::collectors::find_grok_session_info(raw_id) {
+                    (c, t)
+                } else {
+                    (PathBuf::from("."), None)
+                };
                 self.grok_cached_cwds
                     .insert(session_id.to_string(), cwd.clone());
+                self.grok_cached_cwds
+                    .insert(raw_id.to_string(), cwd.clone());
                 Ok(json!({
                     "thread": {
                         "id": session_id,
@@ -1526,6 +1573,31 @@ impl NativeTransport for MultiProviderTransport {
                             .unwrap_or(0);
                         std::cmp::Reverse(ms)
                     });
+                    for item in items.iter() {
+                        if let (Some(id), Some(raw_cwd)) =
+                            (item["id"].as_str(), item["cwd"].as_str())
+                        {
+                            let cwd = PathBuf::from(raw_cwd);
+                            if id.starts_with("claude_") {
+                                self.claude_cached_cwds.insert(id.to_string(), cwd.clone());
+                                self.claude_cached_cwds
+                                    .insert(id.trim_start_matches("claude_").to_string(), cwd);
+                            } else if id.starts_with("antigravity_") {
+                                self.antigravity_cached_cwds
+                                    .insert(id.to_string(), cwd.clone());
+                                self.antigravity_cached_cwds
+                                    .insert(id.trim_start_matches("antigravity_").to_string(), cwd);
+                            } else if id.starts_with("grok_") {
+                                self.grok_cached_cwds.insert(id.to_string(), cwd.clone());
+                                self.grok_cached_cwds
+                                    .insert(id.trim_start_matches("grok_").to_string(), cwd);
+                            } else if id.starts_with("zcode_") {
+                                self.zcode_cached_cwds.insert(id.to_string(), cwd.clone());
+                                self.zcode_cached_cwds
+                                    .insert(id.trim_start_matches("zcode_").to_string(), cwd);
+                            }
+                        }
+                    }
                 }
                 Ok(response)
             }
@@ -2577,6 +2649,33 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         }
     }
 
+    pub fn keep_alive_restored_sessions(&mut self) {
+        let mut keepalive_list = Vec::new();
+        for (hub_id, binding) in &self.sessions {
+            let ws = &binding.workspace_path;
+            if ws.is_dir() {
+                let canon = dunce::canonicalize(ws).unwrap_or_else(|_| ws.clone());
+                keepalive_list.push((hub_id.clone(), binding.provider_session_id.clone(), canon));
+            }
+        }
+        for (hub_id, provider_id, cwd) in keepalive_list {
+            if !self.workspaces.contains(&cwd) && self.workspaces.len() < 32 {
+                self.workspaces.push(cwd.clone());
+            }
+            let _ = self.transport.request(
+                "thread/resume",
+                json!({
+                    "threadId": provider_id,
+                    "cwd": cwd.to_string_lossy(),
+                }),
+            );
+            if let Some(binding) = self.sessions.get_mut(&hub_id) {
+                binding.control_connected = true;
+                binding.execution_state = ExecutionState::Idle;
+            }
+        }
+    }
+
     /// Actual provider model/list response, with no invented availability or fallback catalog.
     ///
     /// `data` stays the flat list the console has always consumed. `agents`
@@ -2660,7 +2759,15 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     .to_string_lossy()
                     .trim_start_matches(r"\\?\")
                     .to_string();
-                self.discovered_workspaces.insert(clean, cwd.clone());
+                self.discovered_workspaces
+                    .insert(clean.clone(), cwd.clone());
+                let forward = clean.replace('\\', "/");
+                self.discovered_workspaces
+                    .insert(forward.clone(), cwd.clone());
+                self.discovered_workspaces
+                    .insert(clean.to_lowercase(), cwd.clone());
+                self.discovered_workspaces
+                    .insert(forward.to_lowercase(), cwd.clone());
                 let title = thread["name"]
                     .as_str()
                     .filter(|name| !name.trim().is_empty())
@@ -2863,15 +2970,27 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 }
             }
             let ws_str = workspace_path.to_string_lossy();
+            let norm_path = |p: &str| -> String {
+                p.trim_start_matches(r"\\?\")
+                    .replace('/', "\\")
+                    .trim_end_matches('\\')
+                    .to_lowercase()
+            };
+            let ws_norm = norm_path(&ws_str);
             let cwd = self
                 .workspaces
                 .iter()
-                .find(|w| crate::privacy::workspace_id_for_path(&w.to_string_lossy()) == ws_str)
+                .find(|w| {
+                    let w_str = w.to_string_lossy();
+                    crate::privacy::workspace_id_for_path(&w_str) == ws_str
+                        || (*mode == ConnectMode::Resume && norm_path(&w_str) == ws_norm)
+                })
                 .cloned()
                 .or_else(|| {
                     if *mode == ConnectMode::Resume {
                         self.discovered_workspaces
                             .get(ws_str.as_ref())
+                            .or_else(|| self.discovered_workspaces.get(&ws_norm))
                             .or_else(|| {
                                 let clean = ws_str.trim_start_matches(r"\\?\");
                                 self.discovered_workspaces.get(clean)
@@ -2883,7 +3002,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                             .or_else(|| {
                                 self.discovered_workspaces
                                     .values()
-                                    .find(|p| p.as_path() == workspace_path.as_path())
+                                    .find(|p| norm_path(&p.to_string_lossy()) == ws_norm)
                             })
                             .cloned()
                             .or_else(|| {

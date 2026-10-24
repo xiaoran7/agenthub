@@ -597,19 +597,16 @@ pub fn run_with_local_control(
                         let result = durable
                             .handle_local_command(command)
                             .map_err(|err| err.to_string());
+                        let _ = respond_to.send(result.clone());
                         if result.is_ok() && current_server.is_some() {
-                            if let Err(error) = refresh_discovery_and_publish(
+                            let _ = refresh_discovery_and_publish(
                                 &mut durable,
                                 &cached_models,
                                 &mut cached_discovery,
                                 &mut published_discovery,
                                 device_name,
-                            ) {
-                                let _ = respond_to.send(Err(error.to_string()));
-                                continue;
-                            }
+                            );
                         }
-                        let _ = respond_to.send(result);
                     }
                     Ok(LocalHostCommand::QuerySessions { respond_to }) => {
                         let _ = respond_to.send(durable.host.sessions());

@@ -160,7 +160,23 @@ pub fn load_session_conversation_with_workspace(
                 collect_provider_transcripts(&archived_dir, raw_session_id, 0, &mut paths);
             }
             if paths.is_empty() {
-                collect_provider_transcripts(&codex_root, raw_session_id, 0, &mut paths);
+                // Only scan direct jsonl files in codex_root without recursively traversing subdirectories
+                if let Ok(entries) = fs::read_dir(&codex_root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file()
+                            && path.extension().and_then(|v| v.to_str()) == Some("jsonl")
+                        {
+                            let name = path
+                                .file_name()
+                                .and_then(|v| v.to_str())
+                                .unwrap_or_default();
+                            if name.contains(raw_session_id) {
+                                paths.push(path);
+                            }
+                        }
+                    }
+                }
             }
         }
         AgentType::ClaudeCode => {
