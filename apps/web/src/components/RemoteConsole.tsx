@@ -1213,6 +1213,7 @@ export function RemoteConsole({
     let stopped = false;
     let inFlight = false;
     let cursor = 0;
+    let lastPolledGlobalCursor = -1;
     let accumulated: RemoteEvent[] = [];
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -1226,16 +1227,20 @@ export function RemoteConsole({
           `/sessions/${encodeURIComponent(runnerId)}/${encodeURIComponent(hub)}`,
         );
         if (stopped) return;
-        if (detail.cursor > cursor) {
-          const batch = await requestWithIdentity<{ events: RemoteEvent[] }>(
-            `/events?runner=${encodeURIComponent(runnerId)}&hub=${encodeURIComponent(hub)}&after=${cursor}`,
-          );
-          if (stopped) return;
-          cursor = batch.events.length
-            ? batch.events[batch.events.length - 1]!.cursor
-            : detail.cursor;
-          accumulated = [...accumulated, ...batch.events];
-          setEvents([...accumulated]);
+        if (detail.cursor > lastPolledGlobalCursor) {
+          while (true) {
+            const batch = await requestWithIdentity<{ events: RemoteEvent[] }>(
+              `/events?runner=${encodeURIComponent(runnerId)}&hub=${encodeURIComponent(hub)}&after=${cursor}`,
+            );
+            if (stopped) return;
+            if (batch.events.length > 0) {
+              cursor = batch.events[batch.events.length - 1]!.cursor;
+              accumulated = [...accumulated, ...batch.events];
+              setEvents([...accumulated]);
+            }
+            if (batch.events.length < 256) break;
+          }
+          lastPolledGlobalCursor = detail.cursor;
         }
         // `session` is derived from the 1.5 s snapshot poll, which is where
         // `control_connected` is refreshed; the copy on `detail` would be a

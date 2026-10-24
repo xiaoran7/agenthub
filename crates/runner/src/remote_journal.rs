@@ -798,6 +798,28 @@ fn codex_error_summary(detail: &Value) -> Value {
     Value::Object(summary)
 }
 
+fn extract_text_from_value(value: &Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(arr) = value.as_array() {
+        let mut parts = Vec::new();
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                parts.push(s.to_string());
+            } else if let Some(text) = item.get("text").and_then(Value::as_str) {
+                parts.push(text.to_string());
+            } else if let Some(text) = item.get("output_text").and_then(Value::as_str) {
+                parts.push(text.to_string());
+            }
+        }
+        if !parts.is_empty() {
+            return Some(parts.join("\n"));
+        }
+    }
+    None
+}
+
 fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
     let params = event.raw.get("params")?;
     match event.kind.as_str() {
@@ -819,7 +841,8 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
                     let text = item
                         .get("text")
                         .and_then(Value::as_str)
-                        .or_else(|| item.get("content").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .or_else(|| item.get("content").and_then(extract_text_from_value))
                         .unwrap_or_default();
                     out.insert("text".into(), json!(text));
                     Value::Object(out)
@@ -960,14 +983,29 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
                     if let Some(content) = item.get("content") {
                         user_item["content"] = content.clone();
                     }
-                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                    let text = item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| item.get("content").and_then(extract_text_from_value));
+                    if let Some(text) = text {
                         user_item["text"] = json!(text);
                     }
                     Some(json!({"params":{"item": user_item}}))
                 }
-                "agentMessage" => Some(json!({"params":{"item":{
-                    "id":id,"type":"agentMessage","text":item.get("text").and_then(Value::as_str).unwrap_or_default()
-                }}})),
+                "agentMessage" => {
+                    let text = item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| item.get("content").and_then(extract_text_from_value))
+                        .unwrap_or_default();
+                    Some(json!({"params":{"item":{
+                        "id": id,
+                        "type": "agentMessage",
+                        "text": text
+                    }}}))
+                }
                 "commandExecution" => {
                     let mut cmd_item = json!({"id": id, "type": "commandExecution"});
                     if let Some(cmd) = item.get("command") {
@@ -1157,6 +1195,38 @@ fn history_snapshot_projects_conversation_content_as_text() {
     assert_eq!(items[1]["text"], "ok");
     assert_eq!(items[1]["label"], "Bash · 结果");
     assert!(items[0].get("content").is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn agent_message_projects_content_blocks_as_text() {
+    let event = crate::remote_host::HostEvent {
+        event_id: "agent-msg-one".into(),
+        host_generation: "generation-one".into(),
+        hub_session_id: Some("hub-one".into()),
+        provider_session_id: Some("sess-one".into()),
+        kind: "item/completed".into(),
+        raw: json!({"method":"item/completed","params":{
+            "item": {
+                "id": "msg-123",
+                "type": "agentMessage",
+                "content": [
+                    {"type": "output_text", "text": "第一段回复"},
+                    {"type": "output_text", "text": "第二段回复"}
+                ]
+            }
+        }}),
+        binding: None,
+        approval_id: None,
+        approval: None,
+        question_id: None,
+        question: None,
+    };
+    let projected = projected_remote_event(&event).unwrap();
+    let item = &projected["event"]["raw"]["params"]["item"];
+    assert_eq!(item["type"], "agentMessage");
+    assert_eq!(item["id"], "msg-123");
+    assert_eq!(item["text"], "第一段回复\n第二段回复");
 }
 
 #[cfg(test)]

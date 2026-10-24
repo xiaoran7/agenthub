@@ -95,6 +95,17 @@ pub fn load_session_conversation(
     agent_type: AgentType,
     session_id: &str,
 ) -> Vec<Value> {
+    load_session_conversation_with_workspace(home, agent_type, session_id, None)
+}
+
+/// Loads a bounded conversation preview for one session with optional workspace path
+/// to allow fast O(1) transcript lookup without recursive directory scans.
+pub fn load_session_conversation_with_workspace(
+    home: &Path,
+    agent_type: AgentType,
+    session_id: &str,
+    workspace: Option<&Path>,
+) -> Vec<Value> {
     if validate_session_id(session_id).is_err() {
         return Vec::new();
     }
@@ -139,28 +150,46 @@ pub fn load_session_conversation(
     let mut paths = Vec::new();
     match agent_type {
         AgentType::Codex => {
-            collect_provider_transcripts(&home.join(".codex"), raw_session_id, 0, &mut paths)
+            let codex_root = home.join(".codex");
+            let sessions_dir = codex_root.join("sessions");
+            let archived_dir = codex_root.join("archived_sessions");
+            if sessions_dir.is_dir() {
+                collect_provider_transcripts(&sessions_dir, raw_session_id, 0, &mut paths);
+            }
+            if archived_dir.is_dir() {
+                collect_provider_transcripts(&archived_dir, raw_session_id, 0, &mut paths);
+            }
+            if paths.is_empty() {
+                collect_provider_transcripts(&codex_root, raw_session_id, 0, &mut paths);
+            }
         }
         AgentType::ClaudeCode => {
-            let projects_root = home.join(".claude").join("projects");
-            ensure_claude_path_index(&projects_root);
-            let mut found = false;
-            if let Ok(guard) = claude_path_index().read() {
-                if let Some((_, ref map)) = *guard {
-                    if let Some(p) = map.get(raw_session_id) {
-                        if p.is_file() {
-                            paths.push(p.clone());
-                            found = true;
+            if let Some(ws) = workspace {
+                if let Some(direct) = find_claude_workspace_transcript(home, ws, raw_session_id) {
+                    paths.push(direct);
+                }
+            }
+            if paths.is_empty() {
+                let projects_root = home.join(".claude").join("projects");
+                ensure_claude_path_index(&projects_root);
+                let mut found = false;
+                if let Ok(guard) = claude_path_index().read() {
+                    if let Some((_, ref map)) = *guard {
+                        if let Some(p) = map.get(raw_session_id) {
+                            if p.is_file() {
+                                paths.push(p.clone());
+                                found = true;
+                            }
                         }
                     }
                 }
-            }
-            if !found {
-                collect_transcript_files(&projects_root, raw_session_id, 0, &mut paths);
-                if let Some(first) = paths.first() {
-                    if let Ok(mut guard) = claude_path_index().write() {
-                        if let Some((_, ref mut map)) = *guard {
-                            map.insert(raw_session_id.to_string(), first.clone());
+                if !found {
+                    collect_transcript_files(&projects_root, raw_session_id, 0, &mut paths);
+                    if let Some(first) = paths.first() {
+                        if let Ok(mut guard) = claude_path_index().write() {
+                            if let Some((_, ref mut map)) = *guard {
+                                map.insert(raw_session_id.to_string(), first.clone());
+                            }
                         }
                     }
                 }
@@ -206,11 +235,8 @@ pub fn load_session_conversation(
         omitted |= partial;
         // A similarly named rollout must not contribute a different session.
         if values.iter().any(|v| {
-            (v.get("type").and_then(Value::as_str) == Some("session_meta")
+            v.get("type").and_then(Value::as_str) == Some("session_meta")
                 && v.pointer("/payload/id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| id != raw_session_id && id != session_id))
-                || v.get("sessionId")
                     .and_then(Value::as_str)
                     .is_some_and(|id| id != raw_session_id && id != session_id)
         }) {
@@ -617,6 +643,25 @@ fn collect_provider_transcripts(
             }
         }
         if path.is_dir() {
+            let dir_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if matches!(
+                dir_name,
+                "node_modules"
+                    | "plugins"
+                    | "cache"
+                    | "tmp"
+                    | "temp"
+                    | ".git"
+                    | ".venv"
+                    | "target"
+                    | ".npm"
+                    | ".cargo"
+            ) {
+                continue;
+            }
             collect_provider_transcripts(&path, session_id, depth + 1, results);
         }
     }

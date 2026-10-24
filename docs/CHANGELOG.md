@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+- **会话恢复性能优化与 Web 端历史内容完整渲染（`crates/runner`, `apps/web`）**：
+  - **会话恢复速度优化（`crates/runner/src/conversation.rs`, `crates/runner/src/remote_host.rs`）**：
+    - **Codex 深度搜索剪枝**：将 Codex 会话搜索严格限制在 `~/.codex/sessions` 与 `~/.codex/archived_sessions`（深度 4 层），并在递归遍历中主动跳过 `node_modules`、`plugins`、`cache`、`.git`、`target` 等大型目录，消除 Windows NTFS 上因扫描数百兆插件 node_modules 造成的 10~30 秒卡顿；
+    - **Claude Code 工作区 O(1) 直达**：扩展 `load_session_conversation_with_workspace`，在 `Connect` 流程中注入已知的工作区 `cwd`，优先调用 `find_claude_workspace_transcript` 直接定位 `<session_id>.jsonl`，避免全量项目递归扫描；
+  - **会话恢复内容渲染修复（`crates/runner/src/conversation.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/remote_journal.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
+    - **避免误杀 Claude Code 多 SessionId 转录文件**：移除了全文件跳过逻辑中对单行 `sessionId` 的误判（上下文压缩、分支或子会话常携带父级 sessionId），仅保留针对 Codex rollout 的 `session_meta` 校验；
+    - **保全 `thread/read` 历史 Turns**：修正 `remote_host.rs` 仅检查 `thread/resume` 返回值而丢弃 `thread/read` 返回的历史 turns 的问题，并在无 turns 时可靠降级到本地转录快照；
+    - **Codex `agentMessage` 内容块解析**：新增 `extract_text_from_value`，支持从 `content: [{ type: "output_text", text: "..." }]` 结构中提取文字，解决向网关投影时正文为空导致 Web 界面无文本的缺陷；
+    - **解耦前端事件游标推进**：在 `RemoteConsole.tsx` 中将“已拉取事件游标”与“已轮询全局游标”解耦，彻底杜绝当会话历史事件尚未落库时游标直接跃进至全局游标、从而永久跳过该会话所有历史事件的 Bug；
+  - **回归验证**：`cargo test --package agenthub-runner`（236 单元测试、28 远程 host 测试、17 journal 测试等）全部通过，`apps/web` 75 项测试通过，`services/api` 70 项测试通过。
+
 - **Web 设置页设备在线状态与真实长连接对齐（`services/api`, `apps/web`）**：
   - **问题现象**：本地控制台 `/api/status` 明确 `remote_connected: true`，Web「设置 → 设备」里同一台电脑却显示「离线」；
   - **问题根因**：`/v1/devices` 的 `online` 只由数据库中 `last_seen_at` 推导（PostgreSQL 45 秒、SQLite 300 秒窗口）。该字段仅由 `/v1/devices/register`、`/v1/devices/heartbeat`、`/v1/sync/batches` 推进，而 `web`/`daemon` 模式的 Runner 走的是 `/v3/remote/ws` 长连接，从不调用 HTTP 心跳接口，配对完成后 `last_seen_at` 便冻结在配对时刻，于是连接一直正常、在线状态却永远过期。控制台本身读的是内存中的连接表（`connections`），两个界面因此长期各说各话；

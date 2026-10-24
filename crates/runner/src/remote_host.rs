@@ -2907,6 +2907,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             if let Some(at) = agent_type {
                 params["agentType"] = json!(at);
             }
+            let mut resume_turns = None;
             let method = match mode {
                 ConnectMode::Create => {
                     if provider_session_id.is_some() {
@@ -2932,6 +2933,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         "thread/read",
                         json!({"threadId": id, "includeTurns": true, "cwd": cwd}),
                     )?;
+                    resume_turns = history.get("thread").and_then(|t| t.get("turns")).cloned();
                     let thread = &history["thread"];
                     if thread["id"].as_str() != Some(id) {
                         return Err(NativeError::rejected("native_id_mismatch"));
@@ -2994,10 +2996,14 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 self.newly_created.insert(hub_id.clone());
             }
             if !self.workspaces.contains(&cwd) {
-                self.workspaces.push(cwd);
+                self.workspaces.push(cwd.clone());
             }
 
-            if let Some(turns) = response["thread"]["turns"].as_array() {
+            let turns_source = response["thread"]["turns"]
+                .as_array()
+                .filter(|turns| !turns.is_empty())
+                .or_else(|| resume_turns.as_ref().and_then(Value::as_array));
+            if let Some(turns) = turns_source {
                 for turn in turns {
                     let turn_id = turn["id"].as_str().unwrap_or_default();
                     if let Some(items) = turn["items"].as_array() {
@@ -3038,9 +3044,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             // single bounded transcript reader after explicit resume. This
             // normalized snapshot is sent only for a managed session.
             if *mode == ConnectMode::Resume
-                && response["thread"]["turns"]
-                    .as_array()
-                    .is_none_or(Vec::is_empty)
+                && turns_source.is_none_or(Vec::is_empty)
                 && let Some(home) = crate::collectors::home_dir()
             {
                 let provider = if id.starts_with("sess_") {
@@ -3054,7 +3058,12 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 } else {
                     AgentType::Codex
                 };
-                let items = crate::conversation::load_session_conversation(&home, provider, &id);
+                let items = crate::conversation::load_session_conversation_with_workspace(
+                    &home,
+                    provider,
+                    &id,
+                    Some(&cwd),
+                );
                 if !items.is_empty() {
                     self.pending_historical_events.push_back(HostEvent {
                         event_id: uuid::Uuid::new_v4().to_string(),
