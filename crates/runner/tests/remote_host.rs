@@ -139,6 +139,7 @@ fn start_turn(fake: &Fake, host: &mut NativeSessionHost<Fake>, id: &str) {
             text: "hello".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     assert_eq!(host.handle_command(cmd).status, "accepted");
@@ -183,6 +184,7 @@ fn two_turns_share_native_id_and_only_native_completion_releases_busy_state() {
             text: "second".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     assert_eq!(
@@ -229,6 +231,7 @@ fn failed_turn_does_not_block_subsequent_turns_and_object_status_transitions_run
             text: "hello object status".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     assert_eq!(host.handle_command(cmd).status, "accepted");
@@ -265,6 +268,7 @@ fn failed_turn_does_not_block_subsequent_turns_and_object_status_transitions_run
             text: "retry after failure".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     assert_eq!(host.handle_command(retry_cmd).status, "accepted");
@@ -610,6 +614,7 @@ fn transport_loss_is_unknown_and_never_automatically_reexecutes_a_prompt() {
             text: "change something".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     let receipt = host.handle_command(command.clone());
@@ -995,6 +1000,7 @@ fn unknown_slash_does_not_fall_through_to_prompt() {
             text: "/compact".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     assert_eq!(
@@ -1123,6 +1129,7 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
             text: "hello 1".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     assert_eq!(host.handle_command(cmd1).status, "accepted");
@@ -1154,6 +1161,7 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
             text: "hello 2".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     );
     assert_eq!(host.handle_command(cmd2).status, "accepted");

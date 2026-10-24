@@ -1,9 +1,11 @@
 import type {
+  RemoteAttachment,
   RemoteBinding,
   RemoteCommand,
   RemotePendingApproval,
   RemotePendingQuestion,
 } from "@agent-pulse/contracts/remote";
+export type { RemoteAttachment };
 export type RemoteRequest = <T>(
   path: string,
   body?: unknown,
@@ -21,6 +23,8 @@ export interface DiscoveryCandidate {
   completion_tokens?: number | null;
   total_tokens?: number | null;
   cache_read_tokens?: number | null;
+  context_used_tokens?: number | null;
+  context_window_tokens?: number | null;
   last_activity_at_ms?: number | null;
   execution_state?: string | null;
 }
@@ -223,6 +227,7 @@ export interface RemoteContextUsage {
 /** Only show a percentage when the Host reports actual token use. */
 export function latestContextUsage(
   events: RemoteEvent[],
+  candidate?: DiscoveryCandidate | null,
 ): RemoteContextUsage | null {
   const positive = (value: unknown) =>
     typeof value === "number" && Number.isFinite(value) && value > 0
@@ -241,12 +246,16 @@ export function latestContextUsage(
       info?.usage) as Record<string, unknown> | undefined;
     const values = last ?? usage;
     const used =
+      positive(values?.used) ??
+      positive(usage?.used) ??
       positive(values?.context_used_tokens) ??
       positive(values?.contextUsedTokens) ??
       positive(values?.input_tokens) ??
       positive(values?.inputTokens);
     if (!used) continue;
     const window =
+      positive(usage?.window) ??
+      positive(values?.window) ??
       positive(usage?.model_context_window) ??
       positive(usage?.modelContextWindow) ??
       positive(usage?.context_window_tokens) ??
@@ -254,12 +263,26 @@ export function latestContextUsage(
       positive(info?.model_context_window) ??
       positive(info?.context_window_tokens) ??
       positive(params.model_context_window) ??
-      positive(params.context_window_tokens);
+      positive(params.context_window_tokens) ??
+      positive(candidate?.context_window_tokens);
     return {
       used,
       window: window ?? 0,
       source: window ? "reported" : "usage_only",
     };
+  }
+  if (candidate) {
+    const used =
+      positive(candidate.context_used_tokens) ??
+      positive(candidate.prompt_tokens);
+    if (used) {
+      const window = positive(candidate.context_window_tokens) ?? 0;
+      return {
+        used,
+        window,
+        source: window ? "reported" : "usage_only",
+      };
+    }
   }
   return null;
 }
@@ -423,12 +446,20 @@ export function conversationItems(
     if (native.kind === "turn/started") {
       const turn = p.turn as { id?: string } | undefined;
       const command = prompts.get(turn?.id ?? "");
-      if (command?.command.command.action === "send_prompt")
+      if (command?.command.command.action === "send_prompt") {
+        const attNames =
+          command.command.command.attachments
+            ?.map((a) => `[附件: ${a.name}]`)
+            .join(" ") ?? "";
+        const fullText = [attNames, command.command.command.text]
+          .filter((part) => part && part.trim().length > 0)
+          .join("\n");
         result.push({
           id: command.command.client_cmd_id,
           kind: "user",
-          text: command.command.command.text,
+          text: fullText,
         });
+      }
     }
     const item = p.item as
       | {

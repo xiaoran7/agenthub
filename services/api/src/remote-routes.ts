@@ -393,6 +393,7 @@ export function registerRemoteRoutes(
   );
   app.post<{ Params: { runner: string } }>(
     "/v3/remote/runners/:runner/commands",
+    { bodyLimit: 10 * 1024 * 1024 },
     async (request, reply) => {
       const owner = await resolveOwner(request);
       const { runner } = request.params;

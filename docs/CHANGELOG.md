@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+- **Web 控制台会话渲染状态对齐、最小文案精简、会话内模型选择、附件上传与真实上下文用量上报（`apps/web`, `packages/contracts`, `services/api`, `crates/runner`）**：
+  - **解决会话尚未渲染即显示已连接与历史空白（`crates/runner/src/remote_host.rs`, `crates/runner/src/remote_network.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
+    - `keep_alive_restored_sessions` 在后台恢复既有会话以及 `Connect(Resume)` 命中已连接会话幂等分支时，主动调用 `enqueue_session_history_and_usage` 补发 `history/snapshot` 与 `thread/tokenUsage/updated`，并在 `handle_inbound_command` 完成后即刻刷入出站队列；
+    - 前端新增 `sessionLoading` 状态并在已标记连接但尚未收到历史消息时自动触发一次幂等同步，加载期间统一展示加载动画，不再提前渲染"会话已连接"与空态卡片；
+  - **遵循最小文案规则移除冗余横幅与底部提示（`apps/web/src/components/RemoteConsole.tsx`）**：
+    - 顶栏在会话正常连接时仅展示 Provider 名称，不再拼接冗余的"· 会话已连接"；
+    - 过滤历史 `session_already_bound` / `native_session_already_bound` 回执，彻底移除会话顶部"该会话已在当前设备上处于连接状态。"横幅；
+    - 移除空态卡片下方的"会话已就绪，可以在下方发送第一条指令。"以及输入框底栏左侧的"就绪 / Enter 发送 · Shift+Enter 换行"与占位符快捷键尾缀；
+  - **支持会话内模型切换与多源模型目录聚合（`crates/runner/src/model_catalog.rs`, `crates/runner/src/collectors/claude_app_server.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
+    - `agent_model_catalogs` 聚合网关配置、`~/.claude/settings.json` 与本地 Claude 会话转录中的模型清单，同时注册至 `claude_code` 与 `claude_desktop`；
+    - 会话输入框工具栏新增模型下拉选择器（位于推理深度选择器左侧），持久 `ClaudeProcessSession` 在检测到模型或推理深度变更时自动平滑重建进程；
+  - **支持会话内选择与粘贴附件（`packages/contracts/src/remote.ts`, `services/api/src/remote-routes.ts`, `crates/runner/src/remote_host.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
+    - `send_prompt` 协议契约新增 `attachments` 字段，输入框左侧新增添加附件按钮并支持直接粘贴图片或文件、预览缩略图与移除；
+    - Runner 将附件落盘至系统临时目录，对文本文件内联或附带路径说明，对图片附件同时通过 `stream-json` 原生多模态 `image` 块与本地图片输入透传给底层 Agent；
+  - **打通会话真实上下文用量上报与批量恢复性能优化（`crates/runner/src/collectors/mod.rs`, `crates/runner/src/remote_host.rs`, `apps/web/src/lib/remote.ts`, `apps/web/src/components/RemoteContextCapacity.tsx`）**：
+    - 修复前端 `latestContextUsage` 未读取 `remote_journal` 投射后的 `tokenUsage.used` 与 `tokenUsage.window` 字段导致容量环始终为空的问题；
+    - Runner 在转录扫描、会话恢复、自动保活以及 Claude 流式 `assistant` / `result` 阶段全程提取并上报真实 `context_used_tokens` 与 `context_window_tokens`，前端同时接入发现候选的上下文数据兜底；
+    - 为 `lookup_session_context_usage` 新增 15 秒进程内缓存，消除多会话批量恢复时重复扫描磁盘与 SQLite 的 $O(N \times M)$ 开销；修复会话内模型/推理深度切回默认选项时的进程重建判定，并为附件落盘文件名附加 `client_cmd_id` 唯一前缀防跨轮同名截图覆盖；
+  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `30814a1fe4d85d0086aff7114cc138be46d1db82d818f6fc13d88c77325c81b3`）。
+
 - **Runner Runtime 全局常驻保活与会话秒级极速恢复（`crates/runner`, `apps/web`）**：
   - **Runtime 跨端全局常驻保活（`crates/runner/src/remote_host.rs`, `crates/runner/src/remote_journal.rs`）**：
     - **启动自动激活持久化会话**：在 `DurableHost::new` 恢复本地 Journal 绑定后，自动触发 `host.keep_alive_restored_sessions()`，对磁盘工作区仍有效的既有会话自动加入工作区白名单，并向 Provider Transport 触发 `thread/resume` 完成运行时唤醒；

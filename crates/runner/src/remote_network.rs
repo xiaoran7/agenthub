@@ -938,6 +938,7 @@ fn handle_network_event<T: NativeTransport>(
                         Ok(_) => {
                             command_seq
                                 .store(durable.journal.received_command_seq()?, Ordering::Relaxed);
+                            let _ = durable.poll(true);
                         }
                         Err(crate::remote_journal::JournalError::InvalidAck) => {
                             reject_remote_epoch(control, active, epoch, "command ack invalid");

@@ -268,6 +268,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             text: "Do not use tools. Reply exactly AGENTHUB_DAEMON_OK.".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     };
     let first_receipt = execute(&endpoint, first.clone());
@@ -283,6 +284,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             text: "Without tools, repeat the exact marker from the previous turn.".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     };
     assert_eq!(execute(&endpoint, second).status, "accepted");
@@ -363,6 +365,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             text: "Without tools, reply exactly AGENTHUB_RESTART_OK.".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     };
     assert_eq!(execute(&endpoint, third).status, "accepted");

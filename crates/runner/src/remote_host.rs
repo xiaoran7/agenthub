@@ -202,6 +202,15 @@ impl MultiProviderTransport {
         effort: Option<&str>,
         permission_mode: Option<&str>,
     ) -> Result<&mut ClaudeProcessSession, NativeError> {
+        if let Some(existing) = self.claude_sessions.get(session_id)
+            && !existing.is_turn_in_progress()
+        {
+            let model_changed = model.is_some() && existing.requested_model() != model;
+            let effort_changed = existing.reasoning_effort() != effort;
+            if model_changed || effort_changed {
+                self.claude_sessions.remove(session_id);
+            }
+        }
         if !self.claude_sessions.contains_key(session_id) {
             let raw_id = session_id.trim_start_matches("claude_");
             let resume_id = if raw_id.is_empty() {
@@ -358,6 +367,12 @@ fn local_store_sessions() -> Vec<Value> {
             let ct = entry.output_tokens.unwrap_or(0);
             let tt = entry.total_tokens.unwrap_or(pt + ct);
             let req_count = entry.request_count.unwrap_or(1).max(1);
+            let ctx_used = if pt > 0 { pt } else { tt };
+            let ctx_window = entry
+                .model
+                .as_deref()
+                .and_then(crate::collectors::resolve_zcode_model_context_window)
+                .unwrap_or(200_000);
             items.push(json!({
                 "id": entry.session_id,
                 "session_id": entry.session_id,
@@ -372,6 +387,8 @@ fn local_store_sessions() -> Vec<Value> {
                 "prompt_tokens": pt,
                 "completion_tokens": ct,
                 "cache_read_tokens": entry.cache_read_tokens.unwrap_or(0),
+                "context_used_tokens": ctx_used,
+                "context_window_tokens": ctx_window,
                 "request_count": req_count,
                 "calls": req_count,
                 "last_activity_at_ms": entry.time_updated,
@@ -407,6 +424,8 @@ fn local_store_sessions() -> Vec<Value> {
                 "completion_tokens": entry.completion_tokens,
                 "total_tokens": entry.prompt_tokens + entry.completion_tokens,
                 "cache_read_tokens": entry.cache_read_tokens,
+                "context_used_tokens": entry.context_used_tokens,
+                "context_window_tokens": entry.context_window_tokens,
                 "request_count": entry.request_count,
                 "calls": entry.request_count.max(1),
                 "last_activity_at_ms": entry.last_activity_at_ms,
@@ -761,6 +780,12 @@ impl NativeTransport for MultiProviderTransport {
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned);
 
+                let image_blocks: Vec<Value> = params
+                    .get("imageBlocks")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+
                 // Attempt persistent bidirectional session driving
                 if let Some(ref cwd_path) = cwd {
                     let permission_mode = params["permissionMode"].as_str();
@@ -770,7 +795,9 @@ impl NativeTransport for MultiProviderTransport {
                         model.as_deref(),
                         effort.as_deref(),
                         permission_mode,
-                    ) && session.send_prompt(&turn_id, &text).is_ok()
+                    ) && session
+                        .send_prompt_with_blocks(&turn_id, &text, &image_blocks)
+                        .is_ok()
                     {
                         return Ok(json!({
                             "turn": {
@@ -1733,6 +1760,36 @@ impl NativeTransport for MultiProviderTransport {
                                 }
                             }
                             "assistant" => {
+                                if let Some(usage_obj) = msg.pointer("/message/usage") {
+                                    let model_win = msg
+                                        .pointer("/message/model")
+                                        .and_then(Value::as_str)
+                                        .or_else(|| {
+                                            self.claude_cached_models
+                                                .get(session_id)
+                                                .map(String::as_str)
+                                        })
+                                        .map(crate::collectors::claude_context_window);
+                                    if let Some(usage) =
+                                        crate::collectors::context_usage_from_values(
+                                            usage_obj, model_win,
+                                        )
+                                    {
+                                        messages.push(json!({
+                                            "method": "thread/tokenUsage/updated",
+                                            "params": {
+                                                "threadId": session_id,
+                                                "turnId": self.claude_active_turns.get(session_id).cloned().unwrap_or_default(),
+                                                "tokenUsage": {
+                                                    "used": usage.used,
+                                                    "last": {"inputTokens": usage.used},
+                                                    "window": usage.window,
+                                                    "modelContextWindow": usage.window
+                                                }
+                                            }
+                                        }));
+                                    }
+                                }
                                 if let Some(content) =
                                     msg.pointer("/message/content").and_then(Value::as_array)
                                 {
@@ -1976,14 +2033,21 @@ impl NativeTransport for MultiProviderTransport {
                                 if let Some(usage) =
                                     crate::collectors::claude_result_context_usage(&msg)
                                 {
+                                    let window = usage.window.or_else(|| {
+                                        self.claude_cached_models
+                                            .get(session_id)
+                                            .map(|m| crate::collectors::claude_context_window(m))
+                                    });
                                     messages.push(json!({
                                         "method": "thread/tokenUsage/updated",
                                         "params": {
                                             "threadId": session_id,
                                             "turnId": turn_id,
                                             "tokenUsage": {
+                                                "used": usage.used,
                                                 "last": {"inputTokens": usage.used},
-                                                "modelContextWindow": usage.window
+                                                "window": window,
+                                                "modelContextWindow": window
                                             }
                                         }
                                     }));
@@ -2327,6 +2391,41 @@ pub enum CodexApprovalPolicy {
     Never,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptAttachment {
+    pub name: String,
+    pub media_type: String,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+}
+
+fn decode_base64_bytes(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for byte in input.bytes() {
+        if byte.is_ascii_whitespace() || byte == b'=' {
+            continue;
+        }
+        let val = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        };
+        buf = (buf << 6) | u32::from(val);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xff) as u8);
+        }
+    }
+    Some(out)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RemoteAction {
@@ -2352,6 +2451,9 @@ pub enum RemoteAction {
         /// Per-turn model override.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        /// Optional user-selected file/image attachments.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<PromptAttachment>,
     },
     ResolveApproval {
         approval_id: String,
@@ -2649,6 +2751,121 @@ impl<T: NativeTransport> NativeSessionHost<T> {
         }
     }
 
+    fn enqueue_session_history_and_usage(
+        &mut self,
+        binding: &SessionBinding,
+        turns_source: Option<&Vec<Value>>,
+    ) {
+        let id = &binding.provider_session_id;
+        let hub_id = &binding.hub_session_id;
+        let cwd = &binding.workspace_path;
+
+        if let Some(turns) = turns_source.filter(|turns| !turns.is_empty()) {
+            for turn in turns {
+                let turn_id = turn["id"].as_str().unwrap_or_default();
+                if let Some(items) = turn["items"].as_array() {
+                    for item in items {
+                        let item_type = item["type"].as_str().unwrap_or_default();
+                        if matches!(
+                            item_type,
+                            "userMessage" | "agentMessage" | "commandExecution"
+                        ) {
+                            let synthetic_raw = json!({
+                                "method": "item/completed",
+                                "params": {
+                                    "threadId": id,
+                                    "turnId": turn_id,
+                                    "item": item
+                                }
+                            });
+                            self.pending_historical_events.push_back(HostEvent {
+                                event_id: uuid::Uuid::new_v4().to_string(),
+                                host_generation: self.generation.clone(),
+                                binding: Some(binding.clone()),
+                                hub_session_id: Some(hub_id.clone()),
+                                provider_session_id: Some(id.clone()),
+                                kind: "item/completed".to_string(),
+                                raw: synthetic_raw,
+                                approval_id: None,
+                                approval: None,
+                                question_id: None,
+                                question: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        let Some(home) = crate::collectors::home_dir() else {
+            return;
+        };
+        let provider = if id.starts_with("sess_") {
+            AgentType::ZCode
+        } else if id.starts_with("claude_") {
+            AgentType::ClaudeCode
+        } else if id.starts_with("antigravity_") {
+            AgentType::Antigravity
+        } else if id.starts_with("grok_") {
+            AgentType::GrokBuild
+        } else {
+            AgentType::Codex
+        };
+
+        if turns_source.is_none_or(Vec::is_empty) {
+            let items = crate::conversation::load_session_conversation_with_workspace(
+                &home,
+                provider,
+                id,
+                Some(cwd),
+            );
+            if !items.is_empty() {
+                self.pending_historical_events.push_back(HostEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    host_generation: self.generation.clone(),
+                    binding: Some(binding.clone()),
+                    hub_session_id: Some(hub_id.clone()),
+                    provider_session_id: Some(id.clone()),
+                    kind: "history/snapshot".to_string(),
+                    raw: json!({"method": "history/snapshot", "params": {"items": items}}),
+                    approval_id: None,
+                    approval: None,
+                    question_id: None,
+                    question: None,
+                });
+            }
+        }
+
+        if let Some(usage) =
+            crate::collectors::lookup_session_context_usage(&home, provider, id, Some(cwd))
+        {
+            self.pending_historical_events.push_back(HostEvent {
+                event_id: uuid::Uuid::new_v4().to_string(),
+                host_generation: self.generation.clone(),
+                binding: Some(binding.clone()),
+                hub_session_id: Some(hub_id.clone()),
+                provider_session_id: Some(id.clone()),
+                kind: "thread/tokenUsage/updated".to_string(),
+                raw: json!({
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "threadId": id,
+                        "tokenUsage": {
+                            "used": usage.used,
+                            "last": {"inputTokens": usage.used},
+                            "window": usage.window,
+                            "modelContextWindow": usage.window
+                        }
+                    }
+                }),
+                approval_id: None,
+                approval: None,
+                question_id: None,
+                question: None,
+            });
+        }
+    }
+
     pub fn keep_alive_restored_sessions(&mut self) {
         let mut keepalive_list = Vec::new();
         for (hub_id, binding) in &self.sessions {
@@ -2669,9 +2886,15 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     "cwd": cwd.to_string_lossy(),
                 }),
             );
-            if let Some(binding) = self.sessions.get_mut(&hub_id) {
+            let updated_binding = if let Some(binding) = self.sessions.get_mut(&hub_id) {
                 binding.control_connected = true;
                 binding.execution_state = ExecutionState::Idle;
+                Some(binding.clone())
+            } else {
+                None
+            };
+            if let Some(binding) = updated_binding {
+                self.enqueue_session_history_and_usage(&binding, None);
             }
         }
     }
@@ -2793,6 +3016,14 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     .get("cache_read_tokens")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
+                let ctx_used = thread
+                    .get("context_used_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let ctx_win = thread
+                    .get("context_window_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
                 let last_ms = thread
                     .get("last_activity_at_ms")
                     .and_then(Value::as_i64)
@@ -2817,6 +3048,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     "completion_tokens": ct,
                     "total_tokens": tt,
                     "cache_read_tokens": cr,
+                    "context_used_tokens": ctx_used,
+                    "context_window_tokens": ctx_win,
                     "request_count": req_count,
                     "calls": req_count,
                     "last_activity_at_ms": last_ms,
@@ -2949,14 +3182,15 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             if *mode == ConnectMode::Attach {
                 return Err(NativeError::rejected("attach_not_supported"));
             }
-            if let Some(existing) = self.sessions.get(hub_id) {
+            if let Some(existing) = self.sessions.get(hub_id).cloned() {
                 if *mode != ConnectMode::Resume
                     || provider_session_id.as_ref() != Some(&existing.provider_session_id)
                 {
                     return Err(NativeError::rejected("session_already_bound"));
                 }
                 if existing.control_connected {
-                    // Already connected to this exact native session; return existing binding idempotently.
+                    // Already connected to this exact native session; re-enqueue history and context usage idempotently.
+                    self.enqueue_session_history_and_usage(&existing, None);
                     return Ok(json!({
                         "binding": existing,
                         "provider_response": {
@@ -3122,82 +3356,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 .as_array()
                 .filter(|turns| !turns.is_empty())
                 .or_else(|| resume_turns.as_ref().and_then(Value::as_array));
-            if let Some(turns) = turns_source {
-                for turn in turns {
-                    let turn_id = turn["id"].as_str().unwrap_or_default();
-                    if let Some(items) = turn["items"].as_array() {
-                        for item in items {
-                            let item_type = item["type"].as_str().unwrap_or_default();
-                            if matches!(
-                                item_type,
-                                "userMessage" | "agentMessage" | "commandExecution"
-                            ) {
-                                let synthetic_raw = json!({
-                                    "method": "item/completed",
-                                    "params": {
-                                        "threadId": id,
-                                        "turnId": turn_id,
-                                        "item": item
-                                    }
-                                });
-                                self.pending_historical_events.push_back(HostEvent {
-                                    event_id: uuid::Uuid::new_v4().to_string(),
-                                    host_generation: self.generation.clone(),
-                                    binding: Some(binding.clone()),
-                                    hub_session_id: Some(hub_id.clone()),
-                                    provider_session_id: Some(id.clone()),
-                                    kind: "item/completed".to_string(),
-                                    raw: synthetic_raw,
-                                    approval_id: None,
-                                    approval: None,
-                                    question_id: None,
-                                    question: None,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Providers without native thread/read replay use the daemon's
-            // single bounded transcript reader after explicit resume. This
-            // normalized snapshot is sent only for a managed session.
-            if *mode == ConnectMode::Resume
-                && turns_source.is_none_or(Vec::is_empty)
-                && let Some(home) = crate::collectors::home_dir()
-            {
-                let provider = if id.starts_with("sess_") {
-                    AgentType::ZCode
-                } else if id.starts_with("claude_") {
-                    AgentType::ClaudeCode
-                } else if id.starts_with("antigravity_") {
-                    AgentType::Antigravity
-                } else if id.starts_with("grok_") {
-                    AgentType::GrokBuild
-                } else {
-                    AgentType::Codex
-                };
-                let items = crate::conversation::load_session_conversation_with_workspace(
-                    &home,
-                    provider,
-                    &id,
-                    Some(&cwd),
-                );
-                if !items.is_empty() {
-                    self.pending_historical_events.push_back(HostEvent {
-                        event_id: uuid::Uuid::new_v4().to_string(),
-                        host_generation: self.generation.clone(),
-                        binding: Some(binding.clone()),
-                        hub_session_id: Some(hub_id.clone()),
-                        provider_session_id: Some(id.clone()),
-                        kind: "history/snapshot".to_string(),
-                        raw: json!({"method": "history/snapshot", "params": {"items": items}}),
-                        approval_id: None,
-                        approval: None,
-                        question_id: None,
-                        question: None,
-                    });
-                }
+            if *mode == ConnectMode::Resume || turns_source.is_some() {
+                self.enqueue_session_history_and_usage(&binding, turns_source);
             }
 
             // Bound provider_response in receipt: IPC frame limit is MAX_DAEMON_FRAME_BYTES (1MB).
@@ -3225,8 +3385,9 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 text,
                 effort,
                 model,
+                attachments,
             } => {
-                if text.trim().is_empty() || text.len() > 512 * 1024 {
+                if (text.trim().is_empty() && attachments.is_empty()) || text.len() > 512 * 1024 {
                     return Err(NativeError::rejected("invalid_prompt"));
                 }
                 if text.trim_start().starts_with('/') {
@@ -3246,11 +3407,119 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     binding.current_turn_id = None;
                 }
                 let is_newly_created = self.newly_created.remove(hub_id);
+                let mut effective_text = text.clone();
+                let mut image_blocks: Vec<Value> = Vec::new();
+                let mut codex_extra_inputs: Vec<Value> = Vec::new();
+                if !attachments.is_empty() {
+                    let attach_dir = std::env::temp_dir()
+                        .join("agenthub-attachments")
+                        .join(hub_id);
+                    let _ = std::fs::create_dir_all(&attach_dir);
+                    let cmd_prefix: String = command
+                        .client_cmd_id
+                        .chars()
+                        .filter(char::is_ascii_alphanumeric)
+                        .take(12)
+                        .collect();
+                    let cmd_prefix = if cmd_prefix.is_empty() {
+                        "turn".to_string()
+                    } else {
+                        cmd_prefix
+                    };
+                    let mut attachment_notes = Vec::new();
+                    for (idx, att) in attachments.iter().enumerate() {
+                        let safe_name: String = att
+                            .name
+                            .chars()
+                            .map(|c| {
+                                if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                                    c
+                                } else {
+                                    '_'
+                                }
+                            })
+                            .take(96)
+                            .collect();
+                        let file_name = if safe_name.is_empty() {
+                            format!("{cmd_prefix}_attachment_{idx}")
+                        } else {
+                            format!("{cmd_prefix}_{idx}_{safe_name}")
+                        };
+                        let file_path = attach_dir.join(&file_name);
+                        let is_base64 = att.encoding.as_deref() == Some("base64");
+                        if is_base64 {
+                            let saved_ok = decode_base64_bytes(&att.data)
+                                .is_some_and(|bytes| std::fs::write(&file_path, &bytes).is_ok());
+                            if att.media_type.starts_with("image/") {
+                                image_blocks.push(json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": att.media_type,
+                                        "data": att.data.trim(),
+                                    }
+                                }));
+                                if saved_ok {
+                                    codex_extra_inputs.push(json!({
+                                        "type": "localImage",
+                                        "path": file_path.to_string_lossy(),
+                                    }));
+                                }
+                            }
+                            if saved_ok {
+                                attachment_notes.push(format!(
+                                    "[附件 {}: {} (已保存至本地临时路径: {})]",
+                                    att.name,
+                                    att.media_type,
+                                    file_path.display()
+                                ));
+                            } else {
+                                attachment_notes.push(format!(
+                                    "[附件 {}: {}]",
+                                    att.name, att.media_type
+                                ));
+                            }
+                        } else {
+                            let saved_ok = std::fs::write(&file_path, att.data.as_bytes()).is_ok();
+                            if att.data.len() <= 64 * 1024 {
+                                attachment_notes.push(format!(
+                                    "[附件 {} ({})]:\n```\n{}\n```",
+                                    att.name,
+                                    file_path.display(),
+                                    att.data
+                                ));
+                            } else if saved_ok {
+                                attachment_notes.push(format!(
+                                    "[附件 {}: 已保存至本地临时路径 {}]",
+                                    att.name,
+                                    file_path.display()
+                                ));
+                            }
+                        }
+                    }
+                    if !attachment_notes.is_empty() {
+                        let prefix = attachment_notes.join("\n\n");
+                        effective_text = if effective_text.trim().is_empty() {
+                            prefix
+                        } else {
+                            format!("{prefix}\n\n{effective_text}")
+                        };
+                    }
+                }
+                let mut input_items = vec![json!({
+                    "type": "text",
+                    "text": effective_text,
+                    "text_elements": []
+                })];
+                input_items.extend(codex_extra_inputs);
                 let mut turn_params = json!({
                     "threadId": session.provider_session_id,
                     "cwd": session.workspace_path.to_string_lossy(),
-                    "input": [{"type": "text", "text": text, "text_elements": []}]
+                    "input": input_items
                 });
+                if !image_blocks.is_empty() {
+                    turn_params["imageBlocks"] = json!(image_blocks);
+                }
                 if is_newly_created {
                     turn_params["sessionExists"] = json!(false);
                 }

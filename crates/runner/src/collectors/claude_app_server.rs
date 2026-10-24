@@ -30,6 +30,8 @@ pub struct ClaudeProcessSession {
     session_id: String,
     cwd: PathBuf,
     model: Option<String>,
+    requested_model: Option<String>,
+    reasoning_effort: Option<String>,
     pending_messages: VecDeque<Value>,
     is_turn_in_progress: bool,
     current_turn_id: Option<String>,
@@ -165,6 +167,8 @@ impl ClaudeProcessSession {
             session_id: resume_session_id.unwrap_or_default().to_string(),
             cwd: cwd_path,
             model: effective_model,
+            requested_model: options.model.map(str::to_string),
+            reasoning_effort: options.reasoning_effort.map(str::to_string),
             pending_messages: VecDeque::new(),
             is_turn_in_progress: false,
             current_turn_id: None,
@@ -237,22 +241,41 @@ impl ClaudeProcessSession {
         self.model.as_deref()
     }
 
+    pub fn requested_model(&self) -> Option<&str> {
+        self.requested_model.as_deref()
+    }
+
+    pub fn reasoning_effort(&self) -> Option<&str> {
+        self.reasoning_effort.as_deref()
+    }
+
     pub fn is_turn_in_progress(&self) -> bool {
         self.is_turn_in_progress
     }
 
     /// Sends a new user turn prompt to the long-running Claude process over stdin as JSONL.
     pub fn send_prompt(&mut self, turn_id: &str, prompt: &str) -> Result<(), CollectorError> {
+        self.send_prompt_with_blocks(turn_id, prompt, &[])
+    }
+
+    /// Sends a user turn with optional extra content blocks (such as base64 image blocks).
+    pub fn send_prompt_with_blocks(
+        &mut self,
+        turn_id: &str,
+        prompt: &str,
+        extra_blocks: &[Value],
+    ) -> Result<(), CollectorError> {
+        let mut content = Vec::with_capacity(extra_blocks.len() + 1);
+        content.extend_from_slice(extra_blocks);
+        content.push(json!({
+            "type": "text",
+            "text": prompt
+        }));
         let msg = json!({
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    }
-                ]
+                "content": content
             }
         });
 

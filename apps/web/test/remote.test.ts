@@ -143,6 +143,27 @@ test("context ring uses reported values and stays empty without usage", () => {
     ]),
     { used: 42_000, window: 200_000, source: "reported" },
   );
+  assert.deepEqual(
+    latestContextUsage([
+      event("thread/tokenUsage/updated", {
+        tokenUsage: {
+          used: 68_000,
+          window: 200_000,
+        },
+      }),
+    ]),
+    { used: 68_000, window: 200_000, source: "reported" },
+  );
+  assert.deepEqual(
+    latestContextUsage([], {
+      provider_session_id: "claude_abc",
+      workspace_path: "ws-agent-0123456789abcdef",
+      title: "课表爬虫",
+      context_used_tokens: 54_000,
+      context_window_tokens: 200_000,
+    }),
+    { used: 54_000, window: 200_000, source: "reported" },
+  );
 });
 
 test("managed history snapshots replace stale replay and retain later live messages", () => {

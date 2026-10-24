@@ -411,23 +411,86 @@ fn parse_models_response(val: &Value, provider_name: &str) -> Vec<LiveCatalogMod
 pub fn agent_model_catalogs() -> Vec<(&'static str, Vec<Value>)> {
     let mut out = Vec::new();
 
+    let mut claude_models: Vec<Value> = Vec::new();
+    let mut seen_claude = HashSet::new();
+
     if let Some(profile) = crate::claude_gateway::discover_claude_gateway() {
-        let models: Vec<Value> = profile
-            .models
-            .iter()
-            .map(|m| {
-                json!({
-                    "id": m.name,
-                    "name": m.name,
-                    "display_name": m.label.clone().unwrap_or_else(|| m.name.clone()),
-                    "supports_1m": m.supports_1m,
-                    "upstream_provider": profile.source,
-                })
-            })
-            .collect();
-        if !models.is_empty() {
-            out.push(("claude_code", models));
+        for m in &profile.models {
+            let id = m.name.trim();
+            if id.is_empty() || !seen_claude.insert(id.to_ascii_lowercase()) {
+                continue;
+            }
+            claude_models.push(json!({
+                "id": id,
+                "name": id,
+                "display_name": m.label.clone().unwrap_or_else(|| id.to_string()),
+                "supports_1m": m.supports_1m,
+                "upstream_provider": profile.source,
+            }));
         }
+    }
+
+    if let Some(home) = crate::collectors::home_dir() {
+        let settings_path = home.join(".claude").join("settings.json");
+        if let Ok(content) = fs::read_to_string(&settings_path)
+            && let Ok(val) = serde_json::from_str::<Value>(&content)
+        {
+            let mut candidates = Vec::new();
+            if let Some(m) = val.get("model").and_then(Value::as_str) {
+                candidates.push(m);
+            }
+            if let Some(env_obj) = val.get("env").and_then(Value::as_object) {
+                for key in [
+                    "ANTHROPIC_MODEL",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                ] {
+                    if let Some(m) = env_obj.get(key).and_then(Value::as_str) {
+                        candidates.push(m);
+                    }
+                }
+            }
+            for raw in candidates {
+                let id = raw.trim();
+                if id.is_empty()
+                    || id == "<synthetic>"
+                    || !seen_claude.insert(id.to_ascii_lowercase())
+                {
+                    continue;
+                }
+                claude_models.push(json!({
+                    "id": id,
+                    "name": id,
+                    "display_name": id,
+                    "upstream_provider": "claude-settings",
+                }));
+            }
+        }
+    }
+
+    if let Ok(entries) = crate::collectors::collect_claude_sessions_for_remote() {
+        for entry in entries {
+            let Some(raw) = entry.model.as_deref() else {
+                continue;
+            };
+            let id = raw.trim();
+            if id.is_empty() || id == "<synthetic>" || !seen_claude.insert(id.to_ascii_lowercase())
+            {
+                continue;
+            }
+            claude_models.push(json!({
+                "id": id,
+                "name": id,
+                "display_name": id,
+                "upstream_provider": "claude-transcript",
+            }));
+        }
+    }
+
+    if !claude_models.is_empty() {
+        out.push(("claude_code", claude_models.clone()));
+        out.push(("claude_desktop", claude_models));
     }
 
     if let Some(providers) = crate::collectors::zcode_app_server::load_zcode_v2_provider_registry()

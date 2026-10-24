@@ -196,7 +196,22 @@ pub(crate) fn claude_result_context_usage(value: &Value) -> Option<ContextUsage>
     let window = value
         .get("model_context_window")
         .and_then(Value::as_u64)
-        .or_else(|| value.get("modelContextWindow").and_then(Value::as_u64));
+        .or_else(|| value.get("modelContextWindow").and_then(Value::as_u64))
+        .or_else(|| {
+            value
+                .get("modelUsage")
+                .and_then(Value::as_object)
+                .and_then(|map| {
+                    map.iter().find_map(|(model_name, stats)| {
+                        stats
+                            .get("contextWindow")
+                            .or_else(|| stats.get("context_window"))
+                            .and_then(Value::as_u64)
+                            .filter(|v| *v > 0)
+                            .or_else(|| Some(claude_context_window(model_name)))
+                    })
+                })
+        });
     context_usage_from_values(usage, window)
 }
 
@@ -291,6 +306,8 @@ pub struct ClaudeTranscriptEntry {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cache_read_tokens: u64,
+    pub context_used_tokens: u64,
+    pub context_window_tokens: u64,
     pub request_count: u64,
     /// True when the transcript was written by Claude Desktop rather than the
     /// Coding Assistant CLI. Both write to the same store; each line's
@@ -308,6 +325,10 @@ pub struct ClaudeRemoteSessionEntry {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub context_used_tokens: u64,
+    #[serde(default)]
+    pub context_window_tokens: u64,
     pub request_count: u64,
     /// Written by Claude Desktop, not the Coding Assistant CLI.
     #[serde(default)]
@@ -833,7 +854,7 @@ pub(crate) fn extract_closed_json_object(text: &str, field: &str) -> Option<Stri
 
 pub(crate) fn claude_context_window(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
-    if lower.contains("[1m]") {
+    if lower.contains("[1m]") || lower.contains("-1m") || lower.ends_with("1m") {
         return 1_000_000;
     }
     // Claude 5-series (Opus 5, Sonnet 5, Fable 5, Mythos 5) have native 1M context
@@ -1104,6 +1125,8 @@ fn read_claude_transcript_metadata_uncached(
     let mut prompt_tokens: u64 = 0;
     let mut completion_tokens: u64 = 0;
     let mut cache_read_tokens: u64 = 0;
+    let mut context_used_tokens: u64 = 0;
+    let mut explicit_context_window: Option<u64> = None;
     // A reply is written once per content block, each line repeating the
     // message's usage; counting lines would count blocks as requests, and
     // summing every line would double the tokens. A message counts once, and
@@ -1137,6 +1160,17 @@ fn read_claude_transcript_metadata_uncached(
         {
             desktop = true;
         }
+        if let Some(win) = [
+            "/context_window/context_window_size",
+            "/contextWindow/contextWindowSize",
+            "/message/usage/context_window",
+        ]
+        .into_iter()
+        .find_map(|p| value.pointer(p).and_then(Value::as_u64))
+        .filter(|v| *v > 0)
+        {
+            explicit_context_window = Some(win);
+        }
         if value.get("type").and_then(Value::as_str) == Some("assistant") {
             has_output = true;
             let message_id = value
@@ -1149,23 +1183,24 @@ fn read_claude_transcript_metadata_uncached(
                 let output = usage_u64(usage, "output_tokens");
                 let cache_read = usage_u64(usage, "cache_read_input_tokens");
                 let cache_write = usage_u64(usage, "cache_creation_input_tokens");
-                let figures = (
-                    input.saturating_add(cache_read).saturating_add(cache_write),
-                    output,
-                    cache_read,
-                );
+                let total_input = input.saturating_add(cache_read).saturating_add(cache_write);
+                if total_input > 0 {
+                    context_used_tokens = total_input;
+                }
+                let figures = (total_input, output, cache_read);
                 let key = message_id
                     .unwrap_or_else(|| format!("line-{}", request_count.saturating_add(1)));
                 if message_usage.insert(key, figures).is_none() {
                     request_count = request_count.saturating_add(1);
                 }
-                if model.is_none() {
-                    model = value
-                        .pointer("/message/model")
-                        .or_else(|| value.get("model"))
-                        .and_then(Value::as_str)
-                        .filter(|m| !m.is_empty() && *m != "<synthetic>")
-                        .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS));
+                if let Some(m) = value
+                    .pointer("/message/model")
+                    .or_else(|| value.get("model"))
+                    .and_then(Value::as_str)
+                    .filter(|m| !m.is_empty() && *m != "<synthetic>")
+                    .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS))
+                {
+                    model = Some(m);
                 }
             } else if let Some(id) = message_id {
                 // A block with no usage still belongs to a request.
@@ -1214,6 +1249,9 @@ fn read_claude_transcript_metadata_uncached(
         completion_tokens = completion_tokens.saturating_add(*output);
         cache_read_tokens = cache_read_tokens.saturating_add(*cache_read);
     }
+    let context_window_tokens = explicit_context_window
+        .or_else(|| model.as_deref().map(claude_context_window))
+        .unwrap_or(200_000);
     Ok(session_id.map(|session_id| ClaudeTranscriptEntry {
         session_id,
         cwd: cwd.unwrap_or_default(),
@@ -1225,6 +1263,8 @@ fn read_claude_transcript_metadata_uncached(
         prompt_tokens,
         completion_tokens,
         cache_read_tokens,
+        context_used_tokens,
+        context_window_tokens,
         request_count,
         desktop,
     }))
@@ -1647,6 +1687,8 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
                     prompt_tokens: entry.prompt_tokens,
                     completion_tokens: entry.completion_tokens,
                     cache_read_tokens: entry.cache_read_tokens,
+                    context_used_tokens: entry.context_used_tokens,
+                    context_window_tokens: entry.context_window_tokens,
                     request_count: entry.request_count,
                     desktop: entry.desktop,
                     subagents,
@@ -4102,7 +4144,7 @@ pub fn collect_zcode_session_contexts_from(
 
 pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
     if let Some(home) = home_dir() {
-        let config_path = home.join(r".zcode\v2\config.json");
+        let config_path = home.join(".zcode").join("v2").join("config.json");
         if let Ok(data) = fs::read_to_string(&config_path)
             && let Ok(json) = serde_json::from_str::<Value>(&data)
             && let Some(providers_obj) = json.get("provider").and_then(Value::as_object)
@@ -4135,6 +4177,126 @@ pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
         Some(200_000)
     } else {
         Some(128_000)
+    }
+}
+
+fn non_claude_context_usage_cache()
+-> &'static RwLock<Option<(Instant, HashMap<(crate::domain::AgentType, String), ContextUsage>)>> {
+    static CACHE: OnceLock<
+        RwLock<Option<(Instant, HashMap<(crate::domain::AgentType, String), ContextUsage>)>>,
+    > = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
+/// Resolves the latest known context usage (`used` and `window` tokens) for a
+/// local session so resumed/restored sessions immediately report their real
+/// context fullness to the remote console.
+pub fn lookup_session_context_usage(
+    home: &Path,
+    agent_type: crate::domain::AgentType,
+    session_id: &str,
+    workspace: Option<&Path>,
+) -> Option<ContextUsage> {
+    let raw_id = session_id
+        .strip_prefix("claude_")
+        .or_else(|| session_id.strip_prefix("antigravity_"))
+        .or_else(|| session_id.strip_prefix("grok_"))
+        .unwrap_or(session_id);
+
+    if agent_type != crate::domain::AgentType::ClaudeCode
+        && let Ok(guard) = non_claude_context_usage_cache().read()
+        && let Some((ts, ref map)) = *guard
+        && ts.elapsed() < Duration::from_secs(15)
+    {
+        if let Some(usage) = map
+            .get(&(agent_type, raw_id.to_string()))
+            .or_else(|| map.get(&(agent_type, session_id.to_string())))
+        {
+            return Some(usage.clone());
+        }
+    }
+
+    match agent_type {
+        crate::domain::AgentType::ClaudeCode => {
+            if let Ok(guard) = claude_remote_sessions_cache().read()
+                && let Some((_, ref entries)) = *guard
+                && let Some(entry) = entries
+                    .iter()
+                    .find(|e| e.session_id.trim_start_matches("claude_") == raw_id)
+                && entry.context_used_tokens > 0
+            {
+                return Some(ContextUsage {
+                    used: entry.context_used_tokens,
+                    window: (entry.context_window_tokens > 0)
+                        .then_some(entry.context_window_tokens),
+                });
+            }
+            let path = workspace
+                .and_then(|ws| {
+                    crate::conversation::find_claude_workspace_transcript(home, ws, raw_id)
+                })
+                .or_else(|| {
+                    let config_dir =
+                        discover_claude_config_dir().unwrap_or_else(|_| home.join(".claude"));
+                    crate::conversation::find_transcript_file(
+                        &config_dir.join("projects"),
+                        raw_id,
+                        0,
+                    )
+                })?;
+            let ctx = read_claude_session_context(&path, "Claude transcript context").ok()??;
+            let used = ctx.context_used_tokens.filter(|v| *v > 0)?;
+            Some(ContextUsage {
+                used,
+                window: ctx.context_window_tokens.filter(|v| *v > 0),
+            })
+        }
+        crate::domain::AgentType::Codex
+        | crate::domain::AgentType::ZCode
+        | crate::domain::AgentType::GrokBuild
+        | crate::domain::AgentType::Antigravity => {
+            let contexts = match agent_type {
+                crate::domain::AgentType::Codex => {
+                    collect_codex_session_contexts_from(&home.join(".codex"), 200).ok()?
+                }
+                crate::domain::AgentType::ZCode => {
+                    let db_path = home.join(".zcode").join("cli").join("db").join("db.sqlite");
+                    collect_zcode_session_contexts_from(&db_path, 500).ok()?
+                }
+                crate::domain::AgentType::GrokBuild => {
+                    collect_grok_session_contexts_from(&home.join(".grok"), 200).ok()?
+                }
+                crate::domain::AgentType::Antigravity => {
+                    collect_antigravity_session_contexts_from(home, 200).ok()?
+                }
+                _ => return None,
+            };
+            let mut found = None;
+            if let Ok(mut guard) = non_claude_context_usage_cache().write() {
+                let (ts, map) = guard.get_or_insert_with(|| (Instant::now(), HashMap::new()));
+                if ts.elapsed() >= Duration::from_secs(15) {
+                    map.clear();
+                    *ts = Instant::now();
+                }
+                for ctx in contexts {
+                    if let Some(used) = ctx
+                        .context_used_tokens
+                        .or(ctx.session_total_tokens)
+                        .filter(|v| *v > 0)
+                    {
+                        let usage = ContextUsage {
+                            used,
+                            window: ctx.context_window_tokens.filter(|v| *v > 0),
+                        };
+                        if ctx.agent_session_id == raw_id || ctx.agent_session_id == session_id {
+                            found = Some(usage.clone());
+                        }
+                        map.insert((agent_type, ctx.agent_session_id), usage);
+                    }
+                }
+            }
+            found
+        }
     }
 }
 

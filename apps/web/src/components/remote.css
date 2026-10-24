@@ -3280,11 +3280,97 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   font-size: 11px;
   color: var(--remote-muted);
 }
+.remote-composer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border-radius: 8px;
+  border: none !important;
+  background: transparent;
+  color: var(--remote-muted);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.remote-attach-btn:hover:not(:disabled) {
+  background: var(--remote-hover);
+  color: var(--remote-ink);
+}
+.remote-attach-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.remote-composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+.remote-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--remote-line);
+  background: var(--remote-surface);
+  font-size: 12px;
+  color: var(--remote-ink);
+}
+.remote-attachment-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.remote-attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--remote-muted);
+  flex-shrink: 0;
+}
+.remote-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--remote-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.remote-attachment-remove:hover {
+  background: var(--remote-hover);
+  color: var(--remote-ink);
+}
 .remote-composer-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+.remote-model-selector,
 .remote-effort-selector {
   display: inline-flex;
   align-items: center;

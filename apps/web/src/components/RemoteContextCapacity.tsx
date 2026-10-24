@@ -1,16 +1,25 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { latestContextUsage, type RemoteEvent } from "../lib/remote";
+import {
+  latestContextUsage,
+  type DiscoveryCandidate,
+  type RemoteEvent,
+} from "../lib/remote";
 
 export const RemoteContextCapacity = memo(function RemoteContextCapacity({
   events,
+  candidate,
 }: {
   events: RemoteEvent[];
+  candidate?: DiscoveryCandidate | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
-  const usage = useMemo(() => latestContextUsage(events), [events]);
+  const usage = useMemo(
+    () => latestContextUsage(events, candidate),
+    [events, candidate],
+  );
   const percentage =
     usage && usage.window > 0
       ? Math.min(100, (usage.used / usage.window) * 100)

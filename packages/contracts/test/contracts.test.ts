@@ -487,3 +487,26 @@ test("the ready frame accepts a named device and rejects anything outside the co
     );
   }
 });
+
+test("send_prompt accepts per-turn model override and validated attachments", () => {
+  const cmd = {
+    client_cmd_id: "cmd-attach-1",
+    hub_session_id: "hub-one",
+    host_generation: "generation-one",
+    command: {
+      action: "send_prompt" as const,
+      text: "请结合附件分析",
+      effort: "high",
+      model: "claude-opus-4-6",
+      attachments: [
+        {
+          name: "schedule.png",
+          media_type: "image/png",
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          encoding: "base64" as const,
+        },
+      ],
+    },
+  };
+  assert.deepEqual(parseRemoteCommand(cmd), cmd);
+});

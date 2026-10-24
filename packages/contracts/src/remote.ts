@@ -1,6 +1,13 @@
 /** Native Remote v3; separate from the incomplete legacy v2 envelopes. */
 import { ContractError } from "./index.js";
 
+export interface RemoteAttachment {
+  name: string;
+  media_type: string;
+  data: string;
+  encoding?: "base64" | "utf8";
+}
+
 export interface RemoteCommand {
   client_cmd_id: string;
   hub_session_id: string;
@@ -16,7 +23,13 @@ export interface RemoteCommand {
         sandbox?: "read-only" | "workspace-write" | "danger-full-access";
         approval_policy?: "untrusted" | "on-request" | "never";
       }
-    | { action: "send_prompt"; text: string; effort?: string }
+    | {
+        action: "send_prompt";
+        text: string;
+        effort?: string;
+        model?: string;
+        attachments?: RemoteAttachment[];
+      }
     | { action: "resolve_approval"; approval_id: string; approved: boolean }
     | {
         action: "answer_question";
@@ -196,11 +209,37 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         member(command.approval_policy, ["untrusted", "on-request", "never"]);
       break;
     case "send_prompt":
-      only(command, ["action", "text", "effort"]);
-      text(command.text, 512 * 1024);
-      // Per-turn reasoning effort. Desktop already sends it; the Host accepts it
-      // for every provider and providers without the concept ignore it.
+      only(command, ["action", "text", "effort", "model", "attachments"]);
+      // Per-turn reasoning effort and model override. Desktop already sends
+      // effort; the Host accepts both for every provider and providers without
+      // the concept ignore them.
       if (command.effort !== undefined) text(command.effort, 64);
+      if (command.model !== undefined) text(command.model, 256);
+      if (command.attachments !== undefined) {
+        if (
+          !Array.isArray(command.attachments) ||
+          command.attachments.length === 0 ||
+          command.attachments.length > 16
+        )
+          invalid();
+        for (const item of command.attachments) {
+          const att = object(item);
+          only(att, ["name", "media_type", "data", "encoding"]);
+          text(att.name, 256);
+          text(att.media_type, 128);
+          text(att.data, 8 * 1024 * 1024);
+          if (att.encoding !== undefined)
+            member(att.encoding, ["base64", "utf8"]);
+        }
+        if (
+          typeof command.text !== "string" ||
+          command.text.length > 512 * 1024 ||
+          command.text.includes("\0")
+        )
+          invalid();
+      } else {
+        text(command.text, 512 * 1024);
+      }
       break;
     case "resolve_approval":
       only(command, ["action", "approval_id", "approved"]);

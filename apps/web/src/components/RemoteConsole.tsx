@@ -22,6 +22,7 @@ import {
   type RemoteSessionDetail,
   type ConversationItem,
   type DiscoveryCandidate,
+  type RemoteAttachment,
 } from "../lib/remote";
 import { MarkdownView } from "./MarkdownView";
 import { Select } from "./Select";
@@ -54,17 +55,6 @@ const empty: RemoteSnapshot = { cursor: 0, runners: [], sessions: [] };
  */
 const SESSION_POLL_MS = 1000;
 
-/** Human label for a session's execution state, shared by the tree and header. */
-const states: Record<string, string> = {
-  idle: "就绪",
-  running: "正在工作",
-  awaiting_permission: "等待审批",
-  awaiting_input: "等待输入",
-  unknown: "状态待确认",
-  error: "执行出错",
-  completed: "已完成",
-  terminated: "已结束",
-};
 const key = (session: RemoteSession) =>
   `${session.runner_id}/${session.binding.hub_session_id}`;
 
@@ -831,6 +821,10 @@ export function RemoteConsole({
   const [effort, setEffort] = useState<
     "default" | "low" | "medium" | "high" | "max"
   >("default");
+  const [sessionModel, setSessionModel] = useState("");
+  const [attachments, setAttachments] = useState<RemoteAttachment[]>([]);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [submittingInterrupt, setSubmittingInterrupt] = useState(false);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1045,6 +1039,19 @@ export function RemoteConsole({
   const runnerInfo = snapshot.runners.find((item) => item.runner_id === runner);
   const connected = !!session?.online && !!session.binding.control_connected;
 
+  const discovered = useMemo(() => {
+    const candidates = new Map<string, DiscoveryCandidate>();
+    for (const r of snapshot.runners) {
+      if (r.revoked) continue;
+      for (const candidate of r.hello?.discovery?.candidates ?? [])
+        candidates.set(
+          `${r.runner_id}/${candidate.provider_session_id}`,
+          candidate,
+        );
+    }
+    return candidates;
+  }, [snapshot.runners]);
+
   /** Every online computer, for the launch dialog's first field. */
   const onlineDeviceOptions = useMemo(
     () =>
@@ -1130,29 +1137,195 @@ export function RemoteConsole({
   const launchModelOptions = useMemo(() => {
     const hostModels = runnerInfo?.hello?.models;
     const engine = LAUNCH_AGENTS.find((item) => item.value === agentType);
-    let models: Array<{ id: string; display_name?: string }> = [];
+    const seen = new Set<string>();
+    const models: Array<{ id: string; display_name?: string }> = [];
+    const pushModel = (id?: string | null, displayName?: string | null) => {
+      const clean = id?.trim();
+      if (!clean || clean === "<synthetic>") return;
+      const lower = clean.toLowerCase();
+      if (seen.has(lower)) return;
+      seen.add(lower);
+      models.push({
+        id: clean,
+        display_name: displayName?.trim() || clean.replace(/^models\//u, ""),
+      });
+    };
     for (const key of engine?.catalog ?? []) {
       const list = hostModels?.agents?.[key];
       if (list !== undefined && list.length > 0) {
-        models = list;
-        break;
+        for (const item of list) pushModel(item.id, item.display_name);
       }
     }
     if (models.length === 0 && agentType === "codex") {
-      models = (hostModels?.data ?? []).map((item) => ({
-        id: item.id,
-        display_name:
+      for (const item of hostModels?.data ?? []) {
+        pushModel(
+          item.id,
           item.display_name ?? item.displayName ?? item.name ?? item.id,
-      }));
+        );
+      }
+    }
+    const targetProvider =
+      agentType === "claude_code"
+        ? "claude"
+        : agentType === "grok_build"
+          ? "grok"
+          : agentType;
+    for (const cand of runnerInfo?.hello?.discovery?.candidates ?? []) {
+      const pInfo = getProviderInfo(cand.provider_session_id, cand.provider);
+      if (pInfo.type === targetProvider && cand.model) {
+        pushModel(cand.model, cand.model);
+      }
+    }
+    if (models.length === 0 && agentType === "claude_code") {
+      pushModel("claude-opus-4-6", "Claude Opus 4.6");
+      pushModel("claude-sonnet-4-6", "Claude Sonnet 4.6");
+      pushModel("claude-haiku-4-5-20251001", "Claude Haiku 4.5");
     }
     return [
-      { value: "", label: "沿用原生设置" },
+      { value: "", label: "默认模型" },
       ...models.map((item) => ({
         value: item.id,
         label: item.display_name ?? item.id,
       })),
     ];
   }, [runnerInfo, agentType]);
+
+  const sessionModelOptions = useMemo(() => {
+    if (!session) return [{ value: "", label: "默认模型" }];
+    const sessionRunner = snapshot.runners.find(
+      (item) => item.runner_id === session.runner_id,
+    );
+    const hostModels = sessionRunner?.hello?.models;
+    const candidate = discovered.get(
+      `${session.runner_id}/${session.binding.provider_session_id}`,
+    );
+    const providerType = getProviderInfo(
+      session.binding.provider_session_id,
+      candidate?.provider,
+    ).type;
+    const catalogKeys =
+      providerType === "claude"
+        ? ["claude_code", "claude_desktop", "claude"]
+        : providerType === "codex"
+          ? ["codex"]
+          : providerType === "zcode"
+            ? ["zcode"]
+            : providerType === "antigravity"
+              ? ["antigravity"]
+              : ["grok_build", "grok"];
+    const seen = new Set<string>();
+    const models: Array<{ id: string; display_name?: string }> = [];
+    const pushModel = (id?: string | null, displayName?: string | null) => {
+      const clean = id?.trim();
+      if (!clean || clean === "<synthetic>") return;
+      const lower = clean.toLowerCase();
+      if (seen.has(lower)) return;
+      seen.add(lower);
+      models.push({
+        id: clean,
+        display_name: displayName?.trim() || clean.replace(/^models\//u, ""),
+      });
+    };
+    if (candidate?.model) {
+      pushModel(candidate.model, candidate.model);
+    }
+    for (const k of catalogKeys) {
+      for (const item of hostModels?.agents?.[k] ?? []) {
+        pushModel(item.id, item.display_name);
+      }
+    }
+    if (providerType === "codex" || models.length === 0) {
+      for (const item of hostModels?.data ?? []) {
+        pushModel(
+          item.id,
+          item.display_name ?? item.displayName ?? item.name ?? item.id,
+        );
+      }
+    }
+    for (const cand of sessionRunner?.hello?.discovery?.candidates ?? []) {
+      const pInfo = getProviderInfo(cand.provider_session_id, cand.provider);
+      if (pInfo.type === providerType && cand.model) {
+        pushModel(cand.model, cand.model);
+      }
+    }
+    if (models.length === 0 && providerType === "claude") {
+      pushModel("claude-opus-4-6", "Claude Opus 4.6");
+      pushModel("claude-sonnet-4-6", "Claude Sonnet 4.6");
+      pushModel("claude-haiku-4-5-20251001", "Claude Haiku 4.5");
+    }
+    const defaultLabel = candidate?.model
+      ? candidate.model.replace(/^models\//u, "")
+      : "默认模型";
+    return [
+      { value: "", label: defaultLabel },
+      ...models
+        .filter(
+          (item) =>
+            !candidate?.model ||
+            item.id.toLowerCase() !== candidate.model.toLowerCase(),
+        )
+        .map((item) => ({
+          value: item.id,
+          label: item.display_name ?? item.id,
+        })),
+    ];
+  }, [session, snapshot.runners, discovered]);
+
+  const handleFilesSelected = async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+    const TEXT_EXT_RE =
+      /\.(txt|md|markdown|json|jsonl|yaml|yml|toml|xml|csv|tsv|py|ts|tsx|js|jsx|mjs|cjs|rs|go|java|kt|c|cpp|h|hpp|cs|rb|php|swift|sh|bash|zsh|ps1|bat|cmd|sql|html|css|scss|less|vue|svelte|ini|conf|cfg|env|log)$/iu;
+    const loaded: RemoteAttachment[] = [];
+    for (const file of files.slice(0, 16)) {
+      if (file.size > 6 * 1024 * 1024) {
+        setError(`附件 ${file.name} 超过 6MB 大小限制`);
+        continue;
+      }
+      const isText =
+        file.type.startsWith("text/") ||
+        file.type === "application/json" ||
+        file.type === "application/xml" ||
+        file.type === "application/javascript" ||
+        TEXT_EXT_RE.test(file.name);
+      try {
+        if (isText) {
+          const content = await file.text();
+          loaded.push({
+            name: file.name || "attachment.txt",
+            media_type: file.type || "text/plain",
+            data: content,
+            encoding: "utf8",
+          });
+        } else {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result =
+                typeof reader.result === "string" ? reader.result : "";
+              const comma = result.indexOf(",");
+              resolve(comma >= 0 ? result.slice(comma + 1) : result);
+            };
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+          });
+          if (base64) {
+            loaded.push({
+              name: file.name || "image.png",
+              media_type: file.type || "application/octet-stream",
+              data: base64,
+              encoding: "base64",
+            });
+          }
+        }
+      } catch {
+        setError(`读取附件 ${file.name} 失败`);
+      }
+    }
+    if (loaded.length > 0) {
+      setAttachments((prev) => [...prev, ...loaded].slice(0, 16));
+    }
+  };
   const canSend =
     connected &&
     ["idle", "completed"].includes(session?.binding.execution_state ?? "");
@@ -1202,15 +1375,24 @@ export function RemoteConsole({
     setEvents([]);
     setCommands([]);
     setText("");
+    setSessionModel("");
+    setAttachments([]);
     setQuestionAnswers({});
     setSelectedOptions({});
     setSubmittingApproval(null);
     setSubmittingQuestionId(null);
     setFollowBottom(true);
     setDismissedFailure(null);
-    if (!selected) return;
+    if (!selected) {
+      setSessionLoading(false);
+      return;
+    }
     const [runnerId, hub] = selected.split("/");
-    if (!runnerId || !hub) return;
+    if (!runnerId || !hub) {
+      setSessionLoading(false);
+      return;
+    }
+    setSessionLoading(true);
     let stopped = false;
     let inFlight = false;
     let cursor = 0;
@@ -1246,6 +1428,7 @@ export function RemoteConsole({
           lastPolledGlobalCursor = detail.cursor;
         }
         setCommands(detail.commands);
+        setSessionLoading(false);
         const resolvedBinding = detail.binding;
         if (resolvedBinding) {
           setSnapshot((prev) => {
@@ -1269,7 +1452,10 @@ export function RemoteConsole({
           });
         }
       } catch (err) {
-        if (!stopped) setError(remoteError(err));
+        if (!stopped) {
+          setError(remoteError(err));
+          setSessionLoading(false);
+        }
       } finally {
         inFlight = false;
         const hasPending = latestDetail?.commands?.some((c) => !c.receipt);
@@ -1342,15 +1528,15 @@ export function RemoteConsole({
     }
   }, [items, followBottom]);
 
-  // 核心特性：选定会话时全量自动开始恢复接入，无需手动点击恢复
+  // 核心特性：选定会话时全量自动开始恢复接入（若已标记连接但尚未拉取到历史快照，也自动触发一次幂等同步）
   useEffect(() => {
-    if (
-      !session ||
-      !session.online ||
-      session.binding.control_connected ||
-      busy
-    )
-      return;
+    if (!session || !session.online || busy || sessionLoading) return;
+    const needsHistorySync =
+      items.length === 0 &&
+      discovered.has(
+        `${session.runner_id}/${session.binding.provider_session_id}`,
+      );
+    if (session.binding.control_connected && !needsHistorySync) return;
     const targetRunner = snapshot.runners.find(
       (r) => r.runner_id === session.runner_id,
     );
@@ -1375,13 +1561,24 @@ export function RemoteConsole({
     session?.binding.host_generation,
     snapshot.runners,
     busy,
+    sessionLoading,
+    items.length,
+    discovered,
   ]);
 
-  const latestFailure = [...commands]
+  const lastCompletedCommand = [...commands]
     .reverse()
-    .find((item) =>
-      ["rejected", "indeterminate"].includes(item.receipt?.status ?? ""),
-    );
+    .find((item) => item.receipt !== null);
+  const latestFailure =
+    lastCompletedCommand &&
+    ["rejected", "indeterminate"].includes(
+      lastCompletedCommand.receipt?.status ?? "",
+    ) &&
+    !["session_already_bound", "native_session_already_bound"].includes(
+      lastCompletedCommand.receipt?.code ?? "",
+    )
+      ? lastCompletedCommand
+      : undefined;
   const handleCopyText = (id: string, textToCopy: string) => {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       void navigator.clipboard.writeText(textToCopy);
@@ -1434,6 +1631,7 @@ export function RemoteConsole({
       attempts.current.delete(attemptKey);
       if (action.action === "send_prompt") {
         setText("");
+        setAttachments([]);
         if (textareaRef.current) textareaRef.current.style.height = "auto";
       }
       refresh.current();
@@ -1465,11 +1663,19 @@ export function RemoteConsole({
       sandbox,
       model,
     ]);
+    const existingSession = nativeId
+      ? snapshot.sessions.find(
+          (s) =>
+            s.runner_id === runner &&
+            s.binding.provider_session_id === nativeId,
+        )
+      : undefined;
     const command =
       attempts.current.get(attemptKey) ??
       ({
         client_cmd_id: safeRandomUUID(),
-        hub_session_id: safeRandomUUID(),
+        hub_session_id:
+          existingSession?.binding.hub_session_id ?? safeRandomUUID(),
         host_generation: generation,
         command: {
           action: "connect",
@@ -1522,11 +1728,17 @@ export function RemoteConsole({
       "read-only",
       "",
     ]);
+    const existingSession = snapshot.sessions.find(
+      (s) =>
+        s.runner_id === targetRunnerId &&
+        s.binding.provider_session_id === providerSessionId,
+    );
     const command =
       attempts.current.get(attemptKey) ??
       ({
         client_cmd_id: safeRandomUUID(),
-        hub_session_id: safeRandomUUID(),
+        hub_session_id:
+          existingSession?.binding.hub_session_id ?? safeRandomUUID(),
         host_generation: generation,
         command: {
           action: "connect",
@@ -1570,19 +1782,6 @@ export function RemoteConsole({
     setter: React.Dispatch<React.SetStateAction<Record<string, boolean>>>,
     nodeKey: string,
   ) => setter((prev) => ({ ...prev, [nodeKey]: !prev[nodeKey] }));
-
-  const discovered = useMemo(() => {
-    const candidates = new Map<string, DiscoveryCandidate>();
-    for (const r of snapshot.runners) {
-      if (r.revoked) continue;
-      for (const candidate of r.hello?.discovery?.candidates ?? [])
-        candidates.set(
-          `${r.runner_id}/${candidate.provider_session_id}`,
-          candidate,
-        );
-    }
-    return candidates;
-  }, [snapshot.runners]);
 
   const deviceGroups = useMemo(
     () =>
@@ -3106,7 +3305,18 @@ export function RemoteConsole({
               </h1>
               <p>
                 {session
-                  ? `${getProviderInfo(session.binding.provider_session_id, discovered.get(`${session.runner_id}/${session.binding.provider_session_id}`)?.provider).name} · ${session.online ? (connected ? "会话已连接" : "会话未连接") : "电脑离线"}`
+                  ? (() => {
+                      const providerName = getProviderInfo(
+                        session.binding.provider_session_id,
+                        discovered.get(
+                          `${session.runner_id}/${session.binding.provider_session_id}`,
+                        )?.provider,
+                      ).name;
+                      if (!session.online) return `${providerName} · 电脑离线`;
+                      if (!connected || (sessionLoading && items.length === 0))
+                        return `${providerName} · 正在连接…`;
+                      return providerName;
+                    })()
                   : "电脑执行，随处继续。"}
               </p>
             </div>
@@ -3303,11 +3513,14 @@ export function RemoteConsole({
                   </article>
                 );
               })}
-              {!session ? (
+              {!session ||
+              (sessionLoading && items.length === 0) ||
+              (!connected && session.online && items.length === 0) ||
+              (busy && items.length === 0) ? (
                 <div className="remote-timeline-empty">
                   <span className="remote-notice-spinner" />
                   <p className="remote-timeline-empty-desc">
-                    正在等待电脑确认会话…
+                    正在加载会话内容…
                   </p>
                 </div>
               ) : !items.length ? (
@@ -3334,13 +3547,9 @@ export function RemoteConsole({
                       `${session.runner_id}/${session.binding.provider_session_id}`,
                     )?.title || formatFallbackTitle()}
                   </h3>
-                  <p className="remote-timeline-empty-desc">
-                    {!session.online
-                      ? "电脑处于离线状态，上线后即可在此开始对话。"
-                      : !connected
-                        ? "正在恢复接入 Agent，稍候即可发送消息。"
-                        : "会话已就绪，可以在下方发送第一条指令。"}
-                  </p>
+                  {!session.online && (
+                    <p className="remote-timeline-empty-desc">电脑离线</p>
+                  )}
                 </div>
               ) : null}
               {approvals.map((approval) => {
@@ -3905,17 +4114,84 @@ export function RemoteConsole({
               className="remote-composer-card"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (canSend && text.trim()) {
+                if (canSend && (text.trim() || attachments.length > 0)) {
+                  const promptText =
+                    text.trim() ||
+                    `请查看附件：${attachments.map((a) => a.name).join("、")}`;
+                  const fallbackModel = session
+                    ? discovered.get(
+                        `${session.runner_id}/${session.binding.provider_session_id}`,
+                      )?.model
+                    : undefined;
+                  const effectiveModel = sessionModel || fallbackModel || "";
                   void submit({
                     action: "send_prompt",
-                    text,
+                    text: promptText,
                     ...(effort !== "default" ? { effort } : {}),
+                    ...(effectiveModel ? { model: effectiveModel } : {}),
+                    ...(attachments.length > 0 ? { attachments } : {}),
                   });
                   if (textareaRef.current)
                     textareaRef.current.style.height = "auto";
                 }
               }}
             >
+              {attachments.length > 0 && (
+                <div
+                  className="remote-composer-attachments"
+                  aria-label="已选附件"
+                >
+                  {attachments.map((att, idx) => (
+                    <div
+                      className="remote-attachment-chip"
+                      key={`${att.name}-${idx}`}
+                    >
+                      {att.encoding === "base64" &&
+                      att.media_type.startsWith("image/") ? (
+                        <img
+                          className="remote-attachment-thumb"
+                          src={`data:${att.media_type};base64,${att.data}`}
+                          alt={att.name}
+                        />
+                      ) : (
+                        <span
+                          className="remote-attachment-icon"
+                          aria-hidden="true"
+                        >
+                          <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                          </svg>
+                        </span>
+                      )}
+                      <span className="remote-attachment-name" title={att.name}>
+                        {att.name}
+                      </span>
+                      <button
+                        type="button"
+                        className="remote-attachment-remove"
+                        aria-label={`移除附件 ${att.name}`}
+                        onClick={() =>
+                          setAttachments((prev) =>
+                            prev.filter((_, i) => i !== idx),
+                          )
+                        }
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="remote-composer-input-wrapper">
                 <textarea
                   ref={textareaRef}
@@ -3924,6 +4200,13 @@ export function RemoteConsole({
                   onChange={(event) => {
                     setText(event.target.value);
                     adjustTextareaHeight();
+                  }}
+                  onPaste={(event) => {
+                    const pastedFiles = event.clipboardData?.files;
+                    if (pastedFiles && pastedFiles.length > 0) {
+                      event.preventDefault();
+                      void handleFilesSelected(pastedFiles);
+                    }
                   }}
                   onKeyDown={(event) => {
                     const isComposing =
@@ -3937,11 +4220,23 @@ export function RemoteConsole({
                       !isComposing
                     ) {
                       event.preventDefault();
-                      if (canSend && text.trim()) {
+                      if (canSend && (text.trim() || attachments.length > 0)) {
+                        const promptText =
+                          text.trim() ||
+                          `请查看附件：${attachments.map((a) => a.name).join("、")}`;
+                        const fallbackModel = session
+                          ? discovered.get(
+                              `${session.runner_id}/${session.binding.provider_session_id}`,
+                            )?.model
+                          : undefined;
+                        const effectiveModel =
+                          sessionModel || fallbackModel || "";
                         void submit({
                           action: "send_prompt",
-                          text,
+                          text: promptText,
                           ...(effort !== "default" ? { effort } : {}),
+                          ...(effectiveModel ? { model: effectiveModel } : {}),
+                          ...(attachments.length > 0 ? { attachments } : {}),
                         });
                         if (textareaRef.current)
                           textareaRef.current.style.height = "auto";
@@ -3952,51 +4247,72 @@ export function RemoteConsole({
                     !session
                       ? "等待电脑确认会话…"
                       : !session.online
-                        ? "电脑离线，无法发送消息"
+                        ? "电脑离线"
                         : !connected
-                          ? "会话正在自动恢复接入中…"
+                          ? "正在连接…"
                           : canSend
-                            ? isMobile
-                              ? "继续这段工作…"
-                              : "继续这段工作… (Enter 发送, Shift+Enter 换行)"
-                            : "Agent 正在执行中…"
+                            ? "继续这段工作…"
+                            : "正在执行…"
                   }
                   rows={1}
                   disabled={!connected}
                 />
               </div>
               <div className="remote-composer-toolbar">
-                <div className="remote-composer-status">
-                  <span
-                    className={`remote-status-pill ${
-                      session?.online
-                        ? connected
-                          ? session?.binding.execution_state === "running"
-                            ? "running"
-                            : "ready"
-                          : "connecting"
-                        : "offline"
-                    }`}
+                <div className="remote-composer-left">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(event) => {
+                      if (event.target.files) {
+                        void handleFilesSelected(event.target.files);
+                        event.target.value = "";
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="remote-attach-btn"
+                    title="添加附件"
+                    aria-label="添加附件"
+                    disabled={!connected || busy}
+                    onClick={() => fileInputRef.current?.click()}
                   >
-                    <span className="remote-pill-dot" />
-                    {session
-                      ? !session.online
-                        ? "电脑离线"
-                        : !connected
-                          ? "正在恢复…"
-                          : (states[session.binding.execution_state] ?? "就绪")
-                      : "正在连接"}
-                  </span>
-                  <span className="remote-composer-hint">
-                    {canSend
-                      ? "Enter 发送 · Shift+Enter 换行"
-                      : "Hub 双向安全同步"}
-                  </span>
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                    </svg>
+                  </button>
                 </div>
                 <div className="remote-composer-actions">
                   <div
+                    className="remote-model-selector"
+                    title="选择本轮对话模型"
+                  >
+                    <Select
+                      variant="compact"
+                      placement="top"
+                      label="会话模型"
+                      value={sessionModel}
+                      disabled={!connected || busy}
+                      options={sessionModelOptions}
+                      onChange={setSessionModel}
+                    />
+                  </div>
+                  <div
                     className="remote-effort-selector"
-                    title="设置本轮思考推理深度 (Claude Code / Codex)"
+                    title="设置本轮思考推理深度"
                   >
                     <Select
                       variant="compact"
@@ -4008,7 +4324,16 @@ export function RemoteConsole({
                       onChange={(next) => setEffort(next as typeof effort)}
                     />
                   </div>
-                  <RemoteContextCapacity events={events} />
+                  <RemoteContextCapacity
+                    events={events}
+                    candidate={
+                      session
+                        ? discovered.get(
+                            `${session.runner_id}/${session.binding.provider_session_id}`,
+                          )
+                        : undefined
+                    }
+                  />
                   {session?.binding.current_turn_id && (
                     <button
                       type="button"
@@ -4031,8 +4356,16 @@ export function RemoteConsole({
                   <button
                     type="submit"
                     className="remote-send-btn"
-                    title={canSend && text.trim() ? "发送" : "等待输入就绪"}
-                    disabled={!canSend || busy || !text.trim()}
+                    title={
+                      canSend && (text.trim() || attachments.length > 0)
+                        ? "发送"
+                        : "等待输入就绪"
+                    }
+                    disabled={
+                      !canSend ||
+                      busy ||
+                      (!text.trim() && attachments.length === 0)
+                    }
                   >
                     <svg
                       width="16"

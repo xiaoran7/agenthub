@@ -10,6 +10,7 @@ fn command() -> RemoteCommand {
             text: "do not repeat this action".into(),
             effort: None,
             model: None,
+            attachments: Vec::new(),
         },
     }
 }
