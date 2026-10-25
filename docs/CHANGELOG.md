@@ -18,7 +18,7 @@
     - Runner 将附件落盘至系统临时目录，对文本文件内联或附带路径说明，对图片附件同时通过 `stream-json` 原生多模态 `image` 块与本地图片输入透传给底层 Agent；
   - **打通会话真实上下文用量上报与批量恢复性能优化（`crates/runner/src/collectors/mod.rs`, `crates/runner/src/remote_host.rs`, `apps/web/src/lib/remote.ts`, `apps/web/src/components/RemoteContextCapacity.tsx`）**：
     - 修复前端 `latestContextUsage` 未读取 `remote_journal` 投射后的 `tokenUsage.used` 与 `tokenUsage.window` 字段导致容量环始终为空的问题；
-    - Runner 在转录扫描、会话恢复、自动保活以及 Claude 流式 `assistant` / `result` 阶段全程提取并上报真实 `context_used_tokens` 与 `context_window_tokens`，前端同时接入发现候选的上下文数据兜底；
+    - Runner 在转录扫描、会话恢复、自动保活以及 Claude 流式 `assistant` / `result` 阶段全程提取并上报真实 `context_used_tokens` 与 `context_window_tokens`，前端同时接入发现候选的上下文数据兜底（并支持对未重启旧版 Runner 按模型名推断上下文窗口及按单轮均摊 `prompt_tokens` 估算上下文用量，以及自动内联附件降级防未知字段断连）；
     - 为 `lookup_session_context_usage` 新增 15 秒进程内缓存，消除多会话批量恢复时重复扫描磁盘与 SQLite 的 $O(N \times M)$ 开销；修复会话内模型/推理深度切回默认选项时的进程重建判定，并为附件落盘文件名附加 `client_cmd_id` 唯一前缀防跨轮同名截图覆盖；
   - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `30814a1fe4d85d0086aff7114cc138be46d1db82d818f6fc13d88c77325c81b3`）。
 
@@ -41,7 +41,6 @@
     - 真实未绑定会话 Connect/Resume 执行响应：**37.5ms**（0.037s），状态 `accepted`，立即建立 `control_connected: true` 与 `idle`；
     - 守护进程冷启动重启自愈：强杀 Runner 并更换 `host_generation` 重启，既有会话 100% 自动完成保活加载（`control_connected: true`, `execution_state: "idle"`）；
     - 自动化测试回归：`cargo test --package agenthub-runner`（236 单元测试 + 28 远程 Host 集成测试全绿）、`cargo clippy`、`cargo fmt`、`npm.cmd run typecheck`、`npm.cmd run format:check`、`npm.cmd test` 全部通过。
-
 
 - **Web 设置页设备在线状态与真实长连接对齐（`services/api`, `apps/web`）**：
   - **问题现象**：本地控制台 `/api/status` 明确 `remote_connected: true`，Web「设置 → 设备」里同一台电脑却显示「离线」；

@@ -4115,9 +4115,29 @@ export function RemoteConsole({
               onSubmit={(event) => {
                 event.preventDefault();
                 if (canSend && (text.trim() || attachments.length > 0)) {
-                  const promptText =
+                  const sessionRunner = session
+                    ? snapshot.runners.find(
+                        (item) => item.runner_id === session.runner_id,
+                      )
+                    : undefined;
+                  const supportsNativeAttachments = Boolean(
+                    sessionRunner?.hello?.models?.agents?.claude_desktop !==
+                      undefined ||
+                    sessionRunner?.hello?.discovery?.candidates?.some(
+                      (c) => c.context_window_tokens !== undefined,
+                    ),
+                  );
+                  let promptText =
                     text.trim() ||
                     `请查看附件：${attachments.map((a) => a.name).join("、")}`;
+                  if (!supportsNativeAttachments && attachments.length > 0) {
+                    const inlineParts = attachments.map((att) =>
+                      att.encoding === "utf8"
+                        ? `[附件 ${att.name}]:\n\`\`\`\n${att.data.slice(0, 64 * 1024)}\n\`\`\``
+                        : `[附件 ${att.name} (${att.media_type})]`,
+                    );
+                    promptText = `${inlineParts.join("\n\n")}\n\n${promptText}`;
+                  }
                   const fallbackModel = session
                     ? discovered.get(
                         `${session.runner_id}/${session.binding.provider_session_id}`,
@@ -4129,7 +4149,9 @@ export function RemoteConsole({
                     text: promptText,
                     ...(effort !== "default" ? { effort } : {}),
                     ...(effectiveModel ? { model: effectiveModel } : {}),
-                    ...(attachments.length > 0 ? { attachments } : {}),
+                    ...(supportsNativeAttachments && attachments.length > 0
+                      ? { attachments }
+                      : {}),
                   });
                   if (textareaRef.current)
                     textareaRef.current.style.height = "auto";
@@ -4221,9 +4243,32 @@ export function RemoteConsole({
                     ) {
                       event.preventDefault();
                       if (canSend && (text.trim() || attachments.length > 0)) {
-                        const promptText =
+                        const sessionRunner = session
+                          ? snapshot.runners.find(
+                              (item) => item.runner_id === session.runner_id,
+                            )
+                          : undefined;
+                        const supportsNativeAttachments = Boolean(
+                          sessionRunner?.hello?.models?.agents
+                            ?.claude_desktop !== undefined ||
+                          sessionRunner?.hello?.discovery?.candidates?.some(
+                            (c) => c.context_window_tokens !== undefined,
+                          ),
+                        );
+                        let promptText =
                           text.trim() ||
                           `请查看附件：${attachments.map((a) => a.name).join("、")}`;
+                        if (
+                          !supportsNativeAttachments &&
+                          attachments.length > 0
+                        ) {
+                          const inlineParts = attachments.map((att) =>
+                            att.encoding === "utf8"
+                              ? `[附件 ${att.name}]:\n\`\`\`\n${att.data.slice(0, 64 * 1024)}\n\`\`\``
+                              : `[附件 ${att.name} (${att.media_type})]`,
+                          );
+                          promptText = `${inlineParts.join("\n\n")}\n\n${promptText}`;
+                        }
                         const fallbackModel = session
                           ? discovered.get(
                               `${session.runner_id}/${session.binding.provider_session_id}`,
@@ -4236,7 +4281,10 @@ export function RemoteConsole({
                           text: promptText,
                           ...(effort !== "default" ? { effort } : {}),
                           ...(effectiveModel ? { model: effectiveModel } : {}),
-                          ...(attachments.length > 0 ? { attachments } : {}),
+                          ...(supportsNativeAttachments &&
+                          attachments.length > 0
+                            ? { attachments }
+                            : {}),
                         });
                         if (textareaRef.current)
                           textareaRef.current.style.height = "auto";

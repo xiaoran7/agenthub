@@ -164,6 +164,17 @@ test("context ring uses reported values and stays empty without usage", () => {
     }),
     { used: 54_000, window: 200_000, source: "reported" },
   );
+  assert.deepEqual(
+    latestContextUsage([], {
+      provider_session_id: "claude_legacy",
+      workspace_path: "ws-agent-0123456789abcdef",
+      title: "旧版Runner兼容",
+      model: "claude-opus-4-6",
+      prompt_tokens: 90_000,
+      calls: 3,
+    }),
+    { used: 30_000, window: 200_000, source: "reported" },
+  );
 });
 
 test("managed history snapshots replace stale replay and retain later live messages", () => {

@@ -25,6 +25,8 @@ export interface DiscoveryCandidate {
   cache_read_tokens?: number | null;
   context_used_tokens?: number | null;
   context_window_tokens?: number | null;
+  calls?: number | null;
+  request_count?: number | null;
   last_activity_at_ms?: number | null;
   execution_state?: string | null;
 }
@@ -224,6 +226,35 @@ export interface RemoteContextUsage {
   source: "reported" | "usage_only";
 }
 
+export function inferModelContextWindow(
+  model?: string | null,
+  provider?: string | null,
+): number {
+  const m = (model ?? "").toLowerCase();
+  if (m.includes("2m")) return 2_000_000;
+  if (
+    m.includes("1m") ||
+    m.startsWith("claude-opus-5") ||
+    m.startsWith("claude-sonnet-5") ||
+    m.startsWith("claude-fable-5") ||
+    m.startsWith("claude-mythos-5") ||
+    m.includes("anthropic.claude-sonnet-5") ||
+    m.includes("gemini")
+  ) {
+    return 1_000_000;
+  }
+  const p = (provider ?? "").toLowerCase();
+  if (
+    m.length > 0 ||
+    p.includes("claude") ||
+    p.includes("codex") ||
+    p.includes("zcode")
+  ) {
+    return 200_000;
+  }
+  return 0;
+}
+
 /** Only show a percentage when the Host reports actual token use. */
 export function latestContextUsage(
   events: RemoteEvent[],
@@ -233,6 +264,12 @@ export function latestContextUsage(
     typeof value === "number" && Number.isFinite(value) && value > 0
       ? value
       : undefined;
+  const fallbackWindow =
+    positive(candidate?.context_window_tokens) ??
+    (candidate
+      ? inferModelContextWindow(candidate.model, candidate.provider) ||
+        undefined
+      : undefined);
   for (let index = events.length - 1; index >= 0; index--) {
     const params = events[index]?.payload.event?.raw?.params;
     if (!params) continue;
@@ -264,7 +301,7 @@ export function latestContextUsage(
       positive(info?.context_window_tokens) ??
       positive(params.model_context_window) ??
       positive(params.context_window_tokens) ??
-      positive(candidate?.context_window_tokens);
+      fallbackWindow;
     return {
       used,
       window: window ?? 0,
@@ -272,13 +309,27 @@ export function latestContextUsage(
     };
   }
   if (candidate) {
-    const used =
-      positive(candidate.context_used_tokens) ??
-      positive(candidate.prompt_tokens);
-    if (used) {
-      const window = positive(candidate.context_window_tokens) ?? 0;
+    const window = fallbackWindow ?? 0;
+    const explicitUsed = positive(candidate.context_used_tokens);
+    if (explicitUsed) {
       return {
-        used,
+        used: explicitUsed,
+        window,
+        source: window ? "reported" : "usage_only",
+      };
+    }
+    const cumulativePrompt =
+      positive(candidate.prompt_tokens) ?? positive(candidate.total_tokens);
+    if (cumulativePrompt) {
+      const calls = Math.max(
+        1,
+        positive(candidate.request_count) ?? positive(candidate.calls) ?? 1,
+      );
+      const estimatedUsed = Math.round(cumulativePrompt / calls);
+      const boundedUsed =
+        window > 0 ? Math.min(window, estimatedUsed) : estimatedUsed;
+      return {
+        used: boundedUsed,
         window,
         source: window ? "reported" : "usage_only",
       };
