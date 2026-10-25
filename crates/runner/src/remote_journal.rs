@@ -1429,12 +1429,16 @@ pub struct DurableHost<T: NativeTransport> {
 }
 
 impl<T: NativeTransport> DurableHost<T> {
-    pub fn new(mut host: NativeSessionHost<T>, journal: RemoteJournal) -> Result<Self> {
+    pub fn new(mut host: NativeSessionHost<T>, mut journal: RemoteJournal) -> Result<Self> {
         host.restore_detached(journal.bindings()?);
         host.keep_alive_restored_sessions();
         let detached = host.sessions();
-        for binding in &detached {
-            persist_binding(&journal.connection, binding)?;
+        if !detached.is_empty() {
+            let tx = journal.connection.transaction()?;
+            for binding in &detached {
+                persist_binding(&tx, binding)?;
+            }
+            tx.commit()?;
         }
         Ok(Self { host, journal })
     }

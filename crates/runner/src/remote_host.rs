@@ -113,6 +113,7 @@ impl NativeTransport for AcpAppServer {
 
 pub struct MultiProviderTransport {
     codex: Option<CodexAppServer>,
+    codex_models_cache: Option<(Instant, Value)>,
     zcode: Option<ZCodeAppServer>,
     zcode_active_turns: HashMap<String, String>,
     zcode_buffered_events: VecDeque<Value>,
@@ -147,6 +148,7 @@ impl MultiProviderTransport {
     pub fn new(codex: Option<CodexAppServer>, zcode: Option<ZCodeAppServer>) -> Self {
         Self {
             codex,
+            codex_models_cache: None,
             zcode,
             zcode_active_turns: HashMap::new(),
             zcode_buffered_events: VecDeque::new(),
@@ -1708,28 +1710,42 @@ impl NativeTransport for MultiProviderTransport {
                         if let (Some(id), Some(raw_cwd)) =
                             (item["id"].as_str(), item["cwd"].as_str())
                         {
-                            let cwd = PathBuf::from(raw_cwd);
                             if id.starts_with("claude_") {
-                                self.claude_cached_cwds.insert(id.to_string(), cwd.clone());
-                                self.claude_cached_cwds
-                                    .insert(id.trim_start_matches("claude_").to_string(), cwd);
+                                if !self.claude_cached_cwds.contains_key(id) {
+                                    let cwd = PathBuf::from(raw_cwd);
+                                    self.claude_cached_cwds.insert(id.to_string(), cwd.clone());
+                                    self.claude_cached_cwds
+                                        .insert(id.trim_start_matches("claude_").to_string(), cwd);
+                                }
                                 if item.get("provider").and_then(Value::as_str)
                                     == Some("claude_desktop")
+                                    && !self.claude_desktop_sessions.contains(id)
                                 {
                                     self.claude_desktop_sessions.insert(id.to_string());
                                     self.claude_desktop_sessions
                                         .insert(id.trim_start_matches("claude_").to_string());
                                 }
                             } else if id.starts_with("antigravity_") {
-                                self.antigravity_cached_cwds
-                                    .insert(id.to_string(), cwd.clone());
-                                self.antigravity_cached_cwds
-                                    .insert(id.trim_start_matches("antigravity_").to_string(), cwd);
+                                if !self.antigravity_cached_cwds.contains_key(id) {
+                                    let cwd = PathBuf::from(raw_cwd);
+                                    self.antigravity_cached_cwds
+                                        .insert(id.to_string(), cwd.clone());
+                                    self.antigravity_cached_cwds.insert(
+                                        id.trim_start_matches("antigravity_").to_string(),
+                                        cwd,
+                                    );
+                                }
                             } else if id.starts_with("grok_") {
-                                self.grok_cached_cwds.insert(id.to_string(), cwd.clone());
-                                self.grok_cached_cwds
-                                    .insert(id.trim_start_matches("grok_").to_string(), cwd);
-                            } else if id.starts_with("zcode_") {
+                                if !self.grok_cached_cwds.contains_key(id) {
+                                    let cwd = PathBuf::from(raw_cwd);
+                                    self.grok_cached_cwds.insert(id.to_string(), cwd.clone());
+                                    self.grok_cached_cwds
+                                        .insert(id.trim_start_matches("grok_").to_string(), cwd);
+                                }
+                            } else if id.starts_with("zcode_")
+                                && !self.zcode_cached_cwds.contains_key(id)
+                            {
+                                let cwd = PathBuf::from(raw_cwd);
                                 self.zcode_cached_cwds.insert(id.to_string(), cwd.clone());
                                 self.zcode_cached_cwds
                                     .insert(id.trim_start_matches("zcode_").to_string(), cwd);
@@ -1738,6 +1754,25 @@ impl NativeTransport for MultiProviderTransport {
                     }
                 }
                 Ok(response)
+            }
+            "model/list" => {
+                if let Some((cached_at, ref cached)) = self.codex_models_cache
+                    && cached_at.elapsed() < Duration::from_secs(30)
+                {
+                    return Ok(cached.clone());
+                }
+                if let Some(ref mut codex) = self.codex {
+                    let resp = codex.request(method, params).map_err(|error| match error {
+                        crate::collectors::CollectorError::Protocol { .. } => {
+                            NativeError::rejected("provider_rejected")
+                        }
+                        _ => NativeError::uncertain("provider_transport_lost"),
+                    })?;
+                    self.codex_models_cache = Some((Instant::now(), resp.clone()));
+                    Ok(resp)
+                } else {
+                    Err(NativeError::rejected("provider_not_available"))
+                }
             }
             _ => {
                 if let Some(ref mut codex) = self.codex {
@@ -2872,6 +2907,7 @@ pub struct NativeSessionHost<T: NativeTransport> {
     generation: String,
     workspaces: Vec<PathBuf>,
     discovered_workspaces: HashMap<String, PathBuf>,
+    cwd_canon_cache: HashMap<String, PathBuf>,
     sessions: HashMap<String, SessionBinding>,
     native_to_hub: HashMap<String, String>,
     newly_created: HashSet<String>,
@@ -2915,6 +2951,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             generation: uuid::Uuid::new_v4().to_string(),
             workspaces,
             discovered_workspaces: HashMap::new(),
+            cwd_canon_cache: HashMap::new(),
             sessions: HashMap::new(),
             native_to_hub: HashMap::new(),
             newly_created: HashSet::new(),
@@ -3224,7 +3261,6 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     pub fn discover(&mut self) -> Result<Value, NativeError> {
         let mut candidates = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
-        let mut cwd_canon_cache: HashMap<String, PathBuf> = HashMap::new();
         let mut cursor: Option<String> = None;
         let mut attempts = 0u32;
         loop {
@@ -3252,7 +3288,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     continue;
                 }
                 let raw_cwd = thread["cwd"].as_str().unwrap_or(".");
-                let cwd = if let Some(cached) = cwd_canon_cache.get(raw_cwd) {
+                let cwd = if let Some(cached) = self.cwd_canon_cache.get(raw_cwd) {
                     cached.clone()
                 } else {
                     let resolved = dunce::canonicalize(PathBuf::from(raw_cwd))
@@ -3274,7 +3310,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                         .insert(clean.to_lowercase(), resolved.clone());
                     self.discovered_workspaces
                         .insert(forward.to_lowercase(), resolved.clone());
-                    cwd_canon_cache.insert(raw_cwd.to_string(), resolved.clone());
+                    self.cwd_canon_cache
+                        .insert(raw_cwd.to_string(), resolved.clone());
                     resolved
                 };
                 let title = thread["name"]

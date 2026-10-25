@@ -1120,7 +1120,6 @@ fn build_dashboard_summary(
         &discover_res,
         crate::daemon_protocol::DaemonResponse::Error { code } if code == "daemon_starting"
     );
-    let models_res = handler.handle(DaemonRequest::GetModels);
     let status_res = handler.handle(DaemonRequest::GetStatus);
     let (remote_enabled, remote_connected) = match &status_res {
         crate::daemon_protocol::DaemonResponse::Status {
@@ -1431,15 +1430,6 @@ fn build_dashboard_summary(
         }
     }
 
-    let mut models = Vec::new();
-    if let crate::daemon_protocol::DaemonResponse::Models(ref val) = models_res {
-        if let Some(data) = val.get("data").and_then(serde_json::Value::as_array) {
-            for m in data {
-                models.push(m.clone());
-            }
-        }
-    }
-
     let catalog_models = crate::model_catalog::fetch_catalog_models(false);
     let models_json: Vec<serde_json::Value> = if !catalog_models.is_empty() {
         catalog_models
@@ -1462,6 +1452,13 @@ fn build_dashboard_summary(
             })
             .collect()
     } else {
+        let mut models = Vec::new();
+        if let crate::daemon_protocol::DaemonResponse::Models(ref val) =
+            handler.handle(DaemonRequest::GetModels)
+            && let Some(data) = val.get("data").and_then(serde_json::Value::as_array)
+        {
+            models.extend(data.iter().cloned());
+        }
         models
     };
 
@@ -1480,22 +1477,13 @@ fn build_dashboard_summary(
         .map(|p| p.models.len())
         .unwrap_or(models_json.len());
 
-    let (claude_installed, claude_path) = find_executable(
-        "claude",
-        &[r"AppData\Roaming\npm\claude.cmd", r".local\bin\claude"],
-    );
-    let (codex_installed, codex_path) = find_executable(
-        "codex",
-        &[r"AppData\Roaming\npm\codex.cmd", r".local\bin\codex"],
-    );
-    let (grok_installed, grok_path) = check_agent_dir(".grok");
-    let (gemini_installed, gemini_path) = find_executable(
-        "gemini",
-        &[r"AppData\Roaming\npm\gemini.cmd", r".local\bin\gemini"],
-    );
-    // Claude Desktop has no CLI to probe: its data folder is the evidence.
-    let (claude_desktop_installed, claude_desktop_path) =
-        check_agent_dir("AppData\\Local\\AIClaude");
+    let [
+        (claude_installed, claude_path),
+        (codex_installed, codex_path),
+        (grok_installed, grok_path),
+        (gemini_installed, gemini_path),
+        (claude_desktop_installed, claude_desktop_path),
+    ] = cached_agent_installations();
 
     let mut active_agents_count = 0;
     for installed in [
@@ -1785,6 +1773,25 @@ fn get_device_info(identity_path: &Path) -> serde_json::Value {
         *guard = Some((Instant::now(), res.clone()));
     }
     res
+}
+
+fn cached_agent_installations() -> [(bool, Option<String>); 5] {
+    [
+        find_executable(
+            "claude",
+            &[r"AppData\Roaming\npm\claude.cmd", r".local\bin\claude"],
+        ),
+        find_executable(
+            "codex",
+            &[r"AppData\Roaming\npm\codex.cmd", r".local\bin\codex"],
+        ),
+        check_agent_dir(".grok"),
+        find_executable(
+            "gemini",
+            &[r"AppData\Roaming\npm\gemini.cmd", r".local\bin\gemini"],
+        ),
+        check_agent_dir("AppData\\Local\\AIClaude"),
+    ]
 }
 
 fn executable_cache() -> &'static RwLock<HashMap<String, (Instant, (bool, Option<String>))>> {

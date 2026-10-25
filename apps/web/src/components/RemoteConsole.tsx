@@ -713,7 +713,7 @@ const RemoteToolCard = memo(function RemoteToolCard({
           {item.output && !questionItems && (
             <div className="remote-tool-section">
               <div className="remote-tool-subhead-bar">
-                <span className="remote-tool-subhead">执行结算输出</span>
+                <span className="remote-tool-subhead">执行结果输出</span>
                 <button
                   type="button"
                   className="remote-card-mini-copy"
@@ -3586,8 +3586,8 @@ export function RemoteConsole({
                 <span className="remote-notice-spinner" />
                 <span>
                   {session.online
-                    ? "正在全量恢复连接原生 Agent 会话…"
-                    : "电脑处于离线状态，上线后将自动恢复接入。"}
+                    ? "正在恢复并同步原生 Agent 会话…"
+                    : "电脑处于离线状态，上线后将自动恢复连接。"}
                 </span>
                 {session.online && (
                   <button
@@ -3874,7 +3874,7 @@ export function RemoteConsole({
                           ).name
                         }
                       </strong>{" "}
-                      请求在当前工作区执行【{approval.tool_name ?? "系统工具"}】
+                      请求在当前工作区执行 "{approval.tool_name ?? "系统工具"}"
                       {approval.description && `：${approval.description}`}
                     </div>
                     {approval.command_preview && (
@@ -4905,7 +4905,7 @@ export function RemoteConsole({
                 />
                 {launchModelOptions.length <= 1 && (
                   <span className="remote-launch-hint">
-                    所选电脑没有上报这个引擎的模型清单，将沿用原生设置。
+                    所选电脑尚未上报该引擎的模型列表，将沿用本机默认配置。
                   </span>
                 )}
               </div>

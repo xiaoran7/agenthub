@@ -427,7 +427,7 @@ const INSTALL_HINTS: Record<PwaInstallState, string> = {
   installing: "正在等待浏览器确认安装…",
   submitted: "安装请求已提交；完成后可从系统应用列表打开。",
   installed: "当前已经在独立应用模式中运行。",
-  manual: "在 Safari 中点“分享”，然后选择“添加到主屏幕”。",
+  manual: '在 Safari 中点 "分享"，然后选择 "添加到主屏幕"。',
   unavailable: "当前浏览器暂未提供安装按钮；仍可正常使用网页版本。",
 };
 
@@ -1689,10 +1689,10 @@ export function SettingsPage({
         title={
           pendingRevoke === undefined
             ? "撤销这台设备？"
-            : `撤销「${deviceFriendlyName(pendingRevoke)}」？`
+            : `撤销 "${deviceFriendlyName(pendingRevoke)}"？`
         }
         description={
-          "现有历史数据会完整保留。撤销后随时可在设备端使用新配对码重新连接激活。"
+          "现有历史数据将完整保留。撤销后随时可在设备端使用新配对码重新绑定连接。"
         }
         confirmLabel="撤销设备"
         cancelLabel="保留"

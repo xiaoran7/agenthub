@@ -567,17 +567,17 @@
         <div class="row pref">
           <div class="who">
             <div class="name">主题</div>
-            <div class="sub">切换整页一并在青空浅色与深色之间过渡，窗口标题栏同步取色</div>
+            <div class="sub">在浅色与深色主题间切换，窗口标题栏同步取色</div>
           </div>
           <div class="segs theme-segs">
-            <button type="button" class="opt" id="themeOptLight" onclick="setAppTheme('light')">明亮</button>
-            <button type="button" class="opt" id="themeOptDark" onclick="setAppTheme('dark')">暗黑</button>
+            <button type="button" class="opt" id="themeOptLight" onclick="setAppTheme('light')">浅色</button>
+            <button type="button" class="opt" id="themeOptDark" onclick="setAppTheme('dark')">深色</button>
           </div>
         </div>
         <div class="row pref">
           <div class="who">
             <div class="name">动效</div>
-            <div class="sub">页面翻页、骨架与数字滚动的过渡；跟随系统“减少动态效果”时始终关闭</div>
+            <div class="sub">页面切换、骨架加载与数字滚动过渡；开启系统 "减少动态效果" 时自动关闭</div>
           </div>
           <div class="segs" id="motionSegs">
             <button type="button" class="opt" data-motion="on" onclick="setMotion('on')">完整</button>
@@ -624,7 +624,7 @@
         <div class="row pref">
           <div class="who">
             <div class="name">绑定到云端 Web 控制台</div>
-            <div class="sub">本机主动出站，不需要在路由器上开端口</div>
+            <div class="sub">本机主动出站连接，无需在路由器上开放端口</div>
           </div>
           <span class="tag" id="pairStateTag">未绑定</span>
         </div>
@@ -671,7 +671,7 @@
         <div class="row pref">
           <div class="who">
             <div class="name">上游模型同步</div>
-            <div class="sub">从网关重新拉取一次可用模型清单；路由与拓扑由上游 CPA 管理，本机只读取结果</div>
+            <div class="sub">从上游网关重新拉取可用模型列表；路由与故障转移由网关管理，本机仅同步结果</div>
           </div>
           <button type="button" class="text action" onclick="refreshModelsCatalog(event)" id="setRefreshModels">
             <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg></span>
@@ -686,7 +686,7 @@
         <div class="row pref">
           <div class="who">
             <div class="name">能力生态</div>
-            <div class="sub" id="capSummarySub">技能、MCP 服务与生命周期钩子，从本机各智能体的配置里读出</div>
+            <div class="sub" id="capSummarySub">自动读取本机各智能体已配置的扩展技能、MCP 服务与生命周期钩子</div>
           </div>
           <button type="button" class="text action" onclick="openRegisterMcpModal()" id="btnRegisterMcp">
             <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
@@ -800,7 +800,7 @@
             </svg>
           </span>
           <b>注册 MCP 服务器</b>
-          <span class="note">纳管 Stdio 本地协议进程或 SSE/HTTP 远程端点</span>
+          <span class="note">接入本地 Stdio 进程或远程 SSE / HTTP 服务</span>
           <button type="button" class="icon push" onclick="closeRegisterMcpModal()" title="关闭 (Esc)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M17.5 6.5 6.5 17.5M6.5 6.5l11 11"/></svg>
           </button>
@@ -878,7 +878,7 @@
         </span>
         <span class="center-title">正在退出 AgentHub Runner</span>
         <p class="center-note" id="shutdownModalMsg">托盘图标与后台监听服务正在安全释放…</p>
-        <p class="center-note dim">服务终止后,您可以安全关闭此桌面窗口。</p>
+        <p class="center-note dim">服务终止后，您可以安全关闭此桌面窗口。</p>
       </div>
     </div>
   </div>
@@ -891,7 +891,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
         </span>
         <span class="center-title" id="deleteSessionsTitle">删除这个会话？</span>
-        <p class="center-note" id="deleteSessionsNote">会话的文件会移入 Runner 的回收目录，不会直接抹掉。</p>
+        <p class="center-note" id="deleteSessionsNote">会话文件将移入 Runner 回收目录，不会立即永久清除。</p>
         <ul class="sm-ask-list" id="deleteSessionsList"></ul>
         <div class="bar center-bar">
           <button type="button" class="text action" onclick="closeDeleteSessions()">取消</button>

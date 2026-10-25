@@ -127,7 +127,7 @@ export function ThinkingAccordion({
             )}
 
             <span className="cds-thinking-title">
-              {isThinking ? "Thinking…" : "Thought process"}
+              {isThinking ? "正在思考…" : "思考过程"}
             </span>
 
             {elapsedMs > 0 && (

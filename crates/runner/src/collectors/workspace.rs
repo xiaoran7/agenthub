@@ -434,10 +434,18 @@ fn scan_codex_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
     let Some(home) = super::home_dir() else {
         return;
     };
-    let db_path = home.join(".codex").join("state_5.db");
-    if !db_path.is_file() {
+    let codex_dir = home.join(".codex");
+    let Some(db_path) = [
+        "state_5.sqlite",
+        "state_5.db",
+        "state_4.sqlite",
+        "state.sqlite",
+    ]
+    .into_iter()
+    .map(|name| codex_dir.join(name))
+    .find(|path| path.is_file()) else {
         return;
-    }
+    };
 
     let Ok(conn) = rusqlite::Connection::open_with_flags(
         &db_path,
@@ -459,7 +467,13 @@ fn scan_codex_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
         let cwd: String = row.get(0)?;
         let count: i64 = row.get(1)?;
         let max_time: Option<i64> = row.get(2)?;
-        Ok((cwd, count as usize, max_time.unwrap_or(0)))
+        let raw_time = max_time.unwrap_or(0);
+        let updated_at = if raw_time > 0 && raw_time < 1_000_000_000_000 {
+            raw_time * 1000
+        } else {
+            raw_time
+        };
+        Ok((cwd, count as usize, updated_at))
     });
 
     if let Ok(rows) = rows {
@@ -471,99 +485,20 @@ fn scan_codex_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
 }
 
 fn scan_antigravity_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
-    let Some(home) = super::home_dir() else {
-        return;
-    };
-    let gemini_brain = home.join(".gemini").join("antigravity").join("brain");
-    let brain_dir = if gemini_brain.is_dir() {
-        gemini_brain
-    } else {
-        let direct = home.join(".antigravity").join("brain");
-        if direct.is_dir() {
-            direct
-        } else {
-            return;
-        }
-    };
-
-    let Ok(entries) = fs::read_dir(&brain_dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|k| k.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let transcript = entry
-            .path()
-            .join(".system_generated")
-            .join("logs")
-            .join("transcript.jsonl");
-        if !transcript.is_file() {
-            continue;
-        }
-
-        let mtime = transcript
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-
-        if let Ok((_, Some(cwd), _)) =
-            super::read_antigravity_transcript_sample(&transcript, "antigravity")
-        {
-            add_workspace_record(map, &cwd, 1, mtime, "Antigravity");
+    if let Ok(entries) = super::collect_antigravity_sessions_for_remote() {
+        for (_, cwd, _, mtime) in entries {
+            if !cwd.trim().is_empty() {
+                add_workspace_record(map, &cwd, 1, mtime, "Antigravity");
+            }
         }
     }
 }
 
 fn scan_grok_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
-    let Some(home) = super::home_dir() else {
-        return;
-    };
-    let sessions_dir = home.join(".grok").join("sessions");
-    if !sessions_dir.is_dir() {
-        return;
-    }
-
-    let Ok(groups) = fs::read_dir(&sessions_dir) else {
-        return;
-    };
-
-    for group in groups.flatten() {
-        if !group.file_type().map(|k| k.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let Ok(children) = fs::read_dir(group.path()) else {
-            continue;
-        };
-        for child in children.flatten() {
-            if !child.file_type().map(|k| k.is_dir()).unwrap_or(false) {
-                continue;
-            }
-            let summary_path = child.path().join("summary.json");
-            if !summary_path.is_file() {
-                continue;
-            }
-            let mtime = summary_path
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-
-            if let Ok(content) = fs::read_to_string(&summary_path) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(cwd) = val.pointer("/info/cwd").and_then(serde_json::Value::as_str)
-                    {
-                        if !cwd.trim().is_empty() {
-                            add_workspace_record(map, cwd, 1, mtime, "Grok Build");
-                        }
-                    }
-                }
+    if let Ok(entries) = super::collect_grok_sessions_for_remote() {
+        for (_, cwd, _, _, mtime) in entries {
+            if !cwd.trim().is_empty() {
+                add_workspace_record(map, &cwd, 1, mtime, "Grok Build");
             }
         }
     }

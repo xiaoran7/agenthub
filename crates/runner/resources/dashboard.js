@@ -718,7 +718,7 @@ async function refreshDashboard(manual) {
     if (seq !== renderSeq) return false;
     consecutiveFailures = 0;
     updateConnectionStatus(true);
-    if (manual) toast("已热刷新最新会话与工作区状态");
+    if (manual) toast("已刷新最新会话与工作区状态");
 
     dashboardData = data;
     renderStats(dashboardData.stats, dashboardData.gateway);
@@ -969,7 +969,7 @@ function renderAgents(agents, mode = "data") {
         : `<span class="tag">未检测到</span>`;
       const pathText = agent.path
         ? escapeHtml(agent.path)
-        : "未找到独立程序，智能体仍可通过命令别名直连";
+        : "未找到独立可执行文件，可通过命令别名调用";
 
       return `
       <div class="row">
@@ -1472,7 +1472,7 @@ function askDeleteSessions(one) {
   const note = document.getElementById("deleteSessionsNote");
   if (note) {
     note.textContent =
-      "会话的对话文件、子代理记录与文件历史会移入 Runner 的回收目录，不会直接抹掉；Usage 页的用量统计保留。最近一分钟内还在写入的会话会被跳过。";
+      "会话的对话文件、子代理记录与文件历史将移入 Runner 回收目录，不会立即永久清除；用量页面的历史统计不受影响。最近 1 分钟内仍在写入的活跃会话将被跳过。";
   }
   const modal = document.getElementById("deleteSessionsModal");
   if (modal) modal.classList.add("open");
@@ -1524,7 +1524,7 @@ async function confirmDeleteSessions() {
     if ((data.refused || []).length) {
       const first = data.refused[0];
       toast(
-        `有 ${data.refused.length} 个会话没有删除：${first.error || "正在使用中"}`,
+        `有 ${data.refused.length} 个会话未删除：${first.error || "正在使用中"}`,
         "err",
       );
     }
@@ -1743,6 +1743,15 @@ function renderWorkspaces(workspaces, mode = "data") {
   // Map sessions to workspaces by path or name to get token volume
   const wsStats = {};
   let maxWsTokens = 1;
+  const exactPathMap = new Map();
+  const exactNameMap = new Map();
+  const wsLookup = workspaces.map((ws) => {
+    const wp = (ws.path || "").toLowerCase();
+    const wn = (ws.name || "").toLowerCase();
+    if (wp && !exactPathMap.has(wp)) exactPathMap.set(wp, ws.path);
+    if (wn && !exactNameMap.has(wn)) exactNameMap.set(wn, ws.path);
+    return { path: ws.path, wp, wn };
+  });
   (allSessionsData || []).forEach((s) => {
     const rawPath = (s.workspace_path || s.cwd || "").toLowerCase();
     const rawName = (s.workspace_name || "").toLowerCase();
@@ -1750,19 +1759,23 @@ function renderWorkspaces(workspaces, mode = "data") {
     const ct = s.completion_tokens || 0;
     const tt = pt + ct || s.total_tokens || 0;
 
-    for (const ws of workspaces) {
-      const wp = (ws.path || "").toLowerCase();
-      const wn = (ws.name || "").toLowerCase();
-      if (
-        (rawPath &&
-          (rawPath === wp || rawPath.endsWith(wp) || wp.endsWith(rawPath))) ||
-        (rawName && rawName === wn)
-      ) {
-        if (!wsStats[ws.path]) wsStats[ws.path] = 0;
-        wsStats[ws.path] += tt;
-        if (wsStats[ws.path] > maxWsTokens) maxWsTokens = wsStats[ws.path];
-        break;
+    let matchedPath =
+      (rawPath && exactPathMap.get(rawPath)) ||
+      (rawName && exactNameMap.get(rawName));
+    if (!matchedPath && rawPath) {
+      for (const item of wsLookup) {
+        if (
+          item.wp &&
+          (rawPath.endsWith(item.wp) || item.wp.endsWith(rawPath))
+        ) {
+          matchedPath = item.path;
+          break;
+        }
       }
+    }
+    if (matchedPath) {
+      wsStats[matchedPath] = (wsStats[matchedPath] || 0) + tt;
+      if (wsStats[matchedPath] > maxWsTokens) maxWsTokens = wsStats[matchedPath];
     }
   });
 
@@ -1854,7 +1867,7 @@ function renderCapabilities(caps) {
   // the tab's own line says what the scan found, in one sentence
   const summary = document.getElementById("capSummarySub");
   if (summary) {
-    summary.textContent = `${skills.length} 个技能 · ${mcpServers.length} 个 MCP 服务 · ${hooks.length} 个生命周期钩子，从本机各智能体的配置里读出`;
+    summary.textContent = `已加载 ${skills.length} 个技能 · ${mcpServers.length} 个 MCP 服务 · ${hooks.length} 个生命周期钩子`;
   }
 
   // Subtab count badges
@@ -1970,7 +1983,7 @@ function applyCapabilitiesFilter() {
   // Render MCP
   if (mcpGrid && showMcp) {
     if (matchedMcp.length === 0) {
-      mcpGrid.innerHTML = `<div class="empty-state"><b>没有找到匹配的 MCP 协议服务器</b><span class="why">可点击右上角“注册 MCP 服务”添加自定义协议进程</span></div>`;
+      mcpGrid.innerHTML = `<div class="empty-state"><b>没有找到匹配的 MCP 协议服务器</b><span class="why">可点击右上角 "注册 MCP 服务" 添加自定义服务</span></div>`;
     } else {
       mcpGrid.innerHTML = matchedMcp.map(renderMcpCard).join("");
     }
@@ -2090,7 +2103,7 @@ async function syncCapabilities(event) {
         cachedCapabilities = data.capabilities;
         renderCapabilities(data.capabilities);
       }
-      toast("已完成智能体扩展生态 (Skills/MCP/Hooks) 探测与统一对齐");
+      toast("已同步技能、MCP 服务与生命周期钩子配置");
     } else {
       toast(`同步失败 (HTTP ${resp.status})`, "err");
     }
@@ -2751,7 +2764,7 @@ async function loadUsage(manual) {
         drawUsage();
       }
     }
-    if (manual) toast("已热刷新最新用量数据");
+    if (manual) toast("已刷新最新用量数据");
   } catch (e) {
     if (e.name === "AbortError") return;
     toast("读取用量失败：" + e.message, "err");
@@ -4383,7 +4396,7 @@ function searchSettings(value) {
   });
   if (none) {
     none.hidden = any;
-    none.textContent = `没有匹配“${value.trim()}”的设置`;
+    none.textContent = `没有匹配 "${value.trim()}" 的设置`;
   }
 }
 
@@ -4456,7 +4469,7 @@ function renderSettings() {
   const hotSub = document.getElementById("hotReloadSub");
   if (hotSub)
     hotSub.textContent = dev
-      ? "直接读取 resources/ 下的页面、样式与脚本，保存后窗口自己刷新（热重载）"
+      ? "直接读取 resources/ 目录下的页面、样式与脚本，保存后窗口自动刷新"
       : "发布构建从二进制内嵌副本读取；用 cargo run 启动即为开发构建";
 
   // the pairing form is filled from the device the daemon last reported
@@ -4531,7 +4544,7 @@ function setMotion(mode) {
 function setAppTheme(theme) {
   const dark = theme === "dark";
   applyTheme(dark);
-  toast(`已切换至${dark ? "暗黑" : "明亮"}外观`);
+  toast(`已切换至${dark ? "深色" : "浅色"}主题`);
 }
 
 // One theme switch, whichever control asked for it: the class, the stored
@@ -4594,7 +4607,7 @@ async function openDataDirectory() {
     if (res.ok) {
       toast("已在系统文件资源管理器中打开数据目录");
     } else {
-      toast("唤起资源管理器失败", "err");
+      toast("打开文件资源管理器失败", "err");
     }
   } catch (e) {
     toast("无法连接本地 Runner 服务", "err");
@@ -4615,13 +4628,13 @@ async function submitDeviceName() {
   if (!input) return;
   const name = input.value.trim();
   if (!name) {
-    toast("请填写这台电脑的名字", "err");
+    toast("请填写本机设备名称", "err");
     return;
   }
   const origText = saveBtn ? saveBtn.innerHTML : "";
   if (saveBtn) {
     saveBtn.disabled = true;
-    saveBtn.innerHTML = "<span>保存中...</span>";
+    saveBtn.innerHTML = "<span>保存中…</span>";
   }
   try {
     const resp = await fetch("/api/device/name", {
@@ -4634,10 +4647,10 @@ async function submitDeviceName() {
       toast("设备名称已更新");
       await refreshDashboard();
     } else {
-      toast("改名失败：" + (resData.error || "未知错误"), "err");
+      toast("修改名称失败：" + (resData.error || "未知错误"), "err");
     }
   } catch (err) {
-    toast("改名失败：" + err.message, "err");
+    toast("修改名称失败：" + err.message, "err");
   } finally {
     if (saveBtn) {
       saveBtn.disabled = false;
@@ -4656,14 +4669,14 @@ async function submitDevicePairing(event) {
   const code = (codeInput ? codeInput.value : "").trim();
 
   if (!gateway) {
-    toast("填写控制台地址，例如 https://agenthub.yourdomain.com", "err");
+    toast("请填写控制台地址，例如 https://agenthub.yourdomain.com", "err");
     return;
   }
   if (!gateway.startsWith("http://") && !gateway.startsWith("https://")) {
     gateway = "https://" + gateway;
   }
   if (!code) {
-    toast("填写 Web 控制台里生成的配对绑定码", "err");
+    toast("请填写从 Web 控制台获取的配对绑定码", "err");
     return;
   }
 
@@ -4673,7 +4686,7 @@ async function submitDevicePairing(event) {
 
   const origText = submitBtn.innerHTML;
   submitBtn.disabled = true;
-  submitBtn.innerHTML = "<span>正在验证绑定...</span>";
+  submitBtn.innerHTML = "<span>正在验证绑定…</span>";
 
   try {
     const resp = await fetch("/api/device/bind", {
@@ -4695,7 +4708,7 @@ async function submitDevicePairing(event) {
       );
     }
   } catch (err) {
-    toast("配对失败：连不上网关（" + err.message + "）", "err");
+    toast("配对失败：无法连接网关（" + err.message + "）", "err");
   } finally {
     submitBtn.disabled = false;
     submitBtn.innerHTML = origText;
@@ -4713,7 +4726,7 @@ async function submitDeviceUnpair() {
   const origText = unpairBtn ? unpairBtn.innerHTML : "";
   if (unpairBtn) {
     unpairBtn.disabled = true;
-    unpairBtn.innerHTML = "<span>正在解除绑定...</span>";
+    unpairBtn.innerHTML = "<span>正在解除绑定…</span>";
   }
   try {
     const resp = await fetch("/api/device/unbind", {

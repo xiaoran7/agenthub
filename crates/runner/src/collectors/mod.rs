@@ -1723,9 +1723,10 @@ fn claude_remote_sessions_cache()
 }
 
 fn claude_session_entry_cache()
--> &'static RwLock<HashMap<PathBuf, (u64, u128, ClaudeRemoteSessionEntry)>> {
-    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (u64, u128, ClaudeRemoteSessionEntry)>>> =
-        OnceLock::new();
+-> &'static RwLock<HashMap<PathBuf, (u64, u128, Option<ClaudeRemoteSessionEntry>)>> {
+    static CACHE: OnceLock<
+        RwLock<HashMap<PathBuf, (u64, u128, Option<ClaudeRemoteSessionEntry>)>>,
+    > = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -1817,7 +1818,9 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
                 && *c_len == len
                 && *c_mod == modified
             {
-                entries.push(cached_entry.clone());
+                if let Some(entry) = cached_entry {
+                    entries.push(entry.clone());
+                }
                 continue;
             }
 
@@ -1844,9 +1847,14 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
                     if guard.len() > 8_000 {
                         guard.clear();
                     }
-                    guard.insert(path, (len, modified, built.clone()));
+                    guard.insert(path, (len, modified, Some(built.clone())));
                 }
                 entries.push(built);
+            } else if is_settled && let Ok(mut guard) = claude_session_entry_cache().write() {
+                if guard.len() > 8_000 {
+                    guard.clear();
+                }
+                guard.insert(path, (len, modified, None));
             }
         }
     }
@@ -2453,75 +2461,11 @@ pub fn collect_codex_local_threads_from(
     let model_expr = optional_column(&columns, &["model"]);
     let tokens_expr = optional_column(&columns, &["tokens_used"]);
 
-    let mut magpie_codex: HashMap<String, (u64, u64, u64, u64)> = HashMap::new();
-    if let Some(home) = home_dir() {
-        let magpie_path = home.join(".cache").join("magpie").join("sessions.json");
-        if let Ok(content) = fs::read_to_string(&magpie_path) {
-            if let Ok(val) = serde_json::from_str::<Value>(&content) {
-                if let Some(files) = val.get("files").and_then(Value::as_object) {
-                    for (k, v) in files {
-                        if k.contains(".codex") {
-                            if let Some(id) = v.get("id").and_then(Value::as_str) {
-                                let mut m_in: u64 = 0;
-                                let mut m_out: u64 = 0;
-                                let mut m_cr: u64 = 0;
-                                if let Some(models) = v.get("models").and_then(Value::as_object) {
-                                    for m in models.values() {
-                                        m_in = m_in.saturating_add(
-                                            m.get("input").and_then(Value::as_u64).unwrap_or(0),
-                                        );
-                                        m_out = m_out.saturating_add(
-                                            m.get("output").and_then(Value::as_u64).unwrap_or(0),
-                                        );
-                                        m_cr = m_cr.saturating_add(
-                                            m.get("cache_read")
-                                                .and_then(Value::as_u64)
-                                                .unwrap_or(0),
-                                        );
-                                    }
-                                }
-                                let mut reqs: u64 = 0;
-                                if let Some(days) = v.get("days").and_then(Value::as_object) {
-                                    for day in days.values() {
-                                        reqs = reqs.saturating_add(
-                                            day.get("r").and_then(Value::as_u64).unwrap_or(0),
-                                        );
-                                    }
-                                }
-                                let prompt = m_in.saturating_add(m_cr);
-                                magpie_codex.insert(id.to_string(), (prompt, m_out, m_cr, reqs));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut history_counts: HashMap<String, u64> = HashMap::new();
-    if let Some(parent_dir) = database.parent() {
-        let hist_path = parent_dir.join("thread_history_1.sqlite");
-        if hist_path.is_file() {
-            if let Ok(hist_conn) = Connection::open_with_flags(
-                &hist_path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            ) {
-                if let Ok(mut stmt) = hist_conn.prepare(
-                    "SELECT thread_id, COUNT(*) FROM thread_items WHERE item_type = 'agentMessage' GROUP BY thread_id",
-                ) {
-                    if let Ok(rows) = stmt.query_map([], |row| {
-                        let tid: String = row.get(0)?;
-                        let count: i64 = row.get(1)?;
-                        Ok((tid, count.max(0) as u64))
-                    }) {
-                        for (tid, count) in rows.flatten() {
-                            history_counts.insert(tid, count);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let magpie_codex = load_magpie_codex_stats();
+    let history_counts = database
+        .parent()
+        .map(|parent_dir| load_codex_history_counts(&parent_dir.join("thread_history_1.sqlite")))
+        .unwrap_or_default();
 
     let sql = format!(
         "SELECT id, cwd, {created}, {updated}, {recency}, {source}, {model_expr}, {tokens_expr} FROM threads{archived_filter} ORDER BY {order_by} DESC LIMIT ?1"
@@ -2613,6 +2557,142 @@ pub fn collect_codex_local_threads_from(
         });
     }
     Ok(result)
+}
+
+fn load_magpie_codex_stats() -> HashMap<String, (u64, u64, u64, u64)> {
+    static CACHE: OnceLock<
+        RwLock<
+            Option<(
+                u64,
+                Option<SystemTime>,
+                HashMap<String, (u64, u64, u64, u64)>,
+            )>,
+        >,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(None));
+
+    let Some(home) = home_dir() else {
+        return HashMap::new();
+    };
+    let magpie_path = home.join(".cache").join("magpie").join("sessions.json");
+    let Ok(meta) = fs::metadata(&magpie_path) else {
+        return HashMap::new();
+    };
+    let len = meta.len();
+    let mtime = meta.modified().ok();
+    if let Ok(guard) = cache.read()
+        && let Some((c_len, c_mtime, ref map)) = *guard
+        && c_len == len
+        && c_mtime == mtime
+    {
+        return map.clone();
+    }
+
+    let mut magpie_codex = HashMap::new();
+    if let Ok(content) = fs::read_to_string(&magpie_path)
+        && let Ok(val) = serde_json::from_str::<Value>(&content)
+        && let Some(files) = val.get("files").and_then(Value::as_object)
+    {
+        for (k, v) in files {
+            if k.contains(".codex")
+                && let Some(id) = v.get("id").and_then(Value::as_str)
+            {
+                let mut m_in: u64 = 0;
+                let mut m_out: u64 = 0;
+                let mut m_cr: u64 = 0;
+                if let Some(models) = v.get("models").and_then(Value::as_object) {
+                    for m in models.values() {
+                        m_in = m_in
+                            .saturating_add(m.get("input").and_then(Value::as_u64).unwrap_or(0));
+                        m_out = m_out
+                            .saturating_add(m.get("output").and_then(Value::as_u64).unwrap_or(0));
+                        m_cr = m_cr.saturating_add(
+                            m.get("cache_read").and_then(Value::as_u64).unwrap_or(0),
+                        );
+                    }
+                }
+                let mut reqs: u64 = 0;
+                if let Some(days) = v.get("days").and_then(Value::as_object) {
+                    for day in days.values() {
+                        reqs =
+                            reqs.saturating_add(day.get("r").and_then(Value::as_u64).unwrap_or(0));
+                    }
+                }
+                let prompt = m_in.saturating_add(m_cr);
+                magpie_codex.insert(id.to_string(), (prompt, m_out, m_cr, reqs));
+            }
+        }
+    }
+
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((len, mtime, magpie_codex.clone()));
+    }
+    magpie_codex
+}
+
+fn load_codex_history_counts(hist_path: &Path) -> HashMap<String, u64> {
+    static CACHE: OnceLock<
+        RwLock<
+            Option<(
+                PathBuf,
+                u64,
+                Option<SystemTime>,
+                u64,
+                Option<SystemTime>,
+                HashMap<String, u64>,
+            )>,
+        >,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(None));
+
+    let Ok(meta) = fs::metadata(hist_path) else {
+        return HashMap::new();
+    };
+    let db_len = meta.len();
+    let db_mtime = meta.modified().ok();
+    let wal_path = hist_path.with_file_name("thread_history_1.sqlite-wal");
+    let wal_meta = fs::metadata(&wal_path).ok();
+    let wal_len = wal_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let wal_mtime = wal_meta.and_then(|m| m.modified().ok());
+
+    if let Ok(guard) = cache.read()
+        && let Some((ref c_path, c_len, c_mtime, c_wal_len, c_wal_mtime, ref map)) = *guard
+        && c_path == hist_path
+        && c_len == db_len
+        && c_mtime == db_mtime
+        && c_wal_len == wal_len
+        && c_wal_mtime == wal_mtime
+    {
+        return map.clone();
+    }
+
+    let mut history_counts = HashMap::new();
+    if let Ok(hist_conn) = Connection::open_with_flags(
+        hist_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) && let Ok(mut stmt) = hist_conn.prepare(
+        "SELECT thread_id, COUNT(*) FROM thread_items WHERE item_type = 'agentMessage' GROUP BY thread_id",
+    ) && let Ok(rows) = stmt.query_map([], |row| {
+        let tid: String = row.get(0)?;
+        let count: i64 = row.get(1)?;
+        Ok((tid, count.max(0) as u64))
+    }) {
+        for (tid, count) in rows.flatten() {
+            history_counts.insert(tid, count);
+        }
+    }
+
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((
+            hist_path.to_path_buf(),
+            db_len,
+            db_mtime,
+            wal_len,
+            wal_mtime,
+            history_counts.clone(),
+        ));
+    }
+    history_counts
 }
 
 /// Reads Codex's metadata-only SQLite columns and a bounded tail of each
@@ -4336,26 +4416,12 @@ pub fn collect_zcode_session_contexts_from(
 }
 
 pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
-    if let Some(home) = home_dir() {
-        let config_path = home.join(".zcode").join("v2").join("config.json");
-        if let Ok(data) = fs::read_to_string(&config_path)
-            && let Ok(json) = serde_json::from_str::<Value>(&data)
-            && let Some(providers_obj) = json.get("provider").and_then(Value::as_object)
+    for (mid, ctx) in load_zcode_config_context_windows() {
+        if mid.eq_ignore_ascii_case(model_name)
+            || model_name.contains(&mid)
+            || mid.contains(model_name)
         {
-            for (_, pdata) in providers_obj {
-                if let Some(models_obj) = pdata.get("models").and_then(Value::as_object) {
-                    for (mid, mdata) in models_obj {
-                        if (mid.eq_ignore_ascii_case(model_name)
-                            || model_name.contains(mid)
-                            || mid.contains(model_name))
-                            && let Some(ctx) =
-                                mdata.pointer("/limit/context").and_then(Value::as_u64)
-                        {
-                            return Some(ctx);
-                        }
-                    }
-                }
-            }
+            return Some(ctx);
         }
     }
     let lower = model_name.to_lowercase();
@@ -4373,20 +4439,60 @@ pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
     }
 }
 
-fn non_claude_context_usage_cache() -> &'static RwLock<
-    Option<(
-        Instant,
-        HashMap<(crate::domain::AgentType, String), ContextUsage>,
-    )>,
-> {
-    static CACHE: OnceLock<
-        RwLock<
-            Option<(
-                Instant,
-                HashMap<(crate::domain::AgentType, String), ContextUsage>,
-            )>,
-        >,
-    > = OnceLock::new();
+fn load_zcode_config_context_windows() -> Vec<(String, u64)> {
+    static CACHE: OnceLock<RwLock<Option<(PathBuf, u64, Option<SystemTime>, Vec<(String, u64)>)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(None));
+
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let config_path = home.join(".zcode").join("v2").join("config.json");
+    let Ok(meta) = fs::metadata(&config_path) else {
+        return Vec::new();
+    };
+    let len = meta.len();
+    let mtime = meta.modified().ok();
+    if let Ok(guard) = cache.read()
+        && let Some((ref c_path, c_len, c_mtime, ref entries)) = *guard
+        && c_path == &config_path
+        && c_len == len
+        && c_mtime == mtime
+    {
+        return entries.clone();
+    }
+
+    let mut entries = Vec::new();
+    if let Ok(data) = fs::read_to_string(&config_path)
+        && let Ok(json) = serde_json::from_str::<Value>(&data)
+        && let Some(providers_obj) = json.get("provider").and_then(Value::as_object)
+    {
+        for (_, pdata) in providers_obj {
+            if let Some(models_obj) = pdata.get("models").and_then(Value::as_object) {
+                for (mid, mdata) in models_obj {
+                    if let Some(ctx) = mdata.pointer("/limit/context").and_then(Value::as_u64) {
+                        entries.push((mid.clone(), ctx));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((config_path, len, mtime, entries.clone()));
+    }
+    entries
+}
+
+struct NonClaudeContextUsageCache {
+    updated_at: Instant,
+    home: PathBuf,
+    populated_agents: HashSet<crate::domain::AgentType>,
+    usages: HashMap<(crate::domain::AgentType, String), ContextUsage>,
+}
+
+fn non_claude_context_usage_cache() -> &'static RwLock<Option<NonClaudeContextUsageCache>> {
+    static CACHE: OnceLock<RwLock<Option<NonClaudeContextUsageCache>>> = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
@@ -4407,14 +4513,19 @@ pub fn lookup_session_context_usage(
 
     if agent_type != crate::domain::AgentType::ClaudeCode
         && let Ok(guard) = non_claude_context_usage_cache().read()
-        && let Some((ts, ref map)) = *guard
-        && ts.elapsed() < Duration::from_secs(15)
+        && let Some(ref cache) = *guard
+        && cache.home == home
+        && cache.updated_at.elapsed() < Duration::from_secs(15)
     {
-        if let Some(usage) = map
+        if let Some(usage) = cache
+            .usages
             .get(&(agent_type, raw_id.to_string()))
-            .or_else(|| map.get(&(agent_type, session_id.to_string())))
+            .or_else(|| cache.usages.get(&(agent_type, session_id.to_string())))
         {
             return Some(*usage);
+        }
+        if cache.populated_agents.contains(&agent_type) {
+            return None;
         }
     }
 
@@ -4459,7 +4570,12 @@ pub fn lookup_session_context_usage(
         | crate::domain::AgentType::Antigravity => {
             let contexts = match agent_type {
                 crate::domain::AgentType::Codex => {
-                    collect_codex_session_contexts_from(&home.join(".codex"), 200).ok()?
+                    let codex_dir = home.join(".codex");
+                    let db_path = ["state_5.sqlite", "state_4.sqlite", "state.sqlite"]
+                        .into_iter()
+                        .map(|name| codex_dir.join(name))
+                        .find(|path| path.is_file())?;
+                    collect_codex_session_contexts_from(&db_path, 200).ok()?
                 }
                 crate::domain::AgentType::ZCode => {
                     let db_path = home.join(".zcode").join("cli").join("db").join("db.sqlite");
@@ -4475,11 +4591,19 @@ pub fn lookup_session_context_usage(
             };
             let mut found = None;
             if let Ok(mut guard) = non_claude_context_usage_cache().write() {
-                let (ts, map) = guard.get_or_insert_with(|| (Instant::now(), HashMap::new()));
-                if ts.elapsed() >= Duration::from_secs(15) {
-                    map.clear();
-                    *ts = Instant::now();
+                let cache = guard.get_or_insert_with(|| NonClaudeContextUsageCache {
+                    updated_at: Instant::now(),
+                    home: home.to_path_buf(),
+                    populated_agents: HashSet::new(),
+                    usages: HashMap::new(),
+                });
+                if cache.home != home || cache.updated_at.elapsed() >= Duration::from_secs(15) {
+                    cache.home = home.to_path_buf();
+                    cache.populated_agents.clear();
+                    cache.usages.clear();
+                    cache.updated_at = Instant::now();
                 }
+                cache.populated_agents.insert(agent_type);
                 for ctx in contexts {
                     if let Some(used) = ctx
                         .context_used_tokens
@@ -4493,7 +4617,9 @@ pub fn lookup_session_context_usage(
                         if ctx.agent_session_id == raw_id || ctx.agent_session_id == session_id {
                             found = Some(usage);
                         }
-                        map.insert((agent_type, ctx.agent_session_id), usage);
+                        cache
+                            .usages
+                            .insert((agent_type, ctx.agent_session_id), usage);
                     }
                 }
             }

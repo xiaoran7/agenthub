@@ -1663,16 +1663,7 @@ mod win32 {
                     } else {
                         (pal.direct_bg, pal.direct_dot)
                     };
-                    fill_round_rect(
-                        &mut image,
-                        w,
-                        h,
-                        &dist,
-                        pill_rect,
-                        10.0 * s,
-                        pill_bg,
-                        None,
-                    );
+                    fill_round_rect(&mut image, w, h, &dist, pill_rect, 10.0 * s, pill_bg, None);
                     fill_circle(
                         &mut image,
                         w,
@@ -2231,8 +2222,7 @@ mod win32 {
                 },
             );
 
-            let status_pill_left =
-                layout.card_x + pad_x + logo_sz + (88.0 * s).round() as i32;
+            let status_pill_left = layout.card_x + pad_x + logo_sz + (88.0 * s).round() as i32;
             let status_pill_w = (54.0 * s).round() as i32;
             g.text(
                 "运行中",
@@ -2456,7 +2446,12 @@ mod tests {
             TrayIconId::Check,
         ] {
             let frame = icon_frame(id).expect("icon frame must exist");
-            let non_transparent = frame.chunks_exact(4).filter(|px| px[3] > 16).count();
+            let non_transparent = frame
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|px| px[3] > 16)
+                .count();
             assert!(
                 non_transparent > 60,
                 "icon {:?} must have visible opaque pixels (got {})",

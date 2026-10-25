@@ -495,10 +495,17 @@ pub fn run_with_local_control(
             effective_workspaces.push(cwd);
         }
     }
-    let codex = CodexAppServer::start_interactive(binary, PROVIDER_RESPONSE_TIMEOUT).ok();
-    let zcode =
-        crate::collectors::ZCodeAppServer::start_if_available(PROVIDER_RESPONSE_TIMEOUT).ok();
-    let claude = crate::collectors::discover_claude_binary();
+    let (codex, zcode, claude) = thread::scope(|s| {
+        let codex_handle =
+            s.spawn(|| CodexAppServer::start_interactive(binary, PROVIDER_RESPONSE_TIMEOUT).ok());
+        let zcode_handle = s.spawn(|| {
+            crate::collectors::ZCodeAppServer::start_if_available(PROVIDER_RESPONSE_TIMEOUT).ok()
+        });
+        let claude = crate::collectors::discover_claude_binary();
+        let codex = codex_handle.join().ok().flatten();
+        let zcode = zcode_handle.join().ok().flatten();
+        (codex, zcode, claude)
+    });
     if codex.is_none() && zcode.is_none() && !claude.exists() && url.is_some() {
         return Err(anyhow::anyhow!("native_host_start_failed"));
     }
@@ -506,8 +513,14 @@ pub fn run_with_local_control(
     let host = NativeSessionHost::new(native, effective_workspaces)
         .map_err(|error| anyhow::anyhow!(error.code))?;
     let mut durable = DurableHost::new(host, journal)?;
-    let mut cached_models = durable.host.models().ok();
-    let mut cached_discovery = sanitize_remote_discovery(durable.host.discover().ok());
+    let (mut cached_models, mut cached_discovery) = if url.is_some() {
+        (
+            durable.host.models().ok(),
+            sanitize_remote_discovery(durable.host.discover().ok()),
+        )
+    } else {
+        (None, None)
+    };
     // The last discovery actually published to the Gateway. A refresh that
     // finds the same sessions must not enqueue another full snapshot.
     let mut published_discovery = cached_discovery.clone();
@@ -692,6 +705,14 @@ pub fn run_with_local_control(
                                 remote_identity.device_id(),
                                 &validated,
                             )?;
+                            if cached_models.is_none() {
+                                cached_models = durable.host.models().ok();
+                            }
+                            if cached_discovery.is_none() {
+                                cached_discovery =
+                                    sanitize_remote_discovery(durable.host.discover().ok());
+                                published_discovery = cached_discovery.clone();
+                            }
                             let ready_payload = remote_ready_payload(
                                 &durable,
                                 cached_models.as_ref(),

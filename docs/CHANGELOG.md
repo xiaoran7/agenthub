@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+- **Runtime 全链路性能优化、重复 I/O 根治与双端（Runtime / Web）文案统一精炼（`crates/runner`, `apps/web`）**：
+  - **启动与恢复阶段耗时治理（`crates/runner/src/remote_network.rs`, `crates/runner/src/remote_journal.rs`）**：
+    - `run_with_local_control` 采用 `std::thread::scope` 并行拉起 `CodexAppServer`、`ZCodeAppServer` 与 Claude CLI 探测，并在本地守护模式（`url.is_none()`）下延后非阻塞拉取 `models()` 与 `discover()`，使本地 IPC 控制通道立即进入 `ready` 状态；
+    - `DurableHost::new` 将恢复出的历史会话绑定状态持久化收敛至单次 SQLite 事务（`journal.connection.transaction()`）批量提交，消除 `PRAGMA synchronous=FULL` 下逐条 `persist_binding` 触发的多次磁盘 `fsync` 阻塞；
+  - **宿主、面板摘要与网关探测缓存加固（`crates/runner/src/claude_gateway.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/web_server.rs`）**：
+    - `claude_gateway.rs` 为 `discover_claude_code_gateway()` 与 `discover_claude_desktop_gateway()` 新增 10 秒进程内缓存（随 `invalidate_claude_gateway_cache()` 同步失效），消除每次轮询重复读取 `cc-switch.db` 与 80ms TCP 探测开销；
+    - `MultiProviderTransport` 为 Codex `model/list` RPC 增加 30 秒缓存，并在 `thread/list` 合并中跳过已缓存会话 ID 的重复 `PathBuf` / `String` 堆分配；`NativeSessionHost` 将 `cwd_canon_cache` 提升为实例持久字段，避免每 5 秒 `discover()` 重复调用 `dunce::canonicalize` 并重复插入 6 种工作区路径变体；
+    - `web_server.rs` 在 `build_dashboard_summary` 中优先复用已缓存模型目录，仅在模型目录为空时才发起 `DaemonRequest::GetModels` IPC 调用，并复用 `cached_agent_installations()` 缓存 5 类客户端安装探测结果；
+  - **采集器、工作区聚合与历史对话读取优化（`crates/runner/src/collectors/mod.rs`, `crates/runner/src/collectors/workspace.rs`, `crates/runner/src/conversation.rs`, `crates/runner/resources/dashboard.js`）**：
+    - `collect_claude_sessions_for_remote` 的 `claude_session_entry_cache` 升级为 `Option<ClaudeRemoteSessionEntry>`，对超过 60 秒未修改的空转录或无输出文件同样缓存负结果，避免每次扫描重复打开解析历史空 `.jsonl` 文件；
+    - `collect_codex_local_threads_from` 按文件 `(len, mtime)` 与 WAL 指纹分别缓存 `~/.cache/magpie/sessions.json` 与 `thread_history_1.sqlite` 聚合结果；`resolve_zcode_model_context_window` 按 `(len, mtime)` 缓存 `~/.zcode/v2/config.json` 模型上下文窗口映射，消除每次扫描多达 5000 次的重复文件读取与 JSON 解析；
+    - 修复 `lookup_session_context_usage` 查询 Codex 会话时误传 `.codex` 目录路径导致 SQLite 打开必败的缺陷（改为定位 `state_5.sqlite` / `state_4.sqlite` / `state.sqlite`），并在 `NonClaudeContextUsageCache` 中记录已扫描的 `AgentType` 集合，消除未命中会话重复触发全表扫描；
+    - `workspace.rs` 修复 `scan_codex_workspaces` 仅匹配 `state_5.db` 而遗漏 `state_5.sqlite` 的问题，并将 `scan_antigravity_workspaces` 与 `scan_grok_workspaces` 改为直接复用采集器内存缓存；`dashboard.js` 的 `renderWorkspaces` 预建小写路径/名称哈希表，将工作区 Token 归属匹配从 $O(N \times M)$ 降至 $O(N)$；
+    - `conversation.rs` 在遍历磁盘目录前优先按已缓存文件指纹执行 $O(1)$ 元数据比对，新增 30 秒 TTL 的 `codex_path_index()` 内存索引避免每次拉取 Codex 对话时执行 7 层目录递归，并在单文件转录（`paths.len() == 1`）时跳过冗余的 `serde_json::to_string` 序列化去重；
+  - **Runtime 与 Web 端全局文案规范化（`crates/runner/resources/dashboard.html`, `crates/runner/resources/dashboard.js`, `apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/SettingsPage.tsx`, `apps/web/src/components/ThinkingAccordion.tsx`）**：
+    - 全面清理直角括号 `「」`、`【】` 与弯引号 `“”`，统一使用标准双引号 `""` 与规范中文标点；
+    - 统一浅色/深色主题命名、MCP 注册说明、能力生态提示、设备配对与解绑反馈、工具"执行结果输出"标题以及思考折叠面板（"正在思考…" / "思考过程"）文案。
+
 - **系统托盘弹窗字体超清化、主题联动配色与真实多色品牌图标内嵌（`crates/runner`）**：
   - **ClearType 亚像素字体渲染与 PerMonitorV2 原生高分屏激活（`crates/runner/src/tray_menu.rs`, `crates/runner/src/tray.rs`, `crates/runner/resources/app.manifest`）**：
     - 将 `CreateFontW` 质量参数从旧式 4 阶灰度平滑 `ANTIALIASED_QUALITY`（`4`）升级为 `CLEARTYPE_NATURAL_QUALITY`（`6`），并对英文标题/客户端名称采用原生 `Segoe UI Semibold`（`seguisb.ttf`）、中文采用原生 `Microsoft YaHei UI` Regular（`msyh.ttc`），根除 GDI 对中文字体执行 `FW_SEMIBOLD` 1px 水平重影合成导致的笔画粘连与模糊；

@@ -29,21 +29,26 @@ struct CachedConversationEntry {
     messages: Vec<Value>,
 }
 
-fn conversation_cache() -> &'static RwLock<HashMap<(AgentType, String), CachedConversationEntry>> {
-    static CACHE: OnceLock<RwLock<HashMap<(AgentType, String), CachedConversationEntry>>> =
+fn conversation_cache()
+-> &'static RwLock<HashMap<(PathBuf, AgentType, String), CachedConversationEntry>> {
+    static CACHE: OnceLock<RwLock<HashMap<(PathBuf, AgentType, String), CachedConversationEntry>>> =
         OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-fn claude_path_index() -> &'static RwLock<Option<(Instant, HashMap<String, PathBuf>)>> {
-    static INDEX: OnceLock<RwLock<Option<(Instant, HashMap<String, PathBuf>)>>> = OnceLock::new();
+fn claude_path_index() -> &'static RwLock<Option<(Instant, PathBuf, HashMap<String, PathBuf>)>> {
+    static INDEX: OnceLock<RwLock<Option<(Instant, PathBuf, HashMap<String, PathBuf>)>>> =
+        OnceLock::new();
     INDEX.get_or_init(|| RwLock::new(None))
 }
 
 fn ensure_claude_path_index(projects_root: &Path) {
     if let Ok(guard) = claude_path_index().read() {
-        if let Some((cached_at, ref map)) = *guard {
-            if cached_at.elapsed() < Duration::from_secs(30) && !map.is_empty() {
+        if let Some((cached_at, ref cached_root, ref map)) = *guard {
+            if cached_root == projects_root
+                && cached_at.elapsed() < Duration::from_secs(30)
+                && !map.is_empty()
+            {
                 return;
             }
         }
@@ -52,7 +57,58 @@ fn ensure_claude_path_index(projects_root: &Path) {
     let mut map = HashMap::new();
     populate_claude_index(projects_root, 0, &mut map);
     if let Ok(mut guard) = claude_path_index().write() {
-        *guard = Some((Instant::now(), map));
+        *guard = Some((Instant::now(), projects_root.to_path_buf(), map));
+    }
+}
+
+fn codex_path_index() -> &'static RwLock<Option<(Instant, PathBuf, Vec<(String, PathBuf)>)>> {
+    static INDEX: OnceLock<RwLock<Option<(Instant, PathBuf, Vec<(String, PathBuf)>)>>> =
+        OnceLock::new();
+    INDEX.get_or_init(|| RwLock::new(None))
+}
+
+fn ensure_codex_path_index(codex_root: &Path) {
+    if let Ok(guard) = codex_path_index().read() {
+        if let Some((cached_at, ref cached_root, ref list)) = *guard {
+            if cached_root == codex_root
+                && cached_at.elapsed() < Duration::from_secs(30)
+                && !list.is_empty()
+            {
+                return;
+            }
+        }
+    }
+
+    let mut list = Vec::new();
+    let sessions_dir = codex_root.join("sessions");
+    let archived_dir = codex_root.join("archived_sessions");
+    if sessions_dir.is_dir() {
+        populate_codex_index(&sessions_dir, 0, &mut list);
+    }
+    if archived_dir.is_dir() {
+        populate_codex_index(&archived_dir, 0, &mut list);
+    }
+    if let Ok(mut guard) = codex_path_index().write() {
+        *guard = Some((Instant::now(), codex_root.to_path_buf(), list));
+    }
+}
+
+fn populate_codex_index(root: &Path, depth: usize, out: &mut Vec<(String, PathBuf)>) {
+    if depth > 7 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            populate_codex_index(&path, depth + 1, out);
+        } else if path.extension().and_then(|v| v.to_str()) == Some("jsonl")
+            && let Some(name) = path.file_name().and_then(|v| v.to_str())
+        {
+            out.push((name.to_string(), path));
+        }
     }
 }
 
@@ -119,9 +175,10 @@ pub fn load_session_conversation_with_workspace(
 
     if agent_type == AgentType::ZCode {
         let db_path = home.join(".zcode").join("cli").join("db").join("db.sqlite");
-        let mtime = fs::metadata(&db_path).ok().and_then(|m| m.modified().ok());
-        let len = fs::metadata(&db_path).ok().map(|m| m.len()).unwrap_or(0);
-        let key = (AgentType::ZCode, session_id.to_string());
+        let meta = fs::metadata(&db_path).ok();
+        let mtime = meta.as_ref().and_then(|m| m.modified().ok());
+        let len = meta.map(|m| m.len()).unwrap_or(0);
+        let key = (home.to_path_buf(), AgentType::ZCode, session_id.to_string());
         if let Ok(guard) = conversation_cache().read() {
             if let Some(entry) = guard.get(&key) {
                 if entry.cached_at.elapsed() < Duration::from_secs(10)
@@ -147,17 +204,46 @@ pub fn load_session_conversation_with_workspace(
         }
         return res;
     }
+
+    let cache_key = (home.to_path_buf(), agent_type, session_id.to_string());
+    if let Ok(guard) = conversation_cache().read()
+        && let Some(entry) = guard.get(&cache_key)
+        && entry.cached_at.elapsed() < Duration::from_secs(10)
+        && !entry.fingerprints.is_empty()
+        && entry.fingerprints.iter().all(|(p, c_len, c_mtime)| {
+            let meta = fs::metadata(p).ok();
+            let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime = meta.and_then(|m| m.modified().ok());
+            len == *c_len && mtime == *c_mtime
+        })
+    {
+        return entry.messages.clone();
+    }
+
     let mut paths = Vec::new();
     match agent_type {
         AgentType::Codex => {
             let codex_root = home.join(".codex");
-            let sessions_dir = codex_root.join("sessions");
-            let archived_dir = codex_root.join("archived_sessions");
-            if sessions_dir.is_dir() {
-                collect_provider_transcripts(&sessions_dir, raw_session_id, 0, &mut paths);
+            ensure_codex_path_index(&codex_root);
+            if let Ok(guard) = codex_path_index().read()
+                && let Some((_, ref cached_root, ref list)) = *guard
+                && cached_root == &codex_root
+            {
+                for (name, p) in list {
+                    if name.contains(raw_session_id) && p.is_file() {
+                        paths.push(p.clone());
+                    }
+                }
             }
-            if archived_dir.is_dir() {
-                collect_provider_transcripts(&archived_dir, raw_session_id, 0, &mut paths);
+            if paths.is_empty() {
+                let sessions_dir = codex_root.join("sessions");
+                let archived_dir = codex_root.join("archived_sessions");
+                if sessions_dir.is_dir() {
+                    collect_provider_transcripts(&sessions_dir, raw_session_id, 0, &mut paths);
+                }
+                if archived_dir.is_dir() {
+                    collect_provider_transcripts(&archived_dir, raw_session_id, 0, &mut paths);
+                }
             }
             if paths.is_empty() {
                 // Only scan direct jsonl files in codex_root without recursively traversing subdirectories
@@ -190,7 +276,7 @@ pub fn load_session_conversation_with_workspace(
                 ensure_claude_path_index(&projects_root);
                 let mut found = false;
                 if let Ok(guard) = claude_path_index().read() {
-                    if let Some((_, ref map)) = *guard {
+                    if let Some((_, _, ref map)) = *guard {
                         if let Some(p) = map.get(raw_session_id) {
                             if p.is_file() {
                                 paths.push(p.clone());
@@ -203,7 +289,7 @@ pub fn load_session_conversation_with_workspace(
                     collect_transcript_files(&projects_root, raw_session_id, 0, &mut paths);
                     if let Some(first) = paths.first() {
                         if let Ok(mut guard) = claude_path_index().write() {
-                            if let Some((_, ref mut map)) = *guard {
+                            if let Some((_, _, ref mut map)) = *guard {
                                 map.insert(raw_session_id.to_string(), first.clone());
                             }
                         }
@@ -226,7 +312,6 @@ pub fn load_session_conversation_with_workspace(
         })
         .collect();
 
-    let cache_key = (agent_type, session_id.to_string());
     if let Ok(guard) = conversation_cache().read() {
         if let Some(entry) = guard.get(&cache_key) {
             if entry.cached_at.elapsed() < Duration::from_secs(10)
@@ -242,6 +327,7 @@ pub fn load_session_conversation_with_workspace(
         paths.truncate(4);
         paths.extend(tail);
     }
+    let multi_source = paths.len() > 1;
     let file_budget = MAX_CONVERSATION_BYTES / paths.len().max(1) as u64;
     let mut records = Vec::new();
     let mut seen = HashMap::<String, usize>::new();
@@ -271,11 +357,13 @@ pub fn load_session_conversation_with_workspace(
             {
                 continue;
             }
-            let key = serde_json::to_string(&value).unwrap_or_default();
-            if seen.get(&key).is_some_and(|previous| *previous != source) {
-                continue;
+            if multi_source {
+                let key = serde_json::to_string(&value).unwrap_or_default();
+                if seen.get(&key).is_some_and(|previous| *previous != source) {
+                    continue;
+                }
+                seen.insert(key, source);
             }
-            seen.insert(key, source);
             records.push(value);
         }
     }
