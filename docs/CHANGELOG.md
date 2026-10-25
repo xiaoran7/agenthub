@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- **系统托盘弹窗字体超清化、主题联动配色与真实多色品牌图标内嵌（`crates/runner`）**：
+  - **ClearType 亚像素字体渲染与 PerMonitorV2 原生高分屏激活（`crates/runner/src/tray_menu.rs`, `crates/runner/src/tray.rs`, `crates/runner/resources/app.manifest`）**：
+    - 将 `CreateFontW` 质量参数从旧式 4 阶灰度平滑 `ANTIALIASED_QUALITY`（`4`）升级为 `CLEARTYPE_NATURAL_QUALITY`（`6`），并对英文标题/客户端名称采用原生 `Segoe UI Semibold`（`seguisb.ttf`）、中文采用原生 `Microsoft YaHei UI` Regular（`msyh.ttc`），根除 GDI 对中文字体执行 `FW_SEMIBOLD` 1px 水平重影合成导致的笔画粘连与模糊；
+    - 在 `tray.rs` 与 `tray_menu.rs` 主动调用 `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` / `SetThreadDpiAwarenessContext` 并升级 `app.manifest` 版本号刷新 Windows 激活上下文缓存，结合 `GetDpiForMonitor` + `GetDpiForWindow` + `GetDpiForSystem` 联合取值，彻底杜绝高分屏下 DWM 位图放大模糊；
+  - **浅色/深色双主题联动配色（`crates/runner/src/tray_menu.rs`, `crates/runner/src/tray.rs`）**：
+    - 新增 `tray::is_dark_theme()` 实时读取 `~/.agenthub/window_shell/theme.txt` 控制台主题状态，构建 `ThemePalette::for_theme(dark)` 双色板；
+    - 浅色模式彻底告别刺眼纯白 `#ffffff` 整板背景，采用与控制台及 Aozora UI 一致的柔和灰蓝底色（`#eceff6` 卡片底 + `#f6f8fc` 独立圆角行卡 + `#dee3ef` 分段轨道 + `#e2e6fc` 主操作按钮），深色模式同步切换为 `#1a1a1e` 卡片底与 `#232328` 独立圆角行卡；
+  - **20 枚真实多色品牌图标与矢量 UI 图标内嵌（`crates/runner/resources/tray_icons_64.bin.zst`, `crates/runner/src/tray_menu.rs`, `crates/runner/build.rs`）**：
+    - 将 `crates/runner/resources/icons/` 下的真实官方品牌图标（`AgentHub` 3D 立方体、`Claude Code` 像素吉祥物、`Claude Desktop` 太阳纹、`Codex` 紫蓝花瓣、`Gemini CLI` 渐变终端、`Gemini` 四芒星、`ZCode`、`Grok`、`Antigravity`）及 11 枚矢量 UI 图标（设置齿轮、配置滑块、用量柱状图、今日请求脉搏、Token 图层、预估成本、主窗口、退出电源、右箭头等）预光栅化为 `64x64` RGBA 精灵包 `tray_icons_64.bin.zst`；
+    - 实装 3×3 超采样双线性插值（9× MSAA 面积下采样）与 SDF 圆角裁剪器 `blit_icon_rgba`，彻底替代原有的单字母 `C`/`D`/`X`/`G`/`Z` 占位符，实现顶栏、分段切换栏、客户端列表、今日用量与热门模型、底栏按钮全链路图文并茂；
+  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `06b599d74e02c7be48e830b4729b00c238de7ac0c457eb8e1213cb5658dea7b7`，`agenthub-runner.exe` SHA256: `ec3b6aa626bdda42bc595198c2e5edb742b17b5505203fc697e72897264de76c`），并通过 Taildrop 推送至 `portable-pc`。
+
 - **Runtime 用量层级嵌套筛选浮窗、CSV 落盘路径展示与定位、托盘图标与品牌文案精简、DOM 分页渲染及全链路热刷新与性能优化（`crates/runner`）**：
   - **托盘图标资源内嵌修复与悬停提示精简为"AgentHub"（`crates/runner/build.rs`, `crates/runner/src/tray.rs`, `crates/runner/src/window_icon.rs`, `crates/runner/resources/dashboard.html`, `crates/runner/src/web_server.rs`）**：
     - `build.rs` 补齐 `x86_64-w64-mingw32-windres` 交叉编译资源编译器路径确保 `app_icon.res`（含多尺寸 `icon.ico` 与 `app.manifest`）完整链接进 PE 头部，并在 `window_icon.rs` / `tray.rs` 新增直接解析内嵌 `icon.ico` 字节的 `create_hicon_from_embedded_ico` 双保险兜底，彻底解决托盘图标空白问题；

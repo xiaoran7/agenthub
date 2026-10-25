@@ -73,6 +73,19 @@ mod windows_tray {
         }
     }
 
+    pub fn enable_per_monitor_dpi_awareness() {
+        unsafe {
+            use windows_sys::Win32::UI::HiDpi::{
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+                SetThreadDpiAwarenessContext,
+            };
+            use windows_sys::Win32::UI::WindowsAndMessaging::SetProcessDPIAware;
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let _ = SetProcessDPIAware();
+        }
+    }
+
     pub fn start_tray(web_url: String, running: Arc<AtomicBool>) {
         let _ = TRAY_STATE.set(TrayState {
             web_url: Mutex::new(web_url.clone()),
@@ -81,6 +94,7 @@ mod windows_tray {
         });
 
         thread::spawn(move || unsafe {
+            enable_per_monitor_dpi_awareness();
             let hinstance: HINSTANCE = GetModuleHandleW(null());
             let class_name: Vec<u16> = "AgentHubRunnerTrayClass\0".encode_utf16().collect();
 
@@ -621,13 +635,36 @@ mod non_windows_tray {
 
 #[cfg(target_os = "windows")]
 pub use windows_tray::{
-    cleanup_desktop_window, open_data_dir, open_desktop_window, open_system_browser, start_tray,
+    cleanup_desktop_window, enable_per_monitor_dpi_awareness, open_data_dir, open_desktop_window,
+    open_system_browser, start_tray,
 };
 
 #[cfg(not(target_os = "windows"))]
 pub use non_windows_tray::{
     cleanup_desktop_window, open_data_dir, open_desktop_window, open_system_browser, start_tray,
 };
+
+/// Returns whether the console/tray should render in dark mode.
+/// Checks `~/.agenthub/window_shell/theme.txt` first (written by the web console),
+/// and falls back to light mode (`#f4f5f8`) which matches the console default.
+pub fn is_dark_theme() -> bool {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from);
+    if let Some(dir) = home {
+        let theme_file = dir.join(".agenthub").join(SHELL_DIR).join("theme.txt");
+        if let Ok(text) = std::fs::read_to_string(theme_file) {
+            let trimmed = text.trim();
+            if trimmed == "dark" {
+                return true;
+            }
+            if trimmed == "light" {
+                return false;
+            }
+        }
+    }
+    false
+}
 
 /// The window's caption, painted the page's own colour. magpie does this on
 /// Windows with DWM (`internal/gui/titletint_windows.go`: "Windows' grey bar

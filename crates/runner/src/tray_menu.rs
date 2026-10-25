@@ -1,13 +1,15 @@
-//! CC Switch-style layered system tray popup card (`UpdateLayeredWindow` + SDF + GDI).
+//! CC Switch-style layered system tray popup card (`UpdateLayeredWindow` + SDF + ClearType GDI).
 //!
-//! Renders a crisp DPI-scaled light rounded card with:
-//! - Header: `"AgentHub"` title + gear settings icon button
-//! - Interactive segmented switcher: `配置` / `用量` (switches tabs in-place)
-//! - `配置` tab: per-agent rows with tinted brand icon badge, bold client name,
-//!   real upstream provider + `直连` / `路由` pill, and `›` chevron
-//! - `用量` tab: live today's requests, tokens, cache hit rate, estimated cost,
-//!   and top active models
-//! - Footer: `打开主窗口` and `退出` side-by-side buttons
+//! Renders a crisp DPI-scaled rounded card synchronized with the active console theme:
+//! - Header: real AgentHub 3D cube logo + `"AgentHub"` title + `"运行中"` status pill + vector gear button
+//! - Interactive segmented switcher: `[sliders] 配置` / `[chart] 用量`
+//! - `配置` tab: per-agent elevated cards with real multi-color brand icons (`Claude`,
+//!   `Claude Desktop`, `Codex`, `Gemini`, `ZCode`, `Grok`, `Antigravity`), client name,
+//!   upstream provider subtitle, right-aligned `● 直连` / `● 路由` pill, and vector chevron
+//! - `用量` tab: live today's requests, tokens, estimated cost, and top models with brand icons
+//! - Footer: `[window] 打开主窗口` primary button and `[power] 退出` secondary button
+
+use std::sync::OnceLock;
 
 /// Action IDs returned to the tray host when a command target is clicked.
 pub const ACTION_OPEN_MAIN: usize = 2001;
@@ -15,6 +17,47 @@ pub const ACTION_OPEN_SETTINGS: usize = 2002;
 pub const ACTION_OPEN_AGENTS: usize = 2003;
 pub const ACTION_OPEN_USAGE: usize = 2004;
 pub const ACTION_EXIT: usize = 2005;
+
+const ICON_SIDE: usize = 64;
+const ICON_FRAME_BYTES: usize = ICON_SIDE * ICON_SIDE * 4;
+const TRAY_ICONS_ZST: &[u8] = include_bytes!("../resources/tray_icons_64.bin.zst");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum TrayIconId {
+    AgentHub = 0,
+    ClaudeCode = 1,
+    ClaudeDesktop = 2,
+    Codex = 3,
+    GeminiCli = 4,
+    GeminiStar = 5,
+    ZCode = 6,
+    Grok = 7,
+    Antigravity = 8,
+    Gear = 9,
+    TabConfig = 10,
+    TabUsage = 11,
+    UsageReq = 12,
+    UsageTok = 13,
+    UsageCost = 14,
+    BtnWindow = 15,
+    BtnExit = 16,
+    ChevronRight = 17,
+    ArrowLeft = 18,
+    Check = 19,
+}
+
+pub(crate) fn icon_bank() -> &'static [u8] {
+    static BANK: OnceLock<Vec<u8>> = OnceLock::new();
+    BANK.get_or_init(|| zstd::decode_all(TRAY_ICONS_ZST).unwrap_or_default())
+}
+
+pub(crate) fn icon_frame(id: TrayIconId) -> Option<&'static [u8]> {
+    let bank = icon_bank();
+    let start = (id as usize).checked_mul(ICON_FRAME_BYTES)?;
+    let end = start.checked_add(ICON_FRAME_BYTES)?;
+    bank.get(start..end)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrayTab {
@@ -28,11 +71,12 @@ pub struct TrayAgentRow {
     pub action_id: usize,
     pub client_id: String,
     pub display_name: String,
-    pub badge_glyph: &'static str,
-    pub brand_rgb: (u8, u8, u8),
-    pub brand_bg_rgb: (u8, u8, u8),
+    pub icon_id: TrayIconId,
+    pub full_bleed_icon: bool,
+    pub badge_bg_light: (u8, u8, u8),
+    pub badge_bg_dark: (u8, u8, u8),
     pub provider_label: String,
-    /// `"direct"` -> green `直连`, `"routed"` -> blue `路由`
+    /// `"direct"` -> green `直连`, `"routed"` -> indigo `路由`
     pub route_mode: String,
 }
 
@@ -42,13 +86,17 @@ pub struct TrayUsageRow {
     pub label: String,
     pub sublabel: String,
     pub value: String,
-    pub accent_rgb: (u8, u8, u8),
+    pub icon_id: TrayIconId,
+    pub full_bleed_icon: bool,
+    pub badge_bg_light: (u8, u8, u8),
+    pub badge_bg_dark: (u8, u8, u8),
 }
 
 #[derive(Debug, Clone)]
 pub struct Menu {
     pub version: String,
     pub host: String,
+    pub dark: bool,
     pub agents: Vec<TrayAgentRow>,
     pub usage_rows: Vec<TrayUsageRow>,
 }
@@ -58,26 +106,121 @@ impl Default for Menu {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             host: "127.0.0.1:4200".to_string(),
+            dark: false,
             agents: Vec::new(),
             usage_rows: Vec::new(),
         }
     }
 }
 
-fn brand_palette(client_id: &str) -> (&'static str, &'static str, (u8, u8, u8), (u8, u8, u8)) {
+fn brand_visual(client_id: &str) -> (&'static str, TrayIconId, bool, (u8, u8, u8), (u8, u8, u8)) {
     match client_id {
-        "claude_code" => ("Claude", "C", (0xd9, 0x77, 0x57), (0xfd, 0xf2, 0xed)),
+        "claude_code" => (
+            "Claude",
+            TrayIconId::ClaudeCode,
+            false,
+            (0xfd, 0xf0, 0xe7),
+            (0x33, 0x22, 0x1b),
+        ),
         "claude_desktop" => (
             "Claude Desktop",
-            "D",
-            (0x63, 0x66, 0xf1),
-            (0xee, 0xf2, 0xff),
+            TrayIconId::ClaudeDesktop,
+            false,
+            (0xfc, 0xee, 0xe4),
+            (0x31, 0x20, 0x19),
         ),
-        "codex" => ("Codex", "X", (0x10, 0xa3, 0x7f), (0xec, 0xfd, 0xf5)),
-        "gemini_cli" => ("Gemini", "G", (0x25, 0x63, 0xeb), (0xef, 0xf6, 0xff)),
-        "zcode" => ("ZCode", "Z", (0x7c, 0x3a, 0xed), (0xf5, 0xf3, 0xff)),
-        "grok_build" => ("Grok", "K", (0x18, 0x18, 0x1b), (0xf4, 0xf4, 0xf5)),
-        _ => ("Agent", "A", (0x4b, 0x55, 0x63), (0xf3, 0xf4, 0xf6)),
+        "codex" => (
+            "Codex",
+            TrayIconId::Codex,
+            true,
+            (0xee, 0xf2, 0xff),
+            (0x23, 0x25, 0x3a),
+        ),
+        "gemini_cli" => (
+            "Gemini",
+            TrayIconId::GeminiCli,
+            true,
+            (0xef, 0xf6, 0xff),
+            (0x1f, 0x29, 0x3d),
+        ),
+        "zcode" => (
+            "ZCode",
+            TrayIconId::ZCode,
+            true,
+            (0xf3, 0xf4, 0xf6),
+            (0x27, 0x27, 0x2f),
+        ),
+        "grok_build" => (
+            "Grok",
+            TrayIconId::Grok,
+            false,
+            (0xf3, 0xe8, 0xff),
+            (0x2b, 0x1f, 0x3d),
+        ),
+        "antigravity" => (
+            "Antigravity",
+            TrayIconId::Antigravity,
+            false,
+            (0xef, 0xf6, 0xff),
+            (0x1e, 0x29, 0x3b),
+        ),
+        _ => (
+            "Agent",
+            TrayIconId::AgentHub,
+            false,
+            (0xee, 0xf2, 0xff),
+            (0x25, 0x28, 0x3d),
+        ),
+    }
+}
+
+fn model_brand_visual(model: &str) -> (TrayIconId, bool, (u8, u8, u8), (u8, u8, u8)) {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("claude")
+        || lower.contains("sonnet")
+        || lower.contains("opus")
+        || lower.contains("haiku")
+        || lower.contains("fable")
+    {
+        (
+            TrayIconId::ClaudeDesktop,
+            false,
+            (0xfd, 0xf0, 0xe7),
+            (0x33, 0x22, 0x1b),
+        )
+    } else if lower.contains("gemini") {
+        (
+            TrayIconId::GeminiStar,
+            false,
+            (0xef, 0xf6, 0xff),
+            (0x1e, 0x29, 0x3b),
+        )
+    } else if lower.contains("gpt")
+        || lower.contains("codex")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+    {
+        (
+            TrayIconId::Codex,
+            true,
+            (0xee, 0xf2, 0xff),
+            (0x23, 0x25, 0x3a),
+        )
+    } else if lower.contains("grok") {
+        (
+            TrayIconId::Grok,
+            false,
+            (0xf3, 0xe8, 0xff),
+            (0x2b, 0x1f, 0x3d),
+        )
+    } else {
+        (
+            TrayIconId::ZCode,
+            true,
+            (0xf3, 0xf4, 0xf6),
+            (0x27, 0x27, 0x2f),
+        )
     }
 }
 
@@ -91,8 +234,9 @@ fn compact_tokens(n: u64) -> String {
     }
 }
 
-/// Builds live tray card data from cached client route discovery and today's usage ledger.
+/// Builds live tray card data from cached client route discovery, today's usage ledger, and active theme.
 pub fn build_live_menu(host: String) -> Menu {
+    let dark = crate::tray::is_dark_theme();
     let summaries = crate::claude_gateway::discover_all_client_route_summaries();
     let mut agents = Vec::new();
     for s in summaries {
@@ -103,7 +247,7 @@ pub fn build_live_menu(host: String) -> Menu {
         if !is_core && !s.is_routed {
             continue;
         }
-        let (short_name, glyph, fg, bg) = brand_palette(s.agent_id);
+        let (short_name, icon_id, full_bleed_icon, bg_light, bg_dark) = brand_visual(s.agent_id);
         let action_id = if s.is_routed {
             ACTION_OPEN_SETTINGS
         } else {
@@ -118,9 +262,10 @@ pub fn build_live_menu(host: String) -> Menu {
             action_id,
             client_id: s.agent_id.to_string(),
             display_name: short_name.to_string(),
-            badge_glyph: glyph,
-            brand_rgb: fg,
-            brand_bg_rgb: bg,
+            icon_id,
+            full_bleed_icon,
+            badge_bg_light: bg_light,
+            badge_bg_dark: bg_dark,
             provider_label: if s.provider_name.trim().is_empty() {
                 "Official".to_string()
             } else {
@@ -147,7 +292,10 @@ pub fn build_live_menu(host: String) -> Menu {
             label: "今日请求与会话".to_string(),
             sublabel: format!("活跃会话 {} 个 · 失败 {} 次", today.sessions, today.errors),
             value: format!("{} 次", today.calls),
-            accent_rgb: (0x25, 0x63, 0xeb),
+            icon_id: TrayIconId::UsageReq,
+            full_bleed_icon: false,
+            badge_bg_light: (0xeb, 0xee, 0xff),
+            badge_bg_dark: (0x25, 0x28, 0x46),
         },
         TrayUsageRow {
             action_id: ACTION_OPEN_USAGE,
@@ -158,42 +306,160 @@ pub fn build_live_menu(host: String) -> Menu {
                 hit_pct
             ),
             value: compact_tokens(today.tokens),
-            accent_rgb: (0x10, 0xa3, 0x7f),
+            icon_id: TrayIconId::UsageTok,
+            full_bleed_icon: false,
+            badge_bg_light: (0xf3, 0xe8, 0xff),
+            badge_bg_dark: (0x2d, 0x21, 0x42),
         },
         TrayUsageRow {
             action_id: ACTION_OPEN_USAGE,
             label: "今日预估成本".to_string(),
             sublabel: "按官方标准费率折算".to_string(),
             value: format!("${:.2}", today.cost),
-            accent_rgb: (0x16, 0xa3, 0x4a),
+            icon_id: TrayIconId::UsageCost,
+            full_bleed_icon: false,
+            badge_bg_light: (0xe2, 0xf6, 0xec),
+            badge_bg_dark: (0x1b, 0x36, 0x28),
         },
     ];
 
     for top in today.by.model.iter().take(2) {
+        let (icon_id, full_bleed_icon, badge_bg_light, badge_bg_dark) =
+            model_brand_visual(&top.name);
         usage_rows.push(TrayUsageRow {
             action_id: ACTION_OPEN_USAGE,
             label: top.name.clone(),
             sublabel: format!("{} 次请求 · ${:.2}", top.calls, top.cost),
             value: compact_tokens(top.tokens),
-            accent_rgb: (0xd9, 0x77, 0x57),
+            icon_id,
+            full_bleed_icon,
+            badge_bg_light,
+            badge_bg_dark,
         });
     }
 
     Menu {
         version: env!("CARGO_PKG_VERSION").to_string(),
         host,
+        dark,
         agents,
         usage_rows,
     }
 }
 
+/// Theme-synchronized color palette matching `dashboard.css` (`:root` and `html.dark`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ThemePalette {
+    pub surface: (u8, u8, u8),
+    pub surface_border: (u8, u8, u8),
+    pub row_card: (u8, u8, u8),
+    pub row_border: (u8, u8, u8),
+    pub row_hover: (u8, u8, u8),
+    pub row_hover_border: (u8, u8, u8),
+    pub seg_track: (u8, u8, u8),
+    pub seg_thumb: (u8, u8, u8),
+    pub seg_thumb_border: (u8, u8, u8),
+    pub text: (u8, u8, u8),
+    pub sub: (u8, u8, u8),
+    pub chevron: (u8, u8, u8),
+    pub accent: (u8, u8, u8),
+    pub hairline: (u8, u8, u8),
+    pub direct_bg: (u8, u8, u8),
+    pub direct_fg: (u8, u8, u8),
+    pub direct_dot: (u8, u8, u8),
+    pub routed_bg: (u8, u8, u8),
+    pub routed_fg: (u8, u8, u8),
+    pub routed_dot: (u8, u8, u8),
+    pub btn_primary_bg: (u8, u8, u8),
+    pub btn_primary_hover: (u8, u8, u8),
+    pub btn_primary_border: (u8, u8, u8),
+    pub btn_primary_fg: (u8, u8, u8),
+    pub btn_sec_bg: (u8, u8, u8),
+    pub btn_sec_hover: (u8, u8, u8),
+    pub btn_sec_border: (u8, u8, u8),
+    pub btn_sec_fg: (u8, u8, u8),
+    pub btn_sec_hover_fg: (u8, u8, u8),
+}
+
+impl ThemePalette {
+    pub fn for_theme(dark: bool) -> Self {
+        if dark {
+            Self {
+                surface: (0x1a, 0x1a, 0x1e),
+                surface_border: (0x33, 0x33, 0x39),
+                row_card: (0x23, 0x23, 0x28),
+                row_border: (0x2f, 0x2f, 0x37),
+                row_hover: (0x2b, 0x2c, 0x3d),
+                row_hover_border: (0x48, 0x4b, 0x74),
+                seg_track: (0x13, 0x13, 0x16),
+                seg_thumb: (0x2c, 0x2c, 0x35),
+                seg_thumb_border: (0x3f, 0x3f, 0x4a),
+                text: (0xed, 0xed, 0xf1),
+                sub: (0x92, 0x92, 0x9e),
+                chevron: (0x72, 0x72, 0x80),
+                accent: (0xa5, 0xb4, 0xfc),
+                hairline: (0x2c, 0x2c, 0x34),
+                direct_bg: (0x1b, 0x36, 0x28),
+                direct_fg: (0x6f, 0xd9, 0x9b),
+                direct_dot: (0x34, 0xd3, 0x99),
+                routed_bg: (0x27, 0x29, 0x46),
+                routed_fg: (0xa5, 0xb4, 0xfc),
+                routed_dot: (0x81, 0x8c, 0xf8),
+                btn_primary_bg: (0x27, 0x29, 0x46),
+                btn_primary_hover: (0x31, 0x34, 0x58),
+                btn_primary_border: (0x43, 0x46, 0x75),
+                btn_primary_fg: (0xc7, 0xd2, 0xfe),
+                btn_sec_bg: (0x23, 0x23, 0x28),
+                btn_sec_hover: (0x45, 0x27, 0x2a),
+                btn_sec_border: (0x33, 0x33, 0x39),
+                btn_sec_fg: (0xb9, 0xb9, 0xc1),
+                btn_sec_hover_fg: (0xf2, 0x8b, 0x82),
+            }
+        } else {
+            // Soft cool slate-gray surface matching `dashboard.css` (`--bg: #f4f5f8`) + Aozora UI
+            Self {
+                surface: (0xec, 0xef, 0xf6),
+                surface_border: (0xd0, 0xd6, 0xe4),
+                row_card: (0xf6, 0xf8, 0xfc),
+                row_border: (0xdc, 0xe1, 0xee),
+                row_hover: (0xe4, 0xe9, 0xfb),
+                row_hover_border: (0xc2, 0xcd, 0xfc),
+                seg_track: (0xde, 0xe3, 0xef),
+                seg_thumb: (0xf8, 0xfa, 0xff),
+                seg_thumb_border: (0xce, 0xd4, 0xe4),
+                text: (0x1c, 0x1e, 0x26),
+                sub: (0x5e, 0x64, 0x74),
+                chevron: (0x85, 0x8b, 0x9c),
+                accent: (0x4f, 0x46, 0xe5),
+                hairline: (0xd8, 0xde, 0xec),
+                direct_bg: (0xdc, 0xf3, 0xe6),
+                direct_fg: (0x15, 0x7a, 0x3c),
+                direct_dot: (0x18, 0x9a, 0x58),
+                routed_bg: (0xe2, 0xe6, 0xfc),
+                routed_fg: (0x37, 0x30, 0xa3),
+                routed_dot: (0x4f, 0x46, 0xe5),
+                btn_primary_bg: (0xe2, 0xe6, 0xfc),
+                btn_primary_hover: (0xd6, 0xdc, 0xfb),
+                btn_primary_border: (0xc2, 0xcd, 0xfc),
+                btn_primary_fg: (0x37, 0x30, 0xa3),
+                btn_sec_bg: (0xf6, 0xf8, 0xfc),
+                btn_sec_hover: (0xfb, 0xe9, 0xe9),
+                btn_sec_border: (0xd8, 0xde, 0xec),
+                btn_sec_fg: (0x4b, 0x4f, 0x5c),
+                btn_sec_hover_fg: (0xd6, 0x45, 0x45),
+            }
+        }
+    }
+}
+
 // Logical card geometry (scaled by monitor DPI / 96.0)
-pub(crate) const CARD_W: i32 = 308;
-pub(crate) const PAD_X: i32 = 14;
+pub(crate) const CARD_W: i32 = 316;
+pub(crate) const PAD_X: i32 = 13;
 pub(crate) const HEADER_H: i32 = 44;
 pub(crate) const TABS_H: i32 = 34;
 pub(crate) const TABS_GAP: i32 = 8;
-pub(crate) const AGENT_ROW_H: i32 = 52;
+pub(crate) const AGENT_ROW_H: i32 = 50;
+pub(crate) const AGENT_ROW_GAP: i32 = 5;
 pub(crate) const FOOTER_H: i32 = 46;
 pub(crate) const RADIUS: i32 = 14;
 pub(crate) const SHADOW_PAD: i32 = 12;
@@ -292,6 +558,7 @@ impl CardLayout {
 
         let mut y = tabs_track.bottom + px(TABS_GAP);
         let row_h = px(AGENT_ROW_H);
+        let row_gap = px(AGENT_ROW_GAP);
         let count = match tab {
             TrayTab::Config => menu.agents.len().max(1),
             TrayTab::Usage => menu.usage_rows.len().max(1),
@@ -312,17 +579,17 @@ impl CardLayout {
             };
             row_rects.push((
                 RectI {
-                    left: card_x + px(8),
+                    left: card_x + pad_x,
                     top: y,
-                    right: card_x + card_w - px(8),
+                    right: card_x + card_w - pad_x,
                     bottom: y + row_h,
                 },
                 action_id,
             ));
-            y += row_h;
+            y += row_h + if idx + 1 < count { row_gap } else { 0 };
         }
 
-        y += px(6);
+        y += px(8);
         let sep_y = y;
         let footer_h = px(FOOTER_H);
         let footer_top = sep_y + px(6);
@@ -404,29 +671,256 @@ impl CardLayout {
     }
 }
 
+pub(crate) fn sd_round_rect(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
+    let qx = (px - cx).abs() - (hw - r);
+    let qy = (py - cy).abs() - (hh - r);
+    let ax = qx.max(0.0);
+    let ay = qy.max(0.0);
+    (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - r
+}
+
+pub(crate) fn lerp(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    (f(a.0, b.0), f(a.1, b.1), f(a.2, b.2))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fill_round_rect(
+    image: &mut [u8],
+    w: i32,
+    h: i32,
+    card_dist: &[f32],
+    rect: RectI,
+    radius: f32,
+    fill: (u8, u8, u8),
+    border: Option<(u8, u8, u8)>,
+) {
+    let x0 = rect.left.max(0);
+    let y0 = rect.top.max(0);
+    let x1 = rect.right.min(w);
+    let y1 = rect.bottom.min(h);
+    let cx = (rect.left + rect.right) as f32 * 0.5;
+    let cy = (rect.top + rect.bottom) as f32 * 0.5;
+    let hw = (rect.right - rect.left) as f32 * 0.5;
+    let hh = (rect.bottom - rect.top) as f32 * 0.5;
+
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) as usize;
+            let card_cov = (0.5 - card_dist[i]).clamp(0.0, 1.0);
+            if card_cov <= 0.0 {
+                continue;
+            }
+            let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, cx, cy, hw, hh, radius);
+            let cov = (0.5 - d).clamp(0.0, 1.0) * card_cov;
+            if cov <= 0.0 {
+                continue;
+            }
+            let mut target = fill;
+            if let Some(bc) = border {
+                let b_edge = (1.0 - (d + 0.5).abs()).clamp(0.0, 1.0);
+                target = lerp(fill, bc, b_edge);
+            }
+            let o = i * 4;
+            let mixed = lerp((image[o], image[o + 1], image[o + 2]), target, cov);
+            image[o] = mixed.0;
+            image[o + 1] = mixed.1;
+            image[o + 2] = mixed.2;
+        }
+    }
+}
+
+pub(crate) fn fill_circle(
+    image: &mut [u8],
+    w: i32,
+    h: i32,
+    card_dist: &[f32],
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    fill: (u8, u8, u8),
+) {
+    let x0 = ((cx - radius - 1.5).floor() as i32).max(0);
+    let y0 = ((cy - radius - 1.5).floor() as i32).max(0);
+    let x1 = ((cx + radius + 1.5).ceil() as i32).min(w);
+    let y1 = ((cy + radius + 1.5).ceil() as i32).min(h);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) as usize;
+            let card_cov = (0.5 - card_dist[i]).clamp(0.0, 1.0);
+            if card_cov <= 0.0 {
+                continue;
+            }
+            let dx = (x as f32 + 0.5) - cx;
+            let dy = (y as f32 + 0.5) - cy;
+            let d = (dx * dx + dy * dy).sqrt() - radius;
+            let cov = (0.5 - d).clamp(0.0, 1.0) * card_cov;
+            if cov <= 0.0 {
+                continue;
+            }
+            let o = i * 4;
+            let mixed = lerp((image[o], image[o + 1], image[o + 2]), fill, cov);
+            image[o] = mixed.0;
+            image[o + 1] = mixed.1;
+            image[o + 2] = mixed.2;
+        }
+    }
+}
+
+fn sample_bilinear_premul(frame: &[u8], u: f32, v: f32) -> (f32, f32, f32, f32) {
+    let max_idx = (ICON_SIDE - 1) as f32;
+    let x = u.clamp(0.0, max_idx);
+    let y = v.clamp(0.0, max_idx);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(ICON_SIDE - 1);
+    let y1 = (y0 + 1).min(ICON_SIDE - 1);
+    let tx = x - x0 as f32;
+    let ty = y - y0 as f32;
+
+    let fetch = |ix: usize, iy: usize| -> (f32, f32, f32, f32) {
+        let o = (iy * ICON_SIDE + ix) * 4;
+        let a = frame[o + 3] as f32 / 255.0;
+        (
+            (frame[o] as f32 / 255.0) * a,
+            (frame[o + 1] as f32 / 255.0) * a,
+            (frame[o + 2] as f32 / 255.0) * a,
+            a,
+        )
+    };
+
+    let c00 = fetch(x0, y0);
+    let c10 = fetch(x1, y0);
+    let c01 = fetch(x0, y1);
+    let c11 = fetch(x1, y1);
+
+    let b = |p00: f32, p10: f32, p01: f32, p11: f32| -> f32 {
+        let top = p00 + (p10 - p00) * tx;
+        let bot = p01 + (p11 - p01) * tx;
+        top + (bot - top) * ty
+    };
+
+    (
+        b(c00.0, c10.0, c01.0, c11.0),
+        b(c00.1, c10.1, c01.1, c11.1),
+        b(c00.2, c10.2, c01.2, c11.2),
+        b(c00.3, c10.3, c01.3, c11.3),
+    )
+}
+
+/// Blits a `64x64` RGBA icon from `tray_icons_64.bin.zst` into `rect` using 3x3
+/// supersampled bilinear filtering (9x MSAA area downsampling), optionally rounded
+/// by `clip_radius` and optionally re-tinted with `tint_rgb`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn blit_icon_rgba(
+    image: &mut [u8],
+    w: i32,
+    h: i32,
+    card_dist: &[f32],
+    rect: RectI,
+    icon_id: TrayIconId,
+    tint_rgb: Option<(u8, u8, u8)>,
+    clip_radius: Option<f32>,
+) {
+    let Some(frame) = icon_frame(icon_id) else {
+        return;
+    };
+    let rw = rect.width().max(1) as f32;
+    let rh = rect.height().max(1) as f32;
+    let x0 = rect.left.max(0);
+    let y0 = rect.top.max(0);
+    let x1 = rect.right.min(w);
+    let y1 = rect.bottom.min(h);
+    let cx = (rect.left + rect.right) as f32 * 0.5;
+    let cy = (rect.top + rect.bottom) as f32 * 0.5;
+    let hw = rw * 0.5;
+    let hh = rh * 0.5;
+    let scale_x = ICON_SIDE as f32 / rw;
+    let scale_y = ICON_SIDE as f32 / rh;
+    let sub_offsets: [f32; 3] = [0.2, 0.5, 0.8];
+
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) as usize;
+            let mut mask_cov = (0.5 - card_dist[i]).clamp(0.0, 1.0);
+            if mask_cov <= 0.0 {
+                continue;
+            }
+            if let Some(r) = clip_radius {
+                let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, cx, cy, hw, hh, r);
+                mask_cov *= (0.5 - d).clamp(0.0, 1.0);
+                if mask_cov <= 0.0 {
+                    continue;
+                }
+            }
+
+            let mut sr = 0.0f32;
+            let mut sg = 0.0f32;
+            let mut sb = 0.0f32;
+            let mut sa = 0.0f32;
+            for oy in sub_offsets {
+                let v = ((y - rect.top) as f32 + oy) * scale_y - 0.5;
+                for ox in sub_offsets {
+                    let u = ((x - rect.left) as f32 + ox) * scale_x - 0.5;
+                    let (pr, pg, pb, pa) = sample_bilinear_premul(frame, u, v);
+                    sr += pr;
+                    sg += pg;
+                    sb += pb;
+                    sa += pa;
+                }
+            }
+            let inv = 1.0 / 9.0;
+            let a = (sa * inv * mask_cov).clamp(0.0, 1.0);
+            if a <= 0.002 {
+                continue;
+            }
+            let (fg_r, fg_g, fg_b) = if let Some((tr, tg, tb)) = tint_rgb {
+                (tr as f32 / 255.0, tg as f32 / 255.0, tb as f32 / 255.0)
+            } else {
+                let raw_a = (sa * inv).max(1e-4);
+                (
+                    (sr * inv / raw_a).clamp(0.0, 1.0),
+                    (sg * inv / raw_a).clamp(0.0, 1.0),
+                    (sb * inv / raw_a).clamp(0.0, 1.0),
+                )
+            };
+
+            let o = i * 4;
+            let dst_r = image[o] as f32 / 255.0;
+            let dst_g = image[o + 1] as f32 / 255.0;
+            let dst_b = image[o + 2] as f32 / 255.0;
+            image[o] = ((dst_r * (1.0 - a) + fg_r * a) * 255.0).round() as u8;
+            image[o + 1] = ((dst_g * (1.0 - a) + fg_g * a) * 255.0).round() as u8;
+            image[o + 2] = ((dst_b * (1.0 - a) + fg_b * a) * 255.0).round() as u8;
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod win32 {
     use super::*;
     use std::cell::RefCell;
     use std::ffi::c_void;
     use std::mem::{size_of, zeroed};
-    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
     use windows_sys::Win32::Foundation::{
         COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
     };
     use windows_sys::Win32::Graphics::Gdi::{
-        ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CLEARTYPE_NATURAL_QUALITY,
         CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateSolidBrush,
         DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DT_CENTER, DT_NOPREFIX, DT_RIGHT,
-        DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, FW_BOLD, FW_NORMAL,
-        FW_SEMIBOLD, FillRect, GetDC, GetMonitorInfoW, GetTextExtentPoint32W, HDC, HFONT, HGDIOBJ,
-        MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, ReleaseDC,
-        SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+        DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, FW_NORMAL, FW_SEMIBOLD,
+        FillRect, GetDC, GetMonitorInfoW, HDC, HFONT, HGDIOBJ, MONITOR_DEFAULTTONEAREST,
+        MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject, SetBkMode,
+        SetTextColor, TRANSPARENT,
     };
     use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
-    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    use windows_sys::Win32::UI::HiDpi::{
+        GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, MDT_EFFECTIVE_DPI,
+    };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE, VK_TAB,
     };
@@ -441,22 +935,6 @@ mod win32 {
 
     const POPUP_CLASS: &str = "AgentHubRunnerPopupClass\0";
     const SETTLE: Duration = Duration::from_millis(400);
-
-    const C_CARD: (u8, u8, u8) = (0xff, 0xff, 0xff);
-    const C_BORDER: (u8, u8, u8) = (0xe2, 0xe4, 0xec);
-    const C_HAIRLINE: (u8, u8, u8) = (0xee, 0xef, 0xf4);
-    const C_TRACK: (u8, u8, u8) = (0xf2, 0xf3, 0xf7);
-    const C_TEXT: (u8, u8, u8) = (0x18, 0x18, 0x1b);
-    const C_SUB: (u8, u8, u8) = (0x71, 0x71, 0x7a);
-    const C_CHEVRON: (u8, u8, u8) = (0xa1, 0xa1, 0xaa);
-    const C_HOVER: (u8, u8, u8) = (0xf4, 0xf5, 0xf9);
-    const C_BTN_BG: (u8, u8, u8) = (0xf6, 0xf7, 0xfa);
-    const C_DANGER: (u8, u8, u8) = (0xdc, 0x26, 0x26);
-    const C_HOVER_DANGER: (u8, u8, u8) = (0xfe, 0xf2, 0xf2);
-    const C_DIRECT_BG: (u8, u8, u8) = (0xdc, 0xfc, 0xe7);
-    const C_DIRECT_FG: (u8, u8, u8) = (0x15, 0x80, 0x3d);
-    const C_ROUTED_BG: (u8, u8, u8) = (0xdb, 0xea, 0xfe);
-    const C_ROUTED_FG: (u8, u8, u8) = (0x1d, 0x4e, 0xd8);
 
     fn colorref(c: (u8, u8, u8)) -> COLORREF {
         c.0 as u32 | ((c.1 as u32) << 8) | ((c.2 as u32) << 16)
@@ -505,18 +983,22 @@ mod win32 {
         STATE.with(|s| s.borrow().as_ref().is_some_and(|st| st.visible))
     }
 
-    fn dpi_at(pt: POINT) -> u32 {
+    fn dpi_at(pt: POINT, hwnd: HWND) -> u32 {
         unsafe {
-            let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-            if monitor.is_null() {
-                return 96;
-            }
-            let (mut x, mut y) = (96u32, 96u32);
-            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) == 0 {
-                x.max(96)
+            let sys_dpi = GetDpiForSystem().max(96);
+            let win_dpi = if !hwnd.is_null() {
+                GetDpiForWindow(hwnd)
             } else {
-                96
+                0
+            };
+            let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+            if !monitor.is_null() {
+                let (mut x, mut y) = (96u32, 96u32);
+                if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) == 0 {
+                    return x.max(win_dpi).max(sys_dpi).max(96);
+                }
             }
+            win_dpi.max(sys_dpi).max(96)
         }
     }
 
@@ -556,15 +1038,17 @@ mod win32 {
     ///
     /// # Safety
     /// `hinstance` must be this process's module handle.
-    pub unsafe fn show(hinstance: HINSTANCE, menu: Menu, choice: fn(usize)) {
+    pub unsafe fn show(hinstance: HINSTANCE, mut menu: Menu, choice: fn(usize)) {
         unsafe {
+            crate::tray::enable_per_monitor_dpi_awareness();
+            menu.dark = crate::tray::is_dark_theme();
             let hwnd = ensure_window(hinstance);
             if hwnd.is_null() {
                 return;
             }
             let mut cursor: POINT = zeroed();
             GetCursorPos(&mut cursor);
-            let dpi = dpi_at(cursor);
+            let dpi = dpi_at(cursor, hwnd);
             let tab = STATE
                 .with(|s| s.borrow().as_ref().map(|st| st.tab))
                 .unwrap_or_default();
@@ -640,7 +1124,6 @@ mod win32 {
                 && cursor.y >= rect.top + card_y
                 && cursor.y < rect.top + card_y + card_h;
             if !inside {
-                // Only auto-dismiss when mouse leaves if foreground was already lost
                 let fg = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
                 if fg != hwnd {
                     hide();
@@ -672,6 +1155,7 @@ mod win32 {
             return *hwnd as HWND;
         }
         unsafe {
+            crate::tray::enable_per_monitor_dpi_awareness();
             let class: Vec<u16> = POPUP_CLASS.encode_utf16().collect();
             let wc = WNDCLASSW {
                 style: 0,
@@ -914,6 +1398,7 @@ mod win32 {
             let w = layout.win_w;
             let h = layout.win_h;
             let s = layout.scale;
+            let pal = ThemePalette::for_theme(menu.dark);
 
             let card_cx = layout.card_x as f32 + layout.card_w as f32 / 2.0;
             let card_cy = layout.card_y as f32 + layout.card_h as f32 / 2.0;
@@ -942,19 +1427,115 @@ mod win32 {
                 h,
                 (10.0 * s).round().max(1.0) as usize,
                 (4.0 * s).round() as i32,
-                0.18,
+                if menu.dark { 0.38 } else { 0.18 },
             );
 
             let mut image = vec![0u8; (w * h * 4) as usize];
             for (i, px) in image.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let (r, g, b, a) = card_color(dist[i], shadow[i]);
+                let (r, g, b, a) = card_color(dist[i], shadow[i], &pal);
                 px[0] = r;
                 px[1] = g;
                 px[2] = b;
                 px[3] = a;
             }
 
-            // Segmented tabs track + active white pill
+            // Header: AgentHub 3D cube logo on the left, vector Gear button on the right
+            let pad_x = (PAD_X as f32 * s).round() as i32;
+            let logo_sz = (22.0 * s).round() as i32;
+            let logo_top = layout.card_y + ((HEADER_H as f32 * s).round() as i32 - logo_sz) / 2;
+            let logo_rect = RectI {
+                left: layout.card_x + pad_x,
+                top: logo_top,
+                right: layout.card_x + pad_x + logo_sz,
+                bottom: logo_top + logo_sz,
+            };
+            blit_icon_rgba(
+                &mut image,
+                w,
+                h,
+                &dist,
+                logo_rect,
+                TrayIconId::AgentHub,
+                None,
+                None,
+            );
+
+            // Header running status pill (`● 运行中`)
+            let status_pill_w = (54.0 * s).round() as i32;
+            let status_pill_h = (18.0 * s).round() as i32;
+            let status_pill_left = logo_rect.right + (88.0 * s).round() as i32;
+            let status_pill_top =
+                layout.card_y + ((HEADER_H as f32 * s).round() as i32 - status_pill_h) / 2;
+            let status_pill_rect = RectI {
+                left: status_pill_left,
+                top: status_pill_top,
+                right: status_pill_left + status_pill_w,
+                bottom: status_pill_top + status_pill_h,
+            };
+            fill_round_rect(
+                &mut image,
+                w,
+                h,
+                &dist,
+                status_pill_rect,
+                9.0 * s,
+                pal.direct_bg,
+                None,
+            );
+            fill_circle(
+                &mut image,
+                w,
+                h,
+                &dist,
+                status_pill_rect.left as f32 + 9.0 * s,
+                (status_pill_rect.top + status_pill_rect.bottom) as f32 * 0.5,
+                2.8 * s,
+                pal.direct_dot,
+            );
+
+            // Gear button card + vector gear icon
+            let gear_bg = if hover == Some(HitTarget::GearSettings) {
+                pal.row_hover
+            } else {
+                pal.row_card
+            };
+            let gear_border = if hover == Some(HitTarget::GearSettings) {
+                pal.row_hover_border
+            } else {
+                pal.row_border
+            };
+            fill_round_rect(
+                &mut image,
+                w,
+                h,
+                &dist,
+                layout.gear_rect,
+                8.0 * s,
+                gear_bg,
+                Some(gear_border),
+            );
+            let gear_inset = (5.0 * s).round() as i32;
+            blit_icon_rgba(
+                &mut image,
+                w,
+                h,
+                &dist,
+                RectI {
+                    left: layout.gear_rect.left + gear_inset,
+                    top: layout.gear_rect.top + gear_inset,
+                    right: layout.gear_rect.right - gear_inset,
+                    bottom: layout.gear_rect.bottom - gear_inset,
+                },
+                TrayIconId::Gear,
+                Some(if hover == Some(HitTarget::GearSettings) {
+                    pal.accent
+                } else {
+                    pal.sub
+                }),
+                None,
+            );
+
+            // Segmented tabs track + active thumb + tab icons
             fill_round_rect(
                 &mut image,
                 w,
@@ -962,8 +1543,8 @@ mod win32 {
                 &dist,
                 layout.tabs_track,
                 9.0 * s,
-                C_TRACK,
-                None,
+                pal.seg_track,
+                Some(pal.row_border),
             );
             let active_tab_rect = match tab {
                 TrayTab::Config => layout.tab_config,
@@ -976,96 +1557,215 @@ mod win32 {
                 &dist,
                 active_tab_rect,
                 7.0 * s,
-                C_CARD,
-                Some(C_BORDER),
+                pal.seg_thumb,
+                Some(pal.seg_thumb_border),
             );
 
-            // Gear hover pill
-            if hover == Some(HitTarget::GearSettings) {
+            let tab_icon_sz = (14.0 * s).round() as i32;
+            for (t_rect, t_kind, t_icon) in [
+                (layout.tab_config, TrayTab::Config, TrayIconId::TabConfig),
+                (layout.tab_usage, TrayTab::Usage, TrayIconId::TabUsage),
+            ] {
+                let is_on = tab == t_kind;
+                let cx = (t_rect.left + t_rect.right) / 2;
+                let cy = (t_rect.top + t_rect.bottom) / 2;
+                let icon_left = cx - (22.0 * s).round() as i32;
+                blit_icon_rgba(
+                    &mut image,
+                    w,
+                    h,
+                    &dist,
+                    RectI {
+                        left: icon_left,
+                        top: cy - tab_icon_sz / 2,
+                        right: icon_left + tab_icon_sz,
+                        bottom: cy - tab_icon_sz / 2 + tab_icon_sz,
+                    },
+                    t_icon,
+                    Some(if is_on { pal.accent } else { pal.sub }),
+                    None,
+                );
+            }
+
+            // Rows: elevated row card + real brand icon badge + right route pill + chevron
+            for (idx, (rect, _)) in layout.row_rects.iter().enumerate() {
+                let is_hover = hover == Some(HitTarget::Row(idx));
+                let row_fill = if is_hover {
+                    pal.row_hover
+                } else {
+                    pal.row_card
+                };
+                let row_bdr = if is_hover {
+                    pal.row_hover_border
+                } else {
+                    pal.row_border
+                };
                 fill_round_rect(
                     &mut image,
                     w,
                     h,
                     &dist,
-                    layout.gear_rect,
-                    8.0 * s,
-                    C_HOVER,
-                    None,
+                    *rect,
+                    10.0 * s,
+                    row_fill,
+                    Some(row_bdr),
                 );
-            }
 
-            // Rows: hover fill + brand/accent badge + route pill
-            for (idx, (rect, _)) in layout.row_rects.iter().enumerate() {
-                if hover == Some(HitTarget::Row(idx)) {
-                    fill_round_rect(&mut image, w, h, &dist, *rect, 9.0 * s, C_HOVER, None);
-                }
+                let badge_sz = (34.0 * s).round() as i32;
+                let bx = rect.left + (9.0 * s).round() as i32;
+                let by = rect.top + (rect.height() - badge_sz) / 2;
+                let badge = RectI {
+                    left: bx,
+                    top: by,
+                    right: bx + badge_sz,
+                    bottom: by + badge_sz,
+                };
+
                 if tab == TrayTab::Config
                     && let Some(agent) = menu.agents.get(idx)
                 {
-                    let badge_sz = (32.0 * s).round() as i32;
-                    let bx = rect.left + (8.0 * s).round() as i32;
-                    let by = rect.top + (rect.height() - badge_sz) / 2;
-                    let badge = RectI {
-                        left: bx,
-                        top: by,
-                        right: bx + badge_sz,
-                        bottom: by + badge_sz,
+                    let badge_bg = if menu.dark {
+                        agent.badge_bg_dark
+                    } else {
+                        agent.badge_bg_light
+                    };
+                    if agent.full_bleed_icon {
+                        blit_icon_rgba(
+                            &mut image,
+                            w,
+                            h,
+                            &dist,
+                            badge,
+                            agent.icon_id,
+                            None,
+                            Some(8.5 * s),
+                        );
+                    } else {
+                        fill_round_rect(&mut image, w, h, &dist, badge, 9.0 * s, badge_bg, None);
+                        blit_icon_rgba(&mut image, w, h, &dist, badge, agent.icon_id, None, None);
+                    }
+
+                    // Right-aligned status pill (`● 直连` or `● 路由`) + vector chevron
+                    let pill_w = (52.0 * s).round() as i32;
+                    let pill_h = (20.0 * s).round() as i32;
+                    let chev_sz = (15.0 * s).round() as i32;
+                    let chev_right = rect.right - (7.0 * s).round() as i32;
+                    let cy = (rect.top + rect.bottom) / 2;
+                    let pill_right = chev_right - chev_sz - (4.0 * s).round() as i32;
+                    let pill_rect = RectI {
+                        left: pill_right - pill_w,
+                        top: cy - pill_h / 2,
+                        right: pill_right,
+                        bottom: cy - pill_h / 2 + pill_h,
+                    };
+                    let (pill_bg, dot_rgb) = if agent.route_mode == "routed" {
+                        (pal.routed_bg, pal.routed_dot)
+                    } else {
+                        (pal.direct_bg, pal.direct_dot)
                     };
                     fill_round_rect(
                         &mut image,
                         w,
                         h,
                         &dist,
-                        badge,
-                        9.0 * s,
-                        agent.brand_bg_rgb,
+                        pill_rect,
+                        10.0 * s,
+                        pill_bg,
                         None,
                     );
-                } else if tab == TrayTab::Usage
-                    && let Some(urow) = menu.usage_rows.get(idx)
-                {
-                    let bar_w = (4.0 * s).round().max(2.0) as i32;
-                    let bar_h = (26.0 * s).round() as i32;
-                    let bx = rect.left + (10.0 * s).round() as i32;
-                    let by = rect.top + (rect.height() - bar_h) / 2;
-                    fill_round_rect(
+                    fill_circle(
+                        &mut image,
+                        w,
+                        h,
+                        &dist,
+                        pill_rect.left as f32 + 9.0 * s,
+                        cy as f32,
+                        2.8 * s,
+                        dot_rgb,
+                    );
+
+                    blit_icon_rgba(
                         &mut image,
                         w,
                         h,
                         &dist,
                         RectI {
-                            left: bx,
-                            top: by,
-                            right: bx + bar_w,
-                            bottom: by + bar_h,
+                            left: chev_right - chev_sz,
+                            top: cy - chev_sz / 2,
+                            right: chev_right,
+                            bottom: cy - chev_sz / 2 + chev_sz,
                         },
-                        2.0 * s,
-                        urow.accent_rgb,
+                        TrayIconId::ChevronRight,
+                        Some(if is_hover { pal.accent } else { pal.chevron }),
                         None,
                     );
+                } else if tab == TrayTab::Usage
+                    && let Some(urow) = menu.usage_rows.get(idx)
+                {
+                    let badge_bg = if menu.dark {
+                        urow.badge_bg_dark
+                    } else {
+                        urow.badge_bg_light
+                    };
+                    if urow.full_bleed_icon {
+                        blit_icon_rgba(
+                            &mut image,
+                            w,
+                            h,
+                            &dist,
+                            badge,
+                            urow.icon_id,
+                            None,
+                            Some(8.5 * s),
+                        );
+                    } else {
+                        fill_round_rect(&mut image, w, h, &dist, badge, 9.0 * s, badge_bg, None);
+                        blit_icon_rgba(&mut image, w, h, &dist, badge, urow.icon_id, None, None);
+                    }
                 }
             }
 
-            // Footer buttons (`打开主窗口` and `退出`)
-            let main_bg = if hover == Some(HitTarget::FooterMain) {
-                C_HOVER
-            } else {
-                C_BTN_BG
-            };
+            // Footer buttons (`打开主窗口` and `退出`) with vector icons
+            let main_hover = hover == Some(HitTarget::FooterMain);
             fill_round_rect(
                 &mut image,
                 w,
                 h,
                 &dist,
                 layout.footer_main,
-                8.0 * s,
-                main_bg,
-                Some(C_BORDER),
+                8.5 * s,
+                if main_hover {
+                    pal.btn_primary_hover
+                } else {
+                    pal.btn_primary_bg
+                },
+                Some(pal.btn_primary_border),
             );
-            let exit_bg = if hover == Some(HitTarget::FooterExit) {
-                C_HOVER_DANGER
+            let btn_icon_sz = (15.0 * s).round() as i32;
+            let main_cx = (layout.footer_main.left + layout.footer_main.right) / 2;
+            let main_cy = (layout.footer_main.top + layout.footer_main.bottom) / 2;
+            let main_icon_left = main_cx - (42.0 * s).round() as i32;
+            blit_icon_rgba(
+                &mut image,
+                w,
+                h,
+                &dist,
+                RectI {
+                    left: main_icon_left,
+                    top: main_cy - btn_icon_sz / 2,
+                    right: main_icon_left + btn_icon_sz,
+                    bottom: main_cy - btn_icon_sz / 2 + btn_icon_sz,
+                },
+                TrayIconId::BtnWindow,
+                Some(pal.btn_primary_fg),
+                None,
+            );
+
+            let exit_hover = hover == Some(HitTarget::FooterExit);
+            let exit_fg = if exit_hover {
+                pal.btn_sec_hover_fg
             } else {
-                C_BTN_BG
+                pal.btn_sec_fg
             };
             fill_round_rect(
                 &mut image,
@@ -1073,29 +1773,54 @@ mod win32 {
                 h,
                 &dist,
                 layout.footer_exit,
-                8.0 * s,
-                exit_bg,
-                Some(C_BORDER),
+                8.5 * s,
+                if exit_hover {
+                    pal.btn_sec_hover
+                } else {
+                    pal.btn_sec_bg
+                },
+                Some(pal.btn_sec_border),
+            );
+            let exit_cx = (layout.footer_exit.left + layout.footer_exit.right) / 2;
+            let exit_cy = (layout.footer_exit.top + layout.footer_exit.bottom) / 2;
+            let exit_icon_left = exit_cx - (22.0 * s).round() as i32;
+            blit_icon_rgba(
+                &mut image,
+                w,
+                h,
+                &dist,
+                RectI {
+                    left: exit_icon_left,
+                    top: exit_cy - btn_icon_sz / 2,
+                    right: exit_icon_left + btn_icon_sz,
+                    bottom: exit_cy - btn_icon_sz / 2 + btn_icon_sz,
+                },
+                TrayIconId::BtnExit,
+                Some(exit_fg),
+                None,
             );
 
-            // Typography & crisp badges via GDI
-            unsafe { draw_typography(&mut image, w, h, &dist, menu, tab, layout, hover) };
+            unsafe {
+                draw_typography(&mut image, w, h, menu, tab, layout, hover, &pal);
+            }
 
-            let upload = unsafe { Upload::new(w, h) };
-            let dirty = upload.is_some();
             Self {
                 session,
                 hover,
                 w,
                 h,
                 image,
-                upload,
-                dirty,
+                upload: None,
+                dirty: true,
             }
         }
 
         unsafe fn present(&mut self, hwnd: HWND, at: POINT) {
             unsafe {
+                if self.upload.is_none() {
+                    self.upload = Upload::new(self.w, self.h);
+                    self.dirty = true;
+                }
                 let Some(upload) = self.upload.as_ref() else {
                     return;
                 };
@@ -1108,59 +1833,14 @@ mod win32 {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn fill_round_rect(
-        image: &mut [u8],
-        w: i32,
-        h: i32,
-        card_dist: &[f32],
-        rect: RectI,
-        radius: f32,
-        fill: (u8, u8, u8),
-        border: Option<(u8, u8, u8)>,
-    ) {
-        let cx = rect.left as f32 + rect.width() as f32 / 2.0;
-        let cy = rect.top as f32 + rect.height() as f32 / 2.0;
-        let hw = rect.width() as f32 / 2.0;
-        let hh = rect.height() as f32 / 2.0;
-        let y0 = (rect.top - 2).clamp(0, h);
-        let y1 = (rect.bottom + 2).clamp(0, h);
-        let x0 = (rect.left - 2).clamp(0, w);
-        let x1 = (rect.right + 2).clamp(0, w);
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let i = (y * w + x) as usize;
-                let card_cov = (0.5 - card_dist[i]).clamp(0.0, 1.0);
-                if card_cov <= 0.0 {
-                    continue;
-                }
-                let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, cx, cy, hw, hh, radius);
-                let cov = (0.5 - d).clamp(0.0, 1.0) * card_cov;
-                if cov <= 0.0 {
-                    continue;
-                }
-                let mut target = fill;
-                if let Some(bc) = border {
-                    let b_edge = (1.0 - (d + 0.5).abs()).clamp(0.0, 1.0);
-                    target = lerp(fill, bc, b_edge);
-                }
-                let o = i * 4;
-                let mixed = lerp((image[o], image[o + 1], image[o + 2]), target, cov);
-                image[o] = mixed.0;
-                image[o + 1] = mixed.1;
-                image[o + 2] = mixed.2;
-            }
-        }
-    }
-
-    fn card_color(dist: f32, shadow: f32) -> (u8, u8, u8, u8) {
+    fn card_color(dist: f32, shadow: f32, pal: &ThemePalette) -> (u8, u8, u8, u8) {
         let cov = (0.5 - dist).clamp(0.0, 1.0);
         let alpha = cov + shadow * (1.0 - cov);
         if alpha <= 0.001 {
             return (0, 0, 0, 0);
         }
         let border = (1.0 - (dist + 0.5).abs()).clamp(0.0, 1.0);
-        let rgb = lerp(C_CARD, C_BORDER, border);
+        let rgb = lerp(pal.surface, pal.surface_border, border);
         (rgb.0, rgb.1, rgb.2, (alpha * 255.0).round() as u8)
     }
 
@@ -1260,20 +1940,6 @@ mod win32 {
                 DeleteDC(self.hdc);
             }
         }
-    }
-
-    fn sd_round_rect(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
-        let qx = (px - cx).abs() - (hw - r);
-        let qy = (py - cy).abs() - (hh - r);
-        let ax = qx.max(0.0);
-        let ay = qy.max(0.0);
-        (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - r
-    }
-
-    fn lerp(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
-        let t = t.clamp(0.0, 1.0);
-        let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-        (f(a.0, b.0), f(a.1, b.1), f(a.2, b.2))
     }
 
     fn shadow_of(mask: &[f32], w: i32, h: i32, radius: usize, dy: i32, strength: f32) -> Vec<f32> {
@@ -1495,19 +2161,10 @@ mod win32 {
                 SelectObject(self.hdc, old);
             }
         }
-
-        unsafe fn text_width(&self, s: &str, font: HFONT) -> i32 {
-            unsafe {
-                let old = SelectObject(self.hdc, font as HGDIOBJ);
-                let mut wide: Vec<u16> = s.encode_utf16().collect();
-                let mut size: SIZE = zeroed();
-                GetTextExtentPoint32W(self.hdc, wide.as_mut_ptr(), wide.len() as i32, &mut size);
-                SelectObject(self.hdc, old);
-                size.cx
-            }
-        }
     }
 
+    /// Creates a ClearType subpixel-antialiased font at physical pixel height `(size * scale).round()`.
+    /// Uses `CLEARTYPE_NATURAL_QUALITY` (`6`) and avoids synthetic double-strike `FW_SEMIBOLD` on CJK faces.
     fn font(scale: f32, size: f32, weight: u32, face: &str) -> HFONT {
         let mut name: Vec<u16> = face.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
@@ -1523,7 +2180,7 @@ mod win32 {
                 DEFAULT_CHARSET as u32,
                 OUT_DEFAULT_PRECIS as u32,
                 CLIP_DEFAULT_PRECIS as u32,
-                ANTIALIASED_QUALITY as u32,
+                CLEARTYPE_NATURAL_QUALITY as u32,
                 DEFAULT_PITCH as u32,
                 name.as_mut_ptr(),
             )
@@ -1535,111 +2192,91 @@ mod win32 {
         px: &mut [u8],
         w: i32,
         h: i32,
-        card_dist: &[f32],
         menu: &Menu,
         tab: TrayTab,
         layout: &CardLayout,
         hover: Option<HitTarget>,
+        pal: &ThemePalette,
     ) {
         unsafe {
-            // Pre-compute pill background positions before locking GDI over `px`
-            let s = layout.scale;
-            if tab == TrayTab::Config {
-                let Some(probe) = Gdi::new(px, w, h) else {
-                    return;
-                };
-                let f_sub = font(s, 11.5, FW_NORMAL, "Microsoft YaHei UI");
-                let f_pill = font(s, 10.5, FW_SEMIBOLD, "Microsoft YaHei UI");
-                let mut pills = Vec::new();
-                for (idx, (rect, _)) in layout.row_rects.iter().enumerate() {
-                    if let Some(agent) = menu.agents.get(idx) {
-                        let text_left = rect.left + (48.0 * s).round() as i32;
-                        let prov_w = probe.text_width(&agent.provider_label, f_sub);
-                        let badge_label = if agent.route_mode == "routed" {
-                            "路由"
-                        } else {
-                            "直连"
-                        };
-                        let pill_w =
-                            probe.text_width(badge_label, f_pill) + (12.0 * s).round() as i32;
-                        let pill_h = (16.0 * s).round() as i32;
-                        let sub_cy = rect.top + (rect.height() * 68) / 100;
-                        let px_left = (text_left + prov_w + (6.0 * s).round() as i32)
-                            .min(rect.right - pill_w - (22.0 * s).round() as i32);
-                        let pill_rect = RectI {
-                            left: px_left,
-                            top: sub_cy - pill_h / 2,
-                            right: px_left + pill_w,
-                            bottom: sub_cy - pill_h / 2 + pill_h,
-                        };
-                        let bg = if agent.route_mode == "routed" {
-                            C_ROUTED_BG
-                        } else {
-                            C_DIRECT_BG
-                        };
-                        pills.push((pill_rect, bg));
-                    }
-                }
-                for f in [f_sub, f_pill] {
-                    DeleteObject(f as HGDIOBJ);
-                }
-                probe.discard();
-                for (pill_rect, bg) in pills {
-                    fill_round_rect(px, w, h, card_dist, pill_rect, 4.5 * s, bg, None);
-                }
-            }
-
             let Some(g) = Gdi::new(px, w, h) else {
                 return;
             };
+            let s = layout.scale;
             let pad_x = (PAD_X as f32 * s).round() as i32;
 
-            let f_brand = font(s, 15.0, FW_BOLD, "Segoe UI");
-            let f_gear = font(s, 15.0, FW_NORMAL, "Segoe UI Symbol");
-            let f_tab_on = font(s, 12.5, FW_SEMIBOLD, "Microsoft YaHei UI");
-            let f_tab_off = font(s, 12.5, FW_NORMAL, "Microsoft YaHei UI");
-            let f_name = font(s, 13.5, FW_SEMIBOLD, "Segoe UI");
-            let f_name_cn = font(s, 13.0, FW_SEMIBOLD, "Microsoft YaHei UI");
-            let f_glyph = font(s, 14.0, FW_BOLD, "Segoe UI");
-            let f_sub = font(s, 11.5, FW_NORMAL, "Microsoft YaHei UI");
-            let f_pill = font(s, 10.5, FW_SEMIBOLD, "Microsoft YaHei UI");
-            let f_chev = font(s, 16.0, FW_NORMAL, "Segoe UI");
-            let f_btn = font(s, 12.5, FW_SEMIBOLD, "Microsoft YaHei UI");
+            // `Segoe UI Semibold` loads native `seguisb.ttf` for Latin titles/names;
+            // `Microsoft YaHei UI` at `FW_NORMAL` loads native `msyh.ttc` without synthetic double-strike smear.
+            let f_brand = font(s, 15.5, FW_SEMIBOLD, "Segoe UI Semibold");
+            let f_tab = font(s, 13.0, FW_NORMAL, "Microsoft YaHei UI");
+            let f_name_en = font(s, 14.0, FW_SEMIBOLD, "Segoe UI Semibold");
+            let f_name_cn = font(s, 13.5, FW_NORMAL, "Microsoft YaHei UI");
+            let f_sub = font(s, 12.0, FW_NORMAL, "Microsoft YaHei UI");
+            let f_pill = font(s, 11.0, FW_NORMAL, "Microsoft YaHei UI");
+            let f_btn = font(s, 13.0, FW_NORMAL, "Microsoft YaHei UI");
 
-            // Header: "AgentHub" + gear icon
-            let header_rect = RECT {
-                left: layout.card_x + pad_x,
-                top: layout.card_y,
-                right: layout.gear_rect.left - (4.0 * s) as i32,
-                bottom: layout.card_y + (HEADER_H as f32 * s).round() as i32,
-            };
-            g.text("AgentHub", f_brand, C_TEXT, header_rect);
-            g.text_center("⚙", f_gear, C_SUB, to_win_rect(layout.gear_rect));
+            // Header: "AgentHub" after the 22px 3D cube logo + "运行中" status pill
+            let logo_sz = (22.0 * s).round() as i32;
+            let header_text_left = layout.card_x + pad_x + logo_sz + (8.0 * s).round() as i32;
+            let header_bottom = layout.card_y + (HEADER_H as f32 * s).round() as i32;
+            g.text(
+                "AgentHub",
+                f_brand,
+                pal.text,
+                RECT {
+                    left: header_text_left,
+                    top: layout.card_y,
+                    right: header_text_left + (84.0 * s).round() as i32,
+                    bottom: header_bottom,
+                },
+            );
 
-            // Segmented Tabs: 配置 | 用量
+            let status_pill_left =
+                layout.card_x + pad_x + logo_sz + (88.0 * s).round() as i32;
+            let status_pill_w = (54.0 * s).round() as i32;
+            g.text(
+                "运行中",
+                f_pill,
+                pal.direct_fg,
+                RECT {
+                    left: status_pill_left + (15.0 * s).round() as i32,
+                    top: layout.card_y,
+                    right: status_pill_left + status_pill_w,
+                    bottom: header_bottom,
+                },
+            );
+
+            // Segmented Tabs: [icon] 配置 | [icon] 用量
+            let tab_text_shift = (9.0 * s).round() as i32;
             g.text_center(
                 "配置",
+                f_tab,
                 if tab == TrayTab::Config {
-                    f_tab_on
+                    pal.text
                 } else {
-                    f_tab_off
+                    pal.sub
                 },
-                if tab == TrayTab::Config {
-                    C_TEXT
-                } else {
-                    C_SUB
+                RECT {
+                    left: layout.tab_config.left + tab_text_shift,
+                    top: layout.tab_config.top,
+                    right: layout.tab_config.right,
+                    bottom: layout.tab_config.bottom,
                 },
-                to_win_rect(layout.tab_config),
             );
             g.text_center(
                 "用量",
+                f_tab,
                 if tab == TrayTab::Usage {
-                    f_tab_on
+                    pal.text
                 } else {
-                    f_tab_off
+                    pal.sub
                 },
-                if tab == TrayTab::Usage { C_TEXT } else { C_SUB },
-                to_win_rect(layout.tab_usage),
+                RECT {
+                    left: layout.tab_usage.left + tab_text_shift,
+                    top: layout.tab_usage.top,
+                    right: layout.tab_usage.right,
+                    bottom: layout.tab_usage.bottom,
+                },
             );
 
             // Body rows
@@ -1647,82 +2284,50 @@ mod win32 {
                 TrayTab::Config => {
                     for (idx, (rect, _)) in layout.row_rects.iter().enumerate() {
                         if let Some(agent) = menu.agents.get(idx) {
-                            let badge_sz = (32.0 * s).round() as i32;
-                            let bx = rect.left + (8.0 * s).round() as i32;
-                            let by = rect.top + (rect.height() - badge_sz) / 2;
-                            g.text_center(
-                                agent.badge_glyph,
-                                f_glyph,
-                                agent.brand_rgb,
-                                RECT {
-                                    left: bx,
-                                    top: by,
-                                    right: bx + badge_sz,
-                                    bottom: by + badge_sz,
-                                },
-                            );
+                            let text_left = rect.left + (51.0 * s).round() as i32;
+                            let chev_right = rect.right - (7.0 * s).round() as i32;
+                            let chev_sz = (15.0 * s).round() as i32;
+                            let pill_w = (52.0 * s).round() as i32;
+                            let pill_right = chev_right - chev_sz - (4.0 * s).round() as i32;
+                            let pill_left = pill_right - pill_w;
 
-                            let text_left = rect.left + (48.0 * s).round() as i32;
-                            let chev_right = rect.right - (10.0 * s).round() as i32;
                             g.text(
                                 &agent.display_name,
-                                f_name,
-                                C_TEXT,
+                                f_name_en,
+                                pal.text,
                                 RECT {
                                     left: text_left,
                                     top: rect.top + (5.0 * s).round() as i32,
-                                    right: chev_right - (14.0 * s).round() as i32,
-                                    bottom: rect.top + (rect.height() * 52) / 100,
+                                    right: pill_left - (6.0 * s).round() as i32,
+                                    bottom: rect.top + (rect.height() * 54) / 100,
                                 },
                             );
 
-                            let prov_w = g.text_width(&agent.provider_label, f_sub);
-                            let sub_top = rect.top + (rect.height() * 48) / 100;
-                            let sub_bottom = rect.bottom - (4.0 * s).round() as i32;
                             g.text(
                                 &agent.provider_label,
                                 f_sub,
-                                C_SUB,
+                                pal.sub,
                                 RECT {
                                     left: text_left,
-                                    top: sub_top,
-                                    right: (text_left + prov_w + 4)
-                                        .min(chev_right - (48.0 * s).round() as i32),
-                                    bottom: sub_bottom,
+                                    top: rect.top + (rect.height() * 48) / 100,
+                                    right: pill_left - (6.0 * s).round() as i32,
+                                    bottom: rect.bottom - (4.0 * s).round() as i32,
                                 },
                             );
 
                             let (badge_label, fg) = if agent.route_mode == "routed" {
-                                ("路由", C_ROUTED_FG)
+                                ("路由", pal.routed_fg)
                             } else {
-                                ("直连", C_DIRECT_FG)
+                                ("直连", pal.direct_fg)
                             };
-                            let pill_w =
-                                g.text_width(badge_label, f_pill) + (12.0 * s).round() as i32;
-                            let pill_h = (16.0 * s).round() as i32;
-                            let sub_cy = rect.top + (rect.height() * 68) / 100;
-                            let px_left = (text_left + prov_w + (6.0 * s).round() as i32)
-                                .min(rect.right - pill_w - (22.0 * s).round() as i32);
-                            g.text_center(
+                            g.text(
                                 badge_label,
                                 f_pill,
                                 fg,
                                 RECT {
-                                    left: px_left,
-                                    top: sub_cy - pill_h / 2,
-                                    right: px_left + pill_w,
-                                    bottom: sub_cy - pill_h / 2 + pill_h,
-                                },
-                            );
-
-                            g.text_right(
-                                "›",
-                                f_chev,
-                                C_CHEVRON,
-                                RECT {
-                                    left: chev_right - (16.0 * s).round() as i32,
+                                    left: pill_left + (16.0 * s).round() as i32,
                                     top: rect.top,
-                                    right: chev_right,
+                                    right: pill_right,
                                     bottom: rect.bottom,
                                 },
                             );
@@ -1732,36 +2337,37 @@ mod win32 {
                 TrayTab::Usage => {
                     for (idx, (rect, _)) in layout.row_rects.iter().enumerate() {
                         if let Some(urow) = menu.usage_rows.get(idx) {
-                            let text_left = rect.left + (22.0 * s).round() as i32;
-                            let right_edge = rect.right - (10.0 * s).round() as i32;
+                            let text_left = rect.left + (51.0 * s).round() as i32;
+                            let right_edge = rect.right - (12.0 * s).round() as i32;
+                            let is_ascii = urow.label.is_ascii();
                             g.text(
                                 &urow.label,
-                                f_name_cn,
-                                C_TEXT,
+                                if is_ascii { f_name_en } else { f_name_cn },
+                                pal.text,
                                 RECT {
                                     left: text_left,
                                     top: rect.top + (5.0 * s).round() as i32,
-                                    right: right_edge - (76.0 * s).round() as i32,
-                                    bottom: rect.top + (rect.height() * 52) / 100,
+                                    right: right_edge - (72.0 * s).round() as i32,
+                                    bottom: rect.top + (rect.height() * 54) / 100,
                                 },
                             );
                             g.text(
                                 &urow.sublabel,
                                 f_sub,
-                                C_SUB,
+                                pal.sub,
                                 RECT {
                                     left: text_left,
                                     top: rect.top + (rect.height() * 48) / 100,
-                                    right: right_edge - (64.0 * s).round() as i32,
+                                    right: right_edge - (62.0 * s).round() as i32,
                                     bottom: rect.bottom - (4.0 * s).round() as i32,
                                 },
                             );
                             g.text_right(
                                 &urow.value,
-                                f_name,
-                                C_TEXT,
+                                f_name_en,
+                                pal.text,
                                 RECT {
-                                    left: right_edge - (88.0 * s).round() as i32,
+                                    left: right_edge - (86.0 * s).round() as i32,
                                     top: rect.top,
                                     right: right_edge,
                                     bottom: rect.bottom,
@@ -1772,27 +2378,44 @@ mod win32 {
                 }
             }
 
-            // Footer hairline + two buttons
+            // Footer hairline + two icon-and-text buttons
             g.fill(
                 layout.card_x + pad_x,
                 layout.sep_y,
                 layout.card_w - 2 * pad_x,
                 1,
-                C_HAIRLINE,
+                pal.hairline,
             );
-            g.text_center("打开主窗口", f_btn, C_TEXT, to_win_rect(layout.footer_main));
+            g.text_center(
+                "打开主窗口",
+                f_btn,
+                pal.btn_primary_fg,
+                RECT {
+                    left: layout.footer_main.left + (12.0 * s).round() as i32,
+                    top: layout.footer_main.top,
+                    right: layout.footer_main.right,
+                    bottom: layout.footer_main.bottom,
+                },
+            );
             let exit_fg = if hover == Some(HitTarget::FooterExit) {
-                C_DANGER
+                pal.btn_sec_hover_fg
             } else {
-                C_SUB
+                pal.btn_sec_fg
             };
-            g.text_center("退出", f_btn, exit_fg, to_win_rect(layout.footer_exit));
+            g.text_center(
+                "退出",
+                f_btn,
+                exit_fg,
+                RECT {
+                    left: layout.footer_exit.left + (10.0 * s).round() as i32,
+                    top: layout.footer_exit.top,
+                    right: layout.footer_exit.right,
+                    bottom: layout.footer_exit.bottom,
+                },
+            );
 
             g.finish(px);
-            for f in [
-                f_brand, f_gear, f_tab_on, f_tab_off, f_name, f_name_cn, f_glyph, f_sub, f_pill,
-                f_chev, f_btn,
-            ] {
+            for f in [f_brand, f_tab, f_name_en, f_name_cn, f_sub, f_pill, f_btn] {
                 DeleteObject(f as HGDIOBJ);
             }
         }
@@ -1807,6 +2430,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn embedded_icon_bank_contains_all_twenty_64x64_rgba_icons() {
+        let bank = icon_bank();
+        assert_eq!(bank.len(), 20 * ICON_FRAME_BYTES);
+        for id in [
+            TrayIconId::AgentHub,
+            TrayIconId::ClaudeCode,
+            TrayIconId::ClaudeDesktop,
+            TrayIconId::Codex,
+            TrayIconId::GeminiCli,
+            TrayIconId::GeminiStar,
+            TrayIconId::ZCode,
+            TrayIconId::Grok,
+            TrayIconId::Antigravity,
+            TrayIconId::Gear,
+            TrayIconId::TabConfig,
+            TrayIconId::TabUsage,
+            TrayIconId::UsageReq,
+            TrayIconId::UsageTok,
+            TrayIconId::UsageCost,
+            TrayIconId::BtnWindow,
+            TrayIconId::BtnExit,
+            TrayIconId::ChevronRight,
+            TrayIconId::ArrowLeft,
+            TrayIconId::Check,
+        ] {
+            let frame = icon_frame(id).expect("icon frame must exist");
+            let non_transparent = frame.chunks_exact(4).filter(|px| px[3] > 16).count();
+            assert!(
+                non_transparent > 60,
+                "icon {:?} must have visible opaque pixels (got {})",
+                id,
+                non_transparent
+            );
+        }
+    }
+
+    #[test]
     fn card_layout_hits_tabs_gear_rows_and_footer() {
         let menu = build_live_menu("127.0.0.1:4200".to_string());
         assert!(
@@ -1818,7 +2478,7 @@ mod tests {
             "usage KPI rows are always populated"
         );
 
-        let layout = CardLayout::compute(&menu, TrayTab::Config, 96);
+        let layout = CardLayout::compute(&menu, TrayTab::Config, 144);
         let gear_mid = (
             (layout.gear_rect.left + layout.gear_rect.right) / 2,
             (layout.gear_rect.top + layout.gear_rect.bottom) / 2,

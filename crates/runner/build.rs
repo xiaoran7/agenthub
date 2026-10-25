@@ -19,6 +19,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=resources/icon.ico");
     println!("cargo:rerun-if-changed=resources/icon.svg");
+    println!("cargo:rerun-if-changed=resources/tray_icons_64.bin.zst");
     println!("cargo:rerun-if-changed=resources/app.manifest");
     println!("cargo:rerun-if-changed=build.rs");
 
