@@ -400,133 +400,452 @@ fn parse_models_response(val: &Value, provider_name: &str) -> Vec<LiveCatalogMod
 
 /// Model catalogs keyed by the agent engine that can actually run them.
 ///
-/// The console picks one engine and then asks which models it can run, so the
-/// catalog keeps each engine's own answer instead of flattening every id into
-/// one list: the Claude gateway and ZCode read different configuration files,
-/// serve different id spaces, and an id from one is a guaranteed provider
-/// rejection on the other.
-///
-/// Codex is not here: its list is a `model/list` RPC answered by the running
-/// app-server, not a file, and `NativeSessionHost::models` asks it directly.
+/// Each agent client reads only its own authentic local configuration / provider
+/// store without cross-client contamination or historical transcript scraping:
+/// - `claude_code`: `~/.claude/settings.json` + active `claude` gateway / CC Switch (`app_type = 'claude'`)
+/// - `claude_desktop`: `Claude-3p` / `Claude` `configLibrary` (`inferenceModels`) + CC Switch (`app_type = 'claude-desktop'`)
+/// - `codex`: `~/.codex/models_cache.json` + `~/.codex/config.toml` + CC Switch (`app_type = 'codex'`)
+/// - `gemini_cli`: `~/.gemini/settings.json` + CC Switch (`app_type = 'gemini'`)
+/// - `zcode`: `~/.zcode/v2/config.json` + CC Switch (`app_type = 'opencode'`)
+/// - `grok_build`: `~/.grok/config.json` / `~/.grok/settings.json`
+/// - `antigravity`: `~/.gemini/antigravity` / `~/.antigravity` config
 pub fn agent_model_catalogs() -> Vec<(&'static str, Vec<Value>)> {
     let mut out = Vec::new();
+    let home = crate::collectors::home_dir();
 
-    let mut claude_models: Vec<Value> = Vec::new();
-    let mut seen_claude = HashSet::new();
-
-    if let Some(profile) = crate::claude_gateway::discover_claude_gateway() {
-        for m in &profile.models {
-            let id = m.name.trim();
-            if id.is_empty() || !seen_claude.insert(id.to_ascii_lowercase()) {
-                continue;
-            }
-            claude_models.push(json!({
-                "id": id,
-                "name": id,
-                "display_name": m.label.clone().unwrap_or_else(|| id.to_string()),
-                "supports_1m": m.supports_1m,
-                "upstream_provider": profile.source,
-            }));
-        }
-    }
-
-    if let Some(home) = crate::collectors::home_dir() {
-        let settings_path = home.join(".claude").join("settings.json");
-        if let Ok(content) = fs::read_to_string(&settings_path)
-            && let Ok(val) = serde_json::from_str::<Value>(&content)
-        {
-            let mut candidates = Vec::new();
-            if let Some(m) = val.get("model").and_then(Value::as_str) {
-                candidates.push(m);
-            }
-            if let Some(env_obj) = val.get("env").and_then(Value::as_object) {
-                for key in [
-                    "ANTHROPIC_MODEL",
-                    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-                    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-                ] {
-                    if let Some(m) = env_obj.get(key).and_then(Value::as_str) {
-                        candidates.push(m);
-                    }
-                }
-            }
-            for raw in candidates {
-                let id = raw.trim();
-                if id.is_empty()
-                    || id == "<synthetic>"
-                    || !seen_claude.insert(id.to_ascii_lowercase())
-                {
-                    continue;
-                }
-                claude_models.push(json!({
-                    "id": id,
-                    "name": id,
-                    "display_name": id,
-                    "upstream_provider": "claude-settings",
-                }));
-            }
-        }
-    }
-
-    if let Ok(entries) = crate::collectors::collect_claude_sessions_for_remote() {
-        for entry in entries {
-            let Some(raw) = entry.model.as_deref() else {
-                continue;
-            };
-            let id = raw.trim();
-            if id.is_empty() || id == "<synthetic>" || !seen_claude.insert(id.to_ascii_lowercase())
-            {
-                continue;
-            }
-            claude_models.push(json!({
-                "id": id,
-                "name": id,
-                "display_name": id,
-                "upstream_provider": "claude-transcript",
-            }));
-        }
-    }
-
-    if !claude_models.is_empty() {
-        out.push(("claude_code", claude_models.clone()));
-        out.push(("claude_desktop", claude_models));
-    }
-
-    if let Some(providers) = crate::collectors::zcode_app_server::load_zcode_v2_provider_registry()
+    // 1. Claude Code (`claude_code`)
     {
-        let mut models = Vec::new();
+        let mut claude_code_models: Vec<Value> = Vec::new();
         let mut seen = HashSet::new();
-        for provider in &providers {
-            let provider_label = provider
-                .get("label")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let Some(list) = provider.get("models").and_then(Value::as_array) else {
-                continue;
-            };
-            for model in list {
-                let Some(id) = model.get("modelId").and_then(Value::as_str) else {
-                    continue;
-                };
+
+        if let Some(profile) = crate::claude_gateway::discover_claude_code_gateway() {
+            for m in &profile.models {
+                let id = m.name.trim();
                 if id.is_empty() || !seen.insert(id.to_ascii_lowercase()) {
                     continue;
                 }
-                models.push(json!({
+                claude_code_models.push(json!({
                     "id": id,
                     "name": id,
-                    "display_name": model
-                        .get("label")
-                        .and_then(Value::as_str)
-                        .filter(|label| !label.is_empty())
-                        .unwrap_or(id),
-                    "context_length": model.get("contextWindow").cloned().unwrap_or(json!(0)),
-                    "upstream_provider": provider_label,
+                    "display_name": m.label.clone().unwrap_or_else(|| id.to_string()),
+                    "supports_1m": m.supports_1m,
+                    "upstream_provider": profile.source,
                 }));
             }
         }
-        if !models.is_empty() {
-            out.push(("zcode", models));
+
+        if let Some(ref h) = home {
+            let settings_path = h.join(".claude").join("settings.json");
+            if let Ok(content) = fs::read_to_string(&settings_path)
+                && let Ok(val) = serde_json::from_str::<Value>(&content)
+            {
+                let mut candidates: Vec<String> = Vec::new();
+                if let Some(m) = val.get("model").and_then(Value::as_str) {
+                    candidates.push(m.to_string());
+                }
+                if let Some(arr) = val.get("availableModels").and_then(Value::as_array) {
+                    for item in arr {
+                        if let Some(m) = item
+                            .as_str()
+                            .or_else(|| item.get("id").and_then(Value::as_str))
+                            .or_else(|| item.get("model").and_then(Value::as_str))
+                        {
+                            candidates.push(m.to_string());
+                        }
+                    }
+                }
+                if let Some(env_obj) = val.get("env").and_then(Value::as_object) {
+                    for key in [
+                        "ANTHROPIC_MODEL",
+                        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                    ] {
+                        if let Some(m) = env_obj.get(key).and_then(Value::as_str) {
+                            candidates.push(m.to_string());
+                        }
+                    }
+                }
+                for raw in candidates {
+                    let id = raw.trim();
+                    if id.is_empty() || id == "<synthetic>" || !seen.insert(id.to_ascii_lowercase())
+                    {
+                        continue;
+                    }
+                    claude_code_models.push(json!({
+                        "id": id,
+                        "name": id,
+                        "display_name": id,
+                        "supports_1m": id.to_ascii_lowercase().contains("1m"),
+                        "upstream_provider": "claude-settings",
+                    }));
+                }
+            }
+
+            // When Claude Code uses official OAuth with no custom gateway model list,
+            // expose the CLI's native `/model` aliases so the user can switch tiers cleanly.
+            if claude_code_models.is_empty() && h.join(".claude").is_dir() {
+                for (id, label, supports_1m) in [
+                    ("opus", "Opus", true),
+                    ("sonnet", "Sonnet", true),
+                    ("haiku", "Haiku", false),
+                ] {
+                    if seen.insert(id.to_string()) {
+                        claude_code_models.push(json!({
+                            "id": id,
+                            "name": id,
+                            "display_name": label,
+                            "supports_1m": supports_1m,
+                            "upstream_provider": "claude-oauth",
+                        }));
+                    }
+                }
+            }
+        }
+
+        if !claude_code_models.is_empty() {
+            out.push(("claude_code", claude_code_models));
+        }
+    }
+
+    // 2. Claude Desktop (`claude_desktop`)
+    {
+        let mut desktop_models: Vec<Value> = Vec::new();
+        let mut seen = HashSet::new();
+
+        // Read directly from Claude Desktop's applied configLibrary first (exact UI list)
+        let cfg_lib_models = crate::claude_gateway::discover_config_library_models();
+        for m in &cfg_lib_models {
+            let id = m.name.trim();
+            if id.is_empty() || !seen.insert(id.to_ascii_lowercase()) {
+                continue;
+            }
+            let display = match m.label.as_deref().filter(|l| !l.trim().is_empty()) {
+                Some(lbl) if !lbl.eq_ignore_ascii_case(id) => format!("{id} ({lbl})"),
+                _ => id.to_string(),
+            };
+            desktop_models.push(json!({
+                "id": id,
+                "name": id,
+                "display_name": display,
+                "supports_1m": m.supports_1m,
+                "upstream_provider": "claude-desktop-config",
+            }));
+        }
+
+        if desktop_models.is_empty()
+            && let Some(cc) =
+                crate::claude_gateway::discover_cc_switch_provider_for_app("claude-desktop")
+        {
+            for m in &cc.models {
+                let id = m.name.trim();
+                if id.is_empty() || !seen.insert(id.to_ascii_lowercase()) {
+                    continue;
+                }
+                let display = match m.label.as_deref().filter(|l| !l.trim().is_empty()) {
+                    Some(lbl) if !lbl.eq_ignore_ascii_case(id) => format!("{id} ({lbl})"),
+                    _ => id.to_string(),
+                };
+                desktop_models.push(json!({
+                    "id": id,
+                    "name": id,
+                    "display_name": display,
+                    "supports_1m": m.supports_1m,
+                    "upstream_provider": cc.name,
+                }));
+            }
+        }
+
+        if desktop_models.is_empty()
+            && let Some(profile) = crate::claude_gateway::discover_claude_desktop_gateway()
+        {
+            for m in &profile.models {
+                let id = m.name.trim();
+                if id.is_empty() || !seen.insert(id.to_ascii_lowercase()) {
+                    continue;
+                }
+                desktop_models.push(json!({
+                    "id": id,
+                    "name": id,
+                    "display_name": m.label.clone().unwrap_or_else(|| id.to_string()),
+                    "supports_1m": m.supports_1m,
+                    "upstream_provider": profile.source,
+                }));
+            }
+        }
+
+        if !desktop_models.is_empty() {
+            out.push(("claude_desktop", desktop_models));
+        }
+    }
+
+    // 3. Codex (`codex`) — local client cache & config fallback/enrichment
+    if let Some(ref h) = home {
+        let mut codex_models: Vec<Value> = Vec::new();
+        let mut seen = HashSet::new();
+        let codex_dir = h.join(".codex");
+
+        if let Ok(toml_str) = fs::read_to_string(codex_dir.join("config.toml")) {
+            for line in toml_str.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("model")
+                    && let Some(rest) = rest.trim_start().strip_prefix('=')
+                {
+                    let val = rest.trim().trim_matches('"').trim_matches('\'').trim();
+                    if !val.is_empty() && seen.insert(val.to_ascii_lowercase()) {
+                        codex_models.push(json!({
+                            "id": val,
+                            "name": val,
+                            "display_name": val,
+                            "upstream_provider": "codex-config",
+                        }));
+                    }
+                }
+            }
+        }
+
+        if let Some(cc) = crate::claude_gateway::discover_cc_switch_provider_for_app("codex") {
+            for m in &cc.models {
+                let id = m.name.trim();
+                if !id.is_empty() && seen.insert(id.to_ascii_lowercase()) {
+                    codex_models.push(json!({
+                        "id": id,
+                        "name": id,
+                        "display_name": m.label.clone().unwrap_or_else(|| id.to_string()),
+                        "upstream_provider": cc.name,
+                    }));
+                }
+            }
+        }
+
+        if let Ok(cache_str) = fs::read_to_string(codex_dir.join("models_cache.json"))
+            && let Ok(cache_val) = serde_json::from_str::<Value>(&cache_str)
+            && let Some(arr) = cache_val
+                .get("models")
+                .or_else(|| cache_val.get("data"))
+                .and_then(Value::as_array)
+        {
+            for item in arr {
+                let visibility = item
+                    .get("visibility")
+                    .and_then(Value::as_str)
+                    .unwrap_or("list");
+                if visibility == "hide" {
+                    continue;
+                }
+                let Some(id) = item
+                    .get("slug")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                else {
+                    continue;
+                };
+                if !seen.insert(id.to_ascii_lowercase()) {
+                    continue;
+                }
+                let display = item
+                    .get("display_name")
+                    .or_else(|| item.get("displayName"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(id);
+                let ctx = item
+                    .get("context_window")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                codex_models.push(json!({
+                    "id": id,
+                    "name": id,
+                    "display_name": display,
+                    "context_length": ctx,
+                    "upstream_provider": "codex-client",
+                }));
+            }
+        }
+
+        if !codex_models.is_empty() {
+            out.push(("codex", codex_models));
+        }
+    }
+
+    // 4. Gemini CLI (`gemini_cli`)
+    if let Some(ref h) = home {
+        let mut gemini_models: Vec<Value> = Vec::new();
+        let mut seen = HashSet::new();
+
+        if let Ok(settings_str) = fs::read_to_string(h.join(".gemini").join("settings.json"))
+            && let Ok(val) = serde_json::from_str::<Value>(&settings_str)
+        {
+            if let Some(m) = val
+                .get("model")
+                .and_then(|v| v.as_str().or_else(|| v.get("name").and_then(Value::as_str)))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                && seen.insert(m.to_ascii_lowercase())
+            {
+                gemini_models.push(json!({
+                    "id": m,
+                    "name": m,
+                    "display_name": m,
+                    "supports_1m": true,
+                    "upstream_provider": "gemini-settings",
+                }));
+            }
+        }
+
+        if let Some(cc) = crate::claude_gateway::discover_cc_switch_provider_for_app("gemini") {
+            for m in &cc.models {
+                let id = m.name.trim();
+                if !id.is_empty() && seen.insert(id.to_ascii_lowercase()) {
+                    gemini_models.push(json!({
+                        "id": id,
+                        "name": id,
+                        "display_name": m.label.clone().unwrap_or_else(|| id.to_string()),
+                        "supports_1m": true,
+                        "upstream_provider": cc.name,
+                    }));
+                }
+            }
+        }
+
+        if !gemini_models.is_empty() {
+            out.push(("gemini_cli", gemini_models));
+        }
+    }
+
+    // 5. ZCode / OpenCode (`zcode`)
+    {
+        let mut zcode_models = Vec::new();
+        let mut seen = HashSet::new();
+
+        if let Some(providers) =
+            crate::collectors::zcode_app_server::load_zcode_v2_provider_registry()
+        {
+            for provider in &providers {
+                let provider_label = provider
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let Some(list) = provider.get("models").and_then(Value::as_array) else {
+                    continue;
+                };
+                for model in list {
+                    let Some(id) = model.get("modelId").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if id.is_empty() || !seen.insert(id.to_ascii_lowercase()) {
+                        continue;
+                    }
+                    zcode_models.push(json!({
+                        "id": id,
+                        "name": id,
+                        "display_name": model
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .filter(|label| !label.is_empty())
+                            .unwrap_or(id),
+                        "context_length": model.get("contextWindow").cloned().unwrap_or(json!(0)),
+                        "upstream_provider": provider_label,
+                    }));
+                }
+            }
+        }
+
+        if let Some(cc) = crate::claude_gateway::discover_cc_switch_provider_for_app("opencode") {
+            for m in &cc.models {
+                let id = m.name.trim();
+                if !id.is_empty() && seen.insert(id.to_ascii_lowercase()) {
+                    zcode_models.push(json!({
+                        "id": id,
+                        "name": id,
+                        "display_name": m.label.clone().unwrap_or_else(|| id.to_string()),
+                        "upstream_provider": cc.name,
+                    }));
+                }
+            }
+        }
+
+        if !zcode_models.is_empty() {
+            out.push(("zcode", zcode_models));
+        }
+    }
+
+    // 6. Grok Build (`grok_build`)
+    if let Some(ref h) = home {
+        let mut grok_models = Vec::new();
+        let mut seen = HashSet::new();
+        let grok_dir = h.join(".grok");
+        for cfg_name in ["config.json", "settings.json"] {
+            if let Ok(content) = fs::read_to_string(grok_dir.join(cfg_name))
+                && let Ok(val) = serde_json::from_str::<Value>(&content)
+            {
+                for key in ["model", "default_model", "current_model_id"] {
+                    if let Some(m) = val.get(key).and_then(Value::as_str).map(str::trim)
+                        && !m.is_empty()
+                        && seen.insert(m.to_ascii_lowercase())
+                    {
+                        grok_models.push(json!({
+                            "id": m,
+                            "name": m,
+                            "display_name": m,
+                            "upstream_provider": "grok-config",
+                        }));
+                    }
+                }
+                if let Some(arr) = val.get("models").and_then(Value::as_array) {
+                    for item in arr {
+                        let id = item
+                            .as_str()
+                            .or_else(|| item.get("id").and_then(Value::as_str))
+                            .unwrap_or("")
+                            .trim();
+                        if !id.is_empty() && seen.insert(id.to_ascii_lowercase()) {
+                            grok_models.push(json!({
+                                "id": id,
+                                "name": id,
+                                "display_name": id,
+                                "upstream_provider": "grok-config",
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        if !grok_models.is_empty() {
+            out.push(("grok_build", grok_models));
+        }
+    }
+
+    // 7. Antigravity (`antigravity`)
+    if let Some(ref h) = home {
+        let mut ag_models = Vec::new();
+        let mut seen = HashSet::new();
+        for ag_dir in [
+            h.join(".gemini").join("antigravity"),
+            h.join(".antigravity"),
+        ] {
+            for cfg_name in ["settings.json", "config.json"] {
+                if let Ok(content) = fs::read_to_string(ag_dir.join(cfg_name))
+                    && let Ok(val) = serde_json::from_str::<Value>(&content)
+                {
+                    if let Some(m) = val.get("model").and_then(Value::as_str).map(str::trim)
+                        && !m.is_empty()
+                        && seen.insert(m.to_ascii_lowercase())
+                    {
+                        ag_models.push(json!({
+                            "id": m,
+                            "name": m,
+                            "display_name": m,
+                            "upstream_provider": "antigravity-config",
+                        }));
+                    }
+                }
+            }
+        }
+        if !ag_models.is_empty() {
+            out.push(("antigravity", ag_models));
         }
     }
 

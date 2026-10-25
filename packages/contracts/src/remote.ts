@@ -8,6 +8,9 @@ export interface RemoteAttachment {
   encoding?: "base64" | "utf8";
 }
 
+export type RemotePermissionMode =
+  "default" | "acceptEdits" | "plan" | "bypassPermissions";
+
 export interface RemoteCommand {
   client_cmd_id: string;
   hub_session_id: string;
@@ -22,12 +25,14 @@ export interface RemoteCommand {
         agent_type?: string;
         sandbox?: "read-only" | "workspace-write" | "danger-full-access";
         approval_policy?: "untrusted" | "on-request" | "never";
+        permission_mode?: RemotePermissionMode;
       }
     | {
         action: "send_prompt";
         text: string;
         effort?: string;
         model?: string;
+        permission_mode?: RemotePermissionMode;
         attachments?: RemoteAttachment[];
       }
     | { action: "resolve_approval"; approval_id: string; approved: boolean }
@@ -185,6 +190,7 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         "agent_type",
         "sandbox",
         "approval_policy",
+        "permission_mode",
       ]);
       member(command.mode, ["create", "resume", "attach"]);
       text(command.workspace_path, 256);
@@ -207,14 +213,35 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         ]);
       if (command.approval_policy !== undefined)
         member(command.approval_policy, ["untrusted", "on-request", "never"]);
+      if (command.permission_mode !== undefined)
+        member(command.permission_mode, [
+          "default",
+          "acceptEdits",
+          "plan",
+          "bypassPermissions",
+        ]);
       break;
     case "send_prompt":
-      only(command, ["action", "text", "effort", "model", "attachments"]);
-      // Per-turn reasoning effort and model override. Desktop already sends
-      // effort; the Host accepts both for every provider and providers without
-      // the concept ignore them.
+      only(command, [
+        "action",
+        "text",
+        "effort",
+        "model",
+        "permission_mode",
+        "attachments",
+      ]);
+      // Per-turn reasoning effort, model override, and permission mode.
+      // Desktop already sends effort; the Host accepts all three for every
+      // provider and providers without the concept ignore them.
       if (command.effort !== undefined) text(command.effort, 64);
       if (command.model !== undefined) text(command.model, 256);
+      if (command.permission_mode !== undefined)
+        member(command.permission_mode, [
+          "default",
+          "acceptEdits",
+          "plan",
+          "bypassPermissions",
+        ]);
       if (command.attachments !== undefined) {
         if (
           !Array.isArray(command.attachments) ||

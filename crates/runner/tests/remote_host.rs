@@ -105,6 +105,7 @@ fn connect(dir: &tempfile::TempDir, hub: &str, generation: &str) -> RemoteComman
             sandbox: CodexSandbox::ReadOnly,
             approval_policy: CodexApprovalPolicy::Untrusted,
             agent_type: None,
+            permission_mode: None,
         },
     }
 }
@@ -139,6 +140,7 @@ fn start_turn(fake: &Fake, host: &mut NativeSessionHost<Fake>, id: &str) {
             text: "hello".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );
@@ -184,6 +186,7 @@ fn two_turns_share_native_id_and_only_native_completion_releases_busy_state() {
             text: "second".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );
@@ -231,6 +234,7 @@ fn failed_turn_does_not_block_subsequent_turns_and_object_status_transitions_run
             text: "hello object status".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );
@@ -268,6 +272,7 @@ fn failed_turn_does_not_block_subsequent_turns_and_object_status_transitions_run
             text: "retry after failure".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );
@@ -614,6 +619,7 @@ fn transport_loss_is_unknown_and_never_automatically_reexecutes_a_prompt() {
             text: "change something".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );
@@ -1000,6 +1006,7 @@ fn unknown_slash_does_not_fall_through_to_prompt() {
             text: "/compact".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );
@@ -1129,6 +1136,7 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
             text: "hello 1".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );
@@ -1161,6 +1169,7 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
             text: "hello 2".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     );

@@ -318,12 +318,6 @@
       <button class="icon" id="usageReload" onclick="loadUsage(true)" title="立即刷新用量" aria-label="立即刷新用量">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></svg>
       </button>
-      <div class="segs" id="usageEvery" aria-label="自动刷新频率" title="自动刷新频率">
-        <button type="button" class="opt" data-ms="0">手动</button>
-        <button type="button" class="opt" data-ms="10000">10 秒</button>
-        <button type="button" class="opt on" data-ms="30000">30 秒</button>
-        <button type="button" class="opt" data-ms="60000">1 分钟</button>
-      </div>
     </div>
 
     <section class="usage-pane" id="usagePaneOverview">
@@ -382,20 +376,79 @@
     </section>
 
     <section class="usage-pane" id="usagePaneRequests" hidden>
-      <div class="tools">
-        <div class="segs" id="ledStatus" aria-label="请求状态">
-          <button type="button" class="opt on" data-status="">全部</button>
-          <button type="button" class="opt" data-status="failed">失败</button>
-          <button type="button" class="opt" data-status="retried">重试后成功</button>
+      <div class="led-req-bar">
+        <div class="segs" id="ledSubTabs" role="tablist" aria-label="明细维度">
+          <button type="button" class="opt on" data-subview="logs">请求日志</button>
+          <button type="button" class="opt" data-subview="providers">供应商</button>
+          <button type="button" class="opt" data-subview="models">模型</button>
         </div>
-        <input class="inp" id="ledQ" type="search" placeholder="搜索模型、智能体、会话或目录…" autocomplete="off" spellcheck="false">
         <span class="grow"></span>
         <span class="tag" id="ledCount">0 条请求</span>
-        <button type="button" class="text action" onclick="exportLedgerCsv()" title="把当前筛选出的请求导出为 CSV">
+        <button type="button" class="text action led-reset-btn" id="ledResetFiltersBtn" onclick="resetLedgerFilters()" hidden>
+          <span>重置筛选</span>
+        </button>
+        <div class="led-col-picker" id="ledColPickerWrap">
+          <button type="button" class="text action" id="ledColsBtn" onclick="toggleLedgerColsMenu(event)" title="自定义显示列" aria-haspopup="true" aria-expanded="false">
+            <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M7.5 3.5v13M12.5 3.5v13"/></svg></span>
+            <span>显示列</span>
+          </button>
+          <div class="led-pop-menu led-cols-menu" id="ledColsMenu" hidden></div>
+        </div>
+        <button type="button" class="text action" onclick="exportLedgerCsv()" title="把当前筛选出的记录导出为 CSV">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/></svg></span>
           <span>导出 CSV</span>
         </button>
       </div>
+
+      <div class="led-filters" id="ledFilterBar">
+        <div class="led-dd" data-dd="agent">
+          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('agent', event)">
+            <span class="led-dd-k">应用</span>
+            <span class="led-dd-v" id="ledDdValAgent">全部</span>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+          </button>
+          <div class="led-pop-menu" id="ledDdMenuAgent" hidden></div>
+        </div>
+
+        <div class="led-dd" data-dd="provider">
+          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('provider', event)">
+            <span class="led-dd-k">供应商</span>
+            <span class="led-dd-v" id="ledDdValProvider">全部</span>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+          </button>
+          <div class="led-pop-menu" id="ledDdMenuProvider" hidden></div>
+        </div>
+
+        <div class="led-dd" data-dd="model">
+          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('model', event)">
+            <span class="led-dd-k">模型</span>
+            <span class="led-dd-v" id="ledDdValModel">全部</span>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+          </button>
+          <div class="led-pop-menu" id="ledDdMenuModel" hidden></div>
+        </div>
+
+        <div class="led-dd" data-dd="status">
+          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('status', event)">
+            <span class="led-dd-k">状态</span>
+            <span class="led-dd-v" id="ledDdValStatus">全部</span>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+          </button>
+          <div class="led-pop-menu" id="ledDdMenuStatus" hidden></div>
+        </div>
+
+        <div class="led-dd" data-dd="tier">
+          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('tier', event)">
+            <span class="led-dd-k">高级筛选</span>
+            <span class="led-dd-v" id="ledDdValTier">全部</span>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+          </button>
+          <div class="led-pop-menu" id="ledDdMenuTier" hidden></div>
+        </div>
+
+        <input class="inp led-search" id="ledQ" type="search" placeholder="搜索模型、供应商、会话、目录或错误…" autocomplete="off" spellcheck="false">
+      </div>
+
       <div class="led-wrap" id="ledWrap">
         <div class="skeleton-card" aria-busy="true" aria-label="正在读取用量…">
           <div class="skeleton-row"><div class="skeleton-bar" style="width: 100%;"></div></div>
@@ -530,17 +583,6 @@
             <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg></span>
             <span>立即刷新</span>
           </button>
-        </div>
-        <div class="row pref">
-          <div class="who">
-            <div class="name">自动探测间隔</div>
-            <div class="sub">控制台多久自己读取一次；会话与用量不在这里留下痕迹</div>
-          </div>
-          <div class="segs" id="pollSegs">
-            <button type="button" class="opt" data-ms="2000" onclick="setPollInterval(2000)">2 秒</button>
-            <button type="button" class="opt" data-ms="4000" onclick="setPollInterval(4000)">4 秒</button>
-            <button type="button" class="opt" data-ms="10000" onclick="setPollInterval(10000)">10 秒</button>
-          </div>
         </div>
         <div class="row pref">
           <div class="who">

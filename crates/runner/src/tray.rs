@@ -30,11 +30,6 @@ mod windows_tray {
     const WM_TRAY_CALLBACK: u32 = WM_USER + 101;
     /// The thread timer that watches the open menu for a click outside it.
     const MENU_WATCH: usize = 0x4148;
-    const ID_TRAY_OPEN_DESKTOP: usize = 2001;
-    const ID_TRAY_OPEN_GATEWAY: usize = 2002;
-    const ID_TRAY_OPEN_BROWSER: usize = 2003;
-    const ID_TRAY_OPEN_DATA_DIR: usize = 2004;
-    const ID_TRAY_EXIT: usize = 2005;
 
     static TRAY_STATE: OnceLock<TrayState> = OnceLock::new();
 
@@ -193,67 +188,37 @@ mod windows_tray {
             match msg {
                 WM_TRAY_CALLBACK => {
                     let event = lparam as u32;
-                    if event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK {
-                        // the menu closes itself when the click leaves it, and
-                        // the press that got here is that same click
-                        if crate::tray_menu::closed_within(std::time::Duration::from_millis(250)) {
-                            crate::tray_menu::hide();
-                        } else if let Some(state) = TRAY_STATE.get() {
+                    if event == WM_LBUTTONDBLCLK {
+                        crate::tray_menu::hide();
+                        if let Some(state) = TRAY_STATE.get() {
                             if let Ok(url) = state.web_url.lock() {
                                 open_desktop_window(&url);
                             }
                         }
-                    } else if event == WM_RBUTTONUP {
-                        let current_url = TRAY_STATE
-                            .get()
-                            .and_then(|s| s.web_url.lock().ok())
-                            .map(|u| u.clone())
-                            .unwrap_or_else(|| "127.0.0.1:4200".to_string());
-                        let display_host = current_url
-                            .trim_start_matches("http://")
-                            .trim_start_matches("https://")
-                            .trim_end_matches('/')
-                            .to_string();
-                        crate::tray_menu::show(
-                            GetModuleHandleW(null()),
-                            crate::tray_menu::Menu {
-                                version: env!("CARGO_PKG_VERSION").to_string(),
-                                host: display_host,
-                                items: vec![
-                                    crate::tray_menu::Item {
-                                        id: ID_TRAY_OPEN_DESKTOP,
-                                        label: "显示协同控制台",
-                                        danger: false,
-                                        separator_before: false,
-                                    },
-                                    crate::tray_menu::Item {
-                                        id: ID_TRAY_OPEN_GATEWAY,
-                                        label: "查看演进拓扑（网关）",
-                                        danger: false,
-                                        separator_before: false,
-                                    },
-                                    crate::tray_menu::Item {
-                                        id: ID_TRAY_OPEN_BROWSER,
-                                        label: "在系统浏览器中打开",
-                                        danger: false,
-                                        separator_before: false,
-                                    },
-                                    crate::tray_menu::Item {
-                                        id: ID_TRAY_OPEN_DATA_DIR,
-                                        label: "打开数据存储目录",
-                                        danger: false,
-                                        separator_before: true,
-                                    },
-                                    crate::tray_menu::Item {
-                                        id: ID_TRAY_EXIT,
-                                        label: "退出 AgentHub",
-                                        danger: true,
-                                        separator_before: true,
-                                    },
-                                ],
-                            },
-                            tray_choice,
-                        );
+                    } else if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
+                        if crate::tray_menu::is_visible()
+                            || crate::tray_menu::closed_within(std::time::Duration::from_millis(
+                                250,
+                            ))
+                        {
+                            crate::tray_menu::hide();
+                        } else {
+                            let current_url = TRAY_STATE
+                                .get()
+                                .and_then(|s| s.web_url.lock().ok())
+                                .map(|u| u.clone())
+                                .unwrap_or_else(|| "127.0.0.1:4200".to_string());
+                            let display_host = current_url
+                                .trim_start_matches("http://")
+                                .trim_start_matches("https://")
+                                .trim_end_matches('/')
+                                .to_string();
+                            crate::tray_menu::show(
+                                GetModuleHandleW(null()),
+                                crate::tray_menu::build_live_menu(display_host),
+                                tray_choice,
+                            );
+                        }
                     }
                     0
                 }
@@ -266,36 +231,34 @@ mod windows_tray {
         }
     }
 
-    /// Runs the row the menu offered; the menu itself is already closed.
+    /// Runs the action selected from the tray popup card.
     fn tray_choice(id: usize) {
-        if id == ID_TRAY_OPEN_DESKTOP {
+        let open_hash = |suffix: &str| {
             if let Some(state) = TRAY_STATE.get() {
                 if let Ok(url) = state.web_url.lock() {
-                    open_desktop_window(&url);
+                    let base = url.trim_end_matches('/');
+                    let target = if suffix.is_empty() {
+                        base.to_string()
+                    } else {
+                        format!("{base}{suffix}")
+                    };
+                    open_desktop_window(&target);
                 }
             }
-        } else if id == ID_TRAY_OPEN_GATEWAY {
-            // the console's gateway route lives on its settings page
-            if let Some(state) = TRAY_STATE.get() {
-                if let Ok(url) = state.web_url.lock() {
-                    let settings_url = format!("{}#settings/gateway", url.trim_end_matches('/'));
-                    open_desktop_window(&settings_url);
+        };
+        match id {
+            crate::tray_menu::ACTION_OPEN_MAIN => open_hash(""),
+            crate::tray_menu::ACTION_OPEN_SETTINGS => open_hash("#settings/gateway"),
+            crate::tray_menu::ACTION_OPEN_AGENTS => open_hash("#agents"),
+            crate::tray_menu::ACTION_OPEN_USAGE => open_hash("#usage"),
+            crate::tray_menu::ACTION_EXIT => {
+                cleanup_desktop_window();
+                if let Some(state) = TRAY_STATE.get() {
+                    state.running.store(false, Ordering::SeqCst);
                 }
+                std::process::exit(0);
             }
-        } else if id == ID_TRAY_OPEN_BROWSER {
-            if let Some(state) = TRAY_STATE.get() {
-                if let Ok(url) = state.web_url.lock() {
-                    open_system_browser(&url);
-                }
-            }
-        } else if id == ID_TRAY_OPEN_DATA_DIR {
-            open_data_dir();
-        } else if id == ID_TRAY_EXIT {
-            cleanup_desktop_window();
-            if let Some(state) = TRAY_STATE.get() {
-                state.running.store(false, Ordering::SeqCst);
-            }
-            std::process::exit(0);
+            _ => {}
         }
     }
 

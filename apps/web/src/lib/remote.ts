@@ -4,8 +4,9 @@ import type {
   RemoteCommand,
   RemotePendingApproval,
   RemotePendingQuestion,
+  RemotePermissionMode,
 } from "@agent-pulse/contracts/remote";
-export type { RemoteAttachment };
+export type { RemoteAttachment, RemotePermissionMode };
 export type RemoteRequest = <T>(
   path: string,
   body?: unknown,
@@ -166,7 +167,38 @@ export function latestTurnFailure(
       continue;
     }
     if (native.kind === "turn/completed") {
-      failure = null;
+      const turn = native.raw?.params?.turn as
+        Record<string, unknown> | undefined;
+      const status = typeof turn?.status === "string" ? turn.status : undefined;
+      const turnError =
+        typeof turn?.error === "string" ? turn.error.trim() : "";
+      const isFailedCompletion =
+        status === "failed" ||
+        status === "error" ||
+        Boolean(turnError) ||
+        native.binding?.execution_state === "error";
+      if (isFailedCompletion) {
+        const prevFailure = failure as TurnFailure | null;
+        const turnId: string | null =
+          typeof turn?.id === "string"
+            ? turn.id
+            : (prevFailure?.turnId ?? null);
+        if (turnError) {
+          failure = {
+            turnId,
+            message: turnError,
+            retrying: false,
+          };
+        } else if (prevFailure) {
+          failure = {
+            turnId,
+            message: prevFailure.message,
+            retrying: false,
+          };
+        }
+      } else {
+        failure = null;
+      }
       continue;
     }
     if (native.kind !== "error") continue;
@@ -434,6 +466,7 @@ export function remoteError(error: unknown): string {
     resume_workspace_mismatch: "会话的工作目录与所选目录不一致。",
     create_cannot_set_native_id: "新建会话时不能指定本机会话编号。",
     invalid_model: "所选模型不可用。",
+    invalid_permission_mode: "所选权限模式不受支持。",
     provider_not_available: "本机没有可用的 Agent 客户端。",
     zcode_not_available: "本机没有安装 ZCode。",
     claude_session_not_found: "本机找不到这个 Claude 会话。",
@@ -490,6 +523,7 @@ export function conversationItems(
       result.push(item);
     }
   }
+  const renderedPromptCmdIds = new Set<string>();
   for (const event of events.slice(lastHistoryIndex + 1)) {
     const native = event.payload.event;
     if (!native) continue;
@@ -505,6 +539,7 @@ export function conversationItems(
         const fullText = [attNames, command.command.command.text]
           .filter((part) => part && part.trim().length > 0)
           .join("\n");
+        renderedPromptCmdIds.add(command.command.client_cmd_id);
         result.push({
           id: command.command.client_cmd_id,
           kind: "user",
@@ -731,6 +766,28 @@ export function conversationItems(
           : native.kind === "item/completed"
             ? "completed"
             : "running";
+    }
+  }
+  for (const command of commands) {
+    if (
+      command.command.command.action === "send_prompt" &&
+      command.receipt === null &&
+      !renderedPromptCmdIds.has(command.command.client_cmd_id)
+    ) {
+      const attNames =
+        command.command.command.attachments
+          ?.map((a) => `[附件: ${a.name}]`)
+          .join(" ") ?? "";
+      const fullText = [attNames, command.command.command.text]
+        .filter((part) => part && part.trim().length > 0)
+        .join("\n");
+      if (fullText) {
+        result.push({
+          id: command.command.client_cmd_id,
+          kind: "user",
+          text: fullText,
+        });
+      }
     }
   }
   return result;

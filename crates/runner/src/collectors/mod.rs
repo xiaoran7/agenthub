@@ -138,6 +138,7 @@ pub struct TurnOptions<'a> {
     pub permission_mode: Option<&'a str>,
     pub reasoning_effort: Option<&'a str>,
     pub session_exists: Option<bool>,
+    pub claude_desktop: bool,
 }
 
 /// Outcome of a streamed agent process: final message plus the session id the
@@ -511,21 +512,40 @@ pub fn collect_claude_session_contexts_from(
     Ok(contexts)
 }
 
+fn session_context_cache()
+-> &'static RwLock<HashMap<PathBuf, (u64, u128, Option<LocalSessionContext>)>> {
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (u64, u128, Option<LocalSessionContext>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 fn read_claude_session_context(
     path: &Path,
     program: &str,
 ) -> Result<Option<LocalSessionContext>, CollectorError> {
+    let meta = fs::metadata(path).map_err(|source| CollectorError::Io {
+        program: program.to_owned(),
+        source,
+    })?;
+    let length = meta.len();
+    let modified_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    if let Ok(guard) = session_context_cache().read()
+        && let Some((c_len, c_mod, cached)) = guard.get(path)
+        && *c_len == length
+        && *c_mod == modified_ms
+    {
+        return Ok(cached.clone());
+    }
+
     let file = fs::File::open(path).map_err(|source| CollectorError::Io {
         program: program.to_owned(),
         source,
     })?;
-    let length = file
-        .metadata()
-        .map_err(|source| CollectorError::Io {
-            program: program.to_owned(),
-            source,
-        })?
-        .len();
     let fallback_id = path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -556,11 +576,18 @@ fn read_claude_session_context(
             program,
         )?;
     }
-    if context.agent_session_id.is_empty() {
-        Ok(None)
+    let result = if context.agent_session_id.is_empty() {
+        None
     } else {
-        Ok(Some(context))
+        Some(context)
+    };
+    if let Ok(mut guard) = session_context_cache().write() {
+        if guard.len() > 4_000 {
+            guard.clear();
+        }
+        guard.insert(path.to_path_buf(), (length, modified_ms, result.clone()));
     }
+    Ok(result)
 }
 
 fn scan_claude_context_region(
@@ -1053,112 +1080,227 @@ fn is_assistant_output(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// One transcript's metadata, memoised on the file's size and last write.
+/// Incremental per-file reader state for Claude transcript metadata.
 ///
-/// A finished conversation's transcript never changes again, and the store
-/// holds gigabytes of them, so re-reading every file on each poll cost the
-/// Runner tens of seconds. A file still being written is read again each
-/// time, because its size changes with every appended line.
-fn transcript_metadata_cache()
--> &'static RwLock<HashMap<PathBuf, (u64, i64, Option<ClaudeTranscriptEntry>)>> {
-    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (u64, i64, Option<ClaudeTranscriptEntry>)>>> =
-        OnceLock::new();
+/// Finished transcripts hit the metadata check without opening a file handle;
+/// active transcripts seek directly to `offset` and parse only newly appended
+/// complete lines instead of re-reading multi-megabyte files from byte 0.
+#[derive(Clone, Default)]
+struct TranscriptMetaState {
+    offset: u64,
+    modified_ms: Option<i64>,
+    session_id: Option<String>,
+    cwd: Option<String>,
+    title: Option<String>,
+    started_at_ms: Option<i64>,
+    has_output: bool,
+    model: Option<String>,
+    context_used_tokens: u64,
+    explicit_context_window: Option<u64>,
+    message_usage: HashMap<String, (u64, u64, u64)>,
+    request_count: u64,
+    desktop: bool,
+}
+
+impl TranscriptMetaState {
+    fn materialize(
+        &self,
+        path: &Path,
+        last_activity_at_ms: Option<i64>,
+    ) -> Option<ClaudeTranscriptEntry> {
+        let session_id = self
+            .session_id
+            .clone()
+            .or_else(|| {
+                path.file_stem()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_owned)
+            })
+            .filter(|value| !value.trim().is_empty())?;
+        let mut prompt_tokens = 0_u64;
+        let mut completion_tokens = 0_u64;
+        let mut cache_read_tokens = 0_u64;
+        for (prompt, output, cache_read) in self.message_usage.values() {
+            prompt_tokens = prompt_tokens.saturating_add(*prompt);
+            completion_tokens = completion_tokens.saturating_add(*output);
+            cache_read_tokens = cache_read_tokens.saturating_add(*cache_read);
+        }
+        let context_window_tokens = self
+            .explicit_context_window
+            .or_else(|| self.model.as_deref().map(claude_context_window))
+            .unwrap_or(200_000);
+        Some(ClaudeTranscriptEntry {
+            session_id,
+            cwd: self.cwd.clone().unwrap_or_default(),
+            title: self.title.clone(),
+            started_at_ms: self.started_at_ms,
+            last_activity_at_ms,
+            has_output: self.has_output,
+            model: self.model.clone(),
+            prompt_tokens,
+            completion_tokens,
+            cache_read_tokens,
+            context_used_tokens: self.context_used_tokens,
+            context_window_tokens,
+            request_count: self.request_count,
+            desktop: self.desktop,
+        })
+    }
+}
+
+fn transcript_metadata_cache() -> &'static RwLock<HashMap<PathBuf, TranscriptMetaState>> {
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, TranscriptMetaState>>> = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn read_incremental_jsonl_line(
+    reader: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<Option<(u64, bool, bool)>> {
+    buf.clear();
+    let mut consumed = 0_u64;
+    let mut oversized = false;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            if consumed == 0 {
+                return Ok(None);
+            }
+            return Ok(Some((consumed, false, oversized)));
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(at) => {
+                if !oversized && buf.len() + at <= MAX_PROTOCOL_LINE_BYTES {
+                    buf.extend_from_slice(&available[..at]);
+                } else {
+                    oversized = true;
+                    buf.clear();
+                }
+                let step = at + 1;
+                reader.consume(step);
+                consumed = consumed.saturating_add(step as u64);
+                return Ok(Some((consumed, true, oversized)));
+            }
+            None => {
+                let step = available.len();
+                if !oversized && buf.len() + step <= MAX_PROTOCOL_LINE_BYTES {
+                    buf.extend_from_slice(available);
+                } else {
+                    oversized = true;
+                    buf.clear();
+                }
+                reader.consume(step);
+                consumed = consumed.saturating_add(step as u64);
+            }
+        }
+    }
 }
 
 fn read_claude_transcript_metadata(
     path: &Path,
     program: &str,
 ) -> Result<Option<ClaudeTranscriptEntry>, CollectorError> {
-    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+    let file_metadata = fs::metadata(path).map_err(|source| CollectorError::Io {
         program: program.to_owned(),
         source,
     })?;
-    let file_metadata = file.metadata().map_err(|source| CollectorError::Io {
-        program: program.to_owned(),
-        source,
-    })?;
+    let file_len = file_metadata.len();
     let last_activity_at_ms = file_metadata
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .and_then(|duration| i64::try_from(duration.as_millis()).ok());
-    if let Ok(guard) = transcript_metadata_cache().read()
-        && let Some((cached_len, cached_modified, entry)) = guard.get(path)
-        && *cached_len == file_metadata.len()
-        && Some(*cached_modified) == last_activity_at_ms
+
+    let mut state = if let Ok(guard) = transcript_metadata_cache().read()
+        && let Some(cached) = guard.get(path)
     {
-        return Ok(entry.clone());
-    }
-    let file_len = file_metadata.len();
-    let entry = read_claude_transcript_metadata_uncached(path, program, last_activity_at_ms)?;
+        if cached.offset == file_len && cached.modified_ms == last_activity_at_ms {
+            return Ok(cached.materialize(path, last_activity_at_ms));
+        }
+        if file_len > cached.offset {
+            cached.clone()
+        } else {
+            TranscriptMetaState::default()
+        }
+    } else {
+        TranscriptMetaState::default()
+    };
+
+    read_claude_transcript_metadata_incremental(path, program, file_len, &mut state)?;
+    state.modified_ms = last_activity_at_ms;
+    let entry = state.materialize(path, last_activity_at_ms);
+
     if let Ok(mut guard) = transcript_metadata_cache().write() {
-        // The store keeps years of transcripts; the map holds one small record
-        // per file, never the transcript itself.
         if guard.len() > 8_000 {
             guard.clear();
         }
-        guard.insert(
-            path.to_path_buf(),
-            (file_len, last_activity_at_ms.unwrap_or(0), entry.clone()),
-        );
+        guard.insert(path.to_path_buf(), state);
     }
     Ok(entry)
 }
 
-fn read_claude_transcript_metadata_uncached(
+fn read_claude_transcript_metadata_incremental(
     path: &Path,
     program: &str,
-    last_activity_at_ms: Option<i64>,
-) -> Result<Option<ClaudeTranscriptEntry>, CollectorError> {
-    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+    file_len: u64,
+    state: &mut TranscriptMetaState,
+) -> Result<(), CollectorError> {
+    if file_len <= state.offset {
+        return Ok(());
+    }
+    let mut file = fs::File::open(path).map_err(|source| CollectorError::Io {
         program: program.to_owned(),
         source,
     })?;
+    if state.offset > 0 {
+        file.seek(SeekFrom::Start(state.offset))
+            .map_err(|source| CollectorError::Io {
+                program: program.to_owned(),
+                source,
+            })?;
+    }
     let mut reader = BufReader::new(file);
-    let mut session_id = None;
-    let mut cwd = None;
-    let mut title = None;
-    let mut started_at_ms: Option<i64> = None;
-    let mut has_output = false;
-    let mut model = None;
-    let mut prompt_tokens: u64 = 0;
-    let mut completion_tokens: u64 = 0;
-    let mut cache_read_tokens: u64 = 0;
-    let mut context_used_tokens: u64 = 0;
-    let mut explicit_context_window: Option<u64> = None;
-    // A reply is written once per content block, each line repeating the
-    // message's usage; counting lines would count blocks as requests, and
-    // summing every line would double the tokens. A message counts once, and
-    // its last line — the one with the final figures — stands for it.
-    let mut message_usage: HashMap<String, (u64, u64, u64)> = HashMap::new();
-    let mut request_count: u64 = 0;
-    let mut desktop = false;
+    let mut raw_line = Vec::new();
 
-    // Scan all lines until EOF to accurately aggregate all assistant turns and token usage,
-    // matching Magpie's comprehensive session accounting model.
     loop {
-        let line = match read_bounded_line(&mut reader) {
-            BoundedLine::Line(line) => line,
-            BoundedLine::Eof => break,
-            BoundedLine::TooLarge => continue,
-            BoundedLine::Io(source) => {
-                return Err(CollectorError::Io {
+        let Some((consumed, terminated, oversized)) =
+            read_incremental_jsonl_line(&mut reader, &mut raw_line).map_err(|source| {
+                CollectorError::Io {
                     program: program.to_owned(),
                     source,
-                });
-            }
+                }
+            })?
+        else {
+            break;
         };
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+        if !terminated && !oversized {
+            let trimmed_end = raw_line
+                .iter()
+                .rev()
+                .find(|&&b| !b.is_ascii_whitespace())
+                .copied();
+            if trimmed_end != Some(b'}') {
+                break;
+            }
+        }
+        state.offset = state.offset.saturating_add(consumed);
+        if oversized {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(&raw_line) else {
             continue;
         };
-        if !desktop
+        if !state.desktop
             && value
                 .get("entrypoint")
                 .and_then(Value::as_str)
                 .is_some_and(|e| e.starts_with("claude-desktop"))
         {
-            desktop = true;
+            state.desktop = true;
         }
         if let Some(win) = [
             "/context_window/context_window_size",
@@ -1169,10 +1311,10 @@ fn read_claude_transcript_metadata_uncached(
         .find_map(|p| value.pointer(p).and_then(Value::as_u64))
         .filter(|v| *v > 0)
         {
-            explicit_context_window = Some(win);
+            state.explicit_context_window = Some(win);
         }
         if value.get("type").and_then(Value::as_str) == Some("assistant") {
-            has_output = true;
+            state.has_output = true;
             let message_id = value
                 .pointer("/message/id")
                 .and_then(Value::as_str)
@@ -1185,13 +1327,13 @@ fn read_claude_transcript_metadata_uncached(
                 let cache_write = usage_u64(usage, "cache_creation_input_tokens");
                 let total_input = input.saturating_add(cache_read).saturating_add(cache_write);
                 if total_input > 0 {
-                    context_used_tokens = total_input;
+                    state.context_used_tokens = total_input;
                 }
                 let figures = (total_input, output, cache_read);
                 let key = message_id
-                    .unwrap_or_else(|| format!("line-{}", request_count.saturating_add(1)));
-                if message_usage.insert(key, figures).is_none() {
-                    request_count = request_count.saturating_add(1);
+                    .unwrap_or_else(|| format!("line-{}", state.request_count.saturating_add(1)));
+                if state.message_usage.insert(key, figures).is_none() {
+                    state.request_count = state.request_count.saturating_add(1);
                 }
                 if let Some(m) = value
                     .pointer("/message/model")
@@ -1200,25 +1342,24 @@ fn read_claude_transcript_metadata_uncached(
                     .filter(|m| !m.is_empty() && *m != "<synthetic>")
                     .and_then(|v| metadata_label(v, MAX_CONFIG_VALUE_CHARS))
                 {
-                    model = Some(m);
+                    state.model = Some(m);
                 }
-            } else if let Some(id) = message_id {
-                // A block with no usage still belongs to a request.
-                if message_usage.insert(id, (0, 0, 0)).is_none() {
-                    request_count = request_count.saturating_add(1);
-                }
+            } else if let Some(id) = message_id
+                && state.message_usage.insert(id, (0, 0, 0)).is_none()
+            {
+                state.request_count = state.request_count.saturating_add(1);
             }
         }
-        if !has_output && is_assistant_output(&value) {
-            has_output = true;
+        if !state.has_output && is_assistant_output(&value) {
+            state.has_output = true;
         }
         let Ok(metadata) = serde_json::from_value::<ClaudeTranscriptMetadata>(value) else {
             continue;
         };
-        session_id = session_id.or(metadata.session_id);
-        cwd = cwd.or(metadata.cwd);
-        if title.is_none() {
-            title = metadata
+        state.session_id = state.session_id.take().or(metadata.session_id);
+        state.cwd = state.cwd.take().or(metadata.cwd);
+        if state.title.is_none() {
+            state.title = metadata
                 .custom_title
                 .or(metadata.ai_title)
                 .or(metadata.title)
@@ -1229,45 +1370,14 @@ fn read_claude_transcript_metadata_uncached(
             let parsed = DateTime::parse_from_rfc3339(&timestamp)
                 .ok()
                 .map(|value| value.timestamp_millis());
-            started_at_ms = match (started_at_ms, parsed) {
+            state.started_at_ms = match (state.started_at_ms, parsed) {
                 (Some(current), Some(candidate)) => Some(current.min(candidate)),
                 (None, candidate) => candidate,
                 (current, None) => current,
             };
         }
     }
-
-    let session_id = session_id
-        .or_else(|| {
-            path.file_stem()
-                .and_then(|value| value.to_str())
-                .map(str::to_owned)
-        })
-        .filter(|value| !value.trim().is_empty());
-    for (prompt, output, cache_read) in message_usage.values() {
-        prompt_tokens = prompt_tokens.saturating_add(*prompt);
-        completion_tokens = completion_tokens.saturating_add(*output);
-        cache_read_tokens = cache_read_tokens.saturating_add(*cache_read);
-    }
-    let context_window_tokens = explicit_context_window
-        .or_else(|| model.as_deref().map(claude_context_window))
-        .unwrap_or(200_000);
-    Ok(session_id.map(|session_id| ClaudeTranscriptEntry {
-        session_id,
-        cwd: cwd.unwrap_or_default(),
-        title,
-        started_at_ms,
-        last_activity_at_ms,
-        has_output,
-        model,
-        prompt_tokens,
-        completion_tokens,
-        cache_read_tokens,
-        context_used_tokens,
-        context_window_tokens,
-        request_count,
-        desktop,
-    }))
+    Ok(())
 }
 
 pub fn discover_claude_binary() -> PathBuf {
@@ -1617,7 +1727,7 @@ fn claude_remote_sessions_cache()
 /// A full scan reads every transcript, so it costs tens of seconds on a large
 /// store. The window has to be long enough that the next caller reuses the
 /// result instead of paying for the same scan again.
-const CLAUDE_REMOTE_SESSIONS_CACHE_TTL: Duration = Duration::from_secs(120);
+const CLAUDE_REMOTE_SESSIONS_CACHE_TTL: Duration = Duration::from_secs(8);
 
 pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError>
 {
@@ -2039,6 +2149,12 @@ fn delete_claude_session_in(
     // move lands on a place of its own.
     move_all_into(&trash, &paths).map_err(io)?;
     forget_subagents();
+    if let Ok(mut guard) = transcript_metadata_cache().write() {
+        guard.remove(&main);
+    }
+    if let Ok(mut guard) = session_context_cache().write() {
+        guard.remove(&main);
+    }
     if let Ok(mut guard) = claude_remote_sessions_cache().write() {
         *guard = None;
     }
@@ -4180,10 +4296,19 @@ pub fn resolve_zcode_model_context_window(model_name: &str) -> Option<u64> {
     }
 }
 
-fn non_claude_context_usage_cache()
--> &'static RwLock<Option<(Instant, HashMap<(crate::domain::AgentType, String), ContextUsage>)>> {
+fn non_claude_context_usage_cache() -> &'static RwLock<
+    Option<(
+        Instant,
+        HashMap<(crate::domain::AgentType, String), ContextUsage>,
+    )>,
+> {
     static CACHE: OnceLock<
-        RwLock<Option<(Instant, HashMap<(crate::domain::AgentType, String), ContextUsage>)>>,
+        RwLock<
+            Option<(
+                Instant,
+                HashMap<(crate::domain::AgentType, String), ContextUsage>,
+            )>,
+        >,
     > = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(None))
 }
@@ -4212,7 +4337,7 @@ pub fn lookup_session_context_usage(
             .get(&(agent_type, raw_id.to_string()))
             .or_else(|| map.get(&(agent_type, session_id.to_string())))
         {
-            return Some(usage.clone());
+            return Some(*usage);
         }
     }
 
@@ -4289,7 +4414,7 @@ pub fn lookup_session_context_usage(
                             window: ctx.context_window_tokens.filter(|v| *v > 0),
                         };
                         if ctx.agent_session_id == raw_id || ctx.agent_session_id == session_id {
-                            found = Some(usage.clone());
+                            found = Some(usage);
                         }
                         map.insert((agent_type, ctx.agent_session_id), usage);
                     }
@@ -4610,7 +4735,9 @@ fn run_agent_session_turn_streaming_once(
         if effective_model.is_none() && options.session_exists != Some(false) {
             effective_model = find_claude_session_model(session_id);
         }
-        if let Some(gateway) = crate::claude_gateway::discover_claude_gateway() {
+        if let Some(gateway) =
+            crate::claude_gateway::discover_claude_gateway_for_client(options.claude_desktop)
+        {
             gateway.inject_into_command_with_session(
                 &mut command,
                 &mut effective_model,
@@ -4705,7 +4832,8 @@ pub fn run_agent_session_start_streaming(
     };
     let mut effective_model = options.model.map(str::to_string);
     if agent == crate::domain::AgentType::ClaudeCode
-        && let Some(gateway) = crate::claude_gateway::discover_claude_gateway()
+        && let Some(gateway) =
+            crate::claude_gateway::discover_claude_gateway_for_client(options.claude_desktop)
     {
         // For fresh sessions, compute implicit fingerprint from prompt so upstream gateway retains prompt cache
         let trimmed_prompt = prompt.trim();
@@ -4873,9 +5001,7 @@ fn run_agent_stream_process(
     let status = wait_for_child_with_cancel(&mut child, &program, timeout, Some(cancelled));
     drop(job);
     let stdout = join_child_output(stdout_reader, &program)?;
-    // Drain stderr to prevent a full pipe from blocking the child, but never
-    // return it: provider diagnostics can contain local paths or prompt text.
-    let _ = join_child_output(stderr_reader, &program)?;
+    let stderr_bytes = join_child_output(stderr_reader, &program)?;
     drop(prompt_file);
     let status = status?;
     if !status.success() {
@@ -4889,20 +5015,27 @@ fn run_agent_stream_process(
                 return Err(CollectorError::SessionUnreadable { program });
             }
             // Propagate explicit API errors (e.g. rate limit / quota exhaustion / auth failures)
-            // as a completed turn response so the turn ends cleanly, realSessionId is preserved,
-            // and neither the daemon binding nor the desktop UI is left in a wedged running state.
+            // as a protocol failure so the turn ends cleanly with an explicit error banner.
             if let Some(err_msg) = final_agent_message(agent, &output) {
-                let session_id = extract_session_id_from_output(agent, &output);
-                return Ok(AgentStreamOutcome {
-                    response: err_msg,
-                    session_id,
-                    usage: extract_context_usage_from_output(agent, &output),
+                let scrubbed = crate::privacy::redact_paths_inside_text(&err_msg);
+                return Err(CollectorError::Protocol {
+                    program,
+                    code: "provider_turn_error".to_owned(),
+                    message: scrubbed,
                 });
             }
         }
+        let stderr_summary = String::from_utf8_lossy(&stderr_bytes);
+        let scrubbed_stderr = crate::privacy::redact_paths_inside_text(stderr_summary.trim());
+        let bounded_stderr: String = scrubbed_stderr.chars().take(512).collect();
+        let detail = if bounded_stderr.is_empty() {
+            status.to_string()
+        } else {
+            format!("{status}: {bounded_stderr}")
+        };
         return Err(CollectorError::Exit {
             program,
-            status: status.to_string(),
+            status: detail,
         });
     }
     if stdout.len() > MAX_AGENT_TURN_OUTPUT_BYTES {

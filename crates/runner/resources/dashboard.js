@@ -633,19 +633,30 @@ function leaveSettings() {
 // `#settings/<tab>` is how the tray menu opens a settings part: the runner's
 // own window has no other way to be told which page to show. The hash is
 // cleared once it is taken, so a reload keeps the reader's saved page.
+let dashboardEtag = "";
+
 function applySettingsHash() {
-  const m = /^#settings(?:\/([a-z]+))?$/.exec(location.hash || "");
-  if (!m) return;
-  history.replaceState(null, "", location.pathname + location.search);
-  openSettings(SET_TABS.includes(m[1]) ? m[1] : "general");
+  const raw = location.hash || "";
+  const m = /^#settings(?:\/([a-z]+))?$/.exec(raw);
+  if (m) {
+    history.replaceState(null, "", location.pathname + location.search);
+    openSettings(SET_TABS.includes(m[1]) ? m[1] : "general");
+    return;
+  }
+  const vm = /^#(sessions|agents|usage|workspaces)$/.exec(raw);
+  if (vm) {
+    history.replaceState(null, "", location.pathname + location.search);
+    switchView(vm[1], true);
+  }
 }
 
 window.addEventListener("hashchange", applySettingsHash);
 
 // manual: the reader asked for this probe, so the button that asked turns
-// while it is out. The four-second poll stays quiet — a button that is
-// always spinning says nothing about whether anything is happening.
+// while it is out. Background polls pass If-None-Match so unchanged state
+// answers 304 Not Modified with zero JSON transfer or DOM diffing.
 async function refreshDashboard(manual) {
+  if (!manual && document.hidden && dashboardData) return true;
   // a probe can take over a second; never let two snapshots render out of order
   if (refreshing) return false;
   refreshing = true;
@@ -688,11 +699,19 @@ async function refreshDashboard(manual) {
 
   const seq = ++renderSeq;
   try {
-    const resp = await fetch("/api/dashboard", { cache: "no-store" });
+    const headers = !manual && dashboardEtag ? { "If-None-Match": dashboardEtag } : {};
+    const resp = await fetch("/api/dashboard", { cache: "no-store", headers });
+    if (resp.status === 304 && dashboardData) {
+      consecutiveFailures = 0;
+      updateConnectionStatus(true);
+      return true;
+    }
     if (!resp.ok) {
       handleFetchFailure();
       return false;
     }
+    const etag = resp.headers.get("ETag");
+    if (etag) dashboardEtag = etag;
     const data = await resp.json();
     if (seq !== renderSeq) return false;
     consecutiveFailures = 0;
@@ -2381,6 +2400,7 @@ const LED_TREND = [
 ];
 const LED_SPLITS = [
   ["model", "模型"],
+  ["provider", "供应商"],
   ["model_at", "模型·智能体"],
   ["agent", "智能体"],
 ];
@@ -2392,23 +2412,60 @@ const LED_HEAT = [
 // the ranking's colours: as many as the chart can tell apart; the rest are
 // "其他" in grey, as magpie's LED_SHOWN
 const LED_SHOWN = 7;
-const LED_STATUSES = { "": "全部", failed: "失败", retried: "重试后成功" };
+const LED_STATUSES = {
+  "": "全部",
+  ok: "成功",
+  failed: "失败",
+  retried: "重试后成功",
+};
+const LED_TIERS = {
+  "": "全部",
+  high_tokens: "高消耗 (≥10K Token)",
+  high_cost: "高成本 (≥$0.05)",
+  slow: "慢请求 (≥5s)",
+  cached: "命中缓存",
+};
+
+const LED_COLUMNS = [
+  { id: "time", label: "时间", defaultOn: true },
+  { id: "agent", label: "应用", defaultOn: true },
+  { id: "provider", label: "供应商", defaultOn: true },
+  { id: "model", label: "模型", defaultOn: true },
+  { id: "input", label: "输入 Token", defaultOn: true, numeric: true },
+  { id: "output", label: "输出 Token", defaultOn: true, numeric: true },
+  { id: "cache_read", label: "缓存读取", defaultOn: true, numeric: true },
+  { id: "cache_write", label: "缓存写入", defaultOn: false, numeric: true },
+  { id: "total_tokens", label: "总计 Token", defaultOn: false, numeric: true },
+  { id: "cost", label: "成本", defaultOn: true, numeric: true },
+  { id: "duration", label: "用时", defaultOn: true, numeric: true },
+  { id: "status", label: "状态", defaultOn: true },
+];
+const USAGE_COLS_KEY = "agenthub_usage_cols";
+const OPTIMAL_USAGE_POLL_MS = 12000;
 
 let usageTab = "overview";
 let usagePeriod = "7d";
 let ledMetric = "tokens";
 let ledSplit = "model";
 let ledHeatMetric = "tokens";
+let ledSubView = "logs";
 let ledStatus = "";
+let ledFilterAgent = "";
+let ledFilterProvider = "";
+let ledFilterModel = "";
+let ledFilterTier = "";
 let ledQuery = "";
+let ledVisibleCols = new Set(
+  LED_COLUMNS.filter((c) => c.defaultOn).map((c) => c.id),
+);
 let usageDigest = null;
 let usageLoading = false;
 let usageFetchingPeriod = "";
 let usageAbortController = null;
 const usageMemoryCache = new Map();
+const usageEtags = new Map();
 let usageSeq = 0;
 let usageTimer = 0;
-let usageEvery = 30000;
 let ledSelectedDay = "";
 // the digest is the daemon's; the page keeps the last one while a refresh is
 // out, so a poll never blanks the figures it already showed
@@ -2424,8 +2481,11 @@ try {
   if (LED_SPLITS.some(([id]) => id === split)) ledSplit = split;
   const heat = localStorage.getItem(STORE.ledHeat);
   if (LED_HEAT.some(([id]) => id === heat)) ledHeatMetric = heat;
-  const every = parseInt(localStorage.getItem(STORE.usageEvery) || "", 10);
-  if ([0, 10000, 30000, 60000].includes(every)) usageEvery = every;
+  const savedCols = JSON.parse(localStorage.getItem(USAGE_COLS_KEY) || "null");
+  if (Array.isArray(savedCols)) {
+    const valid = savedCols.filter((id) => LED_COLUMNS.some((c) => c.id === id));
+    if (valid.length > 0) ledVisibleCols = new Set(valid);
+  }
 } catch (e) {}
 
 function initUsage() {
@@ -2441,27 +2501,29 @@ function initUsage() {
       const b = e.target.closest("button[data-period]");
       if (b && b.dataset.period !== usagePeriod) setUsagePeriod(b.dataset.period);
     });
-  const every = document.getElementById("usageEvery");
-  if (every)
-    every.addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-ms]");
-      if (b) setUsageEvery(Number(b.dataset.ms));
-    });
-  const status = document.getElementById("ledStatus");
-  if (status)
-    status.addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-status]");
-      if (!b) return;
-      ledStatus = b.dataset.status || "";
-      pickUsageSegs();
-      renderLedgerRequests();
+  const subTabs = document.getElementById("ledSubTabs");
+  if (subTabs)
+    subTabs.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-subview]");
+      if (b && b.dataset.subview !== ledSubView) {
+        setLedgerSubView(b.dataset.subview);
+      }
     });
   const q = document.getElementById("ledQ");
   if (q)
     q.addEventListener("input", () => {
       ledQuery = q.value.trim().toLowerCase();
+      updateLedgerFilterUi();
       renderLedgerRequests();
     });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".led-dd") && !e.target.closest(".led-col-picker")) {
+      closeAllLedgerMenus();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAllLedgerMenus();
+  });
   const metric = document.getElementById("ledMetric");
   if (metric)
     metric.addEventListener("click", (e) => {
@@ -2504,6 +2566,7 @@ function initUsage() {
   });
   setUsageTab(usageTab, true);
   pickUsageSegs();
+  updateLedgerFilterUi();
   loadUsage();
   startUsageTimer();
 }
@@ -2559,35 +2622,23 @@ function setUsagePeriod(period) {
   }
 }
 
-function setUsageEvery(ms) {
-  usageEvery = ms;
-  try {
-    localStorage.setItem(STORE.usageEvery, String(ms));
-  } catch (e) {}
-  pickUsageSegs();
-  startUsageTimer();
-  toast(ms ? `用量每 ${Math.round(ms / 1000)} 秒自动刷新` : "用量改为手动刷新");
-}
-
-// the cadence is the reader's: the console's own rule is never under half a
-// second, and the ledger's answer is cached for five, so ten is the floor here
+// Implicit optimal cadence: pauses when the tab or window is hidden and
+// revalidates via ETag / 304 without full re-reading.
 function startUsageTimer() {
   clearInterval(usageTimer);
-  if (!usageEvery) return;
   usageTimer = setInterval(() => {
     if (isUsageOpen() && !document.hidden) loadUsage();
-  }, Math.max(10000, usageEvery));
+  }, OPTIMAL_USAGE_POLL_MS);
 }
 
 function pickUsageSegs() {
   document.querySelectorAll("#usagePeriods button[data-period]").forEach((b) => {
     b.classList.toggle("on", b.dataset.period === usagePeriod);
   });
-  document.querySelectorAll("#usageEvery button[data-ms]").forEach((b) => {
-    b.classList.toggle("on", Number(b.dataset.ms) === usageEvery);
-  });
-  document.querySelectorAll("#ledStatus button[data-status]").forEach((b) => {
-    b.classList.toggle("on", (b.dataset.status || "") === ledStatus);
+  document.querySelectorAll("#ledSubTabs button[data-subview]").forEach((b) => {
+    const on = b.dataset.subview === ledSubView;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", String(on));
   });
   fillSegs("ledMetric", LED_TREND, ledMetric, "data-metric");
   fillSegs("ledSplit", LED_SPLITS, ledSplit, "data-split");
@@ -2627,14 +2678,30 @@ async function loadUsage(manual) {
   }
 
   try {
+    const headers = {};
+    const prevEtag = usageEtags.get(periodToFetch);
+    if (!manual && prevEtag && usageMemoryCache.has(periodToFetch)) {
+      headers["If-None-Match"] = prevEtag;
+    }
     const resp = await fetch(
       `/api/usage/ledger?period=${encodeURIComponent(periodToFetch)}&limit=1000`,
-      { cache: "no-store", signal: usageAbortController.signal },
+      { cache: "no-store", headers, signal: usageAbortController.signal },
     );
+    if (resp.status === 304 && usageMemoryCache.has(periodToFetch)) {
+      const cached = usageMemoryCache.get(periodToFetch);
+      cached.ts = Date.now();
+      if (periodToFetch === usagePeriod && !usageDigest) {
+        usageDigest = cached.data;
+        drawUsage();
+      }
+      return;
+    }
     if (!resp.ok) {
       toast(`读取用量失败（HTTP ${resp.status}）`, "err");
       return;
     }
+    const nextEtag = resp.headers.get("ETag");
+    if (nextEtag) usageEtags.set(periodToFetch, nextEtag);
     const data = await resp.json();
     if (seq !== usageSeq) return;
 
@@ -3415,74 +3482,419 @@ function heatTip(cell) {
 }
 
 // ---- the request table ---------------------------------------------------
-// The rows the period holds, then the page's own status and search. The
-// statuses are the daemon's readings: a failure a later try answered is
-// "retried", not failed; the call that answered it says "retried".
+function setLedgerSubView(view) {
+  if (!["logs", "providers", "models"].includes(view)) view = "logs";
+  ledSubView = view;
+  pickUsageSegs();
+  closeAllLedgerMenus();
+  const colPicker = document.getElementById("ledColPickerWrap");
+  if (colPicker) colPicker.hidden = view !== "logs";
+  renderLedgerRequests();
+}
+
+function closeAllLedgerMenus() {
+  document.querySelectorAll(".led-dd.open").forEach((dd) => {
+    dd.classList.remove("open");
+    const menu = dd.querySelector(".led-dd-menu");
+    if (menu) menu.hidden = true;
+  });
+  const colsMenu = document.getElementById("ledColsMenu");
+  const colsBtn = document.getElementById("ledColsBtn");
+  if (colsMenu) colsMenu.hidden = true;
+  if (colsBtn) colsBtn.setAttribute("aria-expanded", "false");
+}
+
+function toggleLedgerColsMenu(ev) {
+  if (ev) ev.stopPropagation();
+  const colsMenu = document.getElementById("ledColsMenu");
+  const colsBtn = document.getElementById("ledColsBtn");
+  if (!colsMenu || !colsBtn) return;
+  const opening = colsMenu.hidden;
+  closeAllLedgerMenus();
+  if (!opening) return;
+  renderLedgerColsMenu();
+  colsMenu.hidden = false;
+  colsBtn.setAttribute("aria-expanded", "true");
+}
+
+function renderLedgerColsMenu() {
+  const colsMenu = document.getElementById("ledColsMenu");
+  if (!colsMenu) return;
+  colsMenu.innerHTML =
+    `<div class="led-col-menu-head"><span>显示列</span><button type="button" class="led-col-reset" onclick="resetLedgerColumns(event)">恢复默认</button></div>` +
+    LED_COLUMNS.map((col) => {
+      const on = ledVisibleCols.has(col.id);
+      return `<button type="button" class="led-col-item${on ? " on" : ""}" data-col="${col.id}">
+        <span class="led-col-check">${on ? "✓" : ""}</span>
+        <span>${escapeHtml(col.label)}</span>
+      </button>`;
+    }).join("");
+  colsMenu.onclick = (e) => {
+    e.stopPropagation();
+    const item = e.target.closest("button[data-col]");
+    if (!item) return;
+    const id = item.dataset.col;
+    if (ledVisibleCols.has(id)) {
+      if (ledVisibleCols.size <= 2) {
+        toast("至少保留 2 列显示");
+        return;
+      }
+      ledVisibleCols.delete(id);
+    } else {
+      ledVisibleCols.add(id);
+    }
+    try {
+      localStorage.setItem(USAGE_COLS_KEY, JSON.stringify([...ledVisibleCols]));
+    } catch (err) {}
+    renderLedgerColsMenu();
+    renderLedgerRequests();
+  };
+}
+
+function resetLedgerColumns(ev) {
+  if (ev) ev.stopPropagation();
+  ledVisibleCols = new Set(
+    LED_COLUMNS.filter((c) => c.defaultOn).map((c) => c.id),
+  );
+  try {
+    localStorage.setItem(USAGE_COLS_KEY, JSON.stringify([...ledVisibleCols]));
+  } catch (err) {}
+  renderLedgerColsMenu();
+  renderLedgerRequests();
+}
+
+function ledgerFilterOptions(kind) {
+  const rows = (usageDigest && usageDigest.recent) || [];
+  if (kind === "agent") {
+    const seen = new Map([["", "全部"]]);
+    for (const r of rows) {
+      if (r.agent && !seen.has(r.agent)) {
+        seen.set(r.agent, providerLabel(r.agent));
+      }
+    }
+    const byAgent = (usageDigest && usageDigest.by && usageDigest.by.agent) || [];
+    for (const a of byAgent) {
+      if (a.id && !seen.has(a.id)) {
+        seen.set(a.id, a.name || providerLabel(a.id));
+      }
+    }
+    return [...seen.entries()];
+  }
+  if (kind === "provider") {
+    const seen = new Map([["", "全部"]]);
+    const byProv = (usageDigest && usageDigest.by && usageDigest.by.provider) || [];
+    for (const p of byProv) {
+      if (p.id && !seen.has(p.id)) seen.set(p.id, p.name || p.id);
+    }
+    for (const r of rows) {
+      if (r.provider && !seen.has(r.provider)) seen.set(r.provider, r.provider);
+    }
+    return [...seen.entries()];
+  }
+  if (kind === "model") {
+    const seen = new Map([["", "全部"]]);
+    const byModel = (usageDigest && usageDigest.by && usageDigest.by.model) || [];
+    for (const m of byModel) {
+      if (m.id && !seen.has(m.id)) seen.set(m.id, m.name || m.id);
+    }
+    for (const r of rows) {
+      if (r.model && !seen.has(r.model)) seen.set(r.model, r.model);
+    }
+    return [...seen.entries()];
+  }
+  if (kind === "status") {
+    return Object.entries(LED_STATUSES);
+  }
+  if (kind === "tier") {
+    return Object.entries(LED_TIERS);
+  }
+  return [["", "全部"]];
+}
+
+function currentLedgerFilterValue(kind) {
+  if (kind === "agent") return ledFilterAgent;
+  if (kind === "provider") return ledFilterProvider;
+  if (kind === "model") return ledFilterModel;
+  if (kind === "status") return ledStatus;
+  if (kind === "tier") return ledFilterTier;
+  return "";
+}
+
+function setLedgerFilterValue(kind, val) {
+  if (kind === "agent") ledFilterAgent = val;
+  else if (kind === "provider") ledFilterProvider = val;
+  else if (kind === "model") ledFilterModel = val;
+  else if (kind === "status") ledStatus = val;
+  else if (kind === "tier") ledFilterTier = val;
+  updateLedgerFilterUi();
+  renderLedgerRequests();
+}
+
+function updateLedgerFilterUi() {
+  const map = [
+    ["agent", "ledValAgent"],
+    ["provider", "ledValProvider"],
+    ["model", "ledValModel"],
+    ["status", "ledValStatus"],
+    ["tier", "ledValTier"],
+  ];
+  for (const [kind, elId] of map) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    const cur = currentLedgerFilterValue(kind);
+    const opts = ledgerFilterOptions(kind);
+    const hit = opts.find(([k]) => k === cur);
+    el.textContent = hit ? hit[1] : cur || "全部";
+    const dd = el.closest(".led-dd");
+    if (dd) dd.classList.toggle("active", Boolean(cur));
+  }
+  const hasAny = Boolean(
+    ledFilterAgent ||
+      ledFilterProvider ||
+      ledFilterModel ||
+      ledStatus ||
+      ledFilterTier ||
+      ledQuery,
+  );
+  const resetBtn = document.getElementById("ledResetFiltersBtn");
+  if (resetBtn) resetBtn.hidden = !hasAny;
+}
+
+function resetLedgerFilters() {
+  ledFilterAgent = "";
+  ledFilterProvider = "";
+  ledFilterModel = "";
+  ledStatus = "";
+  ledFilterTier = "";
+  ledQuery = "";
+  const q = document.getElementById("ledQ");
+  if (q) q.value = "";
+  closeAllLedgerMenus();
+  updateLedgerFilterUi();
+  renderLedgerRequests();
+}
+
+function toggleLedgerDropdown(kind, ev) {
+  if (ev) ev.stopPropagation();
+  const dd = document.querySelector(`.led-dd[data-dd="${kind}"]`);
+  const menu = document.getElementById(
+    "ledMenu" + kind.charAt(0).toUpperCase() + kind.slice(1),
+  );
+  if (!dd || !menu) return;
+  const opening = !dd.classList.contains("open");
+  closeAllLedgerMenus();
+  if (!opening) return;
+  const cur = currentLedgerFilterValue(kind);
+  const options = ledgerFilterOptions(kind);
+  menu.innerHTML = options
+    .map(
+      ([val, label]) =>
+        `<button type="button" class="led-dd-opt${val === cur ? " on" : ""}" data-val="${escapeHtml(val)}">
+          <span>${escapeHtml(label)}</span>
+          <span class="led-dd-check">${val === cur ? "✓" : ""}</span>
+        </button>`,
+    )
+    .join("");
+  menu.onclick = (e) => {
+    e.stopPropagation();
+    const b = e.target.closest("button[data-val]");
+    if (!b) return;
+    setLedgerFilterValue(kind, b.dataset.val || "");
+    closeAllLedgerMenus();
+  };
+  dd.classList.add("open");
+  menu.hidden = false;
+}
+
+// The rows the period holds, then the page's own multi-dimensional filters and search.
 function ledFilteredRows() {
   const rows = (usageDigest && usageDigest.recent) || [];
   return rows.filter((r) => {
+    if (ledFilterAgent && r.agent !== ledFilterAgent) return false;
+    if (ledFilterProvider && (r.provider || "") !== ledFilterProvider) return false;
+    if (ledFilterModel && (r.model || "") !== ledFilterModel) return false;
+    if (ledStatus === "ok" && (r.error && !r.recovered)) return false;
     if (ledStatus === "failed" && !(r.error && !r.recovered)) return false;
     if (ledStatus === "retried" && !r.retried) return false;
+    if (ledFilterTier === "high_tokens") {
+      const total =
+        (r.input || 0) + (r.output || 0) + (r.cache_read || 0) + (r.cache_write || 0);
+      if (total < 10000) return false;
+    } else if (ledFilterTier === "high_cost") {
+      if ((Number(r.cost) || 0) < 0.05) return false;
+    } else if (ledFilterTier === "slow") {
+      if ((Number(r.duration_ms) || 0) < 5000) return false;
+    } else if (ledFilterTier === "cached") {
+      if ((r.cache_read || 0) <= 0) return false;
+    }
     if (!ledQuery) return true;
-    const text = `${r.model || ""} ${r.agent || ""} ${r.session || ""} ${r.cwd || ""} ${r.error || ""}`.toLowerCase();
+    const text = `${r.model || ""} ${r.provider || ""} ${r.agent || ""} ${providerLabel(r.agent)} ${r.session || ""} ${r.cwd || ""} ${r.error || ""}`.toLowerCase();
     return text.includes(ledQuery);
   });
 }
 
 function ledStatusCell(r) {
-  if (r.retried) return `<span class="tag ok">重试后成功</span>`;
+  if (r.retried) return `<span class="tag ok">200 · 重试</span>`;
   if (r.error && !r.recovered)
     return `<span class="tag err" title="${escapeHtml(r.error)}">失败</span>`;
   if (r.error) return `<span class="tag warn" title="${escapeHtml(r.error)}">已恢复</span>`;
-  return `<span class="tag">成功</span>`;
+  return `<span class="tag ok">200</span>`;
+}
+
+function fmtDurationMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  if (n < 1000) return `${Math.round(n)}ms`;
+  return `${(n / 1000).toFixed(n >= 10000 ? 1 : 2)}s`;
+}
+
+function renderLedgerColumnCell(colId, r) {
+  switch (colId) {
+    case "time":
+      return `<td class="when">${escapeHtml(fmtWhen(r.t, usagePeriod !== "today"))}</td>`;
+    case "agent":
+      return `<td class="muted">${getAgentIcon(r.agent, 14)} ${escapeHtml(providerLabel(r.agent))}</td>`;
+    case "provider":
+      return `<td class="muted"><span class="led-prov-pill">${escapeHtml(r.provider || "直连")}</span></td>`;
+    case "model":
+      return `<td class="model-value">${r.model ? getModelIcon(r.model, 14) + escapeHtml(r.model) : "—"}</td>`;
+    case "input":
+      return `<td class="n">${fmtN(r.input || 0)}</td>`;
+    case "output":
+      return `<td class="n">${fmtN(r.output || 0)}</td>`;
+    case "cache_read":
+      return `<td class="n">${fmtN(r.cache_read || 0)}</td>`;
+    case "cache_write":
+      return `<td class="n">${fmtN(r.cache_write || 0)}</td>`;
+    case "total_tokens": {
+      const tot =
+        (r.input || 0) + (r.output || 0) + (r.cache_read || 0) + (r.cache_write || 0);
+      return `<td class="n">${fmtN(tot)}</td>`;
+    }
+    case "cost":
+      return `<td class="n">${fmtMoney(r.cost || 0)}</td>`;
+    case "duration":
+      return `<td class="n muted">${fmtDurationMs(r.duration_ms)}</td>`;
+    case "status":
+      return `<td>${ledStatusCell(r)}</td>`;
+    default:
+      return `<td>—</td>`;
+  }
+}
+
+function renderLedgerBreakdownTable(kind, wrap, badge) {
+  const list =
+    (usageDigest &&
+      usageDigest.by &&
+      (kind === "providers" ? usageDigest.by.provider : usageDigest.by.model)) ||
+    [];
+  const filtered = list.filter((g) => {
+    if (!ledQuery) return true;
+    const text = `${g.name || ""} ${g.id || ""} ${g.agent || ""}`.toLowerCase();
+    return text.includes(ledQuery);
+  });
+  if (badge) {
+    badge.textContent =
+      kind === "providers"
+        ? `共 ${filtered.length} 个供应商`
+        : `共 ${filtered.length} 个模型`;
+  }
+  if (!filtered.length) {
+    wrap.innerHTML = `<div class="led-none">本周期没有匹配的${kind === "providers" ? "供应商" : "模型"}聚合记录</div>`;
+    return;
+  }
+  const titleCol = kind === "providers" ? "供应商" : "模型";
+  wrap.innerHTML = `
+    <table class="led">
+      <thead><tr>
+        <th>${titleCol}</th>
+        <th class="n">请求数</th>
+        <th class="n">输入 Token</th>
+        <th class="n">输出 Token</th>
+        <th class="n">缓存读取</th>
+        <th class="n">总计 Token</th>
+        <th class="n">成本</th>
+        <th>成功率</th>
+      </tr></thead>
+      <tbody>${filtered
+        .map((g) => {
+          const calls = g.calls || 0;
+          const errs = g.errors || 0;
+          const okRate =
+            calls > 0 ? Math.max(0, Math.round(((calls - errs) * 100) / calls)) : 100;
+          const labelCell =
+            kind === "models"
+              ? `${getModelIcon(g.name || g.id, 14)}${escapeHtml(g.name || g.id)}`
+              : `<span class="led-prov-pill">${escapeHtml(g.name || g.id)}</span>`;
+          return `<tr>
+            <td class="model-value">${labelCell}</td>
+            <td class="n">${calls.toLocaleString()}</td>
+            <td class="n">${fmtN(g.input || 0)}</td>
+            <td class="n">${fmtN(g.output || 0)}</td>
+            <td class="n">${fmtN(g.cache_read || 0)}</td>
+            <td class="n">${fmtN(g.tokens || 0)}</td>
+            <td class="n">${fmtMoney(g.cost || 0)}</td>
+            <td><span class="tag ${errs ? "warn" : "ok"}">${okRate}%</span></td>
+          </tr>`;
+        })
+        .join("")}</tbody>
+    </table>`;
 }
 
 function renderLedgerRequests() {
   const wrap = document.getElementById("ledWrap");
   const badge = document.getElementById("ledCount");
   if (!wrap) return;
+  updateLedgerFilterUi();
   // a poll redraws the same list: the reader's place in it stays put
   const kept = wrap.scrollTop;
   if (!usageDigest) {
     wrap.innerHTML = `<div class="led-none">正在读取用量…</div>`;
     return;
   }
+  if (ledSubView === "providers" || ledSubView === "models") {
+    renderLedgerBreakdownTable(ledSubView, wrap, badge);
+    wrap.scrollTop = kept;
+    return;
+  }
   const rows = ledFilteredRows();
-  if (badge) badge.textContent = `${rows.length.toLocaleString()} 条请求`;
+  if (badge) badge.textContent = `共 ${rows.length.toLocaleString()} 条记录`;
   if (!rows.length) {
-    // the list holds the period's latest calls, not every call of the period:
-    // a filter that finds nothing here says so rather than implying the period
-    // had no failure at all
+    const anyFilter = Boolean(
+      ledFilterAgent ||
+        ledFilterProvider ||
+        ledFilterModel ||
+        ledStatus ||
+        ledFilterTier ||
+        ledQuery,
+    );
     wrap.innerHTML = `<div class="led-none">${
-      ledStatus || ledQuery
+      anyFilter
         ? "最近的请求里没有符合筛选条件的记录"
         : "本周期没有请求"
     }</div>`;
-    // a reader looking for a rare failure is told where it may still be: the
-    // table draws the latest calls, the figures above count every call
-    if (ledStatus && usageDigest.errors) {
+    if (ledStatus === "failed" && usageDigest.errors) {
       wrap.firstElementChild.textContent += `（本周期共 ${usageDigest.errors} 次失败，最近的一千条里没有）`;
     }
     return;
   }
+  const activeCols = LED_COLUMNS.filter((c) => ledVisibleCols.has(c.id));
   wrap.innerHTML = `
     <table class="led">
       <thead><tr>
-        <th>时间</th><th>智能体</th><th>模型</th><th class="n">输入</th><th class="n">输出</th><th class="n">缓存读</th><th class="n">费用</th><th>状态</th>
+        ${activeCols
+          .map(
+            (c) =>
+              `<th${c.numeric ? ' class="n"' : ""}>${escapeHtml(c.label)}</th>`,
+          )
+          .join("")}
       </tr></thead>
       <tbody>${rows
         .map((r) => {
           const failed = r.error && !r.recovered;
-          return `<tr${failed ? ' class="bad"' : ""}>
-            <td class="when">${escapeHtml(fmtWhen(r.t, usagePeriod !== "today"))}</td>
-            <td class="muted">${escapeHtml(providerLabel(r.agent))}</td>
-            <td class="model-value">${r.model ? getModelIcon(r.model, 14) + escapeHtml(r.model) : "—"}</td>
-            <td class="n">${fmtN(r.input || 0)}</td>
-            <td class="n">${fmtN(r.output || 0)}</td>
-            <td class="n">${fmtN(r.cache_read || 0)}</td>
-            <td class="n">${fmtMoney(r.cost || 0)}</td>
-            <td>${ledStatusCell(r)}</td>
-          </tr>`;
+          return `<tr${failed ? ' class="bad"' : ""}>${activeCols
+            .map((c) => renderLedgerColumnCell(c.id, r))
+            .join("")}</tr>`;
         })
         .join("")}</tbody>
     </table>`;
@@ -3571,7 +3983,22 @@ function exportLedgerCsv() {
     toast("当前筛选没有可导出的请求", "err");
     return;
   }
-  const head = ["time", "agent", "model", "session", "cwd", "input", "output", "cache_read", "cache_write", "cost_usd", "status", "error"];
+  const head = [
+    "time",
+    "agent",
+    "provider",
+    "model",
+    "session",
+    "cwd",
+    "input",
+    "output",
+    "cache_read",
+    "cache_write",
+    "cost_usd",
+    "duration_ms",
+    "status",
+    "error",
+  ];
   const cell = (v) => {
     const s = String(v == null ? "" : v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -3581,6 +4008,7 @@ function exportLedgerCsv() {
     return [
       new Date(r.t).toISOString(),
       r.agent,
+      r.provider || "",
       r.model,
       r.session,
       r.cwd,
@@ -3589,6 +4017,7 @@ function exportLedgerCsv() {
       r.cache_read,
       r.cache_write,
       (Number(r.cost) || 0).toFixed(6),
+      r.duration_ms != null ? r.duration_ms : "",
       status,
       r.error || "",
     ]
@@ -3737,9 +4166,6 @@ function renderSettings() {
   if (optLight) optLight.classList.toggle("on", !dark);
   if (optDark) optDark.classList.toggle("on", dark);
 
-  pickIn("pollSegs", (s) =>
-    s.querySelector(`.opt[data-ms="${pollIntervalMs()}"]`),
-  );
   pickIn("sideNavSegs", (s) =>
     s.querySelector(
       `.opt[data-side="${document.documentElement.classList.contains("no-side") ? "off" : "on"}"]`,
@@ -3810,28 +4236,28 @@ function renderSettings() {
   if (dashboardData && dashboardData.device) renderDevice(dashboardData.device);
 }
 
-// the automatic probe's cadence, the reader's to set (never under half a
-// second: the console's own rule for a self-refreshing surface)
+// Implicit optimal background refresh cadence (5s, paused when window hidden).
+const OPTIMAL_DASHBOARD_POLL_MS = 5000;
 function pollIntervalMs() {
-  const saved = parseInt(localStorage.getItem(STORE.pollMs) || "", 10);
-  return [2000, 4000, 10000].includes(saved)
-    ? saved
-    : LAYOUT.dashboardPollMs || 4000;
+  return OPTIMAL_DASHBOARD_POLL_MS;
 }
 
 let pollTimer = 0;
+let pollVisibilityBound = false;
 function startPolling() {
   clearInterval(pollTimer);
-  pollTimer = setInterval(refreshDashboard, pollIntervalMs());
-}
-
-function setPollInterval(ms) {
-  try {
-    localStorage.setItem(STORE.pollMs, String(ms));
-  } catch (e) {}
-  startPolling();
-  pickIn("pollSegs", (s) => s.querySelector(`.opt[data-ms="${ms}"]`));
-  toast(`已改为每 ${Math.round(ms / 1000)} 秒自动探测`);
+  pollTimer = setInterval(() => {
+    if (!document.hidden) refreshDashboard(false);
+  }, pollIntervalMs());
+  if (!pollVisibilityBound) {
+    pollVisibilityBound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        refreshDashboard(false);
+        if (isUsageOpen()) loadUsage(false);
+      }
+    });
+  }
 }
 
 function setSideNavFromSettings(on) {

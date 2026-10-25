@@ -23,6 +23,7 @@ import {
   type ConversationItem,
   type DiscoveryCandidate,
   type RemoteAttachment,
+  type RemotePermissionMode,
 } from "../lib/remote";
 import { MarkdownView } from "./MarkdownView";
 import { Select } from "./Select";
@@ -72,6 +73,28 @@ const SANDBOX_OPTIONS = [
   { value: "workspace-write", label: "允许修改工作区" },
 ] as const;
 
+const PERMISSION_MODE_OPTIONS = [
+  { value: "default", label: "默认权限" },
+  { value: "acceptEdits", label: "自动允许编辑" },
+  { value: "plan", label: "只读规划" },
+  { value: "bypassPermissions", label: "完全自动执行" },
+] as const;
+
+const QUICK_PROMPT_SNIPPETS = [
+  {
+    label: "继续并验证当前改动",
+    text: "请继续完成当前改动，并运行对应的测试和检查确认无误。",
+  },
+  {
+    label: "定位并修复报错",
+    text: "请定位最近一次错误或测试失败的根因，给出最小修复并验证通过。",
+  },
+  {
+    label: "代码审查 (Code Review)",
+    text: "请审查当前未提交的代码改动，重点排查逻辑缺陷、边界条件与安全隐患。",
+  },
+] as const;
+
 /**
  * The engines the Runner can launch, in the order the console offers them.
  *
@@ -84,10 +107,10 @@ const LAUNCH_AGENTS = [
   {
     value: "claude_code",
     label: "Coding Assistant",
-    catalog: ["claude_code", "claude"],
+    catalog: ["claude_code"],
   },
-  { value: "antigravity", label: "Antigravity", catalog: [] },
-  { value: "grok_build", label: "Grok", catalog: [] },
+  { value: "antigravity", label: "Antigravity", catalog: ["antigravity"] },
+  { value: "grok_build", label: "Grok", catalog: ["grok_build"] },
 ] as const;
 
 const LAUNCH_AGENT_OPTIONS = LAUNCH_AGENTS.map(({ value, label }) => ({
@@ -821,8 +844,16 @@ export function RemoteConsole({
   const [effort, setEffort] = useState<
     "default" | "low" | "medium" | "high" | "max"
   >("default");
+  const [permissionMode, setPermissionMode] =
+    useState<RemotePermissionMode>("default");
+  const [permissionModeTouched, setPermissionModeTouched] = useState(false);
+  const [launchPermissionMode, setLaunchPermissionMode] =
+    useState<RemotePermissionMode>("default");
   const [sessionModel, setSessionModel] = useState("");
   const [attachments, setAttachments] = useState<RemoteAttachment[]>([]);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [attachQuickPromptsOpen, setAttachQuickPromptsOpen] = useState(false);
+  const attachMenuRef = useRef<HTMLDivElement>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [submittingInterrupt, setSubmittingInterrupt] = useState(false);
@@ -968,6 +999,31 @@ export function RemoteConsole({
       cleanResizerListenersRef.current?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!attachMenuOpen) return;
+    const onMouseDown = (event: MouseEvent) => {
+      if (
+        attachMenuRef.current &&
+        !attachMenuRef.current.contains(event.target as Node)
+      ) {
+        setAttachMenuOpen(false);
+        setAttachQuickPromptsOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAttachMenuOpen(false);
+        setAttachQuickPromptsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [attachMenuOpen]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => {
@@ -1150,7 +1206,12 @@ export function RemoteConsole({
         display_name: displayName?.trim() || clean.replace(/^models\//u, ""),
       });
     };
-    for (const key of engine?.catalog ?? []) {
+    const keys: readonly string[] =
+      agentType === "claude_code" &&
+      hostModels?.agents?.claude_code === undefined
+        ? ["claude"]
+        : (engine?.catalog ?? []);
+    for (const key of keys) {
       const list = hostModels?.agents?.[key];
       if (list !== undefined && list.length > 0) {
         for (const item of list) pushModel(item.id, item.display_name);
@@ -1163,23 +1224,6 @@ export function RemoteConsole({
           item.display_name ?? item.displayName ?? item.name ?? item.id,
         );
       }
-    }
-    const targetProvider =
-      agentType === "claude_code"
-        ? "claude"
-        : agentType === "grok_build"
-          ? "grok"
-          : agentType;
-    for (const cand of runnerInfo?.hello?.discovery?.candidates ?? []) {
-      const pInfo = getProviderInfo(cand.provider_session_id, cand.provider);
-      if (pInfo.type === targetProvider && cand.model) {
-        pushModel(cand.model, cand.model);
-      }
-    }
-    if (models.length === 0 && agentType === "claude_code") {
-      pushModel("claude-opus-4-6", "Claude Opus 4.6");
-      pushModel("claude-sonnet-4-6", "Claude Sonnet 4.6");
-      pushModel("claude-haiku-4-5-20251001", "Claude Haiku 4.5");
     }
     return [
       { value: "", label: "默认模型" },
@@ -1203,16 +1247,31 @@ export function RemoteConsole({
       session.binding.provider_session_id,
       candidate?.provider,
     ).type;
+    const rawProvider = (candidate?.provider ?? "").toLowerCase();
+    const sid = session.binding.provider_session_id;
     const catalogKeys =
-      providerType === "claude"
-        ? ["claude_code", "claude_desktop", "claude"]
-        : providerType === "codex"
-          ? ["codex"]
-          : providerType === "zcode"
-            ? ["zcode"]
-            : providerType === "antigravity"
-              ? ["antigravity"]
-              : ["grok_build", "grok"];
+      rawProvider === "claude_desktop" || providerType === "claude_desktop"
+        ? ["claude_desktop"]
+        : rawProvider === "claude_code" ||
+            rawProvider === "claude" ||
+            providerType === "claude" ||
+            sid.startsWith("claude_")
+          ? hostModels?.agents?.claude_code !== undefined
+            ? ["claude_code"]
+            : ["claude_code", "claude"]
+          : rawProvider === "gemini_cli" ||
+              rawProvider === "gemini" ||
+              sid.startsWith("gemini_")
+            ? ["gemini_cli"]
+            : providerType === "zcode"
+              ? ["zcode"]
+              : providerType === "antigravity"
+                ? ["antigravity"]
+                : rawProvider === "grok_build" ||
+                    rawProvider === "grok" ||
+                    sid.startsWith("grok_")
+                  ? ["grok_build", "grok"]
+                  : ["codex"];
     const seen = new Set<string>();
     const models: Array<{ id: string; display_name?: string }> = [];
     const pushModel = (id?: string | null, displayName?: string | null) => {
@@ -1226,15 +1285,12 @@ export function RemoteConsole({
         display_name: displayName?.trim() || clean.replace(/^models\//u, ""),
       });
     };
-    if (candidate?.model) {
-      pushModel(candidate.model, candidate.model);
-    }
     for (const k of catalogKeys) {
       for (const item of hostModels?.agents?.[k] ?? []) {
         pushModel(item.id, item.display_name);
       }
     }
-    if (providerType === "codex" || models.length === 0) {
+    if (catalogKeys.includes("codex") && models.length === 0) {
       for (const item of hostModels?.data ?? []) {
         pushModel(
           item.id,
@@ -1242,32 +1298,27 @@ export function RemoteConsole({
         );
       }
     }
-    for (const cand of sessionRunner?.hello?.discovery?.candidates ?? []) {
-      const pInfo = getProviderInfo(cand.provider_session_id, cand.provider);
-      if (pInfo.type === providerType && cand.model) {
-        pushModel(cand.model, cand.model);
-      }
-    }
-    if (models.length === 0 && providerType === "claude") {
-      pushModel("claude-opus-4-6", "Claude Opus 4.6");
-      pushModel("claude-sonnet-4-6", "Claude Sonnet 4.6");
-      pushModel("claude-haiku-4-5-20251001", "Claude Haiku 4.5");
-    }
-    const defaultLabel = candidate?.model
-      ? candidate.model.replace(/^models\//u, "")
+    const normalizedCandidateModel = candidate?.model
+      ?.trim()
+      .replace(/\[1m\]$/iu, "")
+      .toLowerCase();
+    const matchedCatalogModel = normalizedCandidateModel
+      ? models.find(
+          (item) =>
+            item.id.toLowerCase() === normalizedCandidateModel ||
+            item.id.replace(/^models\//u, "").toLowerCase() ===
+              normalizedCandidateModel,
+        )
+      : undefined;
+    const defaultLabel = matchedCatalogModel
+      ? `默认 (${matchedCatalogModel.display_name ?? matchedCatalogModel.id})`
       : "默认模型";
     return [
       { value: "", label: defaultLabel },
-      ...models
-        .filter(
-          (item) =>
-            !candidate?.model ||
-            item.id.toLowerCase() !== candidate.model.toLowerCase(),
-        )
-        .map((item) => ({
-          value: item.id,
-          label: item.display_name ?? item.id,
-        })),
+      ...models.map((item) => ({
+        value: item.id,
+        label: item.display_name ?? item.id,
+      })),
     ];
   }, [session, snapshot.runners, discovered]);
 
@@ -1326,15 +1377,103 @@ export function RemoteConsole({
       setAttachments((prev) => [...prev, ...loaded].slice(0, 16));
     }
   };
+  const hasInFlightPrompt = useMemo(
+    () =>
+      commands.some(
+        (c) => c.command.command.action === "send_prompt" && c.receipt === null,
+      ),
+    [commands],
+  );
+  const isTurnExecuting = Boolean(
+    session &&
+    connected &&
+    (session.binding.execution_state === "running" ||
+      Boolean(session.binding.current_turn_id) ||
+      hasInFlightPrompt),
+  );
   const canSend =
     connected &&
-    ["idle", "completed"].includes(session?.binding.execution_state ?? "");
+    !isTurnExecuting &&
+    ["idle", "completed", "error", "failed", "interrupted"].includes(
+      session?.binding.execution_state ?? "",
+    );
 
   const adjustTextareaHeight = () => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, 28), 220)}px`;
+    const scrollH = el.scrollHeight;
+    const clamped = Math.min(Math.max(scrollH, 28), 220);
+    el.style.height = `${clamped}px`;
+    el.style.overflowY = scrollH > 220 ? "auto" : "hidden";
+  };
+
+  const handlePasteFromClipboardMenu = async () => {
+    setAttachMenuOpen(false);
+    setAttachQuickPromptsOpen(false);
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      setError("当前浏览器环境不支持直接读取剪贴板，请使用 Ctrl+V 粘贴。");
+      return;
+    }
+    try {
+      if (typeof navigator.clipboard.read === "function") {
+        const items = await navigator.clipboard.read();
+        const files: File[] = [];
+        for (const clipItem of items) {
+          const imgType = clipItem.types.find((t) => t.startsWith("image/"));
+          if (imgType) {
+            const blob = await clipItem.getType(imgType);
+            const ext = imgType.split("/")[1] || "png";
+            files.push(
+              new File([blob], `clipboard-${Date.now()}.${ext}`, {
+                type: imgType,
+              }),
+            );
+          }
+        }
+        if (files.length > 0) {
+          await handleFilesSelected(files);
+          textareaRef.current?.focus();
+          return;
+        }
+      }
+      const clipText = await navigator.clipboard.readText();
+      if (clipText) {
+        if (clipText.length > 8192) {
+          const textFile = new File([clipText], `clipboard-${Date.now()}.txt`, {
+            type: "text/plain",
+          });
+          await handleFilesSelected([textFile]);
+        } else {
+          setText((prev) => (prev ? `${prev}\n${clipText}` : clipText));
+          requestAnimationFrame(adjustTextareaHeight);
+        }
+        textareaRef.current?.focus();
+      }
+    } catch {
+      setError("浏览器未授权读取剪贴板，请直接在输入框按 Ctrl+V 粘贴。");
+    }
+  };
+
+  const handleInsertCodeSnippet = () => {
+    setAttachMenuOpen(false);
+    setAttachQuickPromptsOpen(false);
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    const selectedSlice = text.slice(start, end);
+    const prefix = start > 0 && text[start - 1] !== "\n" ? "\n" : "";
+    const block = `${prefix}\`\`\`\n${selectedSlice}\n\`\`\`\n`;
+    const nextText = text.slice(0, start) + block + text.slice(end);
+    setText(nextText);
+    const cursorOffset = start + prefix.length + 4 + selectedSlice.length;
+    requestAnimationFrame(() => {
+      adjustTextareaHeight();
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(cursorOffset, cursorOffset);
+      }
+    });
   };
   useEffect(() => {
     let stopped = false;
@@ -1376,7 +1515,11 @@ export function RemoteConsole({
     setCommands([]);
     setText("");
     setSessionModel("");
+    setPermissionMode("default");
+    setPermissionModeTouched(false);
     setAttachments([]);
+    setAttachMenuOpen(false);
+    setAttachQuickPromptsOpen(false);
     setQuestionAnswers({});
     setSelectedOptions({});
     setSubmittingApproval(null);
@@ -1526,7 +1669,7 @@ export function RemoteConsole({
     if (pane && followBottom) {
       pane.scrollTop = pane.scrollHeight;
     }
-  }, [items, followBottom]);
+  }, [items, isTurnExecuting, turnFailure, followBottom]);
 
   // 核心特性：选定会话时全量自动开始恢复接入（若已标记连接但尚未拉取到历史快照，也自动触发一次幂等同步）
   useEffect(() => {
@@ -1632,7 +1775,11 @@ export function RemoteConsole({
       if (action.action === "send_prompt") {
         setText("");
         setAttachments([]);
-        if (textareaRef.current) textareaRef.current.style.height = "auto";
+        setDismissedFailure(null);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "auto";
+          textareaRef.current.style.overflowY = "hidden";
+        }
       }
       refresh.current();
       refreshSessionDetail.current();
@@ -1646,6 +1793,45 @@ export function RemoteConsole({
       setSubmittingInterrupt(false);
     }
   };
+  const sendCurrentPrompt = () => {
+    if (!canSend || (!text.trim() && attachments.length === 0)) return;
+    const sessionRunner = session
+      ? snapshot.runners.find((item) => item.runner_id === session.runner_id)
+      : undefined;
+    const supportsModernCommandFields = Boolean(
+      sessionRunner?.hello?.models?.agents?.claude_desktop !== undefined ||
+      sessionRunner?.hello?.discovery?.candidates?.some(
+        (c) => c.context_window_tokens !== undefined,
+      ),
+    );
+    let promptText =
+      text.trim() || `请查看附件：${attachments.map((a) => a.name).join("、")}`;
+    if (!supportsModernCommandFields && attachments.length > 0) {
+      const inlineParts = attachments.map((att) =>
+        att.encoding === "utf8"
+          ? `[附件 ${att.name}]:\n\`\`\`\n${att.data.slice(0, 64 * 1024)}\n\`\`\``
+          : `[附件 ${att.name} (${att.media_type})]`,
+      );
+      promptText = `${inlineParts.join("\n\n")}\n\n${promptText}`;
+    }
+    const shouldSendPermissionMode =
+      permissionMode !== "default" || permissionModeTouched;
+    void submit({
+      action: "send_prompt",
+      text: promptText,
+      ...(effort !== "default" ? { effort } : {}),
+      ...(sessionModel ? { model: sessionModel } : {}),
+      ...(shouldSendPermissionMode ? { permission_mode: permissionMode } : {}),
+      ...(supportsModernCommandFields && attachments.length > 0
+        ? { attachments }
+        : {}),
+    });
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.overflowY = "hidden";
+    }
+  };
+
   const launch = async () => {
     const launchRunner = snapshot.runners.find(
       (item) => item.runner_id === runner,
@@ -1661,6 +1847,7 @@ export function RemoteConsole({
       nativeId,
       agentType,
       sandbox,
+      launchPermissionMode,
       model,
     ]);
     const existingSession = nativeId
@@ -1682,7 +1869,15 @@ export function RemoteConsole({
           mode: nativeId ? "resume" : "create",
           workspace_path: workspace,
           sandbox,
-          approval_policy: "untrusted",
+          approval_policy:
+            launchPermissionMode === "bypassPermissions"
+              ? "never"
+              : launchPermissionMode === "acceptEdits"
+                ? "on-request"
+                : "untrusted",
+          ...(launchPermissionMode !== "default"
+            ? { permission_mode: launchPermissionMode }
+            : {}),
           ...(model ? { model } : {}),
           ...(nativeId
             ? { provider_session_id: nativeId }
@@ -3338,27 +3533,6 @@ export function RemoteConsole({
             </button>
           </div>
         )}
-        {latestFailure && (
-          <div className="remote-notice" role="status">
-            {remoteError(new Error(latestFailure.receipt?.code ?? ""))}
-          </div>
-        )}
-        {turnFailure &&
-          !turnFailure.retrying &&
-          turnFailure.message !== dismissedFailure && (
-            <div className="remote-notice remote-notice-error" role="alert">
-              <div className="remote-notice-error-body">
-                <strong>这一轮没有完成</strong>
-                <span>{readableRemoteText(turnFailure.message)}</span>
-              </div>
-              <button
-                aria-label="关闭提示"
-                onClick={() => setDismissedFailure(turnFailure.message)}
-              >
-                ×
-              </button>
-            </div>
-          )}
         {!selected ? (
           <div key="welcome" className="remote-welcome remote-view-enter">
             <span className="remote-eyebrow">YOUR WORK IN FLOW</span>
@@ -3491,6 +3665,9 @@ export function RemoteConsole({
                           {
                             getProviderInfo(
                               session?.binding.provider_session_id ?? "",
+                              discovered.get(
+                                `${session?.runner_id ?? ""}/${session?.binding.provider_session_id ?? ""}`,
+                              )?.provider,
                             ).name
                           }
                         </small>
@@ -3513,6 +3690,88 @@ export function RemoteConsole({
                   </article>
                 );
               })}
+              {isTurnExecuting &&
+                approvals.length === 0 &&
+                questions.length === 0 && (
+                  <div
+                    className="remote-turn-live"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <div className="remote-turn-live-main">
+                      <span
+                        className="remote-turn-live-dots"
+                        aria-hidden="true"
+                      >
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <span className="remote-turn-live-label">
+                        {hasInFlightPrompt && !session?.binding.current_turn_id
+                          ? "正在派发指令…"
+                          : items[items.length - 1]?.kind === "tool" &&
+                              items[items.length - 1]?.status === "running"
+                            ? `正在执行 · ${items[items.length - 1]?.title || "工具调用"}`
+                            : items[items.length - 1]?.kind === "assistant" &&
+                                session?.binding.current_turn_id
+                              ? "正在执行 · 正在生成回复…"
+                              : "正在执行…"}
+                      </span>
+                      {session && (
+                        <span className="remote-turn-live-provider">
+                          {
+                            getProviderInfo(
+                              session.binding.provider_session_id,
+                              discovered.get(
+                                `${session.runner_id}/${session.binding.provider_session_id}`,
+                              )?.provider,
+                            ).name
+                          }
+                        </span>
+                      )}
+                    </div>
+                    {session?.binding.current_turn_id && (
+                      <button
+                        type="button"
+                        className="remote-turn-live-stop"
+                        disabled={!connected || busy || submittingInterrupt}
+                        onClick={() => void submit({ action: "interrupt" })}
+                      >
+                        {submittingInterrupt ? "停止中…" : "停止"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              {!isTurnExecuting &&
+                (() => {
+                  const failText =
+                    turnFailure && !turnFailure.retrying
+                      ? readableRemoteText(turnFailure.message)
+                      : latestFailure
+                        ? remoteError(
+                            new Error(latestFailure.receipt?.code ?? ""),
+                          )
+                        : session?.binding.execution_state === "error"
+                          ? "上一轮执行异常中断，请检查当前客户端模型或网关配置后重试。"
+                          : "";
+                  if (!failText || failText === dismissedFailure) return null;
+                  return (
+                    <div className="remote-timeline-error" role="alert">
+                      <div className="remote-timeline-error-body">
+                        <strong>本轮执行未完成</strong>
+                        <span>{failText}</span>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="关闭提示"
+                        onClick={() => setDismissedFailure(failText)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })()}
               {!session ||
               (sessionLoading && items.length === 0) ||
               (!connected && session.online && items.length === 0) ||
@@ -4114,48 +4373,7 @@ export function RemoteConsole({
               className="remote-composer-card"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (canSend && (text.trim() || attachments.length > 0)) {
-                  const sessionRunner = session
-                    ? snapshot.runners.find(
-                        (item) => item.runner_id === session.runner_id,
-                      )
-                    : undefined;
-                  const supportsNativeAttachments = Boolean(
-                    sessionRunner?.hello?.models?.agents?.claude_desktop !==
-                      undefined ||
-                    sessionRunner?.hello?.discovery?.candidates?.some(
-                      (c) => c.context_window_tokens !== undefined,
-                    ),
-                  );
-                  let promptText =
-                    text.trim() ||
-                    `请查看附件：${attachments.map((a) => a.name).join("、")}`;
-                  if (!supportsNativeAttachments && attachments.length > 0) {
-                    const inlineParts = attachments.map((att) =>
-                      att.encoding === "utf8"
-                        ? `[附件 ${att.name}]:\n\`\`\`\n${att.data.slice(0, 64 * 1024)}\n\`\`\``
-                        : `[附件 ${att.name} (${att.media_type})]`,
-                    );
-                    promptText = `${inlineParts.join("\n\n")}\n\n${promptText}`;
-                  }
-                  const fallbackModel = session
-                    ? discovered.get(
-                        `${session.runner_id}/${session.binding.provider_session_id}`,
-                      )?.model
-                    : undefined;
-                  const effectiveModel = sessionModel || fallbackModel || "";
-                  void submit({
-                    action: "send_prompt",
-                    text: promptText,
-                    ...(effort !== "default" ? { effort } : {}),
-                    ...(effectiveModel ? { model: effectiveModel } : {}),
-                    ...(supportsNativeAttachments && attachments.length > 0
-                      ? { attachments }
-                      : {}),
-                  });
-                  if (textareaRef.current)
-                    textareaRef.current.style.height = "auto";
-                }
+                sendCurrentPrompt();
               }}
             >
               {attachments.length > 0 && (
@@ -4231,6 +4449,16 @@ export function RemoteConsole({
                     }
                   }}
                   onKeyDown={(event) => {
+                    if (
+                      (event.ctrlKey || event.metaKey) &&
+                      event.key.toLowerCase() === "u"
+                    ) {
+                      event.preventDefault();
+                      if (connected && !busy) {
+                        fileInputRef.current?.click();
+                      }
+                      return;
+                    }
                     const isComposing =
                       (event.nativeEvent as KeyboardEvent).isComposing ||
                       event.keyCode === 229;
@@ -4242,53 +4470,7 @@ export function RemoteConsole({
                       !isComposing
                     ) {
                       event.preventDefault();
-                      if (canSend && (text.trim() || attachments.length > 0)) {
-                        const sessionRunner = session
-                          ? snapshot.runners.find(
-                              (item) => item.runner_id === session.runner_id,
-                            )
-                          : undefined;
-                        const supportsNativeAttachments = Boolean(
-                          sessionRunner?.hello?.models?.agents
-                            ?.claude_desktop !== undefined ||
-                          sessionRunner?.hello?.discovery?.candidates?.some(
-                            (c) => c.context_window_tokens !== undefined,
-                          ),
-                        );
-                        let promptText =
-                          text.trim() ||
-                          `请查看附件：${attachments.map((a) => a.name).join("、")}`;
-                        if (
-                          !supportsNativeAttachments &&
-                          attachments.length > 0
-                        ) {
-                          const inlineParts = attachments.map((att) =>
-                            att.encoding === "utf8"
-                              ? `[附件 ${att.name}]:\n\`\`\`\n${att.data.slice(0, 64 * 1024)}\n\`\`\``
-                              : `[附件 ${att.name} (${att.media_type})]`,
-                          );
-                          promptText = `${inlineParts.join("\n\n")}\n\n${promptText}`;
-                        }
-                        const fallbackModel = session
-                          ? discovered.get(
-                              `${session.runner_id}/${session.binding.provider_session_id}`,
-                            )?.model
-                          : undefined;
-                        const effectiveModel =
-                          sessionModel || fallbackModel || "";
-                        void submit({
-                          action: "send_prompt",
-                          text: promptText,
-                          ...(effort !== "default" ? { effort } : {}),
-                          ...(effectiveModel ? { model: effectiveModel } : {}),
-                          ...(supportsNativeAttachments &&
-                          attachments.length > 0
-                            ? { attachments }
-                            : {}),
-                        });
-                        if (textareaRef.current)
-                          textareaRef.current.style.height = "auto";
-                      }
+                      sendCurrentPrompt();
                     }
                   }}
                   placeholder={
@@ -4298,9 +4480,9 @@ export function RemoteConsole({
                         ? "电脑离线"
                         : !connected
                           ? "正在连接…"
-                          : canSend
-                            ? "继续这段工作…"
-                            : "正在执行…"
+                          : isTurnExecuting
+                            ? "正在执行…"
+                            : "继续这段工作…"
                   }
                   rows={1}
                   disabled={!connected}
@@ -4320,28 +4502,220 @@ export function RemoteConsole({
                       }
                     }}
                   />
-                  <button
-                    type="button"
-                    className="remote-attach-btn"
-                    title="添加附件"
-                    aria-label="添加附件"
-                    disabled={!connected || busy}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
+                  <div className="remote-attach-menu-wrap" ref={attachMenuRef}>
+                    <button
+                      type="button"
+                      className={`remote-attach-btn ${attachMenuOpen ? "open" : ""}`}
+                      title="添加内容或附件"
+                      aria-label="添加内容或附件"
+                      aria-haspopup="menu"
+                      aria-expanded={attachMenuOpen}
+                      disabled={!connected || busy}
+                      onClick={() => {
+                        setAttachMenuOpen((prev) => {
+                          if (prev) setAttachQuickPromptsOpen(false);
+                          return !prev;
+                        });
+                      }}
                     >
-                      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                    </svg>
-                  </button>
+                      <svg
+                        width="17"
+                        height="17"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <line x1="12" y1="5" x2="12" y2="19" />
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                      </svg>
+                    </button>
+                    {attachMenuOpen && (
+                      <div
+                        className="remote-attach-popover"
+                        role="menu"
+                        aria-label="添加附件或快捷内容"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="remote-attach-menu-item"
+                          onClick={() => {
+                            setAttachMenuOpen(false);
+                            setAttachQuickPromptsOpen(false);
+                            fileInputRef.current?.click();
+                          }}
+                        >
+                          <span
+                            className="remote-attach-menu-icon"
+                            aria-hidden="true"
+                          >
+                            <svg
+                              width="15"
+                              height="15"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.9"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                            </svg>
+                          </span>
+                          <span className="remote-attach-menu-label">
+                            添加文件或图片
+                          </span>
+                          <kbd className="remote-attach-menu-kbd">Ctrl+U</kbd>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="remote-attach-menu-item"
+                          onClick={() => void handlePasteFromClipboardMenu()}
+                        >
+                          <span
+                            className="remote-attach-menu-icon"
+                            aria-hidden="true"
+                          >
+                            <svg
+                              width="15"
+                              height="15"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.9"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <rect
+                                x="9"
+                                y="2"
+                                width="6"
+                                height="4"
+                                rx="1"
+                                ry="1"
+                              />
+                              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                            </svg>
+                          </span>
+                          <span className="remote-attach-menu-label">
+                            从剪贴板粘贴
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="remote-attach-menu-item"
+                          onClick={handleInsertCodeSnippet}
+                        >
+                          <span
+                            className="remote-attach-menu-icon"
+                            aria-hidden="true"
+                          >
+                            <svg
+                              width="15"
+                              height="15"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.9"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <polyline points="16 18 22 12 16 6" />
+                              <polyline points="8 6 2 12 8 18" />
+                            </svg>
+                          </span>
+                          <span className="remote-attach-menu-label">
+                            插入代码片段
+                          </span>
+                        </button>
+                        <div className="remote-attach-menu-divider" />
+                        <button
+                          type="button"
+                          role="menuitem"
+                          aria-expanded={attachQuickPromptsOpen}
+                          className={`remote-attach-menu-item ${attachQuickPromptsOpen ? "active" : ""}`}
+                          onClick={() =>
+                            setAttachQuickPromptsOpen((prev) => !prev)
+                          }
+                        >
+                          <span
+                            className="remote-attach-menu-icon"
+                            aria-hidden="true"
+                          >
+                            <svg
+                              width="15"
+                              height="15"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.9"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                            </svg>
+                          </span>
+                          <span className="remote-attach-menu-label">
+                            快捷指令
+                          </span>
+                          <ChevronDownIcon
+                            size={12}
+                            className={`remote-attach-chevron ${attachQuickPromptsOpen ? "open" : ""}`}
+                          />
+                        </button>
+                        {attachQuickPromptsOpen && (
+                          <div className="remote-attach-sublist">
+                            {QUICK_PROMPT_SNIPPETS.map((snippet) => (
+                              <button
+                                key={snippet.label}
+                                type="button"
+                                role="menuitem"
+                                className="remote-attach-subitem"
+                                onClick={() => {
+                                  setAttachMenuOpen(false);
+                                  setAttachQuickPromptsOpen(false);
+                                  setText((prev) =>
+                                    prev
+                                      ? `${prev}\n${snippet.text}`
+                                      : snippet.text,
+                                  );
+                                  requestAnimationFrame(() => {
+                                    adjustTextareaHeight();
+                                    textareaRef.current?.focus();
+                                  });
+                                }}
+                              >
+                                {snippet.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    className="remote-permission-selector"
+                    title="设置当前会话执行权限模式"
+                  >
+                    <Select
+                      variant="compact"
+                      placement="top"
+                      label="权限模式"
+                      value={permissionMode}
+                      disabled={!connected || busy}
+                      options={PERMISSION_MODE_OPTIONS}
+                      onChange={(next) => {
+                        setPermissionMode(next as RemotePermissionMode);
+                        setPermissionModeTouched(true);
+                      }}
+                    />
+                  </div>
                 </div>
                 <div className="remote-composer-actions">
                   <div
@@ -4542,6 +4916,17 @@ export function RemoteConsole({
                   value={sandbox}
                   options={SANDBOX_OPTIONS}
                   onChange={(next) => setSandbox(next as typeof sandbox)}
+                />
+              </div>
+              <div className="remote-launch-field">
+                <span className="remote-launch-label">执行权限模式</span>
+                <Select
+                  label="执行权限模式"
+                  value={launchPermissionMode}
+                  options={PERMISSION_MODE_OPTIONS}
+                  onChange={(next) =>
+                    setLaunchPermissionMode(next as RemotePermissionMode)
+                  }
                 />
               </div>
               <p className="remote-launch-note">

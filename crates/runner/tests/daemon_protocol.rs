@@ -18,6 +18,7 @@ fn command() -> RemoteCommand {
             text: "continue".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     }

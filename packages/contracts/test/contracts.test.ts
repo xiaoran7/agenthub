@@ -498,6 +498,7 @@ test("send_prompt accepts per-turn model override and validated attachments", ()
       text: "请结合附件分析",
       effort: "high",
       model: "claude-opus-4-6",
+      permission_mode: "acceptEdits" as const,
       attachments: [
         {
           name: "schedule.png",
@@ -509,4 +510,13 @@ test("send_prompt accepts per-turn model override and validated attachments", ()
     },
   };
   assert.deepEqual(parseRemoteCommand(cmd), cmd);
+  assert.throws(
+    () =>
+      parseRemoteCommand({
+        ...cmd,
+        command: { ...cmd.command, permission_mode: "root-everything" },
+      }),
+    (error: unknown) =>
+      error instanceof ContractError && error.code === "invalid_field",
+  );
 });

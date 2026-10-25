@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+- **Web 控制台视觉排版与交互升级、全客户端真实模型目录、Runtime 托盘弹窗重构、增量缓存与用量多维筛选（`apps/web`, `packages/contracts`, `services/api`, `crates/runner`）**：
+  - **会话阅读列居中对称与右侧紧凑用户气泡（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
+    - 统一 `.remote-timeline` 与 `.remote-composer` 的居中阅读列宽度（`--remote-measure`），将用户消息气泡重构为右侧锚定的紧凑自适应卡片（`width: fit-content; max-width: min(76%, 560px)`），消除用户指令铺满整行导致的视觉重心偏移；
+    - 隐藏输入框 `<textarea>` 原生滚动条上下微调箭头（`::-webkit-scrollbar-button { display: none }`），保持输入区干净克制；
+  - **会话流内"正在执行"实时状态行与异常显著透出（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/lib/remote.ts`, `crates/runner/src/remote_host.rs`, `crates/runner/src/collectors/claude_app_server.rs`）**：
+    - 在 `.remote-timeline` 内部新增 `.remote-turn-running-row` 实时脉动状态行，指令派发与流式生成期间直接在对话流底部显示"正在执行…"，并支持一键停止当前回合；
+    - 持久 `ClaudeProcessSession` 新增 stderr 环形缓冲采集并在 `result`（`is_error: true` 或 `error_*` 子类型）及进程异常退出时主动下发 `error` 与带失败原因的 `turn/completed` 事件；前端 `latestTurnFailure` 同时解析 `turn/completed` 失败状态并在时间线内显著展示错误卡片，杜绝静默卡死；
+  - **附件选择弹出菜单与权限模式端到端选择器（`packages/contracts/src/remote.ts`, `services/api/src/remote-store.ts`, `crates/runner/src/remote_journal.rs`, `crates/runner/src/remote_host.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
+    - 点击输入框 `+` 按钮不再直接强拉系统文件选择器，改为弹出结构化菜单（"添加文件或图片 Ctrl+U"、"从剪贴板粘贴"、"插入代码片段"、"快捷指令"）；
+    - 新增权限模式选择器（`default` 默认权限、`acceptEdits` 自动允许编辑、`plan` 只读规划、`bypassPermissions` 完全自动执行），贯通 Web 控制台、协议契约与 Runner 各客户端执行参数；
+  - **按客户端隔离读取真实模型列表（`crates/runner/src/claude_gateway.rs`, `crates/runner/src/model_catalog.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
+    - 废除跨客户端混用与从历史 `.jsonl` 会话转录抓取旧模型名的逻辑，按 `claude_code`、`claude_desktop`、`codex`、`gemini_cli`、`zcode`、`grok_build`、`antigravity` 各自独立的本地配置与 CC Switch `app_type` 精确读取真实可用模型列表，并支持网关模型名自动映射还原；
+  - **CC Switch 风格右下角系统托盘弹窗（`crates/runner/src/tray.rs`, `crates/runner/src/tray_menu.rs`, `crates/runner/examples/tray_menu_preview.rs`）**：
+    - 基于 Win32 `UpdateLayeredWindow` 与超采样 SDF 重构右下角托盘弹窗卡片：顶部展示"AgentHub"标题与设置齿轮按钮，内置可原位切换的"配置" / "用量"分段标签页，客户端列表展示品牌徽标、真实 Provider 名称、"直连" / "路由"胶囊与右侧箭头，底部提供"打开主窗口"与"退出"按钮；支持左键/右键唤起弹窗、双击直接打开主窗口；
+  - **Runtime 隐式最优刷新周期与全链路增量字节偏移缓存（`crates/runner/src/usage_ledger.rs`, `crates/runner/src/collectors/mod.rs`, `crates/runner/src/collectors/capabilities.rs`, `crates/runner/src/collectors/workspace.rs`, `crates/runner/src/web_server.rs`）**：
+    - 移除界面显式暴露的刷新频率按钮（`#usageEvery` 与 `#pollSegs`），内置最优刷新周期并在窗口隐藏时自动暂停轮询、恢复可见时立即重验；
+    - `usage_ledger.rs` 与 `collectors/mod.rs` 实装基于文件 `(len, modified_ms)` 与字节偏移水位的增量尾部追加读取（`SeekFrom::Start(state.offset)`）以及 SQLite `rowid` 增量游标，未变化文件零磁盘 I/O；为 `/api/dashboard` 与 `/api/usage/ledger` 接入 `ETag` / `If-None-Match`（`304 Not Modified`）响应；
+  - **Runtime 用量自定义列选择器与多维高级筛选（`crates/runner/resources/dashboard.html`, `crates/runner/resources/dashboard.css`, `crates/runner/resources/dashboard.js`）**：
+    - 用量请求面板新增"请求日志" / "供应商" / "模型"三视图切换、右上角 `[|||]` 12 列自定义显示列勾选弹窗（持久化至 `localStorage`）以及"应用"、"供应商"、"模型"、"状态"、"高级筛选"纯 DOM 下拉过滤与关键词检索；
+  - **分发包同步更新**：重新编译 Windows Release 产物并更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `277d3c54cb37899325d5943114dc35e9b4a13286c290b82757a91202e345790d`）。
+
 - **Web 控制台会话渲染状态对齐、最小文案精简、会话内模型选择、附件上传与真实上下文用量上报（`apps/web`, `packages/contracts`, `services/api`, `crates/runner`）**：
   - **解决会话尚未渲染即显示已连接与历史空白（`crates/runner/src/remote_host.rs`, `crates/runner/src/remote_network.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
     - `keep_alive_restored_sessions` 在后台恢复既有会话以及 `Connect(Resume)` 命中已连接会话幂等分支时，主动调用 `enqueue_session_history_and_usage` 补发 `history/snapshot` 与 `thread/tokenUsage/updated`，并在 `handle_inbound_command` 完成后即刻刷入出站队列；

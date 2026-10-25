@@ -123,6 +123,9 @@ pub struct MultiProviderTransport {
     claude_buffered_events: Arc<Mutex<VecDeque<Value>>>,
     claude_cached_cwds: HashMap<String, PathBuf>,
     claude_cached_models: HashMap<String, String>,
+    claude_desktop_sessions: HashSet<String>,
+    claude_turn_emitted_text: HashSet<String>,
+    claude_turn_streamed_deltas: HashSet<String>,
     claude_sessions: HashMap<String, ClaudeProcessSession>,
     antigravity_binary: PathBuf,
     antigravity_active_turns: HashMap<String, String>,
@@ -154,6 +157,9 @@ impl MultiProviderTransport {
             claude_buffered_events: Arc::new(Mutex::new(VecDeque::new())),
             claude_cached_cwds: HashMap::new(),
             claude_cached_models: HashMap::new(),
+            claude_desktop_sessions: HashSet::new(),
+            claude_turn_emitted_text: HashSet::new(),
+            claude_turn_streamed_deltas: HashSet::new(),
             claude_sessions: HashMap::new(),
             antigravity_binary: crate::collectors::discover_antigravity_binary(),
             antigravity_active_turns: HashMap::new(),
@@ -194,6 +200,25 @@ impl MultiProviderTransport {
             .ok_or_else(|| NativeError::rejected("zcode_not_available"))
     }
 
+    fn is_claude_desktop_session(&mut self, session_id: &str) -> bool {
+        let raw_id = session_id.trim_start_matches("claude_");
+        if self.claude_desktop_sessions.contains(session_id)
+            || self.claude_desktop_sessions.contains(raw_id)
+        {
+            return true;
+        }
+        for item in cached_local_store_sessions() {
+            if item.get("id").and_then(Value::as_str) == Some(session_id)
+                && item.get("provider").and_then(Value::as_str) == Some("claude_desktop")
+            {
+                self.claude_desktop_sessions.insert(session_id.to_string());
+                self.claude_desktop_sessions.insert(raw_id.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
     fn get_or_spawn_claude_session(
         &mut self,
         session_id: &str,
@@ -201,14 +226,20 @@ impl MultiProviderTransport {
         model: Option<&str>,
         effort: Option<&str>,
         permission_mode: Option<&str>,
+        claude_desktop: bool,
     ) -> Result<&mut ClaudeProcessSession, NativeError> {
-        if let Some(existing) = self.claude_sessions.get(session_id)
-            && !existing.is_turn_in_progress()
-        {
-            let model_changed = model.is_some() && existing.requested_model() != model;
-            let effort_changed = existing.reasoning_effort() != effort;
-            if model_changed || effort_changed {
+        if let Some(existing) = self.claude_sessions.get(session_id) {
+            if existing.is_dead() {
                 self.claude_sessions.remove(session_id);
+            } else if !existing.is_turn_in_progress() {
+                let model_changed = model.is_some() && existing.requested_model() != model;
+                let effort_changed = effort.is_some() && existing.reasoning_effort() != effort;
+                let mode_changed =
+                    permission_mode.is_some() && existing.permission_mode() != permission_mode;
+                let client_changed = existing.is_claude_desktop() != claude_desktop;
+                if model_changed || effort_changed || mode_changed || client_changed {
+                    self.claude_sessions.remove(session_id);
+                }
             }
         }
         if !self.claude_sessions.contains_key(session_id) {
@@ -229,6 +260,7 @@ impl MultiProviderTransport {
                 model,
                 reasoning_effort: effort,
                 permission_mode,
+                claude_desktop,
                 ..Default::default()
             };
 
@@ -264,11 +296,10 @@ struct LocalStoreCache {
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
-/// How long a local store scan stays usable.
-///
-/// The scan reads every transcript on disk, so it must be long enough that a
-/// refresh reuses the result rather than paying for the same scan again.
-const LOCAL_STORE_CACHE_TTL: Duration = Duration::from_secs(60);
+/// How long a local store scan stays usable before triggering an incremental
+/// background pass. Each underlying store (`zcode`, `claude`, `codex`) keeps
+/// per-file byte offsets / mtimes, so refreshes only read newly appended bytes.
+const LOCAL_STORE_CACHE_TTL: Duration = Duration::from_secs(8);
 
 /// Start a background scan of the local session stores, if one is not running.
 fn start_local_store_scan() {
@@ -538,11 +569,14 @@ impl NativeTransport for MultiProviderTransport {
                     }
                 }))
             }
-            "thread/start" if agent_type == "claude_code" => {
+            "thread/start" if agent_type == "claude_code" || agent_type == "claude_desktop" => {
                 let cwd = params["cwd"].as_str().unwrap_or(".").to_string();
                 let session_id = format!("claude_{}", uuid::Uuid::new_v4());
                 self.claude_cached_cwds
                     .insert(session_id.clone(), PathBuf::from(&cwd));
+                if agent_type == "claude_desktop" {
+                    self.claude_desktop_sessions.insert(session_id.clone());
+                }
                 if let Some(m) = params["model"]
                     .as_str()
                     .map(str::trim)
@@ -722,6 +756,8 @@ impl NativeTransport for MultiProviderTransport {
                     .unwrap_or("")
                     .to_string();
                 let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
+                self.claude_turn_emitted_text.remove(&session_id);
+                self.claude_turn_streamed_deltas.remove(&session_id);
                 self.claude_active_turns
                     .insert(session_id.clone(), turn_id.clone());
                 let cancel = Arc::new(AtomicBool::new(false));
@@ -779,6 +815,12 @@ impl NativeTransport for MultiProviderTransport {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned);
+                let permission_mode = params["permissionMode"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned);
+                let claude_desktop = self.is_claude_desktop_session(&session_id);
 
                 let image_blocks: Vec<Value> = params
                     .get("imageBlocks")
@@ -788,29 +830,39 @@ impl NativeTransport for MultiProviderTransport {
 
                 // Attempt persistent bidirectional session driving
                 if let Some(ref cwd_path) = cwd {
-                    let permission_mode = params["permissionMode"].as_str();
-                    if let Ok(session) = self.get_or_spawn_claude_session(
+                    match self.get_or_spawn_claude_session(
                         &session_id,
                         cwd_path,
                         model.as_deref(),
                         effort.as_deref(),
-                        permission_mode,
-                    ) && session
-                        .send_prompt_with_blocks(&turn_id, &text, &image_blocks)
-                        .is_ok()
-                    {
-                        return Ok(json!({
-                            "turn": {
-                                "id": turn_id,
-                                "status": { "type": "inProgress" }
+                        permission_mode.as_deref(),
+                        claude_desktop,
+                    ) {
+                        Ok(session) => {
+                            if session
+                                .send_prompt_with_blocks(&turn_id, &text, &image_blocks)
+                                .is_ok()
+                            {
+                                return Ok(json!({
+                                    "turn": {
+                                        "id": turn_id,
+                                        "status": { "type": "inProgress" }
+                                    }
+                                }));
                             }
-                        }));
+                            self.claude_sessions.remove(&session_id);
+                        }
+                        Err(_) => {
+                            self.claude_sessions.remove(&session_id);
+                        }
                     }
                 }
 
                 let binary = self.claude_binary.clone();
                 let session_id_clone = session_id.clone();
                 let turn_id_clone = turn_id.clone();
+                let emitted_text = Arc::new(AtomicBool::new(false));
+                let emitted_text_cb = emitted_text.clone();
 
                 std::thread::spawn(move || {
                     let events_queue = events_tx.clone();
@@ -820,8 +872,12 @@ impl NativeTransport for MultiProviderTransport {
                         let events_queue = events_queue.clone();
                         let s_id = s_id.clone();
                         let t_id = t_id.clone();
+                        let emitted_text_cb = emitted_text_cb.clone();
                         move |update: crate::collectors::AgentTurnUpdate| match update {
                             crate::collectors::AgentTurnUpdate::AssistantDelta(delta) => {
+                                if !delta.is_empty() {
+                                    emitted_text_cb.store(true, Ordering::Relaxed);
+                                }
                                 if let Ok(mut q) = events_queue.lock() {
                                     q.push_back(json!({
                                         "method": "item/agentMessage/delta",
@@ -835,6 +891,9 @@ impl NativeTransport for MultiProviderTransport {
                                 }
                             }
                             crate::collectors::AgentTurnUpdate::AssistantMessage(msg) => {
+                                if !msg.is_empty() {
+                                    emitted_text_cb.store(true, Ordering::Relaxed);
+                                }
                                 if let Ok(mut q) = events_queue.lock() {
                                     q.push_back(json!({
                                         "method": "item/agentMessage/delta",
@@ -874,9 +933,10 @@ impl NativeTransport for MultiProviderTransport {
                             &text,
                             crate::collectors::TurnOptions {
                                 model: model.as_deref(),
+                                permission_mode: permission_mode.as_deref(),
                                 reasoning_effort: effort.as_deref(),
                                 session_exists,
-                                ..Default::default()
+                                claude_desktop,
                             },
                             Duration::from_secs(600),
                             &cancel,
@@ -900,6 +960,17 @@ impl NativeTransport for MultiProviderTransport {
                             }
                         });
                         if let Ok(Ok(ref res)) = outcome {
+                            if !emitted_text.load(Ordering::Relaxed) && !res.response.is_empty() {
+                                q.push_back(json!({
+                                    "method": "item/agentMessage/delta",
+                                    "params": {
+                                        "threadId": session_id_clone,
+                                        "turnId": turn_id_clone,
+                                        "itemId": "claude_msg",
+                                        "delta": &res.response
+                                    }
+                                }));
+                            }
                             completed_params["turn"]["output"] = json!(&res.response);
                             if let Some(ref real_id) = res.session_id {
                                 completed_params["realSessionId"] =
@@ -918,10 +989,21 @@ impl NativeTransport for MultiProviderTransport {
                                     }
                                 }));
                             }
-                        } else if let Ok(Err(ref err)) = outcome {
-                            completed_params["turn"]["error"] = json!(err.to_string());
-                        } else if outcome.is_err() {
-                            completed_params["turn"]["error"] = json!("进程执行异常中断");
+                        } else if !cancel.load(Ordering::Relaxed) {
+                            let err_str = match outcome {
+                                Ok(Err(ref err)) => err.to_string(),
+                                _ => "进程执行异常中断".to_string(),
+                            };
+                            q.push_back(json!({
+                                "method": "error",
+                                "params": {
+                                    "threadId": session_id_clone,
+                                    "turnId": turn_id_clone,
+                                    "willRetry": false,
+                                    "error": { "message": &err_str }
+                                }
+                            }));
+                            completed_params["turn"]["error"] = json!(err_str);
                         }
                         q.push_back(json!({
                             "method": "turn/completed",
@@ -1127,10 +1209,21 @@ impl NativeTransport for MultiProviderTransport {
                         });
                         if let Ok(Ok(ref res)) = outcome {
                             completed_params["turn"]["output"] = json!(&res.response);
-                        } else if let Ok(Err(ref err)) = outcome {
-                            completed_params["turn"]["error"] = json!(err.to_string());
-                        } else if outcome.is_err() {
-                            completed_params["turn"]["error"] = json!("进程执行异常中断");
+                        } else if !cancel.load(Ordering::Relaxed) {
+                            let err_str = match outcome {
+                                Ok(Err(ref err)) => err.to_string(),
+                                _ => "进程执行异常中断".to_string(),
+                            };
+                            q.push_back(json!({
+                                "method": "error",
+                                "params": {
+                                    "threadId": session_id_clone,
+                                    "turnId": turn_id_clone,
+                                    "willRetry": false,
+                                    "error": { "message": &err_str }
+                                }
+                            }));
+                            completed_params["turn"]["error"] = json!(err_str);
                         }
                         q.push_back(json!({
                             "method": "turn/completed",
@@ -1330,10 +1423,21 @@ impl NativeTransport for MultiProviderTransport {
                         });
                         if let Ok(Ok(ref res)) = outcome {
                             completed_params["turn"]["output"] = json!(&res.response);
-                        } else if let Ok(Err(ref err)) = outcome {
-                            completed_params["turn"]["error"] = json!(err.to_string());
-                        } else if outcome.is_err() {
-                            completed_params["turn"]["error"] = json!("进程执行异常中断");
+                        } else if !cancel.load(Ordering::Relaxed) {
+                            let err_str = match outcome {
+                                Ok(Err(ref err)) => err.to_string(),
+                                _ => "进程执行异常中断".to_string(),
+                            };
+                            q.push_back(json!({
+                                "method": "error",
+                                "params": {
+                                    "threadId": session_id_clone,
+                                    "turnId": turn_id_clone,
+                                    "willRetry": false,
+                                    "error": { "message": &err_str }
+                                }
+                            }));
+                            completed_params["turn"]["error"] = json!(err_str);
                         }
                         q.push_back(json!({
                             "method": "turn/completed",
@@ -1609,6 +1713,13 @@ impl NativeTransport for MultiProviderTransport {
                                 self.claude_cached_cwds.insert(id.to_string(), cwd.clone());
                                 self.claude_cached_cwds
                                     .insert(id.trim_start_matches("claude_").to_string(), cwd);
+                                if item.get("provider").and_then(Value::as_str)
+                                    == Some("claude_desktop")
+                                {
+                                    self.claude_desktop_sessions.insert(id.to_string());
+                                    self.claude_desktop_sessions
+                                        .insert(id.trim_start_matches("claude_").to_string());
+                                }
                             } else if id.starts_with("antigravity_") {
                                 self.antigravity_cached_cwds
                                     .insert(id.to_string(), cwd.clone());
@@ -1737,135 +1848,153 @@ impl NativeTransport for MultiProviderTransport {
 
         // Drain active persistent Claude sessions
         let mut claude_completed = Vec::new();
+        let mut claude_dead_sessions = Vec::new();
         for (session_id, session) in self.claude_sessions.iter_mut() {
-            if let Ok(msgs) = session.drain_messages() {
-                for msg in msgs {
-                    if let Some(msg_type) = msg.get("type").and_then(Value::as_str) {
-                        match msg_type {
-                            "stream_event" => {
-                                if let Some(delta) = msg
-                                    .pointer("/event/delta/text")
-                                    .or_else(|| msg.pointer("/delta/text"))
-                                    .and_then(Value::as_str)
-                                {
-                                    messages.push(json!({
-                                        "method": "item/agentMessage/delta",
-                                        "params": {
-                                            "threadId": session_id,
-                                            "turnId": self.claude_active_turns.get(session_id).cloned().unwrap_or_default(),
-                                            "itemId": "claude_msg",
-                                            "delta": delta
-                                        }
-                                    }));
-                                }
-                            }
-                            "assistant" => {
-                                if let Some(usage_obj) = msg.pointer("/message/usage") {
-                                    let model_win = msg
-                                        .pointer("/message/model")
+            match session.drain_messages() {
+                Ok(msgs) => {
+                    for msg in msgs {
+                        if let Some(msg_type) = msg.get("type").and_then(Value::as_str) {
+                            match msg_type {
+                                "stream_event" => {
+                                    if let Some(delta) = msg
+                                        .pointer("/event/delta/text")
+                                        .or_else(|| msg.pointer("/delta/text"))
                                         .and_then(Value::as_str)
-                                        .or_else(|| {
-                                            self.claude_cached_models
-                                                .get(session_id)
-                                                .map(String::as_str)
-                                        })
-                                        .map(crate::collectors::claude_context_window);
-                                    if let Some(usage) =
-                                        crate::collectors::context_usage_from_values(
-                                            usage_obj, model_win,
-                                        )
+                                        && !delta.is_empty()
                                     {
+                                        self.claude_turn_emitted_text.insert(session_id.clone());
+                                        self.claude_turn_streamed_deltas.insert(session_id.clone());
                                         messages.push(json!({
-                                            "method": "thread/tokenUsage/updated",
+                                            "method": "item/agentMessage/delta",
                                             "params": {
                                                 "threadId": session_id,
                                                 "turnId": self.claude_active_turns.get(session_id).cloned().unwrap_or_default(),
-                                                "tokenUsage": {
-                                                    "used": usage.used,
-                                                    "last": {"inputTokens": usage.used},
-                                                    "window": usage.window,
-                                                    "modelContextWindow": usage.window
-                                                }
+                                                "itemId": "claude_msg",
+                                                "delta": delta
                                             }
                                         }));
                                     }
                                 }
-                                if let Some(content) =
-                                    msg.pointer("/message/content").and_then(Value::as_array)
-                                {
-                                    for block in content {
-                                        if block.get("type").and_then(Value::as_str)
-                                            == Some("tool_use")
+                                "assistant" => {
+                                    if let Some(usage_obj) = msg.pointer("/message/usage") {
+                                        let model_win = msg
+                                            .pointer("/message/model")
+                                            .and_then(Value::as_str)
+                                            .or_else(|| {
+                                                self.claude_cached_models
+                                                    .get(session_id)
+                                                    .map(String::as_str)
+                                            })
+                                            .map(crate::collectors::claude_context_window);
+                                        if let Some(usage) =
+                                            crate::collectors::context_usage_from_values(
+                                                usage_obj, model_win,
+                                            )
                                         {
-                                            let tool_name = block
-                                                .get("name")
-                                                .and_then(Value::as_str)
-                                                .unwrap_or("unknown");
                                             messages.push(json!({
-                                                "method": "item/started",
+                                                "method": "thread/tokenUsage/updated",
                                                 "params": {
                                                     "threadId": session_id,
                                                     "turnId": self.claude_active_turns.get(session_id).cloned().unwrap_or_default(),
-                                                    "item": {
-                                                        "id": format!("claude_tool_{}", tool_name),
-                                                        "type": "commandExecution",
-                                                        "toolName": tool_name
+                                                    "tokenUsage": {
+                                                        "used": usage.used,
+                                                        "last": {"inputTokens": usage.used},
+                                                        "window": usage.window,
+                                                        "modelContextWindow": usage.window
                                                     }
-                                                }
-                                            }));
-                                        } else if block.get("type").and_then(Value::as_str)
-                                            == Some("text")
-                                            && let Some(text) =
-                                                block.get("text").and_then(Value::as_str)
-                                        {
-                                            messages.push(json!({
-                                                "method": "item/agentMessage/delta",
-                                                "params": {
-                                                    "threadId": session_id,
-                                                    "turnId": self.claude_active_turns.get(session_id).cloned().unwrap_or_default(),
-                                                    "itemId": "claude_msg",
-                                                    "delta": text
                                                 }
                                             }));
                                         }
                                     }
+                                    if let Some(content) =
+                                        msg.pointer("/message/content").and_then(Value::as_array)
+                                    {
+                                        let already_streamed =
+                                            self.claude_turn_streamed_deltas.contains(session_id);
+                                        for block in content {
+                                            if block.get("type").and_then(Value::as_str)
+                                                == Some("tool_use")
+                                            {
+                                                let tool_name = block
+                                                    .get("name")
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or("unknown");
+                                                messages.push(json!({
+                                                    "method": "item/started",
+                                                    "params": {
+                                                        "threadId": session_id,
+                                                        "turnId": self.claude_active_turns.get(session_id).cloned().unwrap_or_default(),
+                                                        "item": {
+                                                            "id": format!("claude_tool_{}", tool_name),
+                                                            "type": "commandExecution",
+                                                            "toolName": tool_name
+                                                        }
+                                                    }
+                                                }));
+                                            } else if !already_streamed
+                                                && block.get("type").and_then(Value::as_str)
+                                                    == Some("text")
+                                                && let Some(text) =
+                                                    block.get("text").and_then(Value::as_str)
+                                                && !text.is_empty()
+                                            {
+                                                self.claude_turn_emitted_text
+                                                    .insert(session_id.clone());
+                                                messages.push(json!({
+                                                    "method": "item/agentMessage/delta",
+                                                    "params": {
+                                                        "threadId": session_id,
+                                                        "turnId": self.claude_active_turns.get(session_id).cloned().unwrap_or_default(),
+                                                        "itemId": "claude_msg",
+                                                        "delta": text
+                                                    }
+                                                }));
+                                            }
+                                        }
+                                    }
                                 }
-                            }
-                            "control_request" => {
-                                if let Some(req_id) = msg.get("request_id").and_then(Value::as_str)
-                                {
-                                    let req = &msg["request"];
-                                    let subtype = req
-                                        .get("subtype")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("unknown");
-                                    let active_turn_id = self
-                                        .claude_active_turns
-                                        .get(session_id)
-                                        .cloned()
-                                        .unwrap_or_default();
-                                    let tool_name = req.get("tool_name").and_then(Value::as_str);
-                                    let is_question = subtype == "ask_user_question"
-                                        || tool_name == Some("AskUserQuestion");
+                                "control_request" => {
+                                    if let Some(req_id) =
+                                        msg.get("request_id").and_then(Value::as_str)
+                                    {
+                                        let req = &msg["request"];
+                                        let subtype = req
+                                            .get("subtype")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("unknown");
+                                        let active_turn_id = self
+                                            .claude_active_turns
+                                            .get(session_id)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        let tool_name =
+                                            req.get("tool_name").and_then(Value::as_str);
+                                        let is_question = subtype == "ask_user_question"
+                                            || tool_name == Some("AskUserQuestion");
 
-                                    if is_question {
-                                        let input = &req["input"];
-                                        let questions =
-                                            input.get("questions").and_then(Value::as_array);
-                                        let first_q = questions.and_then(|q| q.first());
-                                        let prompt = first_q
-                                            .and_then(|q| q.get("question").and_then(Value::as_str))
-                                            .or_else(|| {
-                                                input.get("question").and_then(Value::as_str)
-                                            })
-                                            .or_else(|| input.get("prompt").and_then(Value::as_str))
-                                            .unwrap_or("Agent 提出了一个问题");
-                                        let header = first_q
-                                            .and_then(|q| q.get("header").and_then(Value::as_str));
-                                        let multi_select = first_q.and_then(|q| {
-                                            q.get("multiSelect").and_then(Value::as_bool)
-                                        });
-                                        let options = first_q
+                                        if is_question {
+                                            let input = &req["input"];
+                                            let questions =
+                                                input.get("questions").and_then(Value::as_array);
+                                            let first_q = questions.and_then(|q| q.first());
+                                            let prompt = first_q
+                                                .and_then(|q| {
+                                                    q.get("question").and_then(Value::as_str)
+                                                })
+                                                .or_else(|| {
+                                                    input.get("question").and_then(Value::as_str)
+                                                })
+                                                .or_else(|| {
+                                                    input.get("prompt").and_then(Value::as_str)
+                                                })
+                                                .unwrap_or("Agent 提出了一个问题");
+                                            let header = first_q.and_then(|q| {
+                                                q.get("header").and_then(Value::as_str)
+                                            });
+                                            let multi_select = first_q.and_then(|q| {
+                                                q.get("multiSelect").and_then(Value::as_bool)
+                                            });
+                                            let options = first_q
                                             .and_then(|q| q.get("options").and_then(Value::as_array))
                                             .map(|opts| {
                                                 opts.iter()
@@ -1882,126 +2011,126 @@ impl NativeTransport for MultiProviderTransport {
                                                     })
                                                     .collect::<Vec<_>>()
                                             });
-                                        messages.push(json!({
-                                            "id": format!("claude_req_{}", req_id),
-                                            "method": "client/askQuestion",
-                                            "params": {
-                                                "threadId": session_id,
-                                                "turnId": active_turn_id,
-                                                "requestId": req_id,
-                                                "prompt": prompt,
-                                                "header": header,
-                                                "options": options,
-                                                "multiSelect": multi_select
-                                            }
-                                        }));
-                                    } else {
-                                        let tool_name_str = tool_name.unwrap_or("Bash");
-                                        let is_file = matches!(
-                                            tool_name_str,
-                                            "Edit" | "Write" | "NotebookEdit" | "fileChange"
-                                        );
-                                        let input = &req["input"];
-                                        let file_path = input
-                                            .get("file_path")
-                                            .or_else(|| input.get("path"))
-                                            .or_else(|| input.get("notebook_path"))
-                                            .and_then(Value::as_str);
-                                        let command = input
-                                            .get("command")
-                                            .or_else(|| input.get("cmd"))
-                                            .and_then(Value::as_str);
-                                        let reason = req
-                                            .get("description")
-                                            .or_else(|| req.get("reason"))
-                                            .and_then(Value::as_str);
-
-                                        if is_file {
-                                            let diff = if let (Some(old_str), Some(new_str)) = (
-                                                input.get("old_string").and_then(Value::as_str),
-                                                input.get("new_string").and_then(Value::as_str),
-                                            ) {
-                                                let sanitized_old =
-                                                    crate::privacy::redact_paths_inside_text(
-                                                        old_str,
-                                                    );
-                                                let sanitized_new =
-                                                    crate::privacy::redact_paths_inside_text(
-                                                        new_str,
-                                                    );
-                                                let mut payload = json!({
-                                                    "old_string": sanitized_old,
-                                                    "new_string": sanitized_new,
-                                                })
-                                                .to_string();
-                                                if payload.len() > 65536 {
-                                                    payload.truncate(65536);
-                                                }
-                                                Some(payload)
-                                            } else if let Some(content) =
-                                                input.get("content").and_then(Value::as_str)
-                                            {
-                                                let sanitized =
-                                                    crate::privacy::redact_paths_inside_text(
-                                                        content,
-                                                    );
-                                                let mut payload = json!({
-                                                    "new_string": sanitized,
-                                                })
-                                                .to_string();
-                                                if payload.len() > 65536 {
-                                                    payload.truncate(65536);
-                                                }
-                                                Some(payload)
-                                            } else if let Some(new_source) =
-                                                input.get("new_source").and_then(Value::as_str)
-                                            {
-                                                let sanitized =
-                                                    crate::privacy::redact_paths_inside_text(
-                                                        new_source,
-                                                    );
-                                                let mut payload = json!({
-                                                    "new_string": sanitized,
-                                                })
-                                                .to_string();
-                                                if payload.len() > 65536 {
-                                                    payload.truncate(65536);
-                                                }
-                                                Some(payload)
-                                            } else if let Some(raw_diff) = input
-                                                .get("diff")
-                                                .or_else(|| input.get("patch"))
-                                                .and_then(Value::as_str)
-                                            {
-                                                let mut sanitized =
-                                                    crate::privacy::redact_paths_inside_text(
-                                                        raw_diff,
-                                                    );
-                                                if sanitized.len() > 65536 {
-                                                    sanitized.truncate(65536);
-                                                }
-                                                Some(sanitized)
-                                            } else {
-                                                None
-                                            };
-
                                             messages.push(json!({
                                                 "id": format!("claude_req_{}", req_id),
-                                                "method": "item/fileChange/requestApproval",
+                                                "method": "client/askQuestion",
                                                 "params": {
                                                     "threadId": session_id,
                                                     "turnId": active_turn_id,
                                                     "requestId": req_id,
-                                                    "toolName": tool_name_str,
-                                                    "filePath": file_path,
-                                                    "diff": diff,
-                                                    "reason": reason,
-                                                    "availableDecisions": ["accept", "decline"]
+                                                    "prompt": prompt,
+                                                    "header": header,
+                                                    "options": options,
+                                                    "multiSelect": multi_select
                                                 }
                                             }));
                                         } else {
-                                            let cmd_preview = command.unwrap_or(tool_name_str);
-                                            messages.push(json!({
+                                            let tool_name_str = tool_name.unwrap_or("Bash");
+                                            let is_file = matches!(
+                                                tool_name_str,
+                                                "Edit" | "Write" | "NotebookEdit" | "fileChange"
+                                            );
+                                            let input = &req["input"];
+                                            let file_path = input
+                                                .get("file_path")
+                                                .or_else(|| input.get("path"))
+                                                .or_else(|| input.get("notebook_path"))
+                                                .and_then(Value::as_str);
+                                            let command = input
+                                                .get("command")
+                                                .or_else(|| input.get("cmd"))
+                                                .and_then(Value::as_str);
+                                            let reason = req
+                                                .get("description")
+                                                .or_else(|| req.get("reason"))
+                                                .and_then(Value::as_str);
+
+                                            if is_file {
+                                                let diff = if let (Some(old_str), Some(new_str)) = (
+                                                    input.get("old_string").and_then(Value::as_str),
+                                                    input.get("new_string").and_then(Value::as_str),
+                                                ) {
+                                                    let sanitized_old =
+                                                        crate::privacy::redact_paths_inside_text(
+                                                            old_str,
+                                                        );
+                                                    let sanitized_new =
+                                                        crate::privacy::redact_paths_inside_text(
+                                                            new_str,
+                                                        );
+                                                    let mut payload = json!({
+                                                        "old_string": sanitized_old,
+                                                        "new_string": sanitized_new,
+                                                    })
+                                                    .to_string();
+                                                    if payload.len() > 65536 {
+                                                        payload.truncate(65536);
+                                                    }
+                                                    Some(payload)
+                                                } else if let Some(content) =
+                                                    input.get("content").and_then(Value::as_str)
+                                                {
+                                                    let sanitized =
+                                                        crate::privacy::redact_paths_inside_text(
+                                                            content,
+                                                        );
+                                                    let mut payload = json!({
+                                                        "new_string": sanitized,
+                                                    })
+                                                    .to_string();
+                                                    if payload.len() > 65536 {
+                                                        payload.truncate(65536);
+                                                    }
+                                                    Some(payload)
+                                                } else if let Some(new_source) =
+                                                    input.get("new_source").and_then(Value::as_str)
+                                                {
+                                                    let sanitized =
+                                                        crate::privacy::redact_paths_inside_text(
+                                                            new_source,
+                                                        );
+                                                    let mut payload = json!({
+                                                        "new_string": sanitized,
+                                                    })
+                                                    .to_string();
+                                                    if payload.len() > 65536 {
+                                                        payload.truncate(65536);
+                                                    }
+                                                    Some(payload)
+                                                } else if let Some(raw_diff) = input
+                                                    .get("diff")
+                                                    .or_else(|| input.get("patch"))
+                                                    .and_then(Value::as_str)
+                                                {
+                                                    let mut sanitized =
+                                                        crate::privacy::redact_paths_inside_text(
+                                                            raw_diff,
+                                                        );
+                                                    if sanitized.len() > 65536 {
+                                                        sanitized.truncate(65536);
+                                                    }
+                                                    Some(sanitized)
+                                                } else {
+                                                    None
+                                                };
+
+                                                messages.push(json!({
+                                                    "id": format!("claude_req_{}", req_id),
+                                                    "method": "item/fileChange/requestApproval",
+                                                    "params": {
+                                                        "threadId": session_id,
+                                                        "turnId": active_turn_id,
+                                                        "requestId": req_id,
+                                                        "toolName": tool_name_str,
+                                                        "filePath": file_path,
+                                                        "diff": diff,
+                                                        "reason": reason,
+                                                        "availableDecisions": ["accept", "decline"]
+                                                    }
+                                                }));
+                                            } else {
+                                                let cmd_preview = command.unwrap_or(tool_name_str);
+                                                messages.push(json!({
                                                 "id": format!("claude_req_{}", req_id),
                                                 "method": "item/commandExecution/requestApproval",
                                                 "params": {
@@ -2014,66 +2143,181 @@ impl NativeTransport for MultiProviderTransport {
                                                     "availableDecisions": ["accept", "decline"]
                                                 }
                                             }));
-                                        }
-                                    }
-                                }
-                            }
-                            "result" => {
-                                let result_text =
-                                    msg.get("result").and_then(Value::as_str).unwrap_or("");
-                                let turn_id = self
-                                    .claude_active_turns
-                                    .get(session_id)
-                                    .cloned()
-                                    .unwrap_or_default();
-                                // The `result` line is where the CLI states how
-                                // much of the window the turn consumed. Without
-                                // forwarding it the phone can only say "capacity
-                                // was not reported", even though it was.
-                                if let Some(usage) =
-                                    crate::collectors::claude_result_context_usage(&msg)
-                                {
-                                    let window = usage.window.or_else(|| {
-                                        self.claude_cached_models
-                                            .get(session_id)
-                                            .map(|m| crate::collectors::claude_context_window(m))
-                                    });
-                                    messages.push(json!({
-                                        "method": "thread/tokenUsage/updated",
-                                        "params": {
-                                            "threadId": session_id,
-                                            "turnId": turn_id,
-                                            "tokenUsage": {
-                                                "used": usage.used,
-                                                "last": {"inputTokens": usage.used},
-                                                "window": window,
-                                                "modelContextWindow": window
                                             }
                                         }
-                                    }));
-                                }
-                                messages.push(json!({
-                                    "method": "turn/completed",
-                                    "params": {
-                                        "threadId": session_id,
-                                        "turn": {
-                                            "id": turn_id,
-                                            "status": "completed",
-                                            "output": result_text
-                                        }
                                     }
-                                }));
-                                claude_completed.push(session_id.clone());
+                                }
+                                "result" => {
+                                    let is_error = msg
+                                        .get("is_error")
+                                        .and_then(Value::as_bool)
+                                        .unwrap_or(false)
+                                        || msg
+                                            .get("subtype")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|s| s.starts_with("error"));
+                                    let result_text = msg
+                                        .get("result")
+                                        .and_then(Value::as_str)
+                                        .filter(|s| !s.trim().is_empty())
+                                        .map(str::to_string)
+                                        .or_else(|| {
+                                            msg.get("errors")
+                                                .and_then(Value::as_array)
+                                                .map(|arr| {
+                                                    arr.iter()
+                                                        .filter_map(Value::as_str)
+                                                        .collect::<Vec<_>>()
+                                                        .join("; ")
+                                                })
+                                                .filter(|s| !s.trim().is_empty())
+                                        })
+                                        .unwrap_or_else(|| session.last_stderr());
+                                    let turn_id = self
+                                        .claude_active_turns
+                                        .get(session_id)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    if let Some(usage) =
+                                        crate::collectors::claude_result_context_usage(&msg)
+                                    {
+                                        let window = usage.window.or_else(|| {
+                                            self.claude_cached_models.get(session_id).map(|m| {
+                                                crate::collectors::claude_context_window(m)
+                                            })
+                                        });
+                                        messages.push(json!({
+                                            "method": "thread/tokenUsage/updated",
+                                            "params": {
+                                                "threadId": session_id,
+                                                "turnId": turn_id,
+                                                "tokenUsage": {
+                                                    "used": usage.used,
+                                                    "last": {"inputTokens": usage.used},
+                                                    "window": window,
+                                                    "modelContextWindow": window
+                                                }
+                                            }
+                                        }));
+                                    }
+                                    let real_sid = msg
+                                        .get("session_id")
+                                        .and_then(Value::as_str)
+                                        .filter(|s| !s.is_empty())
+                                        .map(|s| format!("claude_{s}"));
+
+                                    if is_error {
+                                        let err_msg = if result_text.trim().is_empty() {
+                                            "Claude 执行失败，请检查网关或模型配置".to_string()
+                                        } else {
+                                            result_text
+                                        };
+                                        messages.push(json!({
+                                            "method": "error",
+                                            "params": {
+                                                "threadId": session_id,
+                                                "turnId": turn_id,
+                                                "willRetry": false,
+                                                "error": { "message": &err_msg }
+                                            }
+                                        }));
+                                        let mut completed_params = json!({
+                                            "threadId": session_id,
+                                            "turn": {
+                                                "id": turn_id,
+                                                "status": "failed",
+                                                "error": err_msg
+                                            }
+                                        });
+                                        if let Some(real) = real_sid {
+                                            completed_params["realSessionId"] = json!(real);
+                                        }
+                                        messages.push(json!({
+                                            "method": "turn/completed",
+                                            "params": completed_params
+                                        }));
+                                    } else {
+                                        if !self.claude_turn_emitted_text.contains(session_id)
+                                            && !result_text.trim().is_empty()
+                                        {
+                                            messages.push(json!({
+                                                "method": "item/agentMessage/delta",
+                                                "params": {
+                                                    "threadId": session_id,
+                                                    "turnId": turn_id,
+                                                    "itemId": "claude_msg",
+                                                    "delta": &result_text
+                                                }
+                                            }));
+                                        }
+                                        let mut completed_params = json!({
+                                            "threadId": session_id,
+                                            "turn": {
+                                                "id": turn_id,
+                                                "status": "completed",
+                                                "output": result_text
+                                            }
+                                        });
+                                        if let Some(real) = real_sid {
+                                            completed_params["realSessionId"] = json!(real);
+                                        }
+                                        messages.push(json!({
+                                            "method": "turn/completed",
+                                            "params": completed_params
+                                        }));
+                                    }
+                                    claude_completed.push(session_id.clone());
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
+                    if session.is_dead() {
+                        claude_dead_sessions.push(session_id.clone());
+                    }
+                }
+                Err(err) => {
+                    let turn_id = self
+                        .claude_active_turns
+                        .get(session_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let err_msg = format!("Claude 协议流异常: {err}");
+                    if !turn_id.is_empty() {
+                        messages.push(json!({
+                            "method": "error",
+                            "params": {
+                                "threadId": session_id,
+                                "turnId": turn_id,
+                                "willRetry": false,
+                                "error": { "message": &err_msg }
+                            }
+                        }));
+                        messages.push(json!({
+                            "method": "turn/completed",
+                            "params": {
+                                "threadId": session_id,
+                                "turn": {
+                                    "id": turn_id,
+                                    "status": "failed",
+                                    "error": err_msg
+                                }
+                            }
+                        }));
+                    }
+                    claude_completed.push(session_id.clone());
+                    claude_dead_sessions.push(session_id.clone());
                 }
             }
         }
         for sid in claude_completed {
             self.claude_active_turns.remove(&sid);
             self.claude_cancels.remove(&sid);
+            self.claude_turn_emitted_text.remove(&sid);
+            self.claude_turn_streamed_deltas.remove(&sid);
+        }
+        for sid in claude_dead_sessions {
+            self.claude_sessions.remove(&sid);
         }
 
         if let Ok(mut antigravity_events) = self.antigravity_buffered_events.lock() {
@@ -2181,13 +2425,29 @@ impl NativeTransport for MultiProviderTransport {
                                 "turn.failed" => {
                                     let turn_id = active_turn_id.unwrap_or_else(|| "turn_1".into());
                                     self.zcode_active_turns.remove(session_id);
+                                    let err_msg = payload
+                                        .get("message")
+                                        .or_else(|| payload.get("error"))
+                                        .and_then(Value::as_str)
+                                        .filter(|s| !s.trim().is_empty())
+                                        .unwrap_or("ZCode 会话执行失败");
+                                    messages.push(json!({
+                                        "method": "error",
+                                        "params": {
+                                            "threadId": session_id,
+                                            "turnId": turn_id,
+                                            "willRetry": false,
+                                            "error": { "message": err_msg }
+                                        }
+                                    }));
                                     messages.push(json!({
                                         "method": "turn/completed",
                                         "params": {
                                             "threadId": session_id,
                                             "turn": {
                                                 "id": turn_id,
-                                                "status": "failed"
+                                                "status": "failed",
+                                                "error": err_msg
                                             }
                                         }
                                     }));
@@ -2442,6 +2702,8 @@ pub enum RemoteAction {
         approval_policy: CodexApprovalPolicy,
         #[serde(default)]
         agent_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<String>,
     },
     SendPrompt {
         text: String,
@@ -2451,6 +2713,9 @@ pub enum RemoteAction {
         /// Per-turn model override.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        /// Per-turn permission mode override (`default`, `acceptEdits`, `plan`, `bypassPermissions`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<String>,
         /// Optional user-selected file/image attachments.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<PromptAttachment>,
@@ -2930,7 +3195,21 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     data.push(model.clone());
                 }
             }
-            agents.insert(agent.into(), json!(models));
+            if let Some(existing) = agents.get_mut(agent).and_then(Value::as_array_mut) {
+                let mut existing_ids: HashSet<String> = existing
+                    .iter()
+                    .filter_map(|item| item.get("id").and_then(Value::as_str))
+                    .map(str::to_ascii_lowercase)
+                    .collect();
+                for model in models {
+                    let id = model.get("id").and_then(Value::as_str).unwrap_or("");
+                    if !id.is_empty() && existing_ids.insert(id.to_ascii_lowercase()) {
+                        existing.push(model);
+                    }
+                }
+            } else {
+                agents.insert(agent.into(), json!(models));
+            }
         }
         if data.is_empty() {
             let catalog = crate::model_catalog::fetch_catalog_models(false);
@@ -3177,6 +3456,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             sandbox,
             approval_policy,
             agent_type,
+            permission_mode,
         } = &command.command
         {
             if *mode == ConnectMode::Attach {
@@ -3252,13 +3532,30 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             if model.as_ref().is_some_and(|model| model.trim().is_empty()) {
                 return Err(NativeError::rejected("invalid_model"));
             }
-            let mut params = json!({"cwd": cwd, "sandbox": sandbox, "approvalPolicy": approval_policy,
+            let (effective_sandbox, effective_policy) = match permission_mode.as_deref() {
+                Some("plan") => (CodexSandbox::ReadOnly, CodexApprovalPolicy::OnRequest),
+                Some("acceptEdits") => {
+                    (CodexSandbox::WorkspaceWrite, CodexApprovalPolicy::OnRequest)
+                }
+                Some("bypassPermissions") => {
+                    (CodexSandbox::DangerFullAccess, CodexApprovalPolicy::Never)
+                }
+                _ => (*sandbox, *approval_policy),
+            };
+            let mut params = json!({"cwd": cwd, "sandbox": effective_sandbox, "approvalPolicy": effective_policy,
                 "approvalsReviewer": "user"});
             if let Some(model) = model {
                 params["model"] = json!(model);
             }
             if let Some(at) = agent_type {
                 params["agentType"] = json!(at);
+            }
+            if let Some(pm) = permission_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                params["permissionMode"] = json!(pm);
             }
             let mut resume_turns = None;
             let method = match mode {
@@ -3385,6 +3682,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                 text,
                 effort,
                 model,
+                permission_mode,
                 attachments,
             } => {
                 if (text.trim().is_empty() && attachments.is_empty()) || text.len() > 512 * 1024 {
@@ -3474,10 +3772,8 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                                     file_path.display()
                                 ));
                             } else {
-                                attachment_notes.push(format!(
-                                    "[附件 {}: {}]",
-                                    att.name, att.media_type
-                                ));
+                                attachment_notes
+                                    .push(format!("[附件 {}: {}]", att.name, att.media_type));
                             }
                         } else {
                             let saved_ok = std::fs::write(&file_path, att.data.as_bytes()).is_ok();
@@ -3538,6 +3834,13 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     .filter(|value| !value.is_empty())
                 {
                     turn_params["model"] = json!(model);
+                }
+                if let Some(mode) = permission_mode
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    turn_params["permissionMode"] = json!(mode);
                 }
                 let result = self.transport.request("turn/start", turn_params)?;
                 let turn_id = result["turn"]["id"]

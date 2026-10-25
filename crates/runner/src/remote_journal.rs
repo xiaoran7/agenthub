@@ -850,10 +850,35 @@ fn projected_event_raw(event: &crate::remote_host::HostEvent) -> Option<Value> {
                 .collect();
             json!({"params":{"items": normalized}})
         }),
-        "turn/started" | "turn/completed" => params
+        "turn/started" => params
             .pointer("/turn/id")
             .and_then(Value::as_str)
             .map(|id| json!({"params":{"turn":{"id":id}}})),
+        "turn/completed" => params
+            .pointer("/turn/id")
+            .and_then(Value::as_str)
+            .map(|id| {
+                let mut turn = serde_json::Map::new();
+                turn.insert("id".into(), json!(id));
+                if let Some(status) = params.pointer("/turn/status").and_then(Value::as_str) {
+                    turn.insert("status".into(), json!(status));
+                }
+                let error_msg = params.pointer("/turn/error").and_then(|v| {
+                    v.as_str()
+                        .or_else(|| v.get("message").and_then(Value::as_str))
+                });
+                if let Some(message) = error_msg {
+                    let scrubbed = crate::privacy::redact_paths_inside_text(message);
+                    let bounded = scrubbed
+                        .chars()
+                        .take(MAX_ERROR_MESSAGE_CHARS)
+                        .collect::<String>();
+                    if !bounded.trim().is_empty() {
+                        turn.insert("error".into(), json!(bounded));
+                    }
+                }
+                json!({"params":{"turn": Value::Object(turn)}})
+            }),
         // How full the context window is. Clients get one canonical pair so a
         // Codex camelCase report and a normalised Claude/ACP report read the
         // same; the capacity stays optional because a provider may state
@@ -1533,6 +1558,7 @@ mod inbound_journal_tests {
                 sandbox: crate::remote_host::CodexSandbox::ReadOnly,
                 approval_policy: crate::remote_host::CodexApprovalPolicy::Untrusted,
                 agent_type: None,
+                permission_mode: None,
             },
         }
     }

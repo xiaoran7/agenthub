@@ -835,9 +835,43 @@ function validateRemoteEventRaw(
       !only(["turn"]) ||
       !turn ||
       typeof turn !== "object" ||
-      Array.isArray(turn) ||
-      Object.keys(turn).some((key) => key !== "id") ||
-      typeof (turn as Record<string, unknown>).id !== "string"
+      Array.isArray(turn)
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    const typedTurn = turn as Record<string, unknown>;
+    const allowedTurnKeys =
+      kind === "turn/completed" ? ["id", "status", "error"] : ["id"];
+    if (
+      Object.keys(typedTurn).some((key) => !allowedTurnKeys.includes(key)) ||
+      typeof typedTurn.id !== "string" ||
+      (typedTurn.status !== undefined &&
+        typeof typedTurn.status !== "string") ||
+      (typedTurn.error !== undefined &&
+        (typeof typedTurn.error !== "string" || typedTurn.error.length > 4096))
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    return;
+  }
+  if (kind === "error") {
+    const error = params.error;
+    if (
+      !only(["error", "turnId", "willRetry"]) ||
+      !error ||
+      typeof error !== "object" ||
+      Array.isArray(error) ||
+      (params.turnId !== undefined && typeof params.turnId !== "string") ||
+      (params.willRetry !== undefined && typeof params.willRetry !== "boolean")
+    )
+      throw new RemoteStoreError("unsafe_provider_event");
+    const typedError = error as Record<string, unknown>;
+    if (
+      Object.keys(typedError).some(
+        (key) => !["message", "codexErrorInfo", "type"].includes(key),
+      ) ||
+      (typedError.message !== undefined &&
+        (typeof typedError.message !== "string" ||
+          typedError.message.length > 4096)) ||
+      (typedError.type !== undefined && typeof typedError.type !== "string")
     )
       throw new RemoteStoreError("unsafe_provider_event");
     return;

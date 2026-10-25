@@ -1687,6 +1687,61 @@ html.booting #nav button[data-view]:nth-of-type(6) { animation-delay: 210ms; }
 .led-wrap tr.bad td { background: color-mix(in srgb, var(--red) 5%, transparent); }
 .led-wrap tr.bad:hover td { background: color-mix(in srgb, var(--red) 9%, transparent); }
 .led-none { padding: 40px 16px; text-align: center; color: var(--muted); font-size: var(--fs-body); }
+
+/* request log subviews, column visibility picker & advanced filter dropdowns */
+.led-req-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; flex: none; }
+.led-req-bar .grow { flex: 1; min-width: 8px; }
+.led-reset-btn { color: var(--accent); }
+.led-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; flex: none; }
+.led-filters .led-search { flex: 1 1 200px; min-width: 160px; height: 32px; font-size: var(--fs-note); }
+.led-dd, .led-col-picker { position: relative; display: inline-flex; }
+.led-dd-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  font-size: var(--fs-note); cursor: pointer; transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.led-dd-btn:hover { background: var(--card-2); border-color: color-mix(in srgb, var(--fg) 18%, var(--line)); }
+.led-dd-btn.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
+.led-dd-k { color: var(--muted); font-weight: 500; }
+.led-dd-v { color: var(--fg); font-weight: 600; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.led-dd-btn svg { color: var(--muted); flex: none; }
+.led-pop-menu {
+  position: absolute; top: calc(100% + 5px); left: 0; z-index: 30; min-width: 188px; max-width: 280px; max-height: 310px;
+  overflow-y: auto; padding: 5px; border-radius: 11px; border: 1px solid var(--line);
+  background: var(--pop-bg, rgba(255, 255, 255, 0.96)); box-shadow: var(--shadow);
+  will-change: transform; transform: translateZ(0); scrollbar-width: thin;
+}
+.led-pop-menu[hidden] { display: none; }
+.led-cols-menu { left: auto; right: 0; min-width: 204px; max-height: 360px; }
+.led-pop-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 8px 6px; margin-bottom: 3px; border-bottom: 1px solid var(--line-2);
+  font-size: calc(var(--fs-note) - 0.5px); color: var(--muted); font-weight: 600;
+}
+.led-pop-head button {
+  background: none; border: 0; padding: 0; font-size: calc(var(--fs-note) - 0.5px);
+  color: var(--accent); cursor: pointer; font-weight: 500;
+}
+.led-pop-head button:hover { text-decoration: underline; }
+.led-pop-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0;
+  border-radius: 7px; background: none; color: var(--fg); font-size: var(--fs-note);
+  text-align: left; cursor: pointer; transition: background var(--dur-1) var(--ease);
+}
+.led-pop-item:hover { background: var(--card-2); }
+.led-pop-item.on { background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--fg); font-weight: 600; }
+.led-pop-chk {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line);
+  background: var(--card); color: transparent; transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+.led-pop-item.on .led-pop-chk { background: var(--accent); border-color: var(--accent); color: #fff; }
+.led-pop-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.led-pop-cnt { flex: none; font-size: calc(var(--fs-note) - 1px); color: var(--muted); font-variant-numeric: tabular-nums; }
+.led-prov-pill {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px;
+  background: var(--pill); color: var(--fg-2); font-size: calc(var(--fs-note) - 1px); font-weight: 500;
+}
 #usageContext.led-wrap { padding: 4px 0; }
 .ctx-row .who { flex: 1 1 auto; min-width: 0; }
 .ctx-row .name-line .name { font-family: var(--code); font-size: var(--fs-note); }

@@ -16,7 +16,6 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{OnceLock, RwLock},
     time::{Duration, Instant, UNIX_EPOCH},
@@ -234,6 +233,64 @@ fn add_workspace_record(
     entry.agents.insert(agent_name.to_string());
 }
 
+fn claude_project_cwd_cache() -> &'static RwLock<HashMap<PathBuf, (PathBuf, i64, Option<String>)>> {
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (PathBuf, i64, Option<String>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn extract_claude_project_cwd_cached(
+    project_dir: &Path,
+    latest_path: &Path,
+    latest_mtime: i64,
+) -> Option<String> {
+    if let Ok(guard) = claude_project_cwd_cache().read()
+        && let Some((c_path, c_mtime, c_cwd)) = guard.get(project_dir)
+        && c_path == latest_path
+        && *c_mtime == latest_mtime
+    {
+        return c_cwd.clone();
+    }
+
+    let mut extracted_cwd = None;
+    if let Ok(file) = fs::File::open(latest_path) {
+        use std::io::Read as _;
+        // Read only a bounded 32 KiB prefix instead of unbounded lines so huge
+        // base64 payloads never allocate megabytes just to find `"cwd":"..."`.
+        let mut head = Vec::with_capacity(32 * 1024);
+        if file.take(32 * 1024).read_to_end(&mut head).is_ok() {
+            let text = String::from_utf8_lossy(&head);
+            for line in text.lines().take(64) {
+                if let Some(pos) = line.find(r#""cwd":""#) {
+                    let rest = &line[pos + 7..];
+                    if let Some(end_quote) = rest.find('"') {
+                        let unescaped = rest[..end_quote].replace(r"\\", r"\");
+                        if !unescaped.trim().is_empty() {
+                            extracted_cwd = Some(unescaped);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(mut guard) = claude_project_cwd_cache().write() {
+        if guard.len() > 2_000 {
+            guard.clear();
+        }
+        guard.insert(
+            project_dir.to_path_buf(),
+            (
+                latest_path.to_path_buf(),
+                latest_mtime,
+                extracted_cwd.clone(),
+            ),
+        );
+    }
+    extracted_cwd
+}
+
 fn scan_claude_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
     let Some(home) = super::home_dir() else {
         return;
@@ -285,29 +342,10 @@ fn scan_claude_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
         let latest_mtime = jsonls.first().map(|(m, _)| *m).unwrap_or(0);
         let total_sessions = jsonls.len();
 
-        // Extract real CWD from latest session jsonl
-        let mut extracted_cwd = None;
-        if let Some((_, latest_path)) = jsonls.first() {
-            if let Ok(file) = fs::File::open(latest_path) {
-                let mut reader = BufReader::new(file);
-                for _ in 0..64 {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    if let Some(pos) = line.find(r#""cwd":""#) {
-                        let rest = &line[pos + 7..];
-                        if let Some(end_quote) = rest.find('"') {
-                            let unescaped = rest[..end_quote].replace(r"\\", r"\");
-                            if !unescaped.trim().is_empty() {
-                                extracted_cwd = Some(unescaped);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Extract real CWD from latest session jsonl (cached per project mtime)
+        let extracted_cwd = jsonls.first().and_then(|(_, latest_path)| {
+            extract_claude_project_cwd_cached(&dir_path, latest_path, latest_mtime)
+        });
 
         // Fallback: decode directory name if cwd not found in sample lines
         let final_path = extracted_cwd.unwrap_or_else(|| {

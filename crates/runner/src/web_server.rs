@@ -359,6 +359,7 @@ fn handle_connection(
             method,
             path,
             query: &query,
+            headers: &headers,
             body: &body,
             handler,
             stopped,
@@ -418,6 +419,7 @@ struct ApiRequest<'a> {
     method: &'a str,
     path: &'a str,
     query: &'a HashMap<String, String>,
+    headers: &'a HashMap<String, String>,
     body: &'a [u8],
     handler: Arc<dyn DaemonRequestHandler>,
     stopped: Arc<AtomicBool>,
@@ -433,6 +435,7 @@ impl ApiRequest<'_> {
             method,
             path,
             query,
+            headers,
             body,
             handler,
             stopped,
@@ -443,7 +446,7 @@ impl ApiRequest<'_> {
         match (method, path) {
             ("GET", "/api/dashboard") => {
                 let data = build_dashboard_summary(&handler, port, &identity_path);
-                send_json_response(stream, 200, &data)?;
+                send_json_response_etag(stream, headers, &data)?;
             }
             // the usage page's per-request ledger: one record per model call,
             // aggregated into the trend, the rankings, the heatmap and the
@@ -456,9 +459,9 @@ impl ApiRequest<'_> {
                     .and_then(|n| n.parse::<usize>().ok())
                     .unwrap_or(200)
                     .clamp(1, 1000);
-                let records = crate::usage_ledger::claude_records();
-                let digest = crate::usage_ledger::digest(&records, period, limit);
-                send_json_response(stream, 200, &digest)?;
+                let (generation, digest) = crate::usage_ledger::digest_cached(period, limit);
+                let etag = format!("\"ledger-{generation}-{}-{limit}\"", period.key());
+                send_json_response_with_etag(stream, headers, &etag, digest.as_ref())?;
             }
             // Deleting a session moves its files to the runner's trash: the
             // conversation's transcript, its subagents' folder and what
@@ -621,7 +624,8 @@ impl ApiRequest<'_> {
                 }
             }
             ("POST", "/api/capabilities/sync") => {
-                // Invalidate dashboard summary cache to ensure fresh capabilities view
+                // Invalidate dashboard summary and capability caches to ensure fresh view
+                crate::collectors::capabilities::invalidate_capabilities_cache();
                 if let Ok(mut guard) = dashboard_summary_cache().write() {
                     *guard = None;
                 }
@@ -1730,6 +1734,73 @@ fn check_agent_dir(dir_name: &str) -> (bool, Option<String>) {
     found
 }
 
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn send_not_modified(stream: &mut TcpStream, etag: &str) -> anyhow::Result<()> {
+    let header = format!(
+        "HTTP/1.1 304 Not Modified\r\nETag: {etag}\r\nCache-Control: no-cache, must-revalidate\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn send_json_bytes_with_etag(
+    stream: &mut TcpStream,
+    etag: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: {etag}\r\nCache-Control: no-cache, must-revalidate\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(header.as_bytes())?;
+    if !body.is_empty() {
+        stream.write_all(body)?;
+    }
+    stream.flush()?;
+    Ok(())
+}
+
+fn send_json_response_etag<T: Serialize>(
+    stream: &mut TcpStream,
+    req_headers: &HashMap<String, String>,
+    data: &T,
+) -> anyhow::Result<()> {
+    let body = serde_json::to_vec(data)?;
+    let etag = format!("\"dash-{:016x}\"", fnv1a64(&body));
+    if req_headers
+        .get("if-none-match")
+        .is_some_and(|v| v.trim() == etag)
+    {
+        return send_not_modified(stream, &etag);
+    }
+    send_json_bytes_with_etag(stream, &etag, &body)
+}
+
+fn send_json_response_with_etag<T: Serialize>(
+    stream: &mut TcpStream,
+    req_headers: &HashMap<String, String>,
+    etag: &str,
+    data: &T,
+) -> anyhow::Result<()> {
+    if req_headers
+        .get("if-none-match")
+        .is_some_and(|v| v.trim() == etag)
+    {
+        return send_not_modified(stream, etag);
+    }
+    let body = serde_json::to_vec(data)?;
+    send_json_bytes_with_etag(stream, etag, &body)
+}
+
 fn send_json_response<T: Serialize>(
     stream: &mut TcpStream,
     status: u16,
@@ -2177,7 +2248,9 @@ mod tests {
         for id in [
             "usageTabs",
             "usagePeriods",
-            "usageEvery",
+            "ledSubTabs",
+            "ledColsBtn",
+            "ledColPickerWrap",
             "usageKpi",
             "ledChart",
             "ledRank",
@@ -2188,12 +2261,16 @@ mod tests {
         ] {
             assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "{id}");
         }
+        assert!(!INDEX_HTML.contains("id=\"usageEvery\""));
+        assert!(!INDEX_HTML.contains("id=\"pollSegs\""));
         for fn_name in [
             "initUsage",
             "loadUsage",
             "drawLedgerTrend",
             "drawLedgerHeat",
             "renderLedgerRequests",
+            "toggleLedgerColsMenu",
+            "toggleLedgerDropdown",
             "exportLedgerCsv",
         ] {
             assert!(

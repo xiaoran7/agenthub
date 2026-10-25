@@ -1,9 +1,12 @@
 use std::{
     collections::VecDeque,
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Receiver, TryRecvError},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -14,6 +17,8 @@ use super::{
     BoundedLine, ChildJob, CollectorError, MAX_PROTOCOL_LINE_BYTES, ProtocolRead, TurnOptions,
     configure_process_group, read_bounded_line,
 };
+
+const MAX_STDERR_CAPTURE_BYTES: usize = 8192;
 
 /// A persistent, bidirectional Claude Code session running via:
 /// `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`
@@ -26,15 +31,20 @@ pub struct ClaudeProcessSession {
     stdin: BufWriter<ChildStdin>,
     receiver: Receiver<ProtocolRead>,
     _reader: Option<JoinHandle<()>>,
+    _stderr_reader: Option<JoinHandle<()>>,
+    stderr_buf: Arc<Mutex<String>>,
     job: Option<ChildJob>,
     session_id: String,
     cwd: PathBuf,
     model: Option<String>,
     requested_model: Option<String>,
     reasoning_effort: Option<String>,
+    permission_mode: Option<String>,
+    claude_desktop: bool,
     pending_messages: VecDeque<Value>,
     is_turn_in_progress: bool,
     current_turn_id: Option<String>,
+    eof_reached: bool,
 }
 
 impl ClaudeProcessSession {
@@ -71,27 +81,45 @@ impl ClaudeProcessSession {
 
         command.args(&base_args);
 
-        // Apply Gateway configuration if present
-        let mut effective_model = options.model.map(str::to_string);
-        if let Some(gateway) = crate::claude_gateway::discover_claude_gateway() {
-            gateway.inject_into_command(&mut command, &mut effective_model);
+        // Apply client-appropriate Gateway configuration if present
+        let mut effective_model = options
+            .model
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        if let Some(gateway) =
+            crate::claude_gateway::discover_claude_gateway_for_client(options.claude_desktop)
+        {
+            gateway.inject_into_command_with_session(
+                &mut command,
+                &mut effective_model,
+                resume_session_id,
+            );
         }
 
         // Apply CLI flags
         if let Some(ref model) = effective_model {
             command.args(["--model", model]);
         }
-        if let Some(mode) = options.permission_mode {
+        if let Some(mode) = options
+            .permission_mode
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             command.args(["--permission-mode", mode]);
         }
-        if let Some(effort) = options.reasoning_effort {
+        if let Some(effort) = options
+            .reasoning_effort
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             command.args(["--effort", effort]);
         }
 
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
 
         configure_process_group(&mut command);
 
@@ -121,6 +149,32 @@ impl ClaudeProcessSession {
             .ok_or_else(|| CollectorError::MissingStdio {
                 program: program.clone(),
             })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| CollectorError::MissingStdio {
+                program: program.clone(),
+            })?;
+
+        let stderr_buf = Arc::new(Mutex::new(String::new()));
+        let stderr_clone = stderr_buf.clone();
+        let stderr_reader = thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut chunk = [0_u8; 1024];
+            while let Ok(n) = reader.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                let piece = String::from_utf8_lossy(&chunk[..n]);
+                if let Ok(mut guard) = stderr_clone.lock() {
+                    if guard.len() < MAX_STDERR_CAPTURE_BYTES {
+                        let remaining = MAX_STDERR_CAPTURE_BYTES - guard.len();
+                        let clipped: String = piece.chars().take(remaining).collect();
+                        guard.push_str(&clipped);
+                    }
+                }
+            }
+        });
 
         let (sender, receiver) = mpsc::channel();
         let reader = thread::spawn(move || {
@@ -163,19 +217,26 @@ impl ClaudeProcessSession {
             stdin: BufWriter::new(stdin),
             receiver,
             _reader: Some(reader),
+            _stderr_reader: Some(stderr_reader),
+            stderr_buf,
             job: Some(job),
             session_id: resume_session_id.unwrap_or_default().to_string(),
             cwd: cwd_path,
             model: effective_model,
             requested_model: options.model.map(str::to_string),
             reasoning_effort: options.reasoning_effort.map(str::to_string),
+            permission_mode: options.permission_mode.map(str::to_string),
+            claude_desktop: options.claude_desktop,
             pending_messages: VecDeque::new(),
             is_turn_in_progress: false,
             current_turn_id: None,
+            eof_reached: false,
         };
 
-        // Wait up to 10 seconds for the system/init handshake line from Claude Code
-        let init_timeout = Duration::from_secs(10);
+        // `claude -p --input-format stream-json` waits for the first user JSONL frame
+        // on stdin before emitting `system/init`. Probe briefly (60ms) so immediate
+        // CLI flag / resume failures surface right away without adding a 10s delay.
+        let init_timeout = Duration::from_millis(60);
         let deadline = Instant::now() + init_timeout;
         let mut discovered_session_id = None;
 
@@ -208,10 +269,14 @@ impl ClaudeProcessSession {
                     return Err(CollectorError::Io { program, source });
                 }
                 Ok(ProtocolRead::Eof) => {
-                    return Err(CollectorError::UnexpectedEof {
-                        program,
-                        request_id: 0,
-                    });
+                    let detail = session.last_stderr();
+                    let status = match session.child.try_wait() {
+                        Ok(Some(code)) if !detail.is_empty() => format!("{code}: {detail}"),
+                        Ok(Some(code)) => code.to_string(),
+                        _ if !detail.is_empty() => detail,
+                        _ => "unexpected EOF during startup".to_string(),
+                    };
+                    return Err(CollectorError::Exit { program, status });
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     break;
@@ -247,6 +312,32 @@ impl ClaudeProcessSession {
 
     pub fn reasoning_effort(&self) -> Option<&str> {
         self.reasoning_effort.as_deref()
+    }
+
+    pub fn permission_mode(&self) -> Option<&str> {
+        self.permission_mode.as_deref()
+    }
+
+    pub fn is_claude_desktop(&self) -> bool {
+        self.claude_desktop
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.eof_reached
+    }
+
+    pub fn last_stderr(&self) -> String {
+        let raw = self
+            .stderr_buf
+            .lock()
+            .ok()
+            .map(|g| g.trim().to_string())
+            .unwrap_or_default();
+        if raw.is_empty() {
+            return String::new();
+        }
+        let scrubbed = crate::privacy::redact_paths_inside_text(&raw);
+        scrubbed.chars().take(512).collect()
     }
 
     pub fn is_turn_in_progress(&self) -> bool {
@@ -351,9 +442,31 @@ impl ClaudeProcessSession {
                         source,
                     });
                 }
-                Ok(ProtocolRead::Eof)
-                | Err(TryRecvError::Empty)
-                | Err(TryRecvError::Disconnected) => break,
+                Ok(ProtocolRead::Eof) | Err(TryRecvError::Disconnected) => {
+                    self.eof_reached = true;
+                    if self.is_turn_in_progress {
+                        self.is_turn_in_progress = false;
+                        let stderr_detail = self.last_stderr();
+                        let exit_detail = match self.child.try_wait() {
+                            Ok(Some(status)) if !stderr_detail.is_empty() => {
+                                format!("Claude 进程异常退出 ({status}): {stderr_detail}")
+                            }
+                            Ok(Some(status)) => format!("Claude 进程异常退出 ({status})"),
+                            _ if !stderr_detail.is_empty() => {
+                                format!("Claude 会话连接中断: {stderr_detail}")
+                            }
+                            _ => "Claude 会话连接中断，未返回执行结果".to_string(),
+                        };
+                        messages.push(json!({
+                            "type": "result",
+                            "subtype": "error_process_exit",
+                            "is_error": true,
+                            "result": exit_detail,
+                        }));
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
             }
         }
 
@@ -361,10 +474,21 @@ impl ClaudeProcessSession {
     }
 
     fn track_turn_state(&mut self, msg: &Value) {
-        if let Some(msg_type) = msg.get("type").and_then(Value::as_str)
-            && msg_type == "result"
-        {
-            self.is_turn_in_progress = false;
+        if let Some(msg_type) = msg.get("type").and_then(Value::as_str) {
+            if msg_type == "system"
+                && msg.get("subtype").and_then(Value::as_str) == Some("init")
+                && let Some(sid) = msg.get("session_id").and_then(Value::as_str)
+                && !sid.is_empty()
+            {
+                self.session_id = sid.to_string();
+            } else if msg_type == "result" {
+                if let Some(sid) = msg.get("session_id").and_then(Value::as_str)
+                    && !sid.is_empty()
+                {
+                    self.session_id = sid.to_string();
+                }
+                self.is_turn_in_progress = false;
+            }
         }
     }
 

@@ -348,6 +348,31 @@ test("a new turn clears an earlier failure and a completed turn clears it too", 
 
   const completed = event("turn/completed", { turn: { id: "turn-two" } });
   assert.equal(latestTurnFailure([failed, completed], "hub-one"), null);
+
+  const failedCompletion: RemoteEvent = {
+    cursor: 3,
+    runner_id: "runner-one",
+    payload: {
+      type: "event",
+      event: {
+        kind: "turn/completed",
+        raw: { params: { turn: { id: "turn-one" } } },
+        binding: {
+          hub_session_id: "hub-one",
+          provider_session_id: "native-one",
+          workspace_path: "ws-app-0123456789abcdef",
+          host_generation: "generation-one",
+          control_connected: true,
+          execution_state: "error",
+          current_turn_id: null,
+        },
+      },
+    },
+  };
+  assert.equal(
+    latestTurnFailure([failed, failedCompletion], "hub-one")?.message,
+    "model unavailable",
+  );
 });
 
 test("another session's turn must not clear this session's failure", () => {

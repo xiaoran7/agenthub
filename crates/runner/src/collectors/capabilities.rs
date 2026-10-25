@@ -9,6 +9,8 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::{OnceLock, RwLock},
+    time::UNIX_EPOCH,
 };
 
 use serde::{Deserialize, Serialize};
@@ -65,11 +67,79 @@ pub struct CapabilitiesSummary {
     pub total_hooks: usize,
 }
 
-/// Discovers all available skills, MCP servers, and hooks on the host.
+type CapCacheKey = (Option<PathBuf>, Option<PathBuf>);
+
+fn capabilities_cache() -> &'static RwLock<HashMap<CapCacheKey, (u64, CapabilitiesSummary)>> {
+    static CACHE: OnceLock<RwLock<HashMap<CapCacheKey, (u64, CapabilitiesSummary)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub fn invalidate_capabilities_cache() {
+    if let Ok(mut guard) = capabilities_cache().write() {
+        guard.clear();
+    }
+}
+
+fn capabilities_fingerprint(home: Option<&Path>, workspace_opt: Option<&Path>) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut feed = |p: &Path| {
+        if let Ok(meta) = fs::metadata(p) {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            hash ^= meta.len().wrapping_add(1);
+            hash = hash.wrapping_mul(0x100000001b3);
+            hash ^= mtime;
+            hash = hash.wrapping_mul(0x100000001b3);
+        } else {
+            hash ^= 0xff;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    };
+    if let Some(h) = home {
+        for rel in [
+            ".claude/skills",
+            ".codex/skills",
+            ".agenthub/skills",
+            ".agents/skills",
+            ".claude.json",
+            ".claude/settings.json",
+            ".codex/config.toml",
+            ".codex/hooks.json",
+            ".agenthub/mcp.json",
+            ".agenthub/hooks.json",
+        ] {
+            feed(&h.join(rel));
+        }
+    }
+    if let Some(ws) = workspace_opt {
+        feed(&ws.join(".mcp.json"));
+        feed(&ws.join(".claude").join("skills"));
+    } else {
+        feed(Path::new(".mcp.json"));
+    }
+    hash
+}
+
+/// Discovers all available skills, MCP servers, and hooks on the host,
+/// reusing cached results whenever configuration files and skill directories
+/// have not changed on disk.
 pub fn discover_capabilities(workspace_opt: Option<&Path>) -> CapabilitiesSummary {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from);
+    let key: CapCacheKey = (home.clone(), workspace_opt.map(Path::to_path_buf));
+    let fingerprint = capabilities_fingerprint(home.as_deref(), workspace_opt);
+    if let Ok(guard) = capabilities_cache().read()
+        && let Some((cached_fp, summary)) = guard.get(&key)
+        && *cached_fp == fingerprint
+    {
+        return summary.clone();
+    }
 
     let mut skills = Vec::new();
     let mut mcp_servers = Vec::new();
@@ -165,14 +235,21 @@ pub fn discover_capabilities(workspace_opt: Option<&Path>) -> CapabilitiesSummar
     let total_mcp_servers = mcp_servers.len();
     let total_hooks = hooks.len();
 
-    CapabilitiesSummary {
+    let summary = CapabilitiesSummary {
         skills,
         mcp_servers,
         hooks,
         total_skills,
         total_mcp_servers,
         total_hooks,
+    };
+    if let Ok(mut guard) = capabilities_cache().write() {
+        if guard.len() > 32 {
+            guard.clear();
+        }
+        guard.insert(key, (fingerprint, summary.clone()));
     }
+    summary
 }
 
 /// Scans a directory for skill subdirectories containing SKILL.md or script files.
@@ -768,6 +845,7 @@ pub fn register_agenthub_mcp_server(
     let serialized =
         serde_json::to_string_pretty(&doc).map_err(|e| format!("json_serialize_error: {}", e))?;
     fs::write(&mcp_path, serialized).map_err(|e| format!("write_mcp_json_error: {}", e))?;
+    invalidate_capabilities_cache();
 
     Ok(McpServerItem {
         id: format!("agenthub:{}", name),

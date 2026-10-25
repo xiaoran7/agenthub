@@ -251,6 +251,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             sandbox: CodexSandbox::ReadOnly,
             approval_policy: CodexApprovalPolicy::Untrusted,
             agent_type: None,
+            permission_mode: None,
         },
     };
     let receipt = execute(&endpoint, connect);
@@ -268,6 +269,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             text: "Do not use tools. Reply exactly AGENTHUB_DAEMON_OK.".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     };
@@ -284,6 +286,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             text: "Without tools, repeat the exact marker from the previous turn.".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     };
@@ -344,6 +347,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             sandbox: CodexSandbox::ReadOnly,
             approval_policy: CodexApprovalPolicy::Untrusted,
             agent_type: None,
+            permission_mode: None,
         },
     };
     let resumed = execute(&endpoint, resume);
@@ -365,6 +369,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
             text: "Without tools, reply exactly AGENTHUB_RESTART_OK.".into(),
             effort: None,
             model: None,
+            permission_mode: None,
             attachments: Vec::new(),
         },
     };

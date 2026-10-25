@@ -16,6 +16,7 @@
 
 use std::{
     env, fs,
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     path::PathBuf,
     process::Command,
     sync::RwLock,
@@ -73,7 +74,7 @@ impl ClaudeGatewayProfile {
             return requested.map(str::to_owned);
         }
 
-        let Some(req) = requested else {
+        let Some(raw_req) = requested else {
             // No model requested: default to the gateway's flagship configured model (opus > sonnet > first).
             return self
                 .models
@@ -88,11 +89,19 @@ impl ClaudeGatewayProfile {
                 .map(|m| m.name.clone());
         };
 
+        let req = raw_req
+            .trim_end_matches(" [1m]")
+            .trim_end_matches("[1m]")
+            .trim_end_matches(" [1M]")
+            .trim_end_matches("[1M]")
+            .trim();
+        let req = if req.is_empty() { raw_req } else { req };
+
         // 1. Exact name match (case-insensitive)
         if let Some(m) = self
             .models
             .iter()
-            .find(|m| m.name.eq_ignore_ascii_case(req))
+            .find(|m| m.name.eq_ignore_ascii_case(raw_req) || m.name.eq_ignore_ascii_case(req))
         {
             return Some(m.name.clone());
         }
@@ -219,6 +228,26 @@ pub struct CcSwitchActiveProvider {
     pub upstream_base_url: Option<String>,
     pub upstream_auth_token: Option<String>,
     pub models: Vec<ClaudeGatewayModel>,
+    #[serde(default)]
+    pub upstream_models: Vec<ClaudeGatewayModel>,
+    #[serde(default)]
+    pub is_routed: bool,
+}
+
+/// Summary of one local agent client's active provider & routing mode (for tray / diagnostics).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientRouteSummary {
+    pub agent_id: &'static str,
+    pub title: &'static str,
+    pub provider_name: String,
+    pub is_routed: bool,
+}
+
+impl ClientRouteSummary {
+    pub fn subtitle(&self) -> String {
+        let mode = if self.is_routed { "路由" } else { "直连" };
+        format!("{} · {mode}", self.provider_name)
+    }
 }
 
 /// Locates the local CC Switch SQLite database (`~/.cc-switch/cc-switch.db`).
@@ -230,8 +259,53 @@ pub fn cc_switch_db_path() -> Option<PathBuf> {
     if p.is_file() { Some(p) } else { None }
 }
 
-/// Discovers the currently active provider and configured model routes from `cc-switch.db`.
-pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
+fn query_cc_switch_proxy_enabled(conn: &rusqlite::Connection, app_type: &str) -> bool {
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT enabled FROM proxy_config WHERE app_type = ?1 LIMIT 1")
+        && let Ok(enabled) = stmt.query_row([app_type], |row| row.get::<_, i64>(0))
+    {
+        return enabled != 0;
+    }
+    if let Ok(mut stmt) = conn.prepare("SELECT value FROM settings WHERE key = 'proxy_takeover'")
+        && let Ok(val) = stmt.query_row([], |row| row.get::<_, String>(0))
+    {
+        return val.contains(app_type) || val == "true";
+    }
+    false
+}
+
+fn extract_toml_quoted_value(toml_text: &str, key: &str) -> Option<String> {
+    for line in toml_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let val = rest.trim();
+        if let Some(stripped) = val.strip_prefix('"').and_then(|s| s.split('"').next()) {
+            let clean = stripped.trim();
+            if !clean.is_empty() {
+                return Some(clean.to_string());
+            }
+        }
+        if let Some(stripped) = val.strip_prefix('\'').and_then(|s| s.split('\'').next()) {
+            let clean = stripped.trim();
+            if !clean.is_empty() {
+                return Some(clean.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Discovers the active provider for a specific `app_type` (`claude`, `claude-desktop`, `codex`, `gemini`, `opencode`) from `cc-switch.db`.
+pub fn discover_cc_switch_provider_for_app(app_type: &str) -> Option<CcSwitchActiveProvider> {
     let db_path = cc_switch_db_path()?;
     let conn = rusqlite::Connection::open_with_flags(
         &db_path,
@@ -243,18 +317,17 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
         .prepare(
             "SELECT id, name, app_type, settings_config, meta \
              FROM providers \
-             WHERE is_current = 1 AND app_type IN ('claude-desktop', 'claude') \
-             ORDER BY CASE WHEN app_type = 'claude-desktop' THEN 0 ELSE 1 END \
+             WHERE is_current = 1 AND app_type = ?1 \
              LIMIT 1",
         )
         .ok()?;
 
-    let mut rows = stmt.query([]).ok()?;
+    let mut rows = stmt.query([app_type]).ok()?;
     let row = rows.next().ok()??;
 
     let id: String = row.get(0).unwrap_or_default();
     let name: String = row.get(1).unwrap_or_default();
-    let app_type: String = row.get(2).unwrap_or_default();
+    let row_app_type: String = row.get(2).unwrap_or_default();
     let settings_str: String = row.get(3).unwrap_or_default();
     let meta_str: String = row.get(4).unwrap_or_default();
 
@@ -262,47 +335,76 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
     let meta: Value = serde_json::from_str(&meta_str).unwrap_or(Value::Null);
 
     let env_obj = settings.get("env");
+    let config_toml = settings
+        .get("config")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
     let upstream_base_url = env_obj
-        .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
+        .and_then(|e| {
+            e.get("ANTHROPIC_BASE_URL")
+                .or_else(|| e.get("OPENAI_BASE_URL"))
+                .or_else(|| e.get("GOOGLE_GEMINI_BASE_URL"))
+        })
         .or_else(|| settings.get("base_url"))
         .or_else(|| settings.get("baseUrl"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .map(str::to_string)
+        .or_else(|| extract_toml_quoted_value(config_toml, "base_url"));
 
     let upstream_auth_token = env_obj
         .and_then(|e| {
             e.get("ANTHROPIC_AUTH_TOKEN")
                 .or_else(|| e.get("ANTHROPIC_API_KEY"))
+                .or_else(|| e.get("OPENAI_API_KEY"))
+                .or_else(|| e.get("GEMINI_API_KEY"))
         })
         .or_else(|| settings.get("auth_token"))
         .or_else(|| settings.get("apiKey"))
-        .or_else(|| settings.get("auth").and_then(|a| a.get("OPENAI_API_KEY")))
+        .or_else(|| {
+            settings.get("auth").and_then(|a| {
+                a.get("OPENAI_API_KEY")
+                    .or_else(|| a.get("ANTHROPIC_API_KEY"))
+                    .or_else(|| a.get("GEMINI_API_KEY"))
+            })
+        })
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
     let mut models = Vec::new();
+    let mut upstream_models = Vec::new();
     let mut seen_names = std::collections::HashSet::new();
+    let mut seen_upstream = std::collections::HashSet::new();
+    let mut has_desktop_routes = false;
 
-    // 1. Configured routes in meta.claudeDesktopModelRoutes
-    if let Some(routes) = meta
-        .get("claudeDesktopModelRoutes")
-        .and_then(Value::as_object)
+    // 1. Configured routes in meta.claudeDesktopModelRoutes (only for claude-desktop)
+    if row_app_type == "claude-desktop"
+        && let Some(routes) = meta
+            .get("claudeDesktopModelRoutes")
+            .and_then(Value::as_object)
     {
         for (route_name, route_val) in routes {
             if route_name.is_empty() || !seen_names.insert(route_name.to_ascii_lowercase()) {
                 continue;
             }
-            let target = route_val
-                .get("labelOverride")
-                .or_else(|| route_val.get("model"))
+            has_desktop_routes = true;
+            let raw_model = route_val
+                .get("model")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
+            let target = route_val
+                .get("labelOverride")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| raw_model.clone());
             let supports_1m = route_val
                 .get("supports1m")
                 .and_then(Value::as_bool)
@@ -312,6 +414,15 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
                 label: target,
                 supports_1m,
             });
+            if let Some(m_id) = raw_model
+                && seen_upstream.insert(m_id.to_ascii_lowercase())
+            {
+                upstream_models.push(ClaudeGatewayModel {
+                    name: m_id,
+                    label: Some(route_name.clone()),
+                    supports_1m,
+                });
+            }
         }
     }
 
@@ -327,24 +438,81 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
             if let Some(m_name) = item
                 .get("model")
                 .or_else(|| item.get("name"))
+                .or_else(|| item.get("id"))
                 .and_then(Value::as_str)
-                .filter(|m| !m.is_empty() && seen_names.insert(m.to_ascii_lowercase()))
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
             {
                 let display_name = item
                     .get("displayName")
+                    .or_else(|| item.get("label"))
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                models.push(ClaudeGatewayModel {
-                    name: m_name.to_string(),
-                    label: display_name,
-                    supports_1m: false,
-                });
+                let supports_1m = item
+                    .get("supports1m")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_else(|| m_name.to_ascii_lowercase().contains("1m"));
+                if !has_desktop_routes && seen_names.insert(m_name.to_ascii_lowercase()) {
+                    models.push(ClaudeGatewayModel {
+                        name: m_name.to_string(),
+                        label: display_name.clone(),
+                        supports_1m,
+                    });
+                }
+                if seen_upstream.insert(m_name.to_ascii_lowercase()) {
+                    upstream_models.push(ClaudeGatewayModel {
+                        name: m_name.to_string(),
+                        label: display_name,
+                        supports_1m,
+                    });
+                }
             }
         }
     }
 
-    // Sort routes: opus > sonnet > fable > haiku > others
-    models.sort_by_key(|m| {
+    // 3. Explicit single-model keys in env / settings / TOML
+    let mut single_models = Vec::new();
+    if let Some(env_map) = env_obj.and_then(Value::as_object) {
+        for key in [
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "GEMINI_MODEL",
+            "OPENAI_MODEL",
+        ] {
+            if let Some(m) = env_map.get(key).and_then(Value::as_str) {
+                single_models.push(m.trim().to_string());
+            }
+        }
+    }
+    if let Some(m) = settings.get("model").and_then(Value::as_str) {
+        single_models.push(m.trim().to_string());
+    }
+    if let Some(m) = extract_toml_quoted_value(config_toml, "model") {
+        single_models.push(m);
+    }
+    for m_name in single_models {
+        if m_name.is_empty() {
+            continue;
+        }
+        if !has_desktop_routes && seen_names.insert(m_name.to_ascii_lowercase()) {
+            models.push(ClaudeGatewayModel {
+                name: m_name.clone(),
+                label: None,
+                supports_1m: m_name.to_ascii_lowercase().contains("1m"),
+            });
+        }
+        if seen_upstream.insert(m_name.to_ascii_lowercase()) {
+            upstream_models.push(ClaudeGatewayModel {
+                name: m_name,
+                label: None,
+                supports_1m: false,
+            });
+        }
+    }
+
+    let sort_key = |m: &ClaudeGatewayModel| {
         let name_lower = m.name.to_ascii_lowercase();
         if name_lower.contains("opus") {
             0
@@ -357,16 +525,270 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
         } else {
             4
         }
-    });
+    };
+    models.sort_by_key(sort_key);
+    upstream_models.sort_by_key(sort_key);
+
+    let is_routed = query_cc_switch_proxy_enabled(&conn, app_type) || has_desktop_routes;
 
     Some(CcSwitchActiveProvider {
         id,
         name,
-        app_type,
+        app_type: row_app_type,
         upstream_base_url,
         upstream_auth_token,
         models,
+        upstream_models,
+        is_routed,
     })
+}
+
+/// Discovers the currently active Claude Desktop or Claude provider from `cc-switch.db`.
+pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
+    discover_cc_switch_provider_for_app("claude-desktop")
+        .or_else(|| discover_cc_switch_provider_for_app("claude"))
+}
+
+/// Collects real provider + routing mode summaries across local Agent clients.
+pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
+    let mut summaries = Vec::with_capacity(5);
+
+    // 1. Claude Code
+    let claude_code = if let Some(cc) = discover_cc_switch_provider_for_app("claude") {
+        let provider_name = if cc.name.trim().is_empty() {
+            "default".to_string()
+        } else {
+            cc.name
+        };
+        ClientRouteSummary {
+            agent_id: "claude_code",
+            title: "Claude Code",
+            provider_name,
+            is_routed: cc.is_routed,
+        }
+    } else if let Some((base_url, _, _, _)) = discover_claude_settings_env() {
+        let is_local = is_loopback_url(&base_url);
+        ClientRouteSummary {
+            agent_id: "claude_code",
+            title: "Claude Code",
+            provider_name: host_label_from_url(&base_url).unwrap_or_else(|| "Custom".into()),
+            is_routed: is_local,
+        }
+    } else {
+        ClientRouteSummary {
+            agent_id: "claude_code",
+            title: "Claude Code",
+            provider_name: "default".to_string(),
+            is_routed: false,
+        }
+    };
+    summaries.push(claude_code);
+
+    // 2. Claude Desktop
+    let roots = gateway_search_roots();
+    let has_desktop_cfg = discover_config_library(&roots).is_some();
+    let claude_desktop = if let Some(cc) = discover_cc_switch_provider_for_app("claude-desktop") {
+        ClientRouteSummary {
+            agent_id: "claude_desktop",
+            title: "Claude Desktop",
+            provider_name: if cc.name.trim().is_empty() {
+                "Claude Desktop".into()
+            } else {
+                cc.name
+            },
+            is_routed: cc.is_routed || has_desktop_cfg,
+        }
+    } else if let Some((base_url, _, _, _)) = discover_config_library(&roots) {
+        ClientRouteSummary {
+            agent_id: "claude_desktop",
+            title: "Claude Desktop",
+            provider_name: host_label_from_url(&base_url).unwrap_or_else(|| "Gateway".into()),
+            is_routed: true,
+        }
+    } else {
+        ClientRouteSummary {
+            agent_id: "claude_desktop",
+            title: "Claude Desktop",
+            provider_name: "Anthropic Official".to_string(),
+            is_routed: false,
+        }
+    };
+    summaries.push(claude_desktop);
+
+    // 3. Codex
+    let codex = if let Some(cc) = discover_cc_switch_provider_for_app("codex") {
+        ClientRouteSummary {
+            agent_id: "codex",
+            title: "Codex",
+            provider_name: if cc.name.trim().is_empty() {
+                "OpenAI".into()
+            } else {
+                cc.name
+            },
+            is_routed: cc.is_routed,
+        }
+    } else {
+        let mut provider_name = "OpenAI Official".to_string();
+        let mut is_routed = false;
+        if let Some(home) = crate::collectors::home_dir()
+            && let Ok(toml_str) = fs::read_to_string(home.join(".codex").join("config.toml"))
+        {
+            if let Some(mp) = extract_toml_quoted_value(&toml_str, "model_provider") {
+                provider_name = mp;
+            }
+            if let Some(base) = extract_toml_quoted_value(&toml_str, "base_url") {
+                is_routed = is_loopback_url(&base);
+            }
+        }
+        ClientRouteSummary {
+            agent_id: "codex",
+            title: "Codex",
+            provider_name,
+            is_routed,
+        }
+    };
+    summaries.push(codex);
+
+    // 4. Gemini CLI
+    let gemini = if let Some(cc) = discover_cc_switch_provider_for_app("gemini") {
+        ClientRouteSummary {
+            agent_id: "gemini_cli",
+            title: "Gemini",
+            provider_name: if cc.name.trim().is_empty() {
+                "Google Official".into()
+            } else {
+                cc.name
+            },
+            is_routed: cc.is_routed,
+        }
+    } else {
+        ClientRouteSummary {
+            agent_id: "gemini_cli",
+            title: "Gemini",
+            provider_name: "Google Official".to_string(),
+            is_routed: false,
+        }
+    };
+    summaries.push(gemini);
+
+    // 5. ZCode / OpenCode
+    let zcode = if let Some(cc) = discover_cc_switch_provider_for_app("opencode") {
+        ClientRouteSummary {
+            agent_id: "zcode",
+            title: "OpenCode",
+            provider_name: if cc.name.trim().is_empty() {
+                "default".into()
+            } else {
+                cc.name
+            },
+            is_routed: cc.is_routed,
+        }
+    } else if let Some(providers) =
+        crate::collectors::zcode_app_server::load_zcode_v2_provider_registry()
+        && let Some(first) = providers.first()
+        && let Some(lbl) = first
+            .get("label")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    {
+        ClientRouteSummary {
+            agent_id: "zcode",
+            title: "ZCode",
+            provider_name: lbl.to_string(),
+            is_routed: false,
+        }
+    } else {
+        ClientRouteSummary {
+            agent_id: "zcode",
+            title: "ZCode",
+            provider_name: "default".to_string(),
+            is_routed: false,
+        }
+    };
+    summaries.push(zcode);
+
+    summaries
+}
+
+fn parse_url_host_port(url: &str) -> Option<(String, u16)> {
+    let trimmed = url.trim();
+    let (scheme, rest) = if let Some(r) = trimmed.strip_prefix("https://") {
+        ("https", r)
+    } else {
+        let r = trimmed.strip_prefix("http://")?;
+        ("http", r)
+    };
+    let authority = rest.split('/').next()?;
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, port_part) = bracketed.split_once(']')?;
+        let port = port_part
+            .strip_prefix(':')
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(default_port);
+        return Some((host.to_string(), port));
+    }
+    if let Some((host, port_str)) = authority.rsplit_once(':')
+        && let Ok(port) = port_str.parse::<u16>()
+    {
+        return Some((host.to_string(), port));
+    }
+    Some((authority.to_string(), default_port))
+}
+
+fn is_loopback_url(url: &str) -> bool {
+    let Some((host, _)) = parse_url_host_port(url) else {
+        return false;
+    };
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "::1"
+    )
+}
+
+fn host_label_from_url(url: &str) -> Option<String> {
+    let (host, port) = parse_url_host_port(url)?;
+    if matches!(
+        host.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "::1"
+    ) {
+        Some(format!("Local :{port}"))
+    } else {
+        Some(host)
+    }
+}
+
+/// Verifies that a local loopback gateway endpoint is actually listening before
+/// injecting it into a child CLI process. Remote endpoints return `true` without
+/// blocking on WAN latency.
+fn is_gateway_url_reachable(url: &str) -> bool {
+    let Some((host, port)) = parse_url_host_port(url) else {
+        return false;
+    };
+    if !matches!(
+        host.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "::1"
+    ) {
+        return true;
+    }
+    let addr_str = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    if let Ok(addrs) = addr_str.to_socket_addrs() {
+        for addr in addrs {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(80)).is_ok() {
+                return true;
+            }
+        }
+    } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        let sock = SocketAddr::new(ip, port);
+        if TcpStream::connect_timeout(&sock, Duration::from_millis(80)).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Dynamically queries live models from an upstream OpenAI/Anthropic compatible gateway.
@@ -466,6 +888,7 @@ pub fn fetch_live_upstream_models(base_url: &str, token: &str) -> Vec<ClaudeGate
     fetched
 }
 
+#[cfg(test)]
 fn merge_gateway_models(target: &mut Vec<ClaudeGatewayModel>, incoming: Vec<ClaudeGatewayModel>) {
     let mut seen: std::collections::HashSet<String> =
         target.iter().map(|m| m.name.to_ascii_lowercase()).collect();
@@ -481,12 +904,98 @@ fn merge_gateway_models(target: &mut Vec<ClaudeGatewayModel>, incoming: Vec<Clau
     }
 }
 
-/// Discovers active Claude gateway configuration from environment, `settings.json`, `magpie`, `cc-switch.db`, `Claude-3p`, or `Claude` profiles.
-pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
-    let cc_switch = discover_cc_switch_active_provider();
+/// Discovers active Claude gateway configuration for a specific client (`desktop == true` for Claude Desktop,
+/// `desktop == false` for Claude Code CLI).
+pub fn discover_claude_gateway_for_client(desktop: bool) -> Option<ClaudeGatewayProfile> {
+    if desktop {
+        discover_claude_desktop_gateway()
+    } else {
+        discover_claude_code_gateway()
+    }
+}
+
+/// Discovers active gateway configuration specifically for Claude Code CLI (`claude`).
+///
+/// By default, Claude Code uses official OAuth unless explicitly configured via process env,
+/// `~/.claude/settings.json`, or an active `cc-switch.db` provider for `app_type = 'claude'`.
+/// It never inherits Claude Desktop's `Claude-3p` or `host-creds` profiles.
+pub fn discover_claude_code_gateway() -> Option<ClaudeGatewayProfile> {
+    let env_base = env::var("ANTHROPIC_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let env_token = env::var("ANTHROPIC_AUTH_TOKEN")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        });
+
+    let cc_claude = discover_cc_switch_provider_for_app("claude");
+
+    if let (Some(base_url), Some(auth_token)) = (env_base, env_token) {
+        let mut models = cc_claude
+            .as_ref()
+            .map(|c| c.models.clone())
+            .unwrap_or_default();
+        if models.is_empty() {
+            models = fetch_live_upstream_models(&base_url, &auth_token);
+        }
+        return Some(ClaudeGatewayProfile::new(
+            base_url,
+            auth_token,
+            "environment",
+            models,
+        ));
+    }
+
+    if let Some((base_url, auth_token, mut models, source_name)) = discover_claude_settings_env() {
+        if is_gateway_url_reachable(&base_url) {
+            if let Some(ref cc) = cc_claude
+                && !cc.models.is_empty()
+            {
+                models = cc.models.clone();
+            }
+            return Some(ClaudeGatewayProfile::new(
+                base_url,
+                auth_token,
+                source_name,
+                models,
+            ));
+        }
+    }
+
+    if let Some(cc) = cc_claude
+        && let Some(upstream_url) = cc.upstream_base_url
+        && let Some(upstream_token) = cc.upstream_auth_token
+        && is_gateway_url_reachable(&upstream_url)
+    {
+        let mut models = if !cc.upstream_models.is_empty() {
+            cc.upstream_models
+        } else {
+            cc.models
+        };
+        if models.is_empty() {
+            models = fetch_live_upstream_models(&upstream_url, &upstream_token);
+        }
+        return Some(ClaudeGatewayProfile::new(
+            upstream_url,
+            upstream_token,
+            format!("cc-switch:{}", cc.name),
+            models,
+        ));
+    }
+
+    None
+}
+
+/// Discovers active gateway configuration specifically for Claude Desktop (`claude-desktop`).
+pub fn discover_claude_desktop_gateway() -> Option<ClaudeGatewayProfile> {
+    let cc_desktop = discover_cc_switch_provider_for_app("claude-desktop");
     let roots = gateway_search_roots();
 
-    // 1. Environment variables take precedence if explicitly set
+    // 1. Explicit process environment variables take precedence
     let env_base = env::var("ANTHROPIC_BASE_URL")
         .ok()
         .filter(|v| !v.trim().is_empty());
@@ -500,13 +1009,16 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         });
 
     if let (Some(base_url), Some(auth_token)) = (env_base, env_token) {
-        let mut models = if let Some(ref cc) = cc_switch {
+        let mut models = if let Some(ref cc) = cc_desktop
+            && !cc.models.is_empty()
+        {
             cc.models.clone()
         } else {
-            discover_config_library_models()
+            discover_config_library_models_in_roots(&roots)
         };
-        let live_models = fetch_live_upstream_models(&base_url, &auth_token);
-        merge_gateway_models(&mut models, live_models);
+        if models.is_empty() {
+            models = fetch_live_upstream_models(&base_url, &auth_token);
+        }
         return Some(ClaudeGatewayProfile::new(
             base_url,
             auth_token,
@@ -515,8 +1027,15 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
-    // 2. Discover from Claude settings.json env (where Magpie or manual config writes ANTHROPIC_BASE_URL)
-    if let Some((base_url, auth_token, models, source_name)) = discover_claude_settings_env() {
+    // 2. Discover from Claude Desktop's applied configLibrary (`Claude-3p/configLibrary/<appliedId>.json`)
+    if let Some((base_url, auth_token, mut models, source_name)) = discover_config_library(&roots)
+        && is_gateway_url_reachable(&base_url)
+    {
+        if models.is_empty()
+            && let Some(ref cc) = cc_desktop
+        {
+            models = cc.models.clone();
+        }
         return Some(ClaudeGatewayProfile::new(
             base_url,
             auth_token,
@@ -525,29 +1044,21 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
-    // 3. Discover from Magpie configuration (~/.config/magpie/providers.json or %APPDATA%/magpie/providers.json)
-    if let Some((base_url, auth_token, models, source_name)) = discover_magpie_provider() {
-        return Some(ClaudeGatewayProfile::new(
-            base_url,
-            auth_token,
-            source_name,
-            models,
-        ));
-    }
-
-    // 4. Discover from host-creds-*.json (active CC Switch local proxy loopback)
+    // 3. Discover from unexpired, reachable host-creds-*.json (active local proxy loopback)
     if let Some((proxy_url, proxy_token, source_name)) = discover_host_creds(&roots) {
-        let mut models = if let Some(ref cc) = cc_switch {
+        let mut models = if let Some(ref cc) = cc_desktop
+            && !cc.models.is_empty()
+        {
             cc.models.clone()
         } else {
             discover_config_library_models_in_roots(&roots)
         };
-        if let Some(ref cc) = cc_switch
+        if models.is_empty()
+            && let Some(ref cc) = cc_desktop
             && let Some(ref upstream_url) = cc.upstream_base_url
             && let Some(ref upstream_token) = cc.upstream_auth_token
         {
-            let live_models = fetch_live_upstream_models(upstream_url, upstream_token);
-            merge_gateway_models(&mut models, live_models);
+            models = fetch_live_upstream_models(upstream_url, upstream_token);
         }
         return Some(ClaudeGatewayProfile::new(
             proxy_url,
@@ -557,14 +1068,22 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
-    // 5. Discover directly from cc-switch.db if active provider has upstream base_url & token
-    if let Some(cc) = cc_switch
+    // 4. Fallback directly to cc-switch.db upstream if local proxy is unavailable
+    if let Some(cc) = cc_desktop
         && let Some(upstream_url) = cc.upstream_base_url
         && let Some(upstream_token) = cc.upstream_auth_token
+        && is_gateway_url_reachable(&upstream_url)
     {
-        let mut models = cc.models;
-        let live_models = fetch_live_upstream_models(&upstream_url, &upstream_token);
-        merge_gateway_models(&mut models, live_models);
+        // Direct upstream connection bypasses CC Switch's local route translator, so prefer
+        // upstream target model IDs rather than local route aliases.
+        let mut models = if !cc.upstream_models.is_empty() {
+            cc.upstream_models
+        } else {
+            cc.models
+        };
+        if models.is_empty() {
+            models = fetch_live_upstream_models(&upstream_url, &upstream_token);
+        }
         return Some(ClaudeGatewayProfile::new(
             upstream_url,
             upstream_token,
@@ -573,8 +1092,21 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
         ));
     }
 
-    // 6. Discover from configLibrary static metadata as fallback
-    if let Some((base_url, auth_token, models, source_name)) = discover_config_library(&roots) {
+    // 5. Magpie or Claude settings fallback
+    if let Some((base_url, auth_token, models, source_name)) = discover_magpie_provider()
+        && is_gateway_url_reachable(&base_url)
+    {
+        return Some(ClaudeGatewayProfile::new(
+            base_url,
+            auth_token,
+            source_name,
+            models,
+        ));
+    }
+
+    if let Some((base_url, auth_token, models, source_name)) = discover_claude_settings_env()
+        && is_gateway_url_reachable(&base_url)
+    {
         return Some(ClaudeGatewayProfile::new(
             base_url,
             auth_token,
@@ -584,6 +1116,11 @@ pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
     }
 
     None
+}
+
+/// Discovers active Claude gateway configuration across desktop or CLI profiles.
+pub fn discover_claude_gateway() -> Option<ClaudeGatewayProfile> {
+    discover_claude_desktop_gateway().or_else(discover_claude_code_gateway)
 }
 
 /// Discovers gateway env vars directly from `~/.claude/settings.json`.
@@ -779,7 +1316,17 @@ fn discover_host_creds(roots: &[PathBuf]) -> Option<(String, String, String)> {
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
 
-                // Score prioritizing unexpired, then latest procStart / mtime
+                // Never inject expired ephemeral host-creds or dead loopback endpoints.
+                if expires_at > 0 && expires_at <= now_ms {
+                    continue;
+                }
+                if expires_at == 0 && (mtime == 0 || now_ms.saturating_sub(mtime) > 43_200_000) {
+                    continue;
+                }
+                if !is_gateway_url_reachable(base_url) {
+                    continue;
+                }
+
                 let score = if expires_at > now_ms {
                     1_000_000_000_000_000_000_u64 + expires_at
                 } else {
@@ -854,7 +1401,7 @@ fn discover_config_library(
     None
 }
 
-fn discover_config_library_models() -> Vec<ClaudeGatewayModel> {
+pub fn discover_config_library_models() -> Vec<ClaudeGatewayModel> {
     let roots = gateway_search_roots();
     discover_config_library_models_in_roots(&roots)
 }
@@ -1060,8 +1607,8 @@ mod tests {
         if cc_switch_db_path().is_some() {
             let active = discover_cc_switch_active_provider();
             if let Some(prov) = active {
+                assert!(!prov.id.is_empty());
                 assert!(!prov.name.is_empty());
-                assert!(!prov.models.is_empty());
             }
         }
     }

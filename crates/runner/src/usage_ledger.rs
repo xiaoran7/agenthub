@@ -26,11 +26,11 @@
 //! contributes one record holding its final `token_count`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{OnceLock, RwLock},
+    sync::{Arc, OnceLock, RwLock},
     time::{Duration, Instant, UNIX_EPOCH},
 };
 
@@ -123,6 +123,10 @@ pub struct LedgerRecord {
     /// `claude_code`, `claude_desktop`, `codex`, `grok_build`, `zcode`,
     /// `gemini_cli`.
     pub agent: &'static str,
+    /// Upstream provider or configured gateway route (`Anthropic`, `OpenAI`,
+    /// `Google`, `xAI`, `ZCode`, or the custom gateway label).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub provider: String,
     /// The model as the provider answered, e.g. `claude-sonnet-5`.
     pub model: String,
     /// The session the call belongs to.
@@ -134,6 +138,9 @@ pub struct LedgerRecord {
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// Measured turn duration in milliseconds when bounded within a single turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     /// The API error a failed call was written with (`rate_limit`,
     /// `authentication_failed`, …). Such a call has no tokens and no cost; it
     /// exists so the request list can say a request failed.
@@ -153,6 +160,68 @@ pub struct LedgerRecord {
 
 fn is_false(v: &bool) -> bool {
     !*v
+}
+
+const MAX_TURN_DURATION_MS: i64 = 10 * 60 * 1000;
+
+fn turn_duration_ms(asked: i64, t: i64) -> Option<u64> {
+    if asked <= 0 || t <= asked {
+        return None;
+    }
+    let gap = t.saturating_sub(asked);
+    (gap <= MAX_TURN_DURATION_MS).then_some(gap as u64)
+}
+
+/// Resolves the provider label for a model call from active gateway routes
+/// (when routed through a non-official gateway) or model/agent vendor identity.
+pub fn resolve_provider_label(
+    agent: &str,
+    model: &str,
+    routed_providers: &HashMap<String, String>,
+) -> String {
+    if let Some(routed) = routed_providers.get(agent).filter(|s| !s.is_empty()) {
+        return routed.clone();
+    }
+    let lower = model.to_ascii_lowercase();
+    if lower.starts_with("claude") || lower.contains("anthropic") {
+        "Anthropic".to_owned()
+    } else if lower.starts_with("gpt-")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.contains("codex")
+    {
+        "OpenAI".to_owned()
+    } else if lower.starts_with("gemini") {
+        "Google".to_owned()
+    } else if lower.starts_with("grok") {
+        "xAI".to_owned()
+    } else if lower.starts_with("deepseek") {
+        "DeepSeek".to_owned()
+    } else if lower.starts_with("qwen") {
+        "Qwen".to_owned()
+    } else if lower.starts_with("glm") || lower.contains("zcode") {
+        "ZCode".to_owned()
+    } else {
+        match agent {
+            "claude_code" | "claude_desktop" => "Anthropic".to_owned(),
+            "codex" => "OpenAI".to_owned(),
+            "gemini_cli" => "Google".to_owned(),
+            "grok_build" => "xAI".to_owned(),
+            "zcode" => "ZCode".to_owned(),
+            _ => "Other".to_owned(),
+        }
+    }
+}
+
+fn active_routed_providers() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for summary in crate::claude_gateway::discover_all_client_route_summaries() {
+        if summary.is_routed && !summary.provider_name.trim().is_empty() {
+            map.insert(summary.agent_id.to_string(), summary.provider_name);
+        }
+    }
+    map
 }
 
 impl LedgerRecord {
@@ -238,12 +307,42 @@ pub fn calc_cost(model_name: &str, prompt: u64, completion: u64, cache_read: u64
         / 1_000_000.0
 }
 
-/// A transcript file as the ledger last read it: its size and modification
-/// time decide whether reading it again is worth anything.
-#[derive(Debug, Clone)]
+/// A rollout file's size and modification timestamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FileMark {
     len: u64,
     modified_ms: i64,
+}
+
+/// Incremental byte-offset reader state for one `.jsonl` transcript file.
+///
+/// When an active transcript appends new lines, we seek directly to `offset`
+/// and parse only the newly completed lines rather than re-reading the whole
+/// file from byte 0. If the file was truncated (`meta.len() < offset`), we
+/// reset to byte 0 cleanly.
+#[derive(Debug, Clone, Default)]
+struct TranscriptState {
+    offset: u64,
+    modified_ms: i64,
+    last_user_ms: i64,
+    last_assistant_ms: i64,
+    index: HashMap<String, usize>,
+    calls: Vec<LedgerRecord>,
+}
+
+/// Incremental watermark and file fingerprint for ZCode's SQLite store.
+#[derive(Debug, Clone, Default)]
+struct ZCodeCacheState {
+    db_path: PathBuf,
+    db_len: u64,
+    db_modified_ms: i64,
+    wal_len: u64,
+    wal_modified_ms: i64,
+    last_usage_rowid: i64,
+    covered_sessions: HashSet<String>,
+    usage_records: Vec<LedgerRecord>,
+    legacy_records: Vec<LedgerRecord>,
+    legacy_loaded: bool,
 }
 
 /// One file's calls, kept across walks: a store this size should not be
@@ -252,14 +351,20 @@ struct FileMark {
 struct LedgerCache {
     /// When the store was last walked.
     walked_at: Option<Instant>,
-    /// Each file's fingerprint and the calls it held at that walk.
-    files: HashMap<PathBuf, (FileMark, Vec<LedgerRecord>)>,
+    /// Monotonically bumped only when underlying records actually change.
+    generation: u64,
+    /// Each transcript file's incremental byte-offset state.
+    files: HashMap<PathBuf, TranscriptState>,
     /// Each Codex rollout's fingerprint and the one total it held. A rollout
     /// is compressed: re-reading it costs a decompression of the whole
     /// session, so it is kept the same way a transcript file is.
     codex: HashMap<PathBuf, (FileMark, Option<LedgerRecord>)>,
+    /// Incremental ZCode SQLite cache.
+    zcode: Option<ZCodeCacheState>,
     /// The merged, sorted answer the last walk produced.
-    records: Vec<LedgerRecord>,
+    records: Arc<Vec<LedgerRecord>>,
+    /// Memoised digests keyed by `(period, limit, local_day)` for the current generation.
+    digests: HashMap<(&'static str, usize, String), Arc<LedgerDigest>>,
 }
 
 fn ledger_cache() -> &'static RwLock<LedgerCache> {
@@ -268,8 +373,8 @@ fn ledger_cache() -> &'static RwLock<LedgerCache> {
 }
 
 /// How long a scan is reused. The page asks on every poll; transcripts only
-/// change when an agent writes one, and a few seconds of staleness costs
-/// nothing when the fastest poll is two seconds.
+/// change when an agent writes one, and incremental tail reads make post-TTL
+/// refreshes sub-millisecond when nothing grew.
 const LEDGER_TTL: Duration = Duration::from_secs(5);
 
 /// Drops the memoised walk. A session moved to the trash is still on disk at
@@ -284,156 +389,232 @@ pub fn forget_transcripts() {
 
 /// Every call in Coding Assistant's transcript store, newest first.
 ///
-/// A file whose size and modification time have not moved since the last walk
-/// keeps the calls the last walk read from it; only a changed file is read
-/// again. The whole scan is memoised for [`LEDGER_TTL`], so a page that polls
-/// every two seconds does not rewalk a 2 GB store on every tick.
+/// Unchanged files are skipped without opening; appended `.jsonl` transcripts
+/// seek directly to their previous byte `offset` and parse only newly written
+/// lines.
 pub fn claude_records() -> Vec<LedgerRecord> {
+    claude_records_arc().as_ref().clone()
+}
+
+fn claude_records_arc() -> Arc<Vec<LedgerRecord>> {
     if let Ok(guard) = ledger_cache().read() {
         if let Some(at) = guard.walked_at {
             if at.elapsed() < LEDGER_TTL {
-                return guard.records.clone();
+                return Arc::clone(&guard.records);
             }
         }
     }
 
-    let mut records = claude_calls();
-    // The page's totals are the machine's totals, not one agent's: a reader
-    // who runs several CLIs would otherwise see a figure that matches none of
-    // the numbers they remember. Each other store is read from its own
-    // authority (see [`other_agent_calls`]).
-    records.extend(other_agent_calls());
-    // One message repeated across resumed sessions belongs to the session that
-    // wrote it first; later copies would double every figure.
+    let routed = active_routed_providers();
+    let (mut records, claude_changed) = claude_calls(&routed);
+    let (other, other_changed) = other_agent_calls(&routed);
+    records.extend(other);
+
+    let any_changed = claude_changed || other_changed;
+    if !any_changed {
+        if let Ok(mut guard) = ledger_cache().write() {
+            if guard.walked_at.is_some() {
+                guard.walked_at = Some(Instant::now());
+                return Arc::clone(&guard.records);
+            }
+        }
+    }
+
     records.sort_by_key(|r| std::cmp::Reverse(r.t));
     dedupe(&mut records);
     mark_retries(&mut records);
-    let merged = records.clone();
+    let merged = Arc::new(records);
     if let Ok(mut guard) = ledger_cache().write() {
-        // the per-file marks belong to the walks that produced them; the
-        // merge itself keeps no state of its own
-        let files = guard.files.clone();
-        let codex = guard.codex.clone();
-        *guard = LedgerCache {
-            walked_at: Some(Instant::now()),
-            files,
-            codex,
-            records: merged,
-        };
+        guard.walked_at = Some(Instant::now());
+        guard.generation = guard.generation.wrapping_add(1).max(1);
+        guard.records = Arc::clone(&merged);
+        guard.digests.clear();
     }
-    records
+    merged
 }
 
-/// Coding Assistant's own calls, and the per-file marks that make the next
-/// walk cheap.
-fn claude_calls() -> Vec<LedgerRecord> {
+/// Returns `(generation, Arc<LedgerDigest>)`, reusing the memoised digest when
+/// no underlying transcript or SQLite row changed within the current local day.
+pub fn digest_cached(period: Period, recent_limit: usize) -> (u64, Arc<LedgerDigest>) {
+    let records = claude_records_arc();
+    let today = local_day(chrono::Local::now().timestamp_millis());
+    let key = (period.key(), recent_limit, today);
+
+    if let Ok(guard) = ledger_cache().read() {
+        if let Some(hit) = guard.digests.get(&key) {
+            return (guard.generation, Arc::clone(hit));
+        }
+    }
+
+    let built = Arc::new(digest(&records, period, recent_limit));
+    let mut generation = 1;
+    if let Ok(mut guard) = ledger_cache().write() {
+        generation = guard.generation.max(1);
+        if guard.digests.len() > 16 {
+            guard.digests.clear();
+        }
+        guard.digests.insert(key, Arc::clone(&built));
+    }
+    (generation, built)
+}
+
+/// Coding Assistant's own calls, incrementally reading only newly appended
+/// bytes per `.jsonl` transcript file.
+fn claude_calls(routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
     let Some(config_dir) = claude_config_dir() else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let Some(files) = transcript_files(&config_dir) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
 
     let previous = ledger_cache()
         .read()
         .map(|g| g.files.clone())
         .unwrap_or_default();
+    let mut changed = files.len() != previous.len();
     let mut walked = HashMap::with_capacity(files.len());
     let mut records = Vec::new();
     for path in files {
         let Ok(meta) = fs::metadata(&path) else {
             continue;
         };
-        let mark = FileMark {
-            len: meta.len(),
-            modified_ms: meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0),
+        let len = meta.len();
+        let modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let state = match previous.get(&path) {
+            Some(old) if old.offset == len && old.modified_ms == modified_ms => old.clone(),
+            Some(old) if len > old.offset => {
+                changed = true;
+                let mut next = old.clone();
+                let _ = read_transcript_incremental(&path, &mut next, routed);
+                next.modified_ms = modified_ms;
+                next
+            }
+            _ => {
+                changed = true;
+                let mut fresh = TranscriptState::default();
+                let _ = read_transcript_incremental(&path, &mut fresh, routed);
+                fresh.modified_ms = modified_ms;
+                fresh
+            }
         };
-        let cached = previous.get(&path).and_then(|(old, calls)| {
-            (old.len == mark.len && old.modified_ms == mark.modified_ms).then(|| calls.clone())
-        });
-        let calls = cached.unwrap_or_else(|| read_transcript(&path).unwrap_or_default());
-        records.extend(calls.iter().cloned());
-        walked.insert(path, (mark, calls));
+        records.extend(state.calls.iter().cloned());
+        walked.insert(path, state);
     }
     if let Ok(mut guard) = ledger_cache().write() {
         guard.files = walked;
     }
-    records
+    (records, changed)
 }
 
-/// The calls of the other CLIs on this machine, each read from its own
-/// authority rather than from a second-hand cache.
-///
-/// **ZCode** keeps a `model_usage` table with one row per model call, already
-/// carrying tokens, model, session and both ends of the turn — the best
-/// record any store here offers. Older sessions predate that table, so a
-/// session with no `model_usage` row falls back to its assistant messages'
-/// `tokens` block; the two never overlap (a message with a usage row and the
-/// message's own tokens are the same figure, which is why only one of them is
-/// summed).
-///
-/// **Codex** writes one rollout per session, compressed with zstd, and its
-/// last `token_count` event is the session's cumulative usage. Codex reports
-/// `input_tokens` inclusive of the cached part, so only the input and output
-/// are kept: adding `cached_input_tokens` again would count the same prompt
-/// twice.
-///
-/// Both are read best-effort: a store that is missing, locked or being
-/// written contributes nothing rather than failing the page.
-fn other_agent_calls() -> Vec<LedgerRecord> {
+/// The calls of the other CLIs on this machine, each read incrementally from
+/// its own authority rather than re-reading unchanged archives.
+fn other_agent_calls(routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
     let mut records = Vec::new();
+    let mut changed = false;
     if let Some(home) = home_dir() {
-        records.extend(zcode_calls(&home));
-        records.extend(codex_calls(&home));
+        let (zc, zc_changed) = zcode_calls(&home, routed);
+        let (cx, cx_changed) = codex_calls(&home, routed);
+        records.extend(zc);
+        records.extend(cx);
+        changed = zc_changed || cx_changed;
     }
-    records
+    (records, changed)
 }
 
-/// ZCode's calls, from `~/.zcode/cli/db/db.sqlite`.
-fn zcode_calls(home: &Path) -> Vec<LedgerRecord> {
+fn file_len_and_mtime(path: &Path) -> (u64, i64) {
+    let Ok(meta) = fs::metadata(path) else {
+        return (0, 0);
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    (meta.len(), mtime)
+}
+
+/// ZCode's calls, incrementally read from `~/.zcode/cli/db/db.sqlite` using
+/// DB+WAL file fingerprints and a `model_usage` rowid watermark.
+fn zcode_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
     let database = home.join(".zcode").join("cli").join("db").join("db.sqlite");
     if !database.is_file() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
+    let wal = home
+        .join(".zcode")
+        .join("cli")
+        .join("db")
+        .join("db.sqlite-wal");
+    let (db_len, db_modified_ms) = file_len_and_mtime(&database);
+    let (wal_len, wal_modified_ms) = file_len_and_mtime(&wal);
+
+    let prev = ledger_cache().read().ok().and_then(|g| g.zcode.clone());
+    if let Some(ref state) = prev
+        && state.db_path == database
+        && state.db_len == db_len
+        && state.db_modified_ms == db_modified_ms
+        && state.wal_len == wal_len
+        && state.wal_modified_ms == wal_modified_ms
+    {
+        let mut out = Vec::with_capacity(state.usage_records.len() + state.legacy_records.len());
+        out.extend(state.usage_records.iter().cloned());
+        out.extend(state.legacy_records.iter().cloned());
+        return (out, false);
+    }
+
     let Ok(connection) = rusqlite::Connection::open_with_flags(
         &database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     ) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
-    let mut records = Vec::new();
 
-    // One row per model call, with everything the ledger needs already
-    // separate: prompt, cache, completion and both moments.
+    // Reset if DB path changed or DB file shrank (vacuum/recreate); otherwise advance from watermark.
+    let mut state = match prev {
+        Some(old) if old.db_path == database && db_len >= old.db_len => old,
+        _ => ZCodeCacheState::default(),
+    };
+    state.db_path = database.clone();
+    state.db_len = db_len;
+    state.db_modified_ms = db_modified_ms;
+    state.wal_len = wal_len;
+    state.wal_modified_ms = wal_modified_ms;
+
     let usage = connection.prepare(
-        "select session_id, model_id, input_tokens, output_tokens,
+        "select rowid, session_id, model_id, input_tokens, output_tokens,
                 cache_creation_input_tokens, cache_read_input_tokens,
                 started_at, completed_at, status, error_type
-           from model_usage",
+           from model_usage
+          where rowid > ?1
+          order by rowid asc",
     );
     if let Ok(mut statement) = usage {
-        let rows = statement.query_map([], |row| {
+        let rows = statement.query_map([state.last_usage_rowid], |row| {
             Ok((
-                row.get::<_, String>(0)?,
+                row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
+                row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
                 row.get::<_, i64>(5)?,
-                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, i64>(6)?,
                 row.get::<_, Option<i64>>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, Option<String>>(10)?,
             ))
         });
         if let Ok(rows) = rows {
-            let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
             for (
+                rowid,
                 session,
                 model,
                 input,
@@ -446,12 +627,13 @@ fn zcode_calls(home: &Path) -> Vec<LedgerRecord> {
                 error,
             ) in rows.flatten()
             {
-                covered.insert(session.clone());
+                state.last_usage_rowid = state.last_usage_rowid.max(rowid);
+                state.covered_sessions.insert(session.clone());
                 let Some(t) = completed.or(started) else {
                     continue;
                 };
                 let failed = status != "completed";
-                records.push(zcode_record(
+                state.usage_records.push(zcode_record(
                     &session,
                     &model,
                     input,
@@ -465,24 +647,40 @@ fn zcode_calls(home: &Path) -> Vec<LedgerRecord> {
                     } else {
                         None
                     },
+                    routed,
                 ));
             }
-            // Older sessions have no usage rows: their assistant messages
-            // still carry the whole figure. Only the sessions the table did
-            // not cover are read from messages, so no call is counted twice.
-            if let Ok(rows) = read_zcode_messages(&connection, &covered) {
-                records.extend(rows);
+            // Legacy messages predate `model_usage` and never receive new writes,
+            // so scanning them once per Runner lifetime avoids full-table scans.
+            if !state.legacy_loaded {
+                if let Ok(rows) = read_zcode_messages(&connection, &state.covered_sessions, routed)
+                {
+                    state.legacy_records = rows;
+                    state.legacy_loaded = true;
+                }
+            } else {
+                state
+                    .legacy_records
+                    .retain(|r| !state.covered_sessions.contains(&r.session));
             }
         }
     }
-    records
+
+    let mut out = Vec::with_capacity(state.usage_records.len() + state.legacy_records.len());
+    out.extend(state.usage_records.iter().cloned());
+    out.extend(state.legacy_records.iter().cloned());
+    if let Ok(mut guard) = ledger_cache().write() {
+        guard.zcode = Some(state);
+    }
+    (out, true)
 }
 
 /// Fills in the ZCode sessions `model_usage` predates, from each assistant
 /// message's own `tokens` block.
 fn read_zcode_messages(
     connection: &rusqlite::Connection,
-    covered: &std::collections::HashSet<String>,
+    covered: &HashSet<String>,
+    routed: &HashMap<String, String>,
 ) -> rusqlite::Result<Vec<LedgerRecord>> {
     let mut statement = connection.prepare(
         "select session_id, id, data from message
@@ -516,11 +714,6 @@ fn read_zcode_messages(
             .and_then(|c| c.get("write"))
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        // `input` already counts the cached prompt, and ZCode's own `total`
-        // is `input + output`. The record keeps the uncached part separate so
-        // `total_tokens()` does not count the cache twice. `model_usage` rows
-        // differ: their `input_tokens` is already uncached, hence the
-        // subtraction happens here and not in `zcode_record`.
         let input = number("input").saturating_sub(cache_read);
         let t = value
             .get("time")
@@ -545,6 +738,7 @@ fn read_zcode_messages(
             t,
             t,
             None,
+            routed,
         ));
         let _ = id;
     }
@@ -562,16 +756,19 @@ fn zcode_record(
     asked: i64,
     t: i64,
     error: Option<String>,
+    routed: &HashMap<String, String>,
 ) -> LedgerRecord {
     let input = input.max(0) as u64;
     let output = output.max(0) as u64;
     let cache_write = cache_write.max(0) as u64;
     let cache_read = cache_read.max(0) as u64;
     let failed = error.is_some();
+    let provider = resolve_provider_label("zcode", model, routed);
     LedgerRecord {
         t,
         asked,
         agent: "zcode",
+        provider,
         model: if failed {
             String::new()
         } else {
@@ -583,6 +780,7 @@ fn zcode_record(
         output,
         cache_read,
         cache_write,
+        duration_ms: turn_duration_ms(asked, t),
         error,
         cost: if failed {
             0.0
@@ -600,31 +798,22 @@ fn zcode_record(
 }
 
 /// Codex's sessions, from the rollouts under `~/.codex`.
-///
-/// A rollout is one JSONL file per session, zstd-compressed once it is
-/// archived. Its `token_count` events carry the running total, so the last
-/// one is the session's usage; there is no per-turn model in the event, and
-/// the model is read from the rollout's session meta instead.
-fn codex_calls(home: &Path) -> Vec<LedgerRecord> {
+fn codex_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
     let root = home.join(".codex");
     let mut files = Vec::new();
     for directory in ["sessions", "archived_sessions"] {
         collect_rollouts(&root.join(directory), &mut files);
     }
-    // Rollout names begin with their date, so name order is age order: keep
-    // the newest ones and skip the rest rather than read the whole archive.
     files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     if files.len() > CODEX_ROLLOUT_LIMIT {
         files.drain(..files.len() - CODEX_ROLLOUT_LIMIT);
     }
 
-    // A rollout is a compressed whole session, so a walk that has already
-    // read one keeps it; only a rollout whose size or mtime moved is opened
-    // again. Without this, every poll would decompress the entire archive.
     let previous = ledger_cache()
         .read()
         .map(|g| g.codex.clone())
         .unwrap_or_default();
+    let mut changed = files.len() != previous.len();
     let mut walked = HashMap::with_capacity(files.len());
     let mut records = Vec::new();
     for path in files {
@@ -640,19 +829,25 @@ fn codex_calls(home: &Path) -> Vec<LedgerRecord> {
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0),
         };
-        let cached = previous.get(&path).and_then(|(old, record)| {
-            (old.len == mark.len && old.modified_ms == mark.modified_ms).then(|| record.clone())
-        });
-        let record = cached.unwrap_or_else(|| read_codex_rollout(&path));
+        let record = match previous.get(&path) {
+            Some((old, record)) if *old == mark => record.clone(),
+            _ => {
+                changed = true;
+                read_codex_rollout(&path, routed)
+            }
+        };
         if let Some(record) = &record {
             records.push(record.clone());
         }
         walked.insert(path, (mark, record));
     }
     if let Ok(mut guard) = ledger_cache().write() {
-        guard.codex = walked;
+        if guard.codex.len() > 2 * CODEX_ROLLOUT_LIMIT {
+            guard.codex.clear();
+        }
+        guard.codex.extend(walked);
     }
-    records
+    (records, changed)
 }
 
 fn collect_rollouts(directory: &Path, files: &mut Vec<PathBuf>) {
@@ -673,7 +868,7 @@ fn collect_rollouts(directory: &Path, files: &mut Vec<PathBuf>) {
 }
 
 /// One rollout's session total, read off its last `token_count` event.
-fn read_codex_rollout(path: &Path) -> Option<LedgerRecord> {
+fn read_codex_rollout(path: &Path, routed: &HashMap<String, String>) -> Option<LedgerRecord> {
     let bytes = fs::read(path).ok()?;
     let text = zstd::decode_all(bytes.as_slice()).ok()?;
     let mut model = String::new();
@@ -688,7 +883,6 @@ fn read_codex_rollout(path: &Path) -> Option<LedgerRecord> {
         if line.is_empty() {
             continue;
         }
-        // only the few line kinds that matter are parsed
         let meta = line.starts_with(b"{\"timestamp\":")
             && (contains(line, b"\"session_meta\"")
                 || contains(line, b"\"token_count\"")
@@ -713,9 +907,6 @@ fn read_codex_rollout(path: &Path) -> Option<LedgerRecord> {
                     }
                 }
             }
-            // Rollouts written before the CLI recorded `provenance` name the
-            // model only on each turn, and the last turn is the one the
-            // session total was made with.
             Some("turn_context") => {
                 if let Some(name) = value.pointer("/payload/model").and_then(|v| v.as_str()) {
                     if !name.is_empty() {
@@ -754,18 +945,15 @@ fn read_codex_rollout(path: &Path) -> Option<LedgerRecord> {
         }
     }
     let (t, input, output) = last_total?;
-    // A rollout that never spent a token carries nothing the page can show:
-    // it would add a nameless row of zeros to the rankings.
     if input == 0 && output == 0 {
         return None;
     }
-    // Codex counts the cached prompt inside `input_tokens`: splitting it out
-    // would both change the total and claim a cache hit the event never
-    // stated, so the call is recorded as plain input.
+    let provider = resolve_provider_label("codex", &model, routed);
     Some(LedgerRecord {
         t,
         asked: t,
         agent: "codex",
+        provider,
         model: model.clone(),
         session,
         cwd: String::new(),
@@ -773,6 +961,7 @@ fn read_codex_rollout(path: &Path) -> Option<LedgerRecord> {
         output,
         cache_read: 0,
         cache_write: 0,
+        duration_ms: None,
         error: None,
         cost: calc_cost(&model, input, output, 0),
         retried: false,
@@ -975,51 +1164,75 @@ struct AssistantUsage {
     cache_creation_input_tokens: u64,
 }
 
-/// Reads one transcript into per-call records.
-fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
+/// Reads newly appended lines of one transcript from `state.offset` into
+/// `state.calls`, seeking past everything already parsed on previous walks.
+fn read_transcript_incremental(
+    path: &Path,
+    state: &mut TranscriptState,
+    routed: &HashMap<String, String>,
+) -> Result<(), CollectorError> {
     let program = "Claude transcript store";
-    let file = fs::File::open(path).map_err(|source| CollectorError::Io {
+    let mut file = fs::File::open(path).map_err(|source| CollectorError::Io {
         program: program.to_owned(),
         source,
     })?;
+    let file_len = file
+        .metadata()
+        .map_err(|source| CollectorError::Io {
+            program: program.to_owned(),
+            source,
+        })?
+        .len();
+    if file_len < state.offset {
+        *state = TranscriptState::default();
+    } else if file_len == state.offset {
+        return Ok(());
+    }
+    if state.offset > 0 {
+        file.seek(SeekFrom::Start(state.offset))
+            .map_err(|source| CollectorError::Io {
+                program: program.to_owned(),
+                source,
+            })?;
+    }
+
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
-
-    // A message's lines repeat its usage; the latest line carries the final
-    // figures. Identity is `message.id`, falling back to `requestId`.
-    let mut calls: Vec<LedgerRecord> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
     let fallback_session = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_owned();
-    // What a reply is asked by, and when the reply before it ended: the two
-    // moments a whole turn can be timed from (magpie's `state.LastUser` and
-    // `state.LastAsst`). The transcript records no first-token time, so this
-    // is the only way to time a reply that was written in one line.
-    let mut last_user_ms: i64 = 0;
-    let mut last_assistant_ms: i64 = 0;
 
     loop {
         line.clear();
-        match read_line_bounded(&mut reader, &mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
+        let (bytes_read, terminated) = match read_line_with_delim(&mut reader, &mut line) {
+            Ok((0, _)) => break,
+            Ok(pair) => pair,
             Err(_) => break,
+        };
+        if !terminated {
+            // An unterminated tail at EOF is only committed if it already ends a
+            // complete JSON object (`}`); otherwise a writer is mid-flush and
+            // we keep `state.offset` right before it for the next poll.
+            let trimmed_end = line
+                .iter()
+                .rev()
+                .find(|&&b| !b.is_ascii_whitespace())
+                .copied();
+            if trimmed_end != Some(b'}') {
+                break;
+            }
         }
+        state.offset = state.offset.saturating_add(bytes_read as u64);
         if line.len() > LEDGER_LINE_LIMIT {
             continue;
         }
-        // The cheap prefilter keeps the JSON parser away from the many
-        // lifecycle lines a transcript also holds. A prompt is read for its
-        // moment alone, and a tool result can be megabytes of base64: the
-        // moment is taken off the line's bytes, never by parsing the line.
         if !contains(&line, b"\"type\":\"assistant\"") {
             if contains(&line, b"\"type\":\"user\"")
                 && let Some(ms) = line_timestamp_ms(&line)
             {
-                last_user_ms = last_user_ms.max(ms);
+                state.last_user_ms = state.last_user_ms.max(ms);
             }
             continue;
         }
@@ -1044,9 +1257,6 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
             continue;
         };
         let model = message.model.clone().unwrap_or_default();
-        // `<synthetic>` lines are the CLI's own bookkeeping, never a call —
-        // except a failed one, which the CLI records the same way and which
-        // the request list still wants to count as failed.
         let failed = parsed.api_error;
         if model.is_empty() || (model == "<synthetic>" && !failed) {
             continue;
@@ -1071,7 +1281,6 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
             (_, Some(req)) if !req.is_empty() => req.to_owned(),
             _ => format!("{time}\u{1f}{model}"),
         };
-        // A failed call says which kind of error it was and bills nothing.
         let error = if failed {
             Some(
                 parsed
@@ -1083,13 +1292,13 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
         } else {
             None
         };
-        // The moment the reply was asked for: the last prompt or tool result
-        // before it, or, with none since, the end of the reply before it.
-        let asked = last_user_ms.max(last_assistant_ms).min(time);
+        let asked = state.last_user_ms.max(state.last_assistant_ms).min(time);
+        let provider = resolve_provider_label(agent, &model, routed);
         let record = LedgerRecord {
             t: time,
             asked,
             agent,
+            provider,
             model: if failed { String::new() } else { model.clone() },
             session,
             cwd: parsed.cwd.clone().unwrap_or_default(),
@@ -1097,6 +1306,7 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
             output: usage.output_tokens,
             cache_read: usage.cache_read_input_tokens,
             cache_write: usage.cache_creation_input_tokens,
+            duration_ms: turn_duration_ms(asked, time),
             error,
             cost: if failed {
                 0.0
@@ -1114,22 +1324,28 @@ fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
             retried: false,
             recovered: false,
         };
-        match index.get(&key) {
+        match state.index.get(&key) {
             Some(&at) => {
-                // the message's latest line carries the final usage; the ask
-                // it answers was fixed when the message began
-                let asked = calls[at].asked;
-                calls[at] = record;
-                calls[at].asked = asked;
+                let asked = state.calls[at].asked;
+                state.calls[at] = record;
+                state.calls[at].asked = asked;
+                state.calls[at].duration_ms = turn_duration_ms(asked, time);
             }
             None => {
-                index.insert(key, calls.len());
-                calls.push(record);
+                state.index.insert(key, state.calls.len());
+                state.calls.push(record);
             }
         }
-        last_assistant_ms = last_assistant_ms.max(time);
+        state.last_assistant_ms = state.last_assistant_ms.max(time);
     }
-    Ok(calls)
+    Ok(())
+}
+
+#[cfg(test)]
+fn read_transcript(path: &Path) -> Result<Vec<LedgerRecord>, CollectorError> {
+    let mut state = TranscriptState::default();
+    read_transcript_incremental(path, &mut state, &HashMap::new())?;
+    Ok(state.calls)
 }
 
 /// A prompt or tool result's moment, taken off its bytes.
@@ -1164,7 +1380,10 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     find_bytes(haystack, needle).is_some()
 }
-fn read_line_bounded<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+fn read_line_with_delim<R: BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<(usize, bool)> {
     let mut total = 0;
     loop {
         let available = match reader.fill_buf() {
@@ -1173,13 +1392,13 @@ fn read_line_bounded<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::
             Err(e) => return Err(e),
         };
         if available.is_empty() {
-            return Ok(total);
+            return Ok((total, false));
         }
         match available.iter().position(|&b| b == b'\n') {
             Some(at) => {
                 buf.extend_from_slice(&available[..at]);
                 reader.consume(at + 1);
-                return Ok(total + at + 1);
+                return Ok((total + at + 1, true));
             }
             None => {
                 buf.extend_from_slice(available);
@@ -1264,6 +1483,7 @@ pub struct SeriesBy {
     pub model: HashMap<String, Part>,
     pub model_at: HashMap<String, Part>,
     pub agent: HashMap<String, Part>,
+    pub provider: HashMap<String, Part>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -1319,6 +1539,7 @@ pub struct Breakdown {
     pub model: Vec<RankRow>,
     pub model_at: Vec<RankRow>,
     pub agent: Vec<RankRow>,
+    pub provider: Vec<RankRow>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1401,6 +1622,7 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
     let mut models: HashMap<String, RankRow> = HashMap::new();
     let mut model_at: HashMap<(String, &'static str), RankRow> = HashMap::new();
     let mut agents: HashMap<&'static str, RankRow> = HashMap::new();
+    let mut providers: HashMap<String, RankRow> = HashMap::new();
     let mut sessions: HashMap<&str, SessionAgg> = HashMap::new();
 
     let mut recent: Vec<&LedgerRecord> = Vec::new();
@@ -1483,6 +1705,21 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
                 }),
                 record,
             );
+            let prov_label = if record.provider.is_empty() {
+                resolve_provider_label(record.agent, &record.model, &HashMap::new())
+            } else {
+                record.provider.clone()
+            };
+            rank(
+                providers
+                    .entry(prov_label.clone())
+                    .or_insert_with(|| RankRow {
+                        id: prov_label.clone(),
+                        name: prov_label,
+                        ..RankRow::default()
+                    }),
+                record,
+            );
         }
         recent.push(record);
     }
@@ -1516,6 +1753,7 @@ pub fn digest(records: &[LedgerRecord], period: Period, recent_limit: usize) -> 
     digest.by.model = sorted(models.into_values().collect());
     digest.by.model_at = sorted(model_at.into_values().collect());
     digest.by.agent = sorted(agents.into_values().collect());
+    digest.by.provider = sorted(providers.into_values().collect());
 
     let mut session_rows: Vec<SessionRow> = sessions.into_values().map(SessionRow::from).collect();
     session_rows.sort_by(|a, b| b.last.cmp(&a.last).then_with(|| a.id.cmp(&b.id)));
@@ -1639,6 +1877,12 @@ fn accumulate(point: &mut SeriesPoint, record: &LedgerRecord) {
             point.by.agent.entry(record.agent.to_owned()).or_default(),
             record,
         );
+        let prov_label = if record.provider.is_empty() {
+            resolve_provider_label(record.agent, &record.model, &HashMap::new())
+        } else {
+            record.provider.clone()
+        };
+        part(point.by.provider.entry(prov_label).or_default(), record);
     }
 }
 
@@ -1747,6 +1991,7 @@ mod tests {
             t,
             asked: 0,
             agent,
+            provider: resolve_provider_label(agent, model, &HashMap::new()),
             model: model.to_owned(),
             session: "s".to_owned(),
             cwd: String::new(),
@@ -1754,6 +1999,7 @@ mod tests {
             output,
             cache_read: 0,
             cache_write: 0,
+            duration_ms: None,
             error: None,
             cost: calc_cost(model, input, output, 0),
             retried: false,
@@ -2116,7 +2362,7 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        let calls = zcode_calls(&home);
+        let (calls, _) = zcode_calls(&home, &HashMap::new());
         // the covered session's usage rows are the calls; its messages are not
         // read again, which is what would double its prompt
         assert_eq!(calls.len(), 4, "two completed, one error, one old message");
@@ -2172,12 +2418,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            codex_calls(&home).len(),
+            codex_calls(&home, &HashMap::new()).0.len(),
             1,
             "only the session that spent tokens"
         );
 
-        let calls = codex_calls(&home);
+        let (calls, _) = codex_calls(&home, &HashMap::new());
         assert_eq!(calls.len(), 1, "one session, one total");
         let call = &calls[0];
         assert_eq!(call.session, "01a15424");
@@ -2210,7 +2456,7 @@ mod tests {
         };
 
         write(&[meta, &count(400, "2026-10-01T10:00:05.000Z")].join("\n"));
-        assert_eq!(codex_calls(&home)[0].total_tokens(), 410);
+        assert_eq!(codex_calls(&home, &HashMap::new()).0[0].total_tokens(), 410);
         let kept = ledger_cache()
             .read()
             .unwrap()
@@ -2230,7 +2476,64 @@ mod tests {
             ]
             .join("\n"),
         );
-        assert_eq!(codex_calls(&home)[0].total_tokens(), 910);
+        assert_eq!(codex_calls(&home, &HashMap::new()).0[0].total_tokens(), 910);
         fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn incremental_transcript_tail_reads_only_appended_bytes() {
+        use std::io::Write as _;
+        let dir = tempdir();
+        let file = dir.join("tail.jsonl");
+        let first = concat!(
+            r#"{"type":"user","timestamp":"2026-10-01T10:00:00.000Z"}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-10-01T10:00:02.000Z","sessionId":"s_tail","entrypoint":"sdk-cli","message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            "\n"
+        );
+        fs::write(&file, first).unwrap();
+
+        let mut state = TranscriptState::default();
+        read_transcript_incremental(&file, &mut state, &HashMap::new()).unwrap();
+        assert_eq!(state.calls.len(), 1);
+        assert_eq!(state.offset, first.len() as u64);
+        assert_eq!(state.calls[0].provider, "Anthropic");
+        assert_eq!(state.calls[0].duration_ms, Some(2_000));
+
+        // Append a completed line plus an unterminated partial line in flight.
+        let second_complete = concat!(
+            r#"{"type":"user","timestamp":"2026-10-01T10:00:10.000Z"}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-10-01T10:00:13.500Z","sessionId":"s_tail","entrypoint":"sdk-cli","message":{"id":"m2","model":"claude-opus-5","usage":{"input_tokens":200,"output_tokens":80}}}"#,
+            "\n"
+        );
+        let partial_head = r#"{"type":"assistant","timestamp":"2026-10-01T10:00:20.000Z","sessionId":"s_tail","entrypoint":"sdk-cli","message":{"id":"m3","#;
+        {
+            let mut f = fs::OpenOptions::new().append(true).open(&file).unwrap();
+            f.write_all(second_complete.as_bytes()).unwrap();
+            f.write_all(partial_head.as_bytes()).unwrap();
+        }
+
+        read_transcript_incremental(&file, &mut state, &HashMap::new()).unwrap();
+        assert_eq!(state.calls.len(), 2);
+        assert_eq!(
+            state.offset,
+            (first.len() + second_complete.len()) as u64,
+            "offset pauses right before the incomplete trailing JSON line"
+        );
+        assert_eq!(state.calls[1].duration_ms, Some(3_500));
+
+        // Finish writing the partial line; next incremental read picks up m3 cleanly.
+        let partial_tail =
+            r#""model":"claude-haiku-5","usage":{"input_tokens":300,"output_tokens":90}}}"#;
+        {
+            let mut f = fs::OpenOptions::new().append(true).open(&file).unwrap();
+            f.write_all(partial_tail.as_bytes()).unwrap();
+            f.write_all(b"\n").unwrap();
+        }
+        read_transcript_incremental(&file, &mut state, &HashMap::new()).unwrap();
+        assert_eq!(state.calls.len(), 3);
+        assert_eq!(state.calls[2].output, 90);
+        fs::remove_dir_all(&dir).ok();
     }
 }
