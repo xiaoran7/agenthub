@@ -216,6 +216,14 @@ static UPSTREAM_MODELS_CACHE: RwLock<Option<(Instant, String, Vec<ClaudeGatewayM
 static ROUTE_SUMMARIES_CACHE: RwLock<Option<(Instant, Vec<ClientRouteSummary>)>> =
     RwLock::new(None);
 
+#[cfg(not(test))]
+static CLAUDE_CODE_GATEWAY_CACHE: RwLock<Option<(Instant, Option<ClaudeGatewayProfile>)>> =
+    RwLock::new(None);
+
+#[cfg(not(test))]
+static CLAUDE_DESKTOP_GATEWAY_CACHE: RwLock<Option<(Instant, Option<ClaudeGatewayProfile>)>> =
+    RwLock::new(None);
+
 /// Invalidate in-memory cached upstream models, forcing a fresh fetch on the next call.
 pub fn invalidate_claude_gateway_cache() {
     if let Ok(mut guard) = UPSTREAM_MODELS_CACHE.write() {
@@ -223,6 +231,14 @@ pub fn invalidate_claude_gateway_cache() {
     }
     #[cfg(not(test))]
     if let Ok(mut guard) = ROUTE_SUMMARIES_CACHE.write() {
+        *guard = None;
+    }
+    #[cfg(not(test))]
+    if let Ok(mut guard) = CLAUDE_CODE_GATEWAY_CACHE.write() {
+        *guard = None;
+    }
+    #[cfg(not(test))]
+    if let Ok(mut guard) = CLAUDE_DESKTOP_GATEWAY_CACHE.write() {
         *guard = None;
     }
 }
@@ -948,6 +964,25 @@ pub fn discover_claude_gateway_for_client(desktop: bool) -> Option<ClaudeGateway
 /// `~/.claude/settings.json`, or an active `cc-switch.db` provider for `app_type = 'claude'`.
 /// It never inherits Claude Desktop's `Claude-3p` or `host-creds` profiles.
 pub fn discover_claude_code_gateway() -> Option<ClaudeGatewayProfile> {
+    #[cfg(not(test))]
+    if let Ok(guard) = CLAUDE_CODE_GATEWAY_CACHE.read()
+        && let Some((cached_at, ref cached)) = *guard
+        && cached_at.elapsed() < Duration::from_secs(10)
+    {
+        return cached.clone();
+    }
+
+    let profile = discover_claude_code_gateway_uncached();
+
+    #[cfg(not(test))]
+    if let Ok(mut guard) = CLAUDE_CODE_GATEWAY_CACHE.write() {
+        *guard = Some((Instant::now(), profile.clone()));
+    }
+
+    profile
+}
+
+fn discover_claude_code_gateway_uncached() -> Option<ClaudeGatewayProfile> {
     let env_base = env::var("ANTHROPIC_BASE_URL")
         .ok()
         .filter(|v| !v.trim().is_empty());
@@ -1020,6 +1055,25 @@ pub fn discover_claude_code_gateway() -> Option<ClaudeGatewayProfile> {
 
 /// Discovers active gateway configuration specifically for Claude Desktop (`claude-desktop`).
 pub fn discover_claude_desktop_gateway() -> Option<ClaudeGatewayProfile> {
+    #[cfg(not(test))]
+    if let Ok(guard) = CLAUDE_DESKTOP_GATEWAY_CACHE.read()
+        && let Some((cached_at, ref cached)) = *guard
+        && cached_at.elapsed() < Duration::from_secs(10)
+    {
+        return cached.clone();
+    }
+
+    let profile = discover_claude_desktop_gateway_uncached();
+
+    #[cfg(not(test))]
+    if let Ok(mut guard) = CLAUDE_DESKTOP_GATEWAY_CACHE.write() {
+        *guard = Some((Instant::now(), profile.clone()));
+    }
+
+    profile
+}
+
+fn discover_claude_desktop_gateway_uncached() -> Option<ClaudeGatewayProfile> {
     let cc_desktop = discover_cc_switch_provider_for_app("claude-desktop");
     let roots = gateway_search_roots();
 
