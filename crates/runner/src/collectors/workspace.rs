@@ -43,11 +43,22 @@ pub struct DiscoveredWorkspace {
     pub is_git: bool,
 }
 
+fn normalized_path_cache() -> &'static RwLock<HashMap<String, Option<String>>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, Option<String>>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// Normalizes raw directory paths from various session formats into a clean, canonical Windows path.
 pub fn normalize_workspace_path(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         return None;
+    }
+
+    if let Ok(guard) = normalized_path_cache().read()
+        && let Some(cached) = guard.get(trimmed)
+    {
+        return cached.clone();
     }
 
     // Strip UNC/extended prefixes
@@ -77,7 +88,14 @@ pub fn normalize_workspace_path(raw: &str) -> Option<String> {
         normalized.pop();
     }
 
-    Some(normalized)
+    let res = Some(normalized);
+    if let Ok(mut guard) = normalized_path_cache().write() {
+        if guard.len() > 4_000 {
+            guard.clear();
+        }
+        guard.insert(trimmed.to_string(), res.clone());
+    }
+    res
 }
 
 /// Derives a clean workspace display name from its path.
@@ -142,7 +160,7 @@ pub fn invalidate_workspace_cache() {
 pub fn discover_all_workspaces() -> Vec<DiscoveredWorkspace> {
     if let Ok(guard) = workspace_cache().read() {
         if let Some((cached_at, ref list)) = *guard {
-            if cached_at.elapsed() < Duration::from_secs(6) {
+            if cached_at.elapsed() < Duration::from_secs(20) {
                 return list.clone();
             }
         }

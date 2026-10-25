@@ -58,6 +58,8 @@ fn main() {
 fn try_compile_with_windres(rc_path: &Path, res_path: &Path) -> bool {
     let candidates = [
         PathBuf::from(r"C:\Users\tanner\AppData\Local\Programs\msys64\ucrt64\bin\windres.exe"),
+        PathBuf::from("x86_64-w64-mingw32-windres"),
+        PathBuf::from("/usr/bin/x86_64-w64-mingw32-windres"),
         PathBuf::from("windres.exe"),
         PathBuf::from("windres"),
     ];

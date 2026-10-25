@@ -6,7 +6,7 @@
   <meta name="theme-color" id="themeColorMeta">
   <meta name="color-scheme" content="light dark">
   <link rel="manifest" href="/manifest.json?v=__ASSETS_VERSION__">
-  <title>AgentHub Runner</title>
+  <title>AgentHub</title>
   <link rel="icon" type="image/png" sizes="28x28" href="/icon-28.png?v=__ASSETS_VERSION__">
   <link rel="icon" type="image/png" sizes="30x30" href="/icon-30.png?v=__ASSETS_VERSION__">
   <link rel="icon" type="image/png" sizes="36x36" href="/icon-36.png?v=__ASSETS_VERSION__">
@@ -382,11 +382,21 @@
           <button type="button" class="opt" data-subview="providers">供应商</button>
           <button type="button" class="opt" data-subview="models">模型</button>
         </div>
+
+        <input class="inp led-search" id="ledQ" type="search" placeholder="搜索模型、供应商、会话、目录或错误…" autocomplete="off" spellcheck="false">
+
         <span class="grow"></span>
         <span class="tag" id="ledCount">0 条请求</span>
-        <button type="button" class="text action led-reset-btn" id="ledResetFiltersBtn" onclick="resetLedgerFilters()" hidden>
-          <span>重置筛选</span>
-        </button>
+
+        <div class="led-filter-picker" id="ledFilterPickerWrap">
+          <button type="button" class="text action led-filter-trigger" id="ledFilterBtn" onclick="toggleLedgerFilterMenu(event)" title="按应用、供应商、模型、状态或消耗等级嵌套筛选" aria-haspopup="true" aria-expanded="false">
+            <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5h14l-5.5 6.2v4.6l-3 1.5v-6.1L3 4.5z"/></svg></span>
+            <span>筛选</span>
+            <span class="led-filter-badge" id="ledFilterBadge" hidden>0</span>
+          </button>
+          <div class="led-pop-menu led-cascade-menu" id="ledFilterMenu" hidden></div>
+        </div>
+
         <div class="led-col-picker" id="ledColPickerWrap">
           <button type="button" class="text action" id="ledColsBtn" onclick="toggleLedgerColsMenu(event)" title="自定义显示列" aria-haspopup="true" aria-expanded="false">
             <span class="ic"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M7.5 3.5v13M12.5 3.5v13"/></svg></span>
@@ -394,60 +404,15 @@
           </button>
           <div class="led-pop-menu led-cols-menu" id="ledColsMenu" hidden></div>
         </div>
-        <button type="button" class="text action" onclick="exportLedgerCsv()" title="把当前筛选出的记录导出为 CSV">
+
+        <button type="button" class="text action" id="ledExportCsvBtn" onclick="exportLedgerCsv()" title="把当前筛选出的记录导出为 CSV 文件">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/></svg></span>
           <span>导出 CSV</span>
         </button>
       </div>
 
-      <div class="led-filters" id="ledFilterBar">
-        <div class="led-dd" data-dd="agent">
-          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('agent', event)">
-            <span class="led-dd-k">应用</span>
-            <span class="led-dd-v" id="ledDdValAgent">全部</span>
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-          </button>
-          <div class="led-pop-menu" id="ledDdMenuAgent" hidden></div>
-        </div>
-
-        <div class="led-dd" data-dd="provider">
-          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('provider', event)">
-            <span class="led-dd-k">供应商</span>
-            <span class="led-dd-v" id="ledDdValProvider">全部</span>
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-          </button>
-          <div class="led-pop-menu" id="ledDdMenuProvider" hidden></div>
-        </div>
-
-        <div class="led-dd" data-dd="model">
-          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('model', event)">
-            <span class="led-dd-k">模型</span>
-            <span class="led-dd-v" id="ledDdValModel">全部</span>
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-          </button>
-          <div class="led-pop-menu" id="ledDdMenuModel" hidden></div>
-        </div>
-
-        <div class="led-dd" data-dd="status">
-          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('status', event)">
-            <span class="led-dd-k">状态</span>
-            <span class="led-dd-v" id="ledDdValStatus">全部</span>
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-          </button>
-          <div class="led-pop-menu" id="ledDdMenuStatus" hidden></div>
-        </div>
-
-        <div class="led-dd" data-dd="tier">
-          <button type="button" class="led-dd-btn" onclick="toggleLedgerDropdown('tier', event)">
-            <span class="led-dd-k">高级筛选</span>
-            <span class="led-dd-v" id="ledDdValTier">全部</span>
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-          </button>
-          <div class="led-pop-menu" id="ledDdMenuTier" hidden></div>
-        </div>
-
-        <input class="inp led-search" id="ledQ" type="search" placeholder="搜索模型、供应商、会话、目录或错误…" autocomplete="off" spellcheck="false">
-      </div>
+      <div class="led-active-chips" id="ledActiveChips" hidden></div>
+      <div class="led-export-notice" id="ledExportNotice" hidden></div>
 
       <div class="led-wrap" id="ledWrap">
         <div class="skeleton-card" aria-busy="true" aria-label="正在读取用量…">

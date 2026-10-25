@@ -22,13 +22,76 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW, ICON_BIG, ICON_SMALL,
-    IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, SendMessageW,
+    CreateIconFromResourceEx, EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW,
+    ICON_BIG, ICON_SMALL, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, SendMessageW,
 };
 
 /// Chromium's app window: class `Chrome_WidgetWin_1`, title from the page.
 const EDGE_APP_CLASS: &str = "Chrome_WidgetWin_1";
-const EDGE_APP_TITLE: &str = "AgentHub Runner";
+const EDGE_APP_TITLE: &str = "AgentHub";
+
+const EMBEDDED_ICO: &[u8] = include_bytes!("../resources/icon.ico");
+
+/// Creates a native `HICON` for `size` directly from the embedded `icon.ico`
+/// bytes by selecting the closest frame in the ICO directory.
+pub fn create_hicon_from_embedded_ico(size: i32) -> *mut core::ffi::c_void {
+    if EMBEDDED_ICO.len() < 6 {
+        return core::ptr::null_mut();
+    }
+    let count = u16::from_le_bytes([EMBEDDED_ICO[4], EMBEDDED_ICO[5]]) as usize;
+    if count == 0 || EMBEDDED_ICO.len() < 6 + count * 16 {
+        return core::ptr::null_mut();
+    }
+    let target = size.max(16);
+    let mut best_offset = 0usize;
+    let mut best_len = 0usize;
+    let mut best_dist = i32::MAX;
+
+    for i in 0..count {
+        let base = 6 + i * 16;
+        let w = match EMBEDDED_ICO[base] {
+            0 => 256i32,
+            n => i32::from(n),
+        };
+        let bytes_in_res = u32::from_le_bytes([
+            EMBEDDED_ICO[base + 8],
+            EMBEDDED_ICO[base + 9],
+            EMBEDDED_ICO[base + 10],
+            EMBEDDED_ICO[base + 11],
+        ]) as usize;
+        let image_offset = u32::from_le_bytes([
+            EMBEDDED_ICO[base + 12],
+            EMBEDDED_ICO[base + 13],
+            EMBEDDED_ICO[base + 14],
+            EMBEDDED_ICO[base + 15],
+        ]) as usize;
+        if bytes_in_res == 0 || image_offset.saturating_add(bytes_in_res) > EMBEDDED_ICO.len() {
+            continue;
+        }
+        let dist = (w - target).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best_offset = image_offset;
+            best_len = bytes_in_res;
+        }
+    }
+
+    if best_len == 0 {
+        return core::ptr::null_mut();
+    }
+    let slice = &EMBEDDED_ICO[best_offset..best_offset + best_len];
+    unsafe {
+        CreateIconFromResourceEx(
+            slice.as_ptr(),
+            best_len as u32,
+            1,
+            0x00030000,
+            target,
+            target,
+            LR_DEFAULTCOLOR,
+        )
+    }
+}
 
 const WM_SETICON: u32 = 0x80;
 const WM_GETICON: u32 = 0x7F;
@@ -134,7 +197,7 @@ fn frames() -> &'static [(i32, usize)] {
         }
         let mut loaded = Vec::new();
         for size in SLOT_SIZES {
-            let hicon = LoadImageW(
+            let mut hicon = LoadImageW(
                 hinstance,
                 ICON_RESOURCE as *const u16,
                 IMAGE_ICON,
@@ -142,6 +205,9 @@ fn frames() -> &'static [(i32, usize)] {
                 size,
                 LR_DEFAULTCOLOR,
             );
+            if hicon.is_null() {
+                hicon = create_hicon_from_embedded_ico(size);
+            }
             if !hicon.is_null() {
                 loaded.push((size, hicon as usize));
             }

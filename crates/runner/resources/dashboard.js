@@ -699,11 +699,13 @@ async function refreshDashboard(manual) {
 
   const seq = ++renderSeq;
   try {
+    const url = manual ? "/api/dashboard?force=1" : "/api/dashboard";
     const headers = !manual && dashboardEtag ? { "If-None-Match": dashboardEtag } : {};
-    const resp = await fetch("/api/dashboard", { cache: "no-store", headers });
+    const resp = await fetch(url, { cache: "no-store", headers });
     if (resp.status === 304 && dashboardData) {
       consecutiveFailures = 0;
       updateConnectionStatus(true);
+      if (manual) toast("已是最新数据");
       return true;
     }
     if (!resp.ok) {
@@ -716,6 +718,7 @@ async function refreshDashboard(manual) {
     if (seq !== renderSeq) return false;
     consecutiveFailures = 0;
     updateConnectionStatus(true);
+    if (manual) toast("已热刷新最新会话与工作区状态");
 
     dashboardData = data;
     renderStats(dashboardData.stats, dashboardData.gateway);
@@ -1221,7 +1224,7 @@ function renderSessions(sessions, mode = "data") {
           const deletable = rawProvider === "claude_code" || rawProvider === "claude_desktop" || rawProvider === "claude";
           const picked = pickedSessions.has(rawId);
           const subsClosed = !fullId || !expandedSubagents.has(fullId);
-          const subHtml = subs.length ? renderSubagents(subs, subsClosed) : "";
+          const subHtml = subs.length && !subsClosed ? renderSubagents(subs, false) : "";
           const subCount = subs.length
             ? `<button type="button" class="tag sub-count sm-toggle-subs" onclick="event.stopPropagation();toggleSubagents(this)" title="${subsClosed ? "展开子代理" : "收起子代理"}" aria-expanded="${!subsClosed}">
                  <span>${subs.length} 个子代理</span>
@@ -1236,9 +1239,11 @@ function renderSessions(sessions, mode = "data") {
           const check = deletable
             ? `<input type="checkbox" class="sm-check" ${picked ? "checked" : ""} aria-label="选择这个会话" onclick="event.stopPropagation()" onchange="pickSession(this.closest('.row.sess').dataset.id, this.checked)">`
             : `<span class="sm-check-space"></span>`;
+          const animIdx = Math.min(index, 10);
+          const animTotal = Math.min(grp.items.length, 10);
 
           return `
-        <div class="row sess${subs.length ? " has-subs" : ""}${subsClosed ? " subs-closed" : ""}" data-id="${fullId}" style="--i:${index};--n:${grp.items.length}" title="${providerLabel(rawProvider)}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}"${subs.length ? ` onclick="if(!event.target.closest('.sm-del, .sm-check, button, input, a')) toggleSubagents(this)"` : ""}>
+        <div class="row sess${subs.length ? " has-subs" : ""}${subsClosed ? " subs-closed" : ""}" data-id="${fullId}" style="--i:${animIdx};--n:${animTotal}" title="${providerLabel(rawProvider)}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}"${subs.length ? ` onclick="if(!event.target.closest('.sm-del, .sm-check, button, input, a')) toggleSubagents(this)"` : ""}>
           ${check}
           <div class="who">
             <div class="name" title="${prompt}">${prompt}</div>
@@ -1314,7 +1319,16 @@ function toggleSubagents(el) {
   const row = el.closest(".row.sess");
   if (!row) return;
   const id = row.getAttribute("data-id") || "";
-  const subs = row.nextElementSibling;
+  let subs = row.nextElementSibling;
+  if (!subs || !subs.classList.contains("subs")) {
+    const base = lastGoodSessions.length ? lastGoodSessions : allSessionsData;
+    const hit = base.find(
+      (s) => (s.provider_session_id || s.session_id || s.id || "") === id,
+    );
+    if (!hit || !Array.isArray(hit.subagents) || !hit.subagents.length) return;
+    row.insertAdjacentHTML("afterend", renderSubagents(hit.subagents, true));
+    subs = row.nextElementSibling;
+  }
   if (!subs || !subs.classList.contains("subs")) return;
   const closing = !subs.classList.contains("folded");
   subs.classList.toggle("folded", closing);
@@ -2441,7 +2455,16 @@ const LED_COLUMNS = [
   { id: "status", label: "状态", defaultOn: true },
 ];
 const USAGE_COLS_KEY = "agenthub_usage_cols";
-const OPTIMAL_USAGE_POLL_MS = 12000;
+const OPTIMAL_USAGE_POLL_MS = 3500;
+const LED_PAGE_STEP = 100;
+
+const LED_FILTER_CATS = [
+  ["agent", "应用"],
+  ["provider", "供应商"],
+  ["model", "模型"],
+  ["status", "状态"],
+  ["tier", "高级筛选"],
+];
 
 let usageTab = "overview";
 let usagePeriod = "7d";
@@ -2454,7 +2477,10 @@ let ledFilterAgent = "";
 let ledFilterProvider = "";
 let ledFilterModel = "";
 let ledFilterTier = "";
+let ledActiveFilterCat = "agent";
 let ledQuery = "";
+let ledPageLimit = LED_PAGE_STEP;
+let ledSessionPageLimit = LED_PAGE_STEP;
 let ledVisibleCols = new Set(
   LED_COLUMNS.filter((c) => c.defaultOn).map((c) => c.id),
 );
@@ -2512,12 +2538,19 @@ function initUsage() {
   const q = document.getElementById("ledQ");
   if (q)
     q.addEventListener("input", () => {
-      ledQuery = q.value.trim().toLowerCase();
-      updateLedgerFilterUi();
-      renderLedgerRequests();
+      clearTimeout(initUsage._qTimer);
+      initUsage._qTimer = setTimeout(() => {
+        ledQuery = q.value.trim().toLowerCase();
+        ledPageLimit = LED_PAGE_STEP;
+        updateLedgerFilterUi();
+        renderLedgerRequests();
+      }, 90);
     });
   document.addEventListener("click", (e) => {
-    if (!e.target.closest(".led-dd") && !e.target.closest(".led-col-picker")) {
+    if (
+      !e.target.closest(".led-filter-picker") &&
+      !e.target.closest(".led-col-picker")
+    ) {
       closeAllLedgerMenus();
     }
   });
@@ -2594,14 +2627,15 @@ function setUsageTab(tab, silent) {
   document.getElementById("usagePaneRequests").hidden = tab !== "requests";
   document.getElementById("usagePaneSessions").hidden = tab !== "sessions";
   document.getElementById("usagePaneContext").hidden = tab !== "context";
-  // the period steers every tab but the request list's own status, which the
-  // list keeps; drawing again reads the digest already in hand
+  closeAllLedgerMenus();
   if (usageDigest) drawUsage();
 }
 
 function setUsagePeriod(period) {
   if (!["today", "7d", "30d", "all"].includes(period)) return;
   usagePeriod = period;
+  ledPageLimit = LED_PAGE_STEP;
+  ledSessionPageLimit = LED_PAGE_STEP;
   remember("usagePeriod", period);
   pickUsageSegs();
 
@@ -2610,8 +2644,8 @@ function setUsagePeriod(period) {
     // SWR hit: instant switch with zero flicker
     usageDigest = cached.data;
     drawUsage();
-    // Background revalidate if older than 15s
-    if (Date.now() - cached.ts > 15000) {
+    // Background revalidate if older than 6s
+    if (Date.now() - cached.ts > 6000) {
       loadUsage(false);
     }
   } else {
@@ -2627,7 +2661,7 @@ function setUsagePeriod(period) {
 function startUsageTimer() {
   clearInterval(usageTimer);
   usageTimer = setInterval(() => {
-    if (isUsageOpen() && !document.hidden) loadUsage();
+    if (isUsageOpen() && !document.hidden) loadUsage(false);
   }, OPTIMAL_USAGE_POLL_MS);
 }
 
@@ -2658,7 +2692,7 @@ function fillSegs(id, options, current, attr) {
 
 async function loadUsage(manual) {
   const periodToFetch = usagePeriod;
-  if (usageLoading && usageFetchingPeriod === periodToFetch) return;
+  if (!manual && usageLoading && usageFetchingPeriod === periodToFetch) return;
 
   if (usageAbortController) {
     try {
@@ -2671,7 +2705,7 @@ async function loadUsage(manual) {
   usageFetchingPeriod = periodToFetch;
   const seq = ++usageSeq;
   const btn = document.getElementById("usageReload");
-  if (btn) btn.classList.add("busy");
+  if (btn && manual) btn.classList.add("busy");
 
   if (!usageDigest) {
     drawUsageLoading();
@@ -2683,8 +2717,9 @@ async function loadUsage(manual) {
     if (!manual && prevEtag && usageMemoryCache.has(periodToFetch)) {
       headers["If-None-Match"] = prevEtag;
     }
+    const forceParam = manual ? "&force=1" : "";
     const resp = await fetch(
-      `/api/usage/ledger?period=${encodeURIComponent(periodToFetch)}&limit=1000`,
+      `/api/usage/ledger?period=${encodeURIComponent(periodToFetch)}&limit=1000${forceParam}`,
       { cache: "no-store", headers, signal: usageAbortController.signal },
     );
     if (resp.status === 304 && usageMemoryCache.has(periodToFetch)) {
@@ -2694,6 +2729,7 @@ async function loadUsage(manual) {
         usageDigest = cached.data;
         drawUsage();
       }
+      if (manual) toast("用量已是最新状态");
       return;
     }
     if (!resp.ok) {
@@ -2701,16 +2737,21 @@ async function loadUsage(manual) {
       return;
     }
     const nextEtag = resp.headers.get("ETag");
+    const etagChanged = !prevEtag || nextEtag !== prevEtag;
     if (nextEtag) usageEtags.set(periodToFetch, nextEtag);
     const data = await resp.json();
     if (seq !== usageSeq) return;
 
+    const hadDigest = Boolean(usageDigest);
     usageMemoryCache.set(periodToFetch, { data, ts: Date.now() });
 
     if (periodToFetch === usagePeriod) {
       usageDigest = data;
-      drawUsage();
+      if (!hadDigest || etagChanged || manual) {
+        drawUsage();
+      }
     }
+    if (manual) toast("已热刷新最新用量数据");
   } catch (e) {
     if (e.name === "AbortError") return;
     toast("读取用量失败：" + e.message, "err");
@@ -2794,19 +2835,20 @@ function drawUsage() {
   // a hidden page has no width to lay a chart out in; the digest stays in
   // hand and is drawn the moment the page is looked at
   if (!d || !isUsageOpen()) return;
-  drawUsageKpis(d);
-  // the overview's charts are measured from their card: while that tab is
-  // not the one in view, there is no width to draw in
-  if (!document.getElementById("usagePaneOverview").hidden) {
+  if (usageTab === "overview") {
+    drawUsageKpis(d);
     drawLedgerTrend();
     drawLedgerHeat();
-  }
-  renderLedgerRequests();
-  renderLedgerSessions();
-  renderLedgerContext();
-  const note = document.getElementById("usageNote");
-  if (note) {
-    note.textContent = `统计范围：Coding Assistant 与 Claude Desktop 的本地会话记录（${d.from} 至 ${d.to}）。Codex、Grok、Gemini 的会话只有整段合计，不在这里逐条列出。`;
+    const note = document.getElementById("usageNote");
+    if (note) {
+      note.textContent = `统计范围：Coding Assistant、Claude Desktop、ZCode 与 Codex 的本地会话记录（${d.from} 至 ${d.to}）。`;
+    }
+  } else if (usageTab === "requests") {
+    renderLedgerRequests();
+  } else if (usageTab === "sessions") {
+    renderLedgerSessions();
+  } else if (usageTab === "context") {
+    renderLedgerContext();
   }
 }
 
@@ -3485,19 +3527,22 @@ function heatTip(cell) {
 function setLedgerSubView(view) {
   if (!["logs", "providers", "models"].includes(view)) view = "logs";
   ledSubView = view;
+  ledPageLimit = LED_PAGE_STEP;
   pickUsageSegs();
   closeAllLedgerMenus();
   const colPicker = document.getElementById("ledColPickerWrap");
   if (colPicker) colPicker.hidden = view !== "logs";
+  const filterPicker = document.getElementById("ledFilterPickerWrap");
+  if (filterPicker) filterPicker.hidden = view !== "logs";
   renderLedgerRequests();
 }
 
 function closeAllLedgerMenus() {
-  document.querySelectorAll(".led-dd.open").forEach((dd) => {
-    dd.classList.remove("open");
-    const menu = dd.querySelector(".led-dd-menu");
-    if (menu) menu.hidden = true;
-  });
+  const filterMenu = document.getElementById("ledFilterMenu");
+  const filterBtn = document.getElementById("ledFilterBtn");
+  if (filterMenu) filterMenu.hidden = true;
+  if (filterBtn) filterBtn.setAttribute("aria-expanded", "false");
+
   const colsMenu = document.getElementById("ledColsMenu");
   const colsBtn = document.getElementById("ledColsBtn");
   if (colsMenu) colsMenu.hidden = true;
@@ -3521,12 +3566,12 @@ function renderLedgerColsMenu() {
   const colsMenu = document.getElementById("ledColsMenu");
   if (!colsMenu) return;
   colsMenu.innerHTML =
-    `<div class="led-col-menu-head"><span>显示列</span><button type="button" class="led-col-reset" onclick="resetLedgerColumns(event)">恢复默认</button></div>` +
+    `<div class="led-pop-head"><span>显示列</span><button type="button" onclick="resetLedgerColumns(event)">恢复默认</button></div>` +
     LED_COLUMNS.map((col) => {
       const on = ledVisibleCols.has(col.id);
-      return `<button type="button" class="led-col-item${on ? " on" : ""}" data-col="${col.id}">
-        <span class="led-col-check">${on ? "✓" : ""}</span>
-        <span>${escapeHtml(col.label)}</span>
+      return `<button type="button" class="led-pop-item${on ? " on" : ""}" data-col="${col.id}">
+        <span class="led-pop-chk">${on ? "✓" : ""}</span>
+        <span class="led-pop-lbl">${escapeHtml(col.label)}</span>
       </button>`;
     }).join("");
   colsMenu.onclick = (e) => {
@@ -3563,13 +3608,28 @@ function resetLedgerColumns(ev) {
   renderLedgerRequests();
 }
 
+function toggleLedgerFilterMenu(ev) {
+  if (ev) ev.stopPropagation();
+  const filterMenu = document.getElementById("ledFilterMenu");
+  const filterBtn = document.getElementById("ledFilterBtn");
+  if (!filterMenu || !filterBtn) return;
+  const opening = filterMenu.hidden;
+  closeAllLedgerMenus();
+  if (!opening) return;
+  renderLedgerFilterMenu();
+  filterMenu.hidden = false;
+  filterBtn.setAttribute("aria-expanded", "true");
+}
+
 function ledgerFilterOptions(kind) {
   const rows = (usageDigest && usageDigest.recent) || [];
+  const counts = new Map();
   if (kind === "agent") {
     const seen = new Map([["", "全部"]]);
     for (const r of rows) {
-      if (r.agent && !seen.has(r.agent)) {
-        seen.set(r.agent, providerLabel(r.agent));
+      if (r.agent) {
+        counts.set(r.agent, (counts.get(r.agent) || 0) + 1);
+        if (!seen.has(r.agent)) seen.set(r.agent, providerLabel(r.agent));
       }
     }
     const byAgent = (usageDigest && usageDigest.by && usageDigest.by.agent) || [];
@@ -3578,37 +3638,65 @@ function ledgerFilterOptions(kind) {
         seen.set(a.id, a.name || providerLabel(a.id));
       }
     }
-    return [...seen.entries()];
+    return [...seen.entries()].map(([k, lbl]) => [
+      k,
+      lbl,
+      k ? counts.get(k) || 0 : rows.length,
+    ]);
   }
   if (kind === "provider") {
     const seen = new Map([["", "全部"]]);
+    for (const r of rows) {
+      const p = r.provider || "";
+      if (p) {
+        counts.set(p, (counts.get(p) || 0) + 1);
+        if (!seen.has(p)) seen.set(p, p);
+      }
+    }
     const byProv = (usageDigest && usageDigest.by && usageDigest.by.provider) || [];
     for (const p of byProv) {
       if (p.id && !seen.has(p.id)) seen.set(p.id, p.name || p.id);
     }
-    for (const r of rows) {
-      if (r.provider && !seen.has(r.provider)) seen.set(r.provider, r.provider);
-    }
-    return [...seen.entries()];
+    return [...seen.entries()].map(([k, lbl]) => [
+      k,
+      lbl,
+      k ? counts.get(k) || 0 : rows.length,
+    ]);
   }
   if (kind === "model") {
     const seen = new Map([["", "全部"]]);
+    for (const r of rows) {
+      if (r.model) {
+        counts.set(r.model, (counts.get(r.model) || 0) + 1);
+        if (!seen.has(r.model)) seen.set(r.model, r.model);
+      }
+    }
     const byModel = (usageDigest && usageDigest.by && usageDigest.by.model) || [];
     for (const m of byModel) {
       if (m.id && !seen.has(m.id)) seen.set(m.id, m.name || m.id);
     }
-    for (const r of rows) {
-      if (r.model && !seen.has(r.model)) seen.set(r.model, r.model);
-    }
-    return [...seen.entries()];
+    return [...seen.entries()].map(([k, lbl]) => [
+      k,
+      lbl,
+      k ? counts.get(k) || 0 : rows.length,
+    ]);
   }
   if (kind === "status") {
-    return Object.entries(LED_STATUSES);
+    let okCnt = 0;
+    let failCnt = 0;
+    let retryCnt = 0;
+    for (const r of rows) {
+      if (r.error && !r.recovered) failCnt++;
+      else okCnt++;
+      if (r.retried) retryCnt++;
+    }
+    const mapCnt = { "": rows.length, ok: okCnt, failed: failCnt, retried: retryCnt };
+    return Object.entries(LED_STATUSES).map(([k, lbl]) => [k, lbl, mapCnt[k] || 0]);
   }
   if (kind === "tier") {
-    return Object.entries(LED_TIERS);
+    return Object.entries(LED_TIERS).map(([k, lbl]) => [k, lbl, null]);
   }
-  return [["", "全部"]];
+  return [["", "全部", rows.length]];
 }
 
 function currentLedgerFilterValue(kind) {
@@ -3620,90 +3708,150 @@ function currentLedgerFilterValue(kind) {
   return "";
 }
 
+function currentLedgerFilterLabel(kind) {
+  const cur = currentLedgerFilterValue(kind);
+  if (!cur) return "全部";
+  const opts = ledgerFilterOptions(kind);
+  const hit = opts.find(([k]) => k === cur);
+  return hit ? hit[1] : cur;
+}
+
 function setLedgerFilterValue(kind, val) {
   if (kind === "agent") ledFilterAgent = val;
   else if (kind === "provider") ledFilterProvider = val;
   else if (kind === "model") ledFilterModel = val;
   else if (kind === "status") ledStatus = val;
   else if (kind === "tier") ledFilterTier = val;
+  ledPageLimit = LED_PAGE_STEP;
   updateLedgerFilterUi();
   renderLedgerRequests();
 }
 
-function updateLedgerFilterUi() {
-  const map = [
-    ["agent", "ledValAgent"],
-    ["provider", "ledValProvider"],
-    ["model", "ledValModel"],
-    ["status", "ledValStatus"],
-    ["tier", "ledValTier"],
-  ];
-  for (const [kind, elId] of map) {
-    const el = document.getElementById(elId);
-    if (!el) continue;
-    const cur = currentLedgerFilterValue(kind);
-    const opts = ledgerFilterOptions(kind);
-    const hit = opts.find(([k]) => k === cur);
-    el.textContent = hit ? hit[1] : cur || "全部";
-    const dd = el.closest(".led-dd");
-    if (dd) dd.classList.toggle("active", Boolean(cur));
+function renderLedgerFilterMenu() {
+  const menu = document.getElementById("ledFilterMenu");
+  if (!menu) return;
+  const activeCat = ledActiveFilterCat || "agent";
+  const options = ledgerFilterOptions(activeCat);
+  const curVal = currentLedgerFilterValue(activeCat);
+
+  const catsHtml = LED_FILTER_CATS.map(([kind, label]) => {
+    const val = currentLedgerFilterValue(kind);
+    const valLabel = currentLedgerFilterLabel(kind);
+    const isOn = kind === activeCat;
+    return `<button type="button" class="led-cascade-cat${isOn ? " on" : ""}${val ? " filtered" : ""}" data-cat="${kind}">
+      <span class="led-cascade-cat-main">
+        <span class="led-cascade-cat-lbl">${escapeHtml(label)}</span>
+        <span class="led-cascade-cat-val">${escapeHtml(valLabel)}</span>
+      </span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
+    </button>`;
+  }).join("");
+
+  const optsHtml = options
+    .map(([val, label, cnt]) => {
+      const on = val === curVal;
+      return `<button type="button" class="led-pop-item${on ? " on" : ""}" data-fval="${escapeHtml(val)}">
+        <span class="led-pop-chk">${on ? "✓" : ""}</span>
+        <span class="led-pop-lbl" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+        ${cnt != null ? `<span class="led-pop-cnt">${cnt}</span>` : ""}
+      </button>`;
+    })
+    .join("");
+
+  menu.innerHTML = `
+    <div class="led-pop-head">
+      <span>多维嵌套筛选</span>
+      <button type="button" onclick="resetLedgerFilters(event)">重置全部</button>
+    </div>
+    <div class="led-cascade-body">
+      <div class="led-cascade-cats">${catsHtml}</div>
+      <div class="led-cascade-opts">${optsHtml}</div>
+    </div>
+  `;
+
+  const catsBox = menu.querySelector(".led-cascade-cats");
+  if (catsBox) {
+    const switchCat = (e) => {
+      const btn = e.target.closest("button[data-cat]");
+      if (!btn || btn.dataset.cat === ledActiveFilterCat) return;
+      ledActiveFilterCat = btn.dataset.cat;
+      renderLedgerFilterMenu();
+    };
+    catsBox.onmouseover = switchCat;
+    catsBox.onclick = (e) => {
+      e.stopPropagation();
+      switchCat(e);
+    };
   }
-  const hasAny = Boolean(
-    ledFilterAgent ||
-      ledFilterProvider ||
-      ledFilterModel ||
-      ledStatus ||
-      ledFilterTier ||
-      ledQuery,
-  );
-  const resetBtn = document.getElementById("ledResetFiltersBtn");
-  if (resetBtn) resetBtn.hidden = !hasAny;
+  const optsBox = menu.querySelector(".led-cascade-opts");
+  if (optsBox) {
+    optsBox.onclick = (e) => {
+      e.stopPropagation();
+      const btn = e.target.closest("button[data-fval]");
+      if (!btn) return;
+      setLedgerFilterValue(activeCat, btn.dataset.fval || "");
+      renderLedgerFilterMenu();
+    };
+  }
 }
 
-function resetLedgerFilters() {
+function updateLedgerFilterUi() {
+  const activeFilters = [];
+  for (const [kind, catLabel] of LED_FILTER_CATS) {
+    const val = currentLedgerFilterValue(kind);
+    if (val) {
+      activeFilters.push([kind, catLabel, currentLedgerFilterLabel(kind)]);
+    }
+  }
+  const filterBtn = document.getElementById("ledFilterBtn");
+  const filterBadge = document.getElementById("ledFilterBadge");
+  if (filterBtn) {
+    filterBtn.classList.toggle("active", activeFilters.length > 0);
+  }
+  if (filterBadge) {
+    filterBadge.hidden = activeFilters.length === 0;
+    filterBadge.textContent = String(activeFilters.length);
+  }
+  const chipsWrap = document.getElementById("ledActiveChips");
+  if (chipsWrap) {
+    if (!activeFilters.length && !ledQuery) {
+      chipsWrap.hidden = true;
+      chipsWrap.innerHTML = "";
+    } else {
+      chipsWrap.hidden = false;
+      chipsWrap.innerHTML =
+        activeFilters
+          .map(
+            ([kind, catLabel, valLabel]) =>
+              `<button type="button" class="led-chip" onclick="setLedgerFilterValue('${kind}', '')" title="点击移除此筛选条件">
+                <b>${escapeHtml(catLabel)}:</b>
+                <span>${escapeHtml(valLabel)}</span>
+                <i aria-hidden="true">×</i>
+              </button>`,
+          )
+          .join("") +
+        `<button type="button" class="led-chip-reset" onclick="resetLedgerFilters(event)">清除全部筛选</button>`;
+    }
+  }
+}
+
+function resetLedgerFilters(ev) {
+  if (ev) ev.stopPropagation();
   ledFilterAgent = "";
   ledFilterProvider = "";
   ledFilterModel = "";
   ledStatus = "";
   ledFilterTier = "";
   ledQuery = "";
+  ledPageLimit = LED_PAGE_STEP;
   const q = document.getElementById("ledQ");
   if (q) q.value = "";
-  closeAllLedgerMenus();
   updateLedgerFilterUi();
+  const filterMenu = document.getElementById("ledFilterMenu");
+  if (filterMenu && !filterMenu.hidden) {
+    renderLedgerFilterMenu();
+  }
   renderLedgerRequests();
-}
-
-function toggleLedgerDropdown(kind, ev) {
-  if (ev) ev.stopPropagation();
-  const dd = document.querySelector(`.led-dd[data-dd="${kind}"]`);
-  const menu = document.getElementById(
-    "ledMenu" + kind.charAt(0).toUpperCase() + kind.slice(1),
-  );
-  if (!dd || !menu) return;
-  const opening = !dd.classList.contains("open");
-  closeAllLedgerMenus();
-  if (!opening) return;
-  const cur = currentLedgerFilterValue(kind);
-  const options = ledgerFilterOptions(kind);
-  menu.innerHTML = options
-    .map(
-      ([val, label]) =>
-        `<button type="button" class="led-dd-opt${val === cur ? " on" : ""}" data-val="${escapeHtml(val)}">
-          <span>${escapeHtml(label)}</span>
-          <span class="led-dd-check">${val === cur ? "✓" : ""}</span>
-        </button>`,
-    )
-    .join("");
-  menu.onclick = (e) => {
-    e.stopPropagation();
-    const b = e.target.closest("button[data-val]");
-    if (!b) return;
-    setLedgerFilterValue(kind, b.dataset.val || "");
-    closeAllLedgerMenus();
-  };
-  dd.classList.add("open");
-  menu.hidden = false;
 }
 
 // The rows the period holds, then the page's own multi-dimensional filters and search.
@@ -3841,12 +3989,16 @@ function renderLedgerBreakdownTable(kind, wrap, badge) {
     </table>`;
 }
 
+function loadMoreLedgerRows() {
+  ledPageLimit += LED_PAGE_STEP;
+  renderLedgerRequests();
+}
+
 function renderLedgerRequests() {
   const wrap = document.getElementById("ledWrap");
   const badge = document.getElementById("ledCount");
   if (!wrap) return;
   updateLedgerFilterUi();
-  // a poll redraws the same list: the reader's place in it stays put
   const kept = wrap.scrollTop;
   if (!usageDigest) {
     wrap.innerHTML = `<div class="led-none">正在读取用量…</div>`;
@@ -3879,6 +4031,15 @@ function renderLedgerRequests() {
     return;
   }
   const activeCols = LED_COLUMNS.filter((c) => ledVisibleCols.has(c.id));
+  const slice = rows.slice(0, ledPageLimit);
+  const moreHtml =
+    rows.length > slice.length
+      ? `<div class="led-more-bar">
+           <button type="button" class="text action" onclick="loadMoreLedgerRows()">
+             <span>加载更多（已显示 ${slice.length.toLocaleString()} / ${rows.length.toLocaleString()} 条）</span>
+           </button>
+         </div>`
+      : "";
   wrap.innerHTML = `
     <table class="led">
       <thead><tr>
@@ -3889,7 +4050,7 @@ function renderLedgerRequests() {
           )
           .join("")}
       </tr></thead>
-      <tbody>${rows
+      <tbody>${slice
         .map((r) => {
           const failed = r.error && !r.recovered;
           return `<tr${failed ? ' class="bad"' : ""}>${activeCols
@@ -3897,8 +4058,13 @@ function renderLedgerRequests() {
             .join("")}</tr>`;
         })
         .join("")}</tbody>
-    </table>`;
+    </table>${moreHtml}`;
   wrap.scrollTop = kept;
+}
+
+function loadMoreLedgerSessions() {
+  ledSessionPageLimit += LED_PAGE_STEP;
+  renderLedgerSessions();
 }
 
 // ---- the sessions and the context ---------------------------------------
@@ -3911,12 +4077,21 @@ function renderLedgerSessions() {
     wrap.innerHTML = `<div class="led-none">本周期没有会话</div>`;
     return;
   }
+  const slice = rows.slice(0, ledSessionPageLimit);
+  const moreHtml =
+    rows.length > slice.length
+      ? `<div class="led-more-bar">
+           <button type="button" class="text action" onclick="loadMoreLedgerSessions()">
+             <span>加载更多会话（已显示 ${slice.length.toLocaleString()} / ${rows.length.toLocaleString()} 个）</span>
+           </button>
+         </div>`
+      : "";
   wrap.innerHTML = `
     <table class="led">
       <thead><tr>
         <th>最后活动</th><th>智能体</th><th>模型</th><th>目录</th><th class="n">请求</th><th class="n">Token</th><th class="n">费用</th><th>状态</th>
       </tr></thead>
-      <tbody>${rows
+      <tbody>${slice
         .map(
           (s) => `<tr>
             <td class="when">${escapeHtml(fmtWhen(s.last, usagePeriod !== "today"))}</td>
@@ -3930,7 +4105,7 @@ function renderLedgerSessions() {
           </tr>`,
         )
         .join("")}</tbody>
-    </table>`;
+    </table>${moreHtml}`;
   wrap.scrollTop = kept;
 }
 
@@ -3940,7 +4115,8 @@ function renderLedgerContext() {
   const kept = wrap.scrollTop;
   const rows = ((usageDigest && usageDigest.session_rows) || [])
     .filter((s) => s.context > 0)
-    .sort((a, b) => b.context - a.context);
+    .sort((a, b) => b.context - a.context)
+    .slice(0, 120);
   if (!rows.length) {
     wrap.innerHTML = `<div class="led-none">本周期没有可读的上下文</div>`;
     return;
@@ -3974,9 +4150,40 @@ function shortPath(p) {
   return parts.slice(-2).join("/");
 }
 
-// The CSV is the filtered list, every row the period answered, not just the
-// thousand the table draws: a reader exporting wants the period's requests.
-function exportLedgerCsv() {
+let lastExportedCsvPath = "";
+
+async function revealExportedCsv() {
+  if (!lastExportedCsvPath) return;
+  try {
+    const resp = await fetch("/api/reveal-path", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: lastExportedCsvPath }),
+    });
+    if (resp.ok) {
+      toast("已在资源管理器中定位该 CSV 文件");
+    } else {
+      toast("无法打开资源管理器", "err");
+    }
+  } catch (e) {
+    toast("无法连接本地服务", "err");
+  }
+}
+
+function copyExportedCsvPath() {
+  if (!lastExportedCsvPath) return;
+  copyText(lastExportedCsvPath);
+  toast("已复制 CSV 文件完整路径");
+}
+
+function hideExportNotice() {
+  const notice = document.getElementById("ledExportNotice");
+  if (notice) notice.hidden = true;
+}
+
+// The CSV is saved directly to the user's Downloads folder by the daemon so
+// the exact disk path can be shown and revealed in File Explorer.
+async function exportLedgerCsv() {
   if (!usageDigest) return;
   const rows = ledFilteredRows();
   if (!rows.length) {
@@ -4024,17 +4231,48 @@ function exportLedgerCsv() {
       .map(cell)
       .join(",");
   });
+  const filename = `agenthub-usage-${usagePeriod}-${heatISO(new Date())}.csv`;
   const csv = "﻿" + [head.join(","), ...body].join("\r\n");
+
+  try {
+    const resp = await fetch("/api/usage/export-csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, csv }),
+    });
+    if (resp.ok) {
+      const res = await resp.json();
+      if (res && res.ok && res.path) {
+        lastExportedCsvPath = res.path;
+        copyText(res.path);
+        const notice = document.getElementById("ledExportNotice");
+        if (notice) {
+          notice.hidden = false;
+          notice.innerHTML = `
+            <span>已导出 <b>${rows.length.toLocaleString()}</b> 条记录至：</span>
+            <code class="path">${escapeHtml(res.path)}</code>
+            <button type="button" class="text action" onclick="revealExportedCsv()">在文件夹中定位</button>
+            <button type="button" class="text action" onclick="copyExportedCsvPath()">复制路径</button>
+            <button type="button" class="text action" onclick="hideExportNotice()" aria-label="关闭提示">×</button>
+          `;
+        }
+        toast(`已导出至 ${res.path}（路径已复制）`);
+        return;
+      }
+    }
+  } catch (e) {}
+
+  // Fallback for standalone preview
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `agenthub-usage-${usagePeriod}-${heatISO(new Date())}.csv`;
+  a.download = filename;
   document.body.append(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast(`已导出 ${rows.length.toLocaleString()} 条请求`);
+  toast(`已导出 ${rows.length.toLocaleString()} 条请求至浏览器默认下载目录 (${filename})`);
 }
 
 // ---- the settings page -----------------------------------------------------
@@ -4181,7 +4419,7 @@ function renderSettings() {
   if (ep)
     ep.textContent = `http://${location.hostname || "127.0.0.1"}:${PORT} (内嵌 HTTP / SSE)`;
   const ver = document.getElementById("settingsVersion");
-  if (ver) ver.textContent = `AgentHub Runner v${LAYOUT.version || "dev"}`;
+  if (ver) ver.textContent = `AgentHub v${LAYOUT.version || "dev"}`;
 
   const gwUrl = document.getElementById("settingsGatewayUrl");
   if (gwUrl)
@@ -4236,8 +4474,8 @@ function renderSettings() {
   if (dashboardData && dashboardData.device) renderDevice(dashboardData.device);
 }
 
-// Implicit optimal background refresh cadence (5s, paused when window hidden).
-const OPTIMAL_DASHBOARD_POLL_MS = 5000;
+// Implicit optimal background refresh cadence (3.5s, with focus hot-reload).
+const OPTIMAL_DASHBOARD_POLL_MS = 3500;
 function pollIntervalMs() {
   return OPTIMAL_DASHBOARD_POLL_MS;
 }
@@ -4247,16 +4485,20 @@ let pollVisibilityBound = false;
 function startPolling() {
   clearInterval(pollTimer);
   pollTimer = setInterval(() => {
-    if (!document.hidden) refreshDashboard(false);
+    if (document.visibilityState !== "hidden") {
+      refreshDashboard(false);
+    }
   }, pollIntervalMs());
   if (!pollVisibilityBound) {
     pollVisibilityBound = true;
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) {
+    const onResume = () => {
+      if (document.visibilityState !== "hidden") {
         refreshDashboard(false);
         if (isUsageOpen()) loadUsage(false);
       }
-    });
+    };
+    document.addEventListener("visibilitychange", onResume);
+    window.addEventListener("focus", onResume);
   }
 }
 

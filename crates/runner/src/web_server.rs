@@ -445,6 +445,16 @@ impl ApiRequest<'_> {
         let _ = body;
         match (method, path) {
             ("GET", "/api/dashboard") => {
+                let force = query
+                    .get("force")
+                    .map(|v| v == "1" || v == "true")
+                    .unwrap_or(false);
+                if force {
+                    if let Ok(mut guard) = dashboard_summary_cache().write() {
+                        *guard = None;
+                    }
+                    crate::collectors::invalidate_session_caches_for_refresh();
+                }
                 let data = build_dashboard_summary(&handler, port, &identity_path);
                 send_json_response_etag(stream, headers, &data)?;
             }
@@ -459,9 +469,136 @@ impl ApiRequest<'_> {
                     .and_then(|n| n.parse::<usize>().ok())
                     .unwrap_or(200)
                     .clamp(1, 1000);
-                let (generation, digest) = crate::usage_ledger::digest_cached(period, limit);
+                let force = query
+                    .get("force")
+                    .map(|v| v == "1" || v == "true")
+                    .unwrap_or(false);
+                let (generation, digest) =
+                    crate::usage_ledger::digest_cached_with_force(period, limit, force);
                 let etag = format!("\"ledger-{generation}-{}-{limit}\"", period.key());
                 send_json_response_with_etag(stream, headers, &etag, digest.as_ref())?;
+            }
+            ("POST", "/api/usage/export-csv") => {
+                #[derive(Deserialize)]
+                struct ExportCsvReq {
+                    filename: String,
+                    csv: String,
+                }
+                match serde_json::from_slice::<ExportCsvReq>(body) {
+                    Ok(req) => {
+                        let safe_name: String = req
+                            .filename
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
+                            .collect();
+                        let final_name = if safe_name.ends_with(".csv") && safe_name.len() > 4 {
+                            safe_name
+                        } else {
+                            "agenthub-usage.csv".to_string()
+                        };
+                        let home = std::env::var_os("USERPROFILE")
+                            .or_else(|| std::env::var_os("HOME"))
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from("."));
+                        let downloads = home.join("Downloads");
+                        let target_dir = if downloads.is_dir() {
+                            downloads
+                        } else {
+                            let fallback = home.join(".agenthub").join("exports");
+                            let _ = std::fs::create_dir_all(&fallback);
+                            fallback
+                        };
+                        let full_path = target_dir.join(&final_name);
+                        match std::fs::write(&full_path, req.csv.as_bytes()) {
+                            Ok(()) => {
+                                let resolved = dunce::canonicalize(&full_path).unwrap_or(full_path);
+                                send_json_response(
+                                    stream,
+                                    200,
+                                    &json!({
+                                        "ok": true,
+                                        "path": resolved.to_string_lossy(),
+                                        "filename": final_name,
+                                    }),
+                                )?;
+                            }
+                            Err(err) => {
+                                send_json_response(
+                                    stream,
+                                    500,
+                                    &json!({
+                                        "ok": false,
+                                        "error": format!("write_csv_failed: {err}")
+                                    }),
+                                )?;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        send_json_response(
+                            stream,
+                            400,
+                            &json!({
+                                "ok": false,
+                                "error": format!("invalid_export_payload: {err}")
+                            }),
+                        )?;
+                    }
+                }
+            }
+            ("POST", "/api/reveal-path") => {
+                #[derive(Deserialize)]
+                struct RevealReq {
+                    path: PathBuf,
+                }
+                match serde_json::from_slice::<RevealReq>(body) {
+                    Ok(req) => {
+                        let target = dunce::canonicalize(&req.path).unwrap_or(req.path);
+                        let valid_csv = target
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+                            && target.is_file();
+                        if !valid_csv {
+                            send_json_response(
+                                stream,
+                                400,
+                                &json!({ "ok": false, "error": "invalid_target_path" }),
+                            )?;
+                            return Ok(());
+                        }
+                        #[cfg(target_os = "windows")]
+                        {
+                            let _ = std::process::Command::new("explorer.exe")
+                                .arg(format!("/select,{}", target.display()))
+                                .spawn();
+                        }
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = std::process::Command::new("open")
+                                .arg("-R")
+                                .arg(&target)
+                                .spawn();
+                        }
+                        #[cfg(all(unix, not(target_os = "macos")))]
+                        {
+                            if let Some(parent) = target.parent() {
+                                let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+                            }
+                        }
+                        send_json_response(stream, 200, &json!({ "ok": true }))?;
+                    }
+                    Err(err) => {
+                        send_json_response(
+                            stream,
+                            400,
+                            &json!({
+                                "ok": false,
+                                "error": format!("invalid_reveal_payload: {err}")
+                            }),
+                        )?;
+                    }
+                }
             }
             // Deleting a session moves its files to the runner's trash: the
             // conversation's transcript, its subagents' folder and what
@@ -572,6 +709,7 @@ impl ApiRequest<'_> {
                 // Both caches answer this button: the live upstream catalog
                 // and the gateway profile that reads the same endpoint.
                 crate::claude_gateway::invalidate_claude_gateway_cache();
+                crate::model_catalog::invalidate_model_catalog_cache();
                 let catalog_models = crate::model_catalog::fetch_catalog_models(true);
                 let resp = crate::model_catalog::catalog_models_to_json(&catalog_models);
                 send_json_response(stream, 200, &resp)?;
@@ -2023,7 +2161,7 @@ fn render_index_html(port: u16) -> String {
 
 /// 嵌入式 PWA Web App Manifest，用于驱动 Edge 桌面应用模式的主题色与窗口特征
 const MANIFEST_JSON: &str = r##"{
-  "name": "AgentHub Runner",
+  "name": "AgentHub",
   "short_name": "AgentHub",
   "start_url": "/",
   "display": "standalone",
@@ -2270,7 +2408,7 @@ mod tests {
             "drawLedgerHeat",
             "renderLedgerRequests",
             "toggleLedgerColsMenu",
-            "toggleLedgerDropdown",
+            "toggleLedgerFilterMenu",
             "exportLedgerCsv",
         ] {
             assert!(

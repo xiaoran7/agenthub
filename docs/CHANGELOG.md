@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+- **Runtime 用量层级嵌套筛选浮窗、CSV 落盘路径展示与定位、托盘图标与品牌文案精简、DOM 分页渲染及全链路热刷新与性能优化（`crates/runner`）**：
+  - **托盘图标资源内嵌修复与悬停提示精简为"AgentHub"（`crates/runner/build.rs`, `crates/runner/src/tray.rs`, `crates/runner/src/window_icon.rs`, `crates/runner/resources/dashboard.html`, `crates/runner/src/web_server.rs`）**：
+    - `build.rs` 补齐 `x86_64-w64-mingw32-windres` 交叉编译资源编译器路径确保 `app_icon.res`（含多尺寸 `icon.ico` 与 `app.manifest`）完整链接进 PE 头部，并在 `window_icon.rs` / `tray.rs` 新增直接解析内嵌 `icon.ico` 字节的 `create_hicon_from_embedded_ico` 双保险兜底，彻底解决托盘图标空白问题；
+    - 将右下角托盘图标鼠标悬停提示（Tooltip）、窗口标题与 Web App Manifest 名称统一精简为"AgentHub"，去除冗余的"Runner / Runtime"与本地端口后缀；
+  - **二级级联嵌套筛选浮窗与已选条件胶囊（`crates/runner/resources/dashboard.html`, `crates/runner/resources/dashboard.css`, `crates/runner/resources/dashboard.js`）**：
+    - 淘汰并排裸露的 5 个独立筛选下拉按钮，收敛为单一"筛选"按钮（`#ledFilterBtn` + 激活数量角标 `#ledFilterBadge`）唤起二级双栏级联浮窗（`.led-cascade-menu`：左侧分类栏"应用 / 供应商 / 模型 / 状态 / 高级筛选"，右侧展示对应可选项、计数与勾选状态），并在工具栏下方动态渲染可单点移除的已选条件胶囊条（`#ledActiveChips`）；
+    - 修复"显示列"与"筛选"菜单因 DOM ID 与 CSS 类名不一致导致无法打开的问题；
+  - **CSV 导出真实落盘路径横幅与资源管理器定位（`crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
+    - 新增 `POST /api/usage/export-csv` 与 `POST /api/reveal-path` 接口，点击"导出 CSV"由本地守护进程直接写入系统 `Downloads` 目录并返回完整物理路径；界面展示落盘路径横幅（`#ledExportNotice`），自动复制路径至剪贴板，并提供"在文件夹中定位"（`explorer.exe /select`）与"复制路径"按钮；
+  - **DOM 分页渲染、活动标签页按需绘制与子代理懒加载（`crates/runner/resources/dashboard.js`）**：
+    - `drawUsage()` 改为仅渲染当前活动标签页（`overview` / `requests` / `sessions` / `context`），避免后台轮询或切换时同步重排隐藏标签页的数千个表格节点；
+    - 请求日志表与会话表实装每页 100 条增量分页（`ledPageLimit = 100` + "加载更多"按钮），会话列表中的子代理树（`.subs`）改为仅在用户点击展开时按需构建 DOM，彻底消除大日志量下的界面卡顿；
+  - **真正热加载刷新、3.5s 自动轮询与后端零拷贝快路径（`crates/runner/src/web_server.rs`, `crates/runner/src/usage_ledger.rs`, `crates/runner/src/collectors/mod.rs`, `crates/runner/src/collectors/workspace.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/model_catalog.rs`, `crates/runner/src/claude_gateway.rs`）**：
+    - 手动刷新按钮携带 `?force=1` 立即穿透内存 TTL 执行增量尾部读取并给出明确热刷新反馈；后台以 3.5 秒周期及窗口 `focus` / `visibilitychange` 事件驱动无闪烁自动热刷新；
+    - `usage_ledger.rs` 实装未变更零拷贝快路径（磁盘文件 `(len, mtime)` 与 SQLite/WAL 未变时 0 次 `LedgerRecord` 克隆）；`collectors/mod.rs` 基于 DB+WAL 双指纹缓存 ZCode/Codex 会话并缓存 60 秒以上静止 Claude 会话与子代理；`remote_host.rs` 在 `discover()` 中对 `dunce::canonicalize` 按工作区路径记忆化；`model_catalog.rs` 与 `claude_gateway.rs` 消除 `/api/dashboard` 轮询期间的同步网络阻塞；
+  - **分发包同步更新**：重新编译 Windows Release 产物并更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `24c1e6d89e97671732ef36e601e6ff6c1fa8339c9ca5c4f49da3949967477104`）。
+
 - **Web 控制台视觉排版与交互升级、全客户端真实模型目录、Runtime 托盘弹窗重构、增量缓存与用量多维筛选（`apps/web`, `packages/contracts`, `services/api`, `crates/runner`）**：
   - **会话阅读列居中对称与右侧紧凑用户气泡（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
     - 统一 `.remote-timeline` 与 `.remote-composer` 的居中阅读列宽度（`--remote-measure`），将用户消息气泡重构为右侧锚定的紧凑自适应卡片（`width: fit-content; max-width: min(76%, 560px)`），消除用户指令铺满整行导致的视觉重心偏移；

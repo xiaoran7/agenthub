@@ -1722,22 +1722,39 @@ fn claude_remote_sessions_cache()
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
+fn claude_session_entry_cache()
+-> &'static RwLock<HashMap<PathBuf, (u64, u128, ClaudeRemoteSessionEntry)>> {
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (u64, u128, ClaudeRemoteSessionEntry)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Invalidates top-level TTL gates so a manual `?force=1` refresh immediately
+/// re-checks file `(len, mtime)` fingerprints without discarding per-file
+/// incremental reader offsets.
+pub fn invalidate_session_caches_for_refresh() {
+    if let Ok(mut guard) = claude_remote_sessions_cache().write() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = antigravity_remote_sessions_cache().write() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = grok_remote_sessions_cache().write() {
+        *guard = None;
+    }
+}
+
 /// How long a scanned Claude transcript store stays usable.
 ///
 /// A full scan reads every transcript, so it costs tens of seconds on a large
 /// store. The window has to be long enough that the next caller reuses the
 /// result instead of paying for the same scan again.
-const CLAUDE_REMOTE_SESSIONS_CACHE_TTL: Duration = Duration::from_secs(8);
+const CLAUDE_REMOTE_SESSIONS_CACHE_TTL: Duration = Duration::from_secs(6);
 
 pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError>
 {
     if let Ok(guard) = claude_remote_sessions_cache().read() {
         if let Some((cached_at, ref entries)) = *guard {
-            // The scan reads every transcript on disk, which costs tens of
-            // seconds on a large store, so the cache has to outlive one full
-            // scan. A five second window meant the next caller re-read the
-            // whole store again, and the refresh that republishes the
-            // discovered sessions doubled the work on every tick.
             if cached_at.elapsed() < CLAUDE_REMOTE_SESSIONS_CACHE_TTL {
                 return Ok(entries.clone());
             }
@@ -1750,6 +1767,10 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
         return Ok(Vec::new());
     }
     let program = "Claude transcript store".to_owned();
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let mut entries = Vec::new();
     for project in fs::read_dir(&projects_dir).map_err(|source| CollectorError::Io {
         program: program.clone(),
@@ -1770,25 +1791,41 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
             {
                 continue;
             }
-            let modified = file
-                .metadata()
+            let Ok(meta) = file.metadata() else {
+                continue;
+            };
+            let len = meta.len();
+            let modified = meta
+                .modified()
                 .ok()
-                .and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map(|duration| duration.as_millis())
                 .unwrap_or_default();
-            project_candidates.push((modified, path));
+            project_candidates.push((modified, len, path));
         }
         // Limit scanning to most recent files per project to prevent unbounded I/O
-        project_candidates.sort_by_key(|(m, _)| std::cmp::Reverse(*m));
+        project_candidates.sort_by_key(|(m, _, _)| std::cmp::Reverse(*m));
         project_candidates.truncate(500);
 
-        for (_, path) in project_candidates {
+        for (modified, len, path) in project_candidates {
+            // Historical sessions untouched in the last 60s with identical (len, mtime)
+            // reuse their materialized entry (including subagents) without directory walks.
+            let is_settled = now_ms.saturating_sub(modified) > 60_000;
+            if is_settled
+                && let Ok(guard) = claude_session_entry_cache().read()
+                && let Some((c_len, c_mod, cached_entry)) = guard.get(&path)
+                && *c_len == len
+                && *c_mod == modified
+            {
+                entries.push(cached_entry.clone());
+                continue;
+            }
+
             if let Some(entry) = read_claude_transcript_metadata(&path, &program)?
                 && entry.has_output
             {
                 let subagents = collect_claude_subagents(&path);
-                entries.push(ClaudeRemoteSessionEntry {
+                let built = ClaudeRemoteSessionEntry {
                     session_id: entry.session_id,
                     cwd: entry.cwd,
                     title: entry.title,
@@ -1802,7 +1839,14 @@ pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEnt
                     request_count: entry.request_count,
                     desktop: entry.desktop,
                     subagents,
-                });
+                };
+                if is_settled && let Ok(mut guard) = claude_session_entry_cache().write() {
+                    if guard.len() > 8_000 {
+                        guard.clear();
+                    }
+                    guard.insert(path, (len, modified, built.clone()));
+                }
+                entries.push(built);
             }
         }
     }
@@ -2152,6 +2196,9 @@ fn delete_claude_session_in(
     if let Ok(mut guard) = transcript_metadata_cache().write() {
         guard.remove(&main);
     }
+    if let Ok(mut guard) = claude_session_entry_cache().write() {
+        guard.remove(&main);
+    }
     if let Ok(mut guard) = session_context_cache().write() {
         guard.remove(&main);
     }
@@ -2312,8 +2359,10 @@ pub fn collect_codex_local_threads(limit: u32) -> Result<Value, CollectorError> 
 struct CodexLocalThreadsCache {
     db_path: PathBuf,
     limit: u32,
+    db_len: u64,
     db_mtime: Option<SystemTime>,
-    cached_at: Instant,
+    wal_len: u64,
+    wal_mtime: Option<SystemTime>,
     data: Value,
 }
 
@@ -2326,13 +2375,27 @@ pub fn collect_codex_local_threads_from(
     database: &Path,
     limit: u32,
 ) -> Result<Value, CollectorError> {
-    let mtime = fs::metadata(database).ok().and_then(|m| m.modified().ok());
+    let db_meta = fs::metadata(database).ok();
+    let db_len = db_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = db_meta.and_then(|m| m.modified().ok());
+    let wal_path = database.with_file_name(format!(
+        "{}-wal",
+        database
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("state_5.db")
+    ));
+    let wal_meta = fs::metadata(&wal_path).ok();
+    let wal_len = wal_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let wal_mtime = wal_meta.and_then(|m| m.modified().ok());
     if let Ok(guard) = codex_threads_cache().read() {
         if let Some(ref c) = *guard {
             if c.db_path == database
                 && c.limit == limit
+                && c.db_len == db_len
                 && c.db_mtime == mtime
-                && c.cached_at.elapsed() < Duration::from_secs(5)
+                && c.wal_len == wal_len
+                && c.wal_mtime == wal_mtime
             {
                 return Ok(c.data.clone());
             }
@@ -2542,8 +2605,10 @@ pub fn collect_codex_local_threads_from(
         *guard = Some(CodexLocalThreadsCache {
             db_path: database.to_path_buf(),
             limit,
+            db_len,
             db_mtime: mtime,
-            cached_at: Instant::now(),
+            wal_len,
+            wal_mtime,
             data: result.clone(),
         });
     }
@@ -3870,8 +3935,10 @@ pub fn collect_zcode_sessions(include_completed: bool) -> Result<String, Collect
 struct ZCodeSessionsCache {
     db_path: PathBuf,
     include_completed: bool,
+    db_len: u64,
     db_mtime: Option<SystemTime>,
-    cached_at: Instant,
+    wal_len: u64,
+    wal_mtime: Option<SystemTime>,
     payload: String,
 }
 
@@ -3979,13 +4046,21 @@ pub fn collect_zcode_sessions_from(
     database: &Path,
     include_completed: bool,
 ) -> Result<String, CollectorError> {
-    let mtime = fs::metadata(database).ok().and_then(|m| m.modified().ok());
+    let db_meta = fs::metadata(database).ok();
+    let db_len = db_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = db_meta.and_then(|m| m.modified().ok());
+    let wal_path = database.with_file_name("db.sqlite-wal");
+    let wal_meta = fs::metadata(&wal_path).ok();
+    let wal_len = wal_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let wal_mtime = wal_meta.and_then(|m| m.modified().ok());
     if let Ok(guard) = zcode_sessions_cache().read() {
         if let Some(ref c) = *guard {
             if c.db_path == database
                 && c.include_completed == include_completed
+                && c.db_len == db_len
                 && c.db_mtime == mtime
-                && c.cached_at.elapsed() < Duration::from_secs(5)
+                && c.wal_len == wal_len
+                && c.wal_mtime == wal_mtime
             {
                 return Ok(c.payload.clone());
             }
@@ -4100,8 +4175,10 @@ pub fn collect_zcode_sessions_from(
         *guard = Some(ZCodeSessionsCache {
             db_path: database.to_path_buf(),
             include_completed,
+            db_len,
             db_mtime: mtime,
-            cached_at: Instant::now(),
+            wal_len,
+            wal_mtime,
             payload: payload.clone(),
         });
     }

@@ -1688,41 +1688,68 @@ html.booting #nav button[data-view]:nth-of-type(6) { animation-delay: 210ms; }
 .led-wrap tr.bad:hover td { background: color-mix(in srgb, var(--red) 9%, transparent); }
 .led-none { padding: 40px 16px; text-align: center; color: var(--muted); font-size: var(--fs-body); }
 
-/* request log subviews, column visibility picker & advanced filter dropdowns */
+/* request log subviews, column visibility picker & nested cascade filter menu */
 .led-req-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; flex: none; }
 .led-req-bar .grow { flex: 1; min-width: 8px; }
-.led-reset-btn { color: var(--accent); }
-.led-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; flex: none; }
-.led-filters .led-search { flex: 1 1 200px; min-width: 160px; height: 32px; font-size: var(--fs-note); }
-.led-dd, .led-col-picker { position: relative; display: inline-flex; }
-.led-dd-btn {
-  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px;
-  border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg);
-  font-size: var(--fs-note); cursor: pointer; transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+.led-req-bar .led-search { flex: 0 1 240px; min-width: 160px; height: 30px; font-size: var(--fs-note); }
+.led-filter-picker, .led-col-picker { position: relative; display: inline-flex; }
+.led-filter-trigger.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+  color: var(--accent);
 }
-.led-dd-btn:hover { background: var(--card-2); border-color: color-mix(in srgb, var(--fg) 18%, var(--line)); }
-.led-dd-btn.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
-.led-dd-k { color: var(--muted); font-weight: 500; }
-.led-dd-v { color: var(--fg); font-weight: 600; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.led-dd-btn svg { color: var(--muted); flex: none; }
+.led-filter-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; line-height: 1;
+}
+.led-filter-badge[hidden] { display: none; }
 .led-pop-menu {
-  position: absolute; top: calc(100% + 5px); left: 0; z-index: 30; min-width: 188px; max-width: 280px; max-height: 310px;
-  overflow-y: auto; padding: 5px; border-radius: 11px; border: 1px solid var(--line);
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+  padding: 6px; border-radius: 12px; border: 1px solid var(--line);
   background: var(--pop-bg, rgba(255, 255, 255, 0.96)); box-shadow: var(--shadow);
   will-change: transform; transform: translateZ(0); scrollbar-width: thin;
 }
-.led-pop-menu[hidden] { display: none; }
-.led-cols-menu { left: auto; right: 0; min-width: 204px; max-height: 360px; }
+.led-pop-menu[hidden] { display: none !important; }
+.led-cols-menu { min-width: 212px; max-height: 360px; overflow-y: auto; }
+.led-cascade-menu { width: 416px; max-width: calc(100vw - 32px); padding: 0; overflow: hidden; }
 .led-pop-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 5px 8px 6px; margin-bottom: 3px; border-bottom: 1px solid var(--line-2);
+  padding: 8px 12px; border-bottom: 1px solid var(--line-2);
   font-size: calc(var(--fs-note) - 0.5px); color: var(--muted); font-weight: 600;
 }
+.led-cols-menu .led-pop-head { padding: 5px 8px 6px; margin-bottom: 3px; }
 .led-pop-head button {
-  background: none; border: 0; padding: 0; font-size: calc(var(--fs-note) - 0.5px);
-  color: var(--accent); cursor: pointer; font-weight: 500;
+  background: none; border: 0; padding: 2px 6px; border-radius: 5px;
+  font-size: calc(var(--fs-note) - 0.5px); color: var(--accent); cursor: pointer; font-weight: 500;
 }
-.led-pop-head button:hover { text-decoration: underline; }
+.led-pop-head button:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.led-cascade-body {
+  display: grid; grid-template-columns: 152px minmax(0, 1fr); min-height: 236px; max-height: 320px;
+}
+.led-cascade-cats {
+  padding: 6px; border-right: 1px solid var(--line-2); background: color-mix(in srgb, var(--card-2) 60%, transparent);
+  display: flex; flex-direction: column; gap: 2px; overflow-y: auto;
+}
+.led-cascade-cat {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  width: 100%; padding: 7px 9px; border: 0; border-radius: 8px; background: none;
+  color: var(--fg); font-size: var(--fs-note); text-align: left; cursor: pointer;
+  transition: background var(--dur-1) var(--ease);
+}
+.led-cascade-cat:hover { background: var(--card); }
+.led-cascade-cat.on { background: var(--card); font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06); }
+.led-cascade-cat-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.led-cascade-cat-lbl { font-size: var(--fs-note); line-height: 1.25; }
+.led-cascade-cat-val {
+  font-size: calc(var(--fs-note) - 2px); color: var(--muted); font-weight: 400;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;
+}
+.led-cascade-cat.filtered .led-cascade-cat-val { color: var(--accent); font-weight: 600; }
+.led-cascade-cat svg { flex: none; color: var(--muted); width: 12px; height: 12px; }
+.led-cascade-opts {
+  padding: 6px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin;
+}
 .led-pop-item {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0;
   border-radius: 7px; background: none; color: var(--fg); font-size: var(--fs-note);
@@ -1733,11 +1760,46 @@ html.booting #nav button[data-view]:nth-of-type(6) { animation-delay: 210ms; }
 .led-pop-chk {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line);
-  background: var(--card); color: transparent; transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+  background: var(--card); color: transparent; font-size: 11px; line-height: 1;
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
 .led-pop-item.on .led-pop-chk { background: var(--accent); border-color: var(--accent); color: #fff; }
 .led-pop-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.led-pop-cnt { flex: none; font-size: calc(var(--fs-note) - 1px); color: var(--muted); font-variant-numeric: tabular-nums; }
+.led-pop-cnt { flex: none; font-size: calc(var(--fs-note) - 1.5px); color: var(--muted); font-variant-numeric: tabular-nums; }
+.led-active-chips {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; flex: none;
+}
+.led-active-chips[hidden] { display: none; }
+.led-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--card)); color: var(--fg);
+  font-size: calc(var(--fs-note) - 1px); cursor: pointer;
+}
+.led-chip b { color: var(--muted); font-weight: 500; }
+.led-chip span { font-weight: 600; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.led-chip i { font-style: normal; color: var(--muted); font-size: 13px; line-height: 1; }
+.led-chip:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--card)); }
+.led-chip-reset {
+  border: 0; background: none; color: var(--accent); font-size: calc(var(--fs-note) - 1px);
+  font-weight: 500; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.led-chip-reset:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.led-export-notice {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 11px; margin-bottom: 8px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 5%, var(--card)); font-size: var(--fs-note);
+}
+.led-export-notice[hidden] { display: none; }
+.led-export-notice .path {
+  font-family: var(--code); font-size: calc(var(--fs-note) - 1px); color: var(--fg);
+  word-break: break-all; flex: 1; min-width: 180px;
+}
+.led-more-bar {
+  display: flex; align-items: center; justify-content: center; padding: 10px 12px;
+  border-top: 1px solid var(--line-2); background: var(--card-2);
+}
 .led-prov-pill {
   display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px;
   background: var(--pill); color: var(--fg-2); font-size: calc(var(--fs-note) - 1px); font-weight: 500;

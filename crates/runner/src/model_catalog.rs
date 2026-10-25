@@ -54,6 +54,24 @@ fn memory_cache() -> &'static RwLock<Option<(Instant, Vec<LiveCatalogModel>)>> {
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
+#[cfg(not(test))]
+fn agent_catalogs_cache() -> &'static RwLock<Option<(Instant, Vec<(&'static str, Vec<Value>)>)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, Vec<(&'static str, Vec<Value>)>)>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
+/// Invalidates in-memory model catalog caches so a manual refresh re-reads immediately.
+pub fn invalidate_model_catalog_cache() {
+    if let Ok(mut guard) = memory_cache().write() {
+        *guard = None;
+    }
+    #[cfg(not(test))]
+    if let Ok(mut guard) = agent_catalogs_cache().write() {
+        *guard = None;
+    }
+}
+
 /// Returns the cache file path: `~/.agenthub/models_cache.json`.
 fn disk_cache_path() -> Option<PathBuf> {
     crate::collectors::home_dir().map(|h| h.join(".agenthub").join("models_cache.json"))
@@ -173,26 +191,43 @@ pub fn discover_active_upstream() -> Option<(String, String, String)> {
 /// those ids are a guess about someone else's account, and offering a model the
 /// upstream does not serve is worse than offering none.
 pub fn fetch_catalog_models(force_refresh: bool) -> Vec<LiveCatalogModel> {
-    // Check in-memory cache (30s TTL)
+    // Check in-memory cache (120s TTL, including empty results so unreachable
+    // endpoints never block repeated dashboard polls).
     if !force_refresh {
         if let Ok(guard) = memory_cache().read() {
             if let Some((cached_at, ref list)) = *guard {
-                if cached_at.elapsed() < Duration::from_secs(30) && !list.is_empty() {
+                if cached_at.elapsed() < Duration::from_secs(120) {
                     return list.clone();
                 }
             }
         }
+        // Populate immediately from disk cache (or empty) and refresh in the
+        // background so `/api/dashboard` never blocks on network HTTP timeouts.
+        let initial = load_disk_cache().map(|d| d.models).unwrap_or_default();
+        if let Ok(mut guard) = memory_cache().write() {
+            *guard = Some((Instant::now(), initial.clone()));
+        }
+        std::thread::spawn(|| {
+            if let Some((base_url, token, provider_name)) = discover_active_upstream() {
+                let models = fetch_from_endpoint(&base_url, &token, &provider_name);
+                if !models.is_empty() {
+                    save_disk_cache(&base_url, &provider_name, &models);
+                    if let Ok(mut guard) = memory_cache().write() {
+                        *guard = Some((Instant::now(), models));
+                    }
+                }
+            }
+        });
+        return initial;
     }
 
-    // Discover active upstream
+    // Explicit `force_refresh == true`: synchronous probe
     let upstream = discover_active_upstream();
 
     if let Some((base_url, token, provider_name)) = upstream {
         let models = fetch_from_endpoint(&base_url, &token, &provider_name);
         if !models.is_empty() {
-            // Save to disk cache
             save_disk_cache(&base_url, &provider_name, &models);
-            // Update memory cache
             if let Ok(mut guard) = memory_cache().write() {
                 *guard = Some((Instant::now(), models.clone()));
             }
@@ -201,17 +236,11 @@ pub fn fetch_catalog_models(force_refresh: bool) -> Vec<LiveCatalogModel> {
     }
 
     // Fallback to disk cache if live request failed
-    if let Some(disk) = load_disk_cache() {
-        if !disk.models.is_empty() {
-            if let Ok(mut guard) = memory_cache().write() {
-                *guard = Some((Instant::now(), disk.models.clone()));
-            }
-            return disk.models;
-        }
+    let fallback = load_disk_cache().map(|d| d.models).unwrap_or_default();
+    if let Ok(mut guard) = memory_cache().write() {
+        *guard = Some((Instant::now(), fallback.clone()));
     }
-
-    // No upstream, no cache: report nothing rather than inventing ids.
-    Vec::new()
+    fallback
 }
 
 /// Probes `/v1/models` and `/models` using ureq agent.
@@ -410,6 +439,14 @@ fn parse_models_response(val: &Value, provider_name: &str) -> Vec<LiveCatalogMod
 /// - `grok_build`: `~/.grok/config.json` / `~/.grok/settings.json`
 /// - `antigravity`: `~/.gemini/antigravity` / `~/.antigravity` config
 pub fn agent_model_catalogs() -> Vec<(&'static str, Vec<Value>)> {
+    #[cfg(not(test))]
+    if let Ok(guard) = agent_catalogs_cache().read()
+        && let Some((cached_at, ref cached)) = *guard
+        && cached_at.elapsed() < Duration::from_secs(10)
+    {
+        return cached.clone();
+    }
+
     let mut out = Vec::new();
     let home = crate::collectors::home_dir();
 
@@ -847,6 +884,11 @@ pub fn agent_model_catalogs() -> Vec<(&'static str, Vec<Value>)> {
         if !ag_models.is_empty() {
             out.push(("antigravity", ag_models));
         }
+    }
+
+    #[cfg(not(test))]
+    if let Ok(mut guard) = agent_catalogs_cache().write() {
+        *guard = Some((Instant::now(), out.clone()));
     }
 
     out

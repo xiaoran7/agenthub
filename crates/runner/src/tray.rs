@@ -95,19 +95,29 @@ mod windows_tray {
                 cy_big,
                 LR_DEFAULTCOLOR,
             );
-            let hicon_big = if hicon_big != 0 as _ {
+            let hicon_big = if !hicon_big.is_null() {
                 hicon_big as _
             } else {
-                LoadIconW(hinstance, 1 as _)
+                let fallback = crate::window_icon::create_hicon_from_embedded_ico(cx_big);
+                if !fallback.is_null() {
+                    fallback as _
+                } else {
+                    LoadIconW(hinstance, 1 as _)
+                }
             };
 
             let cx_sm = GetSystemMetrics(SM_CXSMICON);
             let cy_sm = GetSystemMetrics(SM_CYSMICON);
             let hicon_sm = LoadImageW(hinstance, 1 as _, IMAGE_ICON, cx_sm, cy_sm, LR_DEFAULTCOLOR);
-            let hicon_sm = if hicon_sm != 0 as _ {
+            let hicon_sm = if !hicon_sm.is_null() {
                 hicon_sm as _
             } else {
-                LoadIconW(hinstance, 1 as _)
+                let fallback = crate::window_icon::create_hicon_from_embedded_ico(cx_sm);
+                if !fallback.is_null() {
+                    fallback as _
+                } else {
+                    LoadIconW(hinstance, 1 as _)
+                }
             };
 
             let wnd_class = WNDCLASSW {
@@ -152,7 +162,7 @@ mod windows_tray {
             nid.uCallbackMessage = WM_TRAY_CALLBACK;
             nid.hIcon = hicon_sm;
 
-            let tip_text = format!("AgentHub Runner ({})\0", web_url);
+            let tip_text = "AgentHub\0";
             let tip_u16: Vec<u16> = tip_text.encode_utf16().collect();
             let copy_len = tip_u16.len().min(nid.szTip.len() - 1);
             nid.szTip[..copy_len].copy_from_slice(&tip_u16[..copy_len]);

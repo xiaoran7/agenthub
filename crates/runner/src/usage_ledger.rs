@@ -375,7 +375,7 @@ fn ledger_cache() -> &'static RwLock<LedgerCache> {
 /// How long a scan is reused. The page asks on every poll; transcripts only
 /// change when an agent writes one, and incremental tail reads make post-TTL
 /// refreshes sub-millisecond when nothing grew.
-const LEDGER_TTL: Duration = Duration::from_secs(5);
+const LEDGER_TTL: Duration = Duration::from_secs(3);
 
 /// Drops the memoised walk. A session moved to the trash is still on disk at
 /// its old path in the cache until the next park, and the fingerprint of a
@@ -393,29 +393,46 @@ pub fn forget_transcripts() {
 /// seek directly to their previous byte `offset` and parse only newly written
 /// lines.
 pub fn claude_records() -> Vec<LedgerRecord> {
-    claude_records_arc().as_ref().clone()
+    claude_records_arc_inner(false).as_ref().clone()
 }
 
-fn claude_records_arc() -> Arc<Vec<LedgerRecord>> {
-    if let Ok(guard) = ledger_cache().read() {
-        if let Some(at) = guard.walked_at {
-            if at.elapsed() < LEDGER_TTL {
-                return Arc::clone(&guard.records);
+fn claude_records_arc_inner(force: bool) -> Arc<Vec<LedgerRecord>> {
+    if !force {
+        if let Ok(guard) = ledger_cache().read() {
+            if let Some(at) = guard.walked_at {
+                if at.elapsed() < LEDGER_TTL {
+                    return Arc::clone(&guard.records);
+                }
             }
         }
     }
 
     let routed = active_routed_providers();
-    let (mut records, claude_changed) = claude_calls(&routed);
-    let (other, other_changed) = other_agent_calls(&routed);
-    records.extend(other);
-
+    let claude_changed = update_claude_calls(&routed);
+    let other_changed = update_other_agent_calls(&routed);
     let any_changed = claude_changed || other_changed;
+
     if !any_changed {
         if let Ok(mut guard) = ledger_cache().write() {
             if guard.walked_at.is_some() {
                 guard.walked_at = Some(Instant::now());
                 return Arc::clone(&guard.records);
+            }
+        }
+    }
+
+    let mut records = Vec::new();
+    if let Ok(guard) = ledger_cache().read() {
+        for state in guard.files.values() {
+            records.extend(state.calls.iter().cloned());
+        }
+        if let Some(ref zc) = guard.zcode {
+            records.extend(zc.usage_records.iter().cloned());
+            records.extend(zc.legacy_records.iter().cloned());
+        }
+        for (_, rec) in guard.codex.values() {
+            if let Some(r) = rec {
+                records.push(r.clone());
             }
         }
     }
@@ -436,7 +453,17 @@ fn claude_records_arc() -> Arc<Vec<LedgerRecord>> {
 /// Returns `(generation, Arc<LedgerDigest>)`, reusing the memoised digest when
 /// no underlying transcript or SQLite row changed within the current local day.
 pub fn digest_cached(period: Period, recent_limit: usize) -> (u64, Arc<LedgerDigest>) {
-    let records = claude_records_arc();
+    digest_cached_with_force(period, recent_limit, false)
+}
+
+/// Like [`digest_cached`], with `force = true` bypassing `LEDGER_TTL` so a
+/// manual refresh immediately tail-reads any newly written transcript lines.
+pub fn digest_cached_with_force(
+    period: Period,
+    recent_limit: usize,
+    force: bool,
+) -> (u64, Arc<LedgerDigest>) {
+    let records = claude_records_arc_inner(force);
     let today = local_day(chrono::Local::now().timestamp_millis());
     let key = (period.key(), recent_limit, today);
 
@@ -459,22 +486,17 @@ pub fn digest_cached(period: Period, recent_limit: usize) -> (u64, Arc<LedgerDig
 }
 
 /// Coding Assistant's own calls, incrementally reading only newly appended
-/// bytes per `.jsonl` transcript file.
-fn claude_calls(routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
+/// bytes per `.jsonl` transcript file. Returns `true` only when at least one
+/// file was added, removed, or modified.
+fn update_claude_calls(routed: &HashMap<String, String>) -> bool {
     let Some(config_dir) = claude_config_dir() else {
-        return (Vec::new(), false);
+        return false;
     };
     let Some(files) = transcript_files(&config_dir) else {
-        return (Vec::new(), false);
+        return false;
     };
 
-    let previous = ledger_cache()
-        .read()
-        .map(|g| g.files.clone())
-        .unwrap_or_default();
-    let mut changed = files.len() != previous.len();
-    let mut walked = HashMap::with_capacity(files.len());
-    let mut records = Vec::new();
+    let mut file_marks = Vec::with_capacity(files.len());
     for path in files {
         let Ok(meta) = fs::metadata(&path) else {
             continue;
@@ -486,46 +508,61 @@ fn claude_calls(routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+        file_marks.push((path, len, modified_ms));
+    }
 
+    // Fast path: check under read lock without cloning any TranscriptState or LedgerRecord.
+    if let Ok(guard) = ledger_cache().read()
+        && guard.walked_at.is_some()
+        && guard.files.len() == file_marks.len()
+        && file_marks.iter().all(|(p, len, mtime)| {
+            guard
+                .files
+                .get(p)
+                .is_some_and(|old| old.offset == *len && old.modified_ms == *mtime)
+        })
+    {
+        return false;
+    }
+
+    let previous = ledger_cache()
+        .read()
+        .map(|g| g.files.clone())
+        .unwrap_or_default();
+    let mut walked = HashMap::with_capacity(file_marks.len());
+    for (path, len, modified_ms) in file_marks {
         let state = match previous.get(&path) {
             Some(old) if old.offset == len && old.modified_ms == modified_ms => old.clone(),
             Some(old) if len > old.offset => {
-                changed = true;
                 let mut next = old.clone();
                 let _ = read_transcript_incremental(&path, &mut next, routed);
                 next.modified_ms = modified_ms;
                 next
             }
             _ => {
-                changed = true;
                 let mut fresh = TranscriptState::default();
                 let _ = read_transcript_incremental(&path, &mut fresh, routed);
                 fresh.modified_ms = modified_ms;
                 fresh
             }
         };
-        records.extend(state.calls.iter().cloned());
         walked.insert(path, state);
     }
     if let Ok(mut guard) = ledger_cache().write() {
         guard.files = walked;
     }
-    (records, changed)
+    true
 }
 
 /// The calls of the other CLIs on this machine, each read incrementally from
 /// its own authority rather than re-reading unchanged archives.
-fn other_agent_calls(routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
-    let mut records = Vec::new();
-    let mut changed = false;
-    if let Some(home) = home_dir() {
-        let (zc, zc_changed) = zcode_calls(&home, routed);
-        let (cx, cx_changed) = codex_calls(&home, routed);
-        records.extend(zc);
-        records.extend(cx);
-        changed = zc_changed || cx_changed;
-    }
-    (records, changed)
+fn update_other_agent_calls(routed: &HashMap<String, String>) -> bool {
+    let Some(home) = home_dir() else {
+        return false;
+    };
+    let zc_changed = update_zcode_calls(&home, routed);
+    let cx_changed = update_codex_calls(&home, routed);
+    zc_changed || cx_changed
 }
 
 fn file_len_and_mtime(path: &Path) -> (u64, i64) {
@@ -543,10 +580,10 @@ fn file_len_and_mtime(path: &Path) -> (u64, i64) {
 
 /// ZCode's calls, incrementally read from `~/.zcode/cli/db/db.sqlite` using
 /// DB+WAL file fingerprints and a `model_usage` rowid watermark.
-fn zcode_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
+fn update_zcode_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
     let database = home.join(".zcode").join("cli").join("db").join("db.sqlite");
     if !database.is_file() {
-        return (Vec::new(), false);
+        return false;
     }
     let wal = home
         .join(".zcode")
@@ -556,25 +593,24 @@ fn zcode_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerReco
     let (db_len, db_modified_ms) = file_len_and_mtime(&database);
     let (wal_len, wal_modified_ms) = file_len_and_mtime(&wal);
 
-    let prev = ledger_cache().read().ok().and_then(|g| g.zcode.clone());
-    if let Some(ref state) = prev
+    // Zero-clone fast path when neither db.sqlite nor db.sqlite-wal changed on disk.
+    if let Ok(guard) = ledger_cache().read()
+        && let Some(ref state) = guard.zcode
         && state.db_path == database
         && state.db_len == db_len
         && state.db_modified_ms == db_modified_ms
         && state.wal_len == wal_len
         && state.wal_modified_ms == wal_modified_ms
     {
-        let mut out = Vec::with_capacity(state.usage_records.len() + state.legacy_records.len());
-        out.extend(state.usage_records.iter().cloned());
-        out.extend(state.legacy_records.iter().cloned());
-        return (out, false);
+        return false;
     }
 
+    let prev = ledger_cache().read().ok().and_then(|g| g.zcode.clone());
     let Ok(connection) = rusqlite::Connection::open_with_flags(
         &database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     ) else {
-        return (Vec::new(), false);
+        return false;
     };
 
     // Reset if DB path changed or DB file shrank (vacuum/recreate); otherwise advance from watermark.
@@ -666,13 +702,10 @@ fn zcode_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerReco
         }
     }
 
-    let mut out = Vec::with_capacity(state.usage_records.len() + state.legacy_records.len());
-    out.extend(state.usage_records.iter().cloned());
-    out.extend(state.legacy_records.iter().cloned());
     if let Ok(mut guard) = ledger_cache().write() {
         guard.zcode = Some(state);
     }
-    (out, true)
+    true
 }
 
 /// Fills in the ZCode sessions `model_usage` predates, from each assistant
@@ -798,7 +831,7 @@ fn zcode_record(
 }
 
 /// Codex's sessions, from the rollouts under `~/.codex`.
-fn codex_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
+fn update_codex_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
     let root = home.join(".codex");
     let mut files = Vec::new();
     for directory in ["sessions", "archived_sessions"] {
@@ -809,13 +842,7 @@ fn codex_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerReco
         files.drain(..files.len() - CODEX_ROLLOUT_LIMIT);
     }
 
-    let previous = ledger_cache()
-        .read()
-        .map(|g| g.codex.clone())
-        .unwrap_or_default();
-    let mut changed = files.len() != previous.len();
-    let mut walked = HashMap::with_capacity(files.len());
-    let mut records = Vec::new();
+    let mut file_marks = Vec::with_capacity(files.len());
     for path in files {
         let Ok(meta) = fs::metadata(&path) else {
             continue;
@@ -829,25 +856,64 @@ fn codex_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerReco
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0),
         };
+        file_marks.push((path, mark));
+    }
+
+    // Zero-clone fast path when all rollout files match their cached FileMark.
+    if let Ok(guard) = ledger_cache().read()
+        && guard.walked_at.is_some()
+        && guard.codex.len() == file_marks.len()
+        && file_marks
+            .iter()
+            .all(|(p, mark)| guard.codex.get(p).is_some_and(|(old, _)| old == mark))
+    {
+        return false;
+    }
+
+    let previous = ledger_cache()
+        .read()
+        .map(|g| g.codex.clone())
+        .unwrap_or_default();
+    let mut walked = HashMap::with_capacity(file_marks.len());
+    for (path, mark) in file_marks {
         let record = match previous.get(&path) {
             Some((old, record)) if *old == mark => record.clone(),
-            _ => {
-                changed = true;
-                read_codex_rollout(&path, routed)
-            }
+            _ => read_codex_rollout(&path, routed),
         };
-        if let Some(record) = &record {
-            records.push(record.clone());
-        }
         walked.insert(path, (mark, record));
     }
     if let Ok(mut guard) = ledger_cache().write() {
-        if guard.codex.len() > 2 * CODEX_ROLLOUT_LIMIT {
-            guard.codex.clear();
-        }
-        guard.codex.extend(walked);
+        guard.codex = walked;
     }
-    (records, changed)
+    true
+}
+
+#[cfg(test)]
+fn zcode_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
+    let changed = update_zcode_calls(home, routed);
+    let mut out = Vec::new();
+    if let Ok(guard) = ledger_cache().read()
+        && let Some(ref state) = guard.zcode
+    {
+        out.extend(state.usage_records.iter().cloned());
+        out.extend(state.legacy_records.iter().cloned());
+    }
+    (out, changed)
+}
+
+#[cfg(test)]
+fn codex_calls(home: &Path, routed: &HashMap<String, String>) -> (Vec<LedgerRecord>, bool) {
+    let changed = update_codex_calls(home, routed);
+    let mut out = Vec::new();
+    if let Ok(guard) = ledger_cache().read() {
+        for (_, rec) in guard.codex.values() {
+            if let Some(r) = rec {
+                out.push(r.clone());
+            }
+        }
+    }
+    out.sort_by_key(|r| std::cmp::Reverse(r.t));
+    (out, changed)
 }
 
 fn collect_rollouts(directory: &Path, files: &mut Vec<PathBuf>) {

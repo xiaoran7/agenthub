@@ -3224,6 +3224,7 @@ impl<T: NativeTransport> NativeSessionHost<T> {
     pub fn discover(&mut self) -> Result<Value, NativeError> {
         let mut candidates = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
+        let mut cwd_canon_cache: HashMap<String, PathBuf> = HashMap::new();
         let mut cursor: Option<String> = None;
         let mut attempts = 0u32;
         loop {
@@ -3251,25 +3252,31 @@ impl<T: NativeTransport> NativeSessionHost<T> {
                     continue;
                 }
                 let raw_cwd = thread["cwd"].as_str().unwrap_or(".");
-                let cwd = dunce::canonicalize(PathBuf::from(raw_cwd))
-                    .unwrap_or_else(|_| PathBuf::from(raw_cwd));
-                let ws_id = crate::privacy::workspace_id_for_path(&cwd.to_string_lossy());
-                self.discovered_workspaces.insert(ws_id, cwd.clone());
-                self.discovered_workspaces
-                    .insert(cwd.to_string_lossy().to_string(), cwd.clone());
-                let clean = cwd
-                    .to_string_lossy()
-                    .trim_start_matches(r"\\?\")
-                    .to_string();
-                self.discovered_workspaces
-                    .insert(clean.clone(), cwd.clone());
-                let forward = clean.replace('\\', "/");
-                self.discovered_workspaces
-                    .insert(forward.clone(), cwd.clone());
-                self.discovered_workspaces
-                    .insert(clean.to_lowercase(), cwd.clone());
-                self.discovered_workspaces
-                    .insert(forward.to_lowercase(), cwd.clone());
+                let cwd = if let Some(cached) = cwd_canon_cache.get(raw_cwd) {
+                    cached.clone()
+                } else {
+                    let resolved = dunce::canonicalize(PathBuf::from(raw_cwd))
+                        .unwrap_or_else(|_| PathBuf::from(raw_cwd));
+                    let ws_id = crate::privacy::workspace_id_for_path(&resolved.to_string_lossy());
+                    self.discovered_workspaces.insert(ws_id, resolved.clone());
+                    self.discovered_workspaces
+                        .insert(resolved.to_string_lossy().to_string(), resolved.clone());
+                    let clean = resolved
+                        .to_string_lossy()
+                        .trim_start_matches(r"\\?\")
+                        .to_string();
+                    self.discovered_workspaces
+                        .insert(clean.clone(), resolved.clone());
+                    let forward = clean.replace('\\', "/");
+                    self.discovered_workspaces
+                        .insert(forward.clone(), resolved.clone());
+                    self.discovered_workspaces
+                        .insert(clean.to_lowercase(), resolved.clone());
+                    self.discovered_workspaces
+                        .insert(forward.to_lowercase(), resolved.clone());
+                    cwd_canon_cache.insert(raw_cwd.to_string(), resolved.clone());
+                    resolved
+                };
                 let title = thread["name"]
                     .as_str()
                     .filter(|name| !name.trim().is_empty())

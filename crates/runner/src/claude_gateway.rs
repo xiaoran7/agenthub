@@ -212,9 +212,17 @@ impl ClaudeGatewayProfile {
 static UPSTREAM_MODELS_CACHE: RwLock<Option<(Instant, String, Vec<ClaudeGatewayModel>)>> =
     RwLock::new(None);
 
+#[cfg(not(test))]
+static ROUTE_SUMMARIES_CACHE: RwLock<Option<(Instant, Vec<ClientRouteSummary>)>> =
+    RwLock::new(None);
+
 /// Invalidate in-memory cached upstream models, forcing a fresh fetch on the next call.
 pub fn invalidate_claude_gateway_cache() {
     if let Ok(mut guard) = UPSTREAM_MODELS_CACHE.write() {
+        *guard = None;
+    }
+    #[cfg(not(test))]
+    if let Ok(mut guard) = ROUTE_SUMMARIES_CACHE.write() {
         *guard = None;
     }
 }
@@ -551,6 +559,14 @@ pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
 
 /// Collects real provider + routing mode summaries across local Agent clients.
 pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
+    #[cfg(not(test))]
+    if let Ok(guard) = ROUTE_SUMMARIES_CACHE.read()
+        && let Some((cached_at, ref cached)) = *guard
+        && cached_at.elapsed() < Duration::from_secs(10)
+    {
+        return cached.clone();
+    }
+
     let mut summaries = Vec::with_capacity(5);
 
     // 1. Claude Code
@@ -707,6 +723,11 @@ pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
     };
     summaries.push(zcode);
 
+    #[cfg(not(test))]
+    if let Ok(mut guard) = ROUTE_SUMMARIES_CACHE.write() {
+        *guard = Some((Instant::now(), summaries.clone()));
+    }
+
     summaries
 }
 
@@ -798,11 +819,12 @@ pub fn fetch_live_upstream_models(base_url: &str, token: &str) -> Vec<ClaudeGate
         return Vec::new();
     }
 
-    // Fast cache lookup (15s TTL)
+    // Fast cache lookup (120s TTL, including empty results so unreachable
+    // endpoints do not repeatedly block the UI).
     if let Ok(guard) = UPSTREAM_MODELS_CACHE.read()
         && let Some((cached_at, cached_url, cached_models)) = guard.as_ref()
         && cached_url == base_url
-        && cached_at.elapsed() < Duration::from_secs(15)
+        && cached_at.elapsed() < Duration::from_secs(120)
     {
         return cached_models.clone();
     }
@@ -814,7 +836,7 @@ pub fn fetch_live_upstream_models(base_url: &str, token: &str) -> Vec<ClaudeGate
     };
 
     let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_millis(2500)))
+        .timeout_global(Some(Duration::from_millis(1800)))
         .build()
         .new_agent();
 
@@ -824,10 +846,16 @@ pub fn fetch_live_upstream_models(base_url: &str, token: &str) -> Vec<ClaudeGate
         .header("x-api-key", token)
         .call()
     else {
+        if let Ok(mut guard) = UPSTREAM_MODELS_CACHE.write() {
+            *guard = Some((Instant::now(), base_url.to_string(), Vec::new()));
+        }
         return Vec::new();
     };
 
     let Ok(val) = resp.body_mut().read_json::<Value>() else {
+        if let Ok(mut guard) = UPSTREAM_MODELS_CACHE.write() {
+            *guard = Some((Instant::now(), base_url.to_string(), Vec::new()));
+        }
         return Vec::new();
     };
 
