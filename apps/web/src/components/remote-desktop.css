@@ -720,19 +720,24 @@
   padding: 26px 32px 20px;
   display: flex;
   flex-direction: column;
+  scrollbar-gutter: stable both-edges;
 }
 
 .remote-notice {
-  width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px));
-  max-width: none;
+  width: min(var(--remote-measure), calc(100% - 64px));
+  max-width: var(--remote-measure);
   margin: 14px auto 0;
+  box-sizing: border-box;
 }
 
 .remote-private-note {
+  width: 100%;
   max-width: var(--remote-measure);
   margin: 0 auto 18px;
   color: var(--remote-muted);
   font-size: 12px;
+  text-align: left;
+  box-sizing: border-box;
 }
 
 /* Assistant turns are anchored by a small provider dot + name plus a very
@@ -784,11 +789,13 @@
 }
 
 .remote-tool-group {
-  max-width: var(--remote-wide);
+  width: 100%;
+  max-width: var(--remote-measure);
   margin: 0 auto 16px;
   border: 1px solid var(--remote-line);
   border-radius: 9px;
   background: var(--remote-surface);
+  box-sizing: border-box;
 }
 
 .remote-tool-group-summary {
@@ -1059,12 +1066,13 @@
   color: var(--remote-muted);
 }
 
-/* The composer matches the reading measure exactly (plus its own padding), so
-   a typed line lands on the same left edge as the reply it produces. */
+/* The composer matches the reading measure exactly, so its left and right
+   edges align with messages, tool groups, and notices in the timeline. */
 .remote-composer-card {
-  width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px));
-  max-width: none;
+  width: min(var(--remote-measure), calc(100% - 64px));
+  max-width: var(--remote-measure);
   margin-bottom: 22px;
+  box-sizing: border-box;
   border: none !important;
   border-radius: var(--radius-xl, 20px);
   background: var(--remote-composer-bg, var(--remote-surface));
@@ -1402,6 +1410,10 @@
   }
 
   .remote-message.user {
+    max-width: 100%;
+  }
+
+  .remote-message.user > .remote-message-body {
     max-width: 88%;
   }
 

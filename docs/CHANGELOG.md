@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- **Web 控制台时间线阅读列宽度基准与居中对称轴对齐修复（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
+  - 为 `.remote-tool-group` 与 `.remote-private-note` 补齐 `width: 100%` 与 `box-sizing: border-box`，根除纵向 Flex 容器下 `margin: 0 auto` 导致工具组折叠条随预览文字长短忽宽忽窄、脱敏提示居中漂移的问题；
+  - 将 `.remote-tool-group`、`.remote-tool`、`.remote-notice`、`.remote-message` 与 `.remote-composer-card` 的宽度基准全面统一为 `var(--remote-measure)`（消除 `760px`、`794px`、`900px` 三种宽度混排导致的左右边缘错位），并为 `.remote-timeline` 设置 `scrollbar-gutter: stable both-edges` 使滚动区内外共享完全一致的几何对称中心。
+
 - **Runtime 全链路性能优化、重复 I/O 根治与双端（Runtime / Web）文案统一精炼（`crates/runner`, `apps/web`）**：
   - **启动与恢复阶段耗时治理（`crates/runner/src/remote_network.rs`, `crates/runner/src/remote_journal.rs`）**：
     - `run_with_local_control` 采用 `std::thread::scope` 并行拉起 `CodexAppServer`、`ZCodeAppServer` 与 Claude CLI 探测，并在本地守护模式（`url.is_none()`）下延后非阻塞拉取 `models()` 与 `discover()`，使本地 IPC 控制通道立即进入 `ready` 状态；

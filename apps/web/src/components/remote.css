@@ -1789,8 +1789,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px));
-  max-width: none;
+  width: min(var(--remote-measure), calc(100% - 64px));
+  max-width: var(--remote-measure);
   margin: 14px auto 0;
   padding: 11px 18px;
   border: 1px solid rgba(198, 125, 40, 0.35);
@@ -1896,7 +1896,7 @@
   min-height: 0;
   overscroll-behavior: contain;
   padding: 20px 32px;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
   -webkit-overflow-scrolling: touch;
@@ -2122,14 +2122,16 @@
   flex-shrink: 0;
 }
 .remote-message.assistant {
+  width: 100%;
   max-width: var(--remote-measure);
+  box-sizing: border-box;
   animation: message-fade-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-/* Code and tables may overhang the prose measure — but they stay centred and
-   scroll inside themselves, never stretching to the viewport. */
+/* Code and tables align with the reading measure and scroll inside themselves,
+   never breaking the column symmetry. */
 .remote-message.assistant .remote-code-block,
 .remote-message.assistant .remote-md-table-wrapper {
-  max-width: var(--remote-wide);
+  max-width: 100%;
 }
 .remote-timeline-empty {
   flex: 1;
@@ -2201,8 +2203,9 @@
   background: var(--cds-surface-2, var(--remote-surface));
   border-radius: var(--cds-panel-radius, 10px);
   margin: 0 auto 14px;
-  max-width: var(--remote-wide);
+  max-width: var(--remote-measure);
   width: 100%;
+  box-sizing: border-box;
   font-size: 13px;
   overflow: hidden;
   box-shadow: var(--cds-panel-shadow, 0 1px 3px rgba(0, 0, 0, 0.05));
@@ -3276,13 +3279,14 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   border-color: #2563eb;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
 }
-/* The composer shares the reading measure exactly, so a typed line sits on the
-   same left edge as the reply it will produce. */
+/* The composer shares the reading measure exactly, so its left and right edges
+   sit on the same column axis as the timeline items above it. */
 .remote-composer-card {
   position: relative;
   flex-shrink: 0;
-  max-width: calc(var(--remote-measure) + 34px);
-  width: calc(100% - 64px);
+  max-width: var(--remote-measure);
+  width: min(var(--remote-measure), calc(100% - 64px));
+  box-sizing: border-box;
   /* The top margin holds the 24px fade band, so the last message dissolves
      into the composer instead of colliding with its border. */
   margin: 24px auto 20px;
@@ -4469,9 +4473,12 @@ details[open] > .remote-tool-summary > .remote-disclosure {
     font-size: 12px;
   }
 
-  /* On a phone the measure is the screen, so the only question left is how
-     much of it the user's own prompt should claim. */
+  /* On a phone the measure is the screen; the inner bubble caps at 88%. */
   .remote-message.user {
+    max-width: 100%;
+  }
+
+  .remote-message.user > .remote-message-body {
     max-width: 88%;
   }
 
