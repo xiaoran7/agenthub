@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **修复 CI 格式门禁失败（services/api/src/remote-store.ts）**：提交 48fce44 新增的 isSameProviderRebind 调用超出 Prettier 行宽限制却未按 --write 重排，导致 Gitea 的 npm run format:check 报错阻断 CI；本次仅执行 Prettier 自动格式化，无任何逻辑改动。
+
 - **Runtime 用量日志上限解除、Windows NTFS/WAL 实时热更新修复、网关直连/路由精准判定、模型厂商图标补齐、单窗口防多开聚焦与托盘鼠标悬停即显（`crates/runner`）**：
   - **解除请求日志 1,000 条硬上限（`crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
     - 将 `/api/usage/ledger` 接口的 `limit` 参数上限从 `.unwrap_or(200).clamp(1, 1000)` 提升至 `.unwrap_or(50_000).clamp(1, 100_000)`，前端 `dashboard.js` 默认拉取上限同步提升至 `50000`，配合前端 DOM 增量分页（每页 100 条），彻底解除"共 1,000 条记录"截断限制；

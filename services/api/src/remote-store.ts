@@ -717,7 +717,10 @@ export class RemoteContentStore {
     if (
       old &&
       old.provider_session_id !== binding.provider_session_id &&
-      !isSameProviderRebind(old.provider_session_id, binding.provider_session_id)
+      !isSameProviderRebind(
+        old.provider_session_id,
+        binding.provider_session_id,
+      )
     )
       throw new RemoteStoreError("native_identity_changed");
     this.writeBindings(owner, runner, [binding]);
