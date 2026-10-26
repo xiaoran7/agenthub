@@ -292,6 +292,8 @@ fn local_store_cache() -> &'static Mutex<LocalStoreCache> {
 struct LocalStoreCache {
     /// The last scan's result, and when it was taken.
     items: Option<(Instant, Vec<Value>)>,
+    /// Monotonically incremented each time a scan completes.
+    generation: u64,
     /// Set while a scan is running, so only one runs at a time.
     scanning: bool,
     /// The thread that owns the running scan.
@@ -300,11 +302,15 @@ struct LocalStoreCache {
 
 /// How long a local store scan stays usable before triggering an incremental
 /// background pass. Each underlying store (`zcode`, `claude`, `codex`) keeps
-/// per-file byte offsets / mtimes, so refreshes only read newly appended bytes.
-const LOCAL_STORE_CACHE_TTL: Duration = Duration::from_secs(8);
+/// per-file byte offsets / SQLite watermarks, so refreshes only read newly appended data.
+const LOCAL_STORE_CACHE_TTL: Duration = Duration::from_millis(1500);
 
 /// Start a background scan of the local session stores, if one is not running.
 fn start_local_store_scan() {
+    start_local_store_scan_inner(false);
+}
+
+fn start_local_store_scan_inner(force: bool) {
     let mut cache = match local_store_cache().lock() {
         Ok(cache) => cache,
         Err(_) => return,
@@ -312,7 +318,8 @@ fn start_local_store_scan() {
     if cache.scanning {
         return;
     }
-    if let Some((at, _)) = &cache.items
+    if !force
+        && let Some((at, _)) = &cache.items
         && at.elapsed() < LOCAL_STORE_CACHE_TTL
     {
         return;
@@ -322,9 +329,39 @@ fn start_local_store_scan() {
         let items = local_store_sessions();
         if let Ok(mut cache) = local_store_cache().lock() {
             cache.items = Some((Instant::now(), items));
+            cache.generation = cache.generation.wrapping_add(1).max(1);
             cache.scanning = false;
         }
     }));
+}
+
+/// Forces an immediate local store scan and waits briefly for incremental completion.
+pub fn force_local_store_scan() {
+    start_local_store_scan_inner(true);
+    wait_for_active_local_store_scan(Duration::from_millis(250));
+}
+
+/// Returns the generation counter of the last completed local store scan.
+pub fn local_store_scan_generation() -> u64 {
+    local_store_cache()
+        .lock()
+        .ok()
+        .map(|cache| cache.generation)
+        .unwrap_or(0)
+}
+
+fn wait_for_active_local_store_scan(timeout: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        let scanning = match local_store_cache().lock() {
+            Ok(cache) => cache.scanning,
+            Err(_) => return,
+        };
+        if !scanning {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
 }
 
 /// Pre-warms the local store scan in the background so sessions from Claude,
@@ -1690,6 +1727,7 @@ impl NativeTransport for MultiProviderTransport {
                     // synchronized and returned together without partial display.
                     ensure_initial_local_store_scan(Duration::from_millis(2000));
                     start_local_store_scan();
+                    wait_for_active_local_store_scan(Duration::from_millis(120));
                     if let Some(items) = response["data"].as_array_mut() {
                         items.extend(cached_local_store_sessions());
                     }

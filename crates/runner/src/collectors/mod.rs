@@ -1743,14 +1743,16 @@ pub fn invalidate_session_caches_for_refresh() {
     if let Ok(mut guard) = grok_remote_sessions_cache().write() {
         *guard = None;
     }
+    if let Ok(mut guard) = zcode_sessions_cache().write() {
+        *guard = None;
+    }
 }
 
 /// How long a scanned Claude transcript store stays usable.
 ///
-/// A full scan reads every transcript, so it costs tens of seconds on a large
-/// store. The window has to be long enough that the next caller reuses the
-/// result instead of paying for the same scan again.
-const CLAUDE_REMOTE_SESSIONS_CACHE_TTL: Duration = Duration::from_secs(6);
+/// Settled files are memoised by `(len, mtime)`, so post-TTL refreshes only
+/// re-stat project directories and re-read active transcripts.
+const CLAUDE_REMOTE_SESSIONS_CACHE_TTL: Duration = Duration::from_millis(1500);
 
 pub fn collect_claude_sessions_for_remote() -> Result<Vec<ClaudeRemoteSessionEntry>, CollectorError>
 {
@@ -4015,10 +4017,7 @@ pub fn collect_zcode_sessions(include_completed: bool) -> Result<String, Collect
 struct ZCodeSessionsCache {
     db_path: PathBuf,
     include_completed: bool,
-    db_len: u64,
-    db_mtime: Option<SystemTime>,
-    wal_len: u64,
-    wal_mtime: Option<SystemTime>,
+    watermark: (i64, i64, i64),
     payload: String,
 }
 
@@ -4126,27 +4125,6 @@ pub fn collect_zcode_sessions_from(
     database: &Path,
     include_completed: bool,
 ) -> Result<String, CollectorError> {
-    let db_meta = fs::metadata(database).ok();
-    let db_len = db_meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let mtime = db_meta.and_then(|m| m.modified().ok());
-    let wal_path = database.with_file_name("db.sqlite-wal");
-    let wal_meta = fs::metadata(&wal_path).ok();
-    let wal_len = wal_meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let wal_mtime = wal_meta.and_then(|m| m.modified().ok());
-    if let Ok(guard) = zcode_sessions_cache().read() {
-        if let Some(ref c) = *guard {
-            if c.db_path == database
-                && c.include_completed == include_completed
-                && c.db_len == db_len
-                && c.db_mtime == mtime
-                && c.wal_len == wal_len
-                && c.wal_mtime == wal_mtime
-            {
-                return Ok(c.payload.clone());
-            }
-        }
-    }
-
     let program = "ZCode session store".to_owned();
     let connection = Connection::open_with_flags(
         database,
@@ -4156,6 +4134,27 @@ pub fn collect_zcode_sessions_from(
         program: program.clone(),
         source,
     })?;
+
+    // Fast SQLite watermark probe (< 0.1ms) that immediately detects WAL commits
+    // even when Windows NTFS delays updating `db.sqlite-wal` file size or mtime.
+    let watermark: (i64, i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM session), COALESCE((SELECT MAX(time_updated) FROM session), 0), (SELECT COUNT(*) FROM message)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap_or((0, 0, 0));
+
+    if let Ok(guard) = zcode_sessions_cache().read() {
+        if let Some(ref c) = *guard {
+            if c.db_path == database
+                && c.include_completed == include_completed
+                && c.watermark == watermark
+            {
+                return Ok(c.payload.clone());
+            }
+        }
+    }
 
     let limit = if include_completed {
         ZCODE_ALL_SESSION_LIMIT
@@ -4255,10 +4254,7 @@ pub fn collect_zcode_sessions_from(
         *guard = Some(ZCodeSessionsCache {
             db_path: database.to_path_buf(),
             include_completed,
-            db_len,
-            db_mtime: mtime,
-            wal_len,
-            wal_mtime,
+            watermark,
             payload: payload.clone(),
         });
     }

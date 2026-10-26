@@ -18,13 +18,14 @@ mod windows_tray {
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Shell::{
-        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+        NIF_ICON, NIF_MESSAGE, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
         IMAGE_ICON, KillTimer, LR_DEFAULTCOLOR, LoadIconW, LoadImageW, MSG, PostQuitMessage,
         RegisterClassW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SetTimer, TranslateMessage,
-        WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW,
+        WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONUP, WM_TIMER, WM_USER,
+        WNDCLASSW,
     };
 
     const WM_TRAY_CALLBACK: u32 = WM_USER + 101;
@@ -172,14 +173,9 @@ mod windows_tray {
             nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
             nid.hWnd = hwnd;
             nid.uID = 1;
-            nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+            nid.uFlags = NIF_ICON | NIF_MESSAGE;
             nid.uCallbackMessage = WM_TRAY_CALLBACK;
             nid.hIcon = hicon_sm;
-
-            let tip_text = "AgentHub\0";
-            let tip_u16: Vec<u16> = tip_text.encode_utf16().collect();
-            let copy_len = tip_u16.len().min(nid.szTip.len() - 1);
-            nid.szTip[..copy_len].copy_from_slice(&tip_u16[..copy_len]);
 
             Shell_NotifyIconW(NIM_ADD, &nid);
 
@@ -202,6 +198,26 @@ mod windows_tray {
         });
     }
 
+    unsafe fn show_tray_popup() {
+        let current_url = TRAY_STATE
+            .get()
+            .and_then(|s| s.web_url.lock().ok())
+            .map(|u| u.clone())
+            .unwrap_or_else(|| "127.0.0.1:4200".to_string());
+        let display_host = current_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .to_string();
+        unsafe {
+            crate::tray_menu::show(
+                GetModuleHandleW(null()),
+                crate::tray_menu::build_live_menu(display_host),
+                tray_choice,
+            );
+        }
+    }
+
     unsafe extern "system" fn tray_wnd_proc(
         hwnd: HWND,
         msg: u32,
@@ -219,29 +235,25 @@ mod windows_tray {
                                 open_desktop_window(&url);
                             }
                         }
-                    } else if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
-                        if crate::tray_menu::is_visible()
-                            || crate::tray_menu::closed_within(std::time::Duration::from_millis(
-                                250,
+                    } else if event == WM_MOUSEMOVE {
+                        if !crate::tray_menu::is_visible()
+                            && !crate::tray_menu::closed_within(std::time::Duration::from_millis(
+                                350,
                             ))
                         {
-                            crate::tray_menu::hide();
-                        } else {
-                            let current_url = TRAY_STATE
-                                .get()
-                                .and_then(|s| s.web_url.lock().ok())
-                                .map(|u| u.clone())
-                                .unwrap_or_else(|| "127.0.0.1:4200".to_string());
-                            let display_host = current_url
-                                .trim_start_matches("http://")
-                                .trim_start_matches("https://")
-                                .trim_end_matches('/')
-                                .to_string();
-                            crate::tray_menu::show(
-                                GetModuleHandleW(null()),
-                                crate::tray_menu::build_live_menu(display_host),
-                                tray_choice,
-                            );
+                            show_tray_popup();
+                        }
+                    } else if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
+                        if crate::tray_menu::is_visible() {
+                            if !crate::tray_menu::shown_within(std::time::Duration::from_millis(
+                                500,
+                            )) {
+                                crate::tray_menu::hide();
+                            }
+                        } else if !crate::tray_menu::closed_within(
+                            std::time::Duration::from_millis(250),
+                        ) {
+                            show_tray_popup();
                         }
                     }
                     0
@@ -258,6 +270,9 @@ mod windows_tray {
     /// Runs the action selected from the tray popup card.
     fn tray_choice(id: usize) {
         let open_hash = |suffix: &str| {
+            if !suffix.is_empty() {
+                super::set_pending_window_hash(Some(suffix.to_string()));
+            }
             if let Some(state) = TRAY_STATE.get() {
                 if let Ok(url) = state.web_url.lock() {
                     let base = url.trim_end_matches('/');
@@ -466,6 +481,14 @@ mod windows_tray {
         use std::os::windows::process::CommandExt;
         use std::path::PathBuf;
 
+        // If an AgentHub window is already open, restore and focus it in place
+        // rather than spawning a second Edge `--app` window.
+        if crate::window_icon::focus_existing_edge_app_window() {
+            return;
+        }
+        // Consumed directly by the initial launch URL when spawning a fresh window
+        let _ = super::take_pending_window_hash();
+
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         let edge_candidates = [
@@ -488,12 +511,12 @@ mod windows_tray {
                 .unwrap_or_else(|| PathBuf::from("."));
             let profile_dir = home.join(".agenthub").join("app_profile");
 
-            // If an Edge window was already spawned, kill it first so file locks on Favicons
-            // are released and Edge doesn't silently delegate to an existing instance with the old icon.
+            // If an Edge child handle was still held, terminate and reap it before spawning.
             if let Some(state) = TRAY_STATE.get() {
                 if let Ok(mut lock) = state.active_child.lock() {
                     if let Some(mut old) = lock.take() {
                         let _ = old.kill();
+                        let _ = old.wait();
                     }
                 }
             }
@@ -643,6 +666,24 @@ pub use windows_tray::{
 pub use non_windows_tray::{
     cleanup_desktop_window, open_data_dir, open_desktop_window, open_system_browser, start_tray,
 };
+
+fn pending_window_hash_slot() -> &'static std::sync::Mutex<Option<String>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+pub fn set_pending_window_hash(hash: Option<String>) {
+    if let Ok(mut guard) = pending_window_hash_slot().lock() {
+        *guard = hash;
+    }
+}
+
+pub fn take_pending_window_hash() -> Option<String> {
+    pending_window_hash_slot()
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take())
+}
 
 /// Returns whether the console/tray should render in dark mode.
 /// Checks `~/.agenthub/window_shell/theme.txt` first (written by the web console),

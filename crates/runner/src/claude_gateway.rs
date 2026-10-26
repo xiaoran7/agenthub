@@ -553,7 +553,12 @@ pub fn discover_cc_switch_provider_for_app(app_type: &str) -> Option<CcSwitchAct
     models.sort_by_key(sort_key);
     upstream_models.sort_by_key(sort_key);
 
-    let is_routed = query_cc_switch_proxy_enabled(&conn, app_type) || has_desktop_routes;
+    let is_routed = query_cc_switch_proxy_enabled(&conn, app_type)
+        || has_desktop_routes
+        || upstream_base_url
+            .as_deref()
+            .is_some_and(|u| !is_official_provider_url(app_type, u))
+        || !is_official_or_default_provider_name(&name, &id);
 
     Some(CcSwitchActiveProvider {
         id,
@@ -567,6 +572,64 @@ pub fn discover_cc_switch_provider_for_app(app_type: &str) -> Option<CcSwitchAct
     })
 }
 
+fn is_official_provider_url(app_type: &str, url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let Some((host, _)) = parse_url_host_port(trimmed) else {
+        return false;
+    };
+    let h = host.to_ascii_lowercase();
+    match app_type {
+        "claude" | "claude-desktop" | "claude_code" | "claude_desktop" => {
+            matches!(h.as_str(), "api.anthropic.com" | "claude.ai")
+        }
+        "codex" => matches!(h.as_str(), "api.openai.com" | "chatgpt.com"),
+        "gemini" | "gemini_cli" => matches!(
+            h.as_str(),
+            "generativelanguage.googleapis.com"
+                | "aiplatform.googleapis.com"
+                | "cloudcode-pa.googleapis.com"
+        ),
+        "opencode" | "zcode" => matches!(h.as_str(), "open.bigmodel.cn"),
+        _ => false,
+    }
+}
+
+fn is_official_or_default_provider_name(name: &str, id: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    let i = id.trim().to_ascii_lowercase();
+    let check = if !n.is_empty() {
+        n.as_str()
+    } else {
+        i.as_str()
+    };
+    matches!(
+        check,
+        "" | "default"
+            | "official"
+            | "anthropic"
+            | "anthropic official"
+            | "openai"
+            | "openai official"
+            | "google"
+            | "google official"
+            | "gemini official"
+            | "zhipu"
+            | "zhipu official"
+    )
+}
+
+fn is_cc_switch_default_placeholder(cc: &CcSwitchActiveProvider) -> bool {
+    !cc.is_routed
+        && is_official_or_default_provider_name(&cc.name, &cc.id)
+        && cc
+            .upstream_base_url
+            .as_deref()
+            .is_none_or(|u| is_official_provider_url(&cc.app_type, u))
+}
+
 /// Discovers the currently active Claude Desktop or Claude provider from `cc-switch.db`.
 pub fn discover_cc_switch_active_provider() -> Option<CcSwitchActiveProvider> {
     discover_cc_switch_provider_for_app("claude-desktop")
@@ -578,7 +641,7 @@ pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
     #[cfg(not(test))]
     if let Ok(guard) = ROUTE_SUMMARIES_CACHE.read()
         && let Some((cached_at, ref cached)) = *guard
-        && cached_at.elapsed() < Duration::from_secs(10)
+        && cached_at.elapsed() < Duration::from_secs(2)
     {
         return cached.clone();
     }
@@ -586,31 +649,46 @@ pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
     let mut summaries = Vec::with_capacity(5);
 
     // 1. Claude Code
-    let claude_code = if let Some(cc) = discover_cc_switch_provider_for_app("claude") {
-        let provider_name = if cc.name.trim().is_empty() {
-            "default".to_string()
-        } else {
-            cc.name
-        };
+    let cc_claude = discover_cc_switch_provider_for_app("claude");
+    let settings_claude = discover_claude_settings_env();
+    let claude_code = if let Some(ref cc) = cc_claude
+        && !is_cc_switch_default_placeholder(cc)
+    {
+        ClientRouteSummary {
+            agent_id: "claude_code",
+            title: "Claude Code",
+            provider_name: if cc.name.trim().is_empty() {
+                "Custom Gateway".to_string()
+            } else {
+                cc.name.clone()
+            },
+            is_routed: cc.is_routed,
+        }
+    } else if let Some((base_url, _, _, _)) = settings_claude {
+        let is_routed = !is_official_provider_url("claude", &base_url);
+        let provider_name = host_label_from_url(&base_url).unwrap_or_else(|| "Custom".into());
         ClientRouteSummary {
             agent_id: "claude_code",
             title: "Claude Code",
             provider_name,
-            is_routed: cc.is_routed,
+            is_routed,
         }
-    } else if let Some((base_url, _, _, _)) = discover_claude_settings_env() {
-        let is_local = is_loopback_url(&base_url);
+    } else if let Some(cc) = cc_claude {
         ClientRouteSummary {
             agent_id: "claude_code",
             title: "Claude Code",
-            provider_name: host_label_from_url(&base_url).unwrap_or_else(|| "Custom".into()),
-            is_routed: is_local,
+            provider_name: if cc.name.trim().is_empty() || cc.name.eq_ignore_ascii_case("default") {
+                "Anthropic Official".to_string()
+            } else {
+                cc.name
+            },
+            is_routed: cc.is_routed,
         }
     } else {
         ClientRouteSummary {
             agent_id: "claude_code",
             title: "Claude Code",
-            provider_name: "default".to_string(),
+            provider_name: "Anthropic Official".to_string(),
             is_routed: false,
         }
     };
@@ -618,19 +696,25 @@ pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
 
     // 2. Claude Desktop
     let roots = gateway_search_roots();
-    let has_desktop_cfg = discover_config_library(&roots).is_some();
+    let desktop_cfg = discover_config_library(&roots);
+    let has_desktop_cfg = desktop_cfg.is_some() || discover_host_creds(&roots).is_some();
     let claude_desktop = if let Some(cc) = discover_cc_switch_provider_for_app("claude-desktop") {
+        let is_routed = cc.is_routed || has_desktop_cfg;
+        let provider_name =
+            if !cc.name.trim().is_empty() && !cc.name.eq_ignore_ascii_case("default") {
+                cc.name
+            } else if let Some((ref base_url, _, _, _)) = desktop_cfg {
+                host_label_from_url(base_url).unwrap_or_else(|| "Claude Gateway".into())
+            } else {
+                "Anthropic Official".into()
+            };
         ClientRouteSummary {
             agent_id: "claude_desktop",
             title: "Claude Desktop",
-            provider_name: if cc.name.trim().is_empty() {
-                "Claude Desktop".into()
-            } else {
-                cc.name
-            },
-            is_routed: cc.is_routed || has_desktop_cfg,
+            provider_name,
+            is_routed,
         }
-    } else if let Some((base_url, _, _, _)) = discover_config_library(&roots) {
+    } else if let Some((base_url, _, _, _)) = desktop_cfg {
         ClientRouteSummary {
             agent_id: "claude_desktop",
             title: "Claude Desktop",
@@ -648,28 +732,47 @@ pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
     summaries.push(claude_desktop);
 
     // 3. Codex
-    let codex = if let Some(cc) = discover_cc_switch_provider_for_app("codex") {
+    let cc_codex = discover_cc_switch_provider_for_app("codex");
+    let codex = if let Some(ref cc) = cc_codex
+        && !is_cc_switch_default_placeholder(cc)
+    {
         ClientRouteSummary {
             agent_id: "codex",
             title: "Codex",
             provider_name: if cc.name.trim().is_empty() {
                 "OpenAI".into()
             } else {
-                cc.name
+                cc.name.clone()
             },
             is_routed: cc.is_routed,
         }
     } else {
-        let mut provider_name = "OpenAI Official".to_string();
-        let mut is_routed = false;
+        let mut provider_name = cc_codex
+            .as_ref()
+            .map(|c| c.name.trim().to_string())
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("default"))
+            .unwrap_or_else(|| "OpenAI Official".to_string());
+        let mut is_routed = cc_codex.as_ref().is_some_and(|c| c.is_routed);
         if let Some(home) = crate::collectors::home_dir()
             && let Ok(toml_str) = fs::read_to_string(home.join(".codex").join("config.toml"))
         {
             if let Some(mp) = extract_toml_quoted_value(&toml_str, "model_provider") {
-                provider_name = mp;
+                if !is_official_or_default_provider_name(&mp, "") {
+                    is_routed = true;
+                }
+                if provider_name == "OpenAI Official" {
+                    provider_name = mp;
+                }
             }
             if let Some(base) = extract_toml_quoted_value(&toml_str, "base_url") {
-                is_routed = is_loopback_url(&base);
+                if !is_official_provider_url("codex", &base) {
+                    is_routed = true;
+                    if provider_name == "OpenAI Official"
+                        && let Some(h) = host_label_from_url(&base)
+                    {
+                        provider_name = h;
+                    }
+                }
             }
         }
         ClientRouteSummary {
@@ -682,15 +785,18 @@ pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
     summaries.push(codex);
 
     // 4. Gemini CLI
-    let gemini = if let Some(cc) = discover_cc_switch_provider_for_app("gemini") {
+    let cc_gemini = discover_cc_switch_provider_for_app("gemini");
+    let gemini = if let Some(cc) = cc_gemini {
+        let provider_name = if cc.name.trim().is_empty() || cc.name.eq_ignore_ascii_case("default")
+        {
+            "Google Official".into()
+        } else {
+            cc.name
+        };
         ClientRouteSummary {
             agent_id: "gemini_cli",
             title: "Gemini",
-            provider_name: if cc.name.trim().is_empty() {
-                "Google Official".into()
-            } else {
-                cc.name
-            },
+            provider_name,
             is_routed: cc.is_routed,
         }
     } else {
@@ -704,36 +810,66 @@ pub fn discover_all_client_route_summaries() -> Vec<ClientRouteSummary> {
     summaries.push(gemini);
 
     // 5. ZCode / OpenCode
-    let zcode = if let Some(cc) = discover_cc_switch_provider_for_app("opencode") {
+    // Prioritize ZCode's native `~/.zcode/v2/config.json` registry over `cc-switch.db`'s
+    // `opencode` placeholder row so ZCode never falsely displays `default · 直连` when
+    // configured with custom gateway providers.
+    let zcode_providers = crate::collectors::zcode_app_server::load_zcode_v2_provider_registry();
+    let cc_opencode = discover_cc_switch_provider_for_app("opencode");
+    let zcode = if let Some(providers) = zcode_providers.filter(|p| !p.is_empty()) {
+        let mut labels = Vec::new();
+        let mut any_routed = false;
+        for p in &providers {
+            let pid = p.get("providerId").and_then(Value::as_str).unwrap_or("");
+            let lbl = p
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(pid);
+            let base = p.get("baseURL").and_then(Value::as_str).unwrap_or("");
+            if !is_official_provider_url("zcode", base)
+                || !is_official_or_default_provider_name(lbl, pid)
+            {
+                any_routed = true;
+            }
+            let display_lbl = if lbl.is_empty() || lbl.eq_ignore_ascii_case("default") {
+                host_label_from_url(base).unwrap_or_else(|| "Custom".to_string())
+            } else {
+                lbl.to_string()
+            };
+            if !labels
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(&display_lbl))
+            {
+                labels.push(display_lbl);
+            }
+        }
+        let provider_name = match labels.len() {
+            0 => "ZCode Official".to_string(),
+            1 => labels.remove(0),
+            2 => format!("{} / {}", labels[0], labels[1]),
+            n => format!("{} 等 {} 源", labels[0], n),
+        };
         ClientRouteSummary {
             agent_id: "zcode",
-            title: "OpenCode",
-            provider_name: if cc.name.trim().is_empty() {
-                "default".into()
-            } else {
-                cc.name
-            },
-            is_routed: cc.is_routed,
+            title: "ZCode",
+            provider_name,
+            is_routed: any_routed,
         }
-    } else if let Some(providers) =
-        crate::collectors::zcode_app_server::load_zcode_v2_provider_registry()
-        && let Some(first) = providers.first()
-        && let Some(lbl) = first
-            .get("label")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
+    } else if let Some(ref cc) = cc_opencode
+        && !is_cc_switch_default_placeholder(cc)
     {
         ClientRouteSummary {
             agent_id: "zcode",
             title: "ZCode",
-            provider_name: lbl.to_string(),
-            is_routed: false,
+            provider_name: cc.name.clone(),
+            is_routed: cc.is_routed,
         }
     } else {
         ClientRouteSummary {
             agent_id: "zcode",
             title: "ZCode",
-            provider_name: "default".to_string(),
+            provider_name: "ZCode Official".to_string(),
             is_routed: false,
         }
     };

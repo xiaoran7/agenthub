@@ -338,7 +338,12 @@ function scaleSegThumb(animate) {
   // open page as a tinted row instead
   if (!nav || !thumb || nav.closest("#navSideSlot")) return;
   const btn = nav.querySelector("button.on");
-  if (!btn) return;
+  if (!btn) {
+    thumb.style.opacity = "0";
+    thumb.style.width = "0px";
+    return;
+  }
+  thumb.style.opacity = "";
   // a transform moves the box without changing what it measures, so where
   // the track sits is read first, before this thumb moves at all
   const track = nav.getBoundingClientRect();
@@ -721,6 +726,10 @@ async function refreshDashboard(manual) {
     if (manual) toast("已刷新最新会话与工作区状态");
 
     dashboardData = data;
+    if (data.pending_nav) {
+      location.hash = data.pending_nav;
+      applySettingsHash();
+    }
     renderStats(dashboardData.stats, dashboardData.gateway);
 
     // Agents: unconditionally render when agents change or upon arrival
@@ -883,6 +892,7 @@ function renderStats(stats, gateway) {
 // made-up logo, which is what made the old inline marks look wrong.
 const AGENT_ICONS = {
   claude_code: "claudecode-color",
+  coding_assistant: "claudecode-color",
   claude_desktop: "claude-color",
   claude: "claude-color",
   codex: "codex-color",
@@ -892,21 +902,23 @@ const AGENT_ICONS = {
   gemini: "gemini-color",
   antigravity: "antigravity-color",
   zcode: "zcode.png",
+  opencode: "zcode.png",
 };
 
 // magpie's family table (internal/agent/icons.go): a model id's prefix names
 // its vendor's mark, first match wins.
 const MODEL_FAMILIES = [
-  ["claude", "claude-color"],
-  ["gpt", "openai"], ["o1", "openai"], ["o3", "openai"], ["o4", "openai"], ["codex", "openai"],
+  ["claude", "claude-color"], ["sonnet", "claude-color"], ["opus", "claude-color"], ["haiku", "claude-color"], ["fable", "claude-color"], ["mythos", "claude-color"],
+  ["codex", "codex-color"],
+  ["gpt", "openai"], ["o1", "openai"], ["o3", "openai"], ["o4", "openai"],
   ["gemini", "gemini-color"], ["gemma", "gemini-color"],
   ["deepseek", "deepseek-color"],
   ["grok", "xai"],
   ["kimi", "kimi"], ["moonshot", "kimi"],
-  ["glm", "zhipu-color"], ["chatglm", "chatglm-color"],
+  ["glm", "zhipu-color"], ["chatglm", "chatglm-color"], ["zhipu", "zhipu-color"],
   ["qwen", "qwen-color"], ["qwq", "qwen-color"],
   ["mistral", "mistral-color"], ["codestral", "mistral-color"], ["devstral", "mistral-color"], ["magistral", "mistral-color"],
-  ["minimax", "minimax-color"],
+  ["minimax", "minimax-color"], ["abab", "minimax-color"],
   ["mimo", "mimocode"], ["xiaomi", "mimocode"],
   ["step", "stepfun-color"],
 ];
@@ -920,7 +932,9 @@ function modelIconName(name) {
   // "vendor/model" on a relay: the model's own name decides
   const slash = id.lastIndexOf("/");
   if (slash >= 0) id = id.slice(slash + 1);
-  const hit = MODEL_FAMILIES.find(([prefix]) => id.startsWith(prefix));
+  const hit =
+    MODEL_FAMILIES.find(([prefix]) => id.startsWith(prefix)) ||
+    MODEL_FAMILIES.find(([prefix]) => prefix.length >= 3 && id.includes(prefix));
   return hit ? hit[1] : "";
 }
 
@@ -2468,7 +2482,7 @@ const LED_COLUMNS = [
   { id: "status", label: "状态", defaultOn: true },
 ];
 const USAGE_COLS_KEY = "agenthub_usage_cols";
-const OPTIMAL_USAGE_POLL_MS = 3500;
+const OPTIMAL_USAGE_POLL_MS = 2000;
 const LED_PAGE_STEP = 100;
 
 const LED_FILTER_CATS = [
@@ -2732,7 +2746,7 @@ async function loadUsage(manual) {
     }
     const forceParam = manual ? "&force=1" : "";
     const resp = await fetch(
-      `/api/usage/ledger?period=${encodeURIComponent(periodToFetch)}&limit=1000${forceParam}`,
+      `/api/usage/ledger?period=${encodeURIComponent(periodToFetch)}&limit=50000${forceParam}`,
       { cache: "no-store", headers, signal: usageAbortController.signal },
     );
     if (resp.status === 304 && usageMemoryCache.has(periodToFetch)) {
@@ -4023,23 +4037,29 @@ function renderLedgerRequests() {
     return;
   }
   const rows = ledFilteredRows();
-  if (badge) badge.textContent = `共 ${rows.length.toLocaleString()} 条记录`;
+  const anyFilter = Boolean(
+    ledFilterAgent ||
+      ledFilterProvider ||
+      ledFilterModel ||
+      ledStatus ||
+      ledFilterTier ||
+      ledQuery,
+  );
+  if (badge) {
+    const totalCount =
+      !anyFilter && usageDigest && usageDigest.calls > rows.length
+        ? usageDigest.calls
+        : rows.length;
+    badge.textContent = `共 ${totalCount.toLocaleString()} 条记录`;
+  }
   if (!rows.length) {
-    const anyFilter = Boolean(
-      ledFilterAgent ||
-        ledFilterProvider ||
-        ledFilterModel ||
-        ledStatus ||
-        ledFilterTier ||
-        ledQuery,
-    );
     wrap.innerHTML = `<div class="led-none">${
       anyFilter
         ? "最近的请求里没有符合筛选条件的记录"
         : "本周期没有请求"
     }</div>`;
     if (ledStatus === "failed" && usageDigest.errors) {
-      wrap.firstElementChild.textContent += `（本周期共 ${usageDigest.errors} 次失败，最近的一千条里没有）`;
+      wrap.firstElementChild.textContent += `（本周期共 ${usageDigest.errors} 次失败）`;
     }
     return;
   }
@@ -4487,8 +4507,8 @@ function renderSettings() {
   if (dashboardData && dashboardData.device) renderDevice(dashboardData.device);
 }
 
-// Implicit optimal background refresh cadence (3.5s, with focus hot-reload).
-const OPTIMAL_DASHBOARD_POLL_MS = 3500;
+// Implicit optimal background refresh cadence (2.0s, with focus hot-reload).
+const OPTIMAL_DASHBOARD_POLL_MS = 2000;
 function pollIntervalMs() {
   return OPTIMAL_DASHBOARD_POLL_MS;
 }
@@ -4500,6 +4520,7 @@ function startPolling() {
   pollTimer = setInterval(() => {
     if (document.visibilityState !== "hidden") {
       refreshDashboard(false);
+      if (isUsageOpen()) loadUsage(false);
     }
   }, pollIntervalMs());
   if (!pollVisibilityBound) {

@@ -375,7 +375,7 @@ fn ledger_cache() -> &'static RwLock<LedgerCache> {
 /// How long a scan is reused. The page asks on every poll; transcripts only
 /// change when an agent writes one, and incremental tail reads make post-TTL
 /// refreshes sub-millisecond when nothing grew.
-const LEDGER_TTL: Duration = Duration::from_secs(3);
+const LEDGER_TTL: Duration = Duration::from_millis(1200);
 
 /// Drops the memoised walk. A session moved to the trash is still on disk at
 /// its old path in the cache until the next park, and the fingerprint of a
@@ -579,7 +579,9 @@ fn file_len_and_mtime(path: &Path) -> (u64, i64) {
 }
 
 /// ZCode's calls, incrementally read from `~/.zcode/cli/db/db.sqlite` using
-/// DB+WAL file fingerprints and a `model_usage` rowid watermark.
+/// a `model_usage` rowid watermark. Does not rely on Windows NTFS WAL `mtime`
+/// or `len` alone, because NTFS delays updating directory metadata while the
+/// WAL file handle is held open by a writer process.
 fn update_zcode_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
     let database = home.join(".zcode").join("cli").join("db").join("db.sqlite");
     if !database.is_file() {
@@ -593,18 +595,6 @@ fn update_zcode_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
     let (db_len, db_modified_ms) = file_len_and_mtime(&database);
     let (wal_len, wal_modified_ms) = file_len_and_mtime(&wal);
 
-    // Zero-clone fast path when neither db.sqlite nor db.sqlite-wal changed on disk.
-    if let Ok(guard) = ledger_cache().read()
-        && let Some(ref state) = guard.zcode
-        && state.db_path == database
-        && state.db_len == db_len
-        && state.db_modified_ms == db_modified_ms
-        && state.wal_len == wal_len
-        && state.wal_modified_ms == wal_modified_ms
-    {
-        return false;
-    }
-
     let prev = ledger_cache().read().ok().and_then(|g| g.zcode.clone());
     let Ok(connection) = rusqlite::Connection::open_with_flags(
         &database,
@@ -614,9 +604,13 @@ fn update_zcode_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
     };
 
     // Reset if DB path changed or DB file shrank (vacuum/recreate); otherwise advance from watermark.
+    let mut was_reset = false;
     let mut state = match prev {
         Some(old) if old.db_path == database && db_len >= old.db_len => old,
-        _ => ZCodeCacheState::default(),
+        _ => {
+            was_reset = true;
+            ZCodeCacheState::default()
+        }
     };
     state.db_path = database.clone();
     state.db_len = db_len;
@@ -624,6 +618,7 @@ fn update_zcode_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
     state.wal_len = wal_len;
     state.wal_modified_ms = wal_modified_ms;
 
+    let mut changed = was_reset;
     let usage = connection.prepare(
         "select rowid, session_id, model_id, input_tokens, output_tokens,
                 cache_creation_input_tokens, cache_read_input_tokens,
@@ -685,16 +680,20 @@ fn update_zcode_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
                     },
                     routed,
                 ));
+                changed = true;
             }
             // Legacy messages predate `model_usage` and never receive new writes,
             // so scanning them once per Runner lifetime avoids full-table scans.
             if !state.legacy_loaded {
                 if let Ok(rows) = read_zcode_messages(&connection, &state.covered_sessions, routed)
                 {
+                    if !rows.is_empty() {
+                        changed = true;
+                    }
                     state.legacy_records = rows;
                     state.legacy_loaded = true;
                 }
-            } else {
+            } else if changed {
                 state
                     .legacy_records
                     .retain(|r| !state.covered_sessions.contains(&r.session));
@@ -705,7 +704,7 @@ fn update_zcode_calls(home: &Path, routed: &HashMap<String, String>) -> bool {
     if let Ok(mut guard) = ledger_cache().write() {
         guard.zcode = Some(state);
     }
-    true
+    changed
 }
 
 /// Fills in the ZCode sessions `model_usage` predates, from each assistant

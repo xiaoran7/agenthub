@@ -454,9 +454,15 @@ impl ApiRequest<'_> {
                         *guard = None;
                     }
                     crate::collectors::invalidate_session_caches_for_refresh();
+                    crate::remote_host::force_local_store_scan();
                 }
-                let data = build_dashboard_summary(&handler, port, &identity_path);
-                send_json_response_etag(stream, headers, &data)?;
+                let mut data = build_dashboard_summary(&handler, port, &identity_path);
+                if let Some(pending_nav) = crate::tray::take_pending_window_hash() {
+                    data["pending_nav"] = json!(pending_nav);
+                    send_json_response(stream, 200, &data)?;
+                } else {
+                    send_json_response_etag(stream, headers, &data)?;
+                }
             }
             // the usage page's per-request ledger: one record per model call,
             // aggregated into the trend, the rankings, the heatmap and the
@@ -467,8 +473,8 @@ impl ApiRequest<'_> {
                 let limit = query
                     .get("limit")
                     .and_then(|n| n.parse::<usize>().ok())
-                    .unwrap_or(200)
-                    .clamp(1, 1000);
+                    .unwrap_or(50_000)
+                    .clamp(1, 100_000);
                 let force = query
                     .get("force")
                     .map(|v| v == "1" || v == "true")
@@ -1075,8 +1081,8 @@ impl ApiRequest<'_> {
     }
 }
 
-fn dashboard_summary_cache() -> &'static RwLock<Option<(Instant, serde_json::Value)>> {
-    static CACHE: OnceLock<RwLock<Option<(Instant, serde_json::Value)>>> = OnceLock::new();
+fn dashboard_summary_cache() -> &'static RwLock<Option<(Instant, u64, serde_json::Value)>> {
+    static CACHE: OnceLock<RwLock<Option<(Instant, u64, serde_json::Value)>>> = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
@@ -1085,8 +1091,9 @@ fn build_dashboard_summary(
     port: u16,
     identity_path: &Path,
 ) -> serde_json::Value {
+    let current_scan_gen = crate::remote_host::local_store_scan_generation();
     if let Ok(guard) = dashboard_summary_cache().read() {
-        if let Some((cached_at, ref val)) = *guard {
+        if let Some((cached_at, cached_gen, ref val)) = *guard {
             let has_sessions = val
                 .get("sessions")
                 .and_then(serde_json::Value::as_array)
@@ -1099,11 +1106,11 @@ fn build_dashboard_summary(
             let ttl = if sessions_loading {
                 Duration::from_millis(250)
             } else if has_sessions {
-                Duration::from_secs(4)
+                Duration::from_millis(1200)
             } else {
                 Duration::from_millis(500)
             };
-            if cached_at.elapsed() < ttl {
+            if cached_gen == current_scan_gen && cached_at.elapsed() < ttl {
                 let mut v = val.clone();
                 v["port"] = json!(port);
                 return v;
@@ -1599,9 +1606,7 @@ fn build_dashboard_summary(
         obj.insert("remote_enabled".to_string(), json!(remote_enabled));
         obj.insert("connected".to_string(), json!(remote_connected));
     }
-    let sessions_loading = is_starting
-        || !crate::remote_host::is_local_store_ready()
-        || crate::remote_host::is_local_store_scanning();
+    let sessions_loading = is_starting || !crate::remote_host::is_local_store_ready();
 
     let summary = json!({
         "ready": is_ready,
@@ -1642,7 +1647,7 @@ fn build_dashboard_summary(
 
     if total_sessions == 0 {
         if let Ok(guard) = dashboard_summary_cache().read() {
-            if let Some((_, ref prev_val)) = *guard {
+            if let Some((_, _, ref prev_val)) = *guard {
                 if let Some(prev_sessions) = prev_val
                     .get("sessions")
                     .and_then(serde_json::Value::as_array)
@@ -1663,16 +1668,17 @@ fn build_dashboard_summary(
         }
     }
 
+    let final_scan_gen = crate::remote_host::local_store_scan_generation();
     if is_ready && total_sessions > 0 {
         if let Ok(mut guard) = dashboard_summary_cache().write() {
-            *guard = Some((Instant::now(), summary.clone()));
+            *guard = Some((Instant::now(), final_scan_gen, summary.clone()));
         }
     } else if is_ready && total_sessions == 0 {
         let prev_had_sessions = dashboard_summary_cache()
             .read()
             .ok()
             .and_then(|g| {
-                g.as_ref().map(|(_, v)| {
+                g.as_ref().map(|(_, _, v)| {
                     v.get("sessions")
                         .and_then(serde_json::Value::as_array)
                         .map(|a| !a.is_empty())
@@ -1682,7 +1688,7 @@ fn build_dashboard_summary(
             .unwrap_or(false);
         if !prev_had_sessions {
             if let Ok(mut guard) = dashboard_summary_cache().write() {
-                *guard = Some((Instant::now(), summary.clone()));
+                *guard = Some((Instant::now(), final_scan_gen, summary.clone()));
             }
         }
     }

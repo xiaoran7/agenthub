@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+- **Runtime 用量日志上限解除、Windows NTFS/WAL 实时热更新修复、网关直连/路由精准判定、模型厂商图标补齐、单窗口防多开聚焦与托盘鼠标悬停即显（`crates/runner`）**：
+  - **解除请求日志 1,000 条硬上限（`crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
+    - 将 `/api/usage/ledger` 接口的 `limit` 参数上限从 `.unwrap_or(200).clamp(1, 1000)` 提升至 `.unwrap_or(50_000).clamp(1, 100_000)`，前端 `dashboard.js` 默认拉取上限同步提升至 `50000`，配合前端 DOM 增量分页（每页 100 条），彻底解除"共 1,000 条记录"截断限制；
+  - **修复 Windows NTFS 下 SQLite WAL 元数据延迟导致的自动热更新失效（`crates/runner/src/usage_ledger.rs`, `crates/runner/src/collectors/mod.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
+    - 根除 `update_zcode_calls` 依赖 Windows NTFS 目录下 `.sqlite-wal` 文件 `(len, mtime)` 变化才触发查询的缺陷（长连接复用预分配 WAL 帧时不改变文件大小且延迟刷新 `ftLastWriteTime`），改为直接执行 `WHERE rowid > ?1` 轻量级主键增量查询，仅当实际读入新行时才标记账本变更；
+    - 将 `collect_zcode_sessions_from` 的会话缓存失效判据升级为 SQLite 内部水位线查询 `(COUNT(session), MAX(time_updated), COUNT(message))`，在 `invalidate_session_caches_for_refresh` 中同步清理 `zcode_sessions_cache`，并将后端 `LEDGER_TTL` / `dashboard_summary_cache` 缩短至 `1.2s`、前端轮询周期缩短至 `2.0s`；
+    - 为 `remote_host.rs` 的本地存储扫描引入 `generation` 代数递增与 `force_local_store_scan()` 强制唤醒机制，消除后台增量扫描期间 `sessions_loading` 阻塞前端会话列表渲染的问题；
+  - **修复客户端"直连 / 路由"与供应商名称判定失真（`crates/runner/src/claude_gateway.rs`, `crates/runner/src/collectors/zcode_app_server.rs`）**：
+    - 新增 `is_official_provider_url`、`is_official_or_default_provider_name` 与 `is_cc_switch_default_placeholder`，识别 `cc-switch.db` 中未配置端点的 `"default"` 占位行，避免其遮蔽 `~/.claude/settings.json` 与 `~/.zcode/v2/config.json` 中的真实网关配置；
+    - 修复 `load_zcode_v2_provider_registry` 因单个自定义 provider 缺少 `baseURL` 字段导致问号操作符提前中断整表扫描的缺陷，并优先从 `~/.zcode/v2/config.json` 解析 ZCode 当前激活供应商与模型路由；任何指向非官方 API 域名或名称含"中转 / CPA / Relay / Proxy"的自定义供应商均统一标记为"路由"（`is_routed = true`）；
+  - **补齐 DeepSeek / Qwen / 智谱 GLM / Kimi / MiniMax / Mistral / OpenAI 真实多色品牌图标（`crates/runner/resources/tray_icons_64.bin.zst`, `crates/runner/src/tray_menu.rs`, `crates/runner/resources/dashboard.js`）**：
+    - 将 `deepseek-color.svg`、`qwen-color.svg`、`zhipu-color.svg`、`kimi.svg`、`minimax-color.svg`、`mistral-color.svg` 与 `openai.svg` 预光栅化并合入 `tray_icons_64.bin.zst`（共 27 枚 `64x64` RGBA 精灵图标）；
+    - 更新 `tray_menu.rs` 的 `model_brand_visual` 与前端 `dashboard.js` 的 `MODEL_FAMILIES` / `modelIconName` 映射，按模型自身厂商前缀渲染真实品牌图标（如 `deepseek-v4.1-flash` 显示蓝色鲸鱼图标而非黑色 ZCode 图标）；
+  - **托盘与桌面端单实例窗口防多开聚焦及顶栏分段滑块修复（`crates/runner/src/window_icon.rs`, `crates/runner/src/tray.rs`, `crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
+    - 在 `window_icon.rs` 新增 `focus_existing_edge_app_window()`，通过 `EnumWindows` 枚举已打开的 `AgentHub` 桌面窗口，调用 `ShowWindow(SW_RESTORE)` + `SetForegroundWindow` 唤醒置顶并自动关闭多余重复窗口；
+    - 点击托盘"打开主窗口"、齿轮设置或会话行时，若主窗口已存在则直接唤醒并通过 `/api/dashboard` 的 `pending_nav` 字段驱动前端就地切换页面，不再重复拉起新的 `msedge.exe --app` 窗口；同时修复前端进入"设置"页时顶栏 `#segThumb` 胶囊仍停留在"用量"或"会话"上的问题；
+  - **系统托盘鼠标悬停即显与移出自动收起（`crates/runner/src/tray.rs`, `crates/runner/src/tray_menu.rs`）**：
+    - `tray_wnd_proc` 监听 `WM_MOUSEMOVE` 事件，鼠标移入右下角托盘图标即自动弹出托盘面板（无需点击），并移除原生 `NIF_TIP` 文本提示以免遮挡弹窗；
+    - `tray_menu.rs` 实时追踪鼠标与托盘卡片及托盘锚点的距离，鼠标移出两块区域 `380ms` 后自动收起弹窗，且弹窗打开期间每 `1.8s` 自动热刷新实时用量数据；
+  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `0ec9959b52e0d733a1ee4b7a5e61b2952bc7edf7935a91ede1c3f0d910686f47`，`agenthub-runner.exe` SHA256: `86d5370d11a81c4225ffdc98fd8ab5b41851c11d62eb297d0ac970ebf7eadcee`），并通过 Taildrop 推送至 `portable-pc`。
+
 - **Web 控制台时间线阅读列宽度基准与居中对称轴对齐修复（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
   - 为 `.remote-tool-group` 与 `.remote-private-note` 补齐 `width: 100%` 与 `box-sizing: border-box`，根除纵向 Flex 容器下 `margin: 0 auto` 导致工具组折叠条随预览文字长短忽宽忽窄、脱敏提示居中漂移的问题；
   - 将 `.remote-tool-group`、`.remote-tool`、`.remote-notice`、`.remote-message` 与 `.remote-composer-card` 的宽度基准全面统一为 `var(--remote-measure)`（消除 `760px`、`794px`、`900px` 三种宽度混排导致的左右边缘错位），并为 `.remote-timeline` 设置 `scrollbar-gutter: stable both-edges` 使滚动区内外共享完全一致的几何对称中心。

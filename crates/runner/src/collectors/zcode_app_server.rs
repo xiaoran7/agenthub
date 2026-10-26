@@ -76,20 +76,33 @@ pub fn resolve_node_executable() -> PathBuf {
 
 pub fn load_zcode_v2_provider_registry() -> Option<Vec<Value>> {
     let home = home_dir()?;
-    let config_path = home.join(r".zcode\v2\config.json");
+    let config_path = home.join(".zcode").join("v2").join("config.json");
     if !config_path.is_file() {
         return None;
     }
     let data = fs::read_to_string(&config_path).ok()?;
     let json: Value = serde_json::from_str(&data).ok()?;
-    let providers_obj = json.get("provider")?.as_object()?;
+    let providers_obj = json
+        .get("provider")
+        .or_else(|| json.get("providers"))?
+        .as_object()?;
     let mut providers = Vec::new();
     for (pid, pdata) in providers_obj {
         if pdata.get("enabled").and_then(Value::as_bool) == Some(false) {
             continue;
         }
         let options = pdata.get("options").unwrap_or(&Value::Null);
-        let base_url = options.get("baseURL").and_then(Value::as_str)?;
+        let Some(base_url) = options
+            .get("baseURL")
+            .or_else(|| options.get("base_url"))
+            .or_else(|| pdata.get("baseURL"))
+            .or_else(|| pdata.get("base_url"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
         let mut models = Vec::new();
         if let Some(models_obj) = pdata.get("models").and_then(Value::as_object) {
             for (mid, mdata) in models_obj {

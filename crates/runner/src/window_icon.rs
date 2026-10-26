@@ -22,8 +22,10 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateIconFromResourceEx, EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW,
-    ICON_BIG, ICON_SMALL, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, SendMessageW,
+    BringWindowToTop, CreateIconFromResourceEx, EnumWindows, GetClassNameW, GetWindowTextLengthW,
+    GetWindowTextW, ICON_BIG, ICON_SMALL, IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTCOLOR,
+    LoadImageW, PostMessageW, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow, ShowWindow,
+    WM_CLOSE,
 };
 
 /// Chromium's app window: class `Chrome_WidgetWin_1`, title from the page.
@@ -134,30 +136,59 @@ pub fn watch_desktop_window_icon() {
     let _ = WATCHER.set(());
     std::thread::spawn(|| {
         loop {
-            if let Some(hwnd) = find_edge_app_window() {
-                unsafe { apply_icon(hwnd) };
+            let hwnds = find_all_edge_app_windows();
+            if let Some(&primary) = hwnds.first() {
+                unsafe { apply_icon(primary) };
+                for &dup in &hwnds[1..] {
+                    unsafe {
+                        let _ = PostMessageW(dup, WM_CLOSE, 0, 0);
+                    }
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(400));
         }
     });
 }
 
-/// Finds the visible Edge app window belonging to AgentHub.
-fn find_edge_app_window() -> Option<HWND> {
-    let mut found: Option<HWND> = None;
+/// If an AgentHub Edge `--app` window is already open, restores and focuses it
+/// (closing any accidental duplicate frames) and returns `true`.
+pub fn focus_existing_edge_app_window() -> bool {
+    let hwnds = find_all_edge_app_windows();
+    let Some(&primary) = hwnds.first() else {
+        return false;
+    };
+    unsafe {
+        for &dup in &hwnds[1..] {
+            let _ = PostMessageW(dup, WM_CLOSE, 0, 0);
+        }
+        if IsIconic(primary) != 0 {
+            let _ = ShowWindow(primary, SW_RESTORE);
+        } else {
+            let _ = ShowWindow(primary, SW_SHOW);
+        }
+        let _ = BringWindowToTop(primary);
+        let _ = SetForegroundWindow(primary);
+        apply_icon(primary);
+    }
+    true
+}
+
+/// Finds all visible Edge app windows belonging to AgentHub.
+fn find_all_edge_app_windows() -> Vec<HWND> {
+    let mut found: Vec<HWND> = Vec::new();
     unsafe {
         EnumWindows(
-            Some(enum_edge_app),
-            &mut found as *mut Option<HWND> as LPARAM,
+            Some(enum_all_edge_apps),
+            &mut found as *mut Vec<HWND> as LPARAM,
         );
     }
     found
 }
 
-unsafe extern "system" fn enum_edge_app(hwnd: HWND, lparam: LPARAM) -> i32 {
-    let slot = unsafe { &mut *(lparam as *mut Option<HWND>) };
-    if slot.is_none() && unsafe { is_edge_app_window(hwnd) } {
-        *slot = Some(hwnd);
+unsafe extern "system" fn enum_all_edge_apps(hwnd: HWND, lparam: LPARAM) -> i32 {
+    let list = unsafe { &mut *(lparam as *mut Vec<HWND>) };
+    if unsafe { is_edge_app_window(hwnd) } {
+        list.push(hwnd);
     }
     1
 }

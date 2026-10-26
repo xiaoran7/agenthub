@@ -45,6 +45,13 @@ pub enum TrayIconId {
     ChevronRight = 17,
     ArrowLeft = 18,
     Check = 19,
+    DeepSeek = 20,
+    Qwen = 21,
+    Zhipu = 22,
+    Kimi = 23,
+    Minimax = 24,
+    Mistral = 25,
+    OpenAi = 26,
 }
 
 pub(crate) fn icon_bank() -> &'static [u8] {
@@ -181,6 +188,7 @@ fn model_brand_visual(model: &str) -> (TrayIconId, bool, (u8, u8, u8), (u8, u8, 
         || lower.contains("opus")
         || lower.contains("haiku")
         || lower.contains("fable")
+        || lower.contains("mythos")
     {
         (
             TrayIconId::ClaudeDesktop,
@@ -188,24 +196,77 @@ fn model_brand_visual(model: &str) -> (TrayIconId, bool, (u8, u8, u8), (u8, u8, 
             (0xfd, 0xf0, 0xe7),
             (0x33, 0x22, 0x1b),
         )
-    } else if lower.contains("gemini") {
+    } else if lower.contains("gemini") || lower.contains("gemma") {
         (
             TrayIconId::GeminiStar,
             false,
             (0xef, 0xf6, 0xff),
             (0x1e, 0x29, 0x3b),
         )
-    } else if lower.contains("gpt")
-        || lower.contains("codex")
-        || lower.starts_with("o1")
-        || lower.starts_with("o3")
-        || lower.starts_with("o4")
+    } else if lower.contains("deepseek") {
+        (
+            TrayIconId::DeepSeek,
+            false,
+            (0xed, 0xf2, 0xff),
+            (0x1e, 0x26, 0x3d),
+        )
+    } else if lower.contains("qwen") || lower.contains("qwq") {
+        (
+            TrayIconId::Qwen,
+            false,
+            (0xf0, 0xed, 0xff),
+            (0x26, 0x20, 0x3d),
+        )
+    } else if lower.contains("glm") || lower.contains("zhipu") {
+        (
+            TrayIconId::Zhipu,
+            false,
+            (0xec, 0xf3, 0xff),
+            (0x1d, 0x28, 0x3d),
+        )
+    } else if lower.contains("kimi") || lower.contains("moonshot") {
+        (
+            TrayIconId::Kimi,
+            false,
+            (0xf1, 0xf3, 0xf7),
+            (0x27, 0x28, 0x30),
+        )
+    } else if lower.contains("minimax") || lower.contains("abab") {
+        (
+            TrayIconId::Minimax,
+            false,
+            (0xff, 0xee, 0xf0),
+            (0x38, 0x1f, 0x24),
+        )
+    } else if lower.contains("mistral")
+        || lower.contains("codestral")
+        || lower.contains("devstral")
+        || lower.contains("magistral")
     {
+        (
+            TrayIconId::Mistral,
+            false,
+            (0xff, 0xf2, 0xe8),
+            (0x36, 0x24, 0x19),
+        )
+    } else if lower.contains("codex") {
         (
             TrayIconId::Codex,
             true,
             (0xee, 0xf2, 0xff),
             (0x23, 0x25, 0x3a),
+        )
+    } else if lower.contains("gpt")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.contains("openai")
+    {
+        (
+            TrayIconId::OpenAi,
+            false,
+            (0xe6, 0xf7, 0xf2),
+            (0x19, 0x33, 0x2b),
         )
     } else if lower.contains("grok") {
         (
@@ -214,12 +275,26 @@ fn model_brand_visual(model: &str) -> (TrayIconId, bool, (u8, u8, u8), (u8, u8, 
             (0xf3, 0xe8, 0xff),
             (0x2b, 0x1f, 0x3d),
         )
-    } else {
+    } else if lower.contains("antigravity") {
+        (
+            TrayIconId::Antigravity,
+            false,
+            (0xef, 0xf6, 0xff),
+            (0x1e, 0x29, 0x3b),
+        )
+    } else if lower.contains("zcode") {
         (
             TrayIconId::ZCode,
             true,
             (0xf3, 0xf4, 0xf6),
             (0x27, 0x27, 0x2f),
+        )
+    } else {
+        (
+            TrayIconId::UsageTok,
+            false,
+            (0xf3, 0xe8, 0xff),
+            (0x2d, 0x21, 0x42),
         )
     }
 }
@@ -962,6 +1037,8 @@ mod win32 {
         visible: bool,
         hidden_at: Option<Instant>,
         shown_at: Option<Instant>,
+        last_inside_at: Instant,
+        last_refreshed_at: Instant,
         session: u64,
     }
 
@@ -975,6 +1052,16 @@ mod win32 {
             s.borrow()
                 .as_ref()
                 .and_then(|st| st.hidden_at)
+                .is_some_and(|at| at.elapsed() < window)
+        })
+    }
+
+    pub fn shown_within(window: Duration) -> bool {
+        STATE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .filter(|st| st.visible)
+                .and_then(|st| st.shown_at)
                 .is_some_and(|at| at.elapsed() < window)
         })
     }
@@ -1061,6 +1148,7 @@ mod win32 {
                     .as_ref()
                     .map(|st| st.session.wrapping_add(1))
                     .unwrap_or(1);
+                let now = Instant::now();
                 *guard = Some(State {
                     hwnd,
                     menu,
@@ -1073,7 +1161,9 @@ mod win32 {
                     pressed: None,
                     visible: true,
                     hidden_at: None,
-                    shown_at: Some(Instant::now()),
+                    shown_at: Some(now),
+                    last_inside_at: now,
+                    last_refreshed_at: now,
                     session: next_session,
                 });
             });
@@ -1098,12 +1188,16 @@ mod win32 {
         unsafe {
             let mut cursor: POINT = zeroed();
             GetCursorPos(&mut cursor);
-            let state = STATE.with(|s| {
+            let snapshot = STATE.with(|s| {
                 s.borrow().as_ref().map(|st| {
                     (
                         st.hwnd,
                         st.visible,
                         st.shown_at,
+                        st.last_inside_at,
+                        st.last_refreshed_at,
+                        st.anchor,
+                        st.layout.scale,
                         st.layout.card_x,
                         st.layout.card_y,
                         st.layout.card_w,
@@ -1111,23 +1205,72 @@ mod win32 {
                     )
                 })
             });
-            let Some((hwnd, visible, shown_at, card_x, card_y, card_w, card_h)) = state else {
+            let Some((
+                hwnd,
+                visible,
+                shown_at,
+                last_inside_at,
+                last_refreshed_at,
+                anchor,
+                scale,
+                card_x,
+                card_y,
+                card_w,
+                card_h,
+            )) = snapshot
+            else {
                 return;
             };
-            if !visible || shown_at.is_none_or(|at| at.elapsed() < SETTLE) {
+            if !visible {
                 return;
             }
             let mut rect: RECT = zeroed();
             GetWindowRect(hwnd, &mut rect);
-            let inside = cursor.x >= rect.left + card_x
+            let inside_card = cursor.x >= rect.left + card_x
                 && cursor.x < rect.left + card_x + card_w
                 && cursor.y >= rect.top + card_y
                 && cursor.y < rect.top + card_y + card_h;
-            if !inside {
-                let fg = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
-                if fg != hwnd {
-                    hide();
+            let pad = (28.0 * scale).round() as i32;
+            let near_anchor =
+                (cursor.x - anchor.x).abs() <= pad && (cursor.y - anchor.y).abs() <= pad;
+            let in_bridge = shown_at.is_some_and(|at| at.elapsed() < Duration::from_millis(900))
+                && cursor.x >= rect.left + card_x - pad
+                && cursor.x <= rect.left + card_x + card_w + pad
+                && cursor.y >= rect.top + card_y - pad
+                && cursor.y <= anchor.y + pad;
+
+            if inside_card || near_anchor || in_bridge {
+                let should_refresh = last_refreshed_at.elapsed() >= Duration::from_millis(1800);
+                let host = STATE.with(|s| {
+                    let mut guard = s.borrow_mut();
+                    let st = guard.as_mut()?;
+                    st.last_inside_at = Instant::now();
+                    should_refresh.then(|| st.menu.host.clone())
+                });
+                if let Some(host) = host {
+                    let fresh_menu = build_live_menu(host);
+                    let need_paint = STATE.with(|s| {
+                        let mut guard = s.borrow_mut();
+                        let st = guard.as_mut()?;
+                        st.menu = fresh_menu;
+                        st.layout = CardLayout::compute(&st.menu, st.tab, st.dpi);
+                        st.last_refreshed_at = Instant::now();
+                        st.session = st.session.wrapping_add(1);
+                        Some(())
+                    });
+                    if need_paint.is_some() {
+                        repaint(hwnd);
+                    }
                 }
+                return;
+            }
+
+            if shown_at.is_none_or(|at| at.elapsed() < SETTLE) {
+                return;
+            }
+            let fg = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+            if fg != hwnd || last_inside_at.elapsed() >= Duration::from_millis(380) {
+                hide();
             }
         }
     }
@@ -2171,7 +2314,7 @@ mod win32 {
                 DEFAULT_CHARSET as u32,
                 OUT_DEFAULT_PRECIS as u32,
                 CLIP_DEFAULT_PRECIS as u32,
-                CLEARTYPE_NATURAL_QUALITY as u32,
+                CLEARTYPE_NATURAL_QUALITY,
                 DEFAULT_PITCH as u32,
                 name.as_mut_ptr(),
             )
@@ -2413,16 +2556,16 @@ mod win32 {
 }
 
 #[cfg(target_os = "windows")]
-pub use win32::{closed_within, hide, hide_if_clicked_away, is_visible, show};
+pub use win32::{closed_within, hide, hide_if_clicked_away, is_visible, show, shown_within};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn embedded_icon_bank_contains_all_twenty_64x64_rgba_icons() {
+    fn embedded_icon_bank_contains_all_twenty_seven_64x64_rgba_icons() {
         let bank = icon_bank();
-        assert_eq!(bank.len(), 20 * ICON_FRAME_BYTES);
+        assert_eq!(bank.len(), 27 * ICON_FRAME_BYTES);
         for id in [
             TrayIconId::AgentHub,
             TrayIconId::ClaudeCode,
@@ -2444,6 +2587,13 @@ mod tests {
             TrayIconId::ChevronRight,
             TrayIconId::ArrowLeft,
             TrayIconId::Check,
+            TrayIconId::DeepSeek,
+            TrayIconId::Qwen,
+            TrayIconId::Zhipu,
+            TrayIconId::Kimi,
+            TrayIconId::Minimax,
+            TrayIconId::Mistral,
+            TrayIconId::OpenAi,
         ] {
             let frame = icon_frame(id).expect("icon frame must exist");
             let non_transparent = frame
