@@ -18,7 +18,8 @@
     - `conversation.rs` 在遍历磁盘目录前优先按已缓存文件指纹执行 $O(1)$ 元数据比对，新增 30 秒 TTL 的 `codex_path_index()` 内存索引避免每次拉取 Codex 对话时执行 7 层目录递归，并在单文件转录（`paths.len() == 1`）时跳过冗余的 `serde_json::to_string` 序列化去重；
   - **Runtime 与 Web 端全局文案规范化（`crates/runner/resources/dashboard.html`, `crates/runner/resources/dashboard.js`, `apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/SettingsPage.tsx`, `apps/web/src/components/ThinkingAccordion.tsx`）**：
     - 全面清理直角括号 `「」`、`【】` 与弯引号 `“”`，统一使用标准双引号 `""` 与规范中文标点；
-    - 统一浅色/深色主题命名、MCP 注册说明、能力生态提示、设备配对与解绑反馈、工具"执行结果输出"标题以及思考折叠面板（"正在思考…" / "思考过程"）文案。
+    - 统一浅色/深色主题命名、MCP 注册说明、能力生态提示、设备配对与解绑反馈、工具"执行结果输出"标题以及思考折叠面板（"正在思考…" / "思考过程"）文案；
+  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `31a737efb417b4b3e7384c48c4b408c1c5605c7bded6a90ae3e5e452cc8f464f`，`agenthub-runner.exe` SHA256: `9ae26edcdcdf689483370629204040c6d4a99a94552dcc4bdd0f25feadc28e33`），并通过 Taildrop 推送至 `portable-pc`。
 
 - **系统托盘弹窗字体超清化、主题联动配色与真实多色品牌图标内嵌（`crates/runner`）**：
   - **ClearType 亚像素字体渲染与 PerMonitorV2 原生高分屏激活（`crates/runner/src/tray_menu.rs`, `crates/runner/src/tray.rs`, `crates/runner/resources/app.manifest`）**：
