@@ -4297,15 +4297,20 @@ impl<T: NativeTransport> NativeSessionHost<T> {
             }
         }
         let question_id = question.as_ref().map(|q| q.question_id.clone());
+        let binding = hub_id
+            .as_ref()
+            .and_then(|id| self.sessions.get(id))
+            .cloned();
+        let effective_native_id = binding
+            .as_ref()
+            .map(|b| b.provider_session_id.clone())
+            .or(native_id);
         HostEvent {
             event_id: uuid::Uuid::new_v4().to_string(),
             host_generation: self.generation.clone(),
-            binding: hub_id
-                .as_ref()
-                .and_then(|id| self.sessions.get(id))
-                .cloned(),
+            binding,
             hub_session_id: hub_id,
-            provider_session_id: native_id,
+            provider_session_id: effective_native_id,
             kind,
             raw,
             approval_id,

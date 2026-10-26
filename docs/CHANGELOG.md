@@ -21,7 +21,10 @@
   - **系统托盘鼠标悬停即显与移出自动收起（`crates/runner/src/tray.rs`, `crates/runner/src/tray_menu.rs`）**：
     - `tray_wnd_proc` 监听 `WM_MOUSEMOVE` 事件，鼠标移入右下角托盘图标即自动弹出托盘面板（无需点击），并移除原生 `NIF_TIP` 文本提示以免遮挡弹窗；
     - `tray_menu.rs` 实时追踪鼠标与托盘卡片及托盘锚点的距离，鼠标移出两块区域 `380ms` 后自动收起弹窗，且弹窗打开期间每 `1.8s` 自动热刷新实时用量数据；
-  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `0ec9959b52e0d733a1ee4b7a5e61b2952bc7edf7935a91ede1c3f0d910686f47`，`agenthub-runner.exe` SHA256: `86d5370d11a81c4225ffdc98fd8ab5b41851c11d62eb297d0ac970ebf7eadcee`），并通过 Taildrop 推送至 `portable-pc`。
+  - **远端 WebSocket 握手超时保护与 Claude 新会话 `realSessionId` 绑定同步修复（`crates/runner/src/remote_network.rs`, `crates/runner/src/remote_host.rs`, `services/api/src/remote-store.ts`）**：
+    - `remote_network.rs` 新增 `connect_with_timeout()`，在发起 `tungstenite::client_tls` 握手前为底层 `TcpStream` 设置 10 秒连接与读取超时、5 秒写入超时及 `TCP_NODELAY`，根除半开连接阻塞重连线程的问题；
+    - `remote_host.rs` 与 `remote-store.ts` 同步兼容 Claude CLI 首轮完成时将占位 `claude_*` ID 更新为真实 `realSessionId` 的场景，避免触发 `binding_conflict` / `native_identity_changed` 导致 Runner 发送队列卡死；
+  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `a7ab7ee3a3251bd3f4c2411ef2bafefcc3ff60ac2f83cd4be0e67beffdfa2a3b`，`agenthub-runner.exe` SHA256: `bc16544d5ccfbdeb277cfdcc8ca42c886bc988e556590d9d09f69154984c2f26`），并通过 Taildrop 同时推送 `.zip` 与 `.exe` 至 `portable-pc`。
 
 - **Web 控制台时间线阅读列宽度基准与居中对称轴对齐修复（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
   - 为 `.remote-tool-group` 与 `.remote-private-note` 补齐 `width: 100%` 与 `box-sizing: border-box`，根除纵向 Flex 容器下 `margin: 0 auto` 导致工具组折叠条随预览文字长短忽宽忽窄、脱敏提示居中漂移的问题；

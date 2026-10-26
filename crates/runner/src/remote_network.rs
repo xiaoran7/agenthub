@@ -1075,6 +1075,44 @@ fn validate_server(server: &str) -> Result<String> {
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
 
+fn connect_with_timeout(url_str: &str, timeout: Duration) -> Result<Socket> {
+    use std::net::ToSocketAddrs;
+    let parsed = url::Url::parse(url_str)?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("missing_remote_host"))?;
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let addrs: Vec<_> = (host, port).to_socket_addrs()?.collect();
+    if addrs.is_empty() {
+        bail!("remote_dns_empty");
+    }
+    let mut last_err = None;
+    let mut tcp = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(s) => {
+                tcp = Some(s);
+                break;
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let stream = match tcp {
+        Some(s) => s,
+        None => {
+            return Err(last_err
+                .map(Into::into)
+                .unwrap_or_else(|| anyhow::anyhow!("remote_connect_failed")));
+        }
+    };
+    let _ = stream.set_nodelay(true);
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let (socket, _) =
+        tungstenite::client_tls(url_str, stream).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(socket)
+}
+
 fn set_timeouts(socket: &mut Socket, read: Duration) -> Result<()> {
     let stream = match socket.get_mut() {
         MaybeTlsStream::Plain(stream) => stream,
@@ -1133,7 +1171,7 @@ fn network_loop(
         // Drop stale queued frames before announcing a new transport epoch.
         for _ in outgoing.try_iter() {}
         let result = (|| -> Result<()> {
-            let (mut socket, _) = tungstenite::connect(&url)?;
+            let mut socket = connect_with_timeout(&url, Duration::from_secs(10))?;
             set_timeouts(&mut socket, Duration::from_secs(10))?;
             let challenge = receive(&mut socket)?;
             let nonce = challenge["nonce"]

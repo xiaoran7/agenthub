@@ -658,7 +658,11 @@ export class RemoteContentStore {
     const previous = existing.get(incoming.hub_session_id);
     if (
       previous &&
-      previous.provider_session_id !== incoming.provider_session_id
+      previous.provider_session_id !== incoming.provider_session_id &&
+      !isSameProviderRebind(
+        previous.provider_session_id,
+        incoming.provider_session_id,
+      )
     )
       throw new RemoteStoreError("native_identity_changed");
   }
@@ -698,7 +702,7 @@ export class RemoteContentStore {
       }
       this.db
         .prepare(
-          `INSERT INTO remote_sessions(owner,runner,hub,native,binding) VALUES ${placeholders} ON CONFLICT(runner,hub) DO UPDATE SET binding=excluded.binding`,
+          `INSERT INTO remote_sessions(owner,runner,hub,native,binding) VALUES ${placeholders} ON CONFLICT(runner,hub) DO UPDATE SET native=excluded.native, binding=excluded.binding`,
         )
         .run(...values);
     }
@@ -710,7 +714,11 @@ export class RemoteContentStore {
     binding: RemoteBinding,
   ): void {
     const old = this.session(owner, runner, binding.hub_session_id);
-    if (old && old.provider_session_id !== binding.provider_session_id)
+    if (
+      old &&
+      old.provider_session_id !== binding.provider_session_id &&
+      !isSameProviderRebind(old.provider_session_id, binding.provider_session_id)
+    )
       throw new RemoteStoreError("native_identity_changed");
     this.writeBindings(owner, runner, [binding]);
   }
@@ -734,6 +742,14 @@ function requireOnlyKeys(
 ): void {
   if (Object.keys(value).some((key) => !keys.includes(key)))
     throw new RemoteStoreError(code);
+}
+
+function isSameProviderRebind(previous: unknown, next: unknown): boolean {
+  if (typeof previous !== "string" || typeof next !== "string") return false;
+  for (const prefix of ["claude_", "antigravity_", "grok_"]) {
+    if (previous.startsWith(prefix) && next.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 function validateRemoteEventFields(event: Record<string, unknown>): void {
@@ -761,6 +777,15 @@ function validateRemoteEventFields(event: Record<string, unknown>): void {
   if (event.binding !== null && event.binding !== undefined) {
     try {
       const binding = parseRemoteBinding(event.binding);
+      if (
+        binding.provider_session_id !== event.provider_session_id &&
+        isSameProviderRebind(
+          event.provider_session_id,
+          binding.provider_session_id,
+        )
+      ) {
+        event.provider_session_id = binding.provider_session_id;
+      }
       if (
         binding.host_generation !== event.host_generation ||
         binding.hub_session_id !== event.hub_session_id ||
