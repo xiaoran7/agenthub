@@ -23,6 +23,14 @@
 
 ---
 
+## Screenshot
+
+![AgentHub Remote showing a Codex session, streamed messages, and tool activity](docs/screenshots/remote-session.jpg)
+
+AgentHub Remote in a desktop browser. The sidebar groups sessions by device and workspace, while the open Codex session streams messages and tool activity. This capture shows an earlier version of the Web interface.
+
+---
+
 ## Overview
 
 AgentHub hooks directly into official CLI agent runtimes (**Claude Code**, **OpenAI Codex**, and **ACP**-compatible agents) without reinventing another inference loop. Through a single-binary Rust daemon (`agenthub-runner`) establishing outbound-only TLS/WebSocket connections to a self-hosted Gateway, you can inspect live output streams, approve tool permissions with diff previews, continue multi-turn sessions, or trigger emergency stops from any browser or mobile PWA.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- 中英文 README 新增 AgentHub 远程会话的浏览器实拍，展示设备和工作区分组、实时消息及工具执行状态。
+
 - **修复 CI 格式门禁失败（services/api/src/remote-store.ts）**：提交 48fce44 新增的 isSameProviderRebind 调用超出 Prettier 行宽限制却未按 --write 重排，导致 Gitea 的 npm run format:check 报错阻断 CI；本次仅执行 Prettier 自动格式化，无任何逻辑改动。
 
 - **Runtime 用量日志上限解除、Windows NTFS/WAL 实时热更新修复、网关直连/路由精准判定、模型厂商图标补齐、单窗口防多开聚焦与托盘鼠标悬停即显（`crates/runner`）**：

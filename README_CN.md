@@ -23,6 +23,14 @@
 
 ---
 
+## 使用截图
+
+![AgentHub 远程 Web 端的 Codex 会话、实时消息和工具卡片](docs/screenshots/remote-session.jpg)
+
+早期版本的 AgentHub 远程 Web 端实拍。左侧按设备和工作区查看会话，右侧展示当前 Codex 会话的消息和工具执行状态。
+
+---
+
 ## 核心定位
 
 AgentHub 不自建重复的 Agent 推理循环，而是通过官方协议托管 **Claude Code**、**OpenAI Codex** 及 **ACP** 兼容智能体。本机轻量守护进程 `agenthub-runner`（`agenthubd`）以主动出站 TLS/WebSocket 连接自部署 Gateway，让你离开工位后在手机或任意电脑浏览器上实时查看输出流、预览 Diff 审批权限、继续多轮对话或一键急停。
