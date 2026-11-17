@@ -25,9 +25,9 @@
 
 ## 使用截图
 
-![AgentHub 远程 Web 端的 Codex 会话、实时消息和工具卡片](docs/screenshots/remote-session.jpg)
+![AgentHub 远程 Web 端的 Codex 会话、实时消息和工具卡片](docs/screenshots/remote-conversation.png)
 
-早期版本的 AgentHub 远程 Web 端实拍。左侧按设备和工作区查看会话，右侧展示当前 Codex 会话的消息和工具执行状态。
+早期版本的 AgentHub 远程 Web 端对话区实拍，展示 Codex 会话消息和工具执行状态。
 
 ---
 

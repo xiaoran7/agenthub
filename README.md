@@ -25,9 +25,9 @@
 
 ## Screenshot
 
-![AgentHub Remote showing a Codex session, streamed messages, and tool activity](docs/screenshots/remote-session.jpg)
+![AgentHub Remote showing a Codex session, streamed messages, and tool activity](docs/screenshots/remote-conversation.png)
 
-AgentHub Remote in a desktop browser. The sidebar groups sessions by device and workspace, while the open Codex session streams messages and tool activity. This capture shows an earlier version of the Web interface.
+A cropped view of a Codex conversation in an earlier version of AgentHub Remote, showing streamed replies and a completed tool call.
 
 ---
 
