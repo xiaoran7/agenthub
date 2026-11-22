@@ -12,6 +12,12 @@
   --cds-surface-popover: #ffffff; /* 悬浮 Popover 纯白表面 */
 
   --cds-clay: #d97757; /* 品牌陶土主色 */
+  /* 陶土色作为 "文字" 时的专用档位。
+   * #d97757 在白底上只有 3.0:1，`--cds-clay-hover` 也只有 4.0:1，都够不上
+   * WCAG AA 的 4.5:1，一旦拿来写 11~13px 的小字就是"好看的糊字"。
+   * 填充色和文字色从此分家：图形/底色继续用 --cds-clay，文字用 --cds-clay-ink。
+   * 同色相压暗到 17.8°，白底 5.6:1，chip 的浅陶土底上 5.1:1。 */
+  --cds-clay-ink: #a9481f;
   --cds-clay-hover: #cc5a36; /* 陶土色悬停加深态 */
   --cds-clay-light: #fbf3ef; /* 陶土极浅背景色 */
   --cds-clay-soft: rgba(217, 119, 87, 0.12);
@@ -127,6 +133,8 @@
   --cds-surface-3: #20201e;
   --cds-surface-popover: #222220;
   --cds-clay: #d97757;
+  /* 暗色底上要把陶土提亮才够对比：#e08264 在 #151515 上是 6.6:1。 */
+  --cds-clay-ink: #e08264;
   --cds-clay-hover: #e08264;
   --cds-clay-light: rgba(217, 119, 87, 0.15);
   --cds-clay-soft: rgba(217, 119, 87, 0.2);

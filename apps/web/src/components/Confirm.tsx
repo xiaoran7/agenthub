@@ -1,6 +1,7 @@
-"use client";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+
+import { useDialogFocus } from "../lib/dialog-focus";
 
 /**
  * The console's one way to ask before doing something irreversible.
@@ -39,12 +40,12 @@ export function Confirm({
   onCancel,
 }: ConfirmProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, dialogRef, { initialFocusRef: cancelRef });
 
-  // Focus lands on the safe choice, not the destructive one, and Escape
-  // always means "no".
+  // Escape always means "no".
   useEffect(() => {
     if (!open) return;
-    cancelRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || busy) return;
       event.preventDefault();
@@ -59,11 +60,12 @@ export function Confirm({
   return createPortal(
     <div
       className="cds-confirm-backdrop"
-      onMouseDown={(event) => {
+      onPointerDown={(event) => {
         if (event.target === event.currentTarget && !busy) onCancel();
       }}
     >
       <div
+        ref={dialogRef}
         className="cds-confirm"
         role="alertdialog"
         aria-modal="true"

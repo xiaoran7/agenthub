@@ -137,6 +137,7 @@ fn start_turn(fake: &Fake, host: &mut NativeSessionHost<Fake>, id: &str) {
         host,
         id,
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "hello".into(),
             effort: None,
             model: None,
@@ -183,6 +184,7 @@ fn two_turns_share_native_id_and_only_native_completion_releases_busy_state() {
         &host,
         "busy",
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "second".into(),
             effort: None,
             model: None,
@@ -231,6 +233,7 @@ fn failed_turn_does_not_block_subsequent_turns_and_object_status_transitions_run
         &host,
         "turn-obj",
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "hello object status".into(),
             effort: None,
             model: None,
@@ -269,6 +272,7 @@ fn failed_turn_does_not_block_subsequent_turns_and_object_status_transitions_run
         &host,
         "turn-retry",
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "retry after failure".into(),
             effort: None,
             model: None,
@@ -616,6 +620,7 @@ fn transport_loss_is_unknown_and_never_automatically_reexecutes_a_prompt() {
         &host,
         "uncertain",
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "change something".into(),
             effort: None,
             model: None,
@@ -977,8 +982,8 @@ fn model_catalog_is_returned_from_native_protocol_without_fallback() {
     // assertions are on the one entry the fake supplied rather than on the
     // whole map, which is host-dependent by design.
     assert_eq!(
-        models["agents"]["codex"],
-        json!([{"id":"native-dynamic-model"}])
+        models["agents"]["codex"][0],
+        json!({"id":"native-dynamic-model"})
     );
     assert_eq!(models["data"][0], json!({"id":"native-dynamic-model"}));
     // Nothing invented: every id in `data` also appears in one of the
@@ -1003,6 +1008,7 @@ fn unknown_slash_does_not_fall_through_to_prompt() {
         &host,
         "slash",
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "/compact".into(),
             effort: None,
             model: None,
@@ -1133,6 +1139,7 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
         &host,
         "turn-1",
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "hello 1".into(),
             effort: None,
             model: None,
@@ -1166,6 +1173,7 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
         &host,
         "turn-2",
         RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "hello 2".into(),
             effort: None,
             model: None,
@@ -1184,7 +1192,7 @@ fn first_turn_of_newly_created_session_passes_session_exists_false_and_subsequen
 
 #[test]
 fn acp_session_routing_in_multiprovider_transport() {
-    let mut transport = MultiProviderTransport::new(None, None);
+    let mut transport = MultiProviderTransport::new(None);
 
     // 1. thread/read for an ACP session returns an idle thread with its session id
     let read_res = transport
@@ -1227,4 +1235,210 @@ fn acp_session_routing_in_multiprovider_transport() {
             )
             .is_ok()
     );
+}
+
+#[test]
+fn antigravity_multiprovider_host_create_read_resume_and_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    let transport = MultiProviderTransport::new(None);
+    let mut host = NativeSessionHost::new(transport, vec![dir.path().into()]).unwrap();
+
+    // 1. Create an Antigravity session through NativeSessionHost
+    let hub_id = "hub-ag-1";
+    let mut cmd = connect(&dir, hub_id, host.generation());
+    if let RemoteAction::Connect {
+        ref mut agent_type,
+        ref mut model,
+        ref mut permission_mode,
+        ..
+    } = cmd.command
+    {
+        *agent_type = Some("antigravity".into());
+        *model = Some("gemini-3.8-flash".into());
+        *permission_mode = Some("acceptEdits".into());
+    }
+    let receipt = host.handle_command(cmd);
+    assert_eq!(receipt.status, "accepted");
+    let binding = host
+        .sessions()
+        .into_iter()
+        .find(|s| s.hub_session_id == hub_id)
+        .expect("antigravity session bound");
+    assert!(
+        binding.provider_session_id.starts_with("antigravity_"),
+        "expected antigravity_ prefix, got {}",
+        binding.provider_session_id
+    );
+
+    // 2. Archive succeeds when idle
+    let arch_cmd = RemoteCommand {
+        client_cmd_id: "arch-ag-1".into(),
+        hub_session_id: hub_id.into(),
+        host_generation: Some(host.generation().into()),
+        command: RemoteAction::SetArchived { archived: true },
+    };
+    assert_eq!(host.handle_command(arch_cmd).status, "accepted");
+}
+
+#[test]
+fn codex_history_preview_never_acquires_control_and_legacy_resume_is_fenced() {
+    let (dir, fake, mut host) = setup();
+    let native_id = uuid::Uuid::new_v4().to_string();
+    let mut command = connect(&dir, "hub", host.generation());
+    let RemoteAction::Connect {
+        mode,
+        provider_session_id,
+        ..
+    } = &mut command.command
+    else {
+        unreachable!()
+    };
+    *mode = ConnectMode::Resume;
+    *provider_session_id = Some(native_id.clone());
+    let receipt = host.handle_command(command.clone());
+    assert_eq!(receipt.code.as_deref(), Some("explicit_control_required"));
+    assert!(fake.0.lock().unwrap().calls.is_empty());
+
+    command.client_cmd_id = "preview".into();
+    let RemoteAction::Connect { mode, .. } = &mut command.command else {
+        unreachable!()
+    };
+    *mode = ConnectMode::Preview;
+    fake.expect(
+        "thread/read",
+        json!({"thread": {
+            "id": native_id, "cwd": dir.path(), "status": {"type": "active"}
+        }}),
+    );
+    assert_eq!(host.handle_command(command).status, "accepted");
+    assert!(!host.sessions()[0].control_connected);
+    assert_eq!(fake.0.lock().unwrap().calls.len(), 1);
+}
+
+#[test]
+fn codex_first_send_takes_control_once_and_release_waits_for_thread_closed() {
+    let (dir, fake, mut host) = setup();
+    let native_id = uuid::Uuid::new_v4().to_string();
+    let mut preview = connect(&dir, "hub", host.generation());
+    let RemoteAction::Connect {
+        mode,
+        provider_session_id,
+        ..
+    } = &mut preview.command
+    else {
+        unreachable!()
+    };
+    *mode = ConnectMode::Preview;
+    *provider_session_id = Some(native_id.clone());
+    let thread =
+        json!({"thread": {"id": native_id, "cwd": dir.path(), "status": {"type": "idle"}}});
+    fake.expect("thread/read", thread.clone());
+    assert_eq!(host.handle_command(preview).status, "accepted");
+
+    let prompt = control(
+        &host,
+        "send-with-control",
+        RemoteAction::SendPrompt {
+            acquire_control: true,
+            text: "continue".into(),
+            effort: None,
+            model: None,
+            permission_mode: None,
+            attachments: vec![],
+        },
+    );
+    fake.expect("thread/read", thread.clone());
+    fake.0.lock().unwrap().expected.push_back((
+        "thread/resume",
+        Err(NativeError::rejected("native_writer_busy")),
+    ));
+    let mut blocked = prompt.clone();
+    blocked.client_cmd_id = "conflicting-writer".into();
+    assert_eq!(
+        host.handle_command(blocked).code.as_deref(),
+        Some("native_writer_busy")
+    );
+    assert!(!host.sessions()[0].control_connected);
+
+    fake.expect("thread/read", thread.clone());
+    fake.expect("thread/resume", thread);
+    fake.expect(
+        "turn/start",
+        json!({"turn": {"id": "turn", "status": "inProgress"}}),
+    );
+    let accepted = host.handle_command(prompt.clone());
+    assert_eq!(accepted.status, "accepted");
+    assert_eq!(
+        accepted.result.as_ref().unwrap()["binding"]["control_connected"],
+        true
+    );
+    assert_eq!(host.handle_command(prompt), accepted);
+    let reject = control(&host, "busy-release", RemoteAction::ReleaseControl);
+    assert_eq!(
+        host.handle_command(reject).code.as_deref(),
+        Some("session_busy_or_unknown")
+    );
+
+    fake.event(json!({"method": "turn/completed", "params": {
+        "threadId": native_id, "turn": {"id": "turn", "status": "completed"}
+    }}));
+    host.poll().unwrap();
+    fake.expect("thread/unsubscribe", json!({"status": "unsubscribed"}));
+    let release = control(&host, "release", RemoteAction::ReleaseControl);
+    assert_eq!(host.handle_command(release).status, "accepted");
+    assert_eq!(
+        host.sessions()[0].execution_state,
+        ExecutionState::ReleasingControl
+    );
+
+    fake.event(json!({"method": "thread/status/changed", "params": {
+        "threadId": native_id, "status": {"type": "idle"}
+    }}));
+    host.poll().unwrap();
+    assert_eq!(
+        host.sessions()[0].execution_state,
+        ExecutionState::ReleasingControl
+    );
+    fake.event(json!({"method": "thread/closed", "params": {"threadId": native_id}}));
+    host.poll().unwrap();
+    assert_eq!(host.sessions()[0].execution_state, ExecutionState::Unknown);
+    assert!(!host.sessions()[0].control_connected);
+    let calls = &fake.0.lock().unwrap().calls;
+    let params = &calls
+        .iter()
+        .find(|(method, _)| method == "thread/resume")
+        .unwrap()
+        .1;
+    assert_eq!(params["config"]["thread_unload_delay_secs"], 1);
+}
+
+#[test]
+fn restored_codex_binding_does_not_resume_on_runner_startup() {
+    use agenthub_runner::remote_journal::{DurableHost, RemoteJournal};
+
+    let (dir, fake, host) = setup();
+    let path = dir.path().join("journal.db");
+    let native_id = uuid::Uuid::new_v4().to_string();
+    fake.expect(
+        "thread/start",
+        json!({"thread": {
+            "id": native_id, "cwd": dir.path(), "status": {"type": "idle"}
+        }}),
+    );
+    let command = connect(&dir, "hub", host.generation());
+    let mut durable = DurableHost::new(host, RemoteJournal::open(&path).unwrap()).unwrap();
+    assert_eq!(
+        durable.handle_local_command(command).unwrap().status,
+        "accepted"
+    );
+    drop(durable);
+
+    let clean_transport = Fake::default();
+    let restarted =
+        NativeSessionHost::new(clean_transport.clone(), vec![dir.path().into()]).unwrap();
+    let restored = DurableHost::new(restarted, RemoteJournal::open(&path).unwrap()).unwrap();
+    let bindings = restored.snapshot().unwrap().sessions;
+    assert_eq!(bindings[0].provider_session_id, native_id);
+    assert!(!bindings[0].control_connected);
+    assert!(clean_transport.0.lock().unwrap().calls.is_empty());
 }

@@ -1,747 +1,166 @@
-"use client";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { RemoteCommand } from "@agent-pulse/contracts/remote";
+import type {
+  AgentPlugin,
+  RemotePluginsResponse,
+} from "@agent-pulse/contracts";
 import type { AccountView } from "../lib/account";
 import { safeRandomUUID } from "../lib/uuid";
 import {
+  cleanBannerText,
   conversationItems,
   groupConversationItems,
-  isRedactedPathOnly,
+  isTransientRemoteError,
+  isTransientRemoteMessage,
   latestTurnFailure,
+  nextOptimisticPromptNeeded,
   pendingApprovals,
+  pendingOptimisticPrompts,
   pendingQuestions,
+  pruneOptimisticPrompts,
   readableRemoteText,
   remoteError,
+  settledConversationItems,
   remoteRequest,
-  type RemoteRequest,
-  type RemoteSnapshot,
-  type RemoteRunner,
-  type RemoteSession,
-  type RemoteEvent,
-  type RemoteCommandRecord,
-  type RemoteSessionDetail,
   type ConversationItem,
   type DiscoveryCandidate,
+  type OptimisticPrompt,
   type RemoteAttachment,
+  type RemoteCommandRecord,
+  type RemoteEvent,
   type RemotePermissionMode,
+  type RemoteRequest,
+  type RemoteRunner,
+  type RemoteRunnerHello,
+  type RemoteRunnerHelloResponse,
+  type RemoteSession,
+  type RemoteSessionDetail,
+  type RemoteSnapshot,
 } from "../lib/remote";
-import { MarkdownView } from "./MarkdownView";
 import { Select } from "./Select";
 import { RemoteContextCapacity } from "./RemoteContextCapacity";
-import { SettingsPage } from "./SettingsPage";
-import { ThinkingAccordion } from "./ThinkingAccordion";
+import { ConversationSkeleton } from "./ConversationSkeleton";
+import { QueuedPromptBar, type QueuedPrompt } from "./QueuedPromptBar";
+import { RemoteLaunchModal, type LaunchAgentType } from "./RemoteLaunchModal";
+import {
+  MobileAttentionBanner,
+  MobileHeaderActions,
+} from "./MobileHeaderAccessories";
+import { useMobileConsoleLayout } from "./useMobileConsoleLayout";
+import { CheckIcon, CopyIcon, RemoteMessageCard } from "./RemoteMessageCard";
+import { parseDiffStats, RemoteToolCard } from "./RemoteToolCard";
+import {
+  buildCommandAttemptKey,
+  checkAttachmentSize,
+  mergeMonotonicEvents,
+  setBoundedSessionRecord,
+} from "../lib/remote-session-state";
+import {
+  RunnerHelloSyncController,
+  isRunnerHelloBlocking,
+  mergeRunnerHelloEntries,
+  type RunnerHelloEntry,
+} from "../lib/runner-hello-sync";
+import { parseSessionRef } from "../lib/types";
+const SettingsPage = lazy(() =>
+  import("./SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
+import { AttentionQueue } from "./AttentionQueue";
 import { parseNotificationPresentedAt } from "../lib/notifications";
+import {
+  followContentStream,
+  streamBatchAffectsSession,
+  streamBatchAffectsSnapshot,
+} from "../lib/stream";
 import type { PanelConfig } from "../lib/config";
 import { loadConfig, saveConfig } from "../lib/config";
 import {
+  attentionEntries,
   buildSessionTree,
   formatFallbackTitle,
   getDeviceLabel,
   getProviderInfo,
+  getWorkspaceActivityMs,
+  groupPendingApprovals,
   workspaceLabel,
   workspaceTooltip,
   type ProviderKind,
   type TreeSessionItem,
 } from "../lib/session-tree";
+import {
+  ChevronDownIcon,
+  CORE_LAUNCH_AGENTS,
+  EFFORT_OPTIONS,
+  formatSessionTokens,
+  LAUNCH_AGENT_OPTIONS,
+  LAUNCH_AGENTS,
+  PERMISSION_MODE_OPTIONS,
+  QUICK_PROMPT_SNIPPETS,
+  SANDBOX_OPTIONS,
+  SettingsIcon,
+  type LaunchAgentSpec,
+} from "./remote-console-constants";
 import "./remote.css";
 import "./remote-desktop.css";
 
 const empty: RemoteSnapshot = { cursor: 0, runners: [], sessions: [] };
 
-/**
- * Session-detail refresh interval. The detail route already returns the event
- * cursor, so this only needs to be fast enough to feel live while typing; a
- * 200 ms tick made every open console fire 10 requests per second, doubled by
- * the event fetch, against a Gateway that is already polling its runners.
- */
-const SESSION_POLL_MS = 1000;
+const SNAPSHOT_FALLBACK_MS = 30_000;
+const DETAIL_FALLBACK_MS = 30_000;
 
 const key = (session: RemoteSession) =>
   `${session.runner_id}/${session.binding.hub_session_id}`;
 
-/** The launch dialog's fixed choices. Everything else is derived from the Host. */
-const EFFORT_OPTIONS = [
-  { value: "default", label: "默认思考" },
-  { value: "low", label: "低推理 (快速)" },
-  { value: "medium", label: "中推理 (标准)" },
-  { value: "high", label: "高推理 (深度)" },
-  { value: "max", label: "超高推理 (最大)" },
-] as const;
-
-const SANDBOX_OPTIONS = [
-  { value: "read-only", label: "只读" },
-  { value: "workspace-write", label: "允许修改工作区" },
-] as const;
-
-const PERMISSION_MODE_OPTIONS = [
-  { value: "default", label: "默认权限" },
-  { value: "acceptEdits", label: "自动允许编辑" },
-  { value: "plan", label: "只读规划" },
-  { value: "bypassPermissions", label: "完全自动执行" },
-] as const;
-
-const QUICK_PROMPT_SNIPPETS = [
-  {
-    label: "继续并验证当前改动",
-    text: "请继续完成当前改动，并运行对应的测试和检查确认无误。",
-  },
-  {
-    label: "定位并修复报错",
-    text: "请定位最近一次错误或测试失败的根因，给出最小修复并验证通过。",
-  },
-  {
-    label: "代码审查 (Code Review)",
-    text: "请审查当前未提交的代码改动，重点排查逻辑缺陷、边界条件与安全隐患。",
-  },
-] as const;
+const EMPTY_EVENTS: RemoteEvent[] = [];
+const EMPTY_COMMANDS: RemoteCommandRecord[] = [];
+const EMPTY_OPTIMISTIC: OptimisticPrompt[] = [];
 
 /**
- * The engines the Runner can launch, in the order the console offers them.
+ * A one-line preview of what a tool group actually did.
  *
- * `catalog` names the key the Host's `models.agents` map uses for that engine;
- * the model list is read from there rather than guessed.
+ * Only distinct command snippets are listed: repeating one label three times
+ * (`exec · exec · exec`) or echoing an empty detail buries the single bit that
+ * tells a reader what the turn is working on.
  */
-const LAUNCH_AGENTS = [
-  { value: "zcode", label: "ZCode", catalog: ["zcode"] },
-  { value: "codex", label: "Codex", catalog: ["codex"] },
-  {
-    value: "claude_code",
-    label: "Coding Assistant",
-    catalog: ["claude_code"],
-  },
-  { value: "antigravity", label: "Antigravity", catalog: ["antigravity"] },
-  { value: "grok_build", label: "Grok", catalog: ["grok_build"] },
-] as const;
-
-const LAUNCH_AGENT_OPTIONS = LAUNCH_AGENTS.map(({ value, label }) => ({
-  value,
-  label,
-}));
-
-function formatSessionTokens(tokens?: number | null): string | null {
-  if (tokens === null || tokens === undefined || tokens <= 0) return null;
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tok`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k tok`;
-  return `${tokens} tok`;
+function isCodexThreadId(id: string): boolean {
+  return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(id);
 }
 
-/**
- * Extracts <thinking> or <thought> blocks from message content for CDS ThinkingAccordion.
- */
-function splitThinkingContent(
-  content: string,
-  isStreaming = false,
-): {
-  thinking: string | null;
-  cleanText: string;
-  isThinkingLive: boolean;
-} {
-  const match = content.match(
-    /<(?:thinking|thought)>([\s\S]*?)(?:<\/(?:thinking|thought)>|$)/i,
-  );
-  if (!match)
-    return { thinking: null, cleanText: content, isThinkingLive: false };
-
-  const thinking = match[1]?.trim() ?? "";
-  const isThinkingLive =
-    isStreaming &&
-    !content.includes("</thinking>") &&
-    !content.includes("</thought>");
-  const cleanText = content
-    .replace(
-      /<(?:thinking|thought)>[\s\S]*?(?:<\/(?:thinking|thought)>|$)/i,
-      "",
-    )
-    .trim();
-
-  return {
-    thinking: thinking || null,
-    cleanText,
-    isThinkingLive,
-  };
-}
-
-/**
- * The shapes a tool call actually takes in a transcript. A wall of identical
- * pencils is unreadable, so each shape gets its own glyph and its own accent.
- */
-type ToolKind = "command" | "read" | "search" | "edit" | "web" | "tool";
-
-/**
- * Matches only on the tool name, never on the MCP server prefix.
- *
- * `conversationItems` builds toolCall titles as `server · tool` ("shell · Read",
- * "mcp · fetch"), so matching the whole string would let the *server* decide the
- * glyph: every tool from the `shell` server would come back as a command no
- * matter what it actually did. The name is the last segment.
- */
-function toolKind(item: ConversationItem): ToolKind {
-  const title = item.title ?? "";
-  const name = (title.split("·").pop() ?? title).toLowerCase().trim();
-  const has = (...needles: string[]) => needles.some((n) => name.includes(n));
-  if (
-    has(
-      "bash",
-      "shell",
-      "zsh",
-      "powershell",
-      "command",
-      "exec",
-      "terminal",
-      "命令",
-      "执行",
-    )
-  )
-    return "command";
-  if (has("web", "browse", "fetch", "http", "url", "联网", "网络"))
-    return "web";
-  if (
-    has(
-      "write",
-      "edit",
-      "create",
-      "patch",
-      "delete",
-      "remove",
-      "rename",
-      "move",
-      "写入",
-      "编辑",
-      "修改",
-    )
-  )
-    return "edit";
-  if (has("grep", "search", "glob", "find", "list", "ls", "搜索", "查找"))
-    return "search";
-  if (has("read", "open", "view", "notebook", "cat", "读取", "查看"))
-    return "read";
-  // No name signal: a command with no path in it is a shell invocation,
-  // whatever it ended up being called.
-  if (item.command && !/[/\\]/u.test(item.command)) return "command";
-  return "tool";
-}
-
-/** Stroke-drawn glyph per tool shape; the accent colour comes from data-tool. */
-const TOOL_PATHS: Record<ToolKind, React.ReactNode> = {
-  command: (
-    <>
-      <polyline points="4 7 4 4 8 4" />
-      <polyline points="16 4 20 4 20 7" />
-      <polyline points="20 17 20 20 16 20" />
-      <polyline points="8 20 4 20 4 17" />
-      <line x1="7" y1="8" x2="17" y2="16" />
-      <line x1="17" y1="8" x2="7" y2="16" />
-    </>
-  ),
-  read: (
-    <>
-      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 3 14 8 19 8" />
-      <line x1="9" y1="13" x2="15" y2="13" />
-      <line x1="9" y1="17" x2="13" y2="17" />
-    </>
-  ),
-  search: (
-    <>
-      <circle cx="11" cy="11" r="7" />
-      <line x1="20" y1="20" x2="16.4" y2="16.4" />
-    </>
-  ),
-  edit: (
-    <>
-      <path d="M12 20h8" />
-      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4z" />
-    </>
-  ),
-  web: (
-    <>
-      <circle cx="12" cy="12" r="9" />
-      <line x1="3" y1="12" x2="21" y2="12" />
-      <path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z" />
-    </>
-  ),
-  tool: (
-    <path d="m14.7 6.3 3 3M4 20l5.3-1.3L20 8a2.1 2.1 0 0 0-3-3L6.3 15.7 5 21" />
-  ),
-};
-
-function ToolIcon({ kind }: { kind: ToolKind }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {TOOL_PATHS[kind]}
-    </svg>
-  );
-}
-
-function ChevronDownIcon({
-  size = 12,
-  className = "",
-}: {
-  size?: number;
-  className?: string;
-}) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
-  );
-}
-
-function CheckIcon({
-  size = 12,
-  className = "",
-}: {
-  size?: number;
-  className?: string;
-}) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
-function CopyIcon({
-  size = 12,
-  className = "",
-}: {
-  size?: number;
-  className?: string;
-}) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-    </svg>
-  );
-}
-
-function SettingsIcon({
-  size = 14,
-  className = "",
-}: {
-  size?: number;
-  className?: string;
-}) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  );
-}
-
-interface DiffStats {
-  additions: number;
-  deletions: number;
-  oldText?: string | undefined;
-  newText?: string | undefined;
-}
-
-function parseDiffStats(content?: string): DiffStats {
-  if (!content) return { additions: 0, deletions: 0 };
-  let additions = 0;
-  let deletions = 0;
-  let oldText: string | undefined;
-  let newText: string | undefined;
-
-  const trimmed = content.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      const oldStr = parsed.old ?? parsed.old_string;
-      const newStr = parsed.new ?? parsed.new_string;
-      if (typeof oldStr === "string" || typeof newStr === "string") {
-        if (typeof oldStr === "string") {
-          oldText = oldStr;
-          deletions = oldStr
-            .split("\n")
-            .filter((l: string) => l.trim() !== "").length;
-        }
-        if (typeof newStr === "string") {
-          newText = newStr;
-          additions = newStr
-            .split("\n")
-            .filter((l: string) => l.trim() !== "").length;
-        }
-        return { additions, deletions, oldText, newText };
-      }
-    } catch {
-      // not simple json
-    }
+function groupPreview(items: ConversationItem[]): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const item of items) {
+    const detail = (item.description ?? item.command ?? "").trim();
+    const line = detail.split("\n").find((part) => part.trim().length > 0);
+    if (!line || line.includes("[local_path_redacted]")) continue;
+    const snippet = line.trim().slice(0, 40);
+    if (seen.has(snippet)) continue;
+    seen.add(snippet);
+    parts.push(`${item.title ?? "工具"} ${snippet}`);
+    if (parts.length === 2) break;
   }
-
-  const lines = content.split("\n");
-  for (const line of lines) {
-    if (
-      line.startsWith("+++") ||
-      line.startsWith("---") ||
-      line.startsWith("@@")
-    ) {
-      continue;
-    }
-    if (line.startsWith("+")) additions++;
-    else if (line.startsWith("-")) deletions++;
-  }
-
-  if (!oldText && !newText && (additions > 0 || deletions > 0)) {
-    const oldLines: string[] = [];
-    const newLines: string[] = [];
-    for (const line of lines) {
-      if (
-        line.startsWith("+++") ||
-        line.startsWith("---") ||
-        line.startsWith("@@")
-      ) {
-        continue;
-      }
-      if (line.startsWith("-")) {
-        oldLines.push(line.slice(1));
-      } else if (line.startsWith("+")) {
-        newLines.push(line.slice(1));
-      } else {
-        const ctx = line.startsWith(" ") ? line.slice(1) : line;
-        oldLines.push(ctx);
-        newLines.push(ctx);
-      }
-    }
-    if (oldLines.length > 0) oldText = oldLines.join("\n");
-    if (newLines.length > 0) newText = newLines.join("\n");
-  }
-
-  return { additions, deletions, oldText, newText };
+  return parts.join(" · ");
 }
 
-interface QuestionItem {
-  question: string;
-  header?: string | undefined;
-  options?:
-    | Array<{
-        label: string;
-        description?: string | undefined;
-        preview?: string | undefined;
-      }>
-    | undefined;
-  multiSelect?: boolean | undefined;
-}
-
-function parseQuestionData(content?: string): QuestionItem[] | null {
-  if (!content) return null;
-  const trimmed = content.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-      return parsed.questions as QuestionItem[];
-    }
-  } catch {
-    // not json
+function sameConversationItemArray(
+  prev: { items: ConversationItem[] },
+  next: { items: ConversationItem[] },
+): boolean {
+  if (prev.items === next.items) return true;
+  if (prev.items.length !== next.items.length) return false;
+  for (let i = 0; i < prev.items.length; i++) {
+    if (prev.items[i] !== next.items[i]) return false;
   }
-  return null;
+  return true;
 }
-
-const RemoteToolCard = memo(function RemoteToolCard({
-  item,
-}: {
-  item: ConversationItem;
-}) {
-  const status = item.status ?? "completed";
-  const kind = toolKind(item);
-  const diffStats = parseDiffStats(item.command);
-  const questionItems = parseQuestionData(item.command);
-  const hasDiff = diffStats.additions > 0 || diffStats.deletions > 0;
-  const [copiedSection, setCopiedSection] = useState<string | null>(null);
-
-  const handleCopy = (section: string, text: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      void navigator.clipboard.writeText(text);
-      setCopiedSection(section);
-      setTimeout(() => {
-        setCopiedSection((cur) => (cur === section ? null : cur));
-      }, 1800);
-    }
-  };
-
-  return (
-    <details
-      className={`remote-tool mcp-tool-decision-card state-${status}`}
-      data-tool={kind}
-    >
-      <summary className="remote-tool-summary">
-        <span className="remote-disclosure" aria-hidden="true">
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="9 6 15 12 9 18" />
-          </svg>
-        </span>
-        <span className="remote-tool-header-left">
-          <span className="remote-tool-glyph">
-            <ToolIcon kind={kind} />
-          </span>
-          <span className="remote-tool-title">{item.title ?? "工具调用"}</span>
-          {hasDiff && (
-            <span
-              className="remote-diff-badge"
-              aria-label={`+${diffStats.additions} -${diffStats.deletions}`}
-            >
-              {diffStats.additions > 0 && (
-                <span className="diff-add">+{diffStats.additions}</span>
-              )}
-              {diffStats.deletions > 0 && (
-                <span className="diff-del">-{diffStats.deletions}</span>
-              )}
-            </span>
-          )}
-        </span>
-        <span className={`remote-tool-status ${status}`}>
-          {status === "running" && (
-            <span className="remote-tool-pulse-dots" aria-hidden="true">
-              <span className="pulse-dot" />
-              <span className="pulse-dot" />
-              <span className="pulse-dot" />
-            </span>
-          )}
-          {status === "running" ? (
-            <span className="status-label">执行中…</span>
-          ) : status === "failed" ? (
-            <span className="status-label">执行失败</span>
-          ) : (
-            <span className="status-label">已完成</span>
-          )}
-        </span>
-      </summary>
-      {(item.description || item.command || item.output) && (
-        <div className="remote-tool-content">
-          {item.description && (
-            <p className="remote-tool-description">
-              {readableRemoteText(item.description)}
-            </p>
-          )}
-          {questionItems ? (
-            <div className="remote-question-card">
-              {questionItems.map((q, qIdx) => (
-                <div key={qIdx} className="remote-question-item">
-                  <div className="remote-question-item-header">
-                    {q.header && (
-                      <span className="remote-question-tag">{q.header}</span>
-                    )}
-                    <span className="remote-question-text">{q.question}</span>
-                  </div>
-                  {q.options && q.options.length > 0 && (
-                    <div className="remote-options-list">
-                      {q.options.map((opt, optIdx) => {
-                        const isSelected =
-                          item.output?.includes(opt.label) ?? false;
-                        return (
-                          <div
-                            key={optIdx}
-                            className={`remote-option-item ${isSelected ? "selected" : ""}`}
-                          >
-                            <div className="remote-option-label">
-                              <span>{opt.label}</span>
-                              {isSelected && (
-                                <span className="remote-option-badge">
-                                  已选择
-                                </span>
-                              )}
-                            </div>
-                            {opt.description && (
-                              <div className="remote-option-desc">
-                                {opt.description}
-                              </div>
-                            )}
-                            {opt.preview && (
-                              <pre className="remote-option-preview">
-                                {opt.preview}
-                              </pre>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : diffStats.oldText || diffStats.newText ? (
-            <div className="remote-diff-viewer">
-              {diffStats.oldText && (
-                <div className="remote-diff-chunk del">
-                  <div className="remote-diff-bar">
-                    <span className="remote-diff-tag">- 变更前</span>
-                    <button
-                      type="button"
-                      className="remote-card-mini-copy"
-                      onClick={(e) =>
-                        handleCopy("diff-del", diffStats.oldText!, e)
-                      }
-                    >
-                      {copiedSection === "diff-del" ? (
-                        <span className="remote-copied-badge">
-                          <CheckIcon size={12} />
-                          <span>已复制</span>
-                        </span>
-                      ) : (
-                        <span className="remote-copy-badge">
-                          <CopyIcon size={12} />
-                          <span>复制</span>
-                        </span>
-                      )}
-                    </button>
-                  </div>
-                  <pre className="remote-diff-pre">{diffStats.oldText}</pre>
-                </div>
-              )}
-              {diffStats.newText && (
-                <div className="remote-diff-chunk add">
-                  <div className="remote-diff-bar">
-                    <span className="remote-diff-tag">+ 变更后</span>
-                    <button
-                      type="button"
-                      className="remote-card-mini-copy"
-                      onClick={(e) =>
-                        handleCopy("diff-add", diffStats.newText!, e)
-                      }
-                    >
-                      {copiedSection === "diff-add" ? (
-                        <span className="remote-copied-badge">
-                          <CheckIcon size={12} />
-                          <span>已复制</span>
-                        </span>
-                      ) : (
-                        <span className="remote-copy-badge">
-                          <CopyIcon size={12} />
-                          <span>复制</span>
-                        </span>
-                      )}
-                    </button>
-                  </div>
-                  <pre className="remote-diff-pre">{diffStats.newText}</pre>
-                </div>
-              )}
-            </div>
-          ) : item.command ? (
-            <div className="remote-tool-section">
-              <div className="remote-tool-subhead-bar">
-                <span className="remote-tool-subhead">命令 / 参数输入</span>
-                <button
-                  type="button"
-                  className="remote-card-mini-copy"
-                  onClick={(e) => handleCopy("cmd", item.command!, e)}
-                >
-                  {copiedSection === "cmd" ? (
-                    <span className="remote-copied-badge">
-                      <CheckIcon size={12} />
-                      <span>已复制</span>
-                    </span>
-                  ) : (
-                    <span className="remote-copy-badge">
-                      <CopyIcon size={12} />
-                      <span>复制</span>
-                    </span>
-                  )}
-                </button>
-              </div>
-              <pre className="remote-tool-cmd">
-                {readableRemoteText(item.command)}
-              </pre>
-            </div>
-          ) : null}
-          {item.output && !questionItems && (
-            <div className="remote-tool-section">
-              <div className="remote-tool-subhead-bar">
-                <span className="remote-tool-subhead">执行结果输出</span>
-                <button
-                  type="button"
-                  className="remote-card-mini-copy"
-                  onClick={(e) => handleCopy("output", item.output!, e)}
-                >
-                  {copiedSection === "output" ? (
-                    <span className="remote-copied-badge">
-                      <CheckIcon size={12} />
-                      <span>已复制</span>
-                    </span>
-                  ) : (
-                    <span className="remote-copy-badge">
-                      <CopyIcon size={12} />
-                      <span>复制</span>
-                    </span>
-                  )}
-                </button>
-              </div>
-              <pre className="remote-tool-output">
-                {readableRemoteText(item.output)}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </details>
-  );
-});
 
 const RemoteToolGroup = memo(function RemoteToolGroup({
   items,
@@ -753,8 +172,9 @@ const RemoteToolGroup = memo(function RemoteToolGroup({
     : items.some((item) => item.status === "running")
       ? "running"
       : "completed";
+  const isRunning = status === "running";
   return (
-    <details className="remote-tool-group">
+    <details className={`remote-tool-group state-${status}`} open={isRunning}>
       <summary className="remote-tool-group-summary">
         <span className="remote-disclosure" aria-hidden="true">
           <svg
@@ -770,24 +190,39 @@ const RemoteToolGroup = memo(function RemoteToolGroup({
             <polyline points="9 6 15 12 9 18" />
           </svg>
         </span>
-        <span>已执行 {items.length} 个工具与操作</span>
-        <span className="remote-tool-group-preview">
-          {items
-            .slice(0, 3)
-            .map((item) => {
-              const detail = item.description ?? item.command;
-              return detail && !detail.includes("[local_path_redacted]")
-                ? `${item.title ?? "工具调用"} · ${detail.slice(0, 34)}`
-                : (item.title ?? "工具调用");
-            })
-            .join(" · ")}
+        <span className="remote-tool-group-icon" aria-hidden="true">
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+          </svg>
         </span>
+        <span className="remote-tool-group-title">
+          执行了 {items.length} 项操作
+        </span>
+        <span className="remote-tool-group-preview">{groupPreview(items)}</span>
         <span className={`remote-tool-status ${status}`}>
-          {status === "running"
-            ? "执行中"
-            : status === "failed"
-              ? "异常"
-              : "完成"}
+          {status === "running" && (
+            <span className="remote-tool-pulse-dots" aria-hidden="true">
+              <span className="pulse-dot" />
+              <span className="pulse-dot" />
+              <span className="pulse-dot" />
+            </span>
+          )}
+          <span className="status-label">
+            {status === "running"
+              ? "执行中…"
+              : status === "failed"
+                ? "异常"
+                : "已完成"}
+          </span>
         </span>
       </summary>
       <div className="remote-tool-group-body">
@@ -797,7 +232,7 @@ const RemoteToolGroup = memo(function RemoteToolGroup({
       </div>
     </details>
   );
-});
+}, sameConversationItemArray);
 
 export function RemoteConsole({
   request = remoteRequest,
@@ -820,10 +255,88 @@ export function RemoteConsole({
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const [selected, setSelected] = useState("");
-  const [events, setEvents] = useState<RemoteEvent[]>([]);
-  const [commands, setCommands] = useState<RemoteCommandRecord[]>([]);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const [eventsBySession, setEventsBySession] = useState<
+    Record<string, RemoteEvent[]>
+  >({});
+  const eventsBySessionRef = useRef(eventsBySession);
+  eventsBySessionRef.current = eventsBySession;
+  const eventsOrderRef = useRef<string[]>([]);
+  const [commandsBySession, setCommandsBySession] = useState<
+    Record<string, RemoteCommandRecord[]>
+  >({});
+  const commandsOrderRef = useRef<string[]>([]);
+  const sessionCursorRef = useRef<
+    Map<string, { cursor: number; lastPolledGlobalCursor: number }>
+  >(new Map());
+  const events = selected
+    ? (eventsBySession[selected] ?? EMPTY_EVENTS)
+    : EMPTY_EVENTS;
+  const commands = selected
+    ? (commandsBySession[selected] ?? EMPTY_COMMANDS)
+    : EMPTY_COMMANDS;
+  const setEventsForSession = (sessionKey: string, next: RemoteEvent[]) => {
+    setEventsBySession((prev) =>
+      setBoundedSessionRecord(prev, eventsOrderRef.current, sessionKey, next),
+    );
+  };
+  const setCommandsForSession = (
+    sessionKey: string,
+    next: RemoteCommandRecord[],
+  ) => {
+    setCommandsBySession((prev) =>
+      setBoundedSessionRecord(prev, commandsOrderRef.current, sessionKey, next),
+    );
+  };
   const [error, setError] = useState("");
+  const errorRef = useRef(error);
+  errorRef.current = error;
+
+  useEffect(() => {
+    if (!error || !isTransientRemoteMessage(error)) return;
+    const timer = setTimeout(() => {
+      setError((current) => (isTransientRemoteMessage(current) ? "" : current));
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [error]);
   const [text, setText] = useState("");
+  const textRef = useRef(text);
+  textRef.current = text;
+  const [optimisticBySession, setOptimisticBySession] = useState<
+    Record<string, OptimisticPrompt[]>
+  >({});
+  const optimisticOrderRef = useRef<string[]>([]);
+  const optimisticPrompts = selected
+    ? (optimisticBySession[selected] ?? EMPTY_OPTIMISTIC)
+    : EMPTY_OPTIMISTIC;
+  const updateOptimisticForSession = (
+    sessionKey: string,
+    updater: (cur: OptimisticPrompt[]) => OptimisticPrompt[],
+  ) => {
+    setOptimisticBySession((prev) => {
+      const cur = prev[sessionKey] ?? EMPTY_OPTIMISTIC;
+      return setBoundedSessionRecord(
+        prev,
+        optimisticOrderRef.current,
+        sessionKey,
+        updater(cur),
+      );
+    });
+  };
+  const [queuedPrompts, setQueuedPrompts] = useState<
+    Record<string, QueuedPrompt>
+  >({});
+  const [resumingCandidateKey, setResumingCandidateKey] = useState<
+    string | null
+  >(null);
+  const draftsBySessionRef = useRef<
+    Record<string, { text: string; attachments: RemoteAttachment[] }>
+  >({});
+  const wasInterruptedBySessionRef = useRef<Record<string, boolean>>({});
+  const wasTurnExecutingBySessionRef = useRef<Record<string, boolean>>({});
+  const lastCheckedQueueSessionRef = useRef("");
+  const prevSelectedSessionRef = useRef("");
   const [questionAnswers, setQuestionAnswers] = useState<
     Record<string, string>
   >({});
@@ -851,13 +364,33 @@ export function RemoteConsole({
     useState<RemotePermissionMode>("default");
   const [sessionModel, setSessionModel] = useState("");
   const [attachments, setAttachments] = useState<RemoteAttachment[]>([]);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [attachQuickPromptsOpen, setAttachQuickPromptsOpen] = useState(false);
   const attachMenuRef = useRef<HTMLDivElement>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [submittingInterrupt, setSubmittingInterrupt] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busyBySession, setBusyBySession] = useState<Record<string, number>>(
+    {},
+  );
+  const [launchBusy, setLaunchBusy] = useState(false);
+  const busy = Boolean(
+    launchBusy || (selected && (busyBySession[selected] ?? 0) > 0),
+  );
+  const setSessionBusy = (sessionKey: string, delta: 1 | -1) => {
+    setBusyBySession((prev) => {
+      const nextCount = Math.max(0, (prev[sessionKey] ?? 0) + delta);
+      if (nextCount === 0) {
+        if (!(sessionKey in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[sessionKey];
+        return copy;
+      }
+      return { ...prev, [sessionKey]: nextCount };
+    });
+  };
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The settings view needs the Gateway address even on the routes that do
   // not pass one down, so the console falls back to the stored config itself.
@@ -873,7 +406,13 @@ export function RemoteConsole({
   const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
   // Keep an uncertain POST's identity when the user retries the same operation.
   const attempts = useRef(new Map<string, RemoteCommand>());
-  const autoResumedRef = useRef<Set<string>>(new Set());
+  const previewedHistory = useRef("");
+  const [takeoverDrafts, setTakeoverDrafts] = useState<
+    Record<
+      string,
+      { id: string; text: string; attachments: RemoteAttachment[] }
+    >
+  >({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -890,10 +429,84 @@ export function RemoteConsole({
   // shows an empty list even though the Runner is publishing sessions. The
   // panel config's id is only the fallback for a Gateway without accounts.
   const requestWithIdentity = useMemo<RemoteRequest>(
-    () => (path, body) =>
-      request(path, body, 12000, account?.user.user_id ?? config?.userId),
-    [request, account?.user.user_id, config?.userId],
+    () =>
+      (path, body, timeoutMs = 25000, _userId?: string, signal?: AbortSignal) =>
+        request(
+          path,
+          body,
+          timeoutMs,
+          account?.user.user_id ?? panelConfig?.userId,
+          signal,
+        ),
+    [request, account?.user.user_id, panelConfig?.userId],
   );
+
+  const refresh = useRef(() => {});
+  const refreshSessionDetail = useRef(() => {});
+
+  /**
+   * Full `hello` per runner, fetched on demand and kept alive across `/sessions`
+   * refreshes so SSE `ready` pushes never discard an in-flight `/hello` load.
+   */
+  const [helloEntries, setHelloEntries] = useState<
+    Record<string, RunnerHelloEntry>
+  >({});
+  const helloSyncRef = useRef<RunnerHelloSyncController | null>(null);
+
+  const runners = useMemo<RemoteRunner[]>(
+    () => mergeRunnerHelloEntries(snapshot.runners, helloEntries),
+    [snapshot.runners, helloEntries],
+  );
+
+  useEffect(() => {
+    setHelloEntries({});
+    const controller = new RunnerHelloSyncController({
+      fetcher: (id, signal) =>
+        requestWithIdentity<RemoteRunnerHelloResponse>(
+          `/runners/${encodeURIComponent(id)}/hello`,
+          undefined,
+          25000,
+          undefined,
+          signal,
+        ),
+      onChange: setHelloEntries,
+      ttlMs: SNAPSHOT_FALLBACK_MS,
+    });
+    helloSyncRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (helloSyncRef.current === controller) {
+        helloSyncRef.current = null;
+      }
+    };
+  }, [requestWithIdentity]);
+
+  useEffect(() => {
+    const targets = snapshot.runners
+      .filter((runner) => !runner.revoked)
+      .map((runner) => ({
+        runnerId: runner.runner_id,
+        hasThinHello: runner.hello !== null,
+        hostGeneration: runner.hello?.host_generation ?? null,
+      }));
+    helloSyncRef.current?.sync(targets);
+  }, [snapshot.runners, requestWithIdentity]);
+
+  // When a user returns to the tab after sleep or background throttling,
+  // immediately trigger fresh polls to resume live conversation state.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        refresh.current();
+        refreshSessionDetail.current();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
 
   // The service worker reports back when it actually presented a waiting
   // notification, so Settings can show a receipt instead of assuming delivery.
@@ -907,22 +520,33 @@ export function RemoteConsole({
         typeof event.data === "object" &&
         event.data.type === "select-session"
       ) {
-        const targetSession = event.data.session;
-        if (typeof targetSession === "string") {
-          setSelected(targetSession);
-        } else if (targetSession && typeof targetSession === "object") {
-          const found = snapshotRef.current.sessions.find(
-            (s) =>
-              s.runner_id === targetSession.device_id &&
-              s.binding.provider_session_id === targetSession.agent_session_id,
-          );
-          if (found) {
-            setSelected(`${found.runner_id}/${found.binding.hub_session_id}`);
+        const rawSession = event.data.session;
+        if (typeof rawSession === "string") {
+          setSelected(rawSession);
+        } else {
+          const parsed = parseSessionRef(rawSession);
+          if (parsed) {
+            const found = snapshotRef.current.sessions.find(
+              (s) =>
+                s.runner_id === parsed.device_id &&
+                s.binding.provider_session_id === parsed.agent_session_id,
+            );
+            if (found) {
+              setSelected(`${found.runner_id}/${found.binding.hub_session_id}`);
+            }
           }
         }
       }
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
+    navigator.serviceWorker.controller?.postMessage({
+      type: "consume-pending-session",
+    });
+    void navigator.serviceWorker.ready
+      .then((reg) =>
+        reg.active?.postMessage({ type: "consume-pending-session" }),
+      )
+      .catch(() => undefined);
     return () =>
       navigator.serviceWorker.removeEventListener("message", onMessage);
   }, []);
@@ -946,17 +570,23 @@ export function RemoteConsole({
     }
     return false;
   });
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 700);
-    };
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
-  }, []);
+  const {
+    isMobile,
+    mobileDrawerOpen,
+    drawerAnimated,
+    consoleRootRef,
+    mobileMenuBtnRef,
+    openMobileDrawer,
+    closeMobileDrawer,
+    setMobileDrawerOpen,
+    onSidebarTouchStart,
+    onSidebarTouchMove,
+    onSidebarTouchEnd,
+    onMainTouchStart,
+    onMainTouchMove,
+    onMainTouchEnd,
+  } = useMobileConsoleLayout();
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // The mobile drawer covers the console, so Escape has to close it and the
   // keyboard must not wander into the content behind it.
@@ -966,7 +596,7 @@ export function RemoteConsole({
     const drawer = mobileDrawerRef.current;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setMobileDrawerOpen(false);
+        closeMobileDrawer(true);
         return;
       }
       if (event.key !== "Tab" || drawer === null) return;
@@ -987,7 +617,7 @@ export function RemoteConsole({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [isMobile, mobileDrawerOpen]);
+  }, [isMobile, mobileDrawerOpen, closeMobileDrawer]);
   const currentSidebarWidthRef = useRef(sidebarWidth);
   currentSidebarWidthRef.current = sidebarWidth;
   const isResizingRef = useRef(false);
@@ -1002,7 +632,7 @@ export function RemoteConsole({
 
   useEffect(() => {
     if (!attachMenuOpen) return;
-    const onMouseDown = (event: MouseEvent) => {
+    const onPointerDown = (event: PointerEvent) => {
       if (
         attachMenuRef.current &&
         !attachMenuRef.current.contains(event.target as Node)
@@ -1013,14 +643,16 @@ export function RemoteConsole({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         setAttachMenuOpen(false);
         setAttachQuickPromptsOpen(false);
       }
     };
-    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [attachMenuOpen]);
@@ -1068,6 +700,7 @@ export function RemoteConsole({
   };
 
   const [providerFilter, setProviderFilter] = useState<ProviderKind>("claude");
+  const userSelectedProviderRef = useRef(false);
   const [selectedRunnerId, setSelectedRunnerId] = useState<string>("");
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
@@ -1078,9 +711,95 @@ export function RemoteConsole({
   const agentMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [runner, setRunner] = useState("");
   const [workspace, setWorkspace] = useState("");
-  const [agentType, setAgentType] = useState<
-    "zcode" | "codex" | "claude_code" | "antigravity" | "grok_build"
-  >("zcode");
+  const [agentType, setAgentType] = useState<LaunchAgentType>("codex");
+
+  const [pluginsResponse, setPluginsResponse] =
+    useState<RemotePluginsResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const loadPlugins = () => {
+      requestWithIdentity<RemotePluginsResponse>("/plugins")
+        .then((res) => {
+          if (!cancelled && res && Array.isArray(res.plugins)) {
+            setPluginsResponse(res);
+          }
+        })
+        .catch(() => {});
+    };
+    loadPlugins();
+    const unfollowPlugins = followContentStream({
+      gatewayBase: panelConfig?.gatewayBase ?? "",
+      event: "plugins",
+      onChange: () => {
+        if (!cancelled) loadPlugins();
+      },
+    });
+    return () => {
+      cancelled = true;
+      unfollowPlugins();
+    };
+  }, [requestWithIdentity, settingsOpen, panelConfig?.gatewayBase]);
+
+  const plugins = useMemo(() => {
+    if (!pluginsResponse) return [];
+    if (runner && Array.isArray(pluginsResponse.runners)) {
+      const snap = pluginsResponse.runners.find((r) => r.runner === runner);
+      if (snap) return snap.plugins;
+      if (pluginsResponse.runners.length > 0) return [];
+    }
+    return pluginsResponse.plugins;
+  }, [pluginsResponse, runner]);
+
+  const allKnownPlugins = useMemo(() => {
+    if (!pluginsResponse) return [];
+    const merged = new Map<string, AgentPlugin>();
+    for (const r of pluginsResponse.runners ?? []) {
+      for (const p of r.plugins) {
+        if (!merged.has(p.id)) merged.set(p.id, p);
+      }
+    }
+    for (const p of pluginsResponse.plugins) {
+      if (!merged.has(p.id)) merged.set(p.id, p);
+    }
+    return [...merged.values()];
+  }, [pluginsResponse]);
+
+  const availableLaunchAgents = useMemo(() => {
+    const list: Array<{
+      value: string;
+      label: string;
+      catalog: readonly string[];
+    }> = [...CORE_LAUNCH_AGENTS];
+    const seen = new Set<string>(list.map((item) => item.value));
+    for (const plugin of plugins) {
+      if (
+        plugin.installed !== false &&
+        plugin.enabled &&
+        plugin.available !== false &&
+        plugin.capabilities?.launch !== false &&
+        !seen.has(plugin.id)
+      ) {
+        seen.add(plugin.id);
+        list.push({
+          value: plugin.id,
+          label: plugin.displayName || plugin.name || plugin.id,
+          catalog: [plugin.id, ...(plugin.aliases ?? [])],
+        });
+      }
+    }
+    return list;
+  }, [plugins]);
+
+  const launchAgentOptions = useMemo(
+    () => availableLaunchAgents.map(({ value, label }) => ({ value, label })),
+    [availableLaunchAgents],
+  );
+
+  useEffect(() => {
+    if (!availableLaunchAgents.some((a) => a.value === agentType)) {
+      setAgentType(availableLaunchAgents[0]?.value ?? "codex");
+    }
+  }, [availableLaunchAgents, agentType]);
   const [model, setModel] = useState("");
   const [sandbox, setSandbox] = useState<"read-only" | "workspace-write">(
     "read-only",
@@ -1089,15 +808,26 @@ export function RemoteConsole({
   const [launchModalOpen, setLaunchModalOpen] = useState(false);
   const timeline = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const refresh = useRef(() => {});
-  const refreshSessionDetail = useRef(() => {});
   const session = snapshot.sessions.find((item) => key(item) === selected);
-  const runnerInfo = snapshot.runners.find((item) => item.runner_id === runner);
+  const runnerInfo = runners.find((item) => item.runner_id === runner);
   const connected = !!session?.online && !!session.binding.control_connected;
+  const supportsCodexControl = (runnerId: string) =>
+    runners.find((item) => item.runner_id === runnerId)
+      ?.codex_session_control === true;
+  const codexSession = Boolean(
+    session &&
+    isCodexThreadId(session.binding.provider_session_id) &&
+    supportsCodexControl(session.runner_id),
+  );
+  const releasingControl =
+    session?.online && session.binding.execution_state === "releasing_control";
+  const canTakeControl = Boolean(
+    codexSession && session?.online && !connected && !releasingControl,
+  );
 
   const discovered = useMemo(() => {
     const candidates = new Map<string, DiscoveryCandidate>();
-    for (const r of snapshot.runners) {
+    for (const r of runners) {
       if (r.revoked) continue;
       for (const candidate of r.hello?.discovery?.candidates ?? [])
         candidates.set(
@@ -1106,18 +836,18 @@ export function RemoteConsole({
         );
     }
     return candidates;
-  }, [snapshot.runners]);
+  }, [runners]);
 
   /** Every online computer, for the launch dialog's first field. */
   const onlineDeviceOptions = useMemo(
     () =>
-      snapshot.runners
+      runners
         .filter((item) => !item.revoked && item.online)
         .map((item) => ({
           value: item.runner_id,
           label: getDeviceLabel(item.runner_id, item.hello),
         })),
-    [snapshot.runners],
+    [runners],
   );
 
   /**
@@ -1192,7 +922,9 @@ export function RemoteConsole({
    */
   const launchModelOptions = useMemo(() => {
     const hostModels = runnerInfo?.hello?.models;
-    const engine = LAUNCH_AGENTS.find((item) => item.value === agentType);
+    const engine = availableLaunchAgents.find(
+      (item) => item.value === agentType,
+    );
     const seen = new Set<string>();
     const models: Array<{ id: string; display_name?: string }> = [];
     const pushModel = (id?: string | null, displayName?: string | null) => {
@@ -1236,18 +968,19 @@ export function RemoteConsole({
 
   const sessionModelOptions = useMemo(() => {
     if (!session) return [{ value: "", label: "默认模型" }];
-    const sessionRunner = snapshot.runners.find(
+    const sessionRunner = runners.find(
       (item) => item.runner_id === session.runner_id,
     );
     const hostModels = sessionRunner?.hello?.models;
     const candidate = discovered.get(
       `${session.runner_id}/${session.binding.provider_session_id}`,
     );
+    const effectiveProvider = candidate?.provider ?? session.provider;
     const providerType = getProviderInfo(
       session.binding.provider_session_id,
-      candidate?.provider,
+      effectiveProvider,
     ).type;
-    const rawProvider = (candidate?.provider ?? "").toLowerCase();
+    const rawProvider = (effectiveProvider ?? "").toLowerCase();
     const sid = session.binding.provider_session_id;
     const catalogKeys =
       rawProvider === "claude_desktop" || providerType === "claude_desktop"
@@ -1259,18 +992,15 @@ export function RemoteConsole({
           ? hostModels?.agents?.claude_code !== undefined
             ? ["claude_code"]
             : ["claude_code", "claude"]
-          : rawProvider === "gemini_cli" ||
-              rawProvider === "gemini" ||
-              sid.startsWith("gemini_")
-            ? ["gemini_cli"]
-            : providerType === "zcode"
-              ? ["zcode"]
-              : providerType === "antigravity"
-                ? ["antigravity"]
-                : rawProvider === "grok_build" ||
-                    rawProvider === "grok" ||
-                    sid.startsWith("grok_")
-                  ? ["grok_build", "grok"]
+          : providerType === "antigravity" || rawProvider === "antigravity"
+            ? ["antigravity"]
+            : rawProvider === "deepseek_harness" ||
+                providerType === "deepseek_harness"
+              ? ["deepseek_harness"]
+              : rawProvider && rawProvider !== "codex"
+                ? [rawProvider]
+                : providerType !== "codex"
+                  ? [providerType]
                   : ["codex"];
     const seen = new Set<string>();
     const models: Array<{ id: string; display_name?: string }> = [];
@@ -1320,7 +1050,7 @@ export function RemoteConsole({
         label: item.display_name ?? item.id,
       })),
     ];
-  }, [session, snapshot.runners, discovered]);
+  }, [session, runners, discovered]);
 
   const handleFilesSelected = async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
@@ -1329,8 +1059,13 @@ export function RemoteConsole({
       /\.(txt|md|markdown|json|jsonl|yaml|yml|toml|xml|csv|tsv|py|ts|tsx|js|jsx|mjs|cjs|rs|go|java|kt|c|cpp|h|hpp|cs|rb|php|swift|sh|bash|zsh|ps1|bat|cmd|sql|html|css|scss|less|vue|svelte|ini|conf|cfg|env|log)$/iu;
     const loaded: RemoteAttachment[] = [];
     for (const file of files.slice(0, 16)) {
-      if (file.size > 6 * 1024 * 1024) {
-        setError(`附件 ${file.name} 超过 6MB 大小限制`);
+      const sizeStatus = checkAttachmentSize(file.size);
+      if (sizeStatus === "empty") {
+        setError(`附件 ${file.name} 为空文件（0 字节），已跳过`);
+        continue;
+      }
+      if (sizeStatus === "too_large") {
+        setError(`附件 ${file.name} 超过 7.5MB 大小限制`);
         continue;
       }
       const isText =
@@ -1389,14 +1124,17 @@ export function RemoteConsole({
     connected &&
     (session.binding.execution_state === "running" ||
       Boolean(session.binding.current_turn_id) ||
-      hasInFlightPrompt),
+      hasInFlightPrompt ||
+      optimisticPrompts.length > 0),
   );
   const canSend =
-    connected &&
-    !isTurnExecuting &&
-    ["idle", "completed", "error", "failed", "interrupted"].includes(
-      session?.binding.execution_state ?? "",
-    );
+    !takeoverDrafts[selected] &&
+    (canTakeControl ||
+      (connected &&
+        !isTurnExecuting &&
+        ["idle", "completed", "error", "failed", "interrupted"].includes(
+          session?.binding.execution_state ?? "",
+        )));
 
   const adjustTextareaHeight = () => {
     const el = textareaRef.current;
@@ -1477,27 +1215,64 @@ export function RemoteConsole({
   };
   useEffect(() => {
     let stopped = false;
+    const abortController = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let inFlight = false;
+    // A push that lands while a read is out asks for one more read after it,
+    // never a second concurrent request: the answer would be older than the
+    // read already in flight.
+    let again = false;
     const poll = async () => {
-      if (stopped || inFlight) return;
+      if (stopped) return;
+      if (inFlight) {
+        again = true;
+        return;
+      }
       inFlight = true;
+      again = false;
+      clearTimeout(timer);
       try {
-        const value = await requestWithIdentity<RemoteSnapshot>("/sessions");
+        const value = await requestWithIdentity<RemoteSnapshot>(
+          "/sessions",
+          undefined,
+          25000,
+          undefined,
+          abortController.signal,
+        );
         if (!stopped) {
           setSnapshot(value);
           setLoading(false);
+          if (isTransientRemoteMessage(errorRef.current)) {
+            setError("");
+          }
         }
       } catch (err) {
-        if (!stopped) {
-          setError(remoteError(err));
+        if (
+          !stopped &&
+          !(err instanceof Error && err.message === "request_aborted")
+        ) {
+          if (
+            typeof document !== "undefined" &&
+            document.hidden &&
+            isTransientRemoteError(err)
+          ) {
+            // Keep background poll silent when tab is suspended or hidden
+          } else {
+            setError(remoteError(err));
+          }
           setLoading(false);
           if (err instanceof Error && err.message === "authentication_required")
             onAuthenticationRequired?.();
         }
       } finally {
         inFlight = false;
-        if (!stopped) timer = setTimeout(() => void poll(), 1500);
+        if (!stopped) {
+          if (again) {
+            void poll();
+          } else {
+            timer = setTimeout(() => void poll(), SNAPSHOT_FALLBACK_MS);
+          }
+        }
       }
     };
     refresh.current = () => {
@@ -1505,19 +1280,45 @@ export function RemoteConsole({
       void poll();
     };
     void poll();
+    const unfollow = followContentStream({
+      gatewayBase: panelConfig?.gatewayBase ?? "",
+      event: "remote",
+      onChange: (frames) => {
+        if (streamBatchAffectsSnapshot(frames)) {
+          void poll();
+        }
+      },
+    });
     return () => {
       stopped = true;
+      abortController.abort();
       clearTimeout(timer);
+      unfollow();
     };
-  }, [requestWithIdentity, onAuthenticationRequired]);
+  }, [
+    requestWithIdentity,
+    onAuthenticationRequired,
+    panelConfig?.gatewayBase,
+    panelConfig?.userId,
+    account?.user.user_id,
+  ]);
   useEffect(() => {
-    setEvents([]);
-    setCommands([]);
-    setText("");
+    const previousKey = prevSelectedSessionRef.current;
+    if (previousKey && previousKey !== selected) {
+      draftsBySessionRef.current[previousKey] = {
+        text: textRef.current,
+        attachments: [...attachmentsRef.current],
+      };
+    }
+    prevSelectedSessionRef.current = selected;
+    const savedDraft = selected
+      ? draftsBySessionRef.current[selected]
+      : undefined;
+    setText(savedDraft?.text ?? "");
+    setAttachments(savedDraft ? [...savedDraft.attachments] : []);
     setSessionModel("");
     setPermissionMode("default");
     setPermissionModeTouched(false);
-    setAttachments([]);
     setAttachMenuOpen(false);
     setAttachQuickPromptsOpen(false);
     setQuestionAnswers({});
@@ -1535,15 +1336,24 @@ export function RemoteConsole({
       setSessionLoading(false);
       return;
     }
-    setSessionLoading(true);
+    const sessionKey = `${runnerId}/${hub}`;
+    const abortController = new AbortController();
+    const existingMeta = sessionCursorRef.current.get(sessionKey);
+    let accumulated = eventsBySessionRef.current[sessionKey] ?? [];
+    setSessionLoading(accumulated.length === 0);
     let stopped = false;
     let inFlight = false;
-    let cursor = 0;
-    let lastPolledGlobalCursor = -1;
-    let accumulated: RemoteEvent[] = [];
+    let again = false;
+    let cursor = existingMeta?.cursor ?? 0;
+    let lastPolledGlobalCursor = existingMeta?.lastPolledGlobalCursor ?? -1;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      if (stopped || inFlight) return;
+      if (stopped) return;
+      if (inFlight) {
+        again = true;
+        return;
+      }
+      again = false;
       inFlight = true;
       let latestDetail: RemoteSessionDetail | null = null;
       try {
@@ -1552,26 +1362,64 @@ export function RemoteConsole({
         // below only runs when the cursor has actually moved.
         const detail = await requestWithIdentity<RemoteSessionDetail>(
           `/sessions/${encodeURIComponent(runnerId)}/${encodeURIComponent(hub)}`,
+          undefined,
+          25000,
+          undefined,
+          abortController.signal,
         );
         if (stopped) return;
         latestDetail = detail;
         if (detail.cursor > lastPolledGlobalCursor) {
+          // First read of this session: start where both the transcript
+          // snapshot and the pending-approval bearer agree, so neither an old
+          // delta wall nor an outstanding approval is skipped. Later reads
+          // resume from the cursor this loop already reached.
+          if (lastPolledGlobalCursor === -1 && cursor === 0 && detail.resume) {
+            const marks = [detail.resume.transcript, detail.resume.approvals]
+              .filter(
+                (mark): mark is number => typeof mark === "number" && mark > 0,
+              )
+              .sort((a, b) => a - b);
+            if (marks.length > 0) cursor = Math.max(0, marks[0]! - 1);
+          }
+          let hasNewEvents = false;
           while (true) {
             const batch = await requestWithIdentity<{ events: RemoteEvent[] }>(
               `/events?runner=${encodeURIComponent(runnerId)}&hub=${encodeURIComponent(hub)}&after=${cursor}`,
+              undefined,
+              25000,
+              undefined,
+              abortController.signal,
             );
             if (stopped) return;
             if (batch.events.length > 0) {
-              cursor = batch.events[batch.events.length - 1]!.cursor;
-              accumulated = [...accumulated, ...batch.events];
-              setEvents([...accumulated]);
+              const merged = mergeMonotonicEvents(
+                accumulated,
+                batch.events,
+                cursor,
+              );
+              cursor = merged.nextCursor;
+              if (merged.changed) {
+                accumulated = merged.nextEvents;
+                hasNewEvents = true;
+              }
             }
             if (batch.events.length < 256) break;
           }
+          if (hasNewEvents) {
+            setEventsForSession(sessionKey, accumulated);
+          }
           lastPolledGlobalCursor = detail.cursor;
+          sessionCursorRef.current.set(sessionKey, {
+            cursor,
+            lastPolledGlobalCursor,
+          });
         }
-        setCommands(detail.commands);
+        setCommandsForSession(sessionKey, detail.commands);
         setSessionLoading(false);
+        if (isTransientRemoteMessage(errorRef.current)) {
+          setError("");
+        }
         const resolvedBinding = detail.binding;
         if (resolvedBinding) {
           setSnapshot((prev) => {
@@ -1579,10 +1427,15 @@ export function RemoteConsole({
               (s) =>
                 s.runner_id === runnerId && s.binding.hub_session_id === hub,
             );
+            const prevBinding =
+              idx >= 0 ? prev.sessions[idx]?.binding : undefined;
             if (
-              idx >= 0 &&
-              prev.sessions[idx]?.binding.control_connected !==
-                resolvedBinding.control_connected
+              prevBinding &&
+              (prevBinding.control_connected !==
+                resolvedBinding.control_connected ||
+                prevBinding.execution_state !==
+                  resolvedBinding.execution_state ||
+                prevBinding.current_turn_id !== resolvedBinding.current_turn_id)
             ) {
               const updated = [...prev.sessions];
               updated[idx] = {
@@ -1595,15 +1448,36 @@ export function RemoteConsole({
           });
         }
       } catch (err) {
-        if (!stopped) {
-          setError(remoteError(err));
+        if (
+          !stopped &&
+          !(err instanceof Error && err.message === "request_aborted")
+        ) {
+          if (
+            typeof document !== "undefined" &&
+            document.hidden &&
+            isTransientRemoteError(err)
+          ) {
+            // Keep background poll silent when tab is suspended or hidden
+          } else {
+            setError(remoteError(err));
+          }
           setSessionLoading(false);
         }
       } finally {
         inFlight = false;
-        const hasPending = latestDetail?.commands?.some((c) => !c.receipt);
-        const nextDelay = hasPending ? 200 : SESSION_POLL_MS;
-        if (!stopped) timer = setTimeout(() => void poll(), nextDelay);
+        // A command still waiting for its receipt is the one thing that
+        // needs a fast read: the Runner answers it, and the receipt is the
+        // conversation moving. A stored frame wakes this loop by itself, so
+        // nothing else runs on a short timer.
+        if (!stopped) {
+          if (again) {
+            void poll();
+          } else {
+            const hasPending = latestDetail?.commands?.some((c) => !c.receipt);
+            const nextDelay = hasPending ? 200 : DETAIL_FALLBACK_MS;
+            timer = setTimeout(() => void poll(), nextDelay);
+          }
+        }
       }
     };
     refreshSessionDetail.current = () => {
@@ -1611,17 +1485,94 @@ export function RemoteConsole({
       void poll();
     };
     void poll();
+    const unfollow = followContentStream({
+      gatewayBase: panelConfig?.gatewayBase ?? "",
+      event: "remote",
+      onChange: (frames) => {
+        if (!streamBatchAffectsSession(frames, runnerId, hub)) return;
+        clearTimeout(timer);
+        void poll();
+      },
+    });
     return () => {
       stopped = true;
+      abortController.abort();
       clearTimeout(timer);
+      unfollow();
       refreshSessionDetail.current = () => {};
     };
-  }, [requestWithIdentity, selected]);
+  }, [requestWithIdentity, selected, panelConfig?.gatewayBase]);
+  const activeTurnId = session?.binding.current_turn_id ?? null;
   const items = useMemo(
-    () => conversationItems(events, commands),
-    [events, commands],
+    () => conversationItems(events, commands, `${selected}/`, activeTurnId),
+    [events, commands, selected, activeTurnId],
   );
-  const itemGroups = useMemo(() => groupConversationItems(items), [items]);
+  const settledItems = useMemo(
+    () => settledConversationItems(items, events, commands, activeTurnId),
+    [items, events, commands, activeTurnId],
+  );
+  const effectiveItems = useMemo(() => {
+    if (optimisticPrompts.length === 0) return items;
+    const { visible } = pruneOptimisticPrompts(
+      optimisticPrompts,
+      settledItems,
+      Date.now(),
+    );
+    const renderedIds = new Set(items.map((item) => item.id));
+    const rejectedIds = new Set(
+      commands
+        .filter((c) => c.receipt && c.receipt.status !== "accepted")
+        .map((c) => c.command.client_cmd_id),
+    );
+    const pendingVisible = visible.filter(
+      (opt) => !renderedIds.has(opt.id) && !rejectedIds.has(opt.id),
+    );
+
+    if (pendingVisible.length === 0) return items;
+
+    const optConversationItems: ConversationItem[] = pendingVisible.map(
+      (opt) => ({
+        id: opt.id,
+        kind: "user",
+        text: opt.text,
+        status: "running",
+      }),
+    );
+
+    return [...items, ...optConversationItems];
+  }, [items, settledItems, commands, optimisticPrompts]);
+
+  const itemGroups = useMemo(
+    () => groupConversationItems(effectiveItems),
+    [effectiveItems],
+  );
+
+  // A prompt leaves the queue when its row landed or when it outlived the TTL.
+  // Both verdicts are per prompt: a prompt sent moments ago keeps its bubble
+  // even when an older one expires in the same tick. The timer exists because
+  // a send that silently died produces no new items at all — nothing would
+  // re-run this effect, and the ghost would never leave the screen.
+  useEffect(() => {
+    if (optimisticPrompts.length === 0) return;
+    const rejectedIds = new Set(
+      commands
+        .filter((c) => c.receipt && c.receipt.status !== "accepted")
+        .map((c) => c.command.client_cmd_id),
+    );
+    const pruneKey = selected;
+    if (!pruneKey) return;
+    const tick = () => {
+      const now = Date.now();
+      updateOptimisticForSession(pruneKey, (prev) => {
+        const { kept } = pruneOptimisticPrompts(prev, settledItems, now);
+        const filtered = kept.filter((opt) => !rejectedIds.has(opt.id));
+        return filtered.length === prev.length ? prev : filtered;
+      });
+    };
+    tick();
+    const timer = setInterval(tick, 1_000);
+    return () => clearInterval(timer);
+  }, [selected, settledItems, commands, optimisticPrompts]);
   const approvals = useMemo(
     () => pendingApprovals(events, session?.binding.hub_session_id ?? ""),
     [events, session?.binding.hub_session_id],
@@ -1637,6 +1588,25 @@ export function RemoteConsole({
   const turnFailure = useMemo(
     () => latestTurnFailure(events, session?.binding.hub_session_id ?? ""),
     [events, session?.binding.hub_session_id],
+  );
+  // The skeleton stays until the assistant's own text starts arriving — not
+  // until the tail stops being a user row. A turn that opens with a tool call
+  // used to hide it the moment the tool started, which is exactly the stretch
+  // where a person wonders whether the console is still listening.
+  const lastUserIndex = effectiveItems.findLastIndex(
+    (item) => item.kind === "user",
+  );
+  const answeredSincePrompt =
+    lastUserIndex >= 0 &&
+    effectiveItems
+      .slice(lastUserIndex + 1)
+      .some((item) => item.kind === "assistant");
+  const isWaitingFirstAssistant = Boolean(
+    (optimisticPrompts.length > 0 || isTurnExecuting) &&
+    lastUserIndex >= 0 &&
+    !answeredSincePrompt &&
+    approvals.length === 0 &&
+    questions.length === 0,
   );
   useEffect(() => {
     const confirmed = new Set(
@@ -1669,45 +1639,51 @@ export function RemoteConsole({
     if (pane && followBottom) {
       pane.scrollTop = pane.scrollHeight;
     }
-  }, [items, isTurnExecuting, turnFailure, followBottom]);
+  }, [effectiveItems, isTurnExecuting, turnFailure, followBottom]);
 
-  // 核心特性：选定会话时全量自动开始恢复接入（若已标记连接但尚未拉取到历史快照，也自动触发一次幂等同步）
+  // History hydration never acquires native control.
   useEffect(() => {
-    if (!session || !session.online || busy || sessionLoading) return;
-    const needsHistorySync =
-      items.length === 0 &&
-      discovered.has(
-        `${session.runner_id}/${session.binding.provider_session_id}`,
-      );
-    if (session.binding.control_connected && !needsHistorySync) return;
-    const targetRunner = snapshot.runners.find(
-      (r) => r.runner_id === session.runner_id,
-    );
-    const activeGeneration =
-      targetRunner?.hello?.host_generation ?? session.binding.host_generation;
-    const sessionKey = `${key(session)}/${activeGeneration}`;
-    if (autoResumedRef.current.has(sessionKey)) return;
-    autoResumedRef.current.add(sessionKey);
+    if (
+      !session ||
+      !session.online ||
+      !codexSession ||
+      sessionLoading ||
+      items.length
+    )
+      return;
+    const previewKey = key(session) + "/" + session.binding.host_generation;
+    if (previewedHistory.current === previewKey) return;
+    previewedHistory.current = previewKey;
     void submit(
       {
         action: "connect",
-        mode: "resume",
+        mode: "preview",
         workspace_path: session.binding.workspace_path,
         provider_session_id: session.binding.provider_session_id,
       },
       session,
     );
-  }, [
-    selected,
-    session?.online,
-    session?.binding.control_connected,
-    session?.binding.host_generation,
-    snapshot.runners,
-    busy,
-    sessionLoading,
-    items.length,
-    discovered,
-  ]);
+  }, [session, codexSession, sessionLoading, items.length]);
+
+  useEffect(() => {
+    const draft = takeoverDrafts[selected];
+    if (!draft) return;
+    const receipt = commands.find(
+      (item) => item.command.client_cmd_id === draft.id,
+    )?.receipt;
+    if (!receipt) return;
+    forgetTakeoverDraft(selected);
+    if (
+      receipt.status === "accepted" &&
+      textRef.current === draft.text &&
+      attachmentsRef.current.length === draft.attachments.length &&
+      attachmentsRef.current.every(
+        (item, index) => item === draft.attachments[index],
+      )
+    ) {
+      clearComposerInput();
+    }
+  }, [commands, selected, takeoverDrafts]);
 
   const lastCompletedCommand = [...commands]
     .reverse()
@@ -1732,9 +1708,22 @@ export function RemoteConsole({
     }
   };
 
-  const submit = async (action: RemoteCommand["command"], target = session) => {
+  const forgetTakeoverDraft = (sessionKey: string) => {
+    setTakeoverDrafts((previous) => {
+      const next = { ...previous };
+      delete next[sessionKey];
+      return next;
+    });
+  };
+  const submit = async (
+    action: RemoteCommand["command"],
+    target = session,
+    clientCmdId?: string,
+    rollbackDraft?: { text: string; attachments: RemoteAttachment[] },
+  ) => {
     if (!target) return;
-    setBusy(true);
+    const targetKey = key(target);
+    setSessionBusy(targetKey, 1);
     if (action.action === "resolve_approval") {
       setSubmittingApproval({
         id: action.approval_id,
@@ -1746,26 +1735,45 @@ export function RemoteConsole({
       setSubmittingInterrupt(true);
     }
     setError("");
-    const targetRunner = snapshot.runners.find(
+    const targetRunner = runners.find(
       (item) => item.runner_id === target.runner_id,
     );
     const activeGeneration =
       targetRunner?.hello?.host_generation ?? target.binding.host_generation;
-    const attemptKey = JSON.stringify([
+    const attemptKey = buildCommandAttemptKey(
       target.runner_id,
       target.binding.hub_session_id,
       action,
       activeGeneration,
-    ]);
+    );
     const command =
       attempts.current.get(attemptKey) ??
       ({
-        client_cmd_id: safeRandomUUID(),
+        client_cmd_id: clientCmdId ?? safeRandomUUID(),
         hub_session_id: target.binding.hub_session_id,
         host_generation: activeGeneration,
         command: action,
       } satisfies RemoteCommand);
     attempts.current.set(attemptKey, command);
+    if (
+      action.action === "send_prompt" &&
+      action.acquire_control &&
+      rollbackDraft
+    ) {
+      setTakeoverDrafts((previous) => ({
+        ...previous,
+        [targetKey]: { id: command.client_cmd_id, ...rollbackDraft },
+      }));
+      if (clientCmdId !== command.client_cmd_id) {
+        updateOptimisticForSession(targetKey, (previous) =>
+          previous.map((entry) =>
+            entry.id === clientCmdId
+              ? { ...entry, id: command.client_cmd_id }
+              : entry,
+          ),
+        );
+      }
+    }
     try {
       await requestWithIdentity(
         `/runners/${encodeURIComponent(target.runner_id)}/commands`,
@@ -1773,80 +1781,219 @@ export function RemoteConsole({
       );
       attempts.current.delete(attemptKey);
       if (action.action === "send_prompt") {
-        setText("");
-        setAttachments([]);
         setDismissedFailure(null);
-        if (textareaRef.current) {
-          textareaRef.current.style.height = "auto";
-          textareaRef.current.style.overflowY = "hidden";
-        }
       }
       refresh.current();
       refreshSessionDetail.current();
     } catch (err) {
-      attempts.current.delete(attemptKey);
+      if (!(err instanceof Error) || err.name === "RemoteRequestRejected") {
+        attempts.current.delete(attemptKey);
+      }
+      if (action.action === "send_prompt") {
+        if (action.acquire_control) forgetTakeoverDraft(targetKey);
+        if (clientCmdId) {
+          updateOptimisticForSession(targetKey, (prev) =>
+            prev.filter((opt) => opt.id !== command.client_cmd_id),
+          );
+        }
+        if (rollbackDraft) {
+          if (selectedRef.current === targetKey) {
+            if (
+              !textRef.current.trim() &&
+              attachmentsRef.current.length === 0
+            ) {
+              setText(rollbackDraft.text);
+              setAttachments([...rollbackDraft.attachments]);
+            }
+          } else if (!draftsBySessionRef.current[targetKey]?.text) {
+            draftsBySessionRef.current[targetKey] = {
+              text: rollbackDraft.text,
+              attachments: [...rollbackDraft.attachments],
+            };
+          }
+        }
+      }
       setError(remoteError(err));
     } finally {
-      setBusy(false);
+      setSessionBusy(targetKey, -1);
       setSubmittingApproval(null);
       setSubmittingQuestionId(null);
       setSubmittingInterrupt(false);
     }
   };
-  const sendCurrentPrompt = () => {
-    if (!canSend || (!text.trim() && attachments.length === 0)) return;
-    const sessionRunner = session
-      ? snapshot.runners.find((item) => item.runner_id === session.runner_id)
-      : undefined;
+
+  const dispatchPromptPayload = (
+    rawText: string,
+    rawAttachments: RemoteAttachment[],
+    acquireControl = false,
+  ) => {
+    if (!session || (!rawText.trim() && rawAttachments.length === 0)) return;
+    const targetKey = key(session);
+    wasInterruptedBySessionRef.current[targetKey] = false;
+    const sessionRunner = runners.find(
+      (item) => item.runner_id === session.runner_id,
+    );
     const supportsModernCommandFields = Boolean(
       sessionRunner?.hello?.models?.agents?.claude_desktop !== undefined ||
+      sessionRunner?.hello?.models?.agents?.antigravity !== undefined ||
       sessionRunner?.hello?.discovery?.candidates?.some(
         (c) => c.context_window_tokens !== undefined,
       ),
     );
     let promptText =
-      text.trim() || `请查看附件：${attachments.map((a) => a.name).join("、")}`;
-    if (!supportsModernCommandFields && attachments.length > 0) {
-      const inlineParts = attachments.map((att) =>
+      rawText.trim() ||
+      `请查看附件：${rawAttachments.map((a) => a.name).join("、")}`;
+    if (!supportsModernCommandFields && rawAttachments.length > 0) {
+      const inlineParts = rawAttachments.map((att) =>
         att.encoding === "utf8"
           ? `[附件 ${att.name}]:\n\`\`\`\n${att.data.slice(0, 64 * 1024)}\n\`\`\``
           : `[附件 ${att.name} (${att.media_type})]`,
       );
       promptText = `${inlineParts.join("\n\n")}\n\n${promptText}`;
     }
+
+    const clientCmdId = safeRandomUUID();
+    const sentAttachments = [...rawAttachments];
+    const userRowCount = settledItems.filter(
+      (item) => item.kind === "user",
+    ).length;
+    const neededUserRows = nextOptimisticPromptNeeded(
+      pendingOptimisticPrompts(optimisticPrompts, settledItems).map(
+        (opt) => opt.neededUserRows,
+      ),
+      userRowCount,
+    );
+    updateOptimisticForSession(targetKey, (prev) => [
+      ...prev,
+      {
+        id: clientCmdId,
+        text: promptText,
+        createdAt: Date.now(),
+        neededUserRows,
+      },
+    ]);
+    setFollowBottom(true);
+    setDismissedFailure(null);
+
     const shouldSendPermissionMode =
       permissionMode !== "default" || permissionModeTouched;
-    void submit({
-      action: "send_prompt",
-      text: promptText,
-      ...(effort !== "default" ? { effort } : {}),
-      ...(sessionModel ? { model: sessionModel } : {}),
-      ...(shouldSendPermissionMode ? { permission_mode: permissionMode } : {}),
-      ...(supportsModernCommandFields && attachments.length > 0
-        ? { attachments }
-        : {}),
-    });
+    void submit(
+      {
+        action: "send_prompt",
+        text: promptText,
+        ...(acquireControl ? { acquire_control: true } : {}),
+        ...(effort !== "default" ? { effort } : {}),
+        ...(sessionModel ? { model: sessionModel } : {}),
+        ...(shouldSendPermissionMode
+          ? { permission_mode: permissionMode }
+          : {}),
+        ...(supportsModernCommandFields && sentAttachments.length > 0
+          ? { attachments: sentAttachments }
+          : {}),
+      },
+      session,
+      clientCmdId,
+      { text: rawText, attachments: sentAttachments },
+    );
+  };
+
+  const clearComposerInput = () => {
+    setText("");
+    setAttachments([]);
+    if (selectedRef.current) {
+      delete draftsBySessionRef.current[selectedRef.current];
+    }
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.overflowY = "hidden";
     }
   };
 
+  const enqueueCurrentPrompt = () => {
+    if (!selected || !connected || (!text.trim() && attachments.length === 0))
+      return;
+    const draftText = text;
+    const draftAttachments = [...attachments];
+    clearComposerInput();
+    setQueuedPrompts((prev) => {
+      const existing = prev[selected];
+      const mergedText = existing
+        ? [existing.text.trim(), draftText.trim()].filter(Boolean).join("\n")
+        : draftText;
+      const mergedAttachments = existing
+        ? [...existing.attachments, ...draftAttachments].slice(0, 16)
+        : draftAttachments;
+      return {
+        ...prev,
+        [selected]: {
+          text: mergedText,
+          attachments: mergedAttachments,
+          queuedAt: Date.now(),
+        },
+      };
+    });
+  };
+
+  const sendCurrentPrompt = () => {
+    if (busy) return;
+    if (!text.trim() && attachments.length === 0) return;
+    if (isTurnExecuting && connected) {
+      enqueueCurrentPrompt();
+      return;
+    }
+    if (!canSend) return;
+    const draftText = text;
+    const draftAttachments = [...attachments];
+    if (!canTakeControl) clearComposerInput();
+    dispatchPromptPayload(draftText, draftAttachments, canTakeControl);
+  };
+
+  const activeQueuedPrompt = selected ? queuedPrompts[selected] : undefined;
+
+  useEffect(() => {
+    if (!selected) return;
+    const switched = lastCheckedQueueSessionRef.current !== selected;
+    lastCheckedQueueSessionRef.current = selected;
+    const previouslyExecuting =
+      wasTurnExecutingBySessionRef.current[selected] === true;
+    wasTurnExecutingBySessionRef.current[selected] = isTurnExecuting;
+    if (switched || !previouslyExecuting || isTurnExecuting) return;
+    const queued = queuedPrompts[selected];
+    if (!queued) return;
+    const hasFailed =
+      Boolean(turnFailure && !turnFailure.retrying) ||
+      session?.binding.execution_state === "error" ||
+      session?.binding.execution_state === "failed" ||
+      session?.binding.execution_state === "interrupted" ||
+      wasInterruptedBySessionRef.current[selected] === true;
+    if (hasFailed || !connected || !canSend) return;
+    setQueuedPrompts((prev) => {
+      const next = { ...prev };
+      delete next[selected];
+      return next;
+    });
+    dispatchPromptPayload(queued.text, queued.attachments);
+  });
+
   const launch = async () => {
-    const launchRunner = snapshot.runners.find(
-      (item) => item.runner_id === runner,
-    );
+    const launchRunner = runners.find((item) => item.runner_id === runner);
     const generation = launchRunner?.hello?.host_generation;
     if (!runner || !workspace || !generation) return;
-    setBusy(true);
+    setLaunchBusy(true);
     setError("");
+    const effectiveSandbox =
+      !nativeId && agentType !== "codex"
+        ? launchPermissionMode === "plan"
+          ? "read-only"
+          : "workspace-write"
+        : sandbox;
     const attemptKey = JSON.stringify([
       "launch",
       runner,
       workspace,
       nativeId,
       agentType,
-      sandbox,
+      effectiveSandbox,
       launchPermissionMode,
       model,
     ]);
@@ -1866,9 +2013,14 @@ export function RemoteConsole({
         host_generation: generation,
         command: {
           action: "connect",
-          mode: nativeId ? "resume" : "create",
+          mode: nativeId
+            ? launchRunner?.codex_session_control &&
+              isCodexThreadId(nativeId.trim())
+              ? "take_control"
+              : "resume"
+            : "create",
           workspace_path: workspace,
-          sandbox,
+          sandbox: effectiveSandbox,
           approval_policy:
             launchPermissionMode === "bypassPermissions"
               ? "never"
@@ -1891,8 +2043,24 @@ export function RemoteConsole({
         command,
       );
       attempts.current.delete(attemptKey);
+      setSelectedRunnerId(runner);
+      if (!nativeId) {
+        const nextProvider: ProviderKind =
+          agentType === "claude_code"
+            ? "claude"
+            : agentType === "antigravity"
+              ? "antigravity"
+              : agentType === "codex"
+                ? "codex"
+                : agentType;
+        userSelectedProviderRef.current = true;
+        setProviderFilter(nextProvider);
+      }
+      setPermissionMode(launchPermissionMode);
+      setPermissionModeTouched(launchPermissionMode !== "default");
       setSelected(`${runner}/${command.hub_session_id}`);
       setLaunchModalOpen(false);
+      if (isMobile) setMobileDrawerOpen(false);
       refresh.current();
       refreshSessionDetail.current();
     } catch (err) {
@@ -1900,7 +2068,7 @@ export function RemoteConsole({
         attempts.current.delete(attemptKey);
       setError(remoteError(err));
     } finally {
-      setBusy(false);
+      setLaunchBusy(false);
     }
   };
   const resumeCandidate = async (
@@ -1908,12 +2076,12 @@ export function RemoteConsole({
     targetWorkspace: string,
     providerSessionId: string,
   ) => {
-    const runnerObj = snapshot.runners.find(
-      (item) => item.runner_id === targetRunnerId,
-    );
+    const runnerObj = runners.find((item) => item.runner_id === targetRunnerId);
     const generation = runnerObj?.hello?.host_generation;
-    if (!runnerObj || !generation || busy) return;
-    setBusy(true);
+    if (!runnerObj || !generation || launchBusy) return;
+    const candidateKey = `${targetRunnerId}/${providerSessionId}`;
+    setResumingCandidateKey(candidateKey);
+    setLaunchBusy(true);
     setError("");
     const attemptKey = JSON.stringify([
       "launch",
@@ -1933,11 +2101,18 @@ export function RemoteConsole({
       ({
         client_cmd_id: safeRandomUUID(),
         hub_session_id:
-          existingSession?.binding.hub_session_id ?? safeRandomUUID(),
+          existingSession?.binding.hub_session_id ??
+          (isCodexThreadId(providerSessionId)
+            ? providerSessionId
+            : safeRandomUUID()),
         host_generation: generation,
         command: {
           action: "connect",
-          mode: "resume",
+          mode:
+            runnerObj.codex_session_control &&
+            isCodexThreadId(providerSessionId)
+              ? "preview"
+              : "resume",
           workspace_path: targetWorkspace,
           sandbox: "read-only",
           approval_policy: "untrusted",
@@ -1959,7 +2134,8 @@ export function RemoteConsole({
         attempts.current.delete(attemptKey);
       setError(remoteError(err));
     } finally {
-      setBusy(false);
+      setLaunchBusy(false);
+      setResumingCandidateKey(null);
     }
   };
 
@@ -1982,7 +2158,7 @@ export function RemoteConsole({
     () =>
       buildSessionTree({
         discovered,
-        devices: snapshot.runners
+        devices: runners
           .filter((runner) => !runner.revoked)
           .map((runner) => ({
             runner_id: runner.runner_id,
@@ -1999,11 +2175,12 @@ export function RemoteConsole({
           title: discovered.get(
             `${item.runner_id}/${item.binding.provider_session_id}`,
           )?.title,
+          provider: item.provider,
           online: item.online,
           control_connected: item.binding.control_connected,
           execution_state: item.binding.execution_state,
         })),
-        candidates: snapshot.runners
+        candidates: runners
           .filter((runner) => !runner.revoked)
           .flatMap((runner) =>
             (runner.hello?.discovery?.candidates ?? []).map((candidate) => ({
@@ -2019,8 +2196,9 @@ export function RemoteConsole({
             })),
           ),
         providerFilter,
+        plugins: allKnownPlugins,
       }),
-    [snapshot.sessions, snapshot.runners, providerFilter, discovered],
+    [snapshot.sessions, runners, providerFilter, discovered, allKnownPlugins],
   );
 
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
@@ -2034,15 +2212,54 @@ export function RemoteConsole({
   }, []);
 
   useEffect(() => {
-    if (!launchModalOpen) return;
-    const onKeyDown = (e: KeyboardEvent) => {
+    const onGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        if (settingsOpen) setSettingsOpen(false);
+        if (!isMobile && sidebarCollapsed) toggleSidebar();
+        if (isMobile && !mobileDrawerOpen) {
+          openMobileDrawer();
+        }
+        setSearchOpen(true);
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+        return;
+      }
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key.toLowerCase() === "b" &&
+        !isMobile
+      ) {
+        e.preventDefault();
+        toggleSidebar();
+        return;
+      }
       if (e.key === "Escape") {
-        setLaunchModalOpen(false);
+        if (launchModalOpen) {
+          setLaunchModalOpen(false);
+          return;
+        }
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          return;
+        }
+        if (searchOpen || sessionSearchQuery) {
+          setSessionSearchQuery("");
+          setSearchOpen(false);
+        }
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [launchModalOpen]);
+    window.addEventListener("keydown", onGlobalKeyDown);
+    return () => window.removeEventListener("keydown", onGlobalKeyDown);
+  }, [
+    launchModalOpen,
+    settingsOpen,
+    searchOpen,
+    sessionSearchQuery,
+    isMobile,
+    sidebarCollapsed,
+    mobileDrawerOpen,
+  ]);
 
   const handleCopySessionId = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2111,7 +2328,7 @@ export function RemoteConsole({
   }, [deviceGroups, sessionSearchQuery]);
 
   const deviceList = useMemo(() => {
-    return snapshot.runners
+    return runners
       .filter((r) => !r.revoked)
       .map((r) => ({
         runnerId: r.runner_id,
@@ -2123,7 +2340,7 @@ export function RemoteConsole({
         if (a.online !== b.online) return a.online ? -1 : 1;
         return a.label.localeCompare(b.label, "zh-Hans-CN");
       });
-  }, [snapshot.runners]);
+  }, [runners]);
 
   const activeRunnerId = useMemo(() => {
     if (
@@ -2140,6 +2357,16 @@ export function RemoteConsole({
   const activeDevice = useMemo(() => {
     return deviceList.find((d) => d.runnerId === activeRunnerId);
   }, [deviceList, activeRunnerId]);
+
+  const activeSnapshotRunner = useMemo(
+    () => snapshot.runners.find((r) => r.runner_id === activeRunnerId),
+    [snapshot.runners, activeRunnerId],
+  );
+
+  const isActiveRunnerHelloPending = isRunnerHelloBlocking(
+    activeRunnerId ? helloEntries[activeRunnerId] : undefined,
+    activeSnapshotRunner,
+  );
 
   /**
    * Available Agents derived from the currently selected computer's runtime.
@@ -2166,7 +2393,7 @@ export function RemoteConsole({
       const disc = discovered.get(key);
       const info = getProviderInfo(
         s.binding.provider_session_id,
-        disc?.provider,
+        disc?.provider ?? s.provider,
       );
       const existing = map.get(info.type);
       map.set(info.type, {
@@ -2177,7 +2404,7 @@ export function RemoteConsole({
     }
 
     // 2. 该电脑 Runner runtime 探测上报的 candidates
-    const activeRunner = snapshot.runners.find(
+    const activeRunner = runners.find(
       (r) => r.runner_id === activeRunnerId && !r.revoked,
     );
     for (const c of activeRunner?.hello?.discovery?.candidates ?? []) {
@@ -2216,13 +2443,20 @@ export function RemoteConsole({
       if (a.count !== b.count) return b.count - a.count;
       return a.name.localeCompare(b.name, "zh-Hans-CN");
     });
-  }, [activeRunnerId, snapshot.runners, snapshot.sessions, discovered]);
+  }, [activeRunnerId, runners, snapshot.sessions, discovered]);
 
   const currentAgentInfo = useMemo(() => {
     if (!activeRunnerId) {
       return {
         type: "" as ProviderKind,
         name: "请先选择电脑",
+        count: 0,
+      };
+    }
+    if (isActiveRunnerHelloPending) {
+      return {
+        type: "" as ProviderKind,
+        name: "正在同步 Agent…",
         count: 0,
       };
     }
@@ -2238,23 +2472,38 @@ export function RemoteConsole({
       name: "暂无可用 Agent",
       count: 0,
     };
-  }, [activeRunnerId, availableAgentsForCurrentDevice, providerFilter]);
+  }, [
+    activeRunnerId,
+    isActiveRunnerHelloPending,
+    availableAgentsForCurrentDevice,
+    providerFilter,
+  ]);
 
-  // 级联规则：只有选择电脑后才响应 Agent；若选中的 Agent 在当前电脑上不存在，自动切换为该电脑支持的第 1 个 Agent
+  // 级联规则：等待当前电脑首次完整 hello 落地后再确定默认 Agent，避免先锁定在残缺/盲猜分类上
   useEffect(() => {
-    if (!activeRunnerId || availableAgentsForCurrentDevice.length === 0) {
+    if (
+      !activeRunnerId ||
+      isActiveRunnerHelloPending ||
+      availableAgentsForCurrentDevice.length === 0
+    ) {
       return;
     }
     const exists = availableAgentsForCurrentDevice.some(
       (a) => a.type === providerFilter,
     );
-    if (!exists) {
+    if (!exists || (!userSelectedProviderRef.current && !selected)) {
       const first = availableAgentsForCurrentDevice[0];
-      if (first) {
+      if (first && first.type !== providerFilter) {
         setProviderFilter(first.type);
       }
     }
-  }, [activeRunnerId, availableAgentsForCurrentDevice, providerFilter]);
+  }, [
+    activeRunnerId,
+    isActiveRunnerHelloPending,
+    availableAgentsForCurrentDevice,
+    providerFilter,
+    selected,
+  ]);
 
   const currentDeviceGroup = useMemo(() => {
     return filteredDeviceGroups.find((d) => d.runnerId === activeRunnerId);
@@ -2278,6 +2527,9 @@ export function RemoteConsole({
       }
     }
     return Array.from(map.values()).sort((a, b) => {
+      const timeA = getWorkspaceActivityMs(a);
+      const timeB = getWorkspaceActivityMs(b);
+      if (timeA !== timeB) return timeB - timeA;
       return a.label.localeCompare(b.label, "zh-Hans-CN");
     });
   }, [currentAgentWorkspaces]);
@@ -2300,8 +2552,8 @@ export function RemoteConsole({
         setAgentMenuOpen(false);
       }
     };
-    window.addEventListener("mousedown", onClickOutside);
-    return () => window.removeEventListener("mousedown", onClickOutside);
+    window.addEventListener("pointerdown", onClickOutside);
+    return () => window.removeEventListener("pointerdown", onClickOutside);
   }, [deviceMenuOpen, agentMenuOpen]);
 
   // Escape closes any open menu and hands the focus back to the button
@@ -2310,6 +2562,8 @@ export function RemoteConsole({
     if (!deviceMenuOpen && !agentMenuOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
       if (deviceMenuOpen) {
         setDeviceMenuOpen(false);
         deviceMenuButtonRef.current?.focus();
@@ -2343,7 +2597,7 @@ export function RemoteConsole({
       );
       const info = getProviderInfo(
         s.binding.provider_session_id,
-        disc?.provider,
+        disc?.provider ?? s.provider,
       );
       if (info.type) {
         setProviderFilter(info.type);
@@ -2351,18 +2605,36 @@ export function RemoteConsole({
     }
   }, [selected, snapshot.sessions, selectedRunnerId, discovered]);
 
-  const pendingApprovalsBySessionKey = useMemo(() => {
+  /**
+   * Pending approvals from every computer, keyed `${runnerId}/${hubSessionId}`.
+   *
+   * This is the Host's own snapshot rather than the open session's event
+   * window, which is what makes it correct for sessions this browser is not
+   * attached to — the whole point of the strip above the device selector.
+   */
+  const pendingApprovalsBySessionKey = useMemo(
+    () => groupPendingApprovals(runners),
+    [runners],
+  );
+
+  const pendingApprovalCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const r of snapshot.runners) {
-      if (r.hello?.pending_approvals) {
-        for (const pa of r.hello.pending_approvals) {
-          const k = `${r.runner_id}/${pa.hub_session_id}`;
-          counts.set(k, (counts.get(k) ?? 0) + 1);
-        }
-      }
+    for (const [k, list] of pendingApprovalsBySessionKey) {
+      counts.set(k, list.length);
     }
     return counts;
-  }, [snapshot.runners]);
+  }, [pendingApprovalsBySessionKey]);
+
+  /**
+   * Sessions blocked on a person, across every computer.
+   *
+   * Built from `deviceGroups`, not from the device-scoped view below: the
+   * strip exists to show what the drill-down hides.
+   */
+  const attention = useMemo(
+    () => attentionEntries(deviceGroups, pendingApprovalsBySessionKey),
+    [deviceGroups, pendingApprovalsBySessionKey],
+  );
 
   /**
    * The folder path to the selected session, so the user can always see where
@@ -2411,13 +2683,64 @@ export function RemoteConsole({
     return undefined;
   }, [deviceGroups, selected, snapshot.sessions]);
 
+  const openLaunchModal = (preferredWorkspace?: string) => {
+    const available = runners.find(
+      (item) => !item.revoked && item.online && item.hello?.workspaces.length,
+    );
+    const nextRunnerId =
+      activeRunnerId || available?.runner_id || runners[0]?.runner_id || "";
+    const rInfo = runners.find(
+      (r) => !r.revoked && r.runner_id === nextRunnerId,
+    );
+    const authorized = rInfo?.hello?.workspaces ?? [];
+    const nextWorkspace =
+      preferredWorkspace && authorized.includes(preferredWorkspace)
+        ? preferredWorkspace
+        : (authorized[0] ?? "");
+    const mappedAgent: LaunchAgentType =
+      providerFilter === "claude" || providerFilter === "claude_desktop"
+        ? "claude_code"
+        : providerFilter === "antigravity"
+          ? "antigravity"
+          : providerFilter !== "all" && providerFilter !== "codex"
+            ? providerFilter
+            : "codex";
+    if (availableLaunchAgents.some((a) => a.value === mappedAgent)) {
+      setAgentType(mappedAgent);
+    } else if (availableLaunchAgents[0]) {
+      setAgentType(availableLaunchAgents[0].value as LaunchAgentType);
+    }
+    setRunner(nextRunnerId);
+    setWorkspace(nextWorkspace);
+    setNativeId("");
+    setModel("");
+    if (isMobile) setMobileDrawerOpen(false);
+    setLaunchModalOpen(true);
+  };
+
+  const reconnectActiveSession = (activeSession: RemoteSession) => {
+    void submit(
+      {
+        action: "connect",
+        mode:
+          supportsCodexControl(activeSession.runner_id) &&
+          isCodexThreadId(activeSession.binding.provider_session_id)
+            ? "take_control"
+            : "resume",
+        workspace_path: activeSession.binding.workspace_path,
+        provider_session_id: activeSession.binding.provider_session_id,
+      },
+      activeSession,
+    );
+  };
+
   return (
-    <div className="remote-console">
+    <div className="remote-console" ref={consoleRootRef}>
       {/* 移动端抽屉遮罩 */}
       {isMobile && (
         <div
           className={`remote-drawer-backdrop ${mobileDrawerOpen ? "open" : ""}`}
-          onClick={() => setMobileDrawerOpen(false)}
+          onClick={() => closeMobileDrawer(true)}
           aria-hidden="true"
         />
       )}
@@ -2431,11 +2754,16 @@ export function RemoteConsole({
               ? "collapsed"
               : ""
         }`}
+        data-drawer-animated={drawerAnimated ? "true" : undefined}
         ref={mobileDrawerRef}
+        role={isMobile ? "dialog" : undefined}
+        aria-modal={isMobile && mobileDrawerOpen ? "true" : undefined}
+        aria-label={isMobile ? "会话导航抽屉" : "会话侧边栏"}
         aria-hidden={isMobile && !mobileDrawerOpen ? true : undefined}
-        // `inert` also takes the closed drawer's controls out of the tab
-        // order, which `aria-hidden` alone does not do.
         inert={isMobile && !mobileDrawerOpen ? true : undefined}
+        onTouchStart={onSidebarTouchStart}
+        onTouchMove={onSidebarTouchMove}
+        onTouchEnd={onSidebarTouchEnd}
         style={
           isMobile
             ? undefined
@@ -2456,7 +2784,7 @@ export function RemoteConsole({
               className={`remote-header-icon-btn ${
                 searchOpen || sessionSearchQuery ? "active" : ""
               }`}
-              title={searchOpen ? "收起搜索" : "搜索会话"}
+              title={searchOpen ? "收起搜索 (Ctrl+K)" : "搜索会话 (Ctrl+K)"}
               aria-label="搜索会话"
               onClick={() => setSearchOpen((prev) => !prev)}
             >
@@ -2481,24 +2809,7 @@ export function RemoteConsole({
               className="remote-header-icon-btn"
               title="新建会话"
               aria-label="新建会话"
-              onClick={() => {
-                const available = snapshot.runners.find(
-                  (item) =>
-                    !item.revoked &&
-                    item.online &&
-                    item.hello?.workspaces.length,
-                );
-                setRunner(activeRunnerId || available?.runner_id || "");
-                const rInfo = snapshot.runners.find(
-                  (r) =>
-                    !r.revoked &&
-                    r.runner_id === (activeRunnerId || available?.runner_id),
-                );
-                setWorkspace(rInfo?.hello?.workspaces[0] ?? "");
-                setNativeId("");
-                setModel("");
-                setLaunchModalOpen(true);
-              }}
+              onClick={() => openLaunchModal()}
             >
               <svg
                 width="15"
@@ -2515,6 +2826,55 @@ export function RemoteConsole({
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
             </button>
+
+            {isMobile ? (
+              <button
+                type="button"
+                className="remote-header-icon-btn"
+                title="关闭菜单"
+                aria-label="关闭菜单"
+                onClick={() => closeMobileDrawer(true)}
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="remote-header-icon-btn"
+                title="收起侧边栏 (Ctrl+B)"
+                aria-label="收起侧边栏"
+                onClick={toggleSidebar}
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="9" y1="3" x2="9" y2="21" />
+                  <path d="M15 9l-3 3 3 3" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
@@ -2534,9 +2894,10 @@ export function RemoteConsole({
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             <input
+              ref={searchInputRef}
               type="text"
               className="remote-sidebar-search-input"
-              placeholder="搜索会话或工作区..."
+              placeholder="搜索会话或工作区…"
               value={sessionSearchQuery}
               autoFocus
               onChange={(e) => setSessionSearchQuery(e.target.value)}
@@ -2567,6 +2928,35 @@ export function RemoteConsole({
             )}
           </div>
         )}
+
+        <AttentionQueue
+          entries={attention}
+          approvalsBySession={pendingApprovalsBySessionKey}
+          submitting={submittingApproval}
+          onOpen={(entry) => {
+            setSelectedRunnerId(entry.runnerId);
+            setSelected(entry.sessionKey);
+            setError("");
+            if (isMobile) setMobileDrawerOpen(false);
+          }}
+          onResolve={(entry, approval, approved) => {
+            const target = snapshot.sessions.find(
+              (item) => key(item) === entry.sessionKey,
+            );
+            if (target === undefined) {
+              setError("该会话已不在当前快照中，请刷新后重试");
+              return;
+            }
+            void submit(
+              {
+                action: "resolve_approval",
+                approval_id: approval.approval_id,
+                approved,
+              },
+              target,
+            );
+          }}
+        />
 
         <div className="remote-selectors-bar">
           {/* 电脑选择器 */}
@@ -2647,6 +3037,7 @@ export function RemoteConsole({
                         onClick={() => {
                           if (dev.runnerId !== activeRunnerId) {
                             setSelected("");
+                            userSelectedProviderRef.current = false;
                           }
                           setSelectedRunnerId(dev.runnerId);
                           setDeviceMenuOpen(false);
@@ -2690,7 +3081,9 @@ export function RemoteConsole({
           <div className="remote-selector-dropdown" ref={agentMenuRef}>
             {(() => {
               const isAgentSelectorDisabled =
-                !activeRunnerId || availableAgentsForCurrentDevice.length === 0;
+                !activeRunnerId ||
+                isActiveRunnerHelloPending ||
+                availableAgentsForCurrentDevice.length === 0;
               return (
                 <button
                   type="button"
@@ -2710,9 +3103,11 @@ export function RemoteConsole({
                   title={
                     !activeRunnerId
                       ? "请先选择电脑"
-                      : availableAgentsForCurrentDevice.length === 0
-                        ? "当前电脑未检测到可用 Agent"
-                        : `${currentAgentInfo.name} · 点击切换 Agent`
+                      : isActiveRunnerHelloPending
+                        ? "正在同步当前电脑的 Agent 与会话列表…"
+                        : availableAgentsForCurrentDevice.length === 0
+                          ? "当前电脑未检测到可用 Agent"
+                          : `${currentAgentInfo.name} · 点击切换 Agent`
                   }
                 >
                   <span className="remote-selector-btn-left">
@@ -2762,7 +3157,7 @@ export function RemoteConsole({
               );
             })()}
 
-            {agentMenuOpen && activeRunnerId && (
+            {agentMenuOpen && activeRunnerId && !isActiveRunnerHelloPending && (
               <div
                 className="remote-selector-popover remote-agent-popover"
                 role="menu"
@@ -2794,6 +3189,7 @@ export function RemoteConsole({
                           if (agent.type !== providerFilter) {
                             setSelected("");
                           }
+                          userSelectedProviderRef.current = true;
                           setProviderFilter(agent.type);
                           setAgentMenuOpen(false);
                         }}
@@ -2841,6 +3237,10 @@ export function RemoteConsole({
             <div className="remote-tree-empty-card">
               <p className="remote-tree-empty-text">请先在上方选择电脑</p>
             </div>
+          ) : isActiveRunnerHelloPending ? (
+            <div className="remote-tree-empty-card">
+              <p className="remote-tree-empty-text">正在同步会话列表…</p>
+            </div>
           ) : availableAgentsForCurrentDevice.length === 0 ? (
             <div className="remote-tree-empty-card">
               <p className="remote-tree-empty-text">
@@ -2860,13 +3260,7 @@ export function RemoteConsole({
                 <button
                   type="button"
                   className="remote-empty-new-btn"
-                  onClick={() => {
-                    setRunner(activeRunnerId);
-                    setWorkspace(activeDevice?.workspaces[0] ?? "");
-                    setNativeId("");
-                    setModel("");
-                    setLaunchModalOpen(true);
-                  }}
+                  onClick={() => openLaunchModal()}
                 >
                   <svg
                     width="12"
@@ -2945,11 +3339,7 @@ export function RemoteConsole({
                       aria-label={`在 ${workspaceGroup.label} 中新建会话`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setRunner(activeRunnerId);
-                        setWorkspace(workspaceGroup.id);
-                        setNativeId("");
-                        setModel("");
-                        setLaunchModalOpen(true);
+                        openLaunchModal(workspaceGroup.id);
                       }}
                     >
                       <svg
@@ -2984,9 +3374,7 @@ export function RemoteConsole({
                               );
                               const isSelected = item.sessionKey === selected;
                               const pendingCount =
-                                pendingApprovalsBySessionKey.get(
-                                  item.sessionKey,
-                                ) ?? 0;
+                                pendingApprovalCounts.get(item.sessionKey) ?? 0;
                               return (
                                 <div
                                   className={`remote-session ${
@@ -2999,84 +3387,10 @@ export function RemoteConsole({
                                     className="remote-session-main"
                                     onClick={() => {
                                       if (activeSession === undefined) return;
-                                      if (isSelected) {
-                                        if (isMobile)
-                                          setMobileDrawerOpen(false);
-                                        if (
-                                          activeSession.online &&
-                                          !activeSession.binding
-                                            .control_connected &&
-                                          !busy
-                                        ) {
-                                          const targetRunner =
-                                            snapshot.runners.find(
-                                              (r) =>
-                                                r.runner_id ===
-                                                activeSession.runner_id,
-                                            );
-                                          const activeGen =
-                                            targetRunner?.hello
-                                              ?.host_generation ??
-                                            activeSession.binding
-                                              .host_generation;
-                                          autoResumedRef.current.delete(
-                                            `${key(activeSession)}/${activeSession.binding.host_generation}`,
-                                          );
-                                          autoResumedRef.current.delete(
-                                            `${key(activeSession)}/${activeGen}`,
-                                          );
-                                          void submit(
-                                            {
-                                              action: "connect",
-                                              mode: "resume",
-                                              workspace_path:
-                                                activeSession.binding
-                                                  .workspace_path,
-                                              provider_session_id:
-                                                activeSession.binding
-                                                  .provider_session_id,
-                                            },
-                                            activeSession,
-                                          );
-                                        }
-                                        return;
-                                      }
-                                      setSelected(item.sessionKey);
-                                      setError("");
                                       if (isMobile) setMobileDrawerOpen(false);
-                                      if (
-                                        activeSession.online &&
-                                        !activeSession.binding.control_connected
-                                      ) {
-                                        const targetRunner =
-                                          snapshot.runners.find(
-                                            (r) =>
-                                              r.runner_id ===
-                                              activeSession.runner_id,
-                                          );
-                                        const activeGen =
-                                          targetRunner?.hello
-                                            ?.host_generation ??
-                                          activeSession.binding.host_generation;
-                                        autoResumedRef.current.delete(
-                                          `${key(activeSession)}/${activeSession.binding.host_generation}`,
-                                        );
-                                        autoResumedRef.current.delete(
-                                          `${key(activeSession)}/${activeGen}`,
-                                        );
-                                        void submit(
-                                          {
-                                            action: "connect",
-                                            mode: "resume",
-                                            workspace_path:
-                                              activeSession.binding
-                                                .workspace_path,
-                                            provider_session_id:
-                                              activeSession.binding
-                                                .provider_session_id,
-                                          },
-                                          activeSession,
-                                        );
+                                      if (!isSelected) {
+                                        setSelected(item.sessionKey);
+                                        setError("");
                                       }
                                     }}
                                   >
@@ -3107,9 +3421,12 @@ export function RemoteConsole({
                                       {!item.session.control_connected &&
                                       activeSession?.online ? (
                                         <span className="remote-session-badge reconnecting">
-                                          {busy && isSelected
-                                            ? "正在恢复..."
-                                            : "未连接"}
+                                          {item.session.execution_state ===
+                                          "releasing_control"
+                                            ? "正在归还"
+                                            : busy && isSelected
+                                              ? "处理中"
+                                              : "只读"}
                                         </span>
                                       ) : item.session.execution_state ===
                                         "running" ? (
@@ -3180,7 +3497,12 @@ export function RemoteConsole({
                                       }
                                     >
                                       {copiedSessionId === item.sessionKey ? (
-                                        <CheckIcon size={12} />
+                                        <>
+                                          <CheckIcon size={12} />
+                                          <span className="remote-copy-inline-label">
+                                            已复制
+                                          </span>
+                                        </>
                                       ) : (
                                         <CopyIcon size={12} />
                                       )}
@@ -3190,21 +3512,30 @@ export function RemoteConsole({
                               );
                             }
 
+                            const isResumingThis =
+                              resumingCandidateKey === item.key;
+                            const canPreview =
+                              supportsCodexControl(item.runnerId) &&
+                              isCodexThreadId(item.providerSessionId);
                             return (
                               <div
-                                className="remote-session candidate"
+                                className={`remote-session candidate ${isResumingThis ? "resuming" : ""}`}
                                 key={item.key}
                               >
                                 <button
                                   type="button"
                                   className="remote-session-main"
                                   title={
-                                    item.candidate.resumable === false
-                                      ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
-                                      : `点击恢复：${item.title}`
+                                    canPreview
+                                      ? "查看历史会话"
+                                      : item.candidate.resumable === false
+                                        ? "电脑端目前仅发现会话元数据，尚不能远程恢复"
+                                        : `点击恢复：${item.title}`
                                   }
                                   disabled={
-                                    busy || item.candidate.resumable === false
+                                    busy ||
+                                    (!canPreview &&
+                                      item.candidate.resumable === false)
                                   }
                                   onClick={() => {
                                     if (isMobile) setMobileDrawerOpen(false);
@@ -3217,7 +3548,7 @@ export function RemoteConsole({
                                 >
                                   <div className="remote-session-top-line">
                                     <span
-                                      className="remote-session-bullet candidate"
+                                      className={`remote-session-bullet ${isResumingThis ? "reconnecting" : "candidate"}`}
                                       aria-hidden="true"
                                     />
                                     <span className="remote-session-title">
@@ -3225,8 +3556,14 @@ export function RemoteConsole({
                                     </span>
                                   </div>
                                   <span className="remote-session-meta">
-                                    <span className="remote-session-badge candidate">
-                                      可接管
+                                    <span
+                                      className={`remote-session-badge ${isResumingThis ? "reconnecting" : "candidate"}`}
+                                    >
+                                      {isResumingThis
+                                        ? "打开中…"
+                                        : canPreview
+                                          ? "可查看"
+                                          : "可接管"}
                                     </span>
                                     {item.model && (
                                       <span
@@ -3269,7 +3606,12 @@ export function RemoteConsole({
                                   >
                                     {copiedSessionId ===
                                     item.providerSessionId ? (
-                                      <CheckIcon size={12} />
+                                      <>
+                                        <CheckIcon size={12} />
+                                        <span className="remote-copy-inline-label">
+                                          已复制
+                                        </span>
+                                      </>
                                     ) : (
                                       <CopyIcon size={12} />
                                     )}
@@ -3311,20 +3653,18 @@ export function RemoteConsole({
         <div className="remote-sidebar-footer">
           <div className="remote-runner-status">
             <span
-              className={`remote-status-dot ${snapshot.runners.some((item) => !item.revoked && item.online) ? "online" : "offline"}`}
+              className={`remote-status-dot ${runners.some((item) => !item.revoked && item.online) ? "online" : "offline"}`}
             />
             <span>
-              {
-                snapshot.runners.filter((item) => !item.revoked && item.online)
-                  .length
-              }{" "}
+              {runners.filter((item) => !item.revoked && item.online).length}{" "}
               台电脑在线
             </span>
           </div>
           {account?.user ? (
             <div className="remote-account-card">
               <div className="remote-account-avatar" aria-hidden="true">
-                {account.user.avatar_data_url ? (
+                {account.user.avatar_data_url &&
+                account.user.avatar_data_url.trim().length > 0 ? (
                   <img
                     src={account.user.avatar_data_url}
                     alt=""
@@ -3344,7 +3684,10 @@ export function RemoteConsole({
               <div className="remote-account-actions">
                 <button
                   className="remote-account-btn"
-                  onClick={() => setSettingsOpen(true)}
+                  onClick={() => {
+                    if (isMobile) setMobileDrawerOpen(false);
+                    setSettingsOpen(true);
+                  }}
                   type="button"
                   title="设置"
                 >
@@ -3370,7 +3713,10 @@ export function RemoteConsole({
             >
               <button
                 className="remote-account-btn"
-                onClick={() => setSettingsOpen(true)}
+                onClick={() => {
+                  if (isMobile) setMobileDrawerOpen(false);
+                  setSettingsOpen(true);
+                }}
                 type="button"
                 style={{ width: "100%", justifyContent: "center" }}
                 title="设置"
@@ -3389,16 +3735,32 @@ export function RemoteConsole({
           title="拖拽调整侧边栏宽度"
         />
       )}
-      <main className="remote-main">
+      <main
+        className="remote-main"
+        inert={isMobile && mobileDrawerOpen ? true : undefined}
+        onTouchStart={onMainTouchStart}
+        onTouchMove={onMainTouchMove}
+        onTouchEnd={onMainTouchEnd}
+      >
         <header>
           <div className="remote-header-left">
             {isMobile ? (
               <button
                 type="button"
+                ref={mobileMenuBtnRef}
                 className="remote-icon-btn mobile-menu-btn"
-                title="打开菜单"
-                aria-label="打开菜单"
-                onClick={() => setMobileDrawerOpen(true)}
+                title={
+                  attention.length > 0
+                    ? `打开菜单（${attention.length} 项待处理）`
+                    : "打开菜单"
+                }
+                aria-label={
+                  attention.length > 0
+                    ? `打开菜单，有 ${attention.length} 项待处理`
+                    : "打开菜单"
+                }
+                aria-expanded={mobileDrawerOpen}
+                onClick={openMobileDrawer}
               >
                 <svg
                   width="20"
@@ -3412,6 +3774,11 @@ export function RemoteConsole({
                   <line x1="3" y1="6" x2="21" y2="6" />
                   <line x1="3" y1="18" x2="21" y2="18" />
                 </svg>
+                {attention.length > 0 && (
+                  <span className="remote-mobile-menu-badge" aria-hidden="true">
+                    {attention.length > 9 ? "9+" : attention.length}
+                  </span>
+                )}
               </button>
             ) : (
               sidebarCollapsed && (
@@ -3480,6 +3847,7 @@ export function RemoteConsole({
                                 setSelectedRunnerId(crumb.runnerId);
                               }
                               if (crumb.provider !== undefined) {
+                                userSelectedProviderRef.current = true;
                                 setProviderFilter(crumb.provider);
                               }
                               setSelected("");
@@ -3505,29 +3873,45 @@ export function RemoteConsole({
                         session.binding.provider_session_id,
                         discovered.get(
                           `${session.runner_id}/${session.binding.provider_session_id}`,
-                        )?.provider,
+                        )?.provider ?? session.provider,
                       ).name;
                       if (!session.online) return `${providerName} · 电脑离线`;
-                      if (!connected || (sessionLoading && items.length === 0))
-                        return `${providerName} · 正在连接…`;
+                      if (releasingControl)
+                        return `${providerName} · 正在归还控制`;
+                      if (sessionLoading && items.length === 0)
+                        return `${providerName} · 正在同步历史`;
+                      if (!connected) return `${providerName} · 只读`;
                       return providerName;
                     })()
                   : "电脑执行，随处继续。"}
               </p>
             </div>
           </div>
-          {session?.binding.current_turn_id && (
-            <button
-              disabled={!connected || busy}
-              onClick={() => void submit({ action: "interrupt" })}
-            >
-              停止任务
-            </button>
-          )}
+          <MobileHeaderActions
+            isMobile={isMobile}
+            selectedSessionKey={selected}
+            copiedSessionId={copiedSessionId}
+            onCopySessionId={handleCopySessionId}
+            onNewSession={() =>
+              openLaunchModal(session?.binding.workspace_path)
+            }
+          />
         </header>
+        {isMobile && !mobileDrawerOpen && (
+          <MobileAttentionBanner
+            entries={attention}
+            selectedSessionKey={selected}
+            onOpenSingle={(entry) => {
+              setSelectedRunnerId(entry.runnerId);
+              setSelected(entry.sessionKey);
+              setError("");
+            }}
+            onOpenDrawer={openMobileDrawer}
+          />
+        )}
         {error && (
           <div role="alert" className="remote-notice">
-            {error}
+            {cleanBannerText(error)}
             <button aria-label="关闭提示" onClick={() => setError("")}>
               ×
             </button>
@@ -3546,24 +3930,11 @@ export function RemoteConsole({
                 {
                   title: "新建会话",
                   desc: "在指定设备工作区派发新 Agent",
-                  action: () => {
-                    const available = snapshot.runners.find(
-                      (item) => item.online && item.hello?.workspaces?.length,
-                    );
-                    setRunner(
-                      available?.runner_id ??
-                        snapshot.runners[0]?.runner_id ??
-                        "",
-                    );
-                    setWorkspace(available?.hello?.workspaces[0] ?? "");
-                    setNativeId("");
-                    setModel("");
-                    setLaunchModalOpen(true);
-                  },
+                  action: () => openLaunchModal(),
                 },
                 {
                   title: "外观设置",
-                  desc: "在温润天然纸张与黑曜石暖炭间切换",
+                  desc: "在温润纸张与黑曜石暖炭间切换",
                   action: () => setSettingsOpen(true),
                 },
               ].map((chip) => (
@@ -3582,31 +3953,39 @@ export function RemoteConsole({
         ) : (
           <div key={selected} className="remote-session-view remote-view-enter">
             {session && !connected && (
-              <div className="remote-notice restoring">
-                <span className="remote-notice-spinner" />
+              <div className="remote-notice session-control">
                 <span>
-                  {session.online
-                    ? "正在恢复并同步原生 Agent 会话…"
-                    : "电脑处于离线状态，上线后将自动恢复连接。"}
+                  {releasingControl
+                    ? "正在归还控制…"
+                    : session.online
+                      ? "正在只读查看会话"
+                      : "电脑离线，可查看已同步的历史"}
                 </span>
-                {session.online && (
+                {session.online && !releasingControl && (
                   <button
                     disabled={busy}
-                    onClick={() =>
-                      void submit({
-                        action: "connect",
-                        mode: "resume",
-                        workspace_path: session.binding.workspace_path,
-                        provider_session_id:
-                          session.binding.provider_session_id,
-                      })
-                    }
+                    onClick={() => reconnectActiveSession(session)}
                   >
-                    重试连接
+                    接管会话
                   </button>
                 )}
               </div>
             )}
+            {codexSession &&
+              connected &&
+              !isTurnExecuting &&
+              approvals.length === 0 &&
+              questions.length === 0 && (
+                <div className="remote-notice session-control">
+                  <span>AgentHub 已接管会话</span>
+                  <button
+                    disabled={busy}
+                    onClick={() => void submit({ action: "release_control" })}
+                  >
+                    归还控制
+                  </button>
+                </div>
+              )}
             <div
               className="remote-timeline cds-scroll-fade-mask"
               ref={timeline}
@@ -3625,74 +4004,38 @@ export function RemoteConsole({
                 const item = group.item;
                 if (item.kind === "tool")
                   return <RemoteToolCard key={item.id} item={item} />;
-                if (
-                  item.kind === "assistant" &&
-                  isRedactedPathOnly(item.text)
-                ) {
-                  return (
-                    <p className="remote-private-note" key={item.id}>
-                      本机路径已隐藏
-                    </p>
-                  );
-                }
+
                 const isStreamingThis = Boolean(
                   item.kind === "assistant" &&
                   session?.binding.current_turn_id &&
-                  item === items[items.length - 1],
+                  item === effectiveItems[effectiveItems.length - 1],
                 );
-                const rawText = readableRemoteText(item.text);
-                const { thinking, cleanText, isThinkingLive } =
-                  item.kind === "assistant"
-                    ? splitThinkingContent(rawText, isStreamingThis)
-                    : {
-                        thinking: null,
-                        cleanText: rawText,
-                        isThinkingLive: false,
-                      };
+                const providerName =
+                  item.kind !== "user"
+                    ? getProviderInfo(
+                        session?.binding.provider_session_id ?? "",
+                        discovered.get(
+                          `${session?.runner_id ?? ""}/${session?.binding.provider_session_id ?? ""}`,
+                        )?.provider ?? session?.provider,
+                      ).name
+                    : undefined;
 
                 return (
-                  <article
-                    className={`remote-message ${item.kind}`}
+                  <RemoteMessageCard
                     key={item.id}
-                  >
-                    {item.kind !== "user" && (
-                      <div className="remote-turn-tag">
-                        <span
-                          className="remote-turn-marker"
-                          aria-hidden="true"
-                        />
-                        <small>
-                          {
-                            getProviderInfo(
-                              session?.binding.provider_session_id ?? "",
-                              discovered.get(
-                                `${session?.runner_id ?? ""}/${session?.binding.provider_session_id ?? ""}`,
-                              )?.provider,
-                            ).name
-                          }
-                        </small>
-                      </div>
-                    )}
-                    <div className="remote-message-body">
-                      {thinking && (
-                        <ThinkingAccordion
-                          thoughtText={thinking}
-                          isThinking={isThinkingLive}
-                        />
-                      )}
-                      {(cleanText || !thinking) && (
-                        <MarkdownView
-                          content={cleanText}
-                          streaming={isStreamingThis}
-                        />
-                      )}
-                    </div>
-                  </article>
+                    item={item}
+                    isStreamingThis={isStreamingThis}
+                    providerName={providerName}
+                  />
                 );
               })}
               {isTurnExecuting &&
                 approvals.length === 0 &&
-                questions.length === 0 && (
+                questions.length === 0 &&
+                (isWaitingFirstAssistant ||
+                  (effectiveItems[effectiveItems.length - 1]?.kind === "tool" &&
+                    effectiveItems[effectiveItems.length - 1]?.status ===
+                      "running")) && (
                   <div
                     className="remote-turn-live"
                     role="status"
@@ -3708,15 +4051,15 @@ export function RemoteConsole({
                         <i />
                       </span>
                       <span className="remote-turn-live-label">
-                        {hasInFlightPrompt && !session?.binding.current_turn_id
-                          ? "正在派发指令…"
-                          : items[items.length - 1]?.kind === "tool" &&
-                              items[items.length - 1]?.status === "running"
-                            ? `正在执行 · ${items[items.length - 1]?.title || "工具调用"}`
-                            : items[items.length - 1]?.kind === "assistant" &&
-                                session?.binding.current_turn_id
-                              ? "正在执行 · 正在生成回复…"
-                              : "正在执行…"}
+                        {optimisticPrompts.length > 0 ||
+                        (hasInFlightPrompt && !session?.binding.current_turn_id)
+                          ? "已发送，正在等待响应…"
+                          : effectiveItems[effectiveItems.length - 1]?.kind ===
+                                "tool" &&
+                              effectiveItems[effectiveItems.length - 1]
+                                ?.status === "running"
+                            ? `正在执行 · ${effectiveItems[effectiveItems.length - 1]?.title || "工具调用"}`
+                            : "正在思考并生成回复…"}
                       </span>
                       {session && (
                         <span className="remote-turn-live-provider">
@@ -3725,29 +4068,19 @@ export function RemoteConsole({
                               session.binding.provider_session_id,
                               discovered.get(
                                 `${session.runner_id}/${session.binding.provider_session_id}`,
-                              )?.provider,
+                              )?.provider ?? session.provider,
                             ).name
                           }
                         </span>
                       )}
                     </div>
-                    {session?.binding.current_turn_id && (
-                      <button
-                        type="button"
-                        className="remote-turn-live-stop"
-                        disabled={!connected || busy || submittingInterrupt}
-                        onClick={() => void submit({ action: "interrupt" })}
-                      >
-                        {submittingInterrupt ? "停止中…" : "停止"}
-                      </button>
-                    )}
                   </div>
                 )}
               {!isTurnExecuting &&
                 (() => {
                   const failText =
                     turnFailure && !turnFailure.retrying
-                      ? readableRemoteText(turnFailure.message)
+                      ? cleanBannerText(turnFailure.message)
                       : latestFailure
                         ? remoteError(
                             new Error(latestFailure.receipt?.code ?? ""),
@@ -3759,7 +4092,11 @@ export function RemoteConsole({
                   return (
                     <div className="remote-timeline-error" role="alert">
                       <div className="remote-timeline-error-body">
-                        <strong>本轮执行未完成</strong>
+                        <strong>
+                          {latestFailure?.receipt?.code === "native_writer_busy"
+                            ? "接管失败"
+                            : "本轮执行未完成"}
+                        </strong>
                         <span>{failText}</span>
                       </div>
                       <button
@@ -3772,16 +4109,8 @@ export function RemoteConsole({
                     </div>
                   );
                 })()}
-              {!session ||
-              (sessionLoading && items.length === 0) ||
-              (!connected && session.online && items.length === 0) ||
-              (busy && items.length === 0) ? (
-                <div className="remote-timeline-empty">
-                  <span className="remote-notice-spinner" />
-                  <p className="remote-timeline-empty-desc">
-                    正在加载会话内容…
-                  </p>
-                </div>
+              {!session || ((sessionLoading || busy) && items.length === 0) ? (
+                <ConversationSkeleton label="正在加载会话内容…" />
               ) : !items.length ? (
                 <div className="remote-timeline-empty">
                   <div
@@ -3806,9 +4135,9 @@ export function RemoteConsole({
                       `${session.runner_id}/${session.binding.provider_session_id}`,
                     )?.title || formatFallbackTitle()}
                   </h3>
-                  {!session.online && (
-                    <p className="remote-timeline-empty-desc">电脑离线</p>
-                  )}
+                  <p className="remote-timeline-empty-desc">
+                    {session.online ? "暂无已同步的消息" : "电脑离线"}
+                  </p>
                 </div>
               ) : null}
               {approvals.map((approval) => {
@@ -3871,6 +4200,9 @@ export function RemoteConsole({
                         {
                           getProviderInfo(
                             session?.binding.provider_session_id ?? "",
+                            discovered.get(
+                              `${session?.runner_id ?? ""}/${session?.binding.provider_session_id ?? ""}`,
+                            )?.provider ?? session?.provider,
                           ).name
                         }
                       </strong>{" "}
@@ -4376,6 +4708,55 @@ export function RemoteConsole({
                 sendCurrentPrompt();
               }}
             >
+              {activeQueuedPrompt && (
+                <QueuedPromptBar
+                  queued={activeQueuedPrompt}
+                  canSendNow={Boolean(connected && canSend && !isTurnExecuting)}
+                  onSendNow={() => {
+                    if (!selected || !connected || !canSend) return;
+                    const queued = activeQueuedPrompt;
+                    setQueuedPrompts((prev) => {
+                      const next = { ...prev };
+                      delete next[selected];
+                      return next;
+                    });
+                    dispatchPromptPayload(queued.text, queued.attachments);
+                  }}
+                  onEdit={() => {
+                    if (!selected) return;
+                    setText((prev) =>
+                      prev.trim()
+                        ? `${activeQueuedPrompt.text}\n${prev}`
+                        : activeQueuedPrompt.text,
+                    );
+                    if (activeQueuedPrompt.attachments.length > 0) {
+                      setAttachments((prev) =>
+                        [...activeQueuedPrompt.attachments, ...prev].slice(
+                          0,
+                          16,
+                        ),
+                      );
+                    }
+                    setQueuedPrompts((prev) => {
+                      const next = { ...prev };
+                      delete next[selected];
+                      return next;
+                    });
+                    requestAnimationFrame(() => {
+                      adjustTextareaHeight();
+                      textareaRef.current?.focus();
+                    });
+                  }}
+                  onCancel={() => {
+                    if (!selected) return;
+                    setQueuedPrompts((prev) => {
+                      const next = { ...prev };
+                      delete next[selected];
+                      return next;
+                    });
+                  }}
+                />
+              )}
               {attachments.length > 0 && (
                 <div
                   className="remote-composer-attachments"
@@ -4387,6 +4768,7 @@ export function RemoteConsole({
                       key={`${att.name}-${idx}`}
                     >
                       {att.encoding === "base64" &&
+                      att.data.length > 0 &&
                       att.media_type.startsWith("image/") ? (
                         <img
                           className="remote-attachment-thumb"
@@ -4454,7 +4836,7 @@ export function RemoteConsole({
                       event.key.toLowerCase() === "u"
                     ) {
                       event.preventDefault();
-                      if (connected && !busy) {
+                      if ((connected || canTakeControl) && !busy) {
                         fileInputRef.current?.click();
                       }
                       return;
@@ -4479,13 +4861,19 @@ export function RemoteConsole({
                       : !session.online
                         ? "电脑离线"
                         : !connected
-                          ? "正在连接…"
+                          ? canTakeControl
+                            ? "输入消息，发送时接管会话"
+                            : "等待会话可用"
                           : isTurnExecuting
-                            ? "正在执行…"
-                            : "继续这段工作…"
+                            ? isMobile
+                              ? '输入下一条消息，点"排队"加入待发…'
+                              : "输入下一条消息，按 Enter 加入待发队列…"
+                            : items.length === 0
+                              ? "输入指令开始新对话…"
+                              : "继续这段工作…"
                   }
                   rows={1}
-                  disabled={!connected}
+                  disabled={!connected && !canTakeControl}
                 />
               </div>
               <div className="remote-composer-toolbar">
@@ -4756,214 +5144,164 @@ export function RemoteConsole({
                         : undefined
                     }
                   />
-                  {session?.binding.current_turn_id && (
+                  {/* One control for the send slot, not two buttons side by
+                      side: while a turn is running the slot *becomes* stop.
+                      This is the only stop control in the view — the header
+                      and the live banner used to carry one each as well. */}
+                  {isTurnExecuting ? (
+                    <div className="remote-live-action-pair">
+                      {(text.trim() || attachments.length > 0) && (
+                        <button
+                          type="button"
+                          className="remote-queue-btn"
+                          title="加入待发队列，当前轮次完成后自动发送"
+                          disabled={!connected || busy}
+                          onClick={enqueueCurrentPrompt}
+                        >
+                          排队
+                        </button>
+                      )}
+                      {session?.binding.current_turn_id ? (
+                        <button
+                          type="button"
+                          className="remote-interrupt-btn"
+                          title="停止这一轮"
+                          disabled={!connected || busy || submittingInterrupt}
+                          onClick={() => {
+                            if (selected) {
+                              wasInterruptedBySessionRef.current[selected] =
+                                true;
+                            }
+                            void submit({ action: "interrupt" });
+                          }}
+                        >
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                          >
+                            <rect x="4" y="4" width="16" height="16" rx="2" />
+                          </svg>
+                          <span>
+                            {submittingInterrupt ? "停止中…" : "停止"}
+                          </span>
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : (
                     <button
-                      type="button"
-                      className="remote-interrupt-btn"
-                      title="停止任务"
-                      disabled={!connected || busy || submittingInterrupt}
-                      onClick={() => void submit({ action: "interrupt" })}
+                      type="submit"
+                      className={
+                        canTakeControl
+                          ? "remote-send-btn remote-send-takeover"
+                          : "remote-send-btn"
+                      }
+                      title={
+                        canTakeControl
+                          ? "接管并发送"
+                          : !connected
+                            ? "等待会话连接"
+                            : text.trim() || attachments.length > 0
+                              ? "发送消息 (Enter)"
+                              : "请输入消息内容"
+                      }
+                      aria-label={
+                        canTakeControl
+                          ? "接管并发送"
+                          : text.trim() || attachments.length > 0
+                            ? "发送消息"
+                            : "请输入消息内容"
+                      }
+                      disabled={
+                        !canSend ||
+                        busy ||
+                        (!text.trim() && attachments.length === 0)
+                      }
                     >
+                      {canTakeControl && <span>接管并发送</span>}
                       <svg
-                        width="12"
-                        height="12"
+                        width="16"
+                        height="16"
                         viewBox="0 0 24 24"
-                        fill="currentColor"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
                       >
-                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <line x1="12" y1="19" x2="12" y2="5" />
+                        <polyline points="5 12 12 5 19 12" />
                       </svg>
-                      <span>{submittingInterrupt ? "正在停止…" : "停止"}</span>
                     </button>
                   )}
-                  <button
-                    type="submit"
-                    className="remote-send-btn"
-                    title={
-                      canSend && (text.trim() || attachments.length > 0)
-                        ? "发送"
-                        : "等待输入就绪"
-                    }
-                    disabled={
-                      !canSend ||
-                      busy ||
-                      (!text.trim() && attachments.length === 0)
-                    }
-                  >
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <line x1="12" y1="19" x2="12" y2="5" />
-                      <polyline points="5 12 12 5 19 12" />
-                    </svg>
-                  </button>
                 </div>
               </div>
             </form>
           </div>
         )}
       </main>
-      {launchModalOpen && (
-        <div
-          className="remote-modal-backdrop"
-          role="presentation"
-          onClick={() => setLaunchModalOpen(false)}
-        >
-          <div
-            className="remote-launch"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="remote-launch-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void launch();
-              }}
-            >
-              <header>
-                <h2 id="remote-launch-title">在电脑上开始</h2>
-                <button
-                  type="button"
-                  className="remote-modal-close"
-                  aria-label="关闭"
-                  onClick={() => setLaunchModalOpen(false)}
-                >
-                  ×
-                </button>
-              </header>
-              <div className="remote-launch-field">
-                <span className="remote-launch-label">电脑</span>
-                <Select
-                  label="电脑"
-                  value={runner}
-                  placeholder="选择在线电脑"
-                  options={onlineDeviceOptions}
-                  onChange={(next) => {
-                    setRunner(next);
-                    setWorkspace(
-                      snapshot.runners.find((item) => item.runner_id === next)
-                        ?.hello?.workspaces[0] ?? "",
-                    );
-                    setNativeId("");
-                    setModel("");
-                  }}
-                />
-              </div>
-              <div className="remote-launch-field">
-                <span className="remote-launch-label">工作区</span>
-                <Select
-                  label="工作区"
-                  value={workspace}
-                  placeholder="选择已授权目录"
-                  options={launchWorkspaceOptions}
-                  onChange={(next) => {
-                    setWorkspace(next);
-                    setNativeId("");
-                  }}
-                />
-              </div>
-              <div className="remote-launch-field">
-                <span className="remote-launch-label">会话</span>
-                <Select
-                  label="会话"
-                  value={nativeId}
-                  options={launchSessionOptions}
-                  onChange={setNativeId}
-                />
-              </div>
-              {!nativeId && (
-                <div className="remote-launch-field">
-                  <span className="remote-launch-label">Agent 引擎</span>
-                  <Select
-                    label="Agent 引擎"
-                    value={agentType}
-                    options={LAUNCH_AGENT_OPTIONS}
-                    onChange={(next) => {
-                      setAgentType(next as typeof agentType);
-                      // A model id belongs to one engine; carrying it across a
-                      // switch would hand the new engine an id it cannot run.
-                      setModel("");
-                    }}
-                  />
-                </div>
-              )}
-              <div className="remote-launch-field">
-                <span className="remote-launch-label">模型</span>
-                <Select
-                  label="模型"
-                  value={model}
-                  options={launchModelOptions}
-                  onChange={setModel}
-                />
-                {launchModelOptions.length <= 1 && (
-                  <span className="remote-launch-hint">
-                    所选电脑尚未上报该引擎的模型列表，将沿用本机默认配置。
-                  </span>
-                )}
-              </div>
-              <div className="remote-launch-field">
-                <span className="remote-launch-label">文件权限</span>
-                <Select
-                  label="文件权限"
-                  value={sandbox}
-                  options={SANDBOX_OPTIONS}
-                  onChange={(next) => setSandbox(next as typeof sandbox)}
-                />
-              </div>
-              <div className="remote-launch-field">
-                <span className="remote-launch-label">执行权限模式</span>
-                <Select
-                  label="执行权限模式"
-                  value={launchPermissionMode}
-                  options={PERMISSION_MODE_OPTIONS}
-                  onChange={(next) =>
-                    setLaunchPermissionMode(next as RemotePermissionMode)
-                  }
-                />
-              </div>
-              <p className="remote-launch-note">
-                执行发生在所选电脑。会话内容将同步到你的
-                Hub，供其他设备查看和继续。
-              </p>
-              <div className="remote-modal-actions">
-                <button
-                  type="submit"
-                  className="remote-primary remote-modal-submit"
-                  disabled={busy || !workspace || !runner}
-                >
-                  {busy ? "正在启动…" : nativeId ? "恢复会话" : "创建会话"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <RemoteLaunchModal
+        open={launchModalOpen}
+        busy={busy}
+        runner={runner}
+        workspace={workspace}
+        nativeId={nativeId}
+        agentType={agentType}
+        model={model}
+        sandbox={sandbox}
+        launchPermissionMode={launchPermissionMode}
+        onlineDeviceOptions={onlineDeviceOptions}
+        launchWorkspaceOptions={launchWorkspaceOptions}
+        launchSessionOptions={launchSessionOptions}
+        launchAgentOptions={launchAgentOptions}
+        launchModelOptions={launchModelOptions}
+        sandboxOptions={SANDBOX_OPTIONS}
+        permissionModeOptions={PERMISSION_MODE_OPTIONS}
+        onClose={() => setLaunchModalOpen(false)}
+        onSubmit={() => void launch()}
+        onRunnerChange={(next) => {
+          setRunner(next);
+          setWorkspace(
+            runners.find((item) => item.runner_id === next)?.hello
+              ?.workspaces[0] ?? "",
+          );
+          setNativeId("");
+          setModel("");
+        }}
+        onWorkspaceChange={(next) => {
+          setWorkspace(next);
+          setNativeId("");
+        }}
+        onNativeIdChange={setNativeId}
+        onAgentTypeChange={(next) => {
+          setAgentType(next);
+          setModel("");
+        }}
+        onModelChange={setModel}
+        onSandboxChange={setSandbox}
+        onPermissionModeChange={setLaunchPermissionMode}
+      />
       {settingsOpen && panelConfig !== undefined && (
-        <SettingsPage
-          account={account ?? undefined}
-          config={panelConfig}
-          notificationPresentedAt={notificationPresentedAt}
-          onClose={() => setSettingsOpen(false)}
-          onLoggedOut={() => {
-            setSettingsOpen(false);
-            onLoggedOut?.();
-          }}
-          onSave={(next) => {
-            saveConfig(window.localStorage, next);
-            setPanelConfig(next);
-            setSettingsOpen(false);
-            refresh.current();
-          }}
-          onWorkspaceChanged={() => refresh.current()}
-        />
+        <Suspense fallback={null}>
+          <SettingsPage
+            account={account ?? undefined}
+            config={panelConfig}
+            notificationPresentedAt={notificationPresentedAt}
+            onClose={() => setSettingsOpen(false)}
+            onLoggedOut={() => {
+              setSettingsOpen(false);
+              onLoggedOut?.();
+            }}
+            onSave={(next) => {
+              saveConfig(window.localStorage, next);
+              setPanelConfig(next);
+              setSettingsOpen(false);
+              refresh.current();
+            }}
+            onWorkspaceChanged={() => refresh.current()}
+          />
+        </Suspense>
       )}
     </div>
   );

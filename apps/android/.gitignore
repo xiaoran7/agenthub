@@ -3,3 +3,7 @@
 /local.properties
 /**/build/
 *.iml
+
+# Kotlin compile daemon scratch: session and crash logs, never sources.
+/.kotlin/
+**/.kotlin/

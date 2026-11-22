@@ -5,6 +5,7 @@ let lastRenderState = {
   deviceJson: "",
   sessionsJson: "",
   capabilitiesJson: "",
+  pluginsJson: "",
 };
 let consecutiveFailures = 0;
 let consecutiveEmptyResponses = 0;
@@ -31,7 +32,7 @@ const VIEW_EN_LABELS = {
 };
 
 // the settings page's own parts, one tab each, as magpie's Settings
-const SET_TABS = ["general", "appearance", "gateway", "capabilities", "about"];
+const SET_TABS = ["general", "appearance", "gateway", "capabilities", "plugins", "about"];
 
 function updateCrumb(viewId) {
   const title = document.getElementById("topCrumbTitle");
@@ -45,20 +46,32 @@ const PROVIDER_LABELS = {
   claude: "Claude",
   claude_desktop: "Claude Desktop",
   codex: "Codex",
-  zcode: "ZCode",
   antigravity: "Antigravity",
-  grok_build: "Grok",
-  gemini: "Gemini CLI",
-  gemini_cli: "Gemini CLI",
-  cursor: "Cursor",
-  cline: "Cline",
-  opencode: "OpenCode",
+  deepseek_harness: "DeepSeek Harness",
 };
+const dynamicPluginMeta = new Map();
+
+function registerPluginAgentMeta(list) {
+  if (!Array.isArray(list)) return;
+  for (const item of list) {
+    const id = String((item && (item.id || item.plugin_id)) || "")
+      .toLowerCase()
+      .trim();
+    if (!id) continue;
+    dynamicPluginMeta.set(id, {
+      name: item.name || id,
+      iconUrl: item.icon_url || "",
+      isPlugin: item.is_plugin !== false,
+    });
+  }
+}
 
 function providerLabel(id) {
   const key = String(id || "")
     .toLowerCase()
     .trim();
+  const dyn = dynamicPluginMeta.get(key);
+  if (dyn && dyn.name) return dyn.name;
   return PROVIDER_LABELS[key] || String(id || "");
 }
 
@@ -84,15 +97,34 @@ function initTheme() {
   syncWindowTheme();
 }
 
+function localCsrfToken() {
+  return (window.AppLayout && window.AppLayout.csrfToken) || "";
+}
+
+function localApiPost(url, payload) {
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-AgentHub-Csrf": localCsrfToken(),
+    },
+    body: JSON.stringify(payload === undefined ? {} : payload),
+  });
+}
+
 // the caption's theme, kept where the next window reads it as it opens
 function syncWindowTheme() {
   const dark = document.documentElement.classList.contains("dark");
-  fetch("/api/window-theme", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dark }),
-  }).catch(() => {});
+  localApiPost("/api/window-theme", { dark }).catch(() => {});
 }
+
+// A closed window tears its stream down itself. Without this the browser
+// would keep reconnecting for the tab's id until it is finally dropped, which
+// on a laptop is a connection every second pointed at a page nobody sees.
+window.addEventListener("pagehide", () => {
+  clearTimeout(streamRetryTimer);
+  if (streamSource) streamSource.close();
+});
 
 async function init() {
   // the first paint is drawn once, in order; the class comes off on the
@@ -553,11 +585,13 @@ function switchView(viewId, silent) {
     // the usage page's charts need a laid-out card to measure: a page drawn
     // while hidden has no width, so the digest is drawn as it comes into view
     if (viewId === "usage") {
-      if (!usageDigest && !usageLoading) {
-        loadUsage(true);
-      } else {
+      if (usageDigest) {
         drawUsage();
       }
+      if (!usageDigest || usageDirty) {
+        loadUsage(!usageDigest);
+      }
+      startUsageTimer();
     }
   };
   // a turn only draws when the window is painting frames: a tucked-away
@@ -723,12 +757,26 @@ async function refreshDashboard(manual) {
     if (seq !== renderSeq) return false;
     consecutiveFailures = 0;
     updateConnectionStatus(true);
-    if (manual) toast("已刷新最新会话与工作区状态");
+    if (manual) {
+      usageDirty = true;
+      usageMemoryCache.clear();
+      if (isUsageOpen()) loadUsage(true);
+      toast("已刷新最新会话与工作区状态");
+    }
 
     dashboardData = data;
     if (data.pending_nav) {
       location.hash = data.pending_nav;
       applySettingsHash();
+    }
+    registerPluginAgentMeta(dashboardData.agents);
+    if (dashboardData.plugins && Array.isArray(dashboardData.plugins.items)) {
+      registerPluginAgentMeta(dashboardData.plugins.items);
+      const pluginsStr = JSON.stringify(dashboardData.plugins);
+      if (pluginsStr !== lastRenderState.pluginsJson) {
+        renderPluginsSection(dashboardData.plugins);
+        lastRenderState.pluginsJson = pluginsStr;
+      }
     }
     renderStats(dashboardData.stats, dashboardData.gateway);
 
@@ -746,7 +794,7 @@ async function refreshDashboard(manual) {
     let sessionsChanged = false;
 
     if (sessionsLoading) {
-      // Transcript scanning (Claude, Claude Desktop, Grok, etc.) or daemon startup is in progress:
+      // Transcript scanning or daemon startup is in progress:
       // never show partial sessions (e.g. Codex-only before Claude finishes scanning)
       if (lastGoodSessions.length === 0) {
         renderSessions([], "loading");
@@ -859,7 +907,26 @@ function renderStats(stats, gateway) {
   const totalSessions = stats.total_sessions || 0;
   countTo(document.getElementById("statTotalSessions"), totalSessions);
   const breakdown = document.getElementById("statSessionsBreakdown");
-    breakdown.textContent = `Coding Assistant ${stats.claude_sessions || 0} · Claude Desktop ${stats.claude_desktop_sessions || 0} · Codex ${stats.codex_sessions || 0} · Grok ${stats.grok_sessions || 0} · Gemini ${stats.gemini_sessions || 0}`;
+  const counts = stats.provider_counts || {};
+  const nativeKeys = new Set([
+    "claude_code",
+    "claude_desktop",
+    "antigravity",
+    "codex",
+    "deepseek_harness",
+  ]);
+  const parts = [
+    `Coding Assistant ${stats.claude_sessions || 0}`,
+    `Claude Desktop ${stats.claude_desktop_sessions || 0}`,
+    `Antigravity ${stats.antigravity_sessions || 0}`,
+    `Codex ${stats.codex_sessions || 0}`,
+    `DeepSeek Harness ${stats.deepseek_harness_sessions || 0}`,
+  ];
+  for (const [k, v] of Object.entries(counts)) {
+    if (nativeKeys.has(k)) continue;
+    if (Number(v) > 0) parts.push(`${providerLabel(k)} ${v}`);
+  }
+  breakdown.textContent = parts.join(" · ");
   breakdown.title = breakdown.textContent;
 
   countTo(document.getElementById("statTotalModels"), stats.total_models || 0);
@@ -896,13 +963,8 @@ const AGENT_ICONS = {
   claude_desktop: "claude-color",
   claude: "claude-color",
   codex: "codex-color",
-  grok_build: "xai",
-  grok: "xai",
-  gemini_cli: "geminicli-color",
-  gemini: "gemini-color",
   antigravity: "antigravity-color",
-  zcode: "zcode.png",
-  opencode: "zcode.png",
+  deepseek_harness: "deepseek-color",
 };
 
 // magpie's family table (internal/agent/icons.go): a model id's prefix names
@@ -947,9 +1009,14 @@ function iconMark(name, size, alt) {
   return `<img class="mark${mono}" src="/icons/${file}" width="${size}" height="${size}" alt="${escapeHtml(alt || "")}" loading="lazy">`;
 }
 
-function getAgentIcon(id, size = 18) {
+function getAgentIcon(id, size = 18, iconUrl = "") {
   const key = String(id || "").toLowerCase().trim();
-  return iconMark(AGENT_ICONS[key] || "", size);
+  const dyn = dynamicPluginMeta.get(key);
+  const resolvedUrl = iconUrl || (dyn && dyn.iconUrl) || "";
+  if (resolvedUrl) {
+    return `<img class="mark" src="${escapeHtml(resolvedUrl)}" width="${size}" height="${size}" alt="${escapeHtml(providerLabel(key))}" loading="lazy" onerror="this.style.display='none'">`;
+  }
+  return iconMark(AGENT_ICONS[key] || "", size, providerLabel(key));
 }
 
 function getModelIcon(name, size = 18) {
@@ -971,27 +1038,43 @@ function renderAgents(agents, mode = "data") {
   if (!container) return;
 
   if (!agents || agents.length === 0) {
-    container.innerHTML = `<div class="empty-state"><b>没有发现可用的智能体</b><span class="why">安装 Coding Assistant 或 Codex 并确保它在 PATH 中，刷新后即可在这里看到。</span></div>`;
+    container.innerHTML = `<div class="empty-state"><b>没有发现可用的智能体</b><span class="why">安装 Coding Assistant、Codex 或前往设置 › 插件启用外部扩展，刷新后即可在这里看到。</span></div>`;
     return;
   }
 
   container.innerHTML = agents
     .map((agent) => {
-      const isReady = agent.installed || agent.sessions_count > 0;
-      const tagHtml = isReady
-        ? `<span class="tag ok">已就绪</span>`
-        : `<span class="tag">未检测到</span>`;
+      const isPlugin = !!agent.is_plugin;
+      const isReady = isPlugin
+        ? !!agent.available || agent.sessions_count > 0
+        : agent.installed || agent.sessions_count > 0;
+      let tagHtml;
+      if (isPlugin) {
+        tagHtml = agent.available
+          ? `<span class="tag ok">已就绪</span>`
+          : `<span class="tag warn">${escapeHtml(agent.runtime_status || "未检测到运行时")}</span>`;
+      } else if (agent.id === "deepseek_harness" && !agent.installed) {
+        tagHtml = `<span class="tag">待接入</span>`;
+      } else {
+        tagHtml = isReady
+          ? `<span class="tag ok">已就绪</span>`
+          : `<span class="tag">未检测到</span>`;
+      }
+      const sourceTag = isPlugin
+        ? `<span class="tag ok">ACP 插件${agent.plugin_version ? ` v${escapeHtml(agent.plugin_version)}` : ""}</span>`
+        : `<span class="tag">原生</span>`;
       const pathText = agent.path
         ? escapeHtml(agent.path)
         : "未找到独立可执行文件，可通过命令别名调用";
 
       return `
       <div class="row">
-        <span class="ic">${getAgentIcon(agent.id, 22)}</span>
+        <span class="ic">${getAgentIcon(agent.id, 22, agent.icon_url || "")}</span>
         <div class="who">
           <div class="name-line">
             <span class="name">${escapeHtml(agent.name)}</span>
             <span class="tag mono">${escapeHtml(agent.command || agent.id)}</span>
+            ${sourceTag}
             ${tagHtml}
           </div>
           <div class="sub flow">
@@ -1095,7 +1178,7 @@ function renderSessions(sessions, mode = "data") {
     container.innerHTML = `
       <div class="empty-state">
         <b>还没有可读取的会话</b>
-        <span class="why">在任意目录下运行一次 Coding Assistant、Codex 或 ZCode，对话结束后会话就会出现在这里。如果刚结束的会话还没出现，稍等几秒再看。</span>
+        <span class="why">运行任意原生智能体或前往设置 › 插件启用 ACP 扩展，对话结束后会话就会出现在这里。如果刚结束的会话还没出现，稍等几秒再看。</span>
         <button class="text action retry" onclick="refreshDashboard(true)">
           <svg class="ic" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 3v4h-4M2.5 17v-4h4"/><path d="M3 9.5a7 7 0 0 1 13-2.5M17 10.5a7 7 0 0 1-13 2.5"/></g></svg>
           <span>重新读取</span>
@@ -1180,30 +1263,34 @@ function renderSessions(sessions, mode = "data") {
         countTitle = `筛选出 ${count} 个会话，该工作区共 ${origCount} 个`;
       }
 
-      const itemsHtml = grp.items
+      const limit = isSearching
+        ? 120
+        : sessionGroupLimits.get(k) || SESSION_GROUP_INITIAL_LIMIT;
+      const visibleItems = grp.items.slice(0, limit);
+      const hiddenCount = Math.max(0, grp.items.length - visibleItems.length);
+
+      const itemsHtml = visibleItems
         .map((item, index) => {
           const rawId =
             item.provider_session_id || item.session_id || item.id || "";
           const hasId = !!rawId && rawId !== "unknown";
           const prompt = escapeHtml(
-            item.prompt ||
-              item.title ||
-              item.first_prompt ||
-              item.name ||
-              "无标题会话",
+            cleanSessionTitleText(
+              item.prompt ||
+                item.title ||
+                item.first_prompt ||
+                item.name ||
+                "",
+            ) || "无标题会话",
           );
           const rawProvider =
             item.provider ||
             item.agent_name ||
-            (rawId.startsWith("sess_")
-              ? "zcode"
-              : rawId.startsWith("antigravity_")
-                ? "antigravity"
-                : rawId.startsWith("claude_")
-                  ? "claude_code"
-                  : rawId.startsWith("grok_")
-                    ? "grok_build"
-                    : "codex");
+            (rawId.startsWith("antigravity_")
+              ? "antigravity"
+              : rawId.startsWith("claude_")
+                ? "claude_code"
+                : "codex");
 
           let timeStr = item.relative_time;
           if (!timeStr) {
@@ -1235,7 +1322,12 @@ function renderSessions(sessions, mode = "data") {
           // conversation that spawned them, never as conversations of their
           // own: their lines carry the parent's session id
           const subs = Array.isArray(item.subagents) ? item.subagents : [];
-          const deletable = rawProvider === "claude_code" || rawProvider === "claude_desktop" || rawProvider === "claude";
+          const deletable =
+            rawProvider === "claude_code" ||
+            rawProvider === "claude_desktop" ||
+            rawProvider === "claude" ||
+            rawProvider === "codex" ||
+            rawProvider === "antigravity";
           const picked = pickedSessions.has(rawId);
           const subsClosed = !fullId || !expandedSubagents.has(fullId);
           const subHtml = subs.length && !subsClosed ? renderSubagents(subs, false) : "";
@@ -1249,19 +1341,19 @@ function renderSessions(sessions, mode = "data") {
             ? `<button type="button" class="text icon sm-del" title="删除这个会话" aria-label="删除这个会话" onclick="event.stopPropagation();askDeleteSessions(this.closest('.row.sess').dataset.id)">
                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
                </button>`
-            : "";
+            : `<span class="sm-del-space" aria-hidden="true"></span>`;
           const check = deletable
             ? `<input type="checkbox" class="sm-check" ${picked ? "checked" : ""} aria-label="选择这个会话" onclick="event.stopPropagation()" onchange="pickSession(this.closest('.row.sess').dataset.id, this.checked)">`
             : `<span class="sm-check-space"></span>`;
           const animIdx = Math.min(index, 10);
-          const animTotal = Math.min(grp.items.length, 10);
+          const animTotal = Math.min(visibleItems.length, 10);
 
           return `
-        <div class="row sess${subs.length ? " has-subs" : ""}${subsClosed ? " subs-closed" : ""}" data-id="${fullId}" style="--i:${animIdx};--n:${animTotal}" title="${providerLabel(rawProvider)}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}"${subs.length ? ` onclick="if(!event.target.closest('.sm-del, .sm-check, button, input, a')) toggleSubagents(this)"` : ""}>
+        <div class="row sess${subs.length ? " has-subs" : ""}${subsClosed ? " subs-closed" : ""}" data-id="${fullId}" style="--i:${animIdx};--n:${animTotal}" title="${escapeHtml(providerLabel(rawProvider))}${fullId ? " · " + fullId : ""}${modelName ? " · " + modelName : ""}${rawTokens > 0 ? " · " + fmtN(rawTokens) + " Tokens" : ""}"${subs.length ? ` onclick="if(!event.target.closest('.sm-del, .sm-check, button, input, a')) toggleSubagents(this)"` : ""}>
           ${check}
           <div class="who">
             <div class="name" title="${prompt}">${prompt}</div>
-            <div class="sub">${providerLabel(rawProvider)}${subCount}${rawTokens > 0 ? ` · ${fmtN(rawTokens)} Tokens` : ""}</div>
+            <div class="sub">${escapeHtml(providerLabel(rawProvider))}${subCount}${rawTokens > 0 ? ` · ${fmtN(rawTokens)} Tokens` : ""}</div>
           </div>
           ${modelName ? `<span class="model" title="${modelName}">${modelName}</span>` : ""}
           <time class="when">${escapeHtml(timeStr)}</time>
@@ -1271,6 +1363,13 @@ function renderSessions(sessions, mode = "data") {
       `;
         })
         .join("");
+
+      const moreHtml =
+        hiddenCount > 0
+          ? `<button type="button" class="row sess-more" data-group-key="${escapeHtml(k)}" onclick="expandSessionGroup(this.dataset.groupKey)">
+               <span>展开更多会话（剩余 ${hiddenCount} 个）</span>
+             </button>`
+          : "";
 
       return `
       <div class="list" data-group="${escapeHtml(k)}">
@@ -1286,7 +1385,7 @@ function renderSessions(sessions, mode = "data") {
           </span>
         </div>
         <div class="group-body${closed ? " folded" : ""}" data-group-body>
-          <div class="group-rows">${itemsHtml}</div>
+          <div class="group-rows">${itemsHtml}${moreHtml}</div>
         </div>
       </div>
     `;
@@ -1294,6 +1393,34 @@ function renderSessions(sessions, mode = "data") {
     .join("");
   sessionsRenderedAt = Date.now();
   syncSessionPickUi();
+}
+
+const SESSION_GROUP_INITIAL_LIMIT = 40;
+const SESSION_GROUP_STEP = 60;
+const sessionGroupLimits = new Map();
+
+function expandSessionGroup(groupKey) {
+  if (!groupKey) return;
+  const current = sessionGroupLimits.get(groupKey) || SESSION_GROUP_INITIAL_LIMIT;
+  sessionGroupLimits.set(groupKey, current + SESSION_GROUP_STEP);
+  filterSessionsList();
+}
+
+function cleanSessionTitleText(raw) {
+  const s = String(raw || "");
+  if (!s.trim()) return "";
+  const cmdMatch = /<command-name>\s*([^<]+?)\s*<\/command-name>/i.exec(s);
+  let cleaned = s
+    .replace(/<command-message>[\s\S]*?<\/command-message>/gi, " ")
+    .replace(/<command-args>([\s\S]*?)<\/command-args>/gi, " $1 ")
+    .replace(/<command-name>\s*([^<]+?)\s*<\/command-name>/gi, " $1 ")
+    .replace(/<\/?[a-zA-Z][a-zA-Z0-9_-]*(?:\s[^>]*)?>/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned && cmdMatch) cleaned = cmdMatch[1].trim();
+  return cleaned;
 }
 
 function sessionRecencyValue(s) {
@@ -1467,7 +1594,7 @@ function askDeleteSessions(one) {
         const s = byId.get(id) || {};
         const li = document.createElement("li");
         li.textContent =
-          s.prompt || s.title || s.name || String(id).replace(/^claude_/, "");
+          s.prompt || s.title || s.name || String(id).replace(/^(?:claude|codex|antigravity)_/, "");
         return li;
       }),
     );
@@ -1510,11 +1637,7 @@ async function confirmDeleteSessions() {
     btn.classList.add("busy");
   }
   try {
-    const resp = await fetch("/api/sessions/delete", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ids }),
-    });
+    const resp = await localApiPost("/api/sessions/delete", { ids });
     if (!resp.ok) {
       // nothing was done, so nothing the reader ticked is spent: leave the
       // picks and the confirm dialog as they were, and say what happened
@@ -1524,7 +1647,10 @@ async function confirmDeleteSessions() {
     const data = (await resp.json()) || {};
     // a refused session stays picked, so the reader can retry it
     const kept = new Set(
-      (data.refused || []).map((r) => String(r.id || "").replace(/^claude_/, "")),
+      (data.refused || []).flatMap((r) => {
+        const s = String(r.id || "");
+        return [s, s.replace(/^(?:claude|codex|antigravity)_/, "")];
+      }),
     );
     for (const id of [...pickedSessions]) if (!kept.has(id)) pickedSessions.delete(id);
     closeDeleteSessions();
@@ -1685,7 +1811,7 @@ async function refreshModelsCatalog(event) {
     btn.classList.add("busy");
   }
   try {
-    const resp = await fetch("/api/models/refresh", { method: "POST" });
+    const resp = await localApiPost("/api/models/refresh");
     if (resp.ok) {
       const data = await resp.json();
       if (data && data.data) {
@@ -1818,7 +1944,7 @@ function renderWorkspaces(workspaces, mode = "data") {
             <span class="name" title="${safeName}">${safeName}</span>
             ${gitBadge}
           </div>
-          <div class="sub mono ws-loc"><span class="ws-parent">${shortParent(ws.path)}</span><span class="ws-leaf">${escapeHtml(pathLeaf(ws.path))}</span></div>
+          <div class="sub mono ws-loc"><span class="ws-parent">${escapeHtml(shortParent(ws.path))}</span><span class="ws-leaf">${escapeHtml(pathLeaf(ws.path))}</span></div>
         </div>
         <div class="share" title="${pct}% 活跃度">
           <i style="width: ${Math.max(tokens > 0 ? 2 : count ? 5 : 0, pct)}%;"></i>
@@ -2029,17 +2155,32 @@ function capAgentMarks(agents, fallback) {
     .join("");
 }
 
+function formatCapabilityDisplay(raw) {
+  const clean = String(raw || "")
+    .replace(/[\x00-\x1f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return "—";
+  return clean.replace(
+    /(-e(?:nc(?:odedcommand)?)?)\s+([A-Za-z0-9+/=]{64,})/gi,
+    (_m, flag, b64) => `${flag} <Base64 脚本 · ${b64.length} 字符>`,
+  );
+}
+
 function capRow({ name, kind, value, facts, agents, meta, copyLabel, title }) {
-  const safeValue = escapeHtml(value || "—");
+  const displayValue = formatCapabilityDisplay(value);
+  const safeValue = escapeHtml(displayValue);
+  const rawCopy = String(value || "").replace(/[\r\n\t]+/g, " ").trim();
+  const hoverTitle = String(title || displayValue).slice(0, 320);
   return `
-    <div class="row cap-row" title="${escapeHtml(title || "")}">
+    <div class="row cap-row" title="${escapeHtml(hoverTitle)}">
       <div class="who">
         <div class="name-line">
           <span class="name">${escapeHtml(name || "—")}</span>
           ${kind ? `<span class="tag">${escapeHtml(kind)}</span>` : ""}
         </div>
         <div class="sub flow">${facts.filter(Boolean).join(" · ")}</div>
-        <button type="button" class="cap-copy mono" onclick="copyText(this.dataset.v); toast('${copyLabel}')" data-v="${escapeHtml(value || "")}" title="${escapeHtml(value || "")}">
+        <button type="button" class="cap-copy mono" onclick="copyText(this.dataset.v); toast('${copyLabel}')" data-v="${escapeHtml(rawCopy)}" title="点击复制完整内容">
           <span class="cap-copy-text">${safeValue}</span>
         </button>
       </div>
@@ -2110,7 +2251,7 @@ async function syncCapabilities(event) {
     btn.classList.add("busy");
   }
   try {
-    const resp = await fetch("/api/capabilities/sync", { method: "POST" });
+    const resp = await localApiPost("/api/capabilities/sync");
     if (resp.ok) {
       const data = await resp.json();
       if (data.capabilities) {
@@ -2246,11 +2387,7 @@ async function submitRegisterMcp(event) {
   submitBtn.innerHTML = "<span>保存中…</span>";
 
   try {
-    const resp = await fetch("/api/capabilities/mcp/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const resp = await localApiPost("/api/capabilities/mcp/register", payload);
     const resData = await resp.json();
     if (resp.ok && resData.ok) {
       closeRegisterMcpModal();
@@ -2380,7 +2517,7 @@ async function shutdownRunner() {
   if (modal) modal.classList.add("open");
 
   try {
-    await fetch("/api/shutdown", { method: "POST" });
+    await localApiPost("/api/shutdown");
     setTimeout(() => {
       document.getElementById("shutdownModalMsg").textContent =
         "AgentHub Runner 已完全退出。托盘图标已注销。您可以关闭此桌面窗口。";
@@ -2482,7 +2619,7 @@ const LED_COLUMNS = [
   { id: "status", label: "状态", defaultOn: true },
 ];
 const USAGE_COLS_KEY = "agenthub_usage_cols";
-const OPTIMAL_USAGE_POLL_MS = 2000;
+const OPTIMAL_USAGE_POLL_MS = 30000;
 const LED_PAGE_STEP = 100;
 
 const LED_FILTER_CATS = [
@@ -2512,6 +2649,7 @@ let ledVisibleCols = new Set(
   LED_COLUMNS.filter((c) => c.defaultOn).map((c) => c.id),
 );
 let usageDigest = null;
+let usageDirty = false;
 let usageLoading = false;
 let usageFetchingPeriod = "";
 let usageAbortController = null;
@@ -2683,8 +2821,9 @@ function setUsagePeriod(period) {
   }
 }
 
-// Implicit optimal cadence: pauses when the tab or window is hidden and
-// revalidates via ETag / 304 without full re-reading.
+// The usage page rides the same change stream as the sessions page: a
+// publish re-reads both. This timer is only the fallback for a blocked
+// stream, and it revalidates via ETag / 304 without a full re-reading.
 function startUsageTimer() {
   clearInterval(usageTimer);
   usageTimer = setInterval(() => {
@@ -2720,6 +2859,16 @@ function fillSegs(id, options, current, attr) {
 async function loadUsage(manual) {
   const periodToFetch = usagePeriod;
   if (!manual && usageLoading && usageFetchingPeriod === periodToFetch) return;
+  if (!manual && !usageDirty && usageMemoryCache.has(periodToFetch)) {
+    const cached = usageMemoryCache.get(periodToFetch);
+    if (cached && Date.now() - cached.ts < 5000) {
+      if (usageDigest !== cached.data) {
+        usageDigest = cached.data;
+        drawUsage();
+      }
+      return;
+    }
+  }
 
   if (usageAbortController) {
     try {
@@ -2752,9 +2901,12 @@ async function loadUsage(manual) {
     if (resp.status === 304 && usageMemoryCache.has(periodToFetch)) {
       const cached = usageMemoryCache.get(periodToFetch);
       cached.ts = Date.now();
-      if (periodToFetch === usagePeriod && !usageDigest) {
-        usageDigest = cached.data;
-        drawUsage();
+      if (periodToFetch === usagePeriod) {
+        usageDirty = false;
+        if (!usageDigest) {
+          usageDigest = cached.data;
+          drawUsage();
+        }
       }
       if (manual) toast("用量已是最新状态");
       return;
@@ -2773,6 +2925,7 @@ async function loadUsage(manual) {
     usageMemoryCache.set(periodToFetch, { data, ts: Date.now() });
 
     if (periodToFetch === usagePeriod) {
+      usageDirty = false;
       usageDigest = data;
       if (!hadDigest || etagChanged || manual) {
         drawUsage();
@@ -2868,7 +3021,7 @@ function drawUsage() {
     drawLedgerHeat();
     const note = document.getElementById("usageNote");
     if (note) {
-      note.textContent = `统计范围：Coding Assistant、Claude Desktop、ZCode 与 Codex 的本地会话记录（${d.from} 至 ${d.to}）。`;
+      note.textContent = `统计范围：本机原生智能体与已启用 ACP 插件的本地会话及网关记录（${d.from} 至 ${d.to}）。`;
     }
   } else if (usageTab === "requests") {
     renderLedgerRequests();
@@ -4188,11 +4341,7 @@ let lastExportedCsvPath = "";
 async function revealExportedCsv() {
   if (!lastExportedCsvPath) return;
   try {
-    const resp = await fetch("/api/reveal-path", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: lastExportedCsvPath }),
-    });
+    const resp = await localApiPost("/api/reveal-path", { path: lastExportedCsvPath });
     if (resp.ok) {
       toast("已在资源管理器中定位该 CSV 文件");
     } else {
@@ -4240,8 +4389,11 @@ async function exportLedgerCsv() {
     "error",
   ];
   const cell = (v) => {
-    const s = String(v == null ? "" : v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    let s = String(v == null ? "" : v);
+    if (/^[=+\-@\t\r]/.test(s)) {
+      s = `'${s}`;
+    }
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const body = rows.map((r) => {
     const status = r.error ? (r.recovered ? "recovered" : "failed") : r.retried ? "retried" : "ok";
@@ -4268,11 +4420,7 @@ async function exportLedgerCsv() {
   const csv = "﻿" + [head.join(","), ...body].join("\r\n");
 
   try {
-    const resp = await fetch("/api/usage/export-csv", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, csv }),
-    });
+    const resp = await localApiPost("/api/usage/export-csv", { filename, csv });
     if (resp.ok) {
       const res = await resp.json();
       if (res && res.ok && res.path) {
@@ -4321,6 +4469,7 @@ const SET_TAB_LABELS = {
   appearance: "外观 · Appearance",
   gateway: "设备与网关 · Gateway",
   capabilities: "能力生态 · Capabilities",
+  plugins: "插件 · Plugins",
   about: "关于 · About",
 };
 
@@ -4505,35 +4654,336 @@ function renderSettings() {
     if (savedGateway) gatewayInput.value = savedGateway;
   }
   if (dashboardData && dashboardData.device) renderDevice(dashboardData.device);
-}
-
-// Implicit optimal background refresh cadence (2.0s, with focus hot-reload).
-const OPTIMAL_DASHBOARD_POLL_MS = 2000;
-function pollIntervalMs() {
-  return OPTIMAL_DASHBOARD_POLL_MS;
-}
-
-let pollTimer = 0;
-let pollVisibilityBound = false;
-function startPolling() {
-  clearInterval(pollTimer);
-  pollTimer = setInterval(() => {
-    if (document.visibilityState !== "hidden") {
-      refreshDashboard(false);
-      if (isUsageOpen()) loadUsage(false);
-    }
-  }, pollIntervalMs());
-  if (!pollVisibilityBound) {
-    pollVisibilityBound = true;
-    const onResume = () => {
-      if (document.visibilityState !== "hidden") {
-        refreshDashboard(false);
-        if (isUsageOpen()) loadUsage(false);
-      }
-    };
-    document.addEventListener("visibilitychange", onResume);
-    window.addEventListener("focus", onResume);
+  if (lastPluginsPayload) {
+    renderPluginsSection(lastPluginsPayload);
+  } else if (dashboardData && dashboardData.plugins) {
+    renderPluginsSection(dashboardData.plugins);
   }
+}
+
+let lastPluginsPayload = null;
+
+function normalizePluginCaps(caps) {
+  if (!caps || typeof caps !== "object") return [];
+  const labels = [
+    ["discover", "发现会话"],
+    ["launch", "远程启动"],
+    ["resume", "恢复会话"],
+    ["models", "模型列表"],
+    ["history", "历史消息"],
+    ["approvals", "审批交互"],
+  ];
+  return labels.filter(([k]) => !!caps[k]).map(([, label]) => label);
+}
+
+function renderPluginRow(p, section) {
+  const id = String(p.id || "");
+  const name = escapeHtml(p.displayName || p.display_name || p.name || id);
+  const ver = escapeHtml(p.installedVersion || p.installed_version || p.version || "");
+  const desc = escapeHtml(p.description || "外部 ACP 智能体插件");
+  const rtStatus = String(p.runtimeStatus || p.runtime_status || (p.available ? "ready" : "unknown"));
+  const available = !!p.available;
+  const enabled = !!p.enabled;
+  const installed = !!p.installed;
+  const hasIcon = installed && !!(p.icon || p.icon_url || p.iconUrl);
+  const iconHtml = hasIcon
+    ? `<img class="mark" src="/api/plugins/icon/${encodeURIComponent(id)}" width="20" height="20" alt="${name}" loading="lazy" onerror="this.style.display='none'">`
+    : `<span class="mark none" style="width:20px;height:20px" aria-hidden="true"></span>`;
+
+  const capsHtml = normalizePluginCaps(p.capabilities)
+    .map((label) => `<span class="tag">${escapeHtml(label)}</span>`)
+    .join("");
+
+  let statusTag = "";
+  if (installed) {
+    if (!enabled) {
+      statusTag = `<span class="tag">已停用</span>`;
+    } else if (available) {
+      statusTag = `<span class="tag ok">运行就绪</span>`;
+    } else {
+      statusTag = `<span class="tag warn">${escapeHtml(rtStatus)}</span>`;
+    }
+  } else {
+    statusTag = `<span class="tag">未安装</span>`;
+  }
+
+  let actionsHtml = "";
+  if (section === "installed") {
+    const toggleLabel = enabled ? "停用" : "启用";
+    const nextEnabled = enabled ? "false" : "true";
+    actionsHtml = `
+      <button type="button" class="text action" data-plugin-id="${escapeHtml(id)}" data-next-enabled="${nextEnabled}" onclick="togglePluginById(this.dataset.pluginId, this.dataset.nextEnabled === 'true')">${toggleLabel}</button>
+      <button type="button" class="text action danger" data-plugin-id="${escapeHtml(id)}" onclick="uninstallPluginById(this.dataset.pluginId)">卸载</button>
+    `;
+  } else {
+    actionsHtml = `
+      <button type="button" class="text action primary" data-plugin-id="${escapeHtml(id)}" onclick="installPluginById(this.dataset.pluginId)">安装</button>
+    `;
+  }
+
+  return `
+    <div class="row cap-row">
+      <span class="ic">${iconHtml}</span>
+      <div class="who">
+        <div class="name-line">
+          <span class="name">${name}</span>
+          <span class="tag mono">${escapeHtml(id)}</span>
+          ${ver ? `<span class="tag mono">v${ver}</span>` : ""}
+          ${statusTag}
+        </div>
+        <div class="sub flow">
+          <span>${desc}</span>
+          ${p.error ? `<span class="tag warn">${escapeHtml(p.error)}</span>` : ""}
+        </div>
+        ${capsHtml ? `<div class="plugin-caps">${capsHtml}</div>` : ""}
+      </div>
+      <div class="plugin-actions">${actionsHtml}</div>
+    </div>
+  `;
+}
+
+function renderPluginsSection(payload) {
+  if (!payload) return;
+  lastPluginsPayload = payload;
+  const items = Array.isArray(payload.items)
+    ? payload.items
+    : Array.isArray(payload.plugins)
+      ? payload.plugins
+      : [];
+  const regInput = document.getElementById("pluginRegistryInput");
+  if (regInput && document.activeElement !== regInput && payload.registry_url) {
+    regInput.value = payload.registry_url;
+  }
+  const sourceTag = document.getElementById("pluginsSourceTag");
+  if (sourceTag) {
+    if (payload.error) {
+      sourceTag.textContent = "目录拉取失败";
+      sourceTag.className = "tag warn";
+    } else if (payload.refreshed) {
+      sourceTag.textContent = "目录已同步";
+      sourceTag.className = "tag ok";
+    } else {
+      sourceTag.textContent = "本地状态";
+      sourceTag.className = "tag";
+    }
+  }
+
+  const installed = items.filter((p) => !!p.installed);
+  const available = items.filter((p) => !p.installed);
+
+  const installedList = document.getElementById("pluginsInstalledList");
+  const installedBadge = document.getElementById("pluginsInstalledBadge");
+  if (installedBadge) installedBadge.textContent = `${installed.length} 个已安装`;
+  if (installedList) {
+    installedList.innerHTML = installed.length
+      ? installed.map((p) => renderPluginRow(p, "installed")).join("")
+      : `<div class="empty-state"><b>尚未安装任何 ACP 插件</b><span class="why">点击上方"刷新目录"即可从 Runner 配置的仓库安装外部智能体适配器。</span></div>`;
+  }
+
+  const catalogList = document.getElementById("pluginsCatalogList");
+  const catalogBadge = document.getElementById("pluginsCatalogBadge");
+  if (catalogBadge) catalogBadge.textContent = `${available.length} 个可用`;
+  if (catalogList) {
+    catalogList.innerHTML = available.length
+      ? available.map((p) => renderPluginRow(p, "catalog")).join("")
+      : `<div class="empty-state"><b>当前没有待安装的目录插件</b><span class="why">${items.length ? "目录中的插件均已安装。" : "点击\"刷新目录\"从插件仓库拉取最新清单。"}</span></div>`;
+  }
+}
+
+async function refreshPluginCatalog() {
+  const btn = document.getElementById("pluginRefreshCatalogBtn");
+  const orig = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "正在同步…";
+  }
+  try {
+    const resp = await localApiPost("/api/plugins/catalog", {});
+    const data = await resp.json();
+    data.refreshed = resp.ok && data.ok !== false;
+    renderPluginsSection(data);
+    if (data.ok !== false) {
+      toast("已从插件仓库同步最新目录");
+    } else {
+      toast("目录拉取失败：" + (data.error || "未知错误"), "err");
+    }
+  } catch (err) {
+    toast("目录拉取失败：" + err.message, "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+}
+
+async function savePluginRegistry() {
+  const regInput = document.getElementById("pluginRegistryInput");
+  const registry_url = regInput ? regInput.value.trim() : "";
+  try {
+    const resp = await localApiPost("/api/plugins/registry", {
+      registry_url: registry_url || null,
+    });
+    const data = await resp.json();
+    if (resp.ok && data.ok !== false) {
+      renderPluginsSection(data);
+      toast(registry_url ? "已保存插件仓库地址" : "已恢复默认官方插件仓库");
+    } else {
+      toast("保存失败：" + (data.error || "无效的仓库地址"), "err");
+    }
+  } catch (err) {
+    toast("保存失败：" + err.message, "err");
+  }
+}
+
+async function installPluginById(pluginId) {
+  if (!pluginId) return;
+  toast(`正在下载并校验插件 ${pluginId}…`);
+  try {
+    const resp = await localApiPost("/api/plugins/install", {
+      plugin_id: pluginId,
+      enable_after: true,
+    });
+    const data = await resp.json();
+    if (resp.ok && data.ok !== false) {
+      renderPluginsSection(data);
+      await refreshDashboard();
+      toast(`已安装并启用插件 ${pluginId}`);
+    } else {
+      toast("安装失败：" + (data.error || "校验或下载失败"), "err");
+    }
+  } catch (err) {
+    toast("安装失败：" + err.message, "err");
+  }
+}
+
+async function togglePluginById(pluginId, enabled) {
+  if (!pluginId) return;
+  try {
+    const resp = await localApiPost("/api/plugins/toggle", {
+      plugin_id: pluginId,
+      enabled,
+    });
+    const data = await resp.json();
+    if (resp.ok && data.ok !== false) {
+      renderPluginsSection(data);
+      await refreshDashboard();
+      toast(enabled ? `已启用插件 ${pluginId}` : `已停用插件 ${pluginId}`);
+    } else {
+      toast("切换失败：" + (data.error || "未知错误"), "err");
+    }
+  } catch (err) {
+    toast("切换失败：" + err.message, "err");
+  }
+}
+
+async function uninstallPluginById(pluginId) {
+  if (!pluginId) return;
+  const confirmed = await askQuestion(
+    `卸载插件 ${pluginId}？`,
+    "卸载会移除本地插件目录中的适配器文件，并从智能体列表移除；你随时可以从插件目录重新安装。",
+    "确认卸载",
+  );
+  if (!confirmed) return;
+  try {
+    const resp = await localApiPost("/api/plugins/uninstall", {
+      plugin_id: pluginId,
+    });
+    const data = await resp.json();
+    if (resp.ok && data.ok !== false) {
+      renderPluginsSection(data);
+      await refreshDashboard();
+      toast(`已卸载插件 ${pluginId}`);
+    } else {
+      toast("卸载失败：" + (data.error || "未知错误"), "err");
+    }
+  } catch (err) {
+    toast("卸载失败：" + err.message, "err");
+  }
+}
+
+// The page follows the daemon's change stream instead of a timer. The
+// daemon publishes once per scan pass that found a change, so every row of a
+// snapshot reaches the page at the same moment; a timer would instead let
+// each provider's cache expire on its own clock and grow the list a row at a
+// time. The slow interval below is only a safety net: it re-reads in case a
+// stream was blocked by a proxy, so the console still works without one.
+const FALLBACK_POLL_MS = 30000;
+
+let streamSource = null;
+let streamRetryTimer = 0;
+let streamFailures = 0;
+const DASHBOARD_STREAM_GIVE_UP = 5;
+let fallbackTimer = 0;
+let pollVisibilityBound = false;
+
+function readDashboardNow() {
+  if (document.visibilityState === "hidden") return;
+  if (!streamSource || streamSource.readyState === EventSource.CLOSED) {
+    streamFailures = 0;
+    openChangeStream();
+  }
+  refreshDashboard(false);
+  if (isUsageOpen()) {
+    loadUsage(false);
+  } else {
+    usageDirty = true;
+    usageMemoryCache.clear();
+  }
+}
+
+// Re-reads the moment the tab becomes visible again. A hidden tab keeps its
+// stream open, but a browser that suspended it comes back with a version
+// the page never saw.
+function bindResumeRefresh() {
+  if (pollVisibilityBound) return;
+  pollVisibilityBound = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") readDashboardNow();
+  });
+  window.addEventListener("focus", readDashboardNow);
+}
+
+function startPolling() {
+  bindResumeRefresh();
+  openChangeStream();
+  clearInterval(fallbackTimer);
+  fallbackTimer = setInterval(readDashboardNow, FALLBACK_POLL_MS);
+}
+
+// One long connection to the daemon. Each `change` frame names the version
+// the daemon just published; the page answers it by re-reading the snapshot
+// under its ETag, so an unchanged snapshot is still a bare 304.
+function openChangeStream() {
+  if (typeof EventSource === "undefined") return;
+  clearTimeout(streamRetryTimer);
+  if (streamSource) streamSource.close();
+  const source = new EventSource("/api/events");
+  streamSource = source;
+  source.addEventListener("open", () => {
+    streamFailures = 0;
+    updateConnectionStatus(true);
+  });
+  source.addEventListener("change", () => {
+    if (document.visibilityState === "hidden") {
+      usageDirty = true;
+      usageMemoryCache.clear();
+      return;
+    }
+    readDashboardNow();
+  });
+  source.addEventListener("error", () => {
+    // EventSource reconnects on its own; this only keeps a stream the
+    // browser gave up on from leaving the page silent until the fallback.
+    streamFailures++;
+    updateConnectionStatus(false);
+    if (source.readyState !== EventSource.CLOSED) return;
+    streamSource = null;
+    if (streamFailures > DASHBOARD_STREAM_GIVE_UP) {
+      return;
+    }
+    streamRetryTimer = setTimeout(openChangeStream, 3000);
+  });
 }
 
 function setSideNavFromSettings(on) {
@@ -4624,7 +5074,7 @@ function updateThemeChoice() {
 
 async function openDataDirectory() {
   try {
-    const res = await fetch("/api/open-data-dir", { method: "POST" });
+    const res = await localApiPost("/api/open-data-dir");
     if (res.ok) {
       toast("已在系统文件资源管理器中打开数据目录");
     } else {
@@ -4658,11 +5108,7 @@ async function submitDeviceName() {
     saveBtn.innerHTML = "<span>保存中…</span>";
   }
   try {
-    const resp = await fetch("/api/device/name", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name }),
-    });
+    const resp = await localApiPost("/api/device/name", { name: name });
     const resData = await resp.json();
     if (resp.ok && resData.ok === true) {
       toast("设备名称已更新");
@@ -4710,11 +5156,7 @@ async function submitDevicePairing(event) {
   submitBtn.innerHTML = "<span>正在验证绑定…</span>";
 
   try {
-    const resp = await fetch("/api/device/bind", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ gateway: gateway, binding_code: code }),
-    });
+    const resp = await localApiPost("/api/device/bind", { gateway: gateway, binding_code: code });
 
     const resData = await resp.json();
     if (resp.ok && (resData.ok === true || resData.status === "ok")) {
@@ -4750,9 +5192,7 @@ async function submitDeviceUnpair() {
     unpairBtn.innerHTML = "<span>正在解除绑定…</span>";
   }
   try {
-    const resp = await fetch("/api/device/unbind", {
-      method: "POST",
-    });
+    const resp = await localApiPost("/api/device/unbind");
     const resData = await resp.json();
     if (resp.ok && (resData.ok === true || resData.status === "ok")) {
       renderSettings();
@@ -4777,7 +5217,8 @@ function escapeHtml(str) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 window.addEventListener("DOMContentLoaded", init);

@@ -1,31 +1,74 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 pub const SCHEMA_VERSION: u16 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AgentType {
-    ClaudeCode,
-    Codex,
     Antigravity,
-    GrokBuild,
-    #[serde(rename = "zcode", alias = "z_code")]
-    ZCode,
+    Codex,
+    ClaudeDesktop,
+    ClaudeCode,
+    DeepseekHarness,
+    Plugin(String),
 }
 
 impl AgentType {
-    pub const fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
-            Self::ClaudeCode => "claude_code",
-            Self::Codex => "codex",
             Self::Antigravity => "antigravity",
-            Self::GrokBuild => "grok_build",
-            Self::ZCode => "zcode",
+            Self::Codex => "codex",
+            Self::ClaudeDesktop => "claude_desktop",
+            Self::ClaudeCode => "claude_code",
+            Self::DeepseekHarness => "deepseek_harness",
+            Self::Plugin(id) => id.as_str(),
         }
+    }
+
+    pub fn is_native(&self) -> bool {
+        !matches!(self, Self::Plugin(_))
+    }
+
+    pub fn is_valid_slug(raw: &str) -> bool {
+        let len = raw.len();
+        if !(2..=64).contains(&len) {
+            return false;
+        }
+        let bytes = raw.as_bytes();
+        bytes[0].is_ascii_lowercase()
+            && bytes[1..]
+                .iter()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_' || *b == b'-')
+    }
+
+    pub fn from_provider_str(raw: &str) -> Option<Self> {
+        let norm = raw.trim().to_ascii_lowercase();
+        match norm.as_str() {
+            "antigravity" => Some(Self::Antigravity),
+            "codex" => Some(Self::Codex),
+            "claude_desktop" => Some(Self::ClaudeDesktop),
+            "claude_code" | "claude" => Some(Self::ClaudeCode),
+            "deepseek_harness" => Some(Self::DeepseekHarness),
+            other if Self::is_valid_slug(other) => Some(Self::Plugin(other.to_string())),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for AgentType {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentType {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::from_provider_str(&raw)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid agent_type: {raw}")))
     }
 }
 
@@ -69,14 +112,10 @@ pub enum ObservationSource {
     AntigravityBrain,
     AntigravityHook,
     AntigravityCli,
-    GrokSessions,
-    GrokHook,
-    GrokActiveSessions,
+    DeepseekHarness,
+    PluginAcp,
     ProcessProbe,
     LocalHistory,
-    ZCodeDb,
-    ZCodeHook,
-    ZCodeRollout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,5 +341,16 @@ mod tests {
 
         let merged = merge_observations(&previous, &incoming);
         assert_eq!(merged.state.activity_status, ActivityStatus::Completed);
+    }
+
+    #[test]
+    fn plugin_agent_type_serializes_and_deserializes_dynamically() {
+        let plugin = AgentType::Plugin("my_acp_bot".into());
+        let json = serde_json::to_string(&plugin).unwrap();
+        assert_eq!(json, "\"my_acp_bot\"");
+        let parsed: AgentType = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, plugin);
+        assert!(!parsed.is_native());
+        assert!(AgentType::DeepseekHarness.is_native());
     }
 }

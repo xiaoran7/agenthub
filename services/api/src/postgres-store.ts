@@ -41,6 +41,20 @@ import {
 } from "./accounts.js";
 import type { PushSubscription } from "./push.js";
 import {
+  bestSessionEvents,
+  classifyPostgresConflict,
+  isoTimestamp,
+  normalizeAccountUser,
+  normalizeAuditEvent,
+  normalizeSubscription,
+  normalizeSubscriptionEvent,
+  postgresConstraint,
+  registeredDevice,
+  syncEvent,
+  type AuditEventRow,
+  type DeviceRow,
+} from "./postgres-helpers.js";
+import {
   GatewayStoreError,
   sessionStatusChange,
   type AuthFilters,
@@ -58,91 +72,13 @@ import {
   type StoredSession,
 } from "./store.js";
 
-const MIGRATIONS = [
-  {
-    version: 1,
-    url: new URL("../migrations/0001_gateway.sql", import.meta.url),
-  },
-  {
-    version: 2,
-    url: new URL(
-      "../migrations/0002_session_timeline_index.sql",
-      import.meta.url,
-    ),
-  },
-  {
-    version: 3,
-    url: new URL("../migrations/0003_push_subscriptions.sql", import.meta.url),
-  },
-  {
-    version: 4,
-    url: new URL("../migrations/0004_device_lifecycle.sql", import.meta.url),
-  },
-  {
-    version: 5,
-    url: new URL("../migrations/0005_device_auth.sql", import.meta.url),
-  },
-  {
-    version: 6,
-    url: new URL(
-      "../migrations/0006_accounts_subscriptions.sql",
-      import.meta.url,
-    ),
-  },
-  {
-    version: 7,
-    url: new URL("../migrations/0007_remote_tasks.sql", import.meta.url),
-  },
-  {
-    version: 8,
-    url: new URL("../migrations/0008_account_lifecycle.sql", import.meta.url),
-  },
-  {
-    version: 9,
-    url: new URL("../migrations/0009_password_lifecycle.sql", import.meta.url),
-  },
-  {
-    version: 10,
-    url: new URL("../migrations/0010_team_workspaces.sql", import.meta.url),
-  },
-  {
-    version: 11,
-    url: new URL("../migrations/0011_audit_events.sql", import.meta.url),
-  },
-  {
-    version: 12,
-    url: new URL("../migrations/0012_device_heartbeat.sql", import.meta.url),
-  },
-  {
-    version: 13,
-    url: new URL("../migrations/0013_device_task_audit.sql", import.meta.url),
-  },
-  {
-    version: 14,
-    url: new URL(
-      "../migrations/0014_remote_task_receipts.sql",
-      import.meta.url,
-    ),
-  },
-  {
-    version: 15,
-    url: new URL("../migrations/0015_oauth_accounts.sql", import.meta.url),
-  },
-  {
-    version: 16,
-    url: new URL("../migrations/0016_user_avatars.sql", import.meta.url),
-  },
-];
+import { MIGRATIONS } from "./migrations-list.js";
 
-interface DeviceRow {
+interface ExistingEventRow {
+  event_id: string;
   device_id: string;
-  public_key: string;
-  owner_id: string;
-  created_at: unknown;
-  last_seen_at: unknown;
-  last_sequence: string | number;
-  revoked_at: unknown | null;
-  last_heartbeat_at?: unknown | null;
+  sequence: string | number;
+  event_data: unknown;
 }
 
 interface BindingCodeRow {
@@ -150,13 +86,6 @@ interface BindingCodeRow {
   expired: boolean;
   claimed_device_id: string | null;
   issued_by: string | null;
-}
-
-interface ExistingEventRow {
-  event_id: string;
-  device_id: string;
-  sequence: string | number;
-  event_data: unknown;
 }
 
 interface SessionRow {
@@ -177,18 +106,6 @@ interface SessionStatusRow {
   agent_session_id: string;
   activity_status: ActivityStatus;
   event_data: unknown;
-}
-
-interface AuditEventRow {
-  event_id: string;
-  scope: AuditEvent["scope"];
-  actor_user_id: string | null;
-  workspace_owner_id: string | null;
-  action: AuditEvent["action"];
-  target_type: Exclude<AuditEvent["target_type"], undefined> | null;
-  target_id: string | null;
-  metadata: unknown;
-  created_at: unknown;
 }
 
 type QuerySql = postgres.Sql | postgres.TransactionSql;
@@ -238,9 +155,23 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     email: string;
     displayName: string;
     passwordHash: string;
+    singleAdmin?: boolean;
   }): Promise<AccountView> {
     try {
       return await this.#sql.begin(async (sql) => {
+        if (input.singleAdmin) {
+          await sql`SELECT pg_advisory_xact_lock(1701733484, 99123)`;
+          const admins = await sql<{ count: string }[]>`
+            SELECT COUNT(*)::text AS count FROM agent_pulse_users WHERE status = 'active'
+          `;
+          if (Number(admins[0]?.count ?? "0") > 0) {
+            throw new AccountError(
+              "admin_already_exists",
+              "administrator is already configured",
+              409,
+            );
+          }
+        }
         const rows = await sql<AccountUser[]>`
           INSERT INTO agent_pulse_users (
             user_id,
@@ -411,12 +342,19 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
         FOR UPDATE
       `;
       if (byEmail[0] !== undefined) {
+        if (!input.emailVerified) {
+          throw new AccountError(
+            "oauth_email_not_verified",
+            "OAuth account email must be verified before linking",
+            403,
+          );
+        }
         const user = byEmail[0];
         await sql`
           UPDATE agent_pulse_users
           SET oauth_provider = ${input.provider},
               oauth_sub = ${input.sub},
-              email_verified_at = COALESCE(email_verified_at, ${input.emailVerified ? timestamp : null}::timestamptz),
+              email_verified_at = COALESCE(email_verified_at, ${timestamp}::timestamptz),
               updated_at = clock_timestamp()
           WHERE user_id = ${user.user_id}
         `;
@@ -1864,6 +1802,20 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     }
   }
 
+  async countPendingBindingCodes(
+    ownerId: string,
+    nowIso: string,
+  ): Promise<number> {
+    const rows = await this.#sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM agent_platform_binding_codes
+      WHERE owner_id = ${ownerId}
+        AND claimed_device_id IS NULL
+        AND expires_at > ${nowIso}::timestamptz
+    `;
+    return Number(rows[0]?.count ?? "0");
+  }
+
   async registerDeviceWithBindingCode(
     codeDigest: string,
     deviceId: string,
@@ -1902,6 +1854,42 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
           "invalid_binding_code",
           "binding code is invalid or expired",
         );
+      }
+
+      if (isFreshClaim) {
+        const subRows = await sql<SubscriptionRecord[]>`
+          SELECT plan, status, current_period_end
+          FROM agent_pulse_subscriptions
+          WHERE user_id::text = ${binding.owner_id}
+          FOR UPDATE
+        `;
+        if (subRows[0] !== undefined) {
+          const maxDevices = entitlementsFor(
+            normalizeSubscription(subRows[0]),
+          ).max_devices;
+          const existingDevice = await sql<
+            Array<{ revoked_at: unknown | null }>
+          >`
+            SELECT revoked_at FROM agent_platform_devices WHERE device_id = ${deviceId} FOR UPDATE
+          `;
+          const needsSlot =
+            existingDevice.length === 0 ||
+            existingDevice[0]!.revoked_at !== null;
+          if (needsSlot) {
+            const activeRows = await sql<{ count: string }[]>`
+              SELECT COUNT(*)::text AS count
+              FROM agent_platform_devices
+              WHERE owner_id = ${binding.owner_id} AND revoked_at IS NULL
+            `;
+            if (Number(activeRows[0]?.count ?? "0") >= maxDevices) {
+              throw new AccountError(
+                "device_limit_reached",
+                "subscription device limit reached",
+                403,
+              );
+            }
+          }
+        }
       }
 
       const inserted = await sql<DeviceRow[]>`
@@ -2697,6 +2685,36 @@ export class PostgresGatewayStore implements GatewayStore, AccountStore {
     });
   }
 
+  async pruneExpiredData(nowIso: string, historyDays = 90): Promise<void> {
+    const cutoff = new Date(
+      Date.parse(nowIso) - historyDays * 86_400_000,
+    ).toISOString();
+    const auditCutoff = new Date(
+      Date.parse(nowIso) - 365 * 86_400_000,
+    ).toISOString();
+    await this
+      .#sql`DELETE FROM agent_pulse_web_sessions WHERE expires_at <= ${nowIso}::timestamptz`;
+    await this
+      .#sql`DELETE FROM agent_pulse_email_verifications WHERE expires_at <= ${nowIso}::timestamptz`;
+    await this
+      .#sql`DELETE FROM agent_pulse_password_resets WHERE expires_at <= ${nowIso}::timestamptz`;
+    await this
+      .#sql`DELETE FROM agent_pulse_team_invitations WHERE expires_at <= ${nowIso}::timestamptz AND consumed_at IS NULL`;
+    await this
+      .#sql`DELETE FROM agent_platform_binding_codes WHERE expires_at <= ${nowIso}::timestamptz AND claimed_at IS NULL`;
+    await this
+      .#sql`DELETE FROM agent_pulse_login_attempts WHERE (blocked_until IS NULL OR blocked_until <= ${nowIso}::timestamptz) AND window_started_at <= ${cutoff}::timestamptz`;
+    await this
+      .#sql`DELETE FROM agent_pulse_audit_events WHERE created_at < ${auditCutoff}::timestamptz`;
+    await this.#sql`
+      DELETE FROM agent_platform_events e
+      USING agent_platform_devices d
+      WHERE e.device_id = d.device_id
+        AND e.sequence < d.last_sequence
+        AND e.observed_at < ${cutoff}::timestamptz
+    `;
+  }
+
   async close(): Promise<void> {
     await this.#sql.end({ timeout: 5 });
   }
@@ -2741,117 +2759,6 @@ export async function migratePostgres(sql: postgres.Sql): Promise<void> {
       `;
     }
   });
-}
-
-function registeredDevice(row: DeviceRow): RegisteredDevice {
-  return {
-    device_id: row.device_id,
-    public_key: row.public_key,
-    owner_id: row.owner_id,
-    created_at: isoTimestamp(row.created_at),
-    last_seen_at: isoTimestamp(row.last_seen_at),
-    ...(row.revoked_at === null
-      ? {}
-      : { revoked_at: isoTimestamp(row.revoked_at) }),
-  };
-}
-
-function isoTimestamp(value: unknown): string {
-  const date =
-    value instanceof Date
-      ? value
-      : typeof value === "string" || typeof value === "number"
-        ? new Date(value)
-        : undefined;
-  if (date === undefined || Number.isNaN(date.getTime())) {
-    throw new Error("database returned an invalid timestamp");
-  }
-  return date.toISOString();
-}
-
-function syncEvent(value: unknown): SyncEvent {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("database returned invalid event data");
-  }
-  return value as SyncEvent;
-}
-
-function bestSessionEvents(events: SyncEvent[]): SyncEvent[] {
-  const sessions = new Map<string, SyncEvent>();
-  for (const event of events) {
-    const key = `${event.device_id}:${event.agent_type}:${event.agent_session_id}`;
-    const current = sessions.get(key);
-    if (current === undefined || shouldReplaceEvent(current, event)) {
-      sessions.set(key, event);
-    }
-  }
-  return [...sessions.values()];
-}
-
-function shouldReplaceEvent(current: SyncEvent, incoming: SyncEvent): boolean {
-  const currentTime = Date.parse(current.observed_at);
-  const incomingTime = Date.parse(incoming.observed_at);
-  if (incomingTime !== currentTime) {
-    return incomingTime > currentTime;
-  }
-  const confidenceRank: Record<SyncEvent["confidence"], number> = {
-    unknown: 0,
-    inferred: 1,
-    observed: 2,
-    authoritative: 3,
-  };
-  const rankDifference =
-    confidenceRank[incoming.confidence] - confidenceRank[current.confidence];
-  return rankDifference === 0
-    ? incoming.sequence > current.sequence
-    : rankDifference > 0;
-}
-
-function classifyPostgresConflict(error: unknown): unknown {
-  if (
-    typeof error !== "object" ||
-    error === null ||
-    !("code" in error) ||
-    error.code !== "23505"
-  ) {
-    return error;
-  }
-  const constraint =
-    "constraint_name" in error && typeof error.constraint_name === "string"
-      ? error.constraint_name
-      : "constraint" in error && typeof error.constraint === "string"
-        ? error.constraint
-        : undefined;
-  if (constraint === "agent_platform_events_pkey") {
-    return new GatewayStoreError(
-      "event_conflict",
-      "event ID was reused with different data",
-    );
-  }
-  if (constraint === "agent_platform_events_device_id_sequence_key") {
-    return new GatewayStoreError(
-      "sequence_conflict",
-      "device sequence was reused by another event",
-    );
-  }
-  if (constraint === "agent_platform_binding_codes_pkey") {
-    return new GatewayStoreError(
-      "binding_code_conflict",
-      "binding code digest already exists",
-    );
-  }
-  return error;
-}
-
-function postgresConstraint(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  if ("constraint_name" in error && typeof error.constraint_name === "string") {
-    return error.constraint_name;
-  }
-  if ("constraint" in error && typeof error.constraint === "string") {
-    return error.constraint;
-  }
-  return undefined;
 }
 
 async function insertAuditEvent(
@@ -2906,29 +2813,6 @@ async function insertWorkspaceAuditIfVisible(
   }
   await insertAuditEvent(sql, { ...input, scope: "workspace" });
   return true;
-}
-
-function normalizeAuditEvent(row: AuditEventRow): AuditEvent {
-  if (
-    typeof row.metadata !== "object" ||
-    row.metadata === null ||
-    Array.isArray(row.metadata)
-  ) {
-    throw new Error("stored audit metadata is invalid");
-  }
-  return {
-    event_id: row.event_id,
-    scope: row.scope,
-    ...(row.actor_user_id === null ? {} : { actor_user_id: row.actor_user_id }),
-    ...(row.workspace_owner_id === null
-      ? {}
-      : { workspace_owner_id: row.workspace_owner_id }),
-    action: row.action,
-    ...(row.target_type === null ? {} : { target_type: row.target_type }),
-    ...(row.target_id === null ? {} : { target_id: row.target_id }),
-    metadata: auditMetadata(row.metadata as Record<string, AuditMetadataValue>),
-    created_at: isoTimestamp(row.created_at),
-  };
 }
 
 async function postgresAccountView(
@@ -2996,72 +2880,4 @@ async function postgresAccountView(
         : { last_event_id: row.last_event_id }),
     }),
   );
-}
-
-function normalizeAccountUser(row: AccountUser): AccountUser {
-  return {
-    user_id: row.user_id,
-    email: row.email,
-    display_name: row.display_name,
-    password_hash: row.password_hash,
-    status: row.status,
-    ...(row.email_verified_at === undefined || row.email_verified_at === null
-      ? {}
-      : { email_verified_at: isoTimestamp(row.email_verified_at) }),
-    ...(row.oauth_provider === undefined || row.oauth_provider === null
-      ? {}
-      : { oauth_provider: row.oauth_provider }),
-    ...(row.oauth_sub === undefined || row.oauth_sub === null
-      ? {}
-      : { oauth_sub: row.oauth_sub }),
-    ...(row.avatar_data_url === undefined || row.avatar_data_url === null
-      ? {}
-      : { avatar_data_url: row.avatar_data_url }),
-    created_at: isoTimestamp(row.created_at),
-  };
-}
-
-function normalizeSubscription(row: SubscriptionRecord): SubscriptionRecord {
-  return {
-    plan: row.plan,
-    status: row.status,
-    ...(row.current_period_end === undefined || row.current_period_end === null
-      ? {}
-      : { current_period_end: isoTimestamp(row.current_period_end) }),
-    ...(row.provider === undefined || row.provider === null
-      ? {}
-      : { provider: row.provider }),
-    ...(row.provider_customer_id === undefined ||
-    row.provider_customer_id === null
-      ? {}
-      : { provider_customer_id: row.provider_customer_id }),
-    ...(row.provider_subscription_id === undefined ||
-    row.provider_subscription_id === null
-      ? {}
-      : { provider_subscription_id: row.provider_subscription_id }),
-    ...(row.last_event_at === undefined || row.last_event_at === null
-      ? {}
-      : { last_event_at: isoTimestamp(row.last_event_at) }),
-    ...(row.last_event_id === undefined || row.last_event_id === null
-      ? {}
-      : { last_event_id: row.last_event_id }),
-  };
-}
-
-function normalizeSubscriptionEvent(
-  row: SubscriptionEvent & { current_period_end: unknown | null },
-): SubscriptionEvent {
-  return {
-    event_id: row.event_id,
-    user_id: row.user_id,
-    provider: row.provider,
-    provider_customer_id: row.provider_customer_id,
-    provider_subscription_id: row.provider_subscription_id,
-    plan: row.plan,
-    status: row.status,
-    ...(row.current_period_end === null
-      ? {}
-      : { current_period_end: isoTimestamp(row.current_period_end) }),
-    occurred_at: isoTimestamp(row.occurred_at),
-  };
 }

@@ -37,7 +37,7 @@ impl CodexAppServer {
         binary: impl AsRef<Path>,
         response_timeout: Duration,
     ) -> Result<Self, CollectorError> {
-        Self::start_mode(binary, response_timeout, false)
+        Self::start_mode(binary, response_timeout, false, false)
     }
 
     /// A long-lived control connection must receive content and tool events.
@@ -46,24 +46,32 @@ impl CodexAppServer {
         binary: impl AsRef<Path>,
         response_timeout: Duration,
     ) -> Result<Self, CollectorError> {
-        Self::start_mode(binary, response_timeout, true)
+        Self::start_mode(binary, response_timeout, true, true)
+    }
+
+    /// Read-only catalog connection with the same model routing as the live host.
+    pub(crate) fn start_catalog(
+        binary: impl AsRef<Path>,
+        response_timeout: Duration,
+    ) -> Result<Self, CollectorError> {
+        Self::start_mode(binary, response_timeout, false, true)
     }
 
     fn start_mode(
         binary: impl AsRef<Path>,
         response_timeout: Duration,
         interactive: bool,
+        use_gateway: bool,
     ) -> Result<Self, CollectorError> {
         let configured_binary = binary.as_ref();
         let binary = resolve_codex_app_server_binary(configured_binary);
         let program = binary.display().to_string();
-        let mut command = Command::new(&binary);
-        command
-            .args(["app-server", "--listen", "stdio://"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        configure_process_group(&mut command);
+        let gateway = if use_gateway {
+            crate::claude_gateway::discover_codex_gateway()
+        } else {
+            None
+        };
+        let mut command = build_codex_app_server_command(&binary, gateway.as_ref());
         let mut child = command.spawn().map_err(|source| CollectorError::Start {
             program: program.clone(),
             source,
@@ -334,6 +342,24 @@ impl CodexAppServer {
     }
 }
 
+fn build_codex_app_server_command(
+    binary: &Path,
+    gateway: Option<&crate::claude_gateway::CodexGatewayProfile>,
+) -> Command {
+    let mut command = super::command_for_binary(binary);
+    command
+        .args(["app-server", "--listen", "stdio://"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    configure_process_group(&mut command);
+    if let Some(profile) = gateway {
+        let mut ignored_model = None;
+        profile.inject_into_command(&mut command, &mut ignored_model);
+    }
+    command
+}
+
 impl Drop for CodexAppServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -373,5 +399,56 @@ pub(crate) fn read_protocol(stdout: impl Read, sender: mpsc::Sender<ProtocolRead
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_codex_app_server_command_injects_explicit_gateway() {
+        let profile = crate::claude_gateway::CodexGatewayProfile::new(
+            "http://127.0.0.1:8316/v1",
+            "sk-codex-test",
+            "cc-switch:codex",
+            vec![],
+        );
+
+        let non_interactive = build_codex_app_server_command(Path::new("codex"), None);
+        let non_envs: std::collections::HashMap<String, String> = non_interactive
+            .get_envs()
+            .filter_map(|(k, v)| {
+                v.map(|val| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        val.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect();
+        assert!(!non_envs.contains_key("OPENAI_BASE_URL"));
+        assert!(!non_envs.contains_key("OPENAI_API_KEY"));
+
+        let interactive = build_codex_app_server_command(Path::new("codex"), Some(&profile));
+        let int_envs: std::collections::HashMap<String, String> = interactive
+            .get_envs()
+            .filter_map(|(k, v)| {
+                v.map(|val| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        val.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            int_envs.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("http://127.0.0.1:8316/v1")
+        );
+        assert_eq!(
+            int_envs.get("OPENAI_API_KEY").map(String::as_str),
+            Some("sk-codex-test")
+        );
     }
 }

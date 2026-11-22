@@ -50,22 +50,17 @@ export interface DeviceRecord {
   runner_version?: string;
 }
 
+/** Agent engines valid for remote/notification SessionRef handoff. */
+export type SessionAgentType = AgentType;
+
 /** Stable identity of one session across snapshot and timeline queries. */
 export interface SessionRef {
   device_id: string;
-  agent_type: AgentType;
+  agent_type: SessionAgentType;
   agent_session_id: string;
 }
 
-// Key completeness is enforced by the contract type: a new agent type fails to
-// compile here rather than silently failing validation at runtime.
-const AGENT_TYPES: Record<AgentType, true> = {
-  claude_code: true,
-  codex: true,
-  antigravity: true,
-  grok_build: true,
-  zcode: true,
-};
+const AGENT_TYPE_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/u;
 
 /**
  * Validates a session reference that arrived from outside React state — today
@@ -84,13 +79,14 @@ export function parseSessionRef(value: unknown): SessionRef | undefined {
     typeof sessionId !== "string" ||
     sessionId.length === 0 ||
     typeof agentType !== "string" ||
-    !Object.hasOwn(AGENT_TYPES, agentType)
+    !AGENT_TYPE_PATTERN.test(agentType) ||
+    agentType === "toString"
   ) {
     return undefined;
   }
   return {
     device_id: deviceId,
-    agent_type: agentType as AgentType,
+    agent_type: agentType as SessionAgentType,
     agent_session_id: sessionId,
   };
 }

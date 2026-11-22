@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { parseSyncBatch, type DeviceHeartbeat } from "@agent-pulse/contracts";
+import {
+  agentTypes,
+  parseSyncBatch,
+  type DeviceHeartbeat,
+} from "@agent-pulse/contracts";
 import postgres from "postgres";
 
 import {
@@ -737,6 +741,83 @@ test(
         if (schemaCreated) {
           await admin`DROP SCHEMA ${admin(schema)} CASCADE`;
         }
+      } finally {
+        await admin.end({ timeout: 5 });
+      }
+    }
+  },
+);
+
+test(
+  "PostgreSQL accepts all 5 contract agent_type variants across sessions and auth",
+  { skip: databaseUrl === undefined },
+  async () => {
+    assert.ok(databaseUrl);
+    const admin = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+    const schema = `agent_pulse_agents_${randomUUID().replaceAll("-", "")}`;
+    let sql: postgres.Sql | undefined;
+    let schemaCreated = false;
+    try {
+      await admin`CREATE SCHEMA ${admin(schema)}`;
+      schemaCreated = true;
+      sql = scopedConnection(databaseUrl, schema);
+      await migratePostgres(sql);
+      const store = new PostgresGatewayStore(sql);
+      const device = makeM4Device(99, "pg-5-agents");
+      await store.registerDevice(
+        "pg-5-agents",
+        device.deviceId,
+        device.publicKey,
+      );
+      const events = agentTypes.map((agentType, index) => ({
+        ...fixture.events[0]!,
+        event_id: randomUUID(),
+        device_id: device.deviceId,
+        sequence: index + 1,
+        agent_type: agentType,
+        agent_session_id: `sess-${agentType}`,
+        observed_at: new Date(
+          Date.UTC(2026, 10, 18, 12, index, 0),
+        ).toISOString(),
+      }));
+      const ingest = await store.ingestBatch({
+        protocol_version: 1,
+        batch_id: randomUUID(),
+        device_id: device.deviceId,
+        public_key: device.publicKey,
+        created_at: events.at(-1)!.observed_at,
+        first_sequence: 1,
+        last_sequence: events.length,
+        events,
+        signature: "0".repeat(128),
+      });
+      assert.equal(ingest.accepted, agentTypes.length);
+      const authIngest = await store.ingestAuthBatch({
+        protocol_version: 1,
+        device_id: device.deviceId,
+        public_key: device.publicKey,
+        checked_at: events.at(-1)!.observed_at,
+        snapshots: agentTypes.map((provider, i) => ({
+          provider,
+          state: "authenticated",
+          source: "official_cli",
+          access_token_present: true,
+          refresh_token_present: true,
+          checked_at: events[i]!.observed_at,
+        })),
+        signature: "0".repeat(128),
+      });
+      assert.equal(authIngest.accepted, agentTypes.length);
+      const stored = await store.listSessions("pg-5-agents", {});
+      assert.equal(stored.length, agentTypes.length);
+      await store.close();
+      sql = undefined;
+    } finally {
+      if (sql !== undefined) {
+        await sql.end({ timeout: 1 }).catch(() => undefined);
+      }
+      try {
+        if (schemaCreated) await admin`DROP SCHEMA ${admin(schema)} CASCADE`;
       } finally {
         await admin.end({ timeout: 5 });
       }

@@ -1,8 +1,10 @@
-"use client";
-
 import { useEffect, useState } from "react";
 
-import { accountErrorMessage, confirmEmailVerification } from "../lib/account";
+import {
+  accountErrorMessage,
+  confirmEmailVerification,
+  consumeUrlHashToken,
+} from "../lib/account";
 
 type VerificationState =
   | { status: "checking" }
@@ -14,9 +16,7 @@ export function VerifyEmailClient() {
 
   useEffect(() => {
     let cancelled = false;
-    const token =
-      new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "";
-    window.history.replaceState(null, "", window.location.pathname);
+    const token = consumeUrlHashToken();
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) {
       setState({ status: "failed", message: "验证链接无效或不完整。" });
       return;

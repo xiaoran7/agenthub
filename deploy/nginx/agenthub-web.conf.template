@@ -1,0 +1,276 @@
+# AgentHub Web 前门：静态资源托管 + 同源 API 反代。
+#
+# 这份配置取代了原先 Next.js 的 Route Handler 代理层
+# （apps/web/src/server/gateway-proxy.ts，已在 2.7.0 删除）。
+# Web 层因此不再需要 Node/Next 运行时：构建产物由 nginx 直接下发，
+# 常驻内存从约 65MB 降到约 10MB，镜像从 1.51GB 降到约 100MB。
+#
+# 与旧实现逐条对齐：
+#   1. Cookie 白名单：只放行 agent_pulse_session / __Host-agent_pulse_session；
+#   2. Authorization：配置 GATEWAY_ACCESS_TOKEN 时由服务端注入 Bearer，
+#      浏览器自带的 Authorization 一律丢弃，避免部署凭据被前端覆盖或外泄；
+#   3. X-User-Id：仅在未配置 Token 时透传（开发态身份注入）；
+#   4. SSE：/v1/stream 与 /v3/remote/stream 关闭缓冲，首字节即时下发；
+#   5. 上游不可达：返回 502 {"error":"gateway_unreachable"}，与旧实现一致；
+#   6. /v3 下非 remote 前缀返回 404 JSON，与旧 /v3/[...path] 路由一致。
+#
+# 注意：nginx 的 proxy_set_header 只在"当前层级没有定义任何 proxy_set_header"
+# 时才继承上一层。所以下面把全部请求头集中放在 server 层，location 里只放
+# proxy_pass / 超时 / 缓存头，绝不在 location 里再写 proxy_set_header。
+
+# ---------- 会话 Cookie 白名单 ----------
+# 只放行两种会话 Cookie，其余（埋点、语言偏好等）一律不转给网关。
+map $http_cookie $agenthub_cookie_plain {
+    default "";
+    "~*(^|;[ ]*)agent_pulse_session=([^;]+)" "agent_pulse_session=$2";
+}
+
+map $http_cookie $agenthub_cookie_host {
+    default "";
+    "~*(^|;[ ]*)__Host-agent_pulse_session=([^;]+)" "__Host-agent_pulse_session=$2";
+}
+
+# 安全 Cookie（__Host-）存在时只转发 __Host-，防止相邻子域注入同名无前缀 Cookie 干扰或降级会话。
+map $agenthub_cookie_host $agenthub_session_cookie {
+    default $agenthub_cookie_host;
+    ""      $agenthub_cookie_plain;
+}
+
+# ---------- 服务端凭据注入 ----------
+# GATEWAY_ACCESS_TOKEN 未配置时映射为空串，Authorization 头被整体丢弃，
+# 部署回落到 Cookie 会话鉴权（生产形态）。
+map "${GATEWAY_ACCESS_TOKEN}" $agenthub_authorization {
+    default "";
+    "~.+" "Bearer ${GATEWAY_ACCESS_TOKEN}";
+}
+
+# 配置了服务端 Token 时丢弃浏览器自带的开发态身份头，否则原样透传。
+map $agenthub_authorization $agenthub_identity {
+    default "$http_x_user_id";
+    "~.+" "";
+}
+
+# ---------- SSE 的 Accept ----------
+map $uri $agenthub_accept {
+    default $http_accept;
+    "/v1/stream" "text/event-stream";
+}
+
+# ---------- WebSocket 升级 ----------
+map $http_upgrade $agenthub_connection {
+    default upgrade;
+    ""      "";
+}
+
+# ---------- 协议与主机名透传（优先沿用外层反代传入值）----------
+map $http_x_forwarded_proto $agenthub_forwarded_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+
+map $http_x_forwarded_host $agenthub_forwarded_host {
+    default $http_x_forwarded_host;
+    ""      $http_host;
+}
+
+server {
+    listen ${WEB_PORT};
+    server_name _;
+
+    root ${WEB_ROOT};
+    index index.html;
+
+    # 旧实现走 Next.js Route Handler，没有额外的体积上限；这里给足余量，
+    # 实际体积由共享契约里的 MAX_AVATAR_BYTES 兜底。
+    client_max_body_size 12m;
+
+    # 启用静态文本与网关大载荷 JSON（如 /runners/:id/hello）压缩；
+    # 故意不包含 text/event-stream，保证 SSE 零缓冲逐帧直达。
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types
+        application/json
+        application/javascript
+        application/manifest+json
+        image/svg+xml
+        text/css
+        text/plain;
+
+    # 网关侧是流式协议（变更流、远程会话流），关掉缓冲让首字节立刻到达浏览器。
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_http_version 1.1;
+
+    # Host 保持上游地址，与旧实现一致（旧实现由 fetch 自动带目标 origin 的 Host）。
+    proxy_set_header Host $proxy_host;
+    # 只放行白名单内的会话 Cookie；空值表示整条 Cookie 头不下发。
+    proxy_set_header Cookie $agenthub_session_cookie;
+    # 空值表示整条 Authorization 头不下发，浏览器自带凭据无法覆盖服务端注入值。
+    proxy_set_header Authorization $agenthub_authorization;
+    proxy_set_header X-User-Id $agenthub_identity;
+    proxy_set_header Accept $agenthub_accept;
+    # 非 WebSocket 请求没有 Upgrade 头，这里会把它整条去掉。
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $agenthub_connection;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $agenthub_forwarded_proto;
+    proxy_set_header X-Forwarded-Host $agenthub_forwarded_host;
+
+    # 上游不可达或请求体超限时返回结构化 JSON，而不是 nginx 默认 HTML 错误页。
+    error_page 413 @payload_too_large;
+    error_page 502 503 504 @gateway_unreachable;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location @payload_too_large {
+        default_type application/json;
+        add_header X-Content-Type-Options "nosniff" always;
+        return 413 '{"error":"payload_too_large","message":"Request body exceeds gateway 12 MiB limit"}';
+    }
+
+    location @gateway_unreachable {
+        default_type application/json;
+        add_header X-Content-Type-Options "nosniff" always;
+        return 502 '{"error":"gateway_unreachable"}';
+    }
+
+    # ---- 带内容哈希的构建产物：长期缓存 ----
+    location ^~ /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        try_files $uri =404;
+    }
+
+    # ---- 主题预涂脚本、Service Worker 与 PWA 清单：必须每次回源 ----
+    location = /theme-init.js {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        try_files $uri =404;
+    }
+
+    location = /sw.js {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        try_files $uri =404;
+    }
+
+    location = /manifest.webmanifest {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        try_files $uri =404;
+    }
+
+    # ---- 三个子页面：精确路径直达，不做目录 301 ----
+    # 邮件里的验证/改密链接就是 /verify-email#token=... 与 /reset-password#token=...，
+    # 末尾多一个斜杠会让落地路径与网关签发的地址对不上。
+    location = /remote {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        try_files /remote/index.html =404;
+    }
+
+    location = /verify-email {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        try_files /verify-email/index.html =404;
+    }
+
+    location = /reset-password {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        try_files /reset-password/index.html =404;
+    }
+
+    # ---- SSE：网关变更流 ----
+    location = /v1/stream {
+        proxy_pass ${GATEWAY_ORIGIN}/v1/stream;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        add_header Cache-Control "no-store" always;
+        add_header X-Accel-Buffering no always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+    }
+
+    # ---- 远程会话 WebSocket ----
+    location = /v3/remote/ws {
+        proxy_pass ${GATEWAY_ORIGIN};
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    # ---- 远程会话流（SSE）----
+    location = /v3/remote/stream {
+        proxy_pass ${GATEWAY_ORIGIN};
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        add_header Cache-Control "no-store" always;
+        add_header X-Accel-Buffering no always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+    }
+
+    # ---- 其余 /v1 网关接口 ----
+    location ^~ /v1/ {
+        proxy_pass ${GATEWAY_ORIGIN};
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+    }
+
+    # ---- 其余 /v3/remote 网关接口 ----
+    location ^~ /v3/remote/ {
+        proxy_pass ${GATEWAY_ORIGIN};
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+    }
+
+    # ---- /v3 下非 remote 前缀：与旧路由保持一致的 404 JSON ----
+    location ^~ /v3/ {
+        default_type application/json;
+        add_header X-Content-Type-Options "nosniff" always;
+        return 404 '{"error":"not_found"}';
+    }
+
+    # ---- 其余路径：静态资源，未命中的落到主面板 ----
+    location / {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        try_files $uri $uri/ /index.html;
+    }
+}

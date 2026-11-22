@@ -1,1328 +1,797 @@
 package com.agentplatform.mobile.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import com.agentplatform.mobile.AppController
 import com.agentplatform.mobile.data.AgentGateway
-import com.agentplatform.mobile.data.GatewayException
-import java.net.URLEncoder
-import java.util.UUID
+import com.agentplatform.mobile.data.AttachmentReader
+import com.agentplatform.mobile.data.AttachmentResult
+import com.agentplatform.mobile.data.ComposerMode
+import com.agentplatform.mobile.data.ConnectMode
+import com.agentplatform.mobile.data.isCodexThreadId
+import com.agentplatform.mobile.data.EffortLevel
+import com.agentplatform.mobile.data.EventWindow
+import com.agentplatform.mobile.data.ExecutionState
+import com.agentplatform.mobile.data.ModelCatalog
+import com.agentplatform.mobile.data.PermissionMode
+import com.agentplatform.mobile.data.RemoteAttachment
+import com.agentplatform.mobile.data.RemoteBinding
+import com.agentplatform.mobile.data.RemoteCommandRecord
+import com.agentplatform.mobile.data.RemoteEvent
+import com.agentplatform.mobile.data.RemoteSessionRow
+import com.agentplatform.mobile.data.SandboxMode
+import com.agentplatform.mobile.data.SessionDetail
+import com.agentplatform.mobile.data.SessionPhase
+import com.agentplatform.mobile.data.connectCommand
+import com.agentplatform.mobile.data.describeGatewayError
+import com.agentplatform.mobile.data.displayEngineLabel
+import com.agentplatform.mobile.data.engineOfSession
+import com.agentplatform.mobile.data.matchCatalogModel
+import com.agentplatform.mobile.data.modelsForEngine
+import com.agentplatform.mobile.data.sendPromptCommand
+import com.agentplatform.mobile.data.summarizeAttachmentResults
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
-private fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
-private fun encoded(value: String): String = URLEncoder.encode(value, "UTF-8")
-
-private fun workspaceLabel(workspaceId: String): String =
-    if (workspaceId.startsWith("ws-")) workspaceId.removePrefix("ws-").replace(Regex("-[0-9a-f]{16}$"), "")
-    else workspaceId.substringAfterLast('/').substringAfterLast('\\')
-
-private fun sessionError(error: Exception): String =
-    when ((error as? GatewayException)?.code) {
-        "runner_offline" -> "电脑 Runner 处于离线状态，恢复连线后可继续。"
-        "session_control_lost", "host_generation_mismatch" -> "会话控制已断开，请返回主机页重新接入。"
-        "approval_not_pending" -> "该审批已处理或已过期。"
-        "session_busy_or_unknown" -> "Agent 正在执行任务，请稍候。"
-        "question_not_pending" -> "问题已处理或已过期。"
-        else ->
-            when ((error as? GatewayException)?.status) {
-                401, 403 -> "认证失效，请到设置更新访问令牌。"
-                408, 504 -> "请求超时，请检查网络后重试。"
-                null -> "暂时无法连接 Gateway，请检查网络与电脑连接。"
-                else -> "Gateway 暂时不可用，请稍后重试。"
-            }
-    }
-
-/** The runner redacts local paths before they leave the machine. */
-private fun readableText(value: String): String = value.replace("[local_path_redacted]", "（本机路径已隐藏）")
-
 // =========================================================================
-// Session screen
-//
-// Header -> turn failure -> approval / question banners -> transcript ->
-// accessory keys -> composer. Polling pauses whenever the app leaves the
-// foreground.
+// Remote session screen: live SSE + cursor stream, queueing, & reconnect
 // =========================================================================
-
-private sealed interface ConversationBlock {
-    data class Single(val item: TranscriptItem) : ConversationBlock
-
-    data class Tools(val items: List<TranscriptItem>) : ConversationBlock
-}
-
-private fun groupTranscript(items: List<TranscriptItem>): List<ConversationBlock> {
-    val blocks = mutableListOf<ConversationBlock>()
-    val tools = mutableListOf<TranscriptItem>()
-    fun flush() {
-        if (tools.size == 1) blocks.add(ConversationBlock.Single(tools.first()))
-        if (tools.size > 1) blocks.add(ConversationBlock.Tools(tools.toList()))
-        tools.clear()
-    }
-    for (item in items) {
-        if (item.kind == TranscriptKind.TOOL) {
-            tools.add(item)
-        } else {
-            flush()
-            blocks.add(ConversationBlock.Single(item))
-        }
-    }
-    flush()
-    return blocks
-}
 
 @Composable
-fun RemoteScreen(
+internal fun RemoteScreen(
     gateway: AgentGateway,
-    runnerId: String,
-    hubId: String,
-    snapshot: JSONObject,
+    controller: AppController,
+    session: RemoteSessionRow,
+    hostGeneration: String,
     onBack: () -> Unit,
+    onSwitchSession: (String) -> Unit = {},
+    seedTurn: TurnSeed? = null,
+    onSeedConsumed: () -> Unit = {},
 ) {
+    BackHandler(enabled = true) { onBack() }
+
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var events by remember { mutableStateOf(listOf<JSONObject>()) }
-    var commands by remember { mutableStateOf(listOf<JSONObject>()) }
-    var draft by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var dismissedFailure by remember { mutableStateOf<String?>(null) }
-    val attempts = remember { mutableMapOf<String, JSONObject>() }
-    val listState = rememberLazyListState()
-    val focusManager = LocalFocusManager.current
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val binding = session.binding
+    val hubId = binding.hubSessionId
+    val runnerId = session.runnerId
 
-    val session =
-        remember(snapshot, runnerId, hubId) {
-            snapshot.optJSONArray("sessions")?.objects()?.find {
-                it.optString("runner_id") == runnerId &&
-                    it.optJSONObject("binding")?.optString("hub_session_id") == hubId
+    val window = remember(gateway, runnerId, hubId) { EventWindow() }
+    val wakeChannel = remember(gateway, runnerId, hubId) { Channel<Unit>(Channel.CONFLATED) }
+    var events by remember(gateway, runnerId, hubId) { mutableStateOf(emptyList<RemoteEvent>()) }
+    var commands by remember(gateway, runnerId, hubId) {
+        mutableStateOf(emptyList<RemoteCommandRecord>())
+    }
+    var seeded by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
+    var seedError by remember(gateway, runnerId, hubId) { mutableStateOf("") }
+    var actionError by remember(gateway, runnerId, hubId) { mutableStateOf("") }
+    var sending by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
+    var takeoverCommandId by remember(gateway, runnerId, hubId) { mutableStateOf<String?>(null) }
+    var reconnecting by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
+    var draft by remember(gateway, runnerId, hubId) { mutableStateOf("") }
+    val sessionKey = "$runnerId/$hubId"
+    val queuedPrompt = controller.queuedPromptFor(sessionKey)
+    var pendingSeedPrompt by remember(runnerId, hubId) { mutableStateOf(seedTurn?.firstPrompt) }
+    var handledRejectedCommandIds by remember(runnerId, hubId) { mutableStateOf(emptySet<String>()) }
+    var manualInterruptPending by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
+    var wasBusy by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
+    var optimisticPrompts by remember(runnerId, hubId) {
+        mutableStateOf(emptyList<OptimisticPrompt>())
+    }
+    var dismissedFailure by remember(gateway, runnerId, hubId) { mutableStateOf<String?>(null) }
+    var showUsage by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
+    var showQuickKeys by remember { mutableStateOf(false) }
+    var copiedHeaderId by remember { mutableStateOf(false) }
+
+    var effort by remember(gateway, runnerId, hubId) {
+        mutableStateOf(seedTurn?.effort ?: EffortLevel.DEFAULT)
+    }
+    var model by remember(gateway, runnerId, hubId) { mutableStateOf(seedTurn?.model.orEmpty()) }
+    var modelExplicitlyCleared by remember(gateway, runnerId, hubId) { mutableStateOf(false) }
+    var permissionMode by remember(gateway, runnerId, hubId) {
+        mutableStateOf(seedTurn?.permissionMode ?: PermissionMode.DEFAULT)
+    }
+    var permissionModeTouched by remember(gateway, runnerId, hubId) {
+        mutableStateOf(seedTurn?.permissionTouched == true)
+    }
+    var attachments by remember(gateway, runnerId, hubId) {
+        mutableStateOf(emptyList<RemoteAttachment>())
+    }
+
+    LaunchedEffect(seedTurn) {
+        if (seedTurn != null) {
+            if (seedTurn.firstPrompt != null && pendingSeedPrompt == null) {
+                pendingSeedPrompt = seedTurn.firstPrompt
             }
+            onSeedConsumed()
         }
-    val binding = session?.optJSONObject("binding")
-    val connected = session?.optBoolean("online") == true && binding?.optBoolean("control_connected") == true
-    val executionState = binding?.optString("execution_state") ?: "unknown"
-    val idle = connected && executionState in listOf("idle", "completed")
-    val generation = binding?.optString("host_generation").orEmpty()
-
-    // Event polling. Only diffed payloads update state, so an idle poll does
-    // not recompose the transcript.
-    LaunchedEffect(gateway, runnerId, hubId, lifecycle) {
-        events = emptyList()
-        commands = emptyList()
-        var cursor = 0L
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            while (true) {
-                var hadActivity = false
-                try {
-                    val batch =
-                        withContext(Dispatchers.IO) {
-                            gateway.remoteRequest(
-                                "/events?runner=${encoded(runnerId)}&hub=${encoded(hubId)}&after=$cursor",
-                            ).getJSONArray("events").objects()
-                        }
-                    if (batch.isNotEmpty()) {
-                        cursor = batch.last().optLong("cursor", cursor)
-                        events = (events + batch).takeLast(1_200)
-                        hadActivity = true
-                    }
-                    val commandList =
-                        withContext(Dispatchers.IO) {
-                            gateway.remoteRequest("/sessions/${encoded(runnerId)}/${encoded(hubId)}")
-                                .optJSONArray("commands")?.objects().orEmpty()
-                        }
-                    if (commandList.toString() != commands.toString()) {
-                        commands = commandList
-                        hadActivity = true
-                    }
-                    if (error.isNotEmpty()) error = ""
-                } catch (cancel: CancellationException) {
-                    throw cancel
-                } catch (failure: Exception) {
-                    error = sessionError(failure)
-                }
-                delay(if (hadActivity) 500 else 900)
-            }
+    }
+    LaunchedEffect(copiedHeaderId) {
+        if (copiedHeaderId) {
+            delay(1800)
+            copiedHeaderId = false
         }
     }
 
-    val live = connected && executionState == "running"
-    val conversation =
-        remember(events, commands, hubId, live) {
-            buildTranscript(events, commands, hubId, live)
-        }
-    val blocks = remember(conversation) { groupTranscript(conversation) }
-    val approvals = remember(events, hubId) { remoteApprovals(events, hubId) }
-    val questions = remember(events, hubId) { remoteQuestions(events, hubId) }
-    val turnFailure = remember(events, hubId) { latestTurnFailure(events, hubId) }
-    val usage = remember(events, hubId) { latestContextUsage(events, hubId) }
-    var showUsage by remember { mutableStateOf(false) }
+    var attachmentNotice by remember(gateway, runnerId, hubId) { mutableStateOf<String?>(null) }
+    var detailBinding by remember(gateway, runnerId, hubId) { mutableStateOf<RemoteBinding?>(null) }
+    val listState = rememberLazyListState()
 
-    // Follow new output only while the reader is already at the bottom, so
-    // scrolling back through history is never yanked away.
+    val current = controller.state.snapshot.session(runnerId, hubId) ?: session
+    val generation = hostGeneration.ifBlank { current.binding.hostGeneration }
+    val liveBinding = detailBinding?.takeIf { it.hostGeneration == generation } ?: current.binding
+    val state = liveBinding.executionState
+    val render = SessionPhase.of(current.online, liveBinding.controlConnected, state)
+    val host = controller.state.snapshot.host(runnerId)
+    val codexSession = host?.codexSessionControl == true && isCodexThreadId(liveBinding.providerSessionId)
+    val releasingControl = current.online && state == ExecutionState.RELEASING_CONTROL
+    val canTakeControl = current.online && codexSession && !render.connected && !releasingControl
+    val mode = if (canTakeControl) ComposerMode.TAKE_CONTROL else render.composer
+    val composerSending = sending || takeoverCommandId != null
+
+    val candidate =
+        remember(host?.hello?.candidates, liveBinding.providerSessionId) {
+            host?.hello?.candidates?.firstOrNull {
+                it.providerSessionId == liveBinding.providerSessionId
+            }
+        }
+    val hostPlugins = host?.hello?.plugins?.takeIf { it.isNotEmpty() } ?: controller.state.plugins.orEmpty()
+    val engine = engineOfSession(liveBinding.providerSessionId, candidate?.provider, hostPlugins)
+    val runtimeLabel = displayEngineLabel(engine, liveBinding.providerSessionId, candidate?.provider, hostPlugins)
+    val modelOptions =
+        remember(host?.models, engine, candidate?.provider, liveBinding.providerSessionId) {
+            modelsForEngine(
+                catalog = host?.models ?: ModelCatalog.Empty,
+                engine = engine,
+                reportedProvider = candidate?.provider,
+                providerSessionId = liveBinding.providerSessionId,
+            )
+        }
+    val initialModel = matchCatalogModel(modelOptions, candidate?.model)
+    LaunchedEffect(initialModel?.id) {
+        if (model.isEmpty() && !modelExplicitlyCleared) {
+            model = initialModel?.id.orEmpty()
+        }
+    }
+
+    LaunchedEffect(runnerId, gateway) {
+        controller.loadRunnerHello(runnerId, force = false)
+    }
+
+    // Cross-device attention alert for other sessions waiting on user approval/input
+    val otherAttention =
+        remember(controller.state.snapshot, runnerId, hubId) {
+            buildAttentionQueue(controller.state.snapshot).filterNot {
+                it.entry.runnerId == runnerId && it.entry.hubSessionId == hubId
+            }
+        }
+
+    // Seed + follow with SSE wakeup and cursor short-circuiting.
+    LaunchedEffect(gateway, runnerId, hubId, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            runRemoteSessionStream(
+                gateway = gateway,
+                runnerId = runnerId,
+                hubId = hubId,
+                window = window,
+                wakeChannel = wakeChannel,
+                initiallySeeded = seeded,
+                currentFallbackBusy = { (detailBinding?.executionState ?: state).busy },
+                currentCommands = { commands },
+                onCommandsUpdated = { nextCommands ->
+                    commands = nextCommands
+                    val outcome =
+                        evaluateRejectedCommands(nextCommands, handledRejectedCommandIds, announceErrors = seeded)
+                    if (outcome.newIds.isNotEmpty()) handledRejectedCommandIds += outcome.newIds
+                    if (outcome.errorMessage != null) actionError = outcome.errorMessage
+                    if (outcome.prunedPromptText != null && optimisticPrompts.isNotEmpty()) {
+                        val idx = optimisticPrompts.indexOfLast { it.text == outcome.prunedPromptText }
+                        if (idx >= 0) optimisticPrompts = optimisticPrompts.filterIndexed { i, _ -> i != idx }
+                    }
+                },
+                onDetailBindingUpdated = { detailBinding = it },
+                onEventsUpdated = { events = it },
+                onSeeded = { seeded = true },
+                onSeedError = { seedError = it },
+                onAuthExpired = { controller.logout() },
+            )
+        }
+    }
+
+    LaunchedEffect(seeded, current.online, generation) {
+        if (seeded && current.online && codexSession && events.isEmpty() &&
+            commands.none { it.command.optJSONObject("command")?.optString("mode") == "preview" }) {
+            controller.dispatch(
+                runnerId = runnerId,
+                hubSessionId = hubId,
+                hostGeneration = generation,
+                action = connectCommand(ConnectMode.PREVIEW, liveBinding.workspacePath, liveBinding.providerSessionId),
+            ) { wakeChannel.trySend(Unit) }
+        }
+    }
+
+    val live = current.online && (state == ExecutionState.RUNNING || optimisticPrompts.isNotEmpty())
+    val transcriptFold = remember(runnerId, hubId) { IncrementalTranscriptFold() }
+    var parsed by remember(runnerId, hubId) { mutableStateOf(ParsedTranscriptState()) }
+
+    LaunchedEffect(events, commands, hubId, live, candidate) {
+        parsed =
+            withContext(Dispatchers.Default) {
+                val baseItems = transcriptFold.update(events, commands, hubId, live)
+                val baseBlocks = groupTranscript(baseItems)
+                val signals = analyzeSessionSignals(events, hubId, candidate)
+                ParsedTranscriptState(
+                    baseConversation = baseItems,
+                    baseBlocks = baseBlocks,
+                    signals = signals,
+                )
+            }
+    }
+
+    val baseConversation = parsed.baseConversation
+    val userRowCount =
+        remember(baseConversation) {
+            baseConversation.count { it.kind == TranscriptKind.USER }
+        }
+    val pendingPrompts =
+        remember(optimisticPrompts, userRowCount) {
+            optimisticPrompts.filter { !optimisticPromptLanded(it.neededUserRows, userRowCount) }
+        }
+
+    LaunchedEffect(optimisticPrompts) {
+        while (optimisticPrompts.isNotEmpty()) {
+            delay(1_000L)
+            val rows = parsed.baseConversation.count { it.kind == TranscriptKind.USER }
+            val now = System.currentTimeMillis()
+            val kept =
+                optimisticPrompts.filter {
+                    !optimisticPromptLanded(it.neededUserRows, rows) &&
+                        now - it.createdAt <= OPTIMISTIC_PROMPT_TTL_MS
+                }
+            if (kept.size != optimisticPrompts.size) optimisticPrompts = kept
+        }
+    }
+
+    val conversation =
+        remember(baseConversation, pendingPrompts) {
+            if (pendingPrompts.isEmpty()) baseConversation
+            else baseConversation + pendingPrompts.map { it.toTranscriptItem() }
+        }
+    val blocks =
+        remember(parsed.baseBlocks, pendingPrompts) {
+            if (pendingPrompts.isEmpty()) parsed.baseBlocks
+            else parsed.baseBlocks + pendingPrompts.map { ConversationBlock.Single(it.toTranscriptItem()) }
+        }
+    val approvals = parsed.signals.approvals
+    val questions = parsed.signals.questions
+    val turnFailure = parsed.signals.turnFailure
+    val turnLive = state == ExecutionState.RUNNING || pendingPrompts.isNotEmpty()
+    val lastUserIndex = conversation.indexOfLast { it.kind == TranscriptKind.USER }
+    val answeredSincePrompt =
+        lastUserIndex >= 0 &&
+            conversation.drop(lastUserIndex + 1).any { it.kind == TranscriptKind.ASSISTANT }
+    val isWaitingFirstAssistant =
+        turnLive &&
+            lastUserIndex >= 0 &&
+            !answeredSincePrompt &&
+            approvals.isEmpty() &&
+            questions.isEmpty()
+    val usage = parsed.signals.usage
+
+    // Follow new streaming output all the way to the bottom of the tail item,
+    // and show a floating "回到最新" pill whenever the user scrolled back up.
+    val canScrollDown by remember { derivedStateOf { listState.canScrollForward } }
     val lastMessageLength = conversation.lastOrNull()?.text?.length ?: 0
     LaunchedEffect(blocks.size, lastMessageLength) {
         if (blocks.isEmpty()) return@LaunchedEffect
-        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (lastVisible >= blocks.lastIndex - 1) {
-            listState.scrollToItem(blocks.lastIndex)
+        if (!listState.canScrollForward || listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == blocks.lastIndex) {
+            listState.scrollToItem(blocks.lastIndex, scrollOffset = 100_000)
         }
     }
 
-    fun submit(action: JSONObject, onDone: () -> Unit = {}) {
-        if (busy) return
-        busy = true
-        val key = action.optString("action") + ":" + action.toString()
-        scope.launch {
-            try {
-                val body =
-                    attempts.getOrPut(key) {
-                        JSONObject()
-                            .put("client_cmd_id", UUID.randomUUID().toString())
-                            .put("hub_session_id", hubId)
-                            .put("host_generation", generation.ifBlank { JSONObject.NULL })
-                            .put("command", action)
+    fun send(
+        action: JSONObject,
+        targetGeneration: String = generation,
+        clearComposerOnSuccess: Boolean = false,
+        onFailure: (() -> Unit)? = null,
+        onQueued: ((String) -> Unit)? = null,
+    ) {
+        if (sending) return
+        sending = true
+        actionError = ""
+        controller.dispatch(
+            runnerId = runnerId,
+            hubSessionId = hubId,
+            hostGeneration = targetGeneration.ifBlank { null },
+            action = action,
+        ) { result ->
+            sending = false
+            result
+                .onSuccess {
+                    onQueued?.invoke(it.clientCmdId)
+                    if (clearComposerOnSuccess) {
+                        draft = ""
+                        attachments = emptyList()
                     }
-                withContext(Dispatchers.IO) {
-                    gateway.remoteRequest("/runners/${encoded(runnerId)}/commands", body)
+                    wakeChannel.trySend(Unit)
                 }
-                attempts.remove(key)
-                error = ""
-                if (action.optString("action") == "send_prompt") draft = ""
-                onDone()
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (failure: Exception) {
-                if (failure is GatewayException && failure.status in 400..499) attempts.remove(key)
-                error = sessionError(failure)
-            } finally {
-                busy = false
+                .onFailure {
+                    actionError = describeGatewayError(it)
+                    onFailure?.invoke()
+                }
+        }
+    }
+
+    fun dispatchPromptPayload(
+        text: String,
+        promptAttachments: List<RemoteAttachment>,
+        clearComposer: Boolean,
+        acquireControl: Boolean = false,
+    ) {
+        val trimmed = text.trim()
+        if ((trimmed.isEmpty() && promptAttachments.isEmpty()) ||
+            (mode != ComposerMode.READY && !(acquireControl && canTakeControl)) || composerSending) return
+        manualInterruptPending = false
+        val promptToSend =
+            trimmed.ifEmpty {
+                "请查看附件：" + promptAttachments.joinToString("、") { it.name }
+            }
+        val optId = "optimistic-${System.currentTimeMillis()}"
+        val neededUserRows =
+            nextOptimisticPromptNeeded(
+                pending = pendingPrompts.map { it.neededUserRows },
+                userRowCount = userRowCount,
+            )
+        val savedDraft = if (clearComposer) draft else null
+        val savedAttachments = if (clearComposer) attachments else emptyList()
+        optimisticPrompts =
+            optimisticPrompts +
+                OptimisticPrompt(id = optId, text = promptToSend, neededUserRows = neededUserRows)
+        if (clearComposer && !acquireControl) {
+            draft = ""
+            attachments = emptyList()
+        }
+        send(
+            action =
+                sendPromptCommand(
+                    text = promptToSend,
+                    effort = effort,
+                    model = model,
+                    permissionMode = permissionMode,
+                    attachments = promptAttachments,
+                    includePermissionMode = permissionModeTouched,
+                    acquireControl = acquireControl,
+                ),
+            clearComposerOnSuccess = false,
+            onQueued = if (acquireControl) { id -> takeoverCommandId = id } else null,
+            onFailure = {
+                optimisticPrompts = optimisticPrompts.filterNot { it.id == optId }
+                if (savedDraft != null) {
+                    if (draft.isBlank()) draft = savedDraft
+                    if (attachments.isEmpty() && savedAttachments.isNotEmpty()) {
+                        attachments = savedAttachments
+                    }
+                }
+            },
+        )
+    }
+
+    LaunchedEffect(commands, takeoverCommandId) {
+        val id = takeoverCommandId ?: return@LaunchedEffect
+        val command = commands.firstOrNull { it.command.optString("client_cmd_id") == id } ?: return@LaunchedEffect
+        val receipt = command.receipt ?: return@LaunchedEffect
+        takeoverCommandId = null
+        if (receipt.optString("status") == "accepted") {
+            draft = ""
+            attachments = emptyList()
+        }
+    }
+
+    fun queueCurrentDraft() {
+        val next = mergeQueuedPrompt(queuedPrompt, draft, attachments) ?: return
+        controller.setQueuedPromptFor(sessionKey, next)
+        draft = ""
+        attachments = emptyList()
+    }
+
+    // Dispatch seeded initial prompt only after control channel is connected and composer is ready.
+    LaunchedEffect(pendingSeedPrompt, render.connected, mode, sending) {
+        val promptAction = pendingSeedPrompt ?: return@LaunchedEffect
+        if (render.connected && mode == ComposerMode.READY && !sending) {
+            pendingSeedPrompt = null
+            val text = promptAction.optString("text").trim()
+            val optId = if (text.isNotEmpty()) "optimistic-${System.currentTimeMillis()}" else null
+            if (optId != null) {
+                val needed =
+                    nextOptimisticPromptNeeded(
+                        pending = pendingPrompts.map { it.neededUserRows },
+                        userRowCount = userRowCount,
+                    )
+                optimisticPrompts = optimisticPrompts + OptimisticPrompt(id = optId, text = text, neededUserRows = needed)
+            }
+            send(
+                action = promptAction,
+                onFailure = {
+                    if (optId != null) optimisticPrompts = optimisticPrompts.filterNot { it.id == optId }
+                },
+            )
+        }
+    }
+
+    // Auto-dispatch queued prompt once an active turn finishes normally (never after manual interrupt or error)
+    LaunchedEffect(mode, sending, queuedPrompt, turnFailure, manualInterruptPending) {
+        if (mode == ComposerMode.BUSY) {
+            wasBusy = true
+            return@LaunchedEffect
+        }
+        val pendingQueue = queuedPrompt
+        if (
+            pendingQueue != null &&
+            shouldAutoDispatchQueue(
+                wasBusy = wasBusy,
+                mode = mode,
+                sending = sending,
+                manualInterruptPending = manualInterruptPending,
+                hasTurnFailure = turnFailure != null && !turnFailure.retrying,
+            )
+        ) {
+            controller.setQueuedPromptFor(sessionKey, null)
+            wasBusy = false
+            dispatchPromptPayload(pendingQueue.text, pendingQueue.attachments, clearComposer = false)
+        } else if (mode == ComposerMode.READY && !sending) {
+            wasBusy = false
+            if (manualInterruptPending) manualInterruptPending = false
+        }
+    }
+
+    val canReconnect =
+        current.online &&
+            !liveBinding.controlConnected &&
+            !releasingControl &&
+            liveBinding.providerSessionId.isNotBlank() &&
+            liveBinding.workspacePath.isNotBlank()
+
+    val reconnectNow: () -> Unit = {
+        if (canReconnect && !reconnecting) {
+            reconnecting = true
+            actionError = ""
+            controller.dispatch(
+                runnerId = runnerId,
+                hubSessionId = hubId,
+                hostGeneration = generation.ifBlank { null },
+                action =
+                    connectCommand(
+                        mode = if (codexSession) ConnectMode.TAKE_CONTROL else ConnectMode.RESUME,
+                        workspacePath = liveBinding.workspacePath,
+                        providerSessionId = liveBinding.providerSessionId,
+                        model = model,
+                        permissionMode = permissionMode,
+                        sandbox = if (permissionMode == PermissionMode.PLAN) SandboxMode.READ_ONLY else SandboxMode.WORKSPACE_WRITE,
+                    ),
+            ) { res ->
+                reconnecting = false
+                res
+                    .onSuccess {
+                        scope.launch { controller.refresh() }
+                        wakeChannel.trySend(Unit)
+                    }
+                    .onFailure { actionError = describeGatewayError(it) }
             }
         }
     }
 
-    fun sendPrompt(text: String) {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty() || !idle || busy) return
-        focusManager.clearFocus()
-        submit(JSONObject().put("action", "send_prompt").put("text", trimmed))
+    fun attachPicked(uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
+        scope.launch {
+            val (ready, notice) =
+                readPickedAttachments(
+                    context = context,
+                    uris = uris,
+                    existingCount = attachments.size,
+                    existingAttachments = attachments,
+                )
+            if (ready.isNotEmpty()) {
+                attachments = (attachments + ready).take(AttachmentReader.MAX_ATTACHMENTS)
+            }
+            attachmentNotice = notice
+        }
     }
 
-    Column(
+    val sessionIdDisplay = liveBinding.providerSessionId.ifBlank { hubId }
+
+    Box(
         modifier =
             Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
                 .statusBarsPadding()
-                .navigationBarsPadding()
-                .imePadding(),
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OrcaIconButton(onClick = onBack) {
-                OrcaBackChevron(MaterialTheme.colorScheme.onSurface)
-            }
-            Column(
-                modifier = Modifier.weight(1f).padding(start = OrcaSpace.xs),
-                verticalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
-            ) {
-                Text(
-                    text = workspaceLabel(binding?.optString("workspace_path").orEmpty()),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-                ) {
-                    OrcaStatusDot(
-                        color = if (connected) stateColor(executionState) else OrcaColors.accentAmber,
-                        5.dp,
-                    )
-                    Text(
-                        text = if (connected) stateLabel(executionState) else "正在恢复控制…",
-                        style = OrcaType.mono,
-                        color = if (connected) stateColor(executionState) else OrcaColors.accentAmber,
-                        maxLines = 1,
-                    )
-                }
-            }
-            if (usage != null) {
-                ContextCapacityRing(usage = usage, onToggle = { showUsage = !showUsage })
-            }
-            if (connected && !idle) {
-                Surface(
-                    onClick = { submit(JSONObject().put("action", "interrupt")) },
-                    modifier = Modifier.height(32.dp),
-                    enabled = !busy,
-                    shape = RoundedCornerShape(OrcaRadius.button),
-                    color = OrcaColors.accentRed.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.5f)),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = OrcaSpace.md),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-                    ) {
-                        OrcaStopIcon(OrcaColors.accentRed)
-                        Text(
-                            text = "停止",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = OrcaColors.accentRed,
-                        )
-                    }
-                }
-            }
-        }
-
-        if (error.isNotBlank()) {
-            OrcaInlineError(error, Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs))
-        }
-
-        if (showUsage && usage != null) {
-            ContextCapacityStrip(
+        Column(Modifier.widthIn(max = 920.dp).fillMaxSize()) {
+            RemoteSessionTopBar(
+                titleText =
+                    sanitizeSessionTitle(liveBinding.title)
+                        .ifBlank { sanitizeSessionTitle(candidate?.title) }
+                        .ifBlank { workspaceLabel(liveBinding.workspacePath) }
+                        .ifBlank { "会话" },
+                deviceTitle = deviceLabel(runnerId, host?.hello?.deviceName),
+                runtimeLabel = runtimeLabel,
+                hostOnline = current.online,
+                controlConnected = liveBinding.controlConnected,
+                state = state,
+                stoppable = render.stoppable,
+                sending = sending,
+                sessionIdDisplay = sessionIdDisplay,
                 usage = usage,
-                modifier = Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xxs),
+                onBack = onBack,
+                onToggleUsage = { showUsage = !showUsage },
+                onInterrupt = {
+                    manualInterruptPending = true
+                    send(JSONObject().put("action", "interrupt"))
+                },
             )
-        }
 
-        if (turnFailure != null && !turnFailure.retrying && turnFailure.message != dismissedFailure) {
-            TurnFailureCard(
-                failure = turnFailure,
-                onDismiss = { dismissedFailure = turnFailure.message },
-                modifier = Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
+            CrossDeviceAttentionBanner(
+                otherAttention = otherAttention,
+                onSwitchSession = onSwitchSession,
             )
-        }
 
-        if (approvals.isNotEmpty() || questions.isNotEmpty()) {
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
-                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-            ) {
-                items(approvals.entries.toList(), key = { it.key }) { (id, approval) ->
-                    ApprovalCard(
-                        approval = approval,
-                        enabled = connected && !busy,
-                        onApprove = {
-                            submit(
-                                JSONObject()
-                                    .put("action", "resolve_approval")
-                                    .put("approval_id", id)
-                                    .put("approved", true),
-                            )
-                        },
-                        onDecline = {
-                            submit(
-                                JSONObject()
-                                    .put("action", "resolve_approval")
-                                    .put("approval_id", id)
-                                    .put("approved", false),
-                            )
-                        },
-                    )
-                }
-                items(questions.entries.toList(), key = { "q-" + it.key }) { (id, question) ->
-                    QuestionCard(
-                        question = question,
-                        enabled = connected && !busy,
-                        onAnswer = { answer ->
-                            submit(
-                                JSONObject()
-                                    .put("action", "answer_question")
-                                    .put("question_id", id)
-                                    .put(
-                                        "answer",
-                                        if (answer is List<*>) JSONArray(answer) else answer,
-                                    ),
-                            )
-                        },
-                    )
-                }
+            SessionControlStrip(
+                releasing = releasingControl,
+                canAcquire = canReconnect,
+                canRelease = codexSession && render.connected && !turnLive && !state.waiting && liveBinding.currentTurnId == null,
+                acquiring = reconnecting,
+                busy = composerSending,
+                onAcquire = reconnectNow,
+                onRelease = { send(JSONObject().put("action", "release_control")) },
+            )
+
+            val banner = actionError.ifBlank { seedError }
+            if (banner.isNotBlank()) {
+                OrcaInlineError(
+                    banner,
+                    Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
+                )
             }
-        }
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
-            verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-        ) {
-            if (blocks.isEmpty()) {
-                item {
-                    OrcaCard {
-                        OrcaNoticeCard(
-                            title = if (connected) "等待 Agent 输出" else "等待电脑连线",
-                            body =
-                                if (connected) "消息、思考过程与工具执行会实时出现在这里；历史对话在恢复会话时载入。"
-                                else "保持 Runner 在线，手机端会自动恢复这条会话的控制权。",
-                            icon = { OrcaTerminalIcon(MaterialTheme.colorScheme.onSurfaceVariant, 22.dp) },
-                        )
-                    }
-                }
+            if (showUsage && usage != null) {
+                ContextCapacityStrip(
+                    usage = usage,
+                    modifier = Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xxs),
+                )
             }
-            items(blocks, key = { block ->
-                when (block) {
-                    is ConversationBlock.Single -> block.item.id
-                    is ConversationBlock.Tools -> "group:" + block.items.first().id
-                }
-            }) { block ->
-                when (block) {
-                    is ConversationBlock.Single ->
-                        when (block.item.kind) {
-                            TranscriptKind.USER -> UserBubble(block.item.text)
-                            TranscriptKind.ASSISTANT -> AssistantMessage(block.item)
-                            TranscriptKind.TOOL -> ToolCard(block.item)
-                            TranscriptKind.SYSTEM -> SystemLine(block.item)
-                        }
-                    is ConversationBlock.Tools -> ToolGroup(block.items)
-                }
+
+            if (turnFailure != null && !turnFailure.retrying && turnFailure.message != dismissedFailure) {
+                TurnFailureCard(
+                    failure = turnFailure,
+                    onDismiss = { dismissedFailure = turnFailure.message },
+                    modifier = Modifier.padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
+                )
             }
-        }
 
-        TerminalAccessoryBar(
-            enabled = connected && !busy,
-            onKey = { key ->
-                when (key) {
-                    "Esc" -> draft = ""
-                    "Tab" -> draft = "$draft  "
-                    "Ctrl+C" -> submit(JSONObject().put("action", "interrupt"))
-                }
-            },
-            onMacro = { macro ->
-                draft = macro
-                if (idle && connected && !busy) sendPrompt(macro)
-            },
-        )
-
-        Surface(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = OrcaSpace.lg, vertical = OrcaSpace.sm),
-            shape = RoundedCornerShape(OrcaRadius.card),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        ) {
-            Row(
-                modifier = Modifier.padding(start = OrcaSpace.rowH, end = OrcaSpace.sm, top = OrcaSpace.xs, bottom = OrcaSpace.xs),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                Box(modifier = Modifier.weight(1f).padding(vertical = OrcaSpace.sm)) {
-                    if (draft.isEmpty()) {
-                        Text(
-                            text =
-                                when {
-                                    !connected -> "等待电脑连线…"
-                                    !idle -> "Agent 正在执行中…"
-                                    else -> "输入指令，或使用上方快捷键…"
-                                },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        )
-                    }
-                    BasicTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = idle && connected && !busy,
-                        textStyle =
-                            MaterialTheme.typography.bodyMedium.copy(
-                                color = MaterialTheme.colorScheme.onSurface,
-                            ),
-                        cursorBrush = SolidColor(OrcaColors.accentBlue),
-                        maxLines = 5,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = { sendPrompt(draft) }),
-                    )
-                }
-                Box(
-                    modifier =
-                        Modifier
-                            .padding(bottom = OrcaSpace.xs)
-                            .size(36.dp)
-                            .background(
-                                if (idle && connected && !busy && draft.isNotBlank()) OrcaColors.accentBlue
-                                else MaterialTheme.colorScheme.surfaceVariant,
-                                CircleShape,
-                            )
-                            .clickable(enabled = idle && connected && !busy && draft.isNotBlank()) {
-                                sendPrompt(draft)
+            if (approvals.isNotEmpty() || questions.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = OrcaSpace.lg, vertical = OrcaSpace.xs),
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
+                ) {
+                    items(approvals, key = { it.approvalId }) { approval ->
+                        ApprovalCard(
+                            approval = approval,
+                            enabled = render.connected && !sending,
+                            onApprove = {
+                                send(
+                                    JSONObject()
+                                        .put("action", "resolve_approval")
+                                        .put("approval_id", approval.approvalId)
+                                        .put("approved", true),
+                                    targetGeneration = approval.hostGeneration,
+                                )
                             },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    OrcaSendIcon(
-                        tint =
-                            if (idle && connected && !busy && draft.isNotBlank()) Color.White
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-// =========================================================================
-// Intervention banners
-// =========================================================================
-
-@Composable
-private fun TurnFailureCard(
-    failure: TurnFailure,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(OrcaRadius.card),
-        color = OrcaColors.accentRed.copy(alpha = 0.08f),
-        border = BorderStroke(1.dp, OrcaColors.accentRed.copy(alpha = 0.45f)),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
-            verticalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-                ) {
-                    OrcaStatusDot(OrcaColors.accentRed, 6.dp)
-                    Text(
-                        text = "这一轮没有完成",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = OrcaColors.accentRed,
-                    )
-                }
-                OrcaTextAction(label = "关闭", onClick = onDismiss)
-            }
-            Text(
-                text = readableText(failure.message),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ApprovalCard(
-    approval: JSONObject,
-    enabled: Boolean,
-    onApprove: () -> Unit,
-    onDecline: () -> Unit,
-) {
-    val tool = approval.optString("tool_name").ifBlank { "工具授权" }
-    val risk = approval.optString("risk_level")
-    val body =
-        approval.optString("command_preview")
-            .ifBlank { approval.optString("description") }
-            .ifBlank { approval.optString("path") }
-            .ifBlank { "Agent 请求执行受保护操作，请确认是否放行。" }
-    val diff = approval.optString("diff")
-    var expanded by remember(approval.toString()) { mutableStateOf(false) }
-
-    Surface(
-        modifier = Modifier.width(288.dp),
-        shape = RoundedCornerShape(OrcaRadius.card),
-        color = OrcaColors.accentAmber.copy(alpha = 0.08f),
-        border = BorderStroke(1.dp, OrcaColors.accentAmber.copy(alpha = 0.55f)),
-    ) {
-        Column(
-            modifier = Modifier.padding(OrcaSpace.md),
-            verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-                ) {
-                    OrcaStatusDot(OrcaColors.accentAmber, 6.dp)
-                    Text(
-                        text = "需要授权",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = OrcaColors.accentAmber,
-                    )
-                }
-                OrcaChip(
-                    text = if (risk == "high") "高风险" else tool,
-                    color = if (risk == "high") OrcaColors.accentRed else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                text = readableText(body),
-                style = OrcaType.mono,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = if (expanded) Int.MAX_VALUE else 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (diff.isNotBlank()) {
-                OrcaTextAction(
-                    label = if (expanded) "收起变更" else "查看变更",
-                    onClick = { expanded = !expanded },
-                )
-                AnimatedVisibility(visible = expanded) {
-                    DiffPreview(diff)
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm)) {
-                OrcaSecondaryButton(
-                    label = "拒绝",
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled && approval.optBoolean("can_decline", true),
-                    onClick = onDecline,
-                )
-                OrcaPrimaryButton(
-                    label = "批准",
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled && approval.optBoolean("can_approve", true),
-                    onClick = onApprove,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DiffPreview(diff: String) {
-    Column(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(OrcaRadius.button))
-                .background(OrcaColors.bgInset)
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(OrcaRadius.button))
-                .padding(OrcaSpace.sm),
-        verticalArrangement = Arrangement.spacedBy(1.dp),
-    ) {
-        diff.lineSequence().take(60).forEach { line ->
-            val color =
-                when {
-                    line.startsWith("+") && !line.startsWith("+++") -> OrcaColors.accentGreen
-                    line.startsWith("-") && !line.startsWith("---") -> OrcaColors.accentRed
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            Text(
-                text = line.ifEmpty { " " },
-                style = OrcaType.code.copy(fontSize = 11.sp),
-                color = color,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun QuestionCard(
-    question: JSONObject,
-    enabled: Boolean,
-    onAnswer: (Any) -> Unit,
-) {
-    val header = question.optString("header").ifBlank { "Agent 提问" }
-    val prompt = question.optString("prompt").ifBlank { "请选择一个选项以继续。" }
-    val options = question.optJSONArray("options")?.objects().orEmpty()
-    val multi = question.optBoolean("multi_select", false)
-    // Selection is per question and survives a poll-driven recomposition, but
-    // not a new question: a submitted answer clears the card anyway.
-    var picked by remember(question.optString("question_id")) { mutableStateOf(setOf<String>()) }
-
-    Surface(
-        modifier = Modifier.width(288.dp),
-        shape = RoundedCornerShape(OrcaRadius.card),
-        color = OrcaColors.accentBlue.copy(alpha = 0.08f),
-        border = BorderStroke(1.dp, OrcaColors.accentBlue.copy(alpha = 0.55f)),
-    ) {
-        Column(
-            modifier = Modifier.padding(OrcaSpace.md),
-            verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-            ) {
-                OrcaStatusDot(OrcaColors.accentBlue, 6.dp)
-                Text(
-                    text = header,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = OrcaColors.accentBlue,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (multi) {
-                    Text(
-                        text = "可多选",
-                        style = OrcaType.mono,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Text(
-                text = prompt,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (options.isEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm)) {
-                    OrcaSecondaryButton("跳过", Modifier.weight(1f), enabled) { onAnswer("") }
-                    OrcaPrimaryButton("继续", Modifier.weight(1f), enabled) { onAnswer("继续") }
-                }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
-                    options.forEach { option ->
-                        val label = option.optString("label")
-                        val selected = label in picked
-                        Surface(
-                            onClick = {
-                                if (multi) {
-                                    picked = if (selected) picked - label else picked + label
-                                } else {
-                                    onAnswer(label)
-                                }
+                            onDecline = {
+                                send(
+                                    JSONObject()
+                                        .put("action", "resolve_approval")
+                                        .put("approval_id", approval.approvalId)
+                                        .put("approved", false),
+                                    targetGeneration = approval.hostGeneration,
+                                )
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = enabled,
-                            shape = RoundedCornerShape(OrcaRadius.button),
-                            color =
-                                if (selected) OrcaColors.accentBlue.copy(alpha = 0.18f)
-                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                            border =
-                                BorderStroke(
-                                    1.dp,
-                                    if (selected) OrcaColors.accentBlue
-                                    else MaterialTheme.colorScheme.outline,
-                                ),
-                        ) {
-                            Row(
-                                modifier =
-                                    Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-                            ) {
-                                if (multi) SelectionBox(selected)
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    val description = option.optString("description")
-                                    if (description.isNotBlank()) {
-                                        Text(
-                                            text = description,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        )
                     }
-                }
-                if (multi) {
-                    OrcaPrimaryButton(
-                        label = if (picked.isEmpty()) "选择后提交" else "提交 ${picked.size} 项选择",
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = enabled && picked.isNotEmpty(),
-                    ) {
-                        // The wire contract takes a string or a string array;
-                        // sending an array is what the desktop console does.
-                        onAnswer(picked.toList())
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Square check affordance; `OrcaCheckIcon` is a bare glyph without a box. */
-@Composable
-private fun SelectionBox(selected: Boolean) {
-    Box(
-        modifier =
-            Modifier
-                .size(14.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(if (selected) OrcaColors.accentBlue else Color.Transparent)
-                .border(1.dp, if (selected) OrcaColors.accentBlue else OrcaColors.borderStrong, RoundedCornerShape(3.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (selected) OrcaCheckIcon(OrcaColors.onBright, 10.dp)
-    }
-}
-
-// =========================================================================
-// Transcript rows
-// =========================================================================
-
-@Composable
-private fun UserBubble(text: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
-    ) {
-        Surface(
-            modifier = Modifier.widthIn(max = 300.dp),
-            shape = RoundedCornerShape(OrcaRadius.card, OrcaRadius.card, OrcaSpace.xs, OrcaRadius.card),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
-            )
-        }
-    }
-}
-
-private val THINK_BLOCK = Regex("<(?:think|thinking|thought)>([\\s\\S]*?)(?:</(?:think|thinking|thought)>|$)", RegexOption.IGNORE_CASE)
-
-/**
- * Splits a `<think>` block out of a message. An unterminated block is a
- * reasoning item that is still streaming, so the accordion stays live.
- */
-private fun splitThinking(text: String, streaming: Boolean): Triple<String?, String, Boolean> {
-    val match = THINK_BLOCK.find(text)
-        ?: return Triple(null, text, false)
-    val block = match.groupValues[1].trim()
-    val closed = match.value.contains("</think", ignoreCase = true) ||
-        match.value.contains("</thinking", ignoreCase = true) ||
-        match.value.contains("</thought", ignoreCase = true)
-    val clean = text.removeRange(match.range).trim()
-    return Triple(block.takeIf { it.isNotEmpty() }, clean, streaming && !closed)
-}
-
-@Composable
-private fun AssistantMessage(item: TranscriptItem) {
-    val (thinking, body, thinkingLive) = remember(item.text, item.streaming) { splitThinking(item.text, item.streaming) }
-    Column(modifier = Modifier.fillMaxWidth()) {
-        if (thinking != null) {
-            ThinkingAccordion(thought = thinking, isGenerating = thinkingLive)
-        }
-        if (body.isNotEmpty() || thinking == null) {
-            RenderMarkdownContent(content = body)
-        }
-        if (item.streaming) StreamingCaret()
-    }
-}
-
-/** A caret that behaves like a live cursor instead of a spinner. */
-@Composable
-private fun StreamingCaret() {
-    val transition = rememberInfiniteTransition(label = "streaming-caret")
-    val alpha by
-        transition.animateFloat(
-            initialValue = 0.25f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-            label = "streaming-caret-alpha",
-        )
-    Row(
-        modifier = Modifier.padding(top = OrcaSpace.xs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-    ) {
-        Box(
-            Modifier
-                .alpha(alpha)
-                .size(width = 7.dp, height = 14.dp)
-                .background(OrcaColors.accentBlue, RoundedCornerShape(1.dp)),
-        )
-        Text(
-            text = "生成中",
-            style = OrcaType.mono,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-private fun toolStateColor(state: ToolState?): Color =
-    when (state) {
-        ToolState.RUNNING -> OrcaColors.accentAmber
-        ToolState.FAILED -> OrcaColors.accentRed
-        else -> OrcaColors.textMuted
-    }
-
-private fun toolStateLabel(state: ToolState?): String =
-    when (state) {
-        ToolState.RUNNING -> "执行中…"
-        ToolState.FAILED -> "执行失败"
-        else -> "已完成"
-    }
-
-private fun readableOutput(value: String): String {
-    val lines = value.lineSequence().take(120).toList()
-    val joined = lines.joinToString("\n")
-    return if (value.lineSequence().count() > 120) "$joined\n…（输出过长，已截断）" else joined
-}
-
-@Composable
-private fun ToolCard(item: TranscriptItem) {
-    val clipboard = LocalClipboardManager.current
-    var expanded by remember(item.id) { mutableStateOf(false) }
-    val title = item.title ?: "工具调用"
-    val output = item.output
-    val command = item.command
-    val hasDetail = !command.isNullOrBlank() || !output.isNullOrBlank()
-    val diff = command?.takeIf { it.contains("\n+") || it.startsWith("---") || it.startsWith("@@") }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(OrcaRadius.card),
-        color = OrcaColors.bgInset,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    ) {
-        Column {
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
-                        .padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-            ) {
-                OrcaStatusDot(toolStateColor(item.state), 5.dp)
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    Text(
-                        text = title,
-                        style = OrcaType.mono,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    command?.takeIf { it.isNotBlank() }?.let {
-                        Text(
-                            text = it.lineSequence().first().take(140),
-                            style = OrcaType.mono,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                    items(questions, key = { it.questionId }) { question ->
+                        QuestionCard(
+                            question = question,
+                            enabled = render.connected && !sending,
+                            onAnswer = { answer ->
+                                send(
+                                    JSONObject()
+                                        .put("action", "answer_question")
+                                        .put("question_id", question.questionId)
+                                        .put(
+                                            "answer",
+                                            if (answer is List<*>) JSONArray(answer) else answer,
+                                        ),
+                                    targetGeneration = question.hostGeneration,
+                                )
+                            },
                         )
                     }
                 }
-                Text(
-                    text = toolStateLabel(item.state),
-                    style = OrcaType.mono,
-                    color = toolStateColor(item.state),
-                )
-                if (hasDetail) {
-                    OrcaChevronDown(
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        size = 10.dp,
-                        expanded = expanded,
-                    )
-                }
             }
-            AnimatedVisibility(visible = expanded && hasDetail) {
-                Column(
-                    modifier = Modifier.padding(start = OrcaSpace.md, end = OrcaSpace.md, bottom = OrcaSpace.md),
-                    verticalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-                ) {
-                    if (diff != null) {
-                        DiffPreview(diff)
-                    } else if (!command.isNullOrBlank()) {
-                        ToolSection(label = "命令 / 参数", text = readableOutput(command), onCopy = {
-                            clipboard.setText(AnnotatedString(command))
-                        })
+
+            // Transcript area + floating scroll-to-bottom button
+            RemoteTranscriptArea(
+                modifier = Modifier.weight(1f),
+                seeded = seeded,
+                seedError = seedError,
+                listState = listState,
+                blocks = blocks,
+                connected = render.connected,
+                canReconnect = canReconnect,
+                onReconnect = reconnectNow,
+                onQuickPrompt = { prompt ->
+                    if (mode == ComposerMode.READY) {
+                        dispatchPromptPayload(prompt, emptyList(), clearComposer = true)
+                    } else {
+                        draft = prompt
                     }
-                    output?.takeIf { it.isNotBlank() && !it.contains("[local_path_redacted]") }?.let {
-                        ToolSection(label = "执行输出", text = readableOutput(readableText(it)), onCopy = {
-                            clipboard.setText(AnnotatedString(it))
-                        })
+                },
+                runtimeLabel = runtimeLabel,
+                isWaitingFirstAssistant = isWaitingFirstAssistant,
+                canScrollDown = canScrollDown,
+            )
+
+            RemoteBottomConsoleDock(
+                render = render,
+                mode = mode,
+                sending = composerSending,
+                modelOptions = modelOptions,
+                model = model,
+                initialModel = initialModel,
+                modelExplicitlyCleared = modelExplicitlyCleared,
+                effort = effort,
+                permissionMode = permissionMode,
+                showQuickKeys = showQuickKeys,
+                onToggleQuickKeys = { showQuickKeys = !showQuickKeys },
+                onOpenSettingsSheet = { showSettingsSheet = true },
+                queuedPrompt = queuedPrompt,
+                onEditQueue = { currentQueue ->
+                    draft =
+                        if (draft.isBlank()) currentQueue.text
+                        else "${currentQueue.text}\n\n$draft"
+                    attachments =
+                        (currentQueue.attachments + attachments)
+                            .take(AttachmentReader.MAX_ATTACHMENTS)
+                    controller.setQueuedPromptFor(sessionKey, null)
+                },
+                onCancelQueue = { controller.setQueuedPromptFor(sessionKey, null) },
+                onSendQueueNow = { currentQueue ->
+                    controller.setQueuedPromptFor(sessionKey, null)
+                    dispatchPromptPayload(
+                        currentQueue.text,
+                        currentQueue.attachments,
+                        clearComposer = false,
+                    )
+                },
+                attachments = attachments,
+                onRemoveAttachment = { attachments = attachments - it },
+                attachmentNotice = attachmentNotice,
+                draft = draft,
+                onDraftChange = { draft = it },
+                onSend = { dispatchPromptPayload(draft, attachments, clearComposer = true, acquireControl = canTakeControl) },
+                onQueue = { queueCurrentDraft() },
+                onAttach = { attachPicked(it) },
+                onKey = { key ->
+                    when (key) {
+                        "Esc" -> draft = ""
+                        "Tab" -> draft = "$draft  "
+                        "Ctrl+C" -> {
+                            manualInterruptPending = true
+                            send(JSONObject().put("action", "interrupt"))
+                        }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ToolSection(label: String, text: String, onCopy: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = label,
-                style = OrcaType.mono,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                },
+                onMacro = { macro ->
+                    if (mode == ComposerMode.READY) {
+                        dispatchPromptPayload(macro, emptyList(), clearComposer = false)
+                    } else {
+                        draft = macro
+                    }
+                },
             )
-            OrcaTextAction(label = "复制", onClick = onCopy)
-        }
-        Text(
-            text = text,
-            style = OrcaType.code,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(OrcaRadius.button))
-                    .background(OrcaColors.bgRaised.copy(alpha = 0.5f))
-                    .padding(OrcaSpace.sm),
-        )
-    }
-}
 
-@Composable
-private fun SystemLine(item: TranscriptItem) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier
-                .width(1.dp)
-                .height(14.dp)
-                .background(OrcaColors.accentPurple.copy(alpha = 0.7f)),
-        )
-        Text(
-            text = listOfNotNull(item.title, readableText(item.text)).joinToString(" · "),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
-private fun ToolGroup(items: List<TranscriptItem>) {
-    var expanded by remember(items.first().id) { mutableStateOf(false) }
-    val running = items.any { it.state == ToolState.RUNNING }
-    val failed = items.any { it.state == ToolState.FAILED }
-    val color =
-        when {
-            failed -> OrcaColors.accentRed
-            running -> OrcaColors.accentAmber
-            else -> OrcaColors.textMuted
-        }
-    val label = when {
-        failed -> "异常"
-        running -> "执行中"
-        else -> "完成"
-    }
-    val preview =
-        items.take(3).joinToString(" · ") {
-            (it.title ?: "工具调用") + (it.command?.lineSequence()?.firstOrNull()?.takeIf { cmd -> cmd.isNotBlank() }?.let { cmd -> " “$cmd”" } ?: "")
-        }
-
-    Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
-        Surface(
-            onClick = { expanded = !expanded },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(OrcaRadius.card),
-            color = OrcaColors.bgInset,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
-            ) {
-                OrcaStatusDot(color, 5.dp)
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    Text(
-                        text = "已执行 ${items.size} 个工具与操作",
-                        style = OrcaType.rowTitle,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                    )
-                    Text(
-                        text = preview,
-                        style = OrcaType.mono,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Text(text = label, style = OrcaType.mono, color = color)
-                OrcaChevronDown(
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    size = 10.dp,
-                    expanded = expanded,
-                )
-            }
-        }
-        AnimatedVisibility(visible = expanded) {
-            Column(verticalArrangement = Arrangement.spacedBy(OrcaSpace.xs)) {
-                items.forEach { ToolCard(it) }
-            }
-        }
-    }
-}
-
-// =========================================================================
-// Accessory keys — ported from Orca `terminal-key-definitions.ts`
-// =========================================================================
-
-private data class AccessoryKey(val label: String, val danger: Boolean = false)
-
-private val ACCESSORY_KEYS =
-    listOf(
-        AccessoryKey("Esc"),
-        AccessoryKey("Tab"),
-        AccessoryKey("Ctrl+C", danger = true),
-    )
-
-private val ACCESSORY_MACROS =
-    listOf(
-        "继续",
-        "git status",
-        "运行测试",
-        "git diff",
-    )
-
-@Composable
-private fun TerminalAccessoryBar(
-    enabled: Boolean,
-    onKey: (String) -> Unit,
-    onMacro: (String) -> Unit,
-) {
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = OrcaSpace.lg),
-        horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        items(ACCESSORY_KEYS) { key ->
-            val tint = if (key.danger) OrcaColors.accentRed else MaterialTheme.colorScheme.onSurface
-            Surface(
-                onClick = { onKey(key.label) },
-                enabled = enabled,
-                shape = RoundedCornerShape(OrcaRadius.button),
-                color = if (key.danger) OrcaColors.accentRed.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surfaceVariant,
-                border =
-                    BorderStroke(
-                        1.dp,
-                        if (key.danger) OrcaColors.accentRed.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline,
-                    ),
-            ) {
-                Text(
-                    text = key.label,
-                    style = OrcaType.mono,
-                    color = tint,
-                    modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 5.dp),
-                )
-            }
-        }
-        item {
-            Box(
-                Modifier
-                    .width(1.dp)
-                    .height(16.dp)
-                    .background(MaterialTheme.colorScheme.outline),
-            )
-        }
-        items(ACCESSORY_MACROS) { macro ->
-            Surface(
-                onClick = { onMacro(macro) },
-                enabled = enabled,
-                shape = RoundedCornerShape(OrcaRadius.button),
-                color = Color.Transparent,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            ) {
-                Text(
-                    text = macro,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 5.dp),
+            if (showSettingsSheet) {
+                SessionSettingsSheet(
+                    modelOptions = modelOptions,
+                    model = model,
+                    onModelChange = { nextModel ->
+                        model = nextModel
+                        modelExplicitlyCleared = nextModel.isEmpty()
+                    },
+                    effort = effort,
+                    onEffortChange = { effort = it },
+                    permissionMode = permissionMode,
+                    onPermissionModeChange = { nextPerm ->
+                        permissionMode = nextPerm
+                        permissionModeTouched = true
+                    },
+                    sessionIdText = sessionIdDisplay,
+                    enabled = render.connected && !sending,
+                    onRefreshModels = {
+                        scope.launch { controller.loadRunnerHello(runnerId, force = true) }
+                    },
+                    onDismiss = { showSettingsSheet = false },
                 )
             }
         }
     }
-}
-
-// =========================================================================
-// Markdown rendering
-// =========================================================================
-
-@Composable
-fun RenderMarkdownContent(content: String) {
-    // The cache survives recomposition of the streaming row, so each delta only
-    // re-parses the changed tail instead of the whole message.
-    val cache = remember { MarkdownSegmentCache() }
-    val segments = remember(content, cache) { cache.update(content) }
-    Column(Modifier.fillMaxWidth()) {
-        segments.forEachIndexed { index, seg ->
-            if (seg.isCodeBlock) {
-                // Keyed by index and language so Compose preserves block identity
-                // across streaming deltas without remounting the surface.
-                key("block-" + index + "-" + seg.language) {
-                    CodeBlockSurface(code = seg.text, language = seg.language)
-                }
-            } else {
-                Text(
-                    text = buildInlineMarkdown(seg.text),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(vertical = OrcaSpace.xxs),
-                )
-            }
-        }
-    }
-}
-
-// =========================================================================
-// Approval / question state
-// =========================================================================
-
-internal fun remoteApprovals(events: List<JSONObject>, hubSessionId: String): Map<String, JSONObject> {
-    val pending = linkedMapOf<String, JSONObject>()
-    for (envelope in events) {
-        val payload = envelope.optJSONObject("payload") ?: continue
-        when (payload.optString("type")) {
-            "ready" -> {
-                pending.clear()
-                payload.optJSONArray("pending_approvals")?.objects()
-                    ?.filter { it.optString("hub_session_id") == hubSessionId }
-                    ?.forEach { pending[it.getString("approval_id")] = it }
-            }
-            "host_lost" -> pending.clear()
-            "receipt" -> {
-                val receipt = payload.optJSONObject("receipt") ?: continue
-                if (receipt.optString("status") == "accepted") {
-                    receipt.optJSONObject("result")
-                        ?.optString("approval_id")
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.let(pending::remove)
-                }
-            }
-            "event" -> {
-                val event = payload.optJSONObject("event") ?: continue
-                when (event.optString("kind")) {
-                    "approval_requested" ->
-                        event.optJSONObject("approval")
-                            ?.takeIf { it.optString("hub_session_id") == hubSessionId }
-                            ?.let { pending[it.getString("approval_id")] = it }
-                    "approval_resolved" ->
-                        event.optString("approval_id").takeIf { it.isNotEmpty() }?.let(pending::remove)
-                    "turn/completed" ->
-                        if (event.optJSONObject("binding")?.optString("hub_session_id") == hubSessionId) {
-                            pending.clear()
-                        }
-                }
-            }
-        }
-    }
-    return pending
-}
-
-internal fun remoteQuestions(events: List<JSONObject>, hubSessionId: String): Map<String, JSONObject> {
-    val pending = linkedMapOf<String, JSONObject>()
-    for (envelope in events) {
-        val payload = envelope.optJSONObject("payload") ?: continue
-        when (payload.optString("type")) {
-            "ready" -> {
-                pending.clear()
-                payload.optJSONArray("pending_questions")?.objects()
-                    ?.filter { it.optString("hub_session_id") == hubSessionId }
-                    ?.forEach { pending[it.getString("question_id")] = it }
-            }
-            "host_lost" -> pending.clear()
-            "event" -> {
-                val event = payload.optJSONObject("event") ?: continue
-                when (event.optString("kind")) {
-                    "question_requested" ->
-                        event.optJSONObject("question")
-                            ?.takeIf { it.optString("hub_session_id") == hubSessionId }
-                            ?.let { pending[it.getString("question_id")] = it }
-                    "question_resolved" ->
-                        event.optString("question_id").takeIf { it.isNotEmpty() }?.let(pending::remove)
-                    "turn/completed" ->
-                        if (event.optJSONObject("binding")?.optString("hub_session_id") == hubSessionId) {
-                            pending.clear()
-                        }
-                }
-            }
-        }
-    }
-    return pending
 }

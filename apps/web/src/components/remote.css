@@ -22,12 +22,36 @@
   color: inherit;
 }
 .remote-console
-  button:not(.remote-session-action-btn):not(.remote-session-main):not(
-    .remote-workspace-title-btn
-  ):not(.remote-workspace-quick-add):not(.remote-workspace-more-btn):not(
-    .remote-header-icon-btn
-  ):not(.cds-select-trigger):not(.cds-select-option),
-.remote-launch button:not(.remote-modal-close) {
+  :where(
+    button:not(
+      .remote-session-action-btn,
+      .remote-session-main,
+      .remote-workspace-title-btn,
+      .remote-workspace-quick-add,
+      .remote-workspace-more-btn,
+      .remote-header-icon-btn,
+      .cds-select-trigger,
+      .cds-select-option,
+      .remote-primary,
+      .cds-confirm-btn,
+      .remote-msg-copy-btn,
+      .remote-queued-prompt-btn,
+      .remote-queue-btn,
+      .remote-header-copy-id,
+      .remote-mobile-attention-btn,
+      .cds-select-sheet-close,
+      .settings-page *
+    )
+  ),
+.remote-launch
+  :where(
+    button:not(
+      .remote-modal-close,
+      .remote-primary,
+      .cds-select-trigger,
+      .cds-select-option
+    )
+  ) {
   border: 1px solid var(--remote-line);
   border-radius: var(--radius-sm, 7px);
   background: var(--remote-surface);
@@ -40,11 +64,27 @@
     opacity 0.15s ease;
 }
 .remote-console
-  button:not(.remote-session-action-btn):not(.remote-session-main):not(
-    .remote-workspace-title-btn
-  ):not(.remote-workspace-quick-add):not(.remote-workspace-more-btn):not(
-    .remote-header-icon-btn
-  ):not(.cds-select-trigger):not(.cds-select-option):hover:not(:disabled) {
+  :where(
+    button:not(
+      .remote-session-action-btn,
+      .remote-session-main,
+      .remote-workspace-title-btn,
+      .remote-workspace-quick-add,
+      .remote-workspace-more-btn,
+      .remote-header-icon-btn,
+      .cds-select-trigger,
+      .cds-select-option,
+      .remote-primary,
+      .cds-confirm-btn,
+      .remote-msg-copy-btn,
+      .remote-queued-prompt-btn,
+      .remote-queue-btn,
+      .remote-header-copy-id,
+      .remote-mobile-attention-btn,
+      .cds-select-sheet-close,
+      .settings-page *
+    )
+  ):hover:not(:disabled) {
   background: var(--remote-hover);
   border-color: var(--remote-line-strong);
 }
@@ -1255,6 +1295,28 @@
   outline-offset: 1px;
 }
 
+.remote-session-action-btn.copied {
+  opacity: 1 !important;
+  width: auto !important;
+  padding: 0 6px !important;
+  gap: 3px !important;
+  color: var(--remote-green, #16a34a) !important;
+  background: rgba(34, 197, 94, 0.12) !important;
+  border-color: rgba(34, 197, 94, 0.28) !important;
+}
+
+.remote-copy-inline-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.remote-sidebar .remote-session.candidate.resuming {
+  background: var(--cds-clay-soft, rgba(217, 119, 87, 0.12));
+  border-color: rgba(217, 119, 87, 0.35);
+}
+
 .remote-session-action-btn:hover {
   opacity: 1 !important;
   background: var(--cds-alpha-2, var(--remote-hover));
@@ -1810,7 +1872,7 @@
   gap: 10px;
   text-align: center;
 }
-.remote-notice.restoring button {
+.remote-notice:is(.restoring, .session-control) button {
   margin-left: 6px;
   padding: 3px 10px;
   font-size: 12px;
@@ -1822,7 +1884,7 @@
   cursor: pointer;
   transition: all 0.12s ease;
 }
-.remote-notice.restoring button:hover:not(:disabled) {
+.remote-notice:is(.restoring, .session-control) button:hover:not(:disabled) {
   background: var(--remote-hover, rgba(0, 0, 0, 0.04));
   border-color: rgba(198, 125, 40, 0.7);
 }
@@ -1898,7 +1960,7 @@
   padding: 20px 32px;
   scrollbar-gutter: stable both-edges;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  scrollbar-color: rgba(17, 24, 39, 0.2) transparent;
   -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
@@ -1908,10 +1970,19 @@
 }
 .remote-timeline::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(17, 24, 39, 0.2);
 }
 .remote-timeline::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.24);
+  background: rgba(17, 24, 39, 0.34);
+}
+[data-theme="dark"] .remote-timeline {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+[data-theme="dark"] .remote-timeline::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+[data-theme="dark"] .remote-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 .remote-message {
   margin: 0 auto 22px;
@@ -1948,6 +2019,148 @@
   border-radius: 50%;
   background: var(--remote-terracotta);
   flex-shrink: 0;
+}
+
+.remote-msg-copy-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--remote-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.14s ease,
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.remote-message.assistant:hover .remote-msg-copy-btn,
+.remote-msg-copy-btn:focus-visible,
+.remote-msg-copy-btn.copied {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .remote-msg-copy-btn {
+    opacity: 0.72;
+  }
+}
+
+.remote-msg-copy-btn:hover {
+  background: var(--remote-hover);
+  color: var(--remote-ink);
+}
+
+.remote-msg-copy-btn.copied {
+  color: var(--remote-green);
+}
+
+/* Conversation loading skeleton */
+.remote-conversation-skeleton {
+  width: 100%;
+  max-width: var(--remote-measure, 760px);
+  margin: 12px auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 12px 4px;
+}
+
+.remote-conv-skel-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.remote-conv-skel-bubble {
+  width: min(260px, 62%);
+  height: 40px;
+  border-radius: 16px 16px 4px 16px;
+  background: linear-gradient(
+    90deg,
+    var(--remote-hover) 25%,
+    var(--remote-line) 50%,
+    var(--remote-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: remote-skel-shimmer 1.5s ease-in-out infinite;
+}
+
+.remote-conv-skel-assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.remote-conv-skel-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.remote-conv-skel-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--remote-terracotta);
+  opacity: 0.55;
+}
+
+.remote-conv-skel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.remote-conv-skel-bar {
+  height: 13px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--remote-hover) 25%,
+    var(--remote-line) 50%,
+    var(--remote-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: remote-skel-shimmer 1.5s ease-in-out infinite;
+}
+
+.remote-conv-skel-bar.w-20 {
+  width: 72px;
+  height: 10px;
+}
+.remote-conv-skel-bar.w-88 {
+  width: 88%;
+}
+.remote-conv-skel-bar.w-72 {
+  width: 72%;
+}
+.remote-conv-skel-bar.w-54 {
+  width: 54%;
+}
+
+.remote-conv-skel-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--remote-muted);
+}
+
+@keyframes remote-skel-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 @keyframes message-fade-up {
   0% {
@@ -2000,11 +2213,11 @@
 .remote-turn-live {
   max-width: var(--remote-measure);
   width: 100%;
-  margin: 0 auto 20px;
-  padding: 9px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--cds-border, var(--remote-line));
-  background: var(--cds-surface-1, var(--remote-surface));
+  margin: 2px auto 14px;
+  padding: 4px 2px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2056,21 +2269,6 @@
   border: 1px solid var(--cds-border, var(--remote-line));
   background: var(--cds-alpha-1, var(--remote-hover));
   flex-shrink: 0;
-}
-.remote-console .remote-turn-live-stop {
-  padding: 3px 10px !important;
-  min-height: 26px !important;
-  font-size: 12px !important;
-  font-weight: 550 !important;
-  border-radius: 999px !important;
-  border: 1px solid rgba(217, 83, 79, 0.3) !important;
-  background: rgba(217, 83, 79, 0.08) !important;
-  color: var(--remote-red) !important;
-  flex-shrink: 0;
-}
-.remote-console .remote-turn-live-stop:hover:not(:disabled) {
-  background: rgba(217, 83, 79, 0.16) !important;
-  border-color: rgba(217, 83, 79, 0.48) !important;
 }
 
 .remote-timeline-error {
@@ -2187,6 +2385,7 @@
   vertical-align: -0.18em;
   background-color: var(--remote-terracotta);
   border-radius: 1px;
+  box-shadow: 0 0 6px rgba(217, 119, 87, 0.45);
   animation: remote-blink 0.9s infinite ease-in-out;
 }
 @keyframes remote-blink {
@@ -2197,6 +2396,162 @@
   50% {
     opacity: 0;
   }
+}
+
+/* 乐观更新发送中微光脉冲与呼吸动效 */
+.remote-message.user.sending > .remote-message-body {
+  border-color: var(--remote-terracotta, #d97757) !important;
+  box-shadow:
+    0 0 0 1px rgba(217, 119, 87, 0.25),
+    0 2px 8px rgba(217, 119, 87, 0.12);
+  animation: remote-user-sending-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes remote-user-sending-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(217, 119, 87, 0.2),
+      0 2px 6px rgba(217, 119, 87, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(217, 119, 87, 0.45),
+      0 4px 14px rgba(217, 119, 87, 0.22);
+  }
+}
+
+.remote-sending-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--remote-terracotta, #d97757);
+  margin-top: 6px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+.remote-sending-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: currentColor;
+  animation: remote-blink 1s infinite ease-in-out;
+}
+
+/* Agent 思考接入 Shimmer 脉冲骨架 */
+.remote-agent-thinking-skeleton {
+  max-width: var(--remote-measure);
+  width: 100%;
+  margin: 0 auto 24px;
+  animation: remote-fade-in 0.25s ease-out;
+}
+
+.remote-skeleton-card {
+  background: var(--remote-surface);
+  border: 1px solid var(--remote-line);
+  border-radius: 12px;
+  padding: 14px 18px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.remote-skeleton-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: remote-shimmer-pulse 1.8s infinite;
+  pointer-events: none;
+}
+
+[data-theme="light"] .remote-skeleton-card::after,
+:root:not([data-theme="dark"]) .remote-skeleton-card::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(217, 119, 87, 0.08) 50%,
+    transparent 100%
+  );
+}
+
+@keyframes remote-shimmer-pulse {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.remote-skeleton-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.remote-skeleton-pulse-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.remote-skeleton-pulse-dot .pulse-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: var(--remote-terracotta, #d97757);
+  animation: timeline-quiet-dot 1.25s infinite ease-in-out;
+}
+
+.remote-skeleton-pulse-dot .pulse-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+.remote-skeleton-pulse-dot .pulse-dot:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.remote-skeleton-pulse-dot .pulse-dot:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+.remote-skeleton-label {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--remote-terracotta, #d97757);
+  letter-spacing: 0.01em;
+}
+
+.remote-skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.remote-skeleton-line {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--remote-line);
+  opacity: 0.55;
+}
+
+.remote-skeleton-line.short {
+  width: 42%;
+}
+.remote-skeleton-line.medium {
+  width: 78%;
+}
+.remote-skeleton-line.long {
+  width: 92%;
 }
 .remote-tool {
   border: 1px solid var(--cds-border, var(--remote-line));
@@ -3388,9 +3743,10 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 }
 .remote-composer-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 10px;
   padding-top: 2px;
 }
 .remote-composer-status {
@@ -3457,11 +3813,13 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-shrink: 0;
 }
 .remote-attach-menu-wrap {
   position: relative;
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
 }
 .remote-console .remote-attach-btn {
   display: inline-flex !important;
@@ -3607,12 +3965,128 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 .remote-permission-selector {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 .remote-composer-attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   padding-bottom: 4px;
+}
+
+/* Queued prompt bar above textarea during active turn */
+.remote-queued-prompt-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border-radius: 11px;
+  background: var(--remote-terracotta-soft, rgba(217, 119, 87, 0.1));
+  border: 1px solid rgba(217, 119, 87, 0.26);
+}
+
+.remote-queued-prompt-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.remote-queued-prompt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(217, 119, 87, 0.16);
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+  font-size: 11px;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+.remote-queued-prompt-text {
+  font-size: 12.5px;
+  color: var(--remote-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.remote-queued-prompt-att {
+  font-size: 11px;
+  color: var(--remote-muted);
+  flex-shrink: 0;
+}
+
+.remote-queued-prompt-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.remote-queued-prompt-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--remote-line);
+  background: var(--remote-surface);
+  color: var(--remote-secondary);
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.remote-queued-prompt-btn:hover {
+  background: var(--remote-hover);
+  color: var(--remote-ink);
+  border-color: var(--remote-line-strong);
+}
+
+.remote-queued-prompt-btn.primary {
+  background: var(--remote-terracotta);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.remote-queued-prompt-btn.primary:hover {
+  background: var(--remote-terracotta-hover);
+  color: #ffffff;
+}
+
+.remote-live-action-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.remote-queue-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(217, 119, 87, 0.38);
+  background: var(--remote-terracotta-soft, rgba(217, 119, 87, 0.12));
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.remote-queue-btn:hover:not(:disabled) {
+  background: var(--remote-terracotta);
+  border-color: transparent;
+  color: #ffffff;
 }
 .remote-attachment-chip {
   display: inline-flex;
@@ -3666,13 +4140,19 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 }
 .remote-composer-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 6px 8px;
+  min-width: 0;
+  margin-left: auto;
 }
 .remote-model-selector,
 .remote-effort-selector {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 .remote-effort-select {
   background: var(--remote-surface);
@@ -3735,6 +4215,14 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1) !important;
   box-shadow: 0 1px 3px rgba(217, 119, 87, 0.3) !important;
 }
+.remote-send-btn.remote-send-takeover {
+  width: auto !important;
+  padding: 0 12px !important;
+  gap: 6px;
+  border-radius: 19px !important;
+  white-space: nowrap;
+}
+
 .remote-send-btn:hover:not(:disabled) {
   transform: translateY(-1.5px) scale(1.04) !important;
   background: var(--cds-clay-hover, var(--remote-terracotta-hover)) !important;
@@ -3769,16 +4257,15 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   background: var(--remote-raised);
   color: var(--remote-ink);
   border: 1px solid var(--remote-line-strong);
-  border-radius: 14px;
-  padding: 26px;
-  width: min(520px, calc(100% - 32px));
-  max-height: 90dvh;
-  /* The dialog is taller than a short viewport, so the content has to
-     scroll — without this the submit button falls off the bottom. */
+  border-radius: 16px;
+  padding: 22px 24px 20px;
+  width: min(500px, calc(100% - 32px));
+  max-height: 92dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
   box-sizing: border-box;
-  animation: remote-dialog-enter 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+  box-shadow: var(--remote-modal-shadow);
+  animation: remote-dialog-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 .remote-launch[open] {
   animation: remote-dialog-enter 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -3850,11 +4337,11 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 .remote-launch label,
 .remote-launch-field {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   font-size: 13px;
   font-weight: 550;
   color: var(--cds-text-secondary, var(--remote-secondary));
-  margin-top: 16px;
+  margin-top: 12px;
 }
 .remote-launch-label {
   display: block;
@@ -3896,16 +4383,26 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   color: #f3f4f6;
 }
 .remote-launch-note {
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--cds-text-muted, var(--remote-muted));
-  margin: 18px 0 16px;
+  margin: 14px 0 14px;
 }
 .remote-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 8px;
+  margin-top: 6px;
+}
+.remote-modal-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  padding: 0 16px;
+  font-size: 13.5px;
+  font-weight: 550;
+  border-radius: var(--radius-lg, 10px);
 }
 .remote-modal-submit {
   display: inline-flex !important;
@@ -4048,18 +4545,18 @@ details[open] > .remote-tool-summary > .remote-disclosure {
      introduces, and the eye needs the break before it, not after. */
   margin: var(--md-space-4) 0 var(--md-space-1);
   font-weight: 650;
-  color: #f1f5f9;
+  color: var(--remote-ink);
   letter-spacing: -0.2px;
   line-height: 1.35;
 }
 .remote-md-content h1 {
   font-size: 18px;
-  border-bottom: 1px solid #2d3139;
+  border-bottom: 1px solid var(--remote-line);
   padding-bottom: 4px;
 }
 .remote-md-content h2 {
   font-size: 16.5px;
-  border-bottom: 1px solid #262930;
+  border-bottom: 1px solid var(--remote-line);
   padding-bottom: 3px;
 }
 .remote-md-content h3 {
@@ -4071,7 +4568,7 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 .remote-md-content h5,
 .remote-md-content h6 {
   font-size: 13.5px;
-  color: #cbd5e1;
+  color: var(--remote-secondary);
 }
 .remote-md-content ul,
 .remote-md-content ol {
@@ -4244,7 +4741,7 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 .remote-md-table-wrapper {
   overflow-x: auto;
   margin: var(--md-space-2) 0;
-  border: 1px solid #282b34;
+  border: 1px solid var(--remote-line);
   border-radius: 8px;
 }
 
@@ -4256,34 +4753,55 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 }
 
 .remote-md-table th {
-  background: #181a20;
+  background: var(--cds-surface-0, var(--remote-sidebar));
   padding: 8px 12px;
   font-weight: 600;
-  color: #f1f5f9;
-  border-bottom: 1px solid #262932;
+  color: var(--remote-ink);
+  border-bottom: 1px solid var(--remote-line-strong);
   white-space: nowrap;
 }
 
 .remote-md-table td {
   padding: 8px 12px;
-  border-bottom: 1px solid #1e2027;
-  color: #cbd5e1;
+  border-bottom: 1px solid var(--remote-line);
+  color: var(--remote-secondary);
 }
 
 .remote-md-table tr:last-child td {
   border-bottom: none;
 }
 
-/* 2% white over an already-dark row is invisible. The hover needs enough
-   lift to actually read as a hover. */
 .remote-md-table tr:hover td {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--remote-hover);
 }
 .remote-md-table tbody tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(17, 24, 39, 0.03);
+}
+[data-theme="dark"] .remote-md-table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.03);
 }
 .remote-md-table tbody tr:nth-child(even):hover td {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--remote-hover);
+}
+.remote-md-ext-img-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--remote-line-strong);
+  background: var(--cds-surface-1, var(--remote-surface));
+  color: var(--remote-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.remote-md-ext-img-btn:hover {
+  border-color: var(--cds-clay, var(--remote-terracotta));
+  color: var(--remote-ink);
+}
+.remote-md-ext-img-btn:focus-visible {
+  outline: 2px solid var(--remote-terracotta);
+  outline-offset: 2px;
 }
 
 /* ================= 移动端适配 (≤ 700px) ================= */
@@ -4291,10 +4809,12 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   .remote-console {
     display: flex;
     flex-direction: column;
-    height: 100dvh;
+    height: var(--vvh, 100dvh);
     overflow: hidden;
     position: relative;
-    padding-top: env(safe-area-inset-top);
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
 
   /* 隐藏桌面端的分栏拖拽条 */
@@ -4306,53 +4826,82 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   .remote-drawer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.68);
+    background: rgba(0, 0, 0, 0.52);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     z-index: 100;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity 0.24s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .remote-drawer-backdrop.open {
     opacity: 1;
     pointer-events: auto;
   }
 
-  /* 移动端侧滑抽屉 (GPU 合成层加速) */
+  /* 移动端侧滑抽屉 (100svh 防浏览器地址栏伸缩抖动，首次挂载零残影) */
   .remote-sidebar {
     position: fixed;
     top: 0;
     bottom: 0;
     left: 0;
-    width: 82vw !important;
-    max-width: 320px !important;
+    margin: 0 !important;
+    width: min(84vw, 330px) !important;
+    max-width: 330px !important;
     min-width: 0 !important;
-    height: 100% !important;
+    height: 100svh !important;
     max-height: none !important;
     z-index: 101;
-    background: var(--cds-surface-0, #f5f5f3) !important;
+    background: var(--cds-surface-0, var(--remote-sidebar)) !important;
     visibility: hidden;
     pointer-events: none;
     will-change: transform;
-    transform: translate3d(-100%, 0, 0);
-    transition:
-      transform 0.28s cubic-bezier(0.32, 0.72, 0, 1),
-      visibility 0.28s;
-    box-shadow: 6px 0 28px rgba(0, 0, 0, 0.45);
+    transform: translate3d(-105%, 0, 0) !important;
+    transition: none;
+    box-shadow: none !important;
     border-right: 1px solid var(--cds-border, var(--remote-line));
     border-bottom: none;
-    padding: max(16px, env(safe-area-inset-top)) 14px
-      max(16px, env(safe-area-inset-bottom));
+    padding: max(14px, env(safe-area-inset-top, 0px)) 14px
+      max(16px, env(safe-area-inset-bottom, 0px))
+      max(14px, env(safe-area-inset-left, 0px));
     display: flex;
     flex-direction: column;
     gap: 12px;
+    overscroll-behavior: contain;
+  }
+
+  .remote-sidebar[data-drawer-animated="true"] {
+    transition:
+      transform 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 0.26s;
   }
 
   .remote-sidebar.drawer-open {
     visibility: visible;
     pointer-events: auto;
-    transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0) !important;
+    box-shadow: 6px 0 28px rgba(0, 0, 0, 0.36) !important;
+    transition:
+      transform 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 0s;
+  }
+
+  .remote-composer-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 6px;
+  }
+
+  .remote-composer-actions {
+    margin-left: auto;
+    gap: 6px;
+  }
+
+  .remote-model-selector .cds-select-trigger,
+  .remote-permission-selector .cds-select-trigger,
+  .remote-effort-selector .cds-select-trigger {
+    max-width: 118px;
+    min-height: 36px !important;
   }
 
   .remote-sidebar-header {
@@ -4382,22 +4931,23 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 
   .remote-session-tree {
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
   }
 
   .remote-sidebar .remote-session {
     width: 100%;
     margin: 0;
-    padding: 8px 10px;
+    padding: 9px 10px;
   }
 
-  /* 恢复移动端底部的完整功能（电脑连接数、绑定电脑、退出账号） */
+  /* 恢复移动端底部的完整功能（随明暗主题自适应边框色） */
   .remote-sidebar-footer {
     display: flex !important;
     flex-direction: column;
     gap: 10px;
     margin-top: auto;
     padding-top: 12px;
-    border-top: 1px solid #282a30;
+    border-top: 1px solid var(--cds-border, var(--remote-line));
   }
 
   .remote-main {
@@ -4405,20 +4955,44 @@ details[open] > .remote-tool-summary > .remote-disclosure {
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-width: 0;
     overflow: hidden;
   }
 
   .remote-main > header {
-    padding: 10px 14px;
-    gap: 10px;
-    border-bottom: 1px solid #282a30;
+    padding: 8px 12px;
+    gap: 8px;
+    border-bottom: 1px solid var(--cds-border, var(--remote-line));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* 手机端收敛五级面包屑，仅保留紧凑根入口与当前工作区，避免顶栏叠成三行 */
+  .remote-main-breadcrumb {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    margin-bottom: 2px;
+    gap: 2px;
+  }
+  .remote-main-breadcrumb-item:not(:last-child) {
+    display: none;
+  }
+  .remote-main-breadcrumb-crumb {
+    max-width: 140px;
   }
 
   .remote-header-left {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-width: 0;
+    flex: 1;
+  }
+
+  .remote-header-left > div {
+    min-width: 0;
+    flex: 1;
   }
 
   .remote-header-left h1 {
@@ -4429,24 +5003,133 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   }
 
   .remote-header-left p {
-    font-size: 11px;
+    font-size: 11.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .remote-icon-btn.mobile-menu-btn {
-    display: flex;
+  .remote-icon-btn.mobile-menu-btn,
+  .remote-icon-btn.mobile-new-btn {
+    position: relative;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 44px;
-    height: 44px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #e5e7eb;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 10px;
+    background: var(--remote-surface);
+    border: 1px solid var(--remote-line);
+    color: var(--remote-ink);
     cursor: pointer;
     flex-shrink: 0;
+    padding: 0;
+  }
+
+  .remote-header-copy-id span {
+    display: none;
+  }
+  .remote-header-copy-id.copied span {
+    display: inline;
+  }
+
+  /* 移动端新建会话与二次确认弹窗升级为底部抽屉 (Bottom Sheet) */
+  .remote-modal-backdrop,
+  .cds-confirm-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .remote-launch {
+    width: 100%;
+    max-width: 100%;
+    max-height: min(90dvh, calc(var(--vvh, 100dvh) - 16px));
+    background: var(--remote-raised, #ffffff) !important;
+    border-radius: 20px 20px 0 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    padding: 18px 18px max(20px, env(safe-area-inset-bottom, 0px));
+    animation: cdsSheetSlideUp 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+
+  .remote-launch .remote-modal-close {
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+  }
+
+  .remote-launch .cds-select-block {
+    height: 44px !important;
+    min-height: 44px !important;
+  }
+
+  .remote-modal-actions {
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .remote-modal-cancel,
+  .remote-modal-submit {
+    flex: 1;
+    height: 44px !important;
+    min-height: 44px !important;
+    font-size: 14.5px !important;
+  }
+
+  .cds-confirm {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 20px 20px 0 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    padding: 20px 18px max(20px, env(safe-area-inset-bottom, 0px));
+    animation: cdsSheetSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .cds-confirm-actions {
+    gap: 10px;
+  }
+
+  .cds-confirm-btn {
+    flex: 1;
+    height: 44px;
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  /* 修复上下文容量浮层在手机端左溢出的问题 */
+  .remote-context-popover {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    width: auto !important;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important;
+    z-index: 120 !important;
+  }
+
+  .remote-attach-popover {
+    width: min(244px, calc(100vw - 32px));
+  }
+
+  .remote-attach-menu-kbd {
+    display: none;
+  }
+
+  .remote-queued-prompt-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .remote-queued-prompt-btn {
+    min-height: 34px;
+    padding: 0 11px;
+    font-size: 12px;
   }
 
   .remote-welcome {
@@ -4548,7 +5231,10 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 
   .remote-question-input,
   .remote-launch select,
-  .remote-launch input {
+  .remote-launch input,
+  .remote-search-input,
+  .cds-select-filter-input,
+  input[type="search"] {
     font-size: 16px !important;
   }
 
@@ -4725,10 +5411,11 @@ details[open] > .remote-tool-summary > .remote-disclosure {
 
 .cds-select-menu {
   position: fixed;
-  z-index: 400;
+  z-index: 1200;
   max-height: 320px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 5px;
   background: var(--cds-surface-popover, #ffffff);
   border: 1px solid var(--cds-border, var(--remote-line));
@@ -4738,6 +5425,356 @@ details[open] > .remote-tool-summary > .remote-disclosure {
     0 3px 8px rgba(0, 0, 0, 0.06);
   animation: cdsSelectMenuIn 0.14s cubic-bezier(0.16, 1, 0.3, 1);
   box-sizing: border-box;
+}
+
+.cds-select-options-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cds-select-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: rgba(0, 0, 0, 0.44);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: remote-backdrop-enter 0.18s ease-out both;
+}
+
+.cds-select-menu.mobile-sheet {
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  top: auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  border-radius: 20px 20px 0 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  padding: 8px 12px max(16px, env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.24);
+  animation: cdsSheetSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.cds-select-menu.mobile-sheet .cds-select-option {
+  min-height: 44px !important;
+  padding: 10px 12px !important;
+  font-size: 14.5px !important;
+  border-radius: 10px !important;
+}
+
+.cds-select-sheet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 4px 10px;
+  border-bottom: 1px solid var(--cds-border, var(--remote-line));
+  margin-bottom: 6px;
+  flex-shrink: 0;
+}
+
+.cds-select-sheet-pill {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--cds-border-strong, var(--remote-line-strong));
+  margin: 0 auto 2px;
+  opacity: 0.65;
+}
+
+.cds-select-sheet-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cds-select-sheet-title {
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--cds-text-primary, var(--remote-ink));
+}
+
+.cds-select-sheet-close {
+  border: 0;
+  background: transparent;
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+  font-size: 14px;
+  font-weight: 600;
+  padding: 6px 8px;
+  min-height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.cds-select-filter-wrap {
+  padding: 2px 4px 8px;
+  flex-shrink: 0;
+}
+
+.cds-select-filter-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid var(--cds-border, var(--remote-line));
+  background: var(--cds-surface-1, var(--remote-bg));
+  color: var(--cds-text-primary, var(--remote-ink));
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.cds-select-filter-input:focus {
+  border-color: var(--cds-clay, #d97757);
+  box-shadow: 0 0 0 2px var(--cds-clay-soft, rgba(217, 119, 87, 0.18));
+}
+.cds-select-filter-input:focus-visible,
+.remote-popover-item:focus-visible,
+.cds-select-option:focus-visible,
+.cds-select-trigger:focus-visible {
+  outline: 2px solid var(--remote-terracotta);
+  outline-offset: 2px;
+}
+
+.cds-select-empty {
+  padding: 18px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+
+@keyframes cdsSheetSlideUp {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Header right-side actions & mobile cross-device attention strip */
+.remote-main-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.remote-header-copy-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--remote-line);
+  background: var(--remote-surface);
+  color: var(--remote-secondary);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.remote-header-copy-id:hover {
+  background: var(--remote-hover);
+  color: var(--remote-ink);
+  border-color: var(--remote-line-strong);
+}
+
+.remote-header-copy-id.copied {
+  color: var(--remote-green);
+  border-color: color-mix(in srgb, var(--remote-green) 40%, transparent);
+  background: color-mix(in srgb, var(--remote-green) 10%, transparent);
+}
+
+.remote-mobile-menu-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--remote-terracotta);
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--remote-bg);
+}
+
+.remote-mobile-attention-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--remote-terracotta-soft);
+  border-bottom: 1px solid rgba(217, 119, 87, 0.24);
+  flex-shrink: 0;
+}
+
+.remote-mobile-attention-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--remote-terracotta);
+  flex-shrink: 0;
+}
+
+.remote-mobile-attention-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--remote-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remote-mobile-attention-btn {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 87, 0.35);
+  background: var(--remote-surface);
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 粗指针触控设备热区优化 (WCAG 2.5.5 44x44 触控目标) */
+@media (pointer: coarse) {
+  .remote-workspace-quick-add,
+  .remote-session-action-btn,
+  .remote-header-icon-btn,
+  .remote-attachment-remove,
+  .remote-context-button {
+    position: relative;
+  }
+
+  .remote-workspace-quick-add::after,
+  .remote-session-action-btn::after,
+  .remote-header-icon-btn::after,
+  .remote-attachment-remove::after,
+  .remote-context-button::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+  }
+
+  .remote-console .remote-workspace-quick-add,
+  .remote-workspace-quick-add {
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    max-width: 30px !important;
+    min-height: 30px !important;
+    max-height: 30px !important;
+    opacity: 0.85;
+  }
+
+  .remote-console .remote-attach-menu-item {
+    min-height: 44px !important;
+    font-size: 14px !important;
+  }
+
+  .remote-console .remote-attach-subitem {
+    min-height: 40px !important;
+    font-size: 13.5px !important;
+  }
+
+  .remote-selector-btn {
+    min-height: 42px;
+  }
+
+  .remote-popover-item {
+    min-height: 44px;
+  }
+}
+
+/* 平板竖屏与紧凑分栏适配 (701px ~ 1024px，如 iPad 768x1024 / 桌面半屏分栏) */
+@media (min-width: 701px) and (max-width: 1024px) {
+  .remote-sidebar:not(.collapsed) {
+    width: clamp(236px, 31vw, 280px) !important;
+    min-width: clamp(236px, 31vw, 280px) !important;
+    max-width: clamp(236px, 31vw, 280px) !important;
+  }
+
+  .remote-main > header {
+    padding: 8px 16px;
+  }
+
+  .remote-timeline {
+    padding: 20px 20px 16px;
+  }
+
+  .remote-notice,
+  .remote-composer-card {
+    width: min(var(--remote-measure), calc(100% - 32px));
+  }
+
+  .remote-composer-card {
+    padding: 10px 14px 9px 16px;
+  }
+
+  .remote-model-selector .cds-select-trigger,
+  .remote-permission-selector .cds-select-trigger,
+  .remote-effort-selector .cds-select-trigger {
+    max-width: 152px;
+  }
+}
+
+/* 超窄屏小手机适配 (320px ~ 380px，如 iPhone SE) */
+@media (max-width: 380px) {
+  .remote-composer-card {
+    width: calc(100% - 12px) !important;
+    padding: 8px 10px !important;
+  }
+
+  .remote-model-selector .cds-select-trigger,
+  .remote-permission-selector .cds-select-trigger,
+  .remote-effort-selector .cds-select-trigger {
+    max-width: 102px;
+    padding: 0 7px !important;
+    font-size: 11.5px !important;
+  }
+
+  .remote-welcome {
+    padding: 18px 12px;
+  }
+
+  .remote-welcome-chips {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 手机横屏紧凑适配 (≤ 500px 高度) */
+@media (max-height: 500px) and (orientation: landscape) {
+  .remote-main > header {
+    padding: 6px 12px;
+  }
+
+  .remote-composer-card {
+    margin: 6px auto max(6px, env(safe-area-inset-bottom, 0px)) !important;
+    padding: 6px 10px !important;
+  }
+
+  .remote-launch {
+    max-height: 94dvh;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom, 0px));
+  }
 }
 
 @keyframes cdsSelectMenuIn {
@@ -5012,5 +6049,457 @@ details[open] > .remote-tool-summary > .remote-disclosure {
   .cds-confirm-backdrop,
   .cds-confirm {
     animation: none;
+  }
+}
+
+/* ================= 跨机 "要你处理" 置顶条 =================
+ *
+ * Sits above the device selector, independent of it. The sidebar below stays
+ * a drill-down; this strip is the only part of the console that answers
+ * "is anything waiting on me, anywhere" without a click.
+ *
+ * Visual language is borrowed from the tree it sits above rather than invented
+ * next to it:
+ *   - title 13.5px / 550  == `.remote-session-title`
+ *   - row radius 10px     == `.remote-session` / `.remote-device-header`
+ *   - hairline borders    == `--cds-border`
+ *   - hover lift + press rebound == the sidebar's own 0.14s easing
+ *
+ * The accent colour appears on the count chip and the state dot only. An
+ * accent-coloured frame around the whole block read as an error banner, which
+ * is the wrong signal for "two sessions are waiting on you".
+ *
+ * Every control here is 32px+ tall inside a 40px+ row. The sidebar is dense by
+ * nature, so the strip matches its density rather than the 40px form-control
+ * baseline — but it never goes below the sidebar's own smallest target.
+ */
+.remote-attention {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 11px 11px 9px;
+  border: 1px solid var(--cds-border, var(--remote-line));
+  /* 16px，不是 `--radius-xl`。令牌里的 xl 是 20px，套在一个内部行只有 10px
+   * 圆角的容器上，内外差了两档，边角看着会"外圆内方"。16px 正好卡在
+   * 大卡片（16）与行（10）之间，视觉上是从外向里递减的。 */
+  border-radius: 16px;
+  background: var(--cds-surface-1, var(--remote-surface));
+  box-shadow: var(--cds-shadow-sm);
+}
+
+.remote-attention-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px;
+}
+
+/* 这是 "区块标签"，不是和行标题抢层级的标题。
+ *
+ * 原先写 13px/600：比行标题的 13.5px 还小半号，字重却更重，读起来既不像
+ * 标题也不像标签，是最难看的中间态。往下压到 11.5px 加字距，它就明确变成
+ * 一枚安静的分区标签，层级由 "大小 + 字距 + 灰度" 表达，而不是靠加粗。 */
+.remote-attention-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+
+/* 计数不再是胶囊。
+ *
+ * 陶土底 + 陶土字的圆角小方块，在侧栏里就是一枚聊天软件式未读红点 ——
+ * 整个控制台别处没有这种形状，它是这一块自己发明的。改成纯数字排印：
+ * 等宽数字、陶土文字色、紧贴标签，靠颜色而不是靠形状提示"有事"。
+ * 11.5px 的小字拿 --cds-clay-ink（不是 --cds-clay），5.0:1 才立得住。 */
+/* 计数和标签之间要有分隔。7px 的距离加上两者都是无衬线小字，"要你处理 6"
+ * 读起来会黏成"要你处理6"。一枚中点既断开语义，又比加括号或改写成"6 条"
+ * 更省宽度 —— 侧栏只有 300px。 */
+.remote-attention-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+}
+
+.remote-attention-count::before {
+  content: "·";
+  font-weight: 400;
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+
+.remote-attention-toggle,
+.remote-attention-more {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 8px !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--radius-sm, 6px) !important;
+  background: transparent !important;
+  color: var(--cds-text-muted, var(--remote-muted)) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease,
+    border-color 0.14s ease;
+}
+
+.remote-attention-toggle:hover,
+.remote-attention-more:hover {
+  background: var(--cds-alpha-1, var(--remote-hover)) !important;
+  color: var(--cds-text-primary, var(--remote-ink)) !important;
+}
+
+.remote-attention-more {
+  align-self: stretch;
+  margin-left: 0;
+  margin-top: 1px;
+  border-color: var(--cds-border, var(--remote-line)) !important;
+  color: var(--cds-text-secondary, var(--remote-secondary)) !important;
+}
+
+.remote-attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Expanded, the list can hold every waiting session on the fleet. Without a
+   * ceiling it grows until the drill-down below is pushed off screen - the
+   * strip would then hide the very sidebar it was added to. `min-height: 0`
+   * is what lets a flex child shrink and scroll instead of overflowing. */
+  max-height: 46vh;
+  /* Both axes are pinned deliberately: `overflow-y: auto` alone computes
+   * `overflow-x` to `auto` as well, so a child a pixel too wide sprouts a
+   * horizontal scrollbar across the whole strip. The strip never scrolls
+   * sideways - long commands truncate instead. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  min-height: 0;
+  /* 展开到十几条时会出现滚动条。Chromium 的原生滚动条在 300px 的窄栏里要占
+   * 掉 8px 并且画成一条高对比的灰槽，比整块卡片任何一条边都显眼。这里对齐
+   * 时间线自己的做法（thin + 5px + 半透明拇指），并留出稳定槽位，避免
+   * 内容在"有没有滚动条"两种状态之间左右跳 8px。 */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--cds-border-strong, var(--remote-line-strong))
+    transparent;
+}
+
+.remote-attention-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.remote-attention-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.remote-attention-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--cds-border-strong, var(--remote-line-strong));
+}
+
+.remote-attention-list::-webkit-scrollbar-thumb:hover {
+  background: var(--cds-text-muted, var(--remote-muted));
+}
+
+.remote-attention-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 3px 0;
+  border-radius: var(--radius-lg, 10px);
+  /* Rows must keep their own height when the list is clipped. Without this
+   * the flex column shrinks every item to fit the ceiling instead of letting
+   * the list scroll, and the strip turns twelve rows into twelve stripes. */
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    transform 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.remote-attention-item:hover {
+  background: var(--cds-alpha-1, var(--remote-hover));
+  border-color: var(--cds-border, var(--remote-line));
+  /* The sidebar's own lift, so the strip moves like the rows beneath it. */
+  transform: translateY(-0.5px);
+}
+
+.remote-attention-item:active {
+  transform: scale(0.995);
+}
+
+/* The row is a button reset — the console's global button rule would
+ * otherwise draw a second border inside the item's own. */
+.remote-attention-item .remote-attention-row {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 8px !important;
+  border: none !important;
+  border-radius: var(--radius-lg, 10px) !important;
+  background: transparent !important;
+  text-align: left;
+  cursor: pointer;
+}
+
+.remote-attention-item .remote-attention-row:hover {
+  background: transparent !important;
+}
+
+.remote-attention-item .remote-attention-row:focus-visible {
+  outline: 2px solid var(--cds-clay, #d97757);
+  outline-offset: -2px;
+}
+
+.remote-attention-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cds-text-muted, var(--remote-muted));
+  /* The same soft halo the console uses for live dots: colour without a
+   * saturated fill that would fight the title next to it. */
+  box-shadow: 0 0 0 2.5px var(--cds-alpha-1, var(--remote-hover));
+}
+
+.remote-attention-dot[data-state="awaiting_permission"] {
+  background: var(--cds-clay, var(--remote-terracotta));
+  box-shadow: 0 0 0 2.5px var(--cds-clay-soft, var(--remote-terracotta-soft));
+}
+
+/* 琥珀色在浅色底上偏亮（#fbbf24 对 #fcfcfb 只有 1.6:1），白点本体看不清；
+ * 靠一圈更实的描边把它从底面上拎出来，深色模式沿用原样即可。 */
+.remote-attention-dot[data-state="awaiting_input"] {
+  background: var(--remote-amber);
+  box-shadow:
+    0 0 0 1px rgba(180, 83, 9, 0.55),
+    0 0 0 2.5px rgba(217, 119, 6, 0.14);
+}
+
+:root[data-theme="dark"] .remote-attention-dot[data-state="awaiting_input"] {
+  box-shadow: 0 0 0 2.5px rgba(217, 119, 6, 0.14);
+}
+
+.remote-attention-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.remote-attention-session {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--cds-text-secondary, var(--remote-secondary));
+  transition: color 0.12s ease;
+}
+
+.remote-attention-item:hover .remote-attention-session {
+  color: var(--cds-text-primary, var(--remote-ink));
+}
+
+.remote-attention-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--cds-text-muted, var(--remote-muted));
+}
+
+.remote-attention-state {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--cds-text-muted, var(--remote-muted));
+  white-space: nowrap;
+}
+
+.remote-attention-state[data-state="awaiting_permission"] {
+  color: var(--cds-clay-ink, var(--remote-terracotta));
+}
+
+/* Inline approval rows: the command on the left, the two decisions on the
+ * right. The command truncates rather than wraps so a long path cannot push
+ * the buttons off the strip. */
+.remote-attention-approvals {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 8px 8px 23px;
+}
+
+/* Two lines, not one. In a 300px rail an inline command plus two decisions
+ * left the command 165px of the 290px it needed, so every approval read as
+ * "Bash · cargo test --". Stacking gives the command the full width and puts
+ * the decisions underneath it, right-aligned where the eye goes next. */
+.remote-attention-approval {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 左竖线 + 等宽字，而不是一条铺满宽度的实心代码条。
+ *
+ * 实心底色把每一行审批变成一块米色砖：两条审批就是两块，压在深色侧栏里
+ * 比会话标题还显眼，重心整个塌到下面。换成 2px 竖线之后，它读起来是
+ * "这段命令从属于上面那条会话"，视觉重量降下来，命令本身反而更清楚 ——
+ * 因为不再需要和底色抢对比度，可以用 secondary 色（10:1）而不是主文字色。 */
+.remote-attention-approval-text {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 0 1px 8px;
+  border-left: 2px solid var(--cds-border-strong, var(--remote-line-strong));
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--cds-text-secondary, var(--remote-secondary));
+}
+
+.remote-attention-approval-actions {
+  display: inline-flex;
+  align-self: flex-end;
+  gap: 4px;
+}
+
+/* Both decisions are outlined at rest. A filled clay button next to a 12px
+ * monospace command drew more attention than the thing being approved — the
+ * strip has to read "here is what it wants to run", then "approve or not".
+ * Hover is what fills them in. 26px is the sidebar's own compact scale: the
+ * timeline's 38px buttons belong to a full-width column, not a 300px rail. */
+.remote-attention-approve,
+.remote-attention-decline {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  /* 32px，不是注释里原先自称的"32px+"、实际却是 26px。
+   * 26px 在触控板上已经要瞄准，在手机上直接是误触制造机；侧栏的行高是
+   * 40px，32px 的按钮放进去仍然留得住呼吸，同时踩到可点区域的下限。 */
+  min-height: 32px;
+  padding: 0 12px !important;
+  border-radius: 8px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  cursor: pointer;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.remote-attention-approve {
+  border: 1px solid rgba(217, 119, 87, 0.45) !important;
+  background: transparent !important;
+  color: var(--cds-clay-ink, var(--remote-terracotta-hover)) !important;
+}
+
+/* 悬停时填成深陶土而不是品牌陶土：#d97757 配白字只有 3.1:1，hover 一压上去
+ * 反而比静止态更难读。深一档的底色配白字是 5.8:1，且仍是同一个色相。 */
+.remote-attention-approve:hover:not(:disabled) {
+  border-color: transparent !important;
+  background: var(--cds-clay-ink, var(--remote-terracotta)) !important;
+  color: #ffffff !important;
+  transform: translateY(-0.5px);
+}
+
+/* 暗色模式反过来：`--cds-clay-ink` 在暗底是"提亮"档（#e08264），拿它当填充色
+ * 配白字只剩 2.8:1，比静止态更糊。深色界面里按钮本来就该是"发光"而不是"压暗"，
+ * 所以这里填一层半透明陶土、文字继续用提亮的陶土色：合成底 rgb(64,43,36) 上
+ * 5.5:1，既亮又不刺眼。 */
+:root[data-theme="dark"] .remote-attention-approve:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--cds-clay) 22%, transparent) !important;
+  color: var(--cds-clay-ink, var(--remote-terracotta-hover)) !important;
+}
+
+.remote-attention-approve:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Decline keeps the red the timeline's own decline button uses, so "no" reads
+ * the same in both places instead of turning into a neutral grey here.
+ * `--remote-red` is the theme-aware pair (#dc2626 light / #f87171 dark); the
+ * literal colour it replaced measured 3.8:1 on the dark surface, under AA. */
+.remote-attention-decline {
+  border: 1px solid color-mix(in srgb, var(--remote-red) 35%, transparent) !important;
+  background: transparent !important;
+  color: var(--remote-red) !important;
+}
+
+/* 悬停加深的是 "字"，不是 "底"。
+ *
+ * 一开始按常规思路把红底加浓，结果越加越糊：红字压在红底上，两者同色相，
+ * 底一深字就跟着沉下去（10% 洗 → 3.8:1，18% 洗 → 3.1:1）。同色相的底和字
+ * 之间拉不开亮度差，这是加多少浓度都救不回来的。
+ *
+ * 反过来才对：底只做极轻的一层提亮（8%），把文字颜色本身压深一档。
+ * 浅色模式 6.4:1，深色模式仍走 --remote-red 的 #f87171（6.8:1）。
+ * 状态变化靠明度表达，而不是靠饱和度堆叠。 */
+.remote-attention-decline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--remote-red) 8%, transparent) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--remote-red) 55%,
+    transparent
+  ) !important;
+  color: color-mix(in srgb, var(--remote-red) 82%, black) !important;
+  transform: translateY(-0.5px);
+}
+
+:root[data-theme="dark"] .remote-attention-decline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--remote-red) 12%, transparent) !important;
+  color: var(--remote-red) !important;
+}
+
+.remote-attention-decline:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.remote-attention-approve:disabled,
+.remote-attention-decline:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .remote-attention-item,
+  .remote-attention-item:hover,
+  .remote-attention-item:active,
+  .remote-attention-approve,
+  .remote-attention-approve:hover:not(:disabled),
+  .remote-attention-approve:active:not(:disabled),
+  .remote-attention-decline,
+  .remote-attention-decline:active:not(:disabled) {
+    transform: none;
+    transition: none;
   }
 }

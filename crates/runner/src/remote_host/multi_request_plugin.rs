@@ -1,0 +1,237 @@
+use super::*;
+
+impl MultiProviderTransport {
+    pub(crate) fn handle_plugin_request(
+        &mut self,
+        plugin_id_hint: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, NativeError> {
+        let session_id_param = params
+            .get("threadId")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        let rec = if !plugin_id_hint.trim().is_empty() {
+            crate::plugins::get_enabled_plugin(plugin_id_hint)
+        } else if !session_id_param.is_empty() {
+            crate::plugins::find_enabled_plugin_for_session(session_id_param)
+        } else {
+            None
+        }
+        .ok_or_else(|| NativeError::rejected("plugin_disabled"))?;
+
+        let prefix = rec.manifest.effective_session_prefix();
+
+        match method {
+            "thread/start" => {
+                if !rec.manifest.capabilities.launch {
+                    return Err(NativeError::rejected("plugin_launch_unsupported"));
+                }
+                let cwd_str = params["cwd"].as_str().unwrap_or(".");
+                let cwd_path = PathBuf::from(cwd_str);
+                let model = params
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let permission_mode = params
+                    .get("permissionMode")
+                    .or_else(|| params.get("approvalPolicy"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+
+                let (_, mut server) = crate::plugins::global_manager()
+                    .spawn_acp_server(&rec.id, Duration::from_secs(20))
+                    .map_err(|err| NativeError::rejected(format!("plugin_start_failed:{err}")))?;
+
+                let raw_id = server
+                    .session_new_with_options(&cwd_path, model, permission_mode)
+                    .map_err(|err| {
+                        NativeError::uncertain(format!("plugin_session_new_failed:{err}"))
+                    })?;
+
+                let session_id = if raw_id.starts_with(&prefix) {
+                    raw_id
+                } else {
+                    format!("{prefix}{raw_id}")
+                };
+                self.acp_cached_cwds.insert(session_id.clone(), cwd_path);
+                self.acp_session_plugins
+                    .insert(session_id.clone(), rec.id.clone());
+                self.acp_servers.insert(session_id.clone(), server);
+
+                Ok(json!({
+                    "thread": {
+                        "id": session_id,
+                        "cwd": cwd_str,
+                        "provider": rec.id,
+                        "agent_name": rec.id,
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "thread/read" => {
+                let cwd = self.resolve_plugin_cwd(session_id_param, &params);
+                self.acp_cached_cwds
+                    .insert(session_id_param.to_string(), cwd.clone());
+                Ok(json!({
+                    "thread": {
+                        "id": session_id_param,
+                        "cwd": cwd.to_string_lossy(),
+                        "provider": rec.id,
+                        "agent_name": rec.id,
+                        "status": { "type": "idle" },
+                        "name": session_id_param
+                    }
+                }))
+            }
+            "thread/resume" => {
+                let cwd = self.resolve_plugin_cwd(session_id_param, &params);
+                self.acp_cached_cwds
+                    .insert(session_id_param.to_string(), cwd.clone());
+                let raw_id = session_id_param
+                    .strip_prefix(&prefix)
+                    .unwrap_or(session_id_param);
+                if !self.acp_servers.contains_key(session_id_param) {
+                    let (_, mut server) = crate::plugins::global_manager()
+                        .spawn_acp_server(&rec.id, Duration::from_secs(20))
+                        .map_err(|err| {
+                            NativeError::rejected(format!("plugin_start_failed:{err}"))
+                        })?;
+                    let cwd_opt = (!cwd.as_os_str().is_empty() && cwd != Path::new("."))
+                        .then_some(cwd.as_path());
+                    server
+                        .session_load_with_cwd(raw_id, cwd_opt)
+                        .map_err(|err| {
+                            NativeError::uncertain(format!("plugin_resume_failed:{err}"))
+                        })?;
+                    self.acp_session_plugins
+                        .insert(session_id_param.to_string(), rec.id.clone());
+                    self.acp_servers
+                        .insert(session_id_param.to_string(), server);
+                }
+                Ok(json!({
+                    "thread": {
+                        "id": session_id_param,
+                        "cwd": cwd.to_string_lossy(),
+                        "provider": rec.id,
+                        "agent_name": rec.id,
+                        "status": { "type": "idle" }
+                    }
+                }))
+            }
+            "turn/start" => {
+                let cwd = self.resolve_plugin_cwd(session_id_param, &params);
+                let raw_id = session_id_param
+                    .strip_prefix(&prefix)
+                    .unwrap_or(session_id_param);
+                if !self.acp_servers.contains_key(session_id_param) {
+                    let (_, mut server) = crate::plugins::global_manager()
+                        .spawn_acp_server(&rec.id, Duration::from_secs(20))
+                        .map_err(|err| {
+                            NativeError::rejected(format!("plugin_start_failed:{err}"))
+                        })?;
+                    let cwd_opt = (!cwd.as_os_str().is_empty() && cwd != Path::new("."))
+                        .then_some(cwd.as_path());
+                    server
+                        .session_load_with_cwd(raw_id, cwd_opt)
+                        .map_err(|err| {
+                            NativeError::uncertain(format!("plugin_resume_failed:{err}"))
+                        })?;
+                    self.acp_session_plugins
+                        .insert(session_id_param.to_string(), rec.id.clone());
+                    self.acp_servers
+                        .insert(session_id_param.to_string(), server);
+                }
+                let text = params["input"]
+                    .as_array()
+                    .and_then(|arr| arr.iter().find_map(|item| item["text"].as_str()))
+                    .unwrap_or("");
+                let model = params
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let permission_mode = params
+                    .get("permissionMode")
+                    .or_else(|| params.get("approvalPolicy"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
+                self.acp_active_turns
+                    .insert(session_id_param.to_string(), turn_id.clone());
+
+                let server = self
+                    .acp_servers
+                    .get_mut(session_id_param)
+                    .ok_or_else(|| NativeError::rejected("plugin_session_not_found"))?;
+
+                server
+                    .send_tracked_prompt_with_options(
+                        raw_id,
+                        text,
+                        &turn_id,
+                        model,
+                        permission_mode,
+                    )
+                    .map_err(|err| NativeError::uncertain(format!("plugin_send_failed:{err}")))?;
+
+                self.acp_buffered_events.push_back(json!({
+                    "method": "turn/started",
+                    "params": {
+                        "threadId": session_id_param,
+                        "turn": {
+                            "id": turn_id.clone(),
+                            "status": { "type": "inProgress" }
+                        }
+                    }
+                }));
+
+                Ok(json!({
+                    "turn": {
+                        "id": turn_id,
+                        "status": { "type": "inProgress" }
+                    }
+                }))
+            }
+            "turn/interrupt" => {
+                let raw_id = session_id_param
+                    .strip_prefix(&prefix)
+                    .unwrap_or(session_id_param);
+                if let Some(server) = self.acp_servers.get_mut(session_id_param) {
+                    let _ = server.session_cancel(raw_id);
+                }
+                self.acp_active_turns.remove(session_id_param);
+                Ok(json!({ "ok": true }))
+            }
+            "thread/archive" | "thread/unarchive" => Ok(json!({ "ok": true })),
+            _ => Err(NativeError::rejected(format!(
+                "unsupported_plugin_method:{method}"
+            ))),
+        }
+    }
+
+    fn resolve_plugin_cwd(&self, session_id: &str, params: &Value) -> PathBuf {
+        if let Some(cached) = self
+            .acp_cached_cwds
+            .get(session_id)
+            .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("."))
+        {
+            return cached.clone();
+        }
+        if let Some(param_cwd) = params
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != ".")
+        {
+            let p = PathBuf::from(param_cwd);
+            return dunce::canonicalize(&p).unwrap_or(p);
+        }
+        PathBuf::from(".")
+    }
+}

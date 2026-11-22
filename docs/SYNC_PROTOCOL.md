@@ -1,46 +1,30 @@
 # AgentHub Remote 与本地 IPC 协议
 
-更新：2026-10-19。本文定义 `agenthubd ↔ 本地客户端`（IPC v2）与 `agenthubd ↔ Gateway ↔ Web/Android`（Remote v3）的可靠性合同。
+本文定义 `agenthubd <-> 本地客户端`（IPC v2）与 `agenthubd <-> Gateway <-> Web/Android`（Remote v3）的通信契约。
 
 ## 1. 本地 IPC v2
+- **传输帧**：4 字节小端长度前缀 JSON（单帧上限 `1 MiB`）；Windows 使用当前用户 ACL + `PIPE_REJECT_REMOTE_CLIENTS` 命名管道，Unix 使用 `0600` Domain Socket。
+- **游标订阅**：必带 `protocol_version` 与 `request_id`；先读 `snapshot + cursor`（含 `pending_approvals`）再按游标订阅增量，越界返回 `snapshot_required`。本地命令复用同一 `RemoteJournal` 幂等账本，收据不伪造为远端收据。
 
-- **帧格式**：4-byte little-endian 长度前缀 JSON frame，单帧上限 1 MiB；Windows 使用当前用户 ACL 且 `PIPE_REJECT_REMOTE_CLIENTS` 的 Named Pipe，Unix 使用 `0600` Domain Socket；
-- **握手与订阅**：请求/响应必带 `protocol_version` 与 `request_id`。客户端先读 `snapshot + cursor`（含 live `pending_approvals`），再按 cursor 订阅增量；cursor 越界显式返回 `snapshot_required`；
-- **命令对齐**：本地命令复用 `RemoteCommand`、`client_cmd_id` 与 `host_generation` 写入同一 durable ledger；本地命令收据只写本机日志，不伪造为 Gateway 收据。
+## 2. 设备身份、代际隔离与结构化发现刷新
+- **认证与 Fencing**：daemon 持 Ed25519 私钥建立出站 WSS；Gateway 仅从认证上下文解析 `workspace_owner_id`。新连接替换旧 socket 时做 `connection_epoch` / `host_generation` 隔离，旧 close 回调绝不误删新连接；`AGENTHUB_RUNNER_OFFLINE_GRACE_MS`（生产默认 `6000ms`）吸收瞬时闪断。
+- **设备名与发现节流**：`ready.device_name` 限 `1..64` 非空字符（可通过 `agenthub-runner device name` 持久化至 `device.json`）。`evaluate_ready_publish` 对 `discovery.candidates` 做结构与状态指纹比对，纯 token/时间戳跳变引发的全量 `ready` 发布被节流至 `120s` 冷却，无 `hub_session_id` 的本地杂音通知在宿主轮询层直接过滤。
 
-## 2. 身份、连接与代际隔离 (Generation Fencing)
+## 3. 控制台身份与瘦列表投影
+- **身份解析**：Web/Android 请求优先解析会话 Cookie（`agent_pulse_session` / `__Host-agent_pulse_session`）对应的 `workspace_owner_id`，无账户自部署模式才回退 `x-user-id`；严禁客户端写死开发头。
+- **列表与完整目录分离**：`GET /v3/remote/sessions` 仅返回轻量设备头（`host_generation`、`device_name`、`workspaces`、`pending_approvals`、`provider`）；完整 `models` 与 `discovery` 目录由 `GET /v3/remote/runners/:runner/hello` 按需拉取；`remote_events` 入库经 `storableFrame()` 剥离 `ready` 大字段但保留 `pending_approvals` 恢复锚点，单设备保留上限 `20,000` 条。
 
-- daemon 用设备 Ed25519 私钥发起 TLS/WSS 长连接；Gateway 从认证上下文解析 owner，拒绝 payload 自报归属；
-- 握手协商 `protocol_version`、`connection_epoch` / `host_generation`、双方连续接收水位与可回放窗口；
-- **Generation Fencing**：新认证连接替换旧 socket，旧 socket 的 close 回调不得注销新连接；单次传输故障只隔离当前 transport epoch，不停止本地 Runtime。当前代际的 `ready` 为 Session 权威全量集合，未列出的旧绑定降级为 `detached/unknown`；
-- **设备名称**：`ready.device_name` 携带面向用户的机器名（系统主机名，或用户自定义名），上限 64 字符且不得为空白。设备 ID 始终只作后端键，控制台显示的是名称而非编号；名称可用 `agenthub-runner device name --identity <path> <名称>` 持久化到身份文件旁的 `device.json`；
-- **会话发现刷新**：`ready` 帧是发现结果的唯一通道，因此每次刷新都必须发布当前完整列表。Runner 每 60 秒重扫一次 Provider 会话列表，仅在结果发生变化时重新入队 `ready`（未变更则不增长 outbox）；扫描失败保留上一份列表，而不是清空控制台。
+## 4. 持久水位 ACK 与幂等命令
+- **连续水位**：数据帧含单调递增 `seq`（心跳/握手/ACK 不占号）；先落盘后发送，事务提交后回 `ack_seq`，同号同负载幂等忽略、异负载报冲突，越界返 `snapshot_required`。`/v3/remote/stream` 省略 `after` 时从尾部实时订阅（`?after=0` 保留重放），写缓冲满时异步等待 `drain` 不断流。
+- **命令状态机**：写命令（`create_session`、`resume_session`、`attach_session`、`send_prompt`、`resolve_approval`、`interrupt_turn`、`set_remote_enabled`）携带 `client_cmd_id`（作用域 `owner + daemon`），流转为 `queued -> dispatched -> accepted -> completed | rejected | failed | indeterminate`。超时副作用命令绝不盲目重放。
+- **审批与路径安全**：仅接受 `ws-{display}-{hash16}` 工作区标识；审批绑定 `session + turn + host_generation + approval_id`（缺失 `decision` 默认 fail-closed 拒绝），Diff 上限 `64 KiB` 且按 UTF-8 字符边界安全截断。
 
-## 3. 控制台身份口径
+- **Codex 历史和控制**：Gateway 仅向在握手声明 `codex_session_control` 的 Runner 派发新版控制指令。`connect/preview` 使用 `thread/read` 校验原生会话和工作区，再读取本机已保存的历史。`connect/take_control` 和明确包含 `acquire_control: true` 的 `send_prompt` 才能恢复原生写入控制。Runner 重启时把历史绑定恢复为断开。`release_control` 或借用会话空闲后调用 `thread/unsubscribe`，会话在收到 `thread/closed` 或确认原生会话已卸载前为 `releasing_control`。执行中的回合、审批及提问会阻止归还。
 
-- Web 控制台的远程请求以**账户会话 Cookie** 为身份：`/v3/remote/*` 与账户路由使用同一套解析口径，优先取会话 Cookie 对应的 `workspace_owner_id`，无账户部署时才回落到 `x-user-id` 开发头；
-- 设备、会话与命令一律按 `workspace_owner_id` 分区。Cookie 缺失或过期返回 401，控制台据此跳转到登录页；
-- 客户端不得把开发身份写死在请求里：一个写死的 `x-user-id` 会解析出与设备实际绑定不同的 owner，从而看到空列表。
+## 5. 事件投影与增量收敛
+- **白名单事件**：`session_bound`、`session_control_changed`、`execution_state_changed`、`turn_started`、`turn_completed`、`message_delta`、`message_completed`、`tool_started`、`tool_completed`、`approval_requested`、`approval_resolved`、`provider_error`。
+- **收敛规则**：`message_delta` 按 `turn/item/block` 聚合，`item/completed` 原位覆盖流式增量；`settledConversationItems` 按已落盘用户消息绝对行数阈值退避乐观气泡，防重复文本误消或超时连坐清空。
 
-## 4. Envelope 与水位 ACK
-
-数据帧包含 `version`、`frame_id`、`type`、`hub_session_id`、`cmd_id`、`seq`、`timestamp`、`payload`。事件、命令与收据使用按设备和方向单调递增的持久 `seq`（心跳/握手/ACK 不占序号）：
-
-- `ack_seq = N` 表示 `<= N` 的帧已连续持久落盘；先落盘后发送，接收事务提交后才回 ACK；
-- 遇到序列间隙暂停推进水位并请求补齐；同 `seq` 同负载幂等忽略，同 `seq` 异负载报协议冲突；
-- 超出保留窗口返回 `snapshot_required`，绝不静默跳帧。
-
-## 5. 幂等命令与审批
-
-统一写命令：`create_session`、`resume_session`、`attach_session`、`send_prompt`、`resolve_approval`、`interrupt_turn`、`set_remote_enabled`（`discover` 与 `import_history` 为只读）。
-
-- **幂等键**：每个写请求带 `client_cmd_id`（作用域 `owner + daemon`）。Gateway 持久提交后即返回 HTTP 202；同 ID 重试返回原收据，同 ID 异负载返回 `conflict`；
-- **状态流转**：`queued -> dispatched -> accepted -> completed | rejected | failed | indeterminate`。超时且可能已产生副作用的命令不自动重放，先与 Runtime 账本 reconcile，无法确认则持久标为 `indeterminate`；
-- **工作区与审批安全**：`connect` 仅接受 `ready.workspaces` 发布的 `ws-{display}-{hash16}` 标识，拒绝物理路径；跨端审批只暴露 opaque `approval_id`、turn ID、脱敏 Diff（≤64 KiB）与允许/拒绝动作，`ready.pending_approvals` 为权威全量集合（空数组清空旧按钮），跨代际或过期审批一律拒绝。
-
-## 6. 事件投影与多端一致性
-
-- **统一事件**：`session_bound`、`session_control_changed`、`execution_state_changed`、`turn_started`、`turn_completed`、`message_delta`、`message_completed`、`tool_started`、`tool_completed`、`approval_requested`、`approval_resolved`、`provider_error`；
-- **白名单 DTO**：Remote outbox 只投影 turn ID、消息文本、工具基础状态（`id/type/name/status`）、归一化上下文容量 `{used, window}` 与 opaque 审批描述符；Provider 原始 JSON-RPC 载荷、未脱敏路径与敏感输出只留本机；
-- **增量收敛**：`message_delta` 按 `turn/item/block` 聚合，`item/completed` 最终消息原位覆盖暂态增量；`history/snapshot` 只取最新非空快照并丢弃其前陈旧重放；
-- **多端并发**：客户端数量不影响 Runtime 生命周期；慢客户端使用有界缓冲，落后时通过 `snapshot_required` 重取快照，绝不阻塞 Provider 读循环。
+## 6. Runner 权威插件状态同步 (Plugin Sync v2)
+- **权威来源与持久化**：Runner 在 `ready.plugins` 上报本机已发现/已安装插件快照与 `registry_url`；Gateway 在 SQLite `RemoteContentStore` 的 `remote_runner_plugins` 表持久化（PostgreSQL 主库由迁移 `0018_dynamic_plugin_agent_types.sql` 放开 `agent_type` 校验），不保留写死默认列表。
+- **双向控制中继与 SSE 推送**：Web/Android 通过 `POST /v3/remote/runners/:runner/plugins/action`（支持 `install`、`uninstall`、`toggle`、`refresh_catalog`、`set_registry`）下发 WebSocket `plugin_command`（远端禁用本地 `source_url` 并强制校验 HTTPS 公共源）；Runner 执行下载与 SHA-256 校验，先推 `downloading` 中间态 `plugin_state` 帧，再推带 `ok` 结果的最终 `plugin_state` 帧，同时 Gateway 向 `/v3/remote/stream` 推送 `event: plugins` 通知。Gateway 对离线目标返回 `503 runner_offline`，超时返回 `504 plugin_action_timeout`。

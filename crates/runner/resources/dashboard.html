@@ -531,6 +531,7 @@
         <button type="button" role="tab" id="setTab-appearance" data-set="appearance" aria-controls="setPage-appearance" aria-selected="false">外观</button>
         <button type="button" role="tab" id="setTab-gateway" data-set="gateway" aria-controls="setPage-gateway" aria-selected="false">设备与网关</button>
         <button type="button" role="tab" id="setTab-capabilities" data-set="capabilities" aria-controls="setPage-capabilities" aria-selected="false">能力生态</button>
+        <button type="button" role="tab" id="setTab-plugins" data-set="plugins" aria-controls="setPage-plugins" aria-selected="false">插件</button>
         <button type="button" role="tab" id="setTab-about" data-set="about" aria-controls="setPage-about" aria-selected="false">关于</button>
       </div>
       <input class="inp set-q" id="setQ" type="search" placeholder="查找设置…" aria-label="查找设置">
@@ -750,6 +751,40 @@
       </div>
     </section>
 
+    <section class="set-page" id="setPage-plugins" role="tabpanel" aria-labelledby="setTab-plugins" hidden>
+      <div class="list prefs">
+        <div class="row pref" id="pluginRegistryRow">
+          <div class="who">
+            <div class="name">插件仓库地址 <span class="tag" id="pluginsSourceTag">本地状态</span></div>
+            <div class="sub">Runner 从该注册表拉取插件目录并按 SHA-256 校验安装，留空恢复官方默认仓库</div>
+          </div>
+          <div class="plugin-reg-controls">
+            <input type="url" class="inp" id="pluginRegistryInput" placeholder="https://raw.githubusercontent.com/xiaoran7/agenthub-plugins/main/registry.json" aria-label="插件仓库地址" />
+            <button type="button" class="text action" onclick="savePluginRegistry()">保存仓库</button>
+            <button type="button" class="text action primary" id="pluginRefreshCatalogBtn" onclick="refreshPluginCatalog()">刷新目录</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="list mt" id="pluginsInstalledSection">
+        <div class="row-head">
+          <span class="label">已安装插件</span>
+          <span class="grow"></span>
+          <span class="tag" id="pluginsInstalledBadge">0 个已安装</span>
+        </div>
+        <div class="cap-rows" id="pluginsInstalledList"></div>
+      </div>
+
+      <div class="list mt" id="pluginsCatalogSection">
+        <div class="row-head">
+          <span class="label">可用插件目录</span>
+          <span class="grow"></span>
+          <span class="tag" id="pluginsCatalogBadge">0 个可用</span>
+        </div>
+        <div class="cap-rows" id="pluginsCatalogList"></div>
+      </div>
+    </section>
+
     <section class="set-page" id="setPage-about" role="tabpanel" aria-labelledby="setTab-about" hidden>
       <div class="list prefs">
         <div class="row pref">
@@ -829,7 +864,7 @@
 
           <label for="mcpFormArgs">命令参数</label>
           <div>
-            <input type="text" class="input mono" id="mcpFormArgs" placeholder="参数用空格分隔，例如: -y @modelcontextprotocol/server-filesystem D:\Claudespace" />
+            <input type="text" class="input mono" id="mcpFormArgs" placeholder="参数用空格分隔，例如: -y @modelcontextprotocol/server-filesystem C:\Projects\workspace" />
             <span class="hint">传递给可执行程序的命令行参数</span>
           </div>
         </div>

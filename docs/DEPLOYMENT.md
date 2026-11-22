@@ -1,68 +1,52 @@
 # AgentHub 部署说明 (DEPLOYMENT)
 
-Gateway API（`:3001`）与 Next.js Web（`:3000`）支持两种持久化部署模式，均由 Web 同源代理 `/v1` 并通过反向代理（Nginx / Caddy / OpenResty）对外提供 HTTPS。
+Gateway API（`@agent-pulse/api`）与静态 Web 前门（Vite 8 构建产物 + `nginx:1.29-alpine`）支持三种标准拓扑。Web 前门同时承载静态托管与 `/v1/*`、`/v3/remote/*` 同源反代，外层 TLS 反向代理只需指向 Web 端口。
 
-> **安全红线**：严禁将 Gateway API 端口或数据库端口直接暴露公网；严禁在公网启用 `AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true`；严禁将内部访问令牌写入前端构建参数、URL 或 `localStorage`。
+| 部署模式 | API 监听 | Web 监听 | 配置文件 |
+| :--- | :--- | :--- | :--- |
+| **极简自部署（Docker 共享网络命名空间）** | `127.0.0.1:3001` | `0.0.0.0:3000` | `deploy/docker-compose.selfhost.yml` |
+| **生产容器（Docker Host 网络）** | `127.0.0.1:3101` | `127.0.0.1:3100` | `deploy/docker-compose.production.yml` |
+| **裸机服务（Systemd + Nginx）** | `127.0.0.1:3001` | `127.0.0.1:3000` | `deploy/agent-pulse.env.example`、`deploy/systemd/` |
 
-## 1. 极简自部署（单机 SQLite，零外部数据库依赖）
+> **安全红线**：严禁将 Gateway API 或数据库端口直接暴露公网；严禁在公网开启 `AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true`；严禁把网关内部访问令牌打入前端构建产物或 URL。
 
-默认使用 Node.js 22 原生 `node:sqlite` 将账户/设备持久化至 `gateway.db`，将 Remote v3 内容持久化至 `remote.db`：
+## 1. 极简自部署（纯 SQLite，零外部数据库依赖）
+
+默认以 Node.js 22 内置 `node:sqlite` 持久化账户库 `gateway.db` 与 Remote 内容库 `remote.db`：
 
 ```bash
 cp deploy/docker.env.selfhost.example deploy/docker.env && chmod 600 deploy/docker.env
-# 编辑 deploy/docker.env，设置至少 32 字节的 GATEWAY_ACCESS_TOKEN
+# 编辑 deploy/docker.env，配置 >=32 字节随机 base64url 串 AGENT_PULSE_LOGIN_RATE_LIMIT_SECRET
 docker compose --env-file deploy/docker.env -f deploy/docker-compose.selfhost.yml up -d --build
 ```
 
-## 2. 生产级部署（PostgreSQL + SQLite Remote 库）
+Web 与 API 共享网络命名空间。宿主机只发布 Web 的 3000 端口，Web 通过容器内的回环地址连接 API。
 
-复制 `deploy/agent-pulse.env.example`（裸机 `/etc/agent-pulse/agent-pulse.env`）或 `deploy/docker.env.example`（Docker / 1Panel），权限设为 `0600`：
+## 2. 生产部署（PostgreSQL 元数据 + SQLite Remote 库）
 
-- **核心环境变量**：
-  - `AGENT_PLATFORM_DATABASE_URL`：PostgreSQL 连接串（未设置时自动使用 `AGENTHUB_GATEWAY_DATABASE`，默认 `./data/gateway.db`）
-  - `AGENTHUB_REMOTE_DATABASE`：Remote v3 单实例 SQLite 路径（默认 `./data/remote.db`）
-  - `AGENT_PULSE_LOGIN_RATE_LIMIT_SECRET`：`node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`
-  - `GATEWAY_ORIGIN=http://127.0.0.1:3001`
-- **可选扩展（按需成组配置，未配置时对应功能安全禁用）**：
-  - **邮件（二选一）**：HTTP 邮件适配器（`AGENT_PULSE_PUBLIC_BASE_URL` + `AGENT_PULSE_EMAIL_ENDPOINT` + `AGENT_PULSE_EMAIL_TOKEN`）或 Resend（`AGENT_PULSE_PUBLIC_BASE_URL` + `AGENT_PULSE_RESEND_API_KEY` + `AGENT_PULSE_RESEND_FROM`）；
-  - **Stripe 订阅**：`AGENT_PULSE_STRIPE_SECRET_KEY`、`AGENT_PULSE_STRIPE_WEBHOOK_SECRET`、`AGENT_PULSE_STRIPE_PRICE_PRO`、`AGENT_PULSE_STRIPE_PRICE_TEAM`、`AGENT_PULSE_PUBLIC_BASE_URL`；
-  - **Web Push**：`npm run vapid-keys --workspace @agent-pulse/api` 生成三元组。
-
-### 裸机 Systemd 启动
+按 `deploy/docker.env.example`（或裸机 `/etc/agent-pulse/agent-pulse.env`，权限 `0600`）配置：
+- **核心变量**：`AGENT_PLATFORM_DATABASE_URL`（PostgreSQL 连接串）、`AGENTHUB_REMOTE_DATABASE`（默认 `./data/remote.db`）、`GATEWAY_ACCESS_TOKEN`、`AGENT_PULSE_LOGIN_RATE_LIMIT_SECRET`、`AGENTHUB_RUNNER_OFFLINE_GRACE_MS`（默认 `6000`）。
+- **可选能力**（未配置自动安全禁用）：邮件通知（HTTP 适配器或 Resend）、Stripe 订阅 Webhook、VAPID Web Push（`npm run vapid-keys --workspace @agent-pulse/api`）。
 
 ```bash
-npm ci
-sudo -u agentpulse env $(grep -v '^#' /etc/agent-pulse/agent-pulse.env | xargs) \
-  npm run migrate --workspace @agent-pulse/api
-npm run build --workspace @agent-pulse/web
-sudo cp deploy/systemd/agent-pulse-api.service deploy/systemd/agent-pulse-web.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now agent-pulse-api agent-pulse-web
-```
-
-### Docker / 1Panel 启动（Host Network 绑定 `127.0.0.1:3100` / `3101`）
-
-```bash
+# Docker Host 网络模式（监听 127.0.0.1:3100 / 3101）
 cp deploy/docker.env.example deploy/docker.env && chmod 600 deploy/docker.env
 docker compose --env-file deploy/docker.env -f deploy/docker-compose.production.yml up -d --build
 ```
 
+裸机 Systemd 模式：运行 `npm ci && npm run migrate --workspace @agent-pulse/api && npm run build --workspace @agent-pulse/web`，将 `apps/web/dist/.` 拷至 `/opt/agent-pulse/web/`，安装 `deploy/systemd/agent-pulse-{api,web}.service` 与 `deploy/systemd/nginx.conf` 后启用服务。
+
 ## 3. HTTPS 反向代理与上线核验
 
-参考 `deploy/nginx/agent-pulse.conf.example` 或 `deploy/1panel/platform.tannerlab.xyz.conf.example` 配置 TLS 反向代理：
+Gateway 监听回环地址时默认信任回环代理。自定义跨主机代理可用 AGENT_PULSE_TRUST_PROXY_ADDRESSES 配置逗号分隔的代理 IP 或 CIDR。旧版 AGENT_PULSE_TRUST_PROXY_HOPS 的正数值不再决定信任范围，值为 0 时仍关闭转发头信任。
 
-- **流式通道要求**：`/v1/stream`（SSE）与 `/v3/remote/ws`（WebSocket）必须关闭代理缓冲（`proxy_buffering off`）并保留长读超时。
-- **上线验收**：
-  1. `curl -fsS http://127.0.0.1:3001/health` 返回 `{"status":"ok"}`；
-  2. 访问 `https://your-domain/` 完成首次单管理员初始化（或口令登录），未授权直访 `/v1/devices` 返回 401；
-  3. 本机 `agenthub-runner` 通过 HTTPS/WSS 完成一次性配对码绑定，流式输出、审批与中断实时同步，重启服务后数据不丢失。
+参考 `deploy/nginx/agent-pulse.conf.example` 或 `deploy/1panel/platform.example.com.conf.example`：
+1. `/v1/stream`（SSE）与 `/v3/remote/ws`（WebSocket）必须关闭缓冲（`proxy_buffering off`）并透传 `Upgrade` / `Connection` 与 `X-Forwarded-Proto`；
+2. 探针校验：`curl -fsS http://127.0.0.1:3101/health` 返回 `{"status":"ok"}`，`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3100/` 返回 `200`，匿名访问 `/v1/devices` 返回 `401`；
+3. 可运行 `npm run test:proxy` 在容器内执行 13 项同源反代安全与缓存头契约回归。
 
 ## 4. Windows Runner 开机自启
 
-Runner 是单文件可执行程序，没有安装器，开机自启靠启动文件夹里的一个快捷方式，而不是服务或计划任务：它需要登录后的用户会话才能显示托盘图标，并以当前用户身份读写 `~/.agenthub/` 与各 Provider 的转录目录。
-
-- **放置位置**：`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\AgentHub Runner.lnk`（`shell:startup`）。放在这里而不是 `HKCU\...\Run`，是为了让用户在「设置 → 应用 → 启动」里能像普通程序一样随时关掉它。
-- **快捷方式目标**：`agenthub-runner.exe web --port 4200 --open-browser false --hide-console true`，工作目录设为一个已授权的项目目录（默认 `.` 会解析成它，需是真实存在的目录，否则启动即 `workspace_unavailable`）。
-- **为什么不需要 `.vbs` 包装**：Runner 编译为 Windows GUI 子系统（`#![windows_subsystem = "windows"]`），双击或从快捷方式启动时不会创建控制台窗口；`--hide-console true` 只是额外隐藏从终端启动时继承来的窗口。`--open-browser false` 让登录时不弹窗，托盘图标与「显示协同控制台」菜单仍然可用。
-- **重复启动是安全的**：Runner 用命名管道做单实例保护，第二个实例在 IPC 阶段即返回 `daemon_already_running` 并退出，不会抢占 4200 端口，也不会打断已在运行的实例。
-- **验证方式**：`Get-CimInstance Win32_Process -Filter "Name='agenthub-runner.exe'"` 应只有一条记录；`curl -s http://127.0.0.1:4200/api/status` 的 `remote_connected` 为 `true`；托盘图标存在但进程没有可见窗口（`MainWindowHandle` 为 0）。
-- **退出与重启**：托盘菜单「退出 AgentHub」或 `POST /api/shutdown` 会安全关闭；下次登录自动再起。
+Runner 编译为 Windows GUI 子系统（无黑框，无需 `.vbs` 包装），推荐在 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` 放置快捷方式 `AgentHub Runner.lnk`：
+- **目标参数**：`agenthub-runner.exe web --port 4200 --open-browser false --hide-console true`（起始位置设为真实存在的工作区目录）。
+- **单实例与退出**：内置命名管道单实例互斥，重复启动自动安全退出；通过托盘菜单 `"退出 AgentHub"` 或 `POST /api/shutdown` 可连同 `ui` 子进程树干净关闭。

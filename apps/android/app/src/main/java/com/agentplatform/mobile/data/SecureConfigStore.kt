@@ -5,7 +5,10 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.nio.charset.StandardCharsets
+import java.security.InvalidKeyException
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -13,12 +16,16 @@ import javax.crypto.spec.GCMParameterSpec
 import org.json.JSONObject
 
 /**
- * Keeps the native client's deployment credential encrypted with a
- * non-exportable Android Keystore key. Nothing is written to logs or backups.
+ * Keeps the deployment credential encrypted with a non-exportable Android
+ * Keystore key. Nothing is written to logs or backups.
+ *
+ * An undecryptable blob (wiped Keystore, restored backup, changed alias) is
+ * treated as "not configured" and cleared, so the phone asks again instead of
+ * repeatedly failing every request.
  */
 class SecureConfigStore(context: Context) {
     private val preferences =
-        context.getSharedPreferences("agent_platform_secure_config", Context.MODE_PRIVATE)
+        context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
 
     fun load(): AppConfig? {
         val iv = preferences.getString(KEY_IV, null) ?: return null
@@ -41,10 +48,20 @@ class SecureConfigStore(context: Context) {
                     gatewayBase = json.getString("gateway_base"),
                     accessToken = json.optString("access_token"),
                     developmentUserId = json.optString("development_user_id"),
+                    sessionCookie = json.optString("session_cookie"),
                 )
             }
-            .getOrElse {
-                clear()
+            .getOrElse { failure ->
+                // Only clear stored credentials when the Keystore key or cipher
+                // blob is permanently unrecoverable. Transient binder/IPC errors
+                // must leave config intact so the next launch recovers cleanly.
+                if (
+                    failure is AEADBadTagException ||
+                    failure is InvalidKeyException ||
+                    failure is UnrecoverableKeyException
+                ) {
+                    clear()
+                }
                 null
             }
     }
@@ -57,6 +74,7 @@ class SecureConfigStore(context: Context) {
                 .put("gateway_base", normalized.gatewayBase)
                 .put("access_token", normalized.accessToken)
                 .put("development_user_id", normalized.developmentUserId)
+                .put("session_cookie", normalized.sessionCookie)
                 .toString()
                 .toByteArray(StandardCharsets.UTF_8)
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -65,10 +83,7 @@ class SecureConfigStore(context: Context) {
         preferences
             .edit()
             .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .putString(
-                KEY_CIPHERTEXT,
-                Base64.encodeToString(ciphertext, Base64.NO_WRAP),
-            )
+            .putString(KEY_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
             .apply()
     }
 
@@ -98,6 +113,7 @@ class SecureConfigStore(context: Context) {
     }
 
     private companion object {
+        const val STORE_NAME = "agent_platform_secure_config"
         const val KEYSTORE_PROVIDER = "AndroidKeyStore"
         const val KEY_ALIAS = "agent_platform_gateway_v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"

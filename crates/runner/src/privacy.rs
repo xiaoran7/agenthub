@@ -100,9 +100,44 @@ pub fn project_display_name(raw_cwd: &str) -> String {
         .unwrap_or_else(|| "unknown-project".into())
 }
 
+fn is_single_level_unix_root(trimmed: &str) -> bool {
+    matches!(
+        trimmed,
+        "/etc"
+            | "/tmp"
+            | "/var"
+            | "/opt"
+            | "/usr"
+            | "/home"
+            | "/root"
+            | "/app"
+            | "/data"
+            | "/mnt"
+            | "/srv"
+            | "/bin"
+            | "/lib"
+            | "/sbin"
+            | "/dev"
+            | "/proc"
+            | "/sys"
+            | "/Users"
+            | "/Volumes"
+            | "/Applications"
+    )
+}
+
 pub fn is_absolute_filesystem_path(s: &str) -> bool {
     let trimmed = s.trim();
-    if trimmed.starts_with("ws-") {
+    if trimmed.starts_with("ws-") || trimmed.is_empty() {
+        return false;
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("file://")
+        .or_else(|| trimmed.strip_prefix("FILE://"))
+    {
+        return rest.starts_with('/') || is_absolute_filesystem_path(rest);
+    }
+    if trimmed.contains("://") {
         return false;
     }
     let bytes = trimmed.as_bytes();
@@ -116,7 +151,9 @@ pub fn is_absolute_filesystem_path(s: &str) -> bool {
     if trimmed.starts_with("\\\\") || trimmed.starts_with("//") {
         return true;
     }
-    if trimmed.starts_with('/') && trimmed[1..].contains('/') {
+    if trimmed.starts_with('/')
+        && (trimmed[1..].contains('/') || is_single_level_unix_root(trimmed))
+    {
         return true;
     }
     false
@@ -170,7 +207,7 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
                     {
                         *val = serde_json::Value::String(workspace_id_for_path(path_str));
                     } else if contains_absolute_filesystem_path(path_str) {
-                        *val = serde_json::Value::String("[local_path_redacted]".into());
+                        *val = serde_json::Value::String(redact_paths_inside_text(path_str));
                     }
                 }
                 sanitize_workspace_paths_in_json(val);
@@ -182,7 +219,7 @@ pub fn sanitize_workspace_paths_in_json(value: &mut serde_json::Value) {
                     if is_absolute_filesystem_path(path_str) && !path_str.starts_with("ws-") {
                         *item = serde_json::Value::String(workspace_id_for_path(path_str));
                     } else if contains_absolute_filesystem_path(path_str) {
-                        *item = serde_json::Value::String("[local_path_redacted]".into());
+                        *item = serde_json::Value::String(redact_paths_inside_text(path_str));
                     }
                 } else {
                     sanitize_workspace_paths_in_json(item);
@@ -206,8 +243,30 @@ pub fn redact_paths_inside_text(value: &str) -> String {
         return value.to_owned();
     }
     let mut redacted = String::with_capacity(value.len());
+    let mut chars = value.char_indices().peekable();
     let mut token = String::new();
-    for character in value.chars() {
+    while let Some((idx, character)) = chars.next() {
+        if (character == '"' || character == '\'') && !value[idx + 1..].is_empty() {
+            // Check whether a matching closing quote frames an absolute path (including spaces).
+            if let Some(close_rel) = value[idx + character.len_utf8()..].find(character) {
+                let inner_start = idx + character.len_utf8();
+                let inner_end = inner_start + close_rel;
+                let inner = &value[inner_start..inner_end];
+                if !inner.is_empty() && is_absolute_filesystem_path(inner) {
+                    push_token(&mut redacted, &mut token);
+                    redacted.push(character);
+                    redacted.push_str("[local_path_redacted]");
+                    redacted.push(character);
+                    while let Some(&(next_idx, _)) = chars.peek() {
+                        chars.next();
+                        if next_idx == inner_end {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
         if character.is_whitespace() {
             push_token(&mut redacted, &mut token);
             redacted.push(character);
@@ -225,6 +284,18 @@ fn push_token(out: &mut String, token: &mut String) {
     if token.is_empty() {
         return;
     }
+    if let Some((lhs, rhs)) = token.split_once('=')
+        && !lhs.contains("://")
+    {
+        let mut rhs_buf = rhs.to_string();
+        let mut lhs_out = String::new();
+        out.push_str(lhs);
+        out.push('=');
+        push_token(&mut lhs_out, &mut rhs_buf);
+        out.push_str(&lhs_out);
+        token.clear();
+        return;
+    }
     let leading = token
         .chars()
         .take_while(|c| matches!(c, '(' | '[' | '"' | '\''))
@@ -239,9 +310,6 @@ fn push_token(out: &mut String, token: &mut String) {
             )
         })
         .count();
-    // A token that is nothing but delimiters counts itself as both leading and
-    // trailing (a lone `"`, or `""`), so the two runs can overlap. Clamping keeps
-    // the split in bounds; such a token is not a path and is emitted verbatim.
     let leading = leading.min(token.len());
     let trailing = trailing.min(token.len() - leading);
     let (prefix, rest) = token.split_at(leading);
@@ -257,7 +325,7 @@ fn push_token(out: &mut String, token: &mut String) {
 }
 
 fn contains_absolute_filesystem_path(value: &str) -> bool {
-    value
+    if value
         .split(|character: char| {
             character.is_whitespace()
                 || matches!(
@@ -265,8 +333,28 @@ fn contains_absolute_filesystem_path(value: &str) -> bool {
                     '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}'
                 )
         })
-        .map(|token| token.trim_start_matches([':', '=', ',', ';']))
+        .map(|token| {
+            let trimmed = token.trim_start_matches([':', '=', ',', ';']);
+            trimmed.split_once('=').map_or(trimmed, |(_, rhs)| rhs)
+        })
         .any(is_absolute_filesystem_path)
+    {
+        return true;
+    }
+    for quote in ['"', '\''] {
+        let mut rest = value;
+        while let Some(start) = rest.find(quote) {
+            let after = &rest[start + 1..];
+            let Some(end) = after.find(quote) else {
+                break;
+            };
+            if is_absolute_filesystem_path(&after[..end]) {
+                return true;
+            }
+            rest = &after[end + 1..];
+        }
+    }
+    false
 }
 
 fn is_current_user_home(trimmed_cwd: &str) -> bool {
@@ -447,8 +535,8 @@ mod tests {
 
         sanitize_workspace_paths_in_json(&mut sample);
 
-        assert_eq!(sample["command"], "[local_path_redacted]");
-        assert_eq!(sample["stderr"], "[local_path_redacted]");
+        assert_eq!(sample["command"], "cat [local_path_redacted]");
+        assert_eq!(sample["stderr"], "failed at [local_path_redacted]");
         assert_eq!(sample["url"], "https://example.com/private/resource");
         assert_eq!(sample["Authorization"], "[redacted]");
         assert_eq!(sample["access_token"], "[redacted]");
@@ -502,6 +590,48 @@ mod tests {
                 .as_str()
                 .unwrap(),
             workspace_id_for_path("D:\\Shared\\docs\\spec.pdf")
+        );
+    }
+
+    #[test]
+    fn sanitize_workspace_paths_in_json_preserves_full_sentences_with_embedded_paths() {
+        let mut sample = serde_json::json!({
+            "message": "Please review the code in /home/alice/project/src/lib.rs and tell me what you think.",
+            "actions": [
+                "run pytest in C:\\Users\\alice\\test",
+                "normal text without path"
+            ]
+        });
+        sanitize_workspace_paths_in_json(&mut sample);
+        assert_eq!(
+            sample["message"],
+            "Please review the code in [local_path_redacted] and tell me what you think."
+        );
+        assert_eq!(sample["actions"][0], "run pytest in [local_path_redacted]");
+        assert_eq!(sample["actions"][1], "normal text without path");
+    }
+
+    #[test]
+    fn redact_paths_inside_text_handles_equals_quotes_file_uri_single_level_and_unc() {
+        assert_eq!(
+            redact_paths_inside_text("--config=C:\\Users\\alice\\app.toml"),
+            "--config=[local_path_redacted]"
+        );
+        assert_eq!(
+            redact_paths_inside_text(r#"open "C:\Program Files\My App\secret.txt" failed"#),
+            r#"open "[local_path_redacted]" failed"#
+        );
+        assert_eq!(
+            redact_paths_inside_text("open file:///Users/alice/repo/src/main.rs now"),
+            "open [local_path_redacted] now"
+        );
+        assert_eq!(
+            redact_paths_inside_text("wrote /tmp and /etc"),
+            "wrote [local_path_redacted] and [local_path_redacted]"
+        );
+        assert_eq!(
+            redact_paths_inside_text(r"copy \\fileserver\team\secret.txt"),
+            "copy [local_path_redacted]"
         );
     }
 }

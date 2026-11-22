@@ -1,5 +1,3 @@
-"use client";
-
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   latestContextUsage,
@@ -29,16 +27,16 @@ export const RemoteContextCapacity = memo(function RemoteContextCapacity({
 
   useEffect(() => {
     if (!open) return;
-    const closeOutside = (event: MouseEvent) => {
+    const closeOutside = (event: PointerEvent) => {
       if (!container.current?.contains(event.target as Node)) setOpen(false);
     };
     const closeEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
-    document.addEventListener("mousedown", closeOutside);
+    document.addEventListener("pointerdown", closeOutside);
     document.addEventListener("keydown", closeEscape);
     return () => {
-      document.removeEventListener("mousedown", closeOutside);
+      document.removeEventListener("pointerdown", closeOutside);
       document.removeEventListener("keydown", closeEscape);
     };
   }, [open]);

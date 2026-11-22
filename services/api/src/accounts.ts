@@ -11,6 +11,28 @@ import { ContractError } from "@agent-pulse/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { AuthenticationError, type OwnerAuthenticator } from "./auth.js";
+import {
+  AccountError,
+  auditMetadata,
+  cloneAuditEvent,
+  compareAuditEvents,
+  normalizeDisplayName,
+  normalizeEmail,
+  roleOrder,
+  validatePassword,
+} from "./account-helpers.js";
+export {
+  AccountError,
+  auditMetadata,
+  normalizeDisplayName,
+  normalizeEmail,
+  validatePassword,
+};
+import {
+  extractSessionToken,
+  scryptSemaphore,
+  serializeCookieHeader,
+} from "./security-guards.js";
 
 const SCRYPT_N = 16_384;
 const SCRYPT_R = 8;
@@ -239,12 +261,14 @@ export interface AccountView {
 }
 
 export interface AccountStore {
+  close?(): void | Promise<void>;
   hasAnyAdmin?(): Promise<boolean>;
   createAccount(input: {
     userId: string;
     email: string;
     displayName: string;
     passwordHash: string;
+    singleAdmin?: boolean;
   }): Promise<AccountView>;
   findAccountByEmail(email: string): Promise<AccountUser | undefined>;
   findAccountByOAuth?(
@@ -458,7 +482,15 @@ export class InMemoryAccountStore implements AccountStore {
     email: string;
     displayName: string;
     passwordHash: string;
+    singleAdmin?: boolean;
   }): Promise<AccountView> {
+    if (input.singleAdmin && (await this.hasAnyAdmin())) {
+      throw new AccountError(
+        "admin_already_exists",
+        "administrator is already configured",
+        409,
+      );
+    }
     if (this.#userIdsByEmail.has(input.email)) {
       throw new AccountError("email_already_registered", "email exists", 409);
     }
@@ -526,9 +558,16 @@ export class InMemoryAccountStore implements AccountStore {
 
     const byEmail = await this.findAccountByEmail(input.email);
     if (byEmail !== undefined) {
+      if (!input.emailVerified) {
+        throw new AccountError(
+          "oauth_email_not_verified",
+          "OAuth account email must be verified before linking",
+          403,
+        );
+      }
       byEmail.oauth_provider = input.provider;
       byEmail.oauth_sub = input.sub;
-      if (input.emailVerified && !byEmail.email_verified_at) {
+      if (!byEmail.email_verified_at) {
         byEmail.email_verified_at = timestamp;
       }
       const view = await this.accountView(byEmail.user_id);
@@ -1508,35 +1547,23 @@ export class InMemoryAccountStore implements AccountStore {
   }
 }
 
-export class AccountError extends ContractError {
-  readonly statusCode: number;
-
-  constructor(code: string, message: string, statusCode: number) {
-    super(code, message);
-    this.name = "AccountError";
-    this.statusCode = statusCode;
-  }
-}
-
 export class SessionAuthenticator implements OwnerAuthenticator {
   readonly #accounts: AccountStore;
+  readonly #secureCookies: boolean;
 
-  constructor(accounts: AccountStore) {
+  constructor(accounts: AccountStore, secureCookies = false) {
     this.#accounts = accounts;
+    this.#secureCookies = secureCookies;
   }
 
   async authenticate(request: FastifyRequest): Promise<string> {
-    const token = sessionToken(request);
-    if (token === undefined) {
-      throw new AuthenticationError();
-    }
+    const token = sessionToken(request, this.#secureCookies);
+    if (token === undefined) throw new AuthenticationError();
     const identity = await this.#accounts.findWebSession(
       tokenDigest(token),
       new Date().toISOString(),
     );
-    if (identity === undefined) {
-      throw new AuthenticationError();
-    }
+    if (identity === undefined) throw new AuthenticationError();
     return identity.workspace_owner_id;
   }
 }
@@ -1545,79 +1572,12 @@ export async function currentSessionIdentity(
   accounts: AccountStore,
   request: FastifyRequest,
   now: Date = new Date(),
+  secureCookies = false,
 ): Promise<SessionIdentity | undefined> {
-  const digest = currentSessionDigest(request);
+  const digest = currentSessionDigest(request, secureCookies);
   return digest === undefined
     ? undefined
     : accounts.findWebSession(digest, now.toISOString());
-}
-
-export function normalizeEmail(value: unknown): string {
-  if (typeof value !== "string") {
-    throw new AccountError(
-      "invalid_email",
-      "邮箱地址格式无效，请输入正确的邮箱",
-      400,
-    );
-  }
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized.length < 3 ||
-    normalized.length > 254 ||
-    !EMAIL_PATTERN.test(normalized)
-  ) {
-    throw new AccountError(
-      "invalid_email",
-      "邮箱地址格式无效，请输入正确的邮箱",
-      400,
-    );
-  }
-  return normalized;
-}
-
-export function normalizeDisplayName(value: unknown, email: string): string {
-  if (value === undefined || value === null) {
-    const defaultName = email.slice(0, email.indexOf("@")).trim();
-    return defaultName || "管理员";
-  }
-  if (typeof value !== "string") {
-    throw new AccountError("invalid_display_name", "显示名称格式无效", 400);
-  }
-  const normalized = value.trim();
-  if (normalized.length === 0) {
-    const defaultName = email.slice(0, email.indexOf("@")).trim();
-    return defaultName || "管理员";
-  }
-  if (normalized.length > 80 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
-    throw new AccountError(
-      "invalid_display_name",
-      "显示名称长度不能超过 80 个字符或包含控制字符",
-      400,
-    );
-  }
-  return normalized;
-}
-
-export function validatePassword(value: unknown): string {
-  if (typeof value !== "string") {
-    throw new AccountError("invalid_password", "密码格式无效", 400);
-  }
-  const bytes = Buffer.byteLength(value, "utf8");
-  if (value.length < 10) {
-    throw new AccountError(
-      "invalid_password",
-      "管理员密码长度至少需要 10 个字符",
-      400,
-    );
-  }
-  if (value.length > 128 || bytes > 512) {
-    throw new AccountError(
-      "invalid_password",
-      "密码长度不能超过 128 个字符",
-      400,
-    );
-  }
-  return value;
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -1773,8 +1733,14 @@ export async function createLoginSession(
 
 export function currentSessionDigest(
   request: FastifyRequest,
+  secureCookies = false,
 ): string | undefined {
-  const token = sessionToken(request);
+  const token = extractSessionToken(
+    request,
+    LOCAL_COOKIE_NAME,
+    SECURE_COOKIE_NAME,
+    secureCookies,
+  );
   return token === undefined ? undefined : tokenDigest(token);
 }
 
@@ -1815,11 +1781,25 @@ export async function clearLoginSession(
   reply: FastifyReply,
   secure: boolean,
 ): Promise<void> {
-  const token = sessionToken(request);
+  const token = extractSessionToken(
+    request,
+    LOCAL_COOKIE_NAME,
+    SECURE_COOKIE_NAME,
+    secure,
+  );
   if (token !== undefined) {
     await accounts.deleteWebSession(tokenDigest(token));
   }
-  reply.header("set-cookie", serializeExpiredSessionCookie(secure));
+  reply.header(
+    "set-cookie",
+    serializeCookieHeader(
+      secure ? SECURE_COOKIE_NAME : LOCAL_COOKIE_NAME,
+      "",
+      new Date(0),
+      0,
+      secure,
+    ),
+  );
 }
 
 export function accountBody(value: unknown): Record<string, unknown> {
@@ -1838,18 +1818,16 @@ export function assertOnlyFields(
   }
 }
 
-function sessionToken(request: FastifyRequest): string | undefined {
-  const cookie = request.headers.cookie;
-  if (cookie === undefined) return undefined;
-  for (const segment of cookie.split(";")) {
-    const separator = segment.indexOf("=");
-    if (separator < 0) continue;
-    const name = segment.slice(0, separator).trim();
-    if (name !== LOCAL_COOKIE_NAME && name !== SECURE_COOKIE_NAME) continue;
-    const token = segment.slice(separator + 1);
-    if (/^[A-Za-z0-9_-]{43}$/.test(token)) return token;
-  }
-  return undefined;
+function sessionToken(
+  request: FastifyRequest,
+  secure = false,
+): string | undefined {
+  return extractSessionToken(
+    request,
+    LOCAL_COOKIE_NAME,
+    SECURE_COOKIE_NAME,
+    secure,
+  );
 }
 
 export function tokenDigest(token: string): string {
@@ -1861,99 +1839,32 @@ function serializeSessionCookie(
   expiresAt: Date,
   secure: boolean,
 ): string {
-  return [
-    `${secure ? SECURE_COOKIE_NAME : LOCAL_COOKIE_NAME}=${token}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Expires=${expiresAt.toUTCString()}`,
-    `Max-Age=${Math.floor(SESSION_TTL_MS / 1_000)}`,
-    ...(secure ? ["Secure"] : []),
-  ].join("; ");
-}
-
-function serializeExpiredSessionCookie(secure: boolean): string {
-  return [
-    `${secure ? SECURE_COOKIE_NAME : LOCAL_COOKIE_NAME}=`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-    "Max-Age=0",
-    ...(secure ? ["Secure"] : []),
-  ].join("; ");
+  return serializeCookieHeader(
+    secure ? SECURE_COOKIE_NAME : LOCAL_COOKIE_NAME,
+    token,
+    expiresAt,
+    Math.floor(SESSION_TTL_MS / 1_000),
+    secure,
+  );
 }
 
 function derivePassword(password: string, salt: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    scryptCallback(
-      password,
-      salt,
-      PASSWORD_HASH_BYTES,
-      {
-        N: SCRYPT_N,
-        r: SCRYPT_R,
-        p: SCRYPT_P,
-        maxmem: 32 * 1024 * 1024,
-      },
-      (error, derived) => {
-        if (error !== null) {
-          reject(error);
-          return;
-        }
-        resolve(derived);
-      },
-    );
-  });
-}
-
-function roleOrder(role: WorkspaceRole): number {
-  return role === "owner" ? 0 : role === "admin" ? 1 : 2;
-}
-
-const AUDIT_METADATA_KEYS = new Set([
-  "reason",
-  "plan",
-  "status",
-  "provider",
-  "role",
-  "previous_role",
-  "invited_user_id",
-  "invitation_id",
-  "revoked_sessions",
-  "agent_type",
-  "task_status",
-  "previous_status",
-  "removed",
-]);
-
-export function auditMetadata(
-  input: Record<string, AuditMetadataValue>,
-): Record<string, AuditMetadataValue> {
-  const output: Record<string, AuditMetadataValue> = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (!AUDIT_METADATA_KEYS.has(key)) {
-      throw new Error(`audit metadata key is not allowed: ${key}`);
-    }
-    if (
-      (typeof value === "string" &&
-        (value.length > 128 || /[\u0000-\u001f\u007f]/u.test(value))) ||
-      (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0))
-    ) {
-      throw new Error(`audit metadata value is invalid: ${key}`);
-    }
-    output[key] = value;
-  }
-  return output;
-}
-
-function compareAuditEvents(left: AuditEvent, right: AuditEvent): number {
-  const timeOrder = right.created_at.localeCompare(left.created_at);
-  return timeOrder === 0
-    ? right.event_id.localeCompare(left.event_id)
-    : timeOrder;
-}
-
-function cloneAuditEvent(event: AuditEvent): AuditEvent {
-  return { ...event, metadata: { ...event.metadata } };
+  return scryptSemaphore.run(
+    () =>
+      new Promise((resolve, reject) => {
+        scryptCallback(
+          password,
+          salt,
+          PASSWORD_HASH_BYTES,
+          { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: 32 * 1024 * 1024 },
+          (error, derived) => {
+            if (error !== null) {
+              reject(error);
+              return;
+            }
+            resolve(derived);
+          },
+        );
+      }),
+  );
 }

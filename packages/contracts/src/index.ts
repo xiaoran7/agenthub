@@ -6,6 +6,7 @@ import {
 
 import { ContractError } from "./contract-error.js";
 import { expectKeys, expectObject } from "./expect.js";
+import { expectAgentType } from "./plugins.js";
 
 export { ContractError } from "./contract-error.js";
 export { expectKeys, expectObject } from "./expect.js";
@@ -13,13 +14,16 @@ export { expectKeys, expectObject } from "./expect.js";
 export const SYNC_PROTOCOL_VERSION = 1;
 export const MAX_SYNC_BATCH_EVENTS = 1_000;
 
-export const agentTypes = [
-  "claude_code",
-  "codex",
+export const coreAgentTypes = [
   "antigravity",
-  "grok_build",
-  "zcode",
+  "codex",
+  "claude_desktop",
+  "claude_code",
+  "deepseek_harness",
 ] as const;
+
+export const agentTypes = coreAgentTypes;
+export type CoreAgentType = (typeof coreAgentTypes)[number];
 export const presences = ["LIVE", "PERSISTED", "UNKNOWN"] as const;
 export const activityStatuses = [
   "WORKING",
@@ -39,6 +43,7 @@ export const observationSources = [
   "antigravity_brain",
   "antigravity_hook",
   "antigravity_cli",
+  "plugin_acp",
   "grok_sessions",
   "grok_hook",
   "grok_active_sessions",
@@ -64,7 +69,7 @@ export const waitingReasons = [
   "unknown",
 ] as const;
 
-export type AgentType = (typeof agentTypes)[number];
+export type AgentType = CoreAgentType | (string & {});
 export type Presence = (typeof presences)[number];
 export type ActivityStatus = (typeof activityStatuses)[number];
 export type ObservationSource = (typeof observationSources)[number];
@@ -341,9 +346,8 @@ export function parseAuthSyncBatch(value: unknown): AuthSyncBatch {
     );
   }
   const providers = snapshots.map((snapshot, index) =>
-    expectEnum(
+    expectAgentType(
       expectObject(snapshot, `snapshots[${index}]`).provider,
-      agentTypes,
       `snapshots[${index}].provider`,
     ),
   );
@@ -432,11 +436,7 @@ function parseAuthSnapshot(value: unknown, index: number): AuthSnapshot {
     ],
   );
   const snapshot: AuthSnapshot = {
-    provider: expectEnum(
-      object.provider,
-      agentTypes,
-      `snapshots[${index}].provider`,
-    ),
+    provider: expectAgentType(object.provider, `snapshots[${index}].provider`),
     state: expectEnum(object.state, authStates, `snapshots[${index}].state`),
     source: expectEnum(
       object.source,
@@ -764,9 +764,8 @@ function parseSyncEvent(value: unknown, index: number): SyncEvent {
       `events[${index}].schema_version`,
     ),
     device_id: expectDeviceId(object.device_id),
-    agent_type: expectEnum(
+    agent_type: expectAgentType(
       object.agent_type,
-      agentTypes,
       `events[${index}].agent_type`,
     ),
     agent_session_id: expectString(
@@ -1141,3 +1140,4 @@ function expectTimestamp(value: unknown, name: string): string {
 
 export * from "./remote.js";
 export * from "./account.js";
+export * from "./plugins.js";

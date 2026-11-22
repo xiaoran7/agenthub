@@ -7,6 +7,7 @@ fn command() -> RemoteCommand {
         hub_session_id: "hub-one".into(),
         host_generation: Some("generation-one".into()),
         command: RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "do not repeat this action".into(),
             effort: None,
             model: None,

@@ -2,26 +2,23 @@
 
 ## 1. Ground Rules
 
-- **Minimal Surface**: AgentHub is a remote continuation control plane for official runtimes. It does NOT implement its own agent reasoning loop or store LLM provider credentials.
-- **Upstream Traceability**: Third-party open-source components must retain license headers and be documented in `README.md` (`Upstream Attribution`).
-- **Changelog**: Every behavior, config, or doc change must update `docs/CHANGELOG.md`.
+- **Minimal Surface**: AgentHub is a remote continuation control plane for official CLI agent runtimes (Claude Code, OpenAI Codex, Google Antigravity, ACP). It never implements its own reasoning loop or stores LLM provider credentials.
+- **Line Limits & Upstream Attribution**: Source files must stay within `scripts/check-line-limits.py` bounds (`<=800` lines). Ported upstream assets must preserve license headers and attribution in `README.md`.
+- **Changelog**: Every code, config, or documentation change must update `docs/CHANGELOG.md`.
 
-## 2. Local Development (Node >= 22, Rust >= 1.80)
+## 2. Local Development (Node >= 22, Rust 2024 toolchain)
 
 ```bash
 npm ci
-npm start --workspace @agent-pulse/api     # Gateway (http://127.0.0.1:3001)
-npm run dev --workspace @agent-pulse/web   # Web UI (http://127.0.0.1:3000)
-cargo run -p agenthub-runner -- daemon     # Local Rust Runner
+npm start --workspace @agent-pulse/api     # Gateway API (http://127.0.0.1:3001)
+npm run dev --workspace @agent-pulse/web   # Vite Web UI (http://127.0.0.1:5173)
+cargo run -p agenthub-runner -- daemon     # Local Rust Runner (:4200 console)
 ```
 
 ## 3. Verification Gates
 
 ```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all --check
-npm test
-npm run typecheck
-npm run format:check
+python3 scripts/check-line-limits.py
+cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+npm run format:check && npm run typecheck && npm test
 ```

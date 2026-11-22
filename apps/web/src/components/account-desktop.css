@@ -213,8 +213,44 @@
   color: var(--remote-muted);
 }
 
-.account-entry button:focus-visible,
-.account-entry input:focus-visible {
+.account-password-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.account-password-wrap input {
+  width: 100%;
+  padding-right: 44px;
+}
+
+.account-password-toggle {
+  position: absolute;
+  right: 6px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--remote-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease;
+}
+
+.account-password-toggle:hover {
+  color: var(--remote-ink);
+  background: var(--remote-hover);
+}
+
+.account-entry button:focus-visible {
   outline: 2px solid var(--remote-terracotta);
   outline-offset: 2px;
 }

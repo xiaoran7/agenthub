@@ -20,6 +20,10 @@ import { StripeBillingProvider } from "./stripe-billing.js";
 import { InMemoryGatewayStore, type GatewayStore } from "./store.js";
 import { SqliteGatewayStore } from "./sqlite-store.js";
 import { RemoteContentStore } from "./remote-store.js";
+import {
+  allowedPushHostsFromEnv,
+  resolveTrustProxyConfig,
+} from "./security-guards.js";
 
 const port = parsePort(process.env.PORT);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -41,7 +45,11 @@ if (databaseUrl === undefined) {
   store = postgresStore;
   accounts = postgresStore;
 }
-const authenticator = ownerAuthenticator(accounts, host);
+const secureCookies = parseSecureCookies(
+  process.env.AGENT_PULSE_COOKIE_SECURE,
+  process.env.NODE_ENV,
+);
+const authenticator = ownerAuthenticator(accounts, host, secureCookies);
 let broker: ChangeBroker = new ChangeBroker();
 if (databaseUrl !== undefined) {
   try {
@@ -60,8 +68,13 @@ const options: GatewayAppOptions = {
   accounts,
   broker,
   authenticator,
-  secureCookies: process.env.NODE_ENV === "production",
-  trustProxy: isLoopbackHost(host),
+  secureCookies,
+  allowedPushHosts: allowedPushHostsFromEnv(),
+  trustProxy: resolveTrustProxyConfig(
+    host,
+    process.env.AGENT_PULSE_TRUST_PROXY_HOPS,
+    process.env.AGENT_PULSE_TRUST_PROXY_ADDRESSES,
+  ),
   logger: true,
 };
 const loginRateLimitSecret = secretFromEnvironment(
@@ -156,7 +169,52 @@ if (vapidKeys !== undefined) {
   };
 }
 options.remoteContent = new RemoteContentStore(remoteDbPath);
+options.remoteRoutes = {
+  offlineGraceMs: parseGraceMs(
+    process.env.AGENTHUB_RUNNER_OFFLINE_GRACE_MS,
+    6_000,
+  ),
+  deviceRevalidateMs: parseGraceMs(
+    process.env.AGENTHUB_DEVICE_REVALIDATE_MS,
+    2_000,
+  ),
+  streamAuthRevalidateMs: parseGraceMs(
+    process.env.AGENTHUB_STREAM_AUTH_REVALIDATE_MS,
+    2_000,
+  ),
+};
 const app = createGatewayApp(options);
+
+const pruneTimer = setInterval(
+  () => {
+    const nowIso = new Date().toISOString();
+    void Promise.all([
+      Promise.resolve(store.pruneExpiredData?.(nowIso)).catch(() => {}),
+      Promise.resolve(
+        (
+          accounts as {
+            pruneExpiredData?: (now: string) => void | Promise<void>;
+          }
+        ).pruneExpiredData?.(nowIso),
+      ).catch(() => {}),
+    ]);
+  },
+  6 * 60 * 60_000,
+);
+pruneTimer.unref();
+
+let shuttingDown = false;
+const shutdown = (): void => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearInterval(pruneTimer);
+  void app.close().then(
+    () => process.exit(0),
+    () => process.exit(1),
+  );
+};
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
 await app.listen({ port, host });
 
@@ -182,15 +240,20 @@ function isLoopbackHost(value: string): boolean {
 function ownerAuthenticator(
   accounts: AccountStore,
   host: string,
+  secureCookies: boolean,
 ):
   | BearerTokenAuthenticator
   | DevelopmentIdentityAuthenticator
   | SessionAuthenticator {
   const ownerId = process.env.AGENT_PLATFORM_OWNER_ID ?? "default-owner";
-  const accessToken =
+  const rawAccessToken =
     process.env.AGENT_PLATFORM_ACCESS_TOKEN ??
     process.env.GATEWAY_SECRET_TOKEN ??
     process.env.GATEWAY_ACCESS_TOKEN;
+  const accessToken =
+    rawAccessToken !== undefined && rawAccessToken.trim() !== ""
+      ? rawAccessToken
+      : undefined;
   const allowDevelopmentAuth =
     process.env.AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH === "true";
   if (allowDevelopmentAuth && !isLoopbackHost(host)) {
@@ -201,7 +264,7 @@ function ownerAuthenticator(
   if (accessToken === undefined) {
     return allowDevelopmentAuth
       ? new DevelopmentIdentityAuthenticator()
-      : new SessionAuthenticator(accounts);
+      : new SessionAuthenticator(accounts, secureCookies);
   }
   const authenticator = new BearerTokenAuthenticator(ownerId, accessToken);
   // Child processes must not inherit a credential the API no longer needs in
@@ -210,6 +273,18 @@ function ownerAuthenticator(
   delete process.env.GATEWAY_SECRET_TOKEN;
   delete process.env.GATEWAY_ACCESS_TOKEN;
   return authenticator;
+}
+
+function parseSecureCookies(
+  raw: string | undefined,
+  nodeEnv: string | undefined,
+): boolean {
+  if (raw === undefined || raw.trim() === "") {
+    return nodeEnv === "production";
+  }
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error("AGENT_PULSE_COOKIE_SECURE must be true or false");
 }
 
 function secretFromEnvironment(
@@ -235,4 +310,11 @@ function secretFromEnvironment(
   }
   delete process.env[name];
   return decoded;
+}
+
+function parseGraceMs(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return fallback;
+  return parsed;
 }

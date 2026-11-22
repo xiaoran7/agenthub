@@ -2,53 +2,78 @@ package com.agentplatform.mobile.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.regex.Pattern
+import kotlinx.coroutines.delay
 
 enum class MessageRole {
-    USER, ASSISTANT, TOOL, SYSTEM
+    USER,
+    ASSISTANT,
+    TOOL,
+    SYSTEM,
 }
 
 data class FormattedSegment(
     val isCodeBlock: Boolean = false,
     val language: String = "",
-    val text: String = ""
+    val text: String = "",
+    val unclosed: Boolean = false,
 )
 
+private val CLOSED_FENCE_PATTERN: Pattern =
+    Pattern.compile("```([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*?)```")
+private val UNCLOSED_FENCE_REGEX =
+    Regex("```([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*)$")
+private val TABLE_SEPARATOR_REGEX =
+    Regex("^\\|?(?:\\s*:?-{3,}:?\\s*\\|)+\\s*:?-{3,}:?\\s*\\|?$")
+
 /**
- * 结构化切分 Markdown 代码块与普通文本
+ * Splits Markdown into closed code blocks, trailing streaming (unclosed) code
+ * fences, and prose segments.
  */
 fun parseMarkdownSegments(content: String): List<FormattedSegment> {
-    // Streaming sends the message one delta at a time; the overwhelmingly
-    // common shape has no fence at all, and skipping the regex scan there is
-    // what keeps a long answer cheap to render.
     if (!content.contains("```")) {
         return if (content.isEmpty()) emptyList() else listOf(FormattedSegment(text = content))
     }
     val segments = mutableListOf<FormattedSegment>()
-    val codeBlockPattern = Pattern.compile("```([a-zA-Z0-9_-]*)\\r?\\n([\\s\\S]*?)```")
-    val matcher = codeBlockPattern.matcher(content)
+    val matcher = CLOSED_FENCE_PATTERN.matcher(content)
     var lastIndex = 0
 
     while (matcher.find()) {
@@ -60,28 +85,35 @@ fun parseMarkdownSegments(content: String): List<FormattedSegment> {
         }
         val lang = matcher.group(1)?.trim() ?: ""
         val code = matcher.group(2) ?: ""
-        segments.add(FormattedSegment(isCodeBlock = true, language = lang, text = code))
+        segments.add(FormattedSegment(isCodeBlock = true, language = lang, text = code, unclosed = false))
         lastIndex = matcher.end()
     }
 
     if (lastIndex < content.length) {
         val remaining = content.substring(lastIndex)
         if (remaining.isNotEmpty()) {
-            segments.add(FormattedSegment(isCodeBlock = false, text = remaining))
+            val openMatch = UNCLOSED_FENCE_REGEX.find(remaining)
+            if (openMatch != null) {
+                val before = remaining.substring(0, openMatch.range.first)
+                if (before.isNotEmpty()) {
+                    segments.add(FormattedSegment(isCodeBlock = false, text = before))
+                }
+                segments.add(
+                    FormattedSegment(
+                        isCodeBlock = true,
+                        language = openMatch.groupValues[1].trim(),
+                        text = openMatch.groupValues[2],
+                        unclosed = true,
+                    ),
+                )
+            } else {
+                segments.add(FormattedSegment(isCodeBlock = false, text = remaining))
+            }
         }
     }
     return segments
 }
 
-/**
- * Parses only what changed as a streaming message grows.
- *
- * Appending can never close a fence that started earlier, so unless the new
- * delta itself contains a fence the previous segments stay valid: a plain tail
- * is extended, and text after a closed block starts a new plain segment. Any
- * other change (a final message replacing the deltas, a fence arriving) falls
- * back to a full parse.
- */
 class MarkdownSegmentCache {
     private var source: String = ""
     private var segments: List<FormattedSegment> = emptyList()
@@ -91,22 +123,21 @@ class MarkdownSegmentCache {
         val appended =
             if (source.isNotEmpty() && content.startsWith(source)) content.substring(source.length)
             else null
-        // A fence can be split across two deltas ("``" then "`python"), so an
-        // incomplete backtick sequence on either side of the seam forces a full parse.
-        // A closed fence ending with "```" is complete, so appending text after it
-        // should extend incrementally rather than forcing a full regex scan.
         val fenceMayBeSplit =
-            appended != null && (
-                (source.endsWith("`") && !source.endsWith("```")) ||
-                appended.startsWith("`")
-            )
+            appended != null &&
+                (
+                    (source.endsWith("`") && !source.endsWith("```")) ||
+                        appended.startsWith("`")
+                    )
         segments =
             if (appended != null && !fenceMayBeSplit && !appended.contains("```")) {
                 val last = segments.lastOrNull()
-                if (last == null || last.isCodeBlock) {
-                    segments + FormattedSegment(text = appended)
-                } else {
-                    segments.dropLast(1) + last.copy(text = last.text + appended)
+                when {
+                    last == null -> listOf(FormattedSegment(text = appended))
+                    last.isCodeBlock && !last.unclosed ->
+                        segments + FormattedSegment(text = appended)
+                    else ->
+                        segments.dropLast(1) + last.copy(text = last.text + appended)
                 }
             } else {
                 parseMarkdownSegments(content)
@@ -116,155 +147,341 @@ class MarkdownSegmentCache {
     }
 }
 
-/**
- * 转换行内 **粗体** 与 `代码` 为 Compose AnnotatedString
- */
 @Composable
 fun buildInlineMarkdown(text: String): AnnotatedString {
     val codeBg = MaterialTheme.colorScheme.surfaceVariant
     val codeColor = OrcaColors.accentBlue
+    val linkColor = OrcaColors.accentBlue
 
-    return buildAnnotatedString {
-        var i = 0
-        while (i < text.length) {
-            // **Bold**
-            if (text.startsWith("**", i)) {
-                val end = text.indexOf("**", i + 2)
-                if (end != -1) {
-                    val boldText = text.substring(i + 2, end)
-                    pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
-                    append(boldText)
-                    pop()
-                    i = end + 2
-                    continue
+    return remember(text, codeBg, codeColor, linkColor) {
+        if (!text.contains("**") && !text.contains('`') && !text.contains('[')) {
+            return@remember AnnotatedString(text)
+        }
+        buildAnnotatedString {
+            var i = 0
+            while (i < text.length) {
+                if (text.startsWith("**", i)) {
+                    val end = text.indexOf("**", i + 2)
+                    if (end != -1) {
+                        pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
+                        append(text.substring(i + 2, end))
+                        pop()
+                        i = end + 2
+                        continue
+                    }
                 }
-            }
-            // `Code`
-            if (text.startsWith("`", i)) {
-                val end = text.indexOf("`", i + 1)
-                if (end != -1) {
-                    val inlineCode = text.substring(i + 1, end)
-                    pushStyle(
-                        SpanStyle(
-                            fontFamily = FontFamily.Monospace,
-                            background = codeBg,
-                            color = codeColor,
-                            fontSize = 12.sp
+                if (text.startsWith("`", i)) {
+                    val end = text.indexOf("`", i + 1)
+                    if (end != -1) {
+                        pushStyle(
+                            SpanStyle(
+                                fontFamily = FontFamily.Monospace,
+                                background = codeBg,
+                                color = codeColor,
+                                fontSize = 12.sp,
+                            ),
                         )
-                    )
-                    append(" $inlineCode ")
-                    pop()
-                    i = end + 1
-                    continue
+                        append(" ${text.substring(i + 1, end)} ")
+                        pop()
+                        i = end + 1
+                        continue
+                    }
                 }
+                if (text[i] == '[') {
+                    val closeBracket = text.indexOf("](", i + 1)
+                    if (closeBracket != -1) {
+                        val closeParen = text.indexOf(')', closeBracket + 2)
+                        if (closeParen != -1) {
+                            val label = text.substring(i + 1, closeBracket)
+                            pushStyle(
+                                SpanStyle(
+                                    color = linkColor,
+                                    textDecoration = TextDecoration.Underline,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                            append(label)
+                            pop()
+                            i = closeParen + 1
+                            continue
+                        }
+                    }
+                }
+                append(text[i])
+                i++
             }
-            append(text[i])
-            i++
         }
     }
 }
 
-/**
- * Claude / AI 风格代码块
- */
+/** Renders prose blocks including headings, blockquotes, lists, and horizontally scrollable tables. */
 @Composable
-fun CodeBlockSurface(
-    code: String,
-    language: String,
-    modifier: Modifier = Modifier
-) {
-    val clipboardManager = LocalClipboardManager.current
-    var copied by remember { mutableStateOf(false) }
-
-    LaunchedEffect(copied) {
-        if (copied) {
-            kotlinx.coroutines.delay(2000)
-            copied = false
-        }
-    }
-
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = OrcaSpace.xs),
-        shape = RoundedCornerShape(OrcaRadius.button),
-        color = OrcaColors.bgInset,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-    ) {
-        Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.xs),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+fun MarkdownProseBlocks(text: String, modifier: Modifier = Modifier) {
+    val lines = remember(text) { text.lines() }
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        var idx = 0
+        while (idx < lines.size) {
+            val line = lines[idx]
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) {
+                idx++
+                continue
+            }
+            // GFM Table detection: header row + separator row (`| --- | --- |`)
+            if (
+                trimmed.contains('|') &&
+                idx + 1 < lines.size &&
+                TABLE_SEPARATOR_REGEX.matches(lines[idx + 1].trim())
             ) {
+                val headers = splitTableCells(trimmed)
+                val rows = mutableListOf<List<String>>()
+                idx += 2
+                while (idx < lines.size && lines[idx].trim().contains('|')) {
+                    rows.add(splitTableCells(lines[idx].trim()))
+                    idx++
+                }
+                MarkdownTableSurface(headers = headers, rows = rows)
+                continue
+            }
+            if (trimmed.startsWith("### ")) {
                 Text(
-                    text = language.ifBlank { "code" },
-                    style = OrcaType.mono,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = buildInlineMarkdown(trimmed.removePrefix("### ").trim()),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
+                idx++
+                continue
+            }
+            if (trimmed.startsWith("## ") || trimmed.startsWith("# ")) {
+                val heading = trimmed.replaceFirst(Regex("^#{1,2}\\s+"), "")
+                Text(
+                    text = buildInlineMarkdown(heading),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                idx++
+                continue
+            }
+            if (trimmed.startsWith("> ")) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.sm),
                 ) {
-                    if (copied) OrcaCheckIcon(OrcaColors.accentGreen, 12.dp)
+                    Box(
+                        Modifier
+                            .width(3.dp)
+                            .height(20.dp)
+                            .background(OrcaColors.borderStrong, RoundedCornerShape(1.5.dp)),
+                    )
                     Text(
-                        text = if (copied) "已复制" else "复制",
-                        style = OrcaType.mono,
-                        color = if (copied) OrcaColors.accentGreen else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable {
-                                clipboardManager.setText(AnnotatedString(code))
-                                copied = true
-                            }
-                            .padding(horizontal = OrcaSpace.xs, vertical = OrcaSpace.xxs)
+                        text = buildInlineMarkdown(trimmed.removePrefix("> ").trim()),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
                     )
                 }
+                idx++
+                continue
+            }
+            // Coalesce consecutive plain/list lines into one paragraph block
+            val buf = StringBuilder(line)
+            idx++
+            while (idx < lines.size) {
+                val next = lines[idx]
+                val nextTrim = next.trim()
+                if (
+                    nextTrim.isEmpty() ||
+                    nextTrim.startsWith("#") ||
+                    nextTrim.startsWith("> ") ||
+                    (
+                        nextTrim.contains('|') &&
+                            idx + 1 < lines.size &&
+                            TABLE_SEPARATOR_REGEX.matches(lines[idx + 1].trim())
+                        )
+                ) {
+                    break
+                }
+                buf.append('\n').append(next)
+                idx++
             }
             Text(
-                text = code.trimEnd(),
-                style = OrcaType.code,
+                text = buildInlineMarkdown(buf.toString()),
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(OrcaSpace.md)
             )
         }
     }
 }
 
-/**
- * 思考折叠卡片 (Thinking Accordion)
- */
+private fun splitTableCells(row: String): List<String> =
+    row.trim().removePrefix("|").removeSuffix("|").split('|').map { it.trim() }
+
+@Composable
+private fun MarkdownTableSurface(
+    headers: List<String>,
+    rows: List<List<String>>,
+) {
+    val scroll = rememberScrollState()
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(vertical = OrcaSpace.xs),
+        shape = RoundedCornerShape(OrcaRadius.button),
+        color = OrcaColors.bgInset,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Column(modifier = Modifier.horizontalScroll(scroll)) {
+            Row(
+                modifier =
+                    Modifier
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = OrcaSpace.sm, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(OrcaSpace.md),
+            ) {
+                headers.forEach { cell ->
+                    Text(
+                        text = cell,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.widthIn(min = 84.dp, max = 220.dp),
+                    )
+                }
+            }
+            rows.forEach { row ->
+                Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
+                Row(
+                    modifier = Modifier.padding(horizontal = OrcaSpace.sm, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.md),
+                ) {
+                    headers.indices.forEach { colIdx ->
+                        Text(
+                            text = row.getOrNull(colIdx).orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.widthIn(min = 84.dp, max = 220.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CodeBlockSurface(
+    code: String,
+    language: String,
+    modifier: Modifier = Modifier,
+) {
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    val scroll = rememberScrollState()
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(2000)
+            copied = false
+        }
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth().padding(vertical = OrcaSpace.xs),
+        shape = RoundedCornerShape(OrcaRadius.button),
+        color = OrcaColors.bgInset,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Column {
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(start = OrcaSpace.md, end = OrcaSpace.xs, top = 2.dp, bottom = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = language.ifBlank { "code" },
+                    style = OrcaType.mono,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier =
+                        Modifier
+                            .minimumInteractiveComponentSize()
+                            .defaultMinSize(minHeight = 36.dp)
+                            .clip(RoundedCornerShape(OrcaRadius.button))
+                            .clickable {
+                                clipboardManager.setText(AnnotatedString(code))
+                                copied = true
+                            }
+                            .padding(horizontal = OrcaSpace.sm, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xxs),
+                ) {
+                    if (copied) OrcaCheckIcon(OrcaColors.accentGreen, 12.dp)
+                    else OrcaCopyIcon(MaterialTheme.colorScheme.onSurfaceVariant, 12.dp)
+                    Text(
+                        text = if (copied) "已复制" else "复制",
+                        style = OrcaType.mono,
+                        color =
+                            if (copied) OrcaColors.accentGreen
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Box(modifier = Modifier.fillMaxWidth().horizontalScroll(scroll).padding(OrcaSpace.md)) {
+                Text(
+                    text = code.trimEnd(),
+                    style = OrcaType.code,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun ThinkingAccordion(
     thought: String,
     isGenerating: Boolean = false,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    var userToggled by remember { mutableStateOf<Boolean?>(null) }
+    var copied by remember { mutableStateOf(false) }
+    val expanded = userToggled ?: isGenerating
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1800)
+            copied = false
+        }
+    }
 
     Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .animateContentSize()
-            .padding(vertical = OrcaSpace.xxs),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .animateContentSize()
+                .padding(vertical = OrcaSpace.xxs),
         shape = RoundedCornerShape(OrcaRadius.button),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
-        Column(Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.sm)) {
+        Column(Modifier.padding(horizontal = OrcaSpace.md, vertical = OrcaSpace.xs)) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded },
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 38.dp)
+                        .clickable { userToggled = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs)
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
                 ) {
                     OrcaStatusDot(
                         color = if (isGenerating) OrcaColors.accentAmber else OrcaColors.textMuted,
@@ -278,11 +495,30 @@ fun ThinkingAccordion(
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs)
+                    horizontalArrangement = Arrangement.spacedBy(OrcaSpace.xs),
                 ) {
+                    if (expanded && thought.isNotBlank()) {
+                        Text(
+                            text = if (copied) "已复制" else "复制思考",
+                            style = OrcaType.mono,
+                            color =
+                                if (copied) OrcaColors.accentGreen
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier =
+                                Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        val quoted =
+                                            thought.trim().lines().joinToString("\n") { "> $it" }
+                                        clipboard.setText(AnnotatedString(quoted))
+                                        copied = true
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                        )
+                    }
                     OrcaChevronDown(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        size = 10.dp,
+                        size = 12.dp,
                         expanded = expanded,
                     )
                 }
@@ -291,7 +527,7 @@ fun ThinkingAccordion(
                 Text(
                     text = thought.trim(),
                     style = OrcaType.code.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
-                    modifier = Modifier.padding(top = OrcaSpace.sm)
+                    modifier = Modifier.padding(top = OrcaSpace.xs, bottom = OrcaSpace.xs),
                 )
             }
         }

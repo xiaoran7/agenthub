@@ -2,10 +2,11 @@ use std::{fs, io::Write, path::Path};
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const IDENTITY_VERSION: u16 = 1;
 
@@ -33,12 +34,13 @@ pub struct DeviceIdentityInfo {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 struct PersistedDeviceIdentity {
     version: u16,
     device_id: String,
     public_key: String,
     private_key: String,
+    #[zeroize(skip)]
     created_at: DateTime<Utc>,
 }
 
@@ -61,15 +63,16 @@ impl DeviceIdentity {
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, DeviceIdentityError> {
-        let contents = fs::read_to_string(path)?;
+        let contents = Zeroizing::new(fs::read_to_string(path)?);
         let persisted: PersistedDeviceIdentity = serde_json::from_str(&contents)?;
         if persisted.version != IDENTITY_VERSION {
             return Err(DeviceIdentityError::UnsupportedVersion(persisted.version));
         }
 
-        let private_key = decode_array::<32>(&persisted.private_key)?;
+        let mut private_key = decode_array::<32>(&persisted.private_key)?;
         let expected_public_key = decode_array::<32>(&persisted.public_key)?;
         let signing_key = SigningKey::from_bytes(&private_key);
+        private_key.zeroize();
         let actual_public_key = signing_key.verifying_key().to_bytes();
         if actual_public_key != expected_public_key {
             return Err(DeviceIdentityError::PublicKeyMismatch);
@@ -79,71 +82,50 @@ impl DeviceIdentity {
         }
 
         Ok(Self {
-            device_id: persisted.device_id,
+            device_id: persisted.device_id.clone(),
             signing_key,
             created_at: persisted.created_at,
         })
     }
 
-    pub fn save_new(&self, path: impl AsRef<Path>) -> Result<(), DeviceIdentityError> {
-        let path = path.as_ref();
+    fn serialize_persisted(&self) -> Result<Zeroizing<Vec<u8>>, DeviceIdentityError> {
+        let mut raw_key = self.signing_key.to_bytes();
+        let private_key = hex::encode(raw_key);
+        raw_key.zeroize();
         let persisted = PersistedDeviceIdentity {
             version: IDENTITY_VERSION,
             device_id: self.device_id.clone(),
             public_key: self.public_key_hex(),
-            private_key: hex::encode(self.signing_key.to_bytes()),
+            private_key,
             created_at: self.created_at,
         };
         let mut serialized = serde_json::to_vec_pretty(&persisted)?;
         serialized.push(b'\n');
+        Ok(Zeroizing::new(serialized))
+    }
 
-        // Write to a same-directory temp file and link it into place without
-        // replacing an existing identity: a crash mid-write must never leave a
-        // truncated identity file at the final path. tempfile creates the temp
-        // file with 0600 on Unix.
-        let directory = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => Path::new("."),
-        };
-        let mut temp_file = tempfile::Builder::new()
-            .prefix(".identity-")
-            .suffix(".tmp")
-            .tempfile_in(directory)?;
-        temp_file.write_all(&serialized)?;
-        temp_file.as_file().sync_all()?;
-        temp_file
-            .persist_noclobber(path)
-            .map_err(|error| DeviceIdentityError::Io(error.error))?;
-        sync_directory(directory);
+    pub fn save_new(&self, path: impl AsRef<Path>) -> Result<(), DeviceIdentityError> {
+        let serialized = self.serialize_persisted()?;
+        write_private_file(path.as_ref(), &serialized, ".identity-", false)?;
         Ok(())
     }
 
     pub fn overwrite(&self, path: impl AsRef<Path>) -> Result<(), DeviceIdentityError> {
         let path = path.as_ref();
-        let persisted = PersistedDeviceIdentity {
-            version: IDENTITY_VERSION,
-            device_id: self.device_id.clone(),
-            public_key: self.public_key_hex(),
-            private_key: hex::encode(self.signing_key.to_bytes()),
-            created_at: self.created_at,
-        };
-        let mut serialized = serde_json::to_vec_pretty(&persisted)?;
-        serialized.push(b'\n');
-
-        let directory = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => Path::new("."),
-        };
-        let mut temp_file = tempfile::Builder::new()
-            .prefix(".identity-")
-            .suffix(".tmp")
-            .tempfile_in(directory)?;
-        temp_file.write_all(&serialized)?;
-        temp_file.as_file().sync_all()?;
-        temp_file
-            .persist(path)
-            .map_err(|error| DeviceIdentityError::Io(error.error))?;
-        sync_directory(directory);
+        if path.exists() {
+            let ts = Utc::now().timestamp();
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("identity.json");
+            let backup_name = format!("{file_name}.revoked-{ts}.bak");
+            let backup_path = path.with_file_name(backup_name);
+            if let Ok(old_bytes) = fs::read(path).map(Zeroizing::new) {
+                let _ = write_private_file(&backup_path, &old_bytes, ".identity-bak-", true);
+            }
+        }
+        let serialized = self.serialize_persisted()?;
+        write_private_file(path, &serialized, ".identity-", true)?;
         Ok(())
     }
 
@@ -207,6 +189,132 @@ fn decode_array<const N: usize>(value: &str) -> Result<[u8; N], DeviceIdentityEr
         .map_err(|_| DeviceIdentityError::InvalidKeyEncoding)?
         .try_into()
         .map_err(|_| DeviceIdentityError::InvalidKeyEncoding)
+}
+
+/// Write sensitive material into a freshly created private temp file (owner-only
+/// DACL on Windows via SDDL protected inheritance, `0600` on Unix) and promote
+/// it atomically so secrets are never briefly world-readable.
+pub(crate) fn write_private_file(
+    path: &Path,
+    bytes: &[u8],
+    prefix: &str,
+    clobber: bool,
+) -> std::io::Result<()> {
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    #[cfg(unix)]
+    if !directory.exists() {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)?;
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(directory)?;
+
+    let mut suffix = [0_u8; 8];
+    OsRng.fill_bytes(&mut suffix);
+    let temp_path = directory.join(format!("{prefix}{}.tmp", hex::encode(suffix)));
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use std::os::windows::io::{FromRawHandle, RawHandle};
+        use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+        use windows_sys::Win32::Storage::FileSystem::{
+            CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, MOVEFILE_REPLACE_EXISTING,
+            MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+
+        let descriptor = crate::daemon_ipc::platform::current_user_descriptor()
+            .map_err(std::io::Error::other)?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: 0,
+        };
+        let temp_wide: Vec<u16> = temp_path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let handle = unsafe {
+            CreateFileW(
+                temp_wide.as_ptr(),
+                GENERIC_WRITE,
+                0,
+                &attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        let write_result = (|| -> std::io::Result<()> {
+            let mut file = unsafe { fs::File::from_raw_handle(handle as RawHandle) };
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        if let Err(err) = write_result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(err);
+        }
+        let target_wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let flags = if clobber {
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        } else {
+            0
+        };
+        if unsafe { MoveFileExW(temp_wide.as_ptr(), target_wide.as_ptr(), flags) } == 0 {
+            let err = std::io::Error::last_os_error();
+            let _ = fs::remove_file(&temp_path);
+            return Err(err);
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp_path)?;
+        let write_result = (|| -> std::io::Result<()> {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        drop(file);
+        if let Err(err) = write_result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(err);
+        }
+        if clobber {
+            if let Err(err) = fs::rename(&temp_path, path) {
+                let _ = fs::remove_file(&temp_path);
+                return Err(err);
+            }
+        } else {
+            let link_res = fs::hard_link(&temp_path, path);
+            let _ = fs::remove_file(&temp_path);
+            link_res?;
+        }
+    }
+
+    sync_directory(directory);
+    Ok(())
 }
 
 /// Flush the directory entry so a power loss immediately after `save_new`
@@ -295,5 +403,28 @@ mod tests {
         second.overwrite(&path).unwrap();
         assert_eq!(DeviceIdentity::load(&path).unwrap().info(), second.info());
         assert_ne!(first.info().device_id, second.info().device_id);
+
+        let backups: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".revoked-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            DeviceIdentity::load(backups[0].path()).unwrap().info(),
+            first.info()
+        );
+    }
+
+    #[test]
+    fn private_file_writer_creates_nested_dirs_and_respects_clobber() {
+        let directory = tempfile::tempdir().unwrap();
+        let nested = directory.path().join("nested").join("secret.bin");
+        write_private_file(&nested, b"v1", ".test-", false).unwrap();
+        assert_eq!(fs::read(&nested).unwrap(), b"v1");
+        let err = write_private_file(&nested, b"v2", ".test-", false).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        write_private_file(&nested, b"v2", ".test-", true).unwrap();
+        assert_eq!(fs::read(&nested).unwrap(), b"v2");
     }
 }

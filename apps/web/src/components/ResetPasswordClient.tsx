@@ -1,8 +1,10 @@
-"use client";
-
 import { useEffect, useState, type FormEvent } from "react";
 
-import { accountErrorMessage, confirmPasswordReset } from "../lib/account";
+import {
+  accountErrorMessage,
+  confirmPasswordReset,
+  consumeUrlHashToken,
+} from "../lib/account";
 
 type ResetState = "ready" | "saving" | "changed" | "invalid";
 
@@ -14,9 +16,7 @@ export function ResetPasswordClient() {
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    const nextToken =
-      new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "";
-    window.history.replaceState(null, "", window.location.pathname);
+    const nextToken = consumeUrlHashToken();
     if (!/^[A-Za-z0-9_-]{43}$/.test(nextToken)) {
       setState("invalid");
       return;

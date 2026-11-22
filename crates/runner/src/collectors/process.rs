@@ -296,3 +296,126 @@ pub(crate) fn sanitize_protocol_message(message: &str) -> String {
         sanitized
     }
 }
+
+pub(crate) fn validate_safe_session_id(sid: &str) -> bool {
+    let s = sid.trim();
+    !s.is_empty()
+        && s.len() <= 128
+        && !s.contains("..")
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+}
+
+pub(crate) fn sanitize_effort(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        "minimal" => Some("minimal"),
+        "none" => Some("none"),
+        _ => None,
+    }
+}
+
+pub(crate) fn sanitize_permission_mode(raw: &str) -> Option<&'static str> {
+    match raw.trim() {
+        "default" => Some("default"),
+        "acceptEdits" => Some("acceptEdits"),
+        "accept-edits" => Some("accept-edits"),
+        "plan" => Some("plan"),
+        "read-only" => Some("read-only"),
+        "workspace-write" => Some("workspace-write"),
+        "bypassPermissions" => Some("bypassPermissions"),
+        "danger-full-access" => Some("danger-full-access"),
+        "yolo" => Some("yolo"),
+        "auto" => Some("auto"),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_safe_model_id(raw: &str) -> bool {
+    let s = raw.trim();
+    !s.is_empty()
+        && s.len() <= 128
+        && !s.starts_with('-')
+        && !s.contains("..")
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '.' | '_' | ':' | '/' | '@' | '+' | '-' | '[' | ']')
+        })
+}
+
+/// On Windows, builds a `Command` that unwraps standard npm `.cmd` Node shims
+/// onto `node.exe <entrypoint.js>` directly when resolvable, avoiding `cmd.exe`
+/// shell metacharacter interpretation on CLI arguments.
+pub(crate) fn command_for_binary(binary: &std::path::Path) -> Command {
+    #[cfg(windows)]
+    {
+        let is_cmd_shim = binary
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+        if is_cmd_shim && let Some((node_exe, script)) = resolve_npm_cmd_node_entrypoint(binary) {
+            let mut cmd = Command::new(node_exe);
+            cmd.arg(script);
+            return cmd;
+        }
+    }
+    Command::new(binary)
+}
+
+pub(crate) fn is_cmd_shim_path(binary: &std::path::Path) -> bool {
+    binary
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+}
+
+pub(crate) fn has_cmd_metacharacters(arg: &str) -> bool {
+    arg.chars().any(|c| {
+        matches!(
+            c,
+            '&' | '|' | '>' | '<' | '^' | '%' | '!' | '"' | '\r' | '\n' | '\0'
+        )
+    })
+}
+
+#[cfg(windows)]
+fn resolve_npm_cmd_node_entrypoint(
+    shim_path: &std::path::Path,
+) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let dir = shim_path.parent()?;
+    let contents = std::fs::read_to_string(shim_path).ok()?;
+    for line in contents.lines() {
+        let marker = "%dp0%\\";
+        let alt_marker = "%~dp0\\";
+        let found = line
+            .find(marker)
+            .map(|i| i + marker.len())
+            .or_else(|| line.find(alt_marker).map(|i| i + alt_marker.len()));
+        let Some(start) = found else {
+            continue;
+        };
+        let rest = &line[start..];
+        let Some(end) = rest.find('"').or_else(|| rest.find(char::is_whitespace)) else {
+            continue;
+        };
+        let rel = rest[..end].trim();
+        if !rel.ends_with(".js") && !rel.ends_with(".mjs") && !rel.ends_with(".cjs") {
+            continue;
+        }
+        let script = dir.join(rel.replace('/', "\\"));
+        if script.is_file() {
+            let sibling_node = dir.join("node.exe");
+            let node_exe = if sibling_node.is_file() {
+                sibling_node
+            } else {
+                std::path::PathBuf::from("node.exe")
+            };
+            return Some((node_exe, script));
+        }
+    }
+    None
+}

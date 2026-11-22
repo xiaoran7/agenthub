@@ -1,7 +1,7 @@
 # AgentHub
 
 > **The Unified Remote Continuation & Control Plane for Official AI Agents**  
-> Seamless Web & mobile management for **Claude Code** and **OpenAI Codex** sessions anywhere, anytime.
+> Continue **Antigravity (`agy`)**, **OpenAI Codex**, **Claude Desktop**, **Claude Code**, **DeepSeek Harness**, and dynamically installed **ACP Plugins** from any browser, mobile PWA, or Android client.
 
 <p align="center">
   <a href="README.md"><b>English</b></a> •
@@ -12,16 +12,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.5.2-0284c7.svg?style=flat-square" alt="Version" /></a>
+  <a href="https://github.com/xiaoran7/agenthub/releases"><img src="https://img.shields.io/badge/version-2.8.1-0284c7.svg?style=flat-square" alt="Version" /></a>
   <a href="https://github.com/xiaoran7/agenthub/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/CI-passing-10b981.svg?style=flat-square" alt="CI Status" /></a>
-  <a href="https://github.com/xiaoran7/agenthub"><img src="https://img.shields.io/badge/tests-258%20passed-10b981.svg?style=flat-square" alt="Tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b.svg?style=flat-square" alt="License" /></a>
   <a href="llms.txt"><img src="https://img.shields.io/badge/llms.txt-standardized-8b5cf6.svg?style=flat-square" alt="llms.txt" /></a>
   <img src="https://img.shields.io/badge/Rust-2024-f97316.svg?style=flat-square" alt="Rust 2024" />
   <img src="https://img.shields.io/badge/Node-%3E%3D22-10b981.svg?style=flat-square" alt="Node" />
 </p>
-
----
 
 ## Screenshot
 
@@ -33,87 +30,68 @@ A cropped view of a Codex conversation in an earlier version of AgentHub Remote,
 
 ## Overview
 
-AgentHub hooks directly into official CLI agent runtimes (**Claude Code**, **OpenAI Codex**, and **ACP**-compatible agents) without reinventing another inference loop. Through a single-binary Rust daemon (`agenthub-runner`) establishing outbound-only TLS/WebSocket connections to a self-hosted Gateway, you can inspect live output streams, approve tool permissions with diff previews, continue multi-turn sessions, or trigger emergency stops from any browser or mobile PWA.
+AgentHub attaches to official CLI agent runtimes without inventing another reasoning loop. A lightweight single-binary Rust daemon (`agenthub-runner`) maintains local session ownership and establishes outbound-only TLS/WSS connections to your self-hosted Gateway—letting you inspect live streams, review redacted diffs, approve permissions, answer multi-select prompts, or interrupt turns remotely.
 
-- ⚡ **Single-Binary Rust Runner**: Zero-dependency embedded Web Console at `http://127.0.0.1:4200` (sessions, agents, per-request usage ledger, workspaces, and federated Skill/MCP/Hook settings).
-- 🌐 **Remote Web & Mobile PWA**: Self-hosted Gateway + responsive Next.js Web client for multi-device session continuation and one-tap permission approvals.
-- 🛡️ **Outbound-Only TLS Security**: Workstation connects outwards to Gateway over WSS—zero public inbound ports required, zero provider credentials uploaded, and local paths redacted into `ws-*` workspace IDs.
-- 🎯 **Native Official Protocol Fidelity**: Exact `create`, `resume`, and read-only `discover` semantics with single-writer ownership and durable command idempotency.
-
----
+- **Single-Binary Rust Runner**: Embedded local Web Console (`http://127.0.0.1:4200`), on-demand isolated WebView2 UI child process (`agenthub-runner ui`), native Win32 tray menu, cold/hot SQLite usage ledger (`UsageIndexDb`), Runner-authoritative ACP plugin manager (`~/.agenthub/plugins/`), and federated Skill/MCP/Hook discovery.
+- **Static Web PWA & Native Android**: Vite 8 static MPA + `nginx:1.29-alpine` same-origin proxy (`~8.4 MiB` RAM) alongside a Kotlin + Jetpack Compose Remote v3 Android client (`apps/android`).
+- **Outbound-Only Zero-Port Security**: Zero public inbound ports on workstations, zero provider API keys uploaded, and local paths redacted into `ws-*` IDs.
+- **Official Protocol Fidelity**: 5 native core slots plus SHA-256 verified ACP plugins (`agenthub-plugins` for `ZCode`, `Grok Build`, `Gemini CLI`, and custom adapters) with single-writer `host_generation` fencing and durable `client_cmd_id` idempotency.
 
 ## Architecture
 
 ```text
-Local Workstation
-  Codex / Claude Code / ACP Runtime
-          ▲  (Official Protocol)
-          ▼
-    agenthub-runner (Rust daemon)
-      ├─ Embedded Web Console  ──► http://127.0.0.1:4200
-      └─ Outbound TLS / WSS    ──► Self-Hosted Gateway (Auth, Ledger, Replay)
-                                          │
-                                          ▼ (HTTPS / WSS / SSE)
-                                   Remote Web Client (PC / Mobile PWA)
+Workstation: Antigravity / Codex / Claude Desktop / Claude Code / DeepSeek Harness + ACP Plugins
+                    ▲  (Official Native Protocol / ACP JSON-RPC 2.0)
+                    ▼
+        agenthub-runner (Rust daemon, ~13.5 MB RSS, Plugin Authority)
+          ├─ Embedded Console & Win32 Tray ──► http://127.0.0.1:4200
+          └─ Outbound TLS / WSS            ──► Self-Hosted Gateway (@agent-pulse/api)
+                                                      │ (HTTPS / WSS / SSE)
+                                                      ▼
+                                      Vite + Nginx Web PWA & Android Client
 ```
-
----
 
 ## Quick Start
 
 ### 1. Local Runner & Embedded Console
 
 ```bash
-# Launch embedded local Web Console at http://127.0.0.1:4200
-agenthub-runner web
-
-# Or run as a background session daemon
-agenthub-runner daemon
+agenthub-runner web      # Launch local console at http://127.0.0.1:4200
+agenthub-runner daemon   # Run headless background session daemon
 ```
 
-### 2. Full Stack from Source (Node >= 22, Rust >= 1.80)
+### 2. Full Stack from Source (Node >= 22, Rust 2024 toolchain)
 
 ```powershell
 npm.cmd ci
-npm.cmd start --workspace @agent-pulse/api    # Gateway (http://127.0.0.1:3001)
-npm.cmd run dev --workspace @agent-pulse/web  # Remote Web UI (http://127.0.0.1:3000)
+npm.cmd start --workspace @agent-pulse/api    # Gateway API (http://127.0.0.1:3001)
+npm.cmd run dev --workspace @agent-pulse/web  # Vite Web UI (http://127.0.0.1:5173)
 cargo run -p agenthub-runner -- daemon        # Local Rust Runner
 ```
 
 ### 3. Verification Gates
 
 ```powershell
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all --check
-npm.cmd test
-npm.cmd run typecheck
-npm.cmd run format:check
+python scripts/check-line-limits.py
+cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+npm.cmd run format:check && npm.cmd run typecheck && npm.cmd test
 ```
-
----
 
 ## Upstream Attribution & Open Source Traceability
 
-| Upstream Project                                  | License                                | Module / Role in AgentHub                                                                                                                                                                                                                                                                                                                                           |
-| :------------------------------------------------ | :------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [magpie](https://github.com/yetone/magpie)        | MIT License, Copyright (c) 2026 yetone | Embedded Web Console design system & layout primitives (`crates/runner/resources/dashboard.{html,css,js}`), vendor icon set (`crates/runner/resources/icons/` served by `console_icons.rs`), per-request usage ledger view (`usage_ledger.rs`), and federated Multi-Agent Library architecture (Skill, MCP Server, Hook management in `collectors/capabilities.rs`) |
-| [stablyai/orca](https://github.com/stablyai/orca) | Apache 2.0 / MIT                       | Mobile Companion UI philosophy, terminal accessory row, and fleet mission-control layout (`apps/android`)                                                                                                                                                                                                                                                           |
+| Upstream Project | License | Module / Role in AgentHub |
+| :--- | :--- | :--- |
+| [magpie](https://github.com/yetone/magpie) | MIT, Copyright (c) 2026 yetone | Embedded Web Console design tokens & layout (`crates/runner/resources/dashboard.{html,css,js}`), vendor icons (`crates/runner/resources/icons/`), usage ledger analytics (`usage_ledger/`), and federated Skill/MCP/Hook library (`collectors/capabilities/`) |
+| [stablyai/orca](https://github.com/stablyai/orca) | Apache 2.0 / MIT | Mobile companion design tokens, terminal accessory row, and mission-control layout (`apps/android`) |
 
-> Foundation CSS tokens, vendor marks under `crates/runner/resources/icons/`, and model-family prefix selection are ported from `yetone/magpie` with upstream copyright and MIT license headers preserved intact.
+## Documentation
 
----
-
-## Documentation Index
-
-- **[AGENTS.md](AGENTS.md)**: Project rules, security redlines & commit discipline
-- **[docs/README.md](docs/README.md)**: Documentation index, implementation status & validation summary
-- **[docs/PRD.md](docs/PRD.md)**: Product scope, session semantics & acceptance criteria
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: System topology, component roles & ownership boundaries
-- **[docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md)**: Local IPC v2, Remote WSS protocol, watermarks & idempotency
-- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**: Systemd, Docker, 1Panel & HTTPS reverse-proxy setup
-- **[docs/PITFALLS.md](docs/PITFALLS.md)**: Known edge cases & verification checklist
-- **[docs/CHANGELOG.md](docs/CHANGELOG.md)**: Release history
+- **[AGENTS.md](AGENTS.md)**: Engineering rules, security redlines & module boundaries
+- **[docs/README.md](docs/README.md)**: Documentation map & current implementation status
+- **[docs/PRD.md](docs/PRD.md)** / **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Product semantics, topology & memory footprint
+- **[docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md)**: IPC v2, Remote v3 WSS, watermarks & idempotent commands
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** / **[docs/PITFALLS.md](docs/PITFALLS.md)**: Self-hosted Docker/Systemd/Nginx setup & pitfalls checklist
+- **[llms.txt](llms.txt)** / **[llms-full.txt](llms-full.txt)** / **[docs/CHANGELOG.md](docs/CHANGELOG.md)**: LLM specs & full release history
 
 ## License
 

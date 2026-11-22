@@ -1,9 +1,9 @@
 {
   "name": "agenthub",
   "private": true,
-  "version": "2.5.3",
+  "version": "2.8.1",
   "description": "Remote Web console & session manager for Claude Code and OpenAI Codex. Continue sessions anywhere via browser or mobile PWA.",
-  "author": "WANGUI TANG",
+  "author": "Tanner",
   "license": "MIT",
   "homepage": "https://github.com/xiaoran7/agenthub#readme",
   "repository": {
@@ -38,7 +38,9 @@
     "format": "prettier --write package.json tsconfig.base.json packages services apps",
     "format:check": "prettier --check package.json tsconfig.base.json packages services apps",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "test:proxy": "bash scripts/test-web-proxy.sh",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint:lines": "python3 scripts/check-line-limits.py"
   },
   "devDependencies": {
     "prettier": "3.9.6"

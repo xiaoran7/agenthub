@@ -1,533 +1,302 @@
 # Changelog
 
-## [Unreleased]
+## [2.8.1] - 2026-11-22
 
-- 裁切公开 README 的远程会话截图，移除设备名、工作区名和会话标识。
+- **插件生态安全加固与多端协同修复（代码审查 #2～#9）**：
+  - **ACP 网关凭据隔离**：`AcpAppServer::start_with_options` 新增 `inject_gateway_env: bool`，第三方插件进程强制传 `false`，阻断因路径/参数含 `claude`/`gemini`/`codex` 意外注入宿主机网关 Token。
+  - **本地目录安装先验校验与防 symlink**：`install_from_local_directory` 在覆盖安装目录前先行校验 `expected_id` 与暂存清单，跳过符号链接并预热启用态缓存。
+  - **大小写不敏感 Scheme 与加强反 SSRF**：Runner 与 Gateway 对 `HTTPS://` / `HTTP://` / `FILE://` 做大小写不敏感校验与 URL 规范化；Gateway `isForbiddenHost` 拦截 IPv4-mapped / IPv4-compatible / 完整展开回环 / 链路本地 / ULA / 组播 IPv6。
+  - **多前缀会话路由一致性**：Runner `PluginView`、Contracts `AgentPlugin`、Gateway 序列化、Web `session-tree.ts` 与 Android `Models.kt`/`ModelCatalog.kt` 完整透传并匹配 `sessionPrefixes`（含 `zcode` 对存量 `sess_*` 会话识别）。
+  - **多端状态同步与设备吊销清理**：Runner WebSocket 建连后主动发送首帧 `plugin_state`；Gateway 吊销设备同步删除 `remote_runner_plugins` 并于 `GET /v3/remote/plugins` 过滤已吊销 Runner，`ready` 携带插件帧时触发 SSE `event: plugins` 推送；Web 插件设置页订阅 `plugins` 事件静默刷新；Android 修复多 Runner 切换误全量覆盖状态与直接走 `performPluginAction(runnerId, "toggle")`。
+  - **清理死代码**：移除 Web SSE 解码器未使用的 `framesByEvent` 临时映射。
+  - **版本发布与公开脱敏**：全仓版本号自增至 `2.8.1`（Android `versionCode = 138`），同步已裁切脱敏的远程对话截图并清理文档/示例注释中的私域及本机工作目录引用。
 
-- 中英文 README 新增 AgentHub 远程会话的浏览器实拍，展示设备和工作区分组、实时消息及工具执行状态。
+## [2.8.0] - 2026-11-20
 
-- **修复 CI 格式门禁失败（services/api/src/remote-store.ts）**：提交 48fce44 新增的 isSameProviderRebind 调用超出 Prettier 行宽限制却未按 --write 重排，导致 Gitea 的 npm run format:check 报错阻断 CI；本次仅执行 Prettier 自动格式化，无任何逻辑改动。
+- **构建以本机 Runner 为权威源的 ACP 智能体插件生态（`crates/runner/`, `packages/contracts/`, `services/api/`, `apps/web/`, `apps/android/`）**：
+  - **5 大原生核心与外部插件剥离**：核心智能体收敛为 `Antigravity`、`Codex`、`Claude Desktop`、`Claude Code` 与 `DeepSeek Harness`（预留原生槽位/图标/契约，未实现运行时显式返回 `deepseek_harness_runtime_not_implemented`）；将原内置的 `ZCode`、`Grok Build`、`Gemini CLI` 适配器完整剥离至独立公开插件仓库 `agenthub-plugins`。
+  - **Runner 权威插件运行时 (`crates/runner/src/plugins/`)**：由本机 Runner 直接拉取远程或本地 `registry.json`，执行相对路径安全校验与文件大小/SHA-256 严格验证，原子安装至 `~/.agenthub/plugins/installed/<id>/` 并持久化 `state.json`；基于标准 ACP JSON-RPC 2.0 及 `agenthub/*` 扩展 RPC（`probe`、`discover`、`models`、`history`）统一驱动发现、模型列表、新建/恢复会话、流式输出与历史读取；新增本地 `:4200` `/api/plugins/*` 路由与控制台 "设置 -> 插件" 管理页。
+  - **契约与网关动态中继 (`packages/contracts/`, `services/api/`)**：支持合法插件 slug（`^[a-z][a-z0-9_-]{1,63}$`）与 `"plugin_acp"` 观测来源；新增 PostgreSQL 迁移 `0018_dynamic_plugin_agent_types.sql` 放开 `agent_type` CHECK 约束，并在 SQLite `RemoteContentStore`（`services/api/src/remote-store-validation.ts`）中建立 `remote_runner_plugins` 表，移除服务端硬编码 `DEFAULT_PLUGINS`；通过 WebSocket `plugin_command` / `plugin_state` 控制帧及 `POST /v3/remote/runners/:runner/plugins/action` 实时中继安装/启停/卸载/源切换，支持 `downloading` 中间态上报、SSE `event: plugins` 推送、`503 runner_offline` 与 `504 plugin_action_timeout` 处理。
+  - **安全加固与生命周期治理**：`/api/plugins/icon/:id` 强制输出 `Content-Security-Policy: default-src 'none'; sandbox` 沙箱头并拦截含 `<script>`/`<foreignObject>`/内联事件的 SVG；远端插件仓库强制校验 HTTPS 与反 SSRF 私网地址检查（禁用远端 `source_url`），运行时命令收敛至 `node` 相对路径入口与安全环境变量白名单；非阻塞缓存插件元信息防止主事件循环卡顿；修复带前缀 ACP `session/update` 的 `turnId` 查找、`zcode` 对存量 `sess_*` 会话前缀兼容、Web 按 Runner 严格隔离与 Android `SettingsScreen`/`RunnerPluginSnapshot` 修复；避免 Windows 下 Node 插件占用安装目录 CWD 句柄并扩展卸载目录共享冲突重试。
+  - **Web 与 Android 多端适配 (`apps/web/`, `apps/android/`)**：按 5 个原生核心 + 已启用且就绪的扩展插件动态渲染智能体列表与新建会话引擎选项；Web 新增 `PluginSettingsSection` 支持按在线 Runner 分组管理插件；Android 升级 `EngineKind`（新增 `DEEPSEEK_HARNESS` 与 `PLUGIN`）并支持远端插件目录刷新与安装卸载切换。
+  - **版本发布与端到端验证**：全仓版本号统一升至 `2.8.0`（Android `versionCode = 137`）；新增 `crates/runner/tests/plugin_ecosystem.rs` 覆盖模拟 HTTP 注册表拉取、SHA-256 篡改拦截、ACP 完整会话生命周期及停用/卸载回收。
 
-- **Runtime 用量日志上限解除、Windows NTFS/WAL 实时热更新修复、网关直连/路由精准判定、模型厂商图标补齐、单窗口防多开聚焦与托盘鼠标悬停即显（`crates/runner`）**：
-  - **解除请求日志 1,000 条硬上限（`crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
-    - 将 `/api/usage/ledger` 接口的 `limit` 参数上限从 `.unwrap_or(200).clamp(1, 1000)` 提升至 `.unwrap_or(50_000).clamp(1, 100_000)`，前端 `dashboard.js` 默认拉取上限同步提升至 `50000`，配合前端 DOM 增量分页（每页 100 条），彻底解除"共 1,000 条记录"截断限制；
-  - **修复 Windows NTFS 下 SQLite WAL 元数据延迟导致的自动热更新失效（`crates/runner/src/usage_ledger.rs`, `crates/runner/src/collectors/mod.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
-    - 根除 `update_zcode_calls` 依赖 Windows NTFS 目录下 `.sqlite-wal` 文件 `(len, mtime)` 变化才触发查询的缺陷（长连接复用预分配 WAL 帧时不改变文件大小且延迟刷新 `ftLastWriteTime`），改为直接执行 `WHERE rowid > ?1` 轻量级主键增量查询，仅当实际读入新行时才标记账本变更；
-    - 将 `collect_zcode_sessions_from` 的会话缓存失效判据升级为 SQLite 内部水位线查询 `(COUNT(session), MAX(time_updated), COUNT(message))`，在 `invalidate_session_caches_for_refresh` 中同步清理 `zcode_sessions_cache`，并将后端 `LEDGER_TTL` / `dashboard_summary_cache` 缩短至 `1.2s`、前端轮询周期缩短至 `2.0s`；
-    - 为 `remote_host.rs` 的本地存储扫描引入 `generation` 代数递增与 `force_local_store_scan()` 强制唤醒机制，消除后台增量扫描期间 `sessions_loading` 阻塞前端会话列表渲染的问题；
-  - **修复客户端"直连 / 路由"与供应商名称判定失真（`crates/runner/src/claude_gateway.rs`, `crates/runner/src/collectors/zcode_app_server.rs`）**：
-    - 新增 `is_official_provider_url`、`is_official_or_default_provider_name` 与 `is_cc_switch_default_placeholder`，识别 `cc-switch.db` 中未配置端点的 `"default"` 占位行，避免其遮蔽 `~/.claude/settings.json` 与 `~/.zcode/v2/config.json` 中的真实网关配置；
-    - 修复 `load_zcode_v2_provider_registry` 因单个自定义 provider 缺少 `baseURL` 字段导致问号操作符提前中断整表扫描的缺陷，并优先从 `~/.zcode/v2/config.json` 解析 ZCode 当前激活供应商与模型路由；任何指向非官方 API 域名或名称含"中转 / CPA / Relay / Proxy"的自定义供应商均统一标记为"路由"（`is_routed = true`）；
-  - **补齐 DeepSeek / Qwen / 智谱 GLM / Kimi / MiniMax / Mistral / OpenAI 真实多色品牌图标（`crates/runner/resources/tray_icons_64.bin.zst`, `crates/runner/src/tray_menu.rs`, `crates/runner/resources/dashboard.js`）**：
-    - 将 `deepseek-color.svg`、`qwen-color.svg`、`zhipu-color.svg`、`kimi.svg`、`minimax-color.svg`、`mistral-color.svg` 与 `openai.svg` 预光栅化并合入 `tray_icons_64.bin.zst`（共 27 枚 `64x64` RGBA 精灵图标）；
-    - 更新 `tray_menu.rs` 的 `model_brand_visual` 与前端 `dashboard.js` 的 `MODEL_FAMILIES` / `modelIconName` 映射，按模型自身厂商前缀渲染真实品牌图标（如 `deepseek-v4.1-flash` 显示蓝色鲸鱼图标而非黑色 ZCode 图标）；
-  - **托盘与桌面端单实例窗口防多开聚焦及顶栏分段滑块修复（`crates/runner/src/window_icon.rs`, `crates/runner/src/tray.rs`, `crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
-    - 在 `window_icon.rs` 新增 `focus_existing_edge_app_window()`，通过 `EnumWindows` 枚举已打开的 `AgentHub` 桌面窗口，调用 `ShowWindow(SW_RESTORE)` + `SetForegroundWindow` 唤醒置顶并自动关闭多余重复窗口；
-    - 点击托盘"打开主窗口"、齿轮设置或会话行时，若主窗口已存在则直接唤醒并通过 `/api/dashboard` 的 `pending_nav` 字段驱动前端就地切换页面，不再重复拉起新的 `msedge.exe --app` 窗口；同时修复前端进入"设置"页时顶栏 `#segThumb` 胶囊仍停留在"用量"或"会话"上的问题；
-  - **系统托盘鼠标悬停即显与移出自动收起（`crates/runner/src/tray.rs`, `crates/runner/src/tray_menu.rs`）**：
-    - `tray_wnd_proc` 监听 `WM_MOUSEMOVE` 事件，鼠标移入右下角托盘图标即自动弹出托盘面板（无需点击），并移除原生 `NIF_TIP` 文本提示以免遮挡弹窗；
-    - `tray_menu.rs` 实时追踪鼠标与托盘卡片及托盘锚点的距离，鼠标移出两块区域 `380ms` 后自动收起弹窗，且弹窗打开期间每 `1.8s` 自动热刷新实时用量数据；
-  - **远端 WebSocket 握手超时保护与 Claude 新会话 `realSessionId` 绑定同步修复（`crates/runner/src/remote_network.rs`, `crates/runner/src/remote_host.rs`, `services/api/src/remote-store.ts`）**：
-    - `remote_network.rs` 新增 `connect_with_timeout()`，在发起 `tungstenite::client_tls` 握手前为底层 `TcpStream` 设置 10 秒连接与读取超时、5 秒写入超时及 `TCP_NODELAY`，根除半开连接阻塞重连线程的问题；
-    - `remote_host.rs` 与 `remote-store.ts` 同步兼容 Claude CLI 首轮完成时将占位 `claude_*` ID 更新为真实 `realSessionId` 的场景，避免触发 `binding_conflict` / `native_identity_changed` 导致 Runner 发送队列卡死；
-  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `a7ab7ee3a3251bd3f4c2411ef2bafefcc3ff60ac2f83cd4be0e67beffdfa2a3b`，`agenthub-runner.exe` SHA256: `bc16544d5ccfbdeb277cfdcc8ca42c886bc988e556590d9d09f69154984c2f26`），并通过 Taildrop 同时推送 `.zip` 与 `.exe` 至 `portable-pc`。
+## [2.7.17] - 2026-11-20
 
-- **Web 控制台时间线阅读列宽度基准与居中对称轴对齐修复（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
-  - 为 `.remote-tool-group` 与 `.remote-private-note` 补齐 `width: 100%` 与 `box-sizing: border-box`，根除纵向 Flex 容器下 `margin: 0 auto` 导致工具组折叠条随预览文字长短忽宽忽窄、脱敏提示居中漂移的问题；
-  - 将 `.remote-tool-group`、`.remote-tool`、`.remote-notice`、`.remote-message` 与 `.remote-composer-card` 的宽度基准全面统一为 `var(--remote-measure)`（消除 `760px`、`794px`、`900px` 三种宽度混排导致的左右边缘错位），并为 `.remote-timeline` 设置 `scrollbar-gutter: stable both-edges` 使滚动区内外共享完全一致的几何对称中心。
+- 修复 Gateway 运行时依赖 Fastify 和 fast-uri，以及 Web 构建依赖 source-map-js 的高危漏洞。
+- Gateway 按代理地址验证转发头。Docker 自托管的 Web 通过回环地址访问 Gateway，只对宿主机发布 Web 端口。
 
-- **Runtime 全链路性能优化、重复 I/O 根治与双端（Runtime / Web）文案统一精炼（`crates/runner`, `apps/web`）**：
-  - **启动与恢复阶段耗时治理（`crates/runner/src/remote_network.rs`, `crates/runner/src/remote_journal.rs`）**：
-    - `run_with_local_control` 采用 `std::thread::scope` 并行拉起 `CodexAppServer`、`ZCodeAppServer` 与 Claude CLI 探测，并在本地守护模式（`url.is_none()`）下延后非阻塞拉取 `models()` 与 `discover()`，使本地 IPC 控制通道立即进入 `ready` 状态；
-    - `DurableHost::new` 将恢复出的历史会话绑定状态持久化收敛至单次 SQLite 事务（`journal.connection.transaction()`）批量提交，消除 `PRAGMA synchronous=FULL` 下逐条 `persist_binding` 触发的多次磁盘 `fsync` 阻塞；
-  - **宿主、面板摘要与网关探测缓存加固（`crates/runner/src/claude_gateway.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/web_server.rs`）**：
-    - `claude_gateway.rs` 为 `discover_claude_code_gateway()` 与 `discover_claude_desktop_gateway()` 新增 10 秒进程内缓存（随 `invalidate_claude_gateway_cache()` 同步失效），消除每次轮询重复读取 `cc-switch.db` 与 80ms TCP 探测开销；
-    - `MultiProviderTransport` 为 Codex `model/list` RPC 增加 30 秒缓存，并在 `thread/list` 合并中跳过已缓存会话 ID 的重复 `PathBuf` / `String` 堆分配；`NativeSessionHost` 将 `cwd_canon_cache` 提升为实例持久字段，避免每 5 秒 `discover()` 重复调用 `dunce::canonicalize` 并重复插入 6 种工作区路径变体；
-    - `web_server.rs` 在 `build_dashboard_summary` 中优先复用已缓存模型目录，仅在模型目录为空时才发起 `DaemonRequest::GetModels` IPC 调用，并复用 `cached_agent_installations()` 缓存 5 类客户端安装探测结果；
-  - **采集器、工作区聚合与历史对话读取优化（`crates/runner/src/collectors/mod.rs`, `crates/runner/src/collectors/workspace.rs`, `crates/runner/src/conversation.rs`, `crates/runner/resources/dashboard.js`）**：
-    - `collect_claude_sessions_for_remote` 的 `claude_session_entry_cache` 升级为 `Option<ClaudeRemoteSessionEntry>`，对超过 60 秒未修改的空转录或无输出文件同样缓存负结果，避免每次扫描重复打开解析历史空 `.jsonl` 文件；
-    - `collect_codex_local_threads_from` 按文件 `(len, mtime)` 与 WAL 指纹分别缓存 `~/.cache/magpie/sessions.json` 与 `thread_history_1.sqlite` 聚合结果；`resolve_zcode_model_context_window` 按 `(len, mtime)` 缓存 `~/.zcode/v2/config.json` 模型上下文窗口映射，消除每次扫描多达 5000 次的重复文件读取与 JSON 解析；
-    - 修复 `lookup_session_context_usage` 查询 Codex 会话时误传 `.codex` 目录路径导致 SQLite 打开必败的缺陷（改为定位 `state_5.sqlite` / `state_4.sqlite` / `state.sqlite`），并在 `NonClaudeContextUsageCache` 中记录已扫描的 `AgentType` 集合，消除未命中会话重复触发全表扫描；
-    - `workspace.rs` 修复 `scan_codex_workspaces` 仅匹配 `state_5.db` 而遗漏 `state_5.sqlite` 的问题，并将 `scan_antigravity_workspaces` 与 `scan_grok_workspaces` 改为直接复用采集器内存缓存；`dashboard.js` 的 `renderWorkspaces` 预建小写路径/名称哈希表，将工作区 Token 归属匹配从 $O(N \times M)$ 降至 $O(N)$；
-    - `conversation.rs` 在遍历磁盘目录前优先按已缓存文件指纹执行 $O(1)$ 元数据比对，新增 30 秒 TTL 的 `codex_path_index()` 内存索引避免每次拉取 Codex 对话时执行 7 层目录递归，并在单文件转录（`paths.len() == 1`）时跳过冗余的 `serde_json::to_string` 序列化去重；
-  - **Runtime 与 Web 端全局文案规范化（`crates/runner/resources/dashboard.html`, `crates/runner/resources/dashboard.js`, `apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/SettingsPage.tsx`, `apps/web/src/components/ThinkingAccordion.tsx`）**：
-    - 全面清理直角括号 `「」`、`【】` 与弯引号 `“”`，统一使用标准双引号 `""` 与规范中文标点；
-    - 统一浅色/深色主题命名、MCP 注册说明、能力生态提示、设备配对与解绑反馈、工具"执行结果输出"标题以及思考折叠面板（"正在思考…" / "思考过程"）文案；
-  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `31a737efb417b4b3e7384c48c4b408c1c5605c7bded6a90ae3e5e452cc8f464f`，`agenthub-runner.exe` SHA256: `9ae26edcdcdf689483370629204040c6d4a99a94552dcc4bdd0f25feadc28e33`），并通过 Taildrop 推送至 `portable-pc`。
+## [2.7.16] - 2026-11-20
 
-- **系统托盘弹窗字体超清化、主题联动配色与真实多色品牌图标内嵌（`crates/runner`）**：
-  - **ClearType 亚像素字体渲染与 PerMonitorV2 原生高分屏激活（`crates/runner/src/tray_menu.rs`, `crates/runner/src/tray.rs`, `crates/runner/resources/app.manifest`）**：
-    - 将 `CreateFontW` 质量参数从旧式 4 阶灰度平滑 `ANTIALIASED_QUALITY`（`4`）升级为 `CLEARTYPE_NATURAL_QUALITY`（`6`），并对英文标题/客户端名称采用原生 `Segoe UI Semibold`（`seguisb.ttf`）、中文采用原生 `Microsoft YaHei UI` Regular（`msyh.ttc`），根除 GDI 对中文字体执行 `FW_SEMIBOLD` 1px 水平重影合成导致的笔画粘连与模糊；
-    - 在 `tray.rs` 与 `tray_menu.rs` 主动调用 `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` / `SetThreadDpiAwarenessContext` 并升级 `app.manifest` 版本号刷新 Windows 激活上下文缓存，结合 `GetDpiForMonitor` + `GetDpiForWindow` + `GetDpiForSystem` 联合取值，彻底杜绝高分屏下 DWM 位图放大模糊；
-  - **浅色/深色双主题联动配色（`crates/runner/src/tray_menu.rs`, `crates/runner/src/tray.rs`）**：
-    - 新增 `tray::is_dark_theme()` 实时读取 `~/.agenthub/window_shell/theme.txt` 控制台主题状态，构建 `ThemePalette::for_theme(dark)` 双色板；
-    - 浅色模式彻底告别刺眼纯白 `#ffffff` 整板背景，采用与控制台及 Aozora UI 一致的柔和灰蓝底色（`#eceff6` 卡片底 + `#f6f8fc` 独立圆角行卡 + `#dee3ef` 分段轨道 + `#e2e6fc` 主操作按钮），深色模式同步切换为 `#1a1a1e` 卡片底与 `#232328` 独立圆角行卡；
-  - **20 枚真实多色品牌图标与矢量 UI 图标内嵌（`crates/runner/resources/tray_icons_64.bin.zst`, `crates/runner/src/tray_menu.rs`, `crates/runner/build.rs`）**：
-    - 将 `crates/runner/resources/icons/` 下的真实官方品牌图标（`AgentHub` 3D 立方体、`Claude Code` 像素吉祥物、`Claude Desktop` 太阳纹、`Codex` 紫蓝花瓣、`Gemini CLI` 渐变终端、`Gemini` 四芒星、`ZCode`、`Grok`、`Antigravity`）及 11 枚矢量 UI 图标（设置齿轮、配置滑块、用量柱状图、今日请求脉搏、Token 图层、预估成本、主窗口、退出电源、右箭头等）预光栅化为 `64x64` RGBA 精灵包 `tray_icons_64.bin.zst`；
-    - 实装 3×3 超采样双线性插值（9× MSAA 面积下采样）与 SDF 圆角裁剪器 `blit_icon_rgba`，彻底替代原有的单字母 `C`/`D`/`X`/`G`/`Z` 占位符，实现顶栏、分段切换栏、客户端列表、今日用量与热门模型、底栏按钮全链路图文并茂；
-  - **分发包同步更新并推送 `portable-pc`**：更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `06b599d74e02c7be48e830b4729b00c238de7ac0c457eb8e1213cb5658dea7b7`，`agenthub-runner.exe` SHA256: `ec3b6aa626bdda42bc595198c2e5edb742b17b5505203fc697e72897264de76c`），并通过 Taildrop 推送至 `portable-pc`。
+- Gateway 核验 Runner 声明的 Codex 会话控制能力，再派发只读预览、接管或归还指令。未升级的 Runner 可继续通过原有的显式恢复入口工作。
 
-- **Runtime 用量层级嵌套筛选浮窗、CSV 落盘路径展示与定位、托盘图标与品牌文案精简、DOM 分页渲染及全链路热刷新与性能优化（`crates/runner`）**：
-  - **托盘图标资源内嵌修复与悬停提示精简为"AgentHub"（`crates/runner/build.rs`, `crates/runner/src/tray.rs`, `crates/runner/src/window_icon.rs`, `crates/runner/resources/dashboard.html`, `crates/runner/src/web_server.rs`）**：
-    - `build.rs` 补齐 `x86_64-w64-mingw32-windres` 交叉编译资源编译器路径确保 `app_icon.res`（含多尺寸 `icon.ico` 与 `app.manifest`）完整链接进 PE 头部，并在 `window_icon.rs` / `tray.rs` 新增直接解析内嵌 `icon.ico` 字节的 `create_hicon_from_embedded_ico` 双保险兜底，彻底解决托盘图标空白问题；
-    - 将右下角托盘图标鼠标悬停提示（Tooltip）、窗口标题与 Web App Manifest 名称统一精简为"AgentHub"，去除冗余的"Runner / Runtime"与本地端口后缀；
-  - **二级级联嵌套筛选浮窗与已选条件胶囊（`crates/runner/resources/dashboard.html`, `crates/runner/resources/dashboard.css`, `crates/runner/resources/dashboard.js`）**：
-    - 淘汰并排裸露的 5 个独立筛选下拉按钮，收敛为单一"筛选"按钮（`#ledFilterBtn` + 激活数量角标 `#ledFilterBadge`）唤起二级双栏级联浮窗（`.led-cascade-menu`：左侧分类栏"应用 / 供应商 / 模型 / 状态 / 高级筛选"，右侧展示对应可选项、计数与勾选状态），并在工具栏下方动态渲染可单点移除的已选条件胶囊条（`#ledActiveChips`）；
-    - 修复"显示列"与"筛选"菜单因 DOM ID 与 CSS 类名不一致导致无法打开的问题；
-  - **CSV 导出真实落盘路径横幅与资源管理器定位（`crates/runner/src/web_server.rs`, `crates/runner/resources/dashboard.js`）**：
-    - 新增 `POST /api/usage/export-csv` 与 `POST /api/reveal-path` 接口，点击"导出 CSV"由本地守护进程直接写入系统 `Downloads` 目录并返回完整物理路径；界面展示落盘路径横幅（`#ledExportNotice`），自动复制路径至剪贴板，并提供"在文件夹中定位"（`explorer.exe /select`）与"复制路径"按钮；
-  - **DOM 分页渲染、活动标签页按需绘制与子代理懒加载（`crates/runner/resources/dashboard.js`）**：
-    - `drawUsage()` 改为仅渲染当前活动标签页（`overview` / `requests` / `sessions` / `context`），避免后台轮询或切换时同步重排隐藏标签页的数千个表格节点；
-    - 请求日志表与会话表实装每页 100 条增量分页（`ledPageLimit = 100` + "加载更多"按钮），会话列表中的子代理树（`.subs`）改为仅在用户点击展开时按需构建 DOM，彻底消除大日志量下的界面卡顿；
-  - **真正热加载刷新、3.5s 自动轮询与后端零拷贝快路径（`crates/runner/src/web_server.rs`, `crates/runner/src/usage_ledger.rs`, `crates/runner/src/collectors/mod.rs`, `crates/runner/src/collectors/workspace.rs`, `crates/runner/src/remote_host.rs`, `crates/runner/src/model_catalog.rs`, `crates/runner/src/claude_gateway.rs`）**：
-    - 手动刷新按钮携带 `?force=1` 立即穿透内存 TTL 执行增量尾部读取并给出明确热刷新反馈；后台以 3.5 秒周期及窗口 `focus` / `visibilitychange` 事件驱动无闪烁自动热刷新；
-    - `usage_ledger.rs` 实装未变更零拷贝快路径（磁盘文件 `(len, mtime)` 与 SQLite/WAL 未变时 0 次 `LedgerRecord` 克隆）；`collectors/mod.rs` 基于 DB+WAL 双指纹缓存 ZCode/Codex 会话并缓存 60 秒以上静止 Claude 会话与子代理；`remote_host.rs` 在 `discover()` 中对 `dunce::canonicalize` 按工作区路径记忆化；`model_catalog.rs` 与 `claude_gateway.rs` 消除 `/api/dashboard` 轮询期间的同步网络阻塞；
-  - **分发包同步更新**：重新编译 Windows Release 产物并更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `24c1e6d89e97671732ef36e601e6ff6c1fa8339c9ca5c4f49da3949967477104`）。
+## [2.7.15] - 2026-11-20
 
-- **Web 控制台视觉排版与交互升级、全客户端真实模型目录、Runtime 托盘弹窗重构、增量缓存与用量多维筛选（`apps/web`, `packages/contracts`, `services/api`, `crates/runner`）**：
-  - **会话阅读列居中对称与右侧紧凑用户气泡（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
-    - 统一 `.remote-timeline` 与 `.remote-composer` 的居中阅读列宽度（`--remote-measure`），将用户消息气泡重构为右侧锚定的紧凑自适应卡片（`width: fit-content; max-width: min(76%, 560px)`），消除用户指令铺满整行导致的视觉重心偏移；
-    - 隐藏输入框 `<textarea>` 原生滚动条上下微调箭头（`::-webkit-scrollbar-button { display: none }`），保持输入区干净克制；
-  - **会话流内"正在执行"实时状态行与异常显著透出（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/lib/remote.ts`, `crates/runner/src/remote_host.rs`, `crates/runner/src/collectors/claude_app_server.rs`）**：
-    - 在 `.remote-timeline` 内部新增 `.remote-turn-running-row` 实时脉动状态行，指令派发与流式生成期间直接在对话流底部显示"正在执行…"，并支持一键停止当前回合；
-    - 持久 `ClaudeProcessSession` 新增 stderr 环形缓冲采集并在 `result`（`is_error: true` 或 `error_*` 子类型）及进程异常退出时主动下发 `error` 与带失败原因的 `turn/completed` 事件；前端 `latestTurnFailure` 同时解析 `turn/completed` 失败状态并在时间线内显著展示错误卡片，杜绝静默卡死；
-  - **附件选择弹出菜单与权限模式端到端选择器（`packages/contracts/src/remote.ts`, `services/api/src/remote-store.ts`, `crates/runner/src/remote_journal.rs`, `crates/runner/src/remote_host.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
-    - 点击输入框 `+` 按钮不再直接强拉系统文件选择器，改为弹出结构化菜单（"添加文件或图片 Ctrl+U"、"从剪贴板粘贴"、"插入代码片段"、"快捷指令"）；
-    - 新增权限模式选择器（`default` 默认权限、`acceptEdits` 自动允许编辑、`plan` 只读规划、`bypassPermissions` 完全自动执行），贯通 Web 控制台、协议契约与 Runner 各客户端执行参数；
-  - **按客户端隔离读取真实模型列表（`crates/runner/src/claude_gateway.rs`, `crates/runner/src/model_catalog.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
-    - 废除跨客户端混用与从历史 `.jsonl` 会话转录抓取旧模型名的逻辑，按 `claude_code`、`claude_desktop`、`codex`、`gemini_cli`、`zcode`、`grok_build`、`antigravity` 各自独立的本地配置与 CC Switch `app_type` 精确读取真实可用模型列表，并支持网关模型名自动映射还原；
-  - **CC Switch 风格右下角系统托盘弹窗（`crates/runner/src/tray.rs`, `crates/runner/src/tray_menu.rs`, `crates/runner/examples/tray_menu_preview.rs`）**：
-    - 基于 Win32 `UpdateLayeredWindow` 与超采样 SDF 重构右下角托盘弹窗卡片：顶部展示"AgentHub"标题与设置齿轮按钮，内置可原位切换的"配置" / "用量"分段标签页，客户端列表展示品牌徽标、真实 Provider 名称、"直连" / "路由"胶囊与右侧箭头，底部提供"打开主窗口"与"退出"按钮；支持左键/右键唤起弹窗、双击直接打开主窗口；
-  - **Runtime 隐式最优刷新周期与全链路增量字节偏移缓存（`crates/runner/src/usage_ledger.rs`, `crates/runner/src/collectors/mod.rs`, `crates/runner/src/collectors/capabilities.rs`, `crates/runner/src/collectors/workspace.rs`, `crates/runner/src/web_server.rs`）**：
-    - 移除界面显式暴露的刷新频率按钮（`#usageEvery` 与 `#pollSegs`），内置最优刷新周期并在窗口隐藏时自动暂停轮询、恢复可见时立即重验；
-    - `usage_ledger.rs` 与 `collectors/mod.rs` 实装基于文件 `(len, modified_ms)` 与字节偏移水位的增量尾部追加读取（`SeekFrom::Start(state.offset)`）以及 SQLite `rowid` 增量游标，未变化文件零磁盘 I/O；为 `/api/dashboard` 与 `/api/usage/ledger` 接入 `ETag` / `If-None-Match`（`304 Not Modified`）响应；
-  - **Runtime 用量自定义列选择器与多维高级筛选（`crates/runner/resources/dashboard.html`, `crates/runner/resources/dashboard.css`, `crates/runner/resources/dashboard.js`）**：
-    - 用量请求面板新增"请求日志" / "供应商" / "模型"三视图切换、右上角 `[|||]` 12 列自定义显示列勾选弹窗（持久化至 `localStorage`）以及"应用"、"供应商"、"模型"、"状态"、"高级筛选"纯 DOM 下拉过滤与关键词检索；
-  - **分发包同步更新**：重新编译 Windows Release 产物并更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `277d3c54cb37899325d5943114dc35e9b4a13286c290b82757a91202e345790d`）。
+- 固定 Web 容器中静态资源的读取权限，避免构建检出使用严格权限时导致 Nginx 健康探针返回 403。
 
-- **Web 控制台会话渲染状态对齐、最小文案精简、会话内模型选择、附件上传与真实上下文用量上报（`apps/web`, `packages/contracts`, `services/api`, `crates/runner`）**：
-  - **解决会话尚未渲染即显示已连接与历史空白（`crates/runner/src/remote_host.rs`, `crates/runner/src/remote_network.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
-    - `keep_alive_restored_sessions` 在后台恢复既有会话以及 `Connect(Resume)` 命中已连接会话幂等分支时，主动调用 `enqueue_session_history_and_usage` 补发 `history/snapshot` 与 `thread/tokenUsage/updated`，并在 `handle_inbound_command` 完成后即刻刷入出站队列；
-    - 前端新增 `sessionLoading` 状态并在已标记连接但尚未收到历史消息时自动触发一次幂等同步，加载期间统一展示加载动画，不再提前渲染"会话已连接"与空态卡片；
-  - **遵循最小文案规则移除冗余横幅与底部提示（`apps/web/src/components/RemoteConsole.tsx`）**：
-    - 顶栏在会话正常连接时仅展示 Provider 名称，不再拼接冗余的"· 会话已连接"；
-    - 过滤历史 `session_already_bound` / `native_session_already_bound` 回执，彻底移除会话顶部"该会话已在当前设备上处于连接状态。"横幅；
-    - 移除空态卡片下方的"会话已就绪，可以在下方发送第一条指令。"以及输入框底栏左侧的"就绪 / Enter 发送 · Shift+Enter 换行"与占位符快捷键尾缀；
-  - **支持会话内模型切换与多源模型目录聚合（`crates/runner/src/model_catalog.rs`, `crates/runner/src/collectors/claude_app_server.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
-    - `agent_model_catalogs` 聚合网关配置、`~/.claude/settings.json` 与本地 Claude 会话转录中的模型清单，同时注册至 `claude_code` 与 `claude_desktop`；
-    - 会话输入框工具栏新增模型下拉选择器（位于推理深度选择器左侧），持久 `ClaudeProcessSession` 在检测到模型或推理深度变更时自动平滑重建进程；
-  - **支持会话内选择与粘贴附件（`packages/contracts/src/remote.ts`, `services/api/src/remote-routes.ts`, `crates/runner/src/remote_host.rs`, `apps/web/src/components/RemoteConsole.tsx`）**：
-    - `send_prompt` 协议契约新增 `attachments` 字段，输入框左侧新增添加附件按钮并支持直接粘贴图片或文件、预览缩略图与移除；
-    - Runner 将附件落盘至系统临时目录，对文本文件内联或附带路径说明，对图片附件同时通过 `stream-json` 原生多模态 `image` 块与本地图片输入透传给底层 Agent；
-  - **打通会话真实上下文用量上报与批量恢复性能优化（`crates/runner/src/collectors/mod.rs`, `crates/runner/src/remote_host.rs`, `apps/web/src/lib/remote.ts`, `apps/web/src/components/RemoteContextCapacity.tsx`）**：
-    - 修复前端 `latestContextUsage` 未读取 `remote_journal` 投射后的 `tokenUsage.used` 与 `tokenUsage.window` 字段导致容量环始终为空的问题；
-    - Runner 在转录扫描、会话恢复、自动保活以及 Claude 流式 `assistant` / `result` 阶段全程提取并上报真实 `context_used_tokens` 与 `context_window_tokens`，前端同时接入发现候选的上下文数据兜底（并支持对未重启旧版 Runner 按模型名推断上下文窗口及按单轮均摊 `prompt_tokens` 估算上下文用量，以及自动内联附件降级防未知字段断连）；
-    - 为 `lookup_session_context_usage` 新增 15 秒进程内缓存，消除多会话批量恢复时重复扫描磁盘与 SQLite 的 $O(N \times M)$ 开销；修复会话内模型/推理深度切回默认选项时的进程重建判定，并为附件落盘文件名附加 `client_cmd_id` 唯一前缀防跨轮同名截图覆盖；
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `30814a1fe4d85d0086aff7114cc138be46d1db82d818f6fc13d88c77325c81b3`）。
+## [2.7.14] - 2026-11-20
 
-- **Runner Runtime 全局常驻保活与会话秒级极速恢复（`crates/runner`, `apps/web`）**：
-  - **Runtime 跨端全局常驻保活（`crates/runner/src/remote_host.rs`, `crates/runner/src/remote_journal.rs`）**：
-    - **启动自动激活持久化会话**：在 `DurableHost::new` 恢复本地 Journal 绑定后，自动触发 `host.keep_alive_restored_sessions()`，对磁盘工作区仍有效的既有会话自动加入工作区白名单，并向 Provider Transport 触发 `thread/resume` 完成运行时唤醒；
-    - **脱离前端依赖的常驻保活**：将恢复出的绑定直接置为 `control_connected = true` 与 `execution_state = Idle`，并通过网关 `ready` 握手向平台宣告在线，彻底解决“前端不打开就不加载运行时、退出前端后后台不保活”的缺陷。实测 Runner 冷启动后无需打开任何网页界面，各会话直接常驻在线，时刻响应远端调度；
-  - **指令执行与全盘扫描解耦（`crates/runner/src/remote_network.rs`）**：
-    - **消除 7 秒级阻塞等待**：修复 `LocalHostCommand::Execute` 在完成本地执行后，因阻塞等待 `refresh_discovery_and_publish`（全盘遍历 500+ 会话元数据）导致 HTTP API 卡顿 6~7 秒的严重架构瓶颈；
-    - **即时管道响应**：在 `handle_local_command` 写入 Journal 并在本地完成连接（约 15~30ms）后立即通过 `respond_to.send` 向调用方交割 `CommandReceipt`，将耗时的全盘扫描转入后置执行，将 Connect (Resume) 接口耗时由 7.68 秒断崖式压缩至 **37ms**；
-  - **转录读取与会话查找毫秒级直达（`crates/runner/src/collectors/mod.rs`, `crates/runner/src/conversation.rs`, `crates/runner/src/remote_host.rs`）**：
-    - **Claude 会话内存快表命中**：`find_claude_session_info` 优先直接查询内存 `claude_remote_sessions_cache()`，消除对 `~/.claude/projects/` 全盘反复遍历，实测 482KB 真实大型转录加载耗时从 14.4 秒降至 **40ms**；
-    - **Codex 深度搜索严格剪枝**：会话搜索限定在 `~/.codex/sessions` 与 `archived_sessions` 根目录 `.jsonl` 文件，主动绕过插件缓存树，集成测试延迟由 14,457ms 骤降至 19.5ms；
-    - **Windows 路径规范化匹配**：在 `ConnectMode::Resume` 授权判定中引入 Windows 路径规范化（统一斜杠、折叠大小写、剥离 `\\?\` 及末尾斜杠），杜绝格式差异引发的 `workspace_not_authorized` 误报；
-  - **前端交互自愈与极速轮询（`apps/web/src/components/RemoteConsole.tsx`）**：
-    - **指令即刻穿透刷新**：新增 `refreshSessionDetail.current()`，在 `connect`、`launch`、`resumeCandidate` 派发后立即穿透刷新会话详情，并在指令待确认期间自适应降频至 200ms 高频轮询；
-    - **状态乐观联动**：在获得最新连接状态时同步更新侧边栏会话树与顶部状态徽章，消灭前端多余的 1.5 秒空窗；
-  - **真实实测数据验收（Local Host API 实测）**：
-    - 482KB 真实转录加载耗时：**40.1ms**（0.040s）；
-    - 真实未绑定会话 Connect/Resume 执行响应：**37.5ms**（0.037s），状态 `accepted`，立即建立 `control_connected: true` 与 `idle`；
-    - 守护进程冷启动重启自愈：强杀 Runner 并更换 `host_generation` 重启，既有会话 100% 自动完成保活加载（`control_connected: true`, `execution_state: "idle"`）；
-    - 自动化测试回归：`cargo test --package agenthub-runner`（236 单元测试 + 28 远程 Host 集成测试全绿）、`cargo clippy`、`cargo fmt`、`npm.cmd run typecheck`、`npm.cmd run format:check`、`npm.cmd test` 全部通过。
+- 修正 Codex 历史会话提前占用桌面端写入锁的问题。浏览会话和 Runner 重启仅恢复历史或绑定记录。主动接管或首次发送才申请原生控制权，归还时等待 Codex 确认卸载。接管的会话空闲 45 秒后自动归还，执行或等待审批时保留控制。Web 和 Android 遇到原生写锁冲突时保留草稿。
 
-- **Web 设置页设备在线状态与真实长连接对齐（`services/api`, `apps/web`）**：
-  - **问题现象**：本地控制台 `/api/status` 明确 `remote_connected: true`，Web「设置 → 设备」里同一台电脑却显示「离线」；
-  - **问题根因**：`/v1/devices` 的 `online` 只由数据库中 `last_seen_at` 推导（PostgreSQL 45 秒、SQLite 300 秒窗口）。该字段仅由 `/v1/devices/register`、`/v1/devices/heartbeat`、`/v1/sync/batches` 推进，而 `web`/`daemon` 模式的 Runner 走的是 `/v3/remote/ws` 长连接，从不调用 HTTP 心跳接口，配对完成后 `last_seen_at` 便冻结在配对时刻，于是连接一直正常、在线状态却永远过期。控制台本身读的是内存中的连接表（`connections`），两个界面因此长期各说各话；
-  - **单一在线事实（`services/api/src/presence.ts`）**：新增 `RunnerPresence`，在 v3 握手成功时标记在线、socket 关闭时清除；`/v1/devices` 的 `online` 改为「长连接在线，或该存储后端自己的最近活跃判定」，已撤销设备一律离线。被新连接替换的旧 socket 关闭时不会误清后继连接的在线状态；
-  - **会话列表同步收敛（`services/api/src/remote-routes.ts`）**：`/v3/remote/sessions` 的 runner/session `online` 改读同一份 presence，避免同一页面里设备选择器与设置页给出相反结论；
-  - **设置页实时刷新（`apps/web/src/components/SettingsPage.tsx`）**：设备分区停留时每 5 秒拉取一次设备列表，Runner 重连或掉线后指示灯自行更新，不必退出重进；
-  - **回归测试**：新增网关用例——`last_seen_at` 已过期时，建立 v3 长连接后设备列表必须显示在线；断开后必须恢复离线（`services/api/test/remote.test.ts`）。`npm.cmd test --workspace @agent-pulse/api` 64 项通过、`npm.cmd test --workspace @agent-pulse/web` 75 项通过、两侧 `typecheck` 与根目录 `format:check` 均通过。
+## [2.7.13] - 2026-11-19
 
-- **Windows Runner 开机自启（`docs/DEPLOYMENT.md`）**：
-  - **自启项**：在启动文件夹 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` 创建 `AgentHub Runner.lnk`，目标 `C:\Users\tanner\Desktop\agenthub-runner.exe web --port 4200 --open-browser false --hide-console true`，工作目录 `D:\Claudespace\Project\agenthub`（与手工启动时一致，`.` 解析为该目录，是唯一被授权的 workspace）。登录后静默进入托盘，不弹窗口、不占用前台；
-  - **为何用启动文件夹而非 `.vbs` 或计划任务**：Runner 已是 Windows GUI 子系统程序（`#![windows_subsystem = "windows"]`），本身不创建控制台窗口，无需 `WScript.Shell.Run(..., 0, False)` 包裹；启动文件夹又比计划任务更容易被用户在「设置 → 应用 → 启动」里自行关闭；
-  - **单实例安全**：验证重复启动被命名管道守卫拦下（`daemon_already_running`），不会抢占 4200 端口或打断已运行实例；
-  - **实测**：通过 `POST /api/shutdown` 停止原进程后由快捷方式冷启动，1 秒内控制台就绪，`/api/status` 显示 `remote_enabled: true`、`remote_connected: true`，`/api/dashboard` 返回 500 条会话与 32 个工作区；进程 `MainWindowHandle = 0`（无可见窗口），枚举到隐藏的 `AgentHubRunnerTrayClass` 托盘窗口；再次经快捷方式启动后进程数仍为 1；
-  - **文档**：`docs/DEPLOYMENT.md` 新增「Windows Runner 开机自启」一节，记录位置、参数、单实例语义与验收命令。
+- 将运行期间的模型和会话目录查询移到独立的只读 App Server 工作线程，避免目录刷新阻塞回复片段、轮次完成事件和新命令。目录结果继续更新工作区映射和会话类型缓存，刷新失败时保留上次成功的目录。
 
-- **Web 控制台交互视觉体验修复与 Runner 会话恢复自愈（`apps/web`, `crates/runner`）**：
-  - **侧边栏复制会话按钮与交互一致性（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/remote.css`）**：
-    - **修复小图标被压缩消失**：排查发现全局 `.remote-console button` 的 `8px 13px` 内边距作用到了 `22×22px` 的 `.remote-session-action-btn` 上，导致内部 SVG 宽度被挤压为 0 呈现为空白小灰块；在全局样式排除选择器中加入 `:not(.remote-session-action-btn)`，强制 `padding: 0 !important` 与 `display: block` SVG；
-    - **候选未连接会话支持复制**：将候选会话（`.remote-session.candidate`）与活跃会话的卡片布局统一为双列网格结构，候选会话同样增加悬浮复制 ID 按钮，抹平行为差异；
-  - **Runner 幂等恢复与 Claude Desktop 判定加固（`crates/runner`, `apps/web/src/lib/remote.ts`）**：
-    - **根治单机重连误报“已绑定到另一台电脑”**：在 `crates/runner/src/remote_host.rs` 的 `NativeSessionHost::connect` 中增加针对 `ConnectMode::Resume` 的幂等判定；当会话已有本地活动绑定且 `provider_session_id` 匹配时直接返回既有连接收据，避免多端或重连时因旧状态未释放误判 `session_already_bound`；
-    - **修正错误提示文案**：在 `remote.ts` 中将 `session_already_bound` 翻译修正为清晰明确的「该会话已在当前设备上处于连接状态」；
-    - **全量行扫描识别 Claude Desktop 会话**：在 `crates/runner/src/collectors/mod.rs` 中，将 `entrypoint.starts_with("claude-desktop")` 的提取从仅检查 assistant 消息行提升到全量 transcript 行，确保即使尚未生成 assistant 消息或在首轮前也能准确归类为 Claude Desktop 而非错误回退至 Claude Code；
-  - **新建会话弹窗防穿透遮罩（`apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/components/remote.css`）**：
-    - 将原生 `<dialog>` 弹窗重构为显式受控状态与 `.remote-modal-backdrop` 全屏遮罩层（带毛玻璃模糊与背景色），彻底解决弹窗展示后仍能点击底层页面内容的交互穿透问题；
-    - 遮罩层点击与 Escape 按键支持安全退出，弹层内部阻止冒泡，彻底避免原生 `<dialog.showModal()>` 的 Top Layer 与 Portalled Select 下拉层级互斥问题；
-  - **推理深度下拉菜单方向与动画修正（`apps/web/src/components/Select.tsx`, `apps/web/src/components/remote.css`）**：
-    - 为 `Select` 组件扩展 `placement?: "auto" | "top" | "bottom"` 属性，底部输入框思考深度选择显式传入 `placement="top"`；
-    - 解决 CSS `@keyframes` 动画中 `transform: translateY(0)` 覆盖内联 `transform: translateY(-100%)` 导致向上展开时依然遮挡按钮的 Bug；改为以 `bottom: ${rect.bottom}px; top: auto;` 定位，并新增专属的 `@keyframes cdsSelectMenuInAbove` 向上展开动画；
-  - **输入框边框与焦点轮廓全面精简（`apps/web/src/components/remote.css`, `apps/web/src/components/remote-desktop.css`）**：
-    - 移除 `.remote-composer-card` 的外边框以及焦点时的外轮廓；
-    - 移除 `.remote-composer-card::before` 顶部分割线（保留纯透明到背景色的柔和渐变过渡）；
-    - 移除内部 textarea 获得焦点时的橙色描边（`outline: none !important; box-shadow: none !important; border: none !important;`），实现通透干净的现代输入框质感；
-  - **全量测试与类型检查通过**：`npm.cmd test` 75 项通过、`npm.cmd run typecheck` 0 错误、`cargo test --package agenthub-runner` 295 项测试全部通过。
+## [2.7.12] - 2026-11-19
 
-- **Web 控制台与本地控制台统一组件语言：原生下拉框、系统弹窗与编号化文案全量替换（`apps/web`, `crates/runner/resources`）**：
-  - **下拉选择全面组件化（`apps/web/src/components/Select.tsx`）**：
-    - **问题现象**：新建会话弹窗（`工作区`）与输入框的推理深度仍使用 `<select>`，在 Windows 上弹出的是操作系统自带的原生菜单，字体、圆角、主题与控制台其余部分完全脱节；工作区选项直接暴露内部标识 `ws-agent_hub-e6174d5db55c0532`；
-    - **单一下拉实现**：新增 `Select` 组件，触发器 + listbox 弹层，复用设备/Agent 级联菜单的 `--cds-surface-popover`、`--cds-border`、阴影与 12px 圆角；弹层经 `createPortal` 挂到 `document.body` 并以 `position: fixed` 定位，避免被弹窗自身的滚动容器裁切；上下空间不足时自动向上翻转，随滚动/缩放重新测量；
-    - **自适应宽度**：弹层先按选项文本估算最小宽度，挂载后再按真实排版测量最宽一行（标题的 `scrollWidth`，即使已显示省略号仍是全文宽度），上限 `MAX_MENU_WIDTH`，并按视口左右留白 12px 夹持，长会话标题因此完整可读而不是被字段宽度截断；
-    - **完整键盘与无障碍**：`ArrowUp/Down`（在可用项间循环）、`Home/End`、`Enter/Space` 提交、`Escape` 关闭并把焦点交还触发器、`Tab` 关闭、点击外部关闭；`role="combobox"/"listbox"/"option"`、`aria-expanded`、`aria-selected`、`aria-controls` 齐备；
-  - **系统原生弹窗替换（`apps/web/src/components/Confirm.tsx`, `crates/runner/resources/dashboard.*`）**：
-    - **Web 控制台**：`SettingsPage` 撤销设备改用新的 `Confirm` 组件（`role="alertdialog"`、焦点默认落在“保留”、`Escape` 等同于取消、点击遮罩取消），不再调用 `window.confirm`；
-    - **本地控制台**：`dashboard.js` 的退出 Runner 与解除网关绑定改用新增的页内 `askModal`（复用既有 `.modal/.dialog` 版式与 `.round` 警示图标），`askQuestion()` 返回 Promise 供调用方 `await`；`Escape` 与点击遮罩都视为取消，被新问题顶替的旧问题自动按“否”结算，不会留下悬挂的 Promise；
-    - **本地控制台复选框**：会话列表的「全选」与逐行勾选原先只设 `accent-color`，方框尺寸、圆角与描边仍由操作系统绘制；改为 `appearance: none` + 自绘勾选/半选（仍保留原生 `<input type="checkbox">` 的键盘、表单值与 `:indeterminate` 语义），浅色与暗色各自取 `--accent` / `--accent-fg`；
-  - **会话标题去编号化（`apps/web/src/lib/session-tree.ts`）**：
-    - **无标题会话**：`formatFallbackTitle` 不再拼接会话 id 前四位（`新会话 · 971b`），统一显示为「新会话」；id 是内部键，对阅读侧边栏的人没有意义；
-    - **解析层同步**：`buildSessionTree` 与时间线空状态不再计算 `shortId`，调用点一并收敛；
-  - **新建会话弹窗字段文案（`apps/web/src/components/RemoteConsole.tsx`）**：
-    - **工作区**：下拉展示文件夹名（`workspaceLabel`），重名时才在第二行补一段 id 尾巴以便区分，原始 `ws-*` 不再出现在任何选项主文案里；
-    - **会话**：接管列表的每项带引擎标签（`Coding Assistant` / `Claude Desktop` / `ZCode` / …），无标题会话显示「未命名会话」并把原始 id 放进 tooltip；
-    - **模型**：按所选引擎读取本机上报的模型清单（`models.agents`），不再跨引擎串用；
-  - **Coding Assistant 与 Claude Desktop 分流（`apps/web/src/lib/session-tree.ts`, `src/components/remote.css`）**：
-    - **问题根因**：`PROVIDER_BY_NAME` 缺少 `claude_desktop` 键，Desktop 会话落到 `claude_` 前缀兜底分支，被错误归入 Coding Assistant 目录；
-    - **修复与视觉区分**：补齐 `claude_desktop` 描述符并加入 `ProviderKind`/`PROVIDER_ORDER`；新增 `claude-desktop` 的徽标、标签与 Agent 指示点配色（浅色为棕调、暗色为暖砂色），与 Coding Assistant 的陶土色在同一色系内可分辨；
-  - **模型清单不再硬编码（`crates/runner/src/model_catalog.rs`, `remote_host.rs`, `web_server.rs`）**：
-    - **删除内置兜底**：移除 `builtin_fallback_models()`（曾写死 `claude-opus-5`、`claude-sonnet-5-5` 等 id）。上游不可达且无缓存时返回空列表 —— 凭空给出别人账户不一定提供的模型，比不给更糟；
-    - **按引擎输出目录**：新增 `agent_model_catalogs()`，从 Claude 网关配置与 ZCode 的 `~/.zcode/v2/config.json` 读取真实模型；`NativeSessionHost::models()` 的 `data` 保持历史扁平结构，同时新增 `agents`（按引擎分组，Codex 取自 `model/list` RPC），`data` 中每条都来自某个引擎目录，不再有无所属的条目；
-    - **刷新按钮**：`POST /api/models/refresh` 同时失效网关配置缓存与上游模型缓存，两个缓存回答同一个按钮；
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（内含新版 `agenthub-runner.exe`，已内嵌新的控制台脚本，SHA256: `f314bd6b43676ccaab9205da0ea11eaac0834d230872189f4e3ce728e71b3785`）；Web 端已构建镜像并部署至东京生产环境。
-  - **回归测试**：`model_catalog_is_returned_from_native_protocol_without_fallback` 改为校验 `agents.codex` 与 `data` 的归属关系（不再断言整包 JSON 恒等），并新增“`data` 中每一项都能在某个引擎目录中找到”的断言；`session-tree` 的无标题用例改为断言纯「新会话」；`npm.cmd test` 75 项、`cargo test --workspace` 全量、`cargo clippy -D warnings`、`cargo fmt --check`、`npm.cmd run typecheck` 与 `npm.cmd run format:check` 均通过。
+- 修复 Claude Desktop 和 Claude Code 连续发送消息时，新回复和思考片段追加到前一轮的问题。Runner 按轮次生成流式消息 ID，Web 按轮次还原旧 Runner 和历史记录中的固定 ID，使后续片段继续更新当前回复。
 
-- **Runner 入站命令日志与网关命令代际对齐，根治“进入网页端就识别不到设备/会话”（`crates/runner`, `services/api`）**：
-  - **问题现象**：Web 控制台里设备与全部会话消失，本地控制台 `/api/status` 恒为 `remote_enabled: true, remote_connected: false`，Runner 每 6 秒重连一次且永远握手失败。生产实测网关上 `dev_68f6…` 的 `received=106`、`command_seq=1`，重连时反复重投同一条 `seq=1` 的 `connect` 命令；
-  - **根因（两侧各自遗留一半状态）**：
-    - **网关侧**：`86a205c` 新增的“命令序号夹持”只把 Runner 上报的 `received_command_seq` 夹到 `command_seq`，却没有清理 Runner 侧已经应用的 `remote_inbound_commands` 行。命令日志回退（数据库重置、换机、重新配对）后，第 1 行仍是旧世代 `48dd0ec2…` 的已执行命令；
-    - **Runner 侧**：`begin_inbound_command` 对同一 `seq` 上「client_cmd_id 或命令体不同」一律返回 `InvalidAck`；该错误经 `handle_network_event` 走到 `reject_remote_epoch`，把当前 transport epoch 永久标记为拒绝，于是每次重连都在同一帧上失败，形成死循环；
-  - **修复（Runner）**：
-    - `begin_inbound_command` 仅在旧行为**已拿到 receipt**（确知已执行完毕、不会重复执行）时才允许新命令替换该 `seq` 的行；**未完成意图（无 receipt）仍严格拒绝**，避免同一序号上的不同命令被二次执行；等于或低于已应用水位的不一致仍按协议故障拒绝；
-    - `reset_inbound_command_seq` 同时删除高于新水位的 `remote_inbound_commands` 行，使回退后的序号能重新落地而不是撞上幽灵行；
-    - `NetworkEvent::Connected` 新增第三字段承载网关的 `command_seq`；网关命令日志短于本地已应用水位时自动回退本地入站水位，旧网关不下发该字段时保持本地水位不变；
-  - **修复（网关）**：新增 `RemoteContentStore.supersedeStaleCommands`，在 WebSocket 握手校验通过后、读取水位之前，丢弃“未收到 receipt 且 `host_generation` 不等于当前世代”的**尾部**命令（保留已应用历史与当前世代命令，序列仍连续），并把 `command_seq`/`command_ack` 同步回退；`hello_ack` 增加 `command_seq` 字段供 Runner 对齐；
-  - **回归测试**：Runner 新增 4 个入站日志用例（网关重建后重发序号可替换、未确认意图不可覆盖、已应用区间不一致仍拒绝、回退水位后重放可落地）与 2 个握手用例（网关命令日志变短则回退、旧网关不下发该字段则保持）；网关新增 2 个用例（重启后旧世代命令不再重投、已有 receipt 的历史不被截断）；
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `4d56af375770d16621e79d0faf8b251821bec29e10e3c50b7615d2a30f70939f`）。
+## [2.7.11] - 2026-11-19
 
-- **Web 端会话树层级视觉重构、渐进式加载与会话恢复底层自愈（`apps/web`）**：
-  - **恢复会话底层 Bug 根治（解决“点击已脱离连接的会话无反应、无法恢复控制”）**：
-    - **问题根因**：Web 控制台向 `/v3/remote/runners/:runner/commands` 提交 `connect` 命令时，固定使用了数据库快照中持久化的旧 `target.binding.host_generation`。当目标 Runner 发生过重启、断网重连或重新建联时，服务端已切换为当前最新的 `conn.generation`，因代际不符直接抛出 `host_generation_mismatch` 拒绝执行。此外，会话项在 `isSelected = true` 或在 `autoResumedRef` 缓存击中时存在早退短路逻辑，导致用户显式点击时无法重试建联；
-    - **动态实时代际解析与强制重连**：`submit` 函数在构造命令时，优先从在线 `snapshot.runners` 中实时解析当前的 `activeGeneration = targetRunner?.hello?.host_generation ?? target.binding.host_generation`，彻底消除 `host_generation_mismatch`；在用户点击未连接控制的主动会话时，主动清理 `autoResumedRef` 缓存并派发恢复指令，支持用户显式发起重试接入；
-  - **会话树视觉层级与全局按钮污染彻底修复**：
-    - **全局按钮隔离与像素级对齐**：使用 `:not(...)` 显式隔离全局 `.remote-console button` 的白色背景、边框和内边距对树节点操作按钮的破坏性污染；工作区标题折叠按钮与快速新建 `+` 图标（22×22px）实现严格的 Flex 垂直居中对齐；
-    - **树形层级指引线**：在工作区会话容器 `.remote-node-sessions` 左侧添加 1.5px 柔和树状缩进引导线（`margin-left: 8px; padding-left: 10px`），形成清晰自然的文件目录树层次感；
-    - **移除工作区数字编号**：移除工作区标题右侧多余的 `(1)` 计数徽标，保持纯净简洁的目录名展示；
-  - **渐进式会话分步加载（解决“长列表一次性全量倾倒渲染”）**：
-    - 每个工作区初始默认展示 5 条最新活跃会话；当会话超过 5 条时，末尾展示精致的次级操作按钮“展开更多（还有 X 条）”，点击每次递增展示 5 条；在会话搜索过滤时自动展开全部匹配项；
-  - **文案精简化与去极客散列化**：
-    - **无标题友好文案**：当会话无原生标题时，使用友好可读的「新会话 · 971b」替代冷冰冰的原始长十六进制散列；
-    - **清除多余状态圆点与噪音文案**：将会话卡片内上下重复渲染的第二枚 `.remote-state-dot` 彻底移除；常态下消除“状态待确认”（unknown）的无谓噪音文字；仅在“运行中”、“待审批”或“未连接”等关键生命周期通过轻量彩标（`.remote-session-badge`）呈现；
-  - **新建会话弹窗（`.remote-launch`）视觉与排版对齐**：
-    - 重构关闭按钮为悬浮圆形微按钮，与弹窗标题完美水平居中对齐；规范表单项与统一高度（40px）的下拉选择框，重构底部操作区域与提交按钮；
-  - **会话主视窗视觉中轴线全量对齐（解决“离线横幅两头拉扯、空状态文字孤悬左上角、视觉中心割裂”）**：
-    - **顶部横幅对齐收拢**：将全局 `.remote-notice` 宽度收拢对齐至阅读栏宽（`width: min(calc(var(--remote-measure) + 34px), calc(100% - 48px)); margin: 14px auto 0`），与底部输入框卡片边缘严格像素级齐平；修复 `.remote-notice.restoring`（离线/恢复横幅）中的 `space-between` 两极分裂，重构为居中成团（`justify-content: center; gap: 10px`），使加载旋转圈、提示文案与重试操作紧凑平衡地锚定在顶部中轴线上；
-    - **中部空状态重构与全局居中**：将会话内容容器 `.remote-timeline` 升级为 Flex 弹性列布局，空状态 `.remote-timeline-empty` 在视窗正中央（水平与垂直双向居中）呈现精致的会话图标、会话标题与动态状态描述，消除光秃秃单行小字悬在左上角的违和感；根据设备离线、连接恢复中或就绪状态自适应切换清晰简洁的提示文案；
-    - **提示关闭按钮隔离**：为所有提示横幅的关闭按钮添加 `:not([aria-label="关闭提示"])` 隔离与纯净样式，杜绝全局按钮的突兀白底黑框污染。
+- **修复远程控制台首次拉取与二次同步 Agent 数量及分类不一致的竞态问题（`services/api/src/`, `apps/web/src/`）**：
+  - **根因定位**：`GET /v3/remote/sessions` 返回的瘦身响应不含 `discovery.candidates` 且活跃绑定未携带 `provider`，导致首帧将同为 `claude_` 前缀的 `claude_desktop` 历史绑定按前缀盲猜并入 `Claude Code`；同时 `RemoteConsole` 拉取 `/runners/:id/hello` 的 `useEffect` 依赖随每次 `/sessions` 刷新而重建的 `runners` 引用，SSE `ready` 推送触发重拉时会提前 `stopped = true` 丢弃在途 `/hello` 并误写 30 秒缓存时间戳；
+  - **后端精确归类 (`services/api/src/remote-store-validation.ts`, `services/api/src/remote-routes.ts`)**：新增 `extractDiscoveryProviders()` 从服务端内存缓存 `runnerHello` 的 `discovery.candidates` 提取权威 `provider`，在 `GET /v3/remote/sessions` 的每个会话行上附加 `provider` 字段，保持 `runner.hello` 瘦身结构不变；
+  - **前端无竞态同步与首屏门禁 (`apps/web/src/lib/runner-hello-sync.ts`, `apps/web/src/components/RemoteConsole.tsx`, `apps/web/src/lib/remote.ts`, `apps/web/src/lib/remote-client.ts`, `apps/web/src/lib/session-tree.ts`)**：抽出 `RunnerHelloSyncController` 对在途 `/hello` 请求按 `runner_id` 去重、取消不污染 `fetchedAt`、瞬时失败保留已有 `hello` 并按 3 秒退避重试、`host_generation` 变更立即刷新；`remoteRequest` 将 `response.text()` 纳入超时/中止守卫；当前设备首次 `/hello` 落地前锁定 Agent 选择器并显示 `"正在同步 Agent…"` / `"正在同步会话列表…"`，落地后未手动选过 Agent 时自动对齐实际会话最多的引擎；
+  - **单测验证**：新增 `services/api/test/runner-hello.test.ts`（1 项）、`apps/web/test/runner-hello-sync.test.ts`（7 项）、`apps/web/test/session-tree.test.ts`（1 项）与 `apps/web/test/remote.test.ts`（1 项），通过 `npm run format:check`、`npm run typecheck`、`npm test`、Vite 生产构建及 `scripts/check-line-limits.py`。
 
-- **远程网络断线重连与双向流序号断崖自愈（`services/api`, `crates/runner`）**：
-  - **Runner 出站事件流断崖自愈（解决“服务端重置或切换网关后本地死循环报 server_seq < acked 无法连接”）**：
-    - **问题根因**：当服务端数据库被重置、换机、迁移或恢复备份时，服务端对当前 Runner 的接收水位 `received_seq` 可能归零（或落后于 Runner 已本地确认的 `acked`）。原先 `remote_network.rs` 在 `NetworkEvent::Connected` 遇到 `server_seq < acked` 时无条件执行 `reject_remote_epoch`，导致 Runner 每隔 6 秒重连并持续被自身拒绝；且由于 `acked` 之前的数据帧已按契约从本地 `remote_outbox` 中清除，盲目重传后续帧会导致服务端抛出 `sequence_gap`；
-    - **自动重置与权威快照自愈**：在 `server_seq < acked` 时，Runner 识别到服务端事件流已重置或回退，自动调用 `reset_watermarks_and_outbox(server_seq)` 矫正本地水位与自增序列，同时将入站命令序号归零，并立即入队一份包含全量工作区、模型和会话能力的最新权威 `ready` 快照（`seq = server_seq + 1`），让服务端与客户端在首帧通信中秒级无缝对齐并恢复双向通信；
-  - **入站命令日记账容错对齐（解决“Runner 入站序号超前时服务端报错 command_journal_mismatch 拒连”）**：
-    - **服务端平滑对齐**：在 `services/api` 的 `/v3/remote/ws` 握手校验中，当 Runner 上报的 `received_command_seq > marks.command_seq`（如 Runner 历史曾连接过已废弃的旧库环境），服务端不再抛出致命的 `command_journal_mismatch` 异常强退连接，而是将有效基准平滑夹持至服务端当前实际具有的最高 `command_seq`，让新连接安全平稳建立；
-    - **Runner 端容错重置**：Runner 握手若收到历史服务端残留的 `command_journal_mismatch` 报错，自动将本地 `received_command_seq` 归零，打破死锁循环；
-  - **设备/网关重绑彻底净化（`rebind_device_and_server`）**：
-    - 在用户于本地控制台重新配对、激活或修改网关地址时，主动重置本地远程水位（`sent=0, acked=0`）、入站序号（`received=0`）及旧出站队列，避免新旧服务器之间的流状态交叉污染；
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `64aa822aa45449d6d7e8a3dc445eda00c31cfb7adcf3a8673f47f7152036069d`）。
+## [2.7.10] - 2026-11-19
 
-- **双端设备连接状态同步、友好设备名称与已撤销设备非破坏性重连激活（`contracts`, `services/api`, `crates/runner`, `apps/web`）**：
-  - **双端在线状态实时一致（解决“明明连接了还是显示未连接”）**：
-    - **问题根因**：Web 控制台依据 PostgreSQL/SQLite 中 `agent_platform_devices` 的 `last_seen_at` 判定在线（45秒内有 HTTP 注册或心跳即亮绿灯），而本地 Runner 状态栏与设置页基于真实的 WebSocket 长连接双向流（`/v3/remote/ws` 的 challenge/hello/hello_ack 握手）判定。原先 `remote_network.rs` 中的 `SetRemoteEnabled` 遇到当前服务地址与已配置地址相同时存在短路退出逻辑（`if current_server == validated { return Ok(true); }`），导致用户重新绑定或配对后未重启 `network_loop`、未递增 generation，未触发 WebSocket 重连；
-    - **全链路重绑与重连**：清除短路分支，无论是否相同网关地址均无条件推进 generation、重新绑定日志库并启动最新 `network_loop` 进行双向长连接流建联，使 Runner 本地与 Web 控制台状态无缝秒级一致；
-  - **设备人类友好名称穿透与展示（解决“不要显示编号看不懂的，人类要看名字”）**：
-    - **契约与上报打通**：在 `DeviceRegistration` 与 `DeviceHeartbeat` 协议中新增可选的 `device_name` 字段；Runner 在配对（`client.bind`）与定期心跳时自动携带本地配置或系统主机名；
-    - **网关自动沉淀与下发**：网关在处理设备注册与心跳时通过 `RemoteContentStore.recordDeviceName` 将其更新到 `remote_runners.hello`，供 Web 控制台获取设备列表时返回真实的 `display_name`；
-    - **Web 控制台呈现优化**：废弃直接暴露生硬十六进制长哈希编号（`dev_68f670f3…`），统一优先展示人类可读的真实设备名称（如 `xiaotang`、`办公电脑`）；在尚无名称的中间过渡态，展示为温和的 `电脑 · <后六位>`，将完整设备 ID 置于气泡浮窗（Tooltip）中；
-  - **撤销设备非破坏性重连激活（解决“撤销不代表以后不用了”）**：
-    - **问题根因**：原先网关的 `registerDeviceWithBindingCode` 与 `registerDevice` 在检查到设备记录已存在且 `revoked_at !== null` 时，无条件阻断并抛出 `403 device_revoked`，导致用户撤销设备后在 Web 控制台生成全新配对码重新连接时被彻底拒之门外；
-    - **安全重连激活**：凭有效、未过期的新鲜配对码发起配对，充分证明拥有者已授权并持有设备私钥；网关现在安全重置 `revoked_at = NULL` 并刷新 `last_seen_at`，记入 `device.reactivated` 审计日志，无缝恢复同步；撤销期间的历史数据依然完整保留；
-    - **清晰透明文案**：Web 控制台撤销确认弹窗更新为：“确定撤销设备「…」吗？现有历史数据会完整保留。撤销后随时可在设备端使用新配对码重新连接激活。”
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（SHA256: `058ece30388ae31103f0bef5842841541c41744c5929d6c9eb330b91d7691db8`）。
+- **托盘「配置」页去硬编码并改为客户端真实配置优先发现（`crates/runner/src/claude_gateway/`, `crates/runner/src/tray_menu/`, `crates/runner/src/usage_ledger/`）**：
+  - **去掉固定 6 项硬编码与静态兜底**：将 `ClientRouteSummary.agent_id`/`title` 改为 `String`；移除 `route_summary.rs` 无条件塞入 6 个客户端 `"Official · 直连"` 的逻辑、移除 `tray_menu/builder.rs` 的 6 项 `is_core` 白名单与 3 行写死加载占位行，并将 `is_loading` 收敛为 `!is_warm`（避免空列表长期停在"加载中"）；移除 `detail_inspect.rs` 中 Antigravity 的静态默认模型列表；
+  - **客户端实时生效配置优先，拒绝过期 CC Switch 劫持**：
+    - `cc_switch.rs` 新增 `proxy_takeover` 真实接管判定（联合检查 `proxy_config.enabled`/`proxy_enabled`/`live_takeover_active`、`proxy_live_backup` 与 `settings.proxy_takeover`）、`discover_all_cc_switch_active_providers()` 及 `cc_switch_manages_live_url()`，仅在 CC Switch 实际处于代理接管或与客户端实时端点同源时采信其记录；
+    - `config_library.rs` 抽出 `inspect_applied_config_library()` 供摘要与详情共用，Claude Desktop 优先读取真实 `configLibrary` / `host-creds`，Claude Code 优先读取 `ANTHROPIC_BASE_URL` / `~/.claude/settings.json`，Gemini CLI 优先读取环境变量 / `~/.gemini/.env` / `~/.gemini/settings.json`，并自动比对本地 `magpie/gateway.json` 解析真实网关名称；
+    - 新增 `route_parsers.rs` 实现分节感知的 `parse_codex_toml_route()`，只解析顶层 `model_provider` 与对应的 `[model_providers.<key>]`，修复顶层未设路由时误抓未启用 `[model_providers.*]` 段地址的问题；
+    - `antigravity` 不再回退继承 `cc-switch.db` 的 `gemini` 行，且补充 `is_official_provider_url` 识别；`discovery.rs` 仅在 `cc_switch_manages_live_url` 成立时复用 CC Switch 模型目录；
+  - **动态接入新客户端与空态提示**：支持按真实本机安装/配置/会话证据动态探测本地 Agent（含 `grok_build`），并动态纳入 `cc-switch.db` 中处于活跃接管的任意 `app_type`；`tray_menu/win32/` 新增空态引导绘制与按中英文字符选择字体及省略号裁剪；
+  - **单测与门禁验证**：新增 `claude_gateway/route_summary_tests.rs`（8 项）与 `tray_menu/tests.rs`（4 项）覆盖空白环境、Claude Desktop / Claude Code / Codex / Antigravity / 动态 `app_type` 与临时 SQLite 接管校验，并通过 `check-line-limits.py`、`cargo fmt`、`cargo clippy` 与 `cargo test --workspace`。
 
-- **Runner 本地控制台用量趋势“速度”指标图表重构为标准分组条形图（`crates/runner`）**：
-  - **根除四不像混合底柱与悬空天线连线**：
-    - **问题根因**：原先在 `speed` 指标下，错误将该时间段所有模型混算的全量平均速度绘制为浅灰色实体底柱（`var(--pill)`），并对速度高于该底柱的模型自顶端画出引线（`stem`）并在空旷处悬挂横条（`mark`），而速度低于底柱的模型则被深埋在灰色底柱内；当鼠标悬停在特定模型时，该模型无调用的时间段依然立满其他模型的浅灰色底柱，违背条形图基本直觉；
-    - **标准分组条形图（Grouped Bar Chart）**：彻底清除虚假全量灰色底柱与引线逻辑。在速度模式下，每个时间槽内仅遍历该时段真正有调用产出的活跃模型，并排渲染专属颜色的条形柱；单模型调用时居中饱满呈现，多模型调用时并排自适应分配宽度与间隙，柱子高度精准对应其实际速度（tok/s）；
-    - **无调用时段绝对静默与干净联动**：当模型在特定时间段无调用时，该时段不绘制该模型的柱子；右侧排行榜悬停联动（`emphasize`）时，目标模型在全周期的速度起伏一目了然；时间槽悬停提示框（Tooltip）保持列出各活跃模型速度与当前时段加权综合速度。
+- **Android 启动器图标切换为透明背景传统 PNG 并发布全仓 `v2.7.10`（`apps/android` `v2.7.10` / `versionCode = 129`）**：
+  - 根因与方案：Android `<adaptive-icon>` 规范强制要求不透明背景层（`#00000000` 在桌面离屏缓冲中被合成为纯黑方块，`#FFFFFF` 渲染为白底圆形），故移除 `mipmap-anydpi/`（`ic_launcher.xml`、`ic_launcher_round.xml`）及 `AndroidManifest.xml` 的 `android:roundIcon` 声明；
+  - 资产更新：基于 `apps/web/public/icon-512.png` 清理零 Alpha 通道边缘残留后，在 `mipmap-mdpi` 至 `mipmap-xxxhdpi` 生成 48/72/96/144/192px 透明 RGBA `ic_launcher.png`；清理仅被自适应图标引用的 `ic_launcher_brand_monochrome.png` 与 `values/colors.xml`，保留 Android 12+ 启动图引用的 `ic_launcher_brand_foreground.png`。
 
-- **Web 远程控制台双按钮级联浮窗选择器重构（`apps/web`）**：
-  - **根除横向滚动药丸过滤条与原生滚动条**：彻底废弃原先存在水平滚动溢出、显示生硬滚动条且在不同设备上宽度不对齐的 `.remote-filter-pill-row` 组件，消除视觉杂乱与排版不对齐；
-  - **双按钮现代并排选择器（`.remote-selectors-bar`）**：设计并实现左侧“电脑选择器”与右侧“Agent 选择器”等宽并排双按钮，高度严格锁定为 32px，内置微图标、截断文本、在线状态圆点、活跃会话数量徽标与动态折叠箭头，配合 CSS 变量无缝适配明暗主题；
-  - **严格级联浮窗（Cascading Popovers）**：
-    - 点击任一按钮展开悬浮弹窗（Popover），具备专属遮罩层级、平滑淡入动效及点击外部区域与 Esc 按键自动收起体验；
-    - **电脑在先、Agent 紧随其后**：优先选择目标电脑，Agent 选项完全由所选电脑运行时实际探测上报的候选能力（`runner.hello.discovery.candidates`）以及该电脑上的活跃会话动态提取与聚合计算，呈现精准会话计数；
-    - **智能级联回退**：切换不同电脑时，系统自动检查当前 Agent 是否受目标电脑支持；若不支持，自动平滑重置为新电脑的首选可用 Agent，杜绝脏状态与无效查询。
+- **CI 排障：Android 单测门禁在自建 Runner 上从未跑通（`.github/workflows/ci.yml`, `docs`）**：
+  - 根因定位：`android-checks` 自 v2.7.9 上线起唯一一次运行（Gitea run #140）即失败，日志停在 `gradle/actions/setup-gradle@v4` 的 clone 阶段并报 `Unable to resolve v4: unsupported object type`。`gradle/actions` 仓库体积约 350MB，而 `act_runner` 对每个 `uses` 引用的外部 action 执行**全量 clone**；在自建 CI Runner 容器内手动全量 clone 同一仓库，6~8 分钟后被对端 `fatal: early EOF` 掐断，缓存目录只剩未完成的 `tmp_pack_*`，故非偶发网络抖动而是结构性不可用；
+  - 修复：移除 `gradle/actions/setup-gradle@v4`，改用体积仅 2.4MB 的 `android-actions/setup-android@v3` 安装 `platforms;android-36` 与 `build-tools;35.0.0` / `36.0.0`（对齐 `compileSdk = 36` 与 AGP 8.13.0 默认 build-tools）；Gradle 发行版继续由 `gradle-wrapper.properties`（8.14.3）自行下载，JDK 仍由 `actions/setup-java@v4` 提供 temurin 17；
+  - 权衡：暂不接入 `actions/cache` / `setup-java` 的 `cache: gradle`，避免在自建 Runner 上为一条本就偶发的链路再叠加缓存上传/磁盘增长这类第二故障源；如需提速可后续单独验证后再加；
+  - 验证：宿主侧实跑 `./gradlew testDebugUnitTest --no-daemon`，`BUILD SUCCESSFUL`（2m46s，208 项单测 0 failure 0 error）；CI 侧从 `catthehacker/ubuntu:act-latest` 探活 `services.gradle.org` / `dl.google.com` / `repo.maven.apache.org` / `plugins.gradle.org` 均 200。
+  - 结果：Gitea run #757 三个 job 中 `Node.js & Web Checks` 与 `Android Unit Tests` 均转 `success`（`Android Unit Tests` 自 v2.7.9 上线以来首次跑通）。
 
-- **Runner 本地控制台会话列表工作区计数口径修正与右侧胶囊徽标对齐（`crates/runner`）**：
-  - **根除 `X / 759` 全局与局部计数混淆**：
-    - **问题根因**：在 `renderSessions` 中，各工作区折叠栏原先错误对比单目录会话数与全机总会话数（759），导致所有工作区折叠栏机械追加 `/ 759`，令用户误解为“每个工作区都有 759 个会话”；
-    - **分级呈现**：日常浏览状态下纯粹展示该工作区自身的独立会话总数（如 `63 个会话`、`447 个会话`、`1 个会话`），带明确量词单位；仅在用户使用顶部搜索框检索过滤时，分母自适应联动该特定工作区过滤前的会话总量（如 `5 / 63 个会话`），顶栏徽标自适应联动全机过滤进度（`12 / 759 个历史会话`）；
-  - **右对齐胶囊徽标现代布局**：
-    - 将 `.group-head .gcount` 设为 `margin-left: auto;` 并重构为独立圆角胶囊药丸（`background: var(--pill); border-radius: 999px; padding: 1px 9px; height: 22px;`），将文件夹名称等主体语义锚定在左侧，折叠箭头（`.chev`）与统计信息优雅聚合于右侧；
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`，同步更新 SHA-256 校验码清单。
+- **CI 排障：修复 `daemon_ipc` 超时单测在自建 Runner 上的偶发失败（`crates/runner/src/daemon_ipc/tests.rs`）**：
+  - 现象：Gitea run #757 的 `Rust Workspace Checks` 在 `Run Workspace Tests` 步失败，`daemon_ipc::tests::request_timeout_returns_without_waiting_for_a_slow_handler` 断言 `error.to_string().contains("ipc_response_timeout")` 不成立，同树 308 passed / 1 failed；
+  - 根因：该断言本身是竞态。`request_with_timeout`（`daemon_ipc/client.rs`）起一个 worker 线程执行 `platform::request(..., timeout)`，主线程用同一个 `timeout` 做 `recv_timeout`；Unix 侧 `cancel_request` 是空实现，双方都无法抢先，谁先到期就决定错误字符串——主线程赢是 `ipc_response_timeout`，worker 自己的 50ms Unix 读超时赢则是 `ipc_read_failed`（`types.rs:59`）。同一提交树在 run #750 全绿、宿主侧 `cargo test --workspace` 370 项全过、单测单独连跑 8/8 过，说明是负载诱发的偶发，而非回归；
+  - 修复：断言改为接受上述两种合法超时结果（附错误串上下文便于失败时定位），真正约束行为的 `unwrap_err()`（不得返回 350ms 慢处理器的响应）与 `started.elapsed() < 250ms`（必须及时放弃而非阻塞）两条原样保留；未使用 `#[ignore]`、未删除用例、未放宽时间预算；
+  - 验证：`cargo fmt --all --check` 通过；`cargo clippy -p agenthub-runner --all-targets -- -D warnings` 零告警；宿主侧 `cargo test --workspace` 全绿（309 + 5 + 7 + 29 + 17 + 3 = 370 项）；额外在 4 核宿主上挂 8 个 `yes` 自旋进程制造满载，连跑该单测 25/25 通过（修复前该条件下会周期性复现）。
 
-- **Runner 本地控制台全景加载动画与侧边栏控制优化（`crates/runner`）**：
-  - **全景骨架屏与用户等待即时反馈（Fix 1）**：
-    - **工作区与智能体独立解耦渲染**：彻底修复 `refreshDashboard()` 中 `renderWorkspaces()` 与 `renderAgents()` 被错误嵌套在 `else if (sessions.length > 0)` 分支下的严重数据耦合陷阱。在后台扫描转录或本地会话为空时，工作区与智能体列表均能即时、无阻塞独立渲染，杜绝工作区列表空白且徽标停滞在“0 个工作区”的无反馈缺陷；
-    - **工作区（`#workspacesList`）与智能体矩阵（`#agentsGrid`）首帧骨架屏**：在 HTML 首帧直接内置匹配各列栅格与高度的动态微光 Shimmer 卡片，并将初始徽标计数置为“正在加载…”，首屏绘制即刻给予用户清晰视觉预期；
-    - **用量各子面板（`#ledWrap` / `#usageSessions` / `#usageContext`）骨架屏补齐**：消除请求列表、用量会话与上下文面板纯文本“正在读取用量…”的生硬占位，统一替换为平滑的 Shimmer 骨架动画；
-    - **全场景刷新与同步按钮动态微交互**：为设置页立即重新探测按钮（`#setRefreshBtn`）补齐 `.busy` 状态管理；修复模型同步按钮（`#setRefreshModels`）在 JS 中因 ID 选择器不一致（`btnRefreshModels` vs `setRefreshModels`）引发的空指针阻断问题，完善 CSS `.busy` 选择器，确保点击刷新后图标即刻平滑旋转反馈。
-  - **侧边栏折叠按钮左移与高对比度重构（Fix 2）**：
-    - **左移对齐（`.side-top`）**：将侧边栏顶部折叠按钮从右侧移至左侧（`justify-content: flex-start; margin-left: 0; margin-right: auto;`），完美贴合单手操作与视觉导航重心；
-    - **高对比度现代容器按钮样式**：彻底抛弃原先极低透明度（`.st-pane { opacity: .28; }`）导致的“看不清、找不到”问题，将 `.side-toggle` 重构为具有实体微底色卡片背景（`color-mix(in srgb, var(--fg) 6%, var(--card))`）、高对比度边框（`1px solid var(--line)`）、微投影与悬停微放大动效的现代图标按钮，并将 SVG 笔触不透明度提升至 `0.85`（加粗 `1.8px`），在明亮与暗黑主题下均呈现锐利清晰的视觉轮廓。
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`，同步更新 SHA-256 校验码清单。
+## [2.7.9] - 2026-11-18
 
-- **Runner 本地控制台现代组件与工作区视图对齐优化（`crates/runner`）**：
-  - **现代简洁内联设备名称组件（设置页）**：替换原先粗糙的浏览器原生单行输入框与分离按钮，采用现代内嵌式输入组件（`.inline-edit-group` / `.inline-edit-wrap`），内置微小设备矢量图标、自适应输入框与紧凑操作按钮，支持聚焦光晕动效与 Enter 快捷保存，风格完全融入控制台整体设计规范；
-  - **语义化多彩工作区图标**：全面弃用机械生硬的双字母缩写头像，引入基于工作区名称哈希的确定性调色盘（6 种自然主题色），并根据 `ws.is_git` 语义化区分渲染 Git 分支图标与代码文件夹图标，提升多项目辨识度与亲和力；
-  - **工作区列表严格网格对齐与基线对齐**：重构 `#workspacesList .row.stat` 的 CSS Grid 列定义为严格固宽（`32px minmax(0, 1fr) 112px 92px`），彻底解决由于单行自适应宽度引发的跨行数字左右错位参差抖动问题；统一数值列与时间列的行高（`1.35`）与双行标签结构（“Token数 / 会话数”与“时间 / 最后活跃”），实现整表横向与纵向基线的严格对准；
-  - **分发包同步更新**：重新编译 Release 产物并打包更新 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`，同步更新 SHA-256 校验码清单。
+- **全栈安全加固、稳定性治理、交互细节优化与架构解耦（`packages/contracts`, `services/api`, `deploy`, `crates/runner`, `apps/web`, `apps/android` `v2.7.9` / `versionCode = 128`）**：
+  - **部署前门、容器非 Root 与后端重构 (`deploy`, `packages/contracts`, `services/api`, `.github/workflows`)**：
+    - `deploy/nginx/agenthub-web.conf.template` 与 `apps/web/public/theme-init.js`：落地面向静态前门的严格 CSP（移除 `unsafe-inline` 内联脚本依赖），补充 `X-Content-Type-Options` / `Referrer-Policy` 等安全响应头，优先转发 `__Host-agent_pulse_session` 安全 Cookie，并使用中性域名重命名样例配置（`deploy/1panel/platform.example.com.conf.example`）；
+    - `deploy/api.Dockerfile`、`deploy/docker-compose.selfhost.yml`、`.dockerignore` 与 `.gitignore`：API 容器切换非 root `node` 用户，收敛自部署默认开发身份开关，完善构建忽略规则并在 `.github/workflows/ci.yml` 增加 `android-checks` 单测门禁；
+    - 新增 `services/api/migrations/0017_expand_agent_types.sql` 将数据库 `agent_type` 约束与索引扩展至全量 5 类引擎（`claude_code`、`codex`、`antigravity`、`grok_build`、`zcode`）；拆出 `security-guards.ts`、`app-helpers.ts`、`account-helpers.ts`、`postgres-helpers.ts`、`remote-stream-helpers.ts`、`store-schemas.ts` 与 `migrations-list.ts`，新增 `services/api/test/security-hardening.test.ts` 验证账号及远程网关边界。
+  - **Rust Runner 私钥隔离、Win32 托盘异步化与并发安全 (`crates/runner`)**：
+    - 私钥与凭证保护（`device.rs`, `auth/cache.rs`, `auth/{types,manager}.rs`, `daemon_ipc/platform/windows.rs`）：新增 `write_private_file`（Windows 受保护独占 DACL `CreateFileW(CREATE_NEW)` / Unix `0o600`），为设备身份与缓存凭证启用 `Zeroize` / `ZeroizeOnDrop` 内存清零及私有 `.revoked-*.bak` 备份；
+    - Win32 托盘防阻塞与异常处理（`tray_menu/win32/{gdi,frame,window,events}.rs`）：为 GDI/上传资源实现 `Drop` 与边界校验，弹窗消息过程包裹 `catch_unwind`，`WM_TIMER` 改为后台异步刷新（`WM_APP_TRAY_MENU_READY`）防止界面阻塞，`STATE`/`FRAME` 改用 `try_borrow*`；
+    - `daemon.rs`、`remote_ipc.rs` 与 `remote_network/*` 跨线程原子变量统一使用 `Release`/`Acquire` 内存序；隔离桌面 Antigravity 守护进程避免干扰单元测试，`is_safe_model_id` 支持带方括号模型 ID。
+  - **Web Console / PWA 与原生 Android 全链路对齐与加固 (`apps/web`, `apps/android`)**：
+    - `apps/web`：扩展 `claude_desktop` / `gemini_cli` 会话引用解析，StrictMode 下幂等消费邮箱验证/重置令牌；`remote-client.ts` 安全处理 `AbortSignal`、非 JSON 错误及 `413 payload_too_large`；为外链 Markdown 图片加入 click-to-load 门禁并拦截 SVG `data:` URI；按会话键隔离事件、指令、队列、草稿及 `MAX_CACHED_SESSIONS = 24` 上限；补齐模态框焦点陷阱（`dialog-focus.ts`）、`<Select>` Tab 筛选与 ARIA 语义、`sw.js` 通知点击精确导航，并将 `RemoteConsole.tsx` 拆出 `remote-session-state.ts` 与 `RemoteToolCard.tsx`；
+    - `apps/android`：`AgentGateway` 强制非回环远端使用 HTTPS（支持 IPv4/IPv6 回环开发）、补全路径编码、修复 `togglePlugin` 单对象 `{ plugin }` 解析并加入响应/SSE `SseLineParser` 长度上限；`SecureConfigStore` 收窄清库触发条件；`CommandLedger` 使用 SHA-256 摘要与 `512` 条 LRU；`EventWindow` 保留关键轮次事件并处理游标回退与 `invalid_cursor` 重置；将待发队列与首条指令迁入生命周期感知与会话级状态，主线程更新 UI 状态并处理 `401` 登出；修复 `QuestionCard` 防连点、配对码 `EXTRA_IS_SENSITIVE` 剪贴板标记、空文件与 `7MB` 附件总容量校验及 `data_extraction_rules.xml` 备份屏蔽；提取 `RemoteTranscriptArea` 使 `RemoteScreen.kt` 降至 `752` 行，全仓通过 `scripts/check-line-limits.py`。
 
-- **远程控制台 UI 现代组件升级与会话通信深度修复（`apps/web` / `services/api` / `crates/runner`）**：
-  - **已注销设备安全隔离与连接清理**：网关 API 在检测到设备被注销时立即以 RFC 6455 状态码 `1008`（`device_revoked`）主动关闭活跃 WebSocket 连接，并在 `/v3/remote/sessions` 中彻底过滤已被注销的 runner，Web 控制台全面剔除已注销设备的展示、统计计数与新建弹窗选项；
-  - **顶部操作栏重构为现代紧凑图标按钮**：移除占空间的“新建会话”与“搜索”文字大按钮，改为原生融入 `.remote-sidebar-header` 的 28px 现代微交互图标按钮，节省大量顶部空间并提升交互效率；
-  - **会话列表消除繁杂折线并强制显式 Agent 选择**：移除历史遗留的文件树虚线边框（`border-left`）与多层缩进，改为扁平现代分组卡片布局；严格过滤无会话的空白工作区占位；彻底移除“全部 Agent”标签，强制显式选择目标 Agent，并默认选中第一个可用 Agent（`claude`）；
-  - **全链路会话转录解析与双向回复修复**：
-    - `conversation.rs` 序列化转录历史消息时同时输出 `"text"` 与 `"content"` 字段，配合 `remote.ts` 双向容错提取，彻底解决历史会话加载显示“无法解析会话”的问题；
-    - `remote_host.rs` 补齐 `thread/read`、`thread/resume` 与 `turn/start` (`turn_params`) 中的 `cwd` 参数传递，并强化 Windows 路径规范化（剥离 `\\?\`、统一反斜杠、忽略 `.` 占位符引发的虚假路径不匹配），彻底根治远程会话无法恢复与发送回复失败的故障；
-    - 分发包同步更新 Windows 预编译可执行文件与 SHA-256 校验和。
+## [2.7.8] - 2026-11-18
 
-- **Runner 桌面端核心体验与加载机制升级（`crates/runner`）**：
-  - **用量加载与多周期切换骨架屏（Fix 1）**：在用量视图（`#view-usage`）中，切换时间范围（“今天”、“7天”、“30天”、“全部”）时，实现响应式骨架加载屏（Skeleton Loading），全面覆盖 5 项 KPI 指标卡片（请求数、Token、预估花费、缓存命中、输出速度）、趋势柱状图（`.skeleton-chart-box` 带有动态梯度 shimmers）以及模型排行列表，避免日期切换后界面数据冻结或无响应感；
-  - **跨 Provider 会话完全同步加载，杜绝残缺闪烁（Fix 2）**：`MultiProviderTransport` 引入 `ensure_initial_local_store_scan(timeout)` 并由守护进程并发预热扫描；`/api/dashboard` 新增 `sessions_loading` 状态判定，在 Claude Code / Claude Desktop / Grok / ZCode 本地会话转录扫描未全部就绪前，严格保持骨架屏加载状态，杜绝 Codex 会话先行刷出而 Claude 会话滞后追加的不一致体验；
-  - **侧边栏顶部品牌信息精简（Fix 3）**：移除侧边栏顶部（`.side-top`）冗余的 AgentHub 图标与文字标题，与原生窗口标题栏图标自然呼应，并保持折叠侧边栏操作按钮右对齐整洁排版；
-  - **左下角真实反映网关 WebSocket 实时连接状态（Fix 4）**：改造 `#headerPairBtn` 状态机与后端 `/api/summary`，从 `remote_connected` 真实状态读取，精确呈现“未绑定 Web 控制台”（灰色离线）、“已连接平台”（绿色呼吸脉冲灯，pulse-dot 动画）与“已绑定但未连接/离线”（红色警示灯），杜绝未连接却虚假显示已连接的问题；
-  - **全仓硬编码审计与消除（Fix 5）**：消除 `dashboard.html` 与 `MANIFEST_JSON` 中写死的 `?v=2.5.7` 资源查询，统一改为由 `CARGO_PKG_VERSION` / `assets_stamp()` 动态注入的 `__ASSETS_VERSION__`；消除托盘菜单硬编码版本号；消除前端固定本地 IP 绑定；
-  - **引入内存缓存与 SWR 重新验证机制（Fix 6）**：前端建立 `usageMemoryCache` 内存映射，切换回已加载的时间周期时毫秒级瞬时恢复视图无缝切换，并对超过 15 秒的数据静默发起后台 revalidation；支持 AbortController 请求取消，防止快速连点引发的数据竞态；
-  - **构建与分发打包**：基于最新改动完成 Release 编译 `cargo build --release -p agenthub-runner`（产出 `agenthub-runner.exe` 13,521,920 字节），并打包更新 Windows 分发包 `Deliverables/AgentHub/AgentHub-Runner-v2.5.3-windows-x64.zip`（5,759,065 字节，含 `agenthub-runner.exe`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`、`README.md`），同步更新 SHA-256 校验清单文件 `Deliverables/AgentHub/AgentHub-v2.5.3-SHA256.txt`（`a1b182645eee4d270a67bbdc97b1d94392452429c5a184a1921fd91ccbe94f0c`）。
+- **Google Antigravity (`antigravity`) 与 OpenAI Codex (`codex`) 全栈完整度全面对齐 Claude Desktop (`crates/runner`, `apps/web`, `apps/android`)**：
+  - **Google Antigravity (`antigravity`) 全协议闭环、实时思考流与精准模型归因 (`crates/runner`)**：
+    - 新增 `collectors/antigravity/daemon.rs` 与 `daemon_turn.rs`：在无独立 `agy` CLI 的 Antigravity 2.0 桌面端环境下，自动探测 `hub_*.json` (`language_server` ConnectRPC 端点)，打通 `StartCascade`、`SendUserCascadeMessage`（支持多模态图片附件与指定模型）、`GetCascadeTrajectorySteps` 实时流式轮询（思考过程、工具/命令执行、统一 Diff、Token 用量）、`HandleCascadeUserInteraction`（权限审批与多选提问应答）及 `CancelCascadeInvocation` 中断闭环；
+    - 精准模型归因与状态校准：通过 `GetCascadeTrajectoryGeneratorMetadata`、`antigravity_state.pbtxt` 占位符映射（`MODEL_PLACEHOLDER_M*` 及展示名反查）与 `<USER_SETTINGS_CHANGE>` 动态解析每会话真实模型（如 `gemini-4-carbon-high`），消除 `"gemini-3.8-flash"` 静态误判；结合 `GetAllCascadeTrajectories` 实时校准 SQLite 陈旧运行态，修复 `conversation_parents.parent_id` 列名兼容，并从 `raw_summary` Protobuf 提取子代理 `Role` 职责描述；
+    - 会话历史与回收站：`conversation/antigravity.rs` 按 FIFO 将 `PLANNER_RESPONSE.tool_calls` 与后续 `GENERIC` 工具输出配对合并为 `"{入参或Diff}\n\n〔结果〕\n{输出}"`，为 `edit_file` / `write_file` 自动合成标准统一 Diff，彻底消除 `Created At:` 原始工具输出泄漏为伪助手消息气泡；新增 `collectors/antigravity/trash.rs` 支持安全移入 `~/.agenthub/trash/sessions/` 并通知守护进程 `DeleteCascadeTrajectory`。
+  - **OpenAI Codex (`codex`) 会话富化、子代理折叠、Diff 解析与审批补齐 (`crates/runner`)**：
+    - 新增 `collectors/codex_enrich.rs`：基于 `state_5.sqlite` 与 rollout JSONL 缓存索引对 `codex app-server` `thread/list` 及本地会话实施全量富化，剥离 Windows `\\?\` 路径前缀、统一秒/毫秒时间戳为毫秒、将 `notLoaded`/`persisted` 归一为 `"idle"`、补齐真实 `model` / `prompt_tokens` / `completion_tokens` / `cache_read_tokens` (`cached_input_tokens`) / `context_window_tokens`，并将多智能体 `source` JSON (`thread_spawn.parent_thread_id`) 子会话折叠至父会话 `subagents: []`；
+    - 历史对话、实时审批与安全回收：新增 `conversation/codex.rs` 保留 `"reasoning"` 思考块、将 `apply_patch` (`*** Begin Patch`) 转换为标准 `--- a/... +++ b/...` 统一 Diff、按 `call_id` 配对 `function_call_output` / `custom_tool_call_output`；`session_host.rs` 扩展 `turns` 回放覆盖思考与工具项并在空回合时自动回退本地 rollout 加载；`session_host_poll.rs` 与 `session_host_exec.rs` 补齐 `item/tool/requestUserInput` (`codex_question_id`)、`execCommandApproval`、`applyPatchApproval` 与 `item/mcpToolCall/requestApproval`；新增 `collectors/codex_trash.rs` 并在 `:4200` 面板开放 Codex 与 Antigravity 会话安全回收。
+  - **Web PWA 与原生 Android 历史/流式思考、工具 Diff 及上下文容量全量对齐 (`apps/web`, `apps/android`)**：
+    - 将 `apps/web/src/lib/remote.ts` (1,306 行) 拆解为 `remote.ts` (485 行)、`remote-transcript-fold.ts` (412 行) 与 `remote-transcript-events.ts` (571 行)，并将 `remote.ts` 正式移出 `scripts/check-line-limits.py` 历史豁免清单；同步将 Android `SessionTranscript.kt` 拆分为 `SessionTranscript.kt` (549 行) 与 `SessionTranscriptEvents.kt` (414 行)；
+    - 双端 `history/snapshot` 全面支持 `kind === "thinking"` 思考折叠块，并将历史 `"tool"` 项按 `"\n\n〔结果〕\n"` 拆分为 `command` (入参/Diff) 与 `output` (执行结果)，使历史会话直接渲染语法高亮 `+add / -del` Diff 与提问卡片；
+    - 双端实时流新增 `item/reasoning/delta`、`item/reasoning/textDelta`、`item/reasoning/summaryTextDelta`、`item/commandExecution/outputDelta`、`item/fileChange/outputDelta` 及 Codex `fileChange.changes` Diff 折叠，并在 `multi_drain_claude.rs` 转发 Claude `/event/delta/thinking`；修复 Android `SessionSignals.kt` 读取 Codex `tokenUsage.last` 与 `modelContextWindow` 上下文水位及 Antigravity `1M` 默认窗口推断。
 
-- **修复代码审查发现的 22 项缺陷（`crates/runner` / `services/api` / `apps/web` / `packages/contracts`）**：
-  - **HIGH · 自定义设备名称永远到不了远程控制台**（`crates/runner/src/device_name.rs` / `main.rs` / `daemon.rs` / `remote_network.rs` / `web_server.rs`）：
-    - **根因**：设备名在 `main.rs` 启动时**解析一次**便以 `String` 按值传入 `DaemonConfig` → `daemon.rs` → `run_with_local_control` → `remote_ready_payload`，进程生命周期内不再变化；而 `ready` 帧是设备名**唯一**的传输通道，网关把它落进 `remote_runners.hello`，控制台正是从那里读 `device_name`。于是改名对已运行的 Runner 永远无效。三处读写位置还各自为政：`device name --identity <p>` 写到 `--identity` 旁（Windows 包内为 `%LOCALAPPDATA%\AgentHub`）、`POST /api/device/name` 写死 `~/.agenthub`、启动读取用的是 `cli.identity`（未传 `--identity` 时为 `None`）——路径不一致，改名静默失效；
-    - **修复**：新增 `DeviceNameSource`，把"名字从哪来"与"名字是什么"分开；`resolve()` 改为**磁盘上已存的名字优先**于命令行名字（改名端点写的就是它，改名必须对运行中的进程生效）；三处路径统一到 Runner 真实使用的 identity 路径（`web_server.rs` 的 `WebServerConfig` 携带 `identity_path`，`get_device_info()` 改从该路径读 binding）；`remote_network.rs` 每次发布 `ready` 帧前**重新解析**名字，并按 5 秒独立节流比对，改名后至多 5 秒即被重新发布（原先只能等 60 秒的发现刷新窗口）；
-  - **HIGH · `providerFilter` 默认值是 `"codex"`，导致侧边栏对其余 provider 全部为空**（`apps/web/src/components/RemoteConsole.tsx`）：
-    - **根因**：`session-tree.ts` 的 `buildSessionTree` 会硬丢弃 provider 与过滤条件不符的条目。默认值 `"codex"` 意味着 Claude / Antigravity / ZCode / Grok 的会话一条都进不了树；这是 `d1b2c48` 引入的回归（提交前为 `"all"` 且带"全部 Agent"胶囊），而该提交同时删掉了"全部 Agent"胶囊，用户再也无法切回"显示全部"——这正是"runtime 有 session、网页端没有"的直接成因；
-    - **修复**：默认值恢复为 `"all"`，补回"全部 Agent"胶囊并给每个胶囊加 `role="tab"` / `aria-selected`；`currentAgentWorkspaces` 在 `"all"` 下合并各 agent 的工作区；
-  - **MEDIUM · `/remote` 页面完全不带身份**（`apps/web/app/remote/page.tsx`）：页面不传 `account` prop，`account?.user.user_id` 恒为 `undefined`，开发鉴权部署下 `DevelopmentIdentityAuthenticator` 直接抛 401。改为先加载账户再渲染 `RemoteConsole`；`requestWithIdentity` 同步回落到 `config?.userId`；
-  - **MEDIUM · 设置页设备列表读的是另一个 owner**（`apps/web/src/lib/api.ts` / `notifications.ts` / `SettingsPage.tsx`）：`fetchDevices` 等函数发的是写死的 `config.userId`（默认 `"local-user"`），而控制台发的是登录账户的 `user_id`——同页两个身份口径，导致设备列表永远为空或读到别人的设备。现由 API 层显式接收 `GatewayIdentity`，设置页用 `account?.user.user_id ?? config.userId`；
-  - **MEDIUM · `--cds-green` / `--cds-blue` 从未定义**（`apps/web/src/components/cds-tokens.css`）：`remote.css` 的三处状态色因此在深色主题下退回浅色硬编码值。已在 `cds-tokens.css` 中定义为 `var(--remote-green, …)` / `var(--remote-blue, …)` 的别名，随浅色/深色主题自动切换（实测深色下解析为 `#4ade80` / `#60a5fa`）；
-  - **MEDIUM · 跨 owner 回落**（`services/api/src/remote-routes.ts`）：`resolveOwner()` 在账户已配置时，Cookie 失效后仍会回落到部署级 owner，导致已登出的控制台**静默读到另一个 scope 的设备**而不是提示重新登录。现检测到 Cookie 但解析不出身份时直接 401；回归测试 "an expired session cookie is not answered from the deployment owner" 覆盖该路径（去掉修复即失败）；
-  - **MEDIUM · Ping/Pong 分支多余且形状错误**（`crates/runner/src/remote_network.rs`）：tungstenite 0.30.0 收到 Ping 会自动排队 Pong，自发 Pong 会**替换**掉那个自动应答；且网关从不发协议级 Ping（用的是 JSON `heartbeat` + `lastSeen` 看门狗）。改为不处理，由 tungstenite 自动应答；
-  - **MEDIUM · 重连退避被从 5 秒砍到 1 秒**（同文件）：`0..10` 恢复为 `0..50`；
-  - **MEDIUM · 头像大小规则其实没有共享**（`packages/contracts/src/account.ts` / `apps/web/src/lib/avatar.ts`）：`MAX_AVATAR_BYTES` 在两处各写一份，而 `exports` 只暴露 `"."` 与 `"./remote"`，浏览器**无法** import 契约模块；JPEG 回落分支也从不做体积校验。现抽出无 import 的叶子模块 `packages/contracts/src/avatar-rules.ts`（`MAX_AVATAR_BYTES` / `avatarMediaTypes` / `utf8ByteLength`），`account.ts` 与浏览器共用同一份，JPEG 回落同样按字节上限校验；
-  - **MEDIUM · 浏览器端契约 import 链断裂**（`packages/contracts/package.json`）：Turbopack 把 `@agent-pulse/contracts` 当外部包解析，契约包内部 `.js` 后缀的相对 import 无法映射回 TypeScript 源文件，导致 `/remote` 页面 500（`Module not found: Can't resolve './expect.js'`）。叶子模块方案同时解决了这一条；
-  - **LOW · 无障碍缺口**（`apps/web/src/components/RemoteConsole.tsx` / `SettingsPage.tsx`）：移动端抽屉加了 `inert`（`aria-hidden` 不会把控件移出 Tab 序列）；设备下拉补上 `role="menu"` / `role="menuitemradio"` / `aria-checked` / `aria-haspopup`，并新增 Escape 关闭并**把焦点还给触发按钮**的处理；头像文件输入框由 `display:none` 改为 `.sr-only` + `<label htmlFor>`，保留原生焦点与标签关联；
-  - **LOW · `avatarPreview` 不随 `account` 重新同步**（`SettingsPage.tsx`）：原为只求值一次的 lazy initializer，切换账号后屏幕上仍是上一个用户的头像 data URL 且可再次上传；改为随 `account.user.avatar_data_url` 同步；
-  - **LOW · 死状态与树形排版**（`RemoteConsole.tsx` / `remote.css` / `session-tree.ts`）：删除从未被读取的 `collapsedDevices` / `collapsedAgents`；恢复树节点被压掉的缩进与导轨（10px + 8px + 1px 竖线）与工作区分组间距；`shortId` 正则补上遗漏的 `antigravity_` 前缀（此前每个未命名 Antigravity 会话都显示同一个 `"antigrav"`）；设置页设备列表改为显示网关下发的 `display_name`（`RemoteContentStore.deviceNames()` + `GET /v1/devices` 附加该字段）而非截断的设备 ID；
-  - **LOW · 畸形帧不再静默丢弃**（`remote_network.rs`）：`events.send` 失败即 break，恢复"消费者已死就停"的信号。
+## [2.7.7] - 2026-11-18
 
-- **修复 Web 控制台看不到本机 Runner 已发布的会话（`services/api/src/remote-routes.ts` / `apps/web/src/lib/remote.ts` / `apps/web/src/components/RemoteConsole.tsx`）**：
-  - **根因分析**：
-    1. **控制台把身份写死成开发账号**：Web 端 `/v3/remote/*` 请求统一携带硬编码的 `x-user-id: local-user`，网关开启开发鉴权（`AGENT_PLATFORM_ALLOW_DEVELOPMENT_AUTH=true`）时按该头解析 owner，解析出的 owner 与设备实际绑定的账号（`workspace_owner_id`）不一致，`content.runners(owner)` / `content.sessions(owner)` 查不到任何记录——于是 Runner 明明在发布 `ready` 帧，控制台侧边栏却是空的；
-    2. **网关远程路由只认鉴权器、不认账户会话**：`/v3/remote/*` 直接调用 `OwnerAuthenticator.authenticate()`，而账户路由的 `mutationIdentity()` 会优先读取账户会话 Cookie。两条路径的身份口径不一致，会话 Cookie 在远程路由上被完全忽略；
-  - **修复**：
-    - 网关侧（`services/api/src/remote-routes.ts`）：新增 `resolveOwner()`，与账户路由保持同一口径——优先用账户会话 Cookie 解析 `workspace_owner_id`，仅在无账户部署时回落到 `x-user-id` 开发头；`RemoteRouteOptions` 增加 `accounts` / `now` 注入点，`app.ts` 统一注入；
-    - 控制台侧（`apps/web/src/lib/remote.ts` / `RemoteConsole.tsx`）：删除硬编码的 `x-user-id: local-user`，改由已登录账户的 `user_id` 作为可选的开发回落传入，`remoteRequest` 与 `RemoteRequest` 签名同步扩展；
-  - **回归测试**（`services/api/test/remote.test.ts`）：新增 "the remote API resolves a session cookie to its owner and ignores the development header"，覆盖“带会话 Cookie 时快照按 Cookie 归属账号返回，且残留的开发头不会把请求改判给别的 owner”。
+- **移动端双轨全面升级：Mobile Web / PWA 自适应打磨与原生 Android 客户端全量对齐（`apps/web`、`apps/android`、`scripts`）**：
+  - **Mobile Web 触控人机工学、底部抽屉与全断点自适应（`Select.tsx`、`useMobileConsoleLayout.ts`、`MobileHeaderAccessories.tsx`、`RemoteConsole.tsx`、`SettingsPage.tsx`、`remote.css`、`remote-desktop.css`、`globals.css`）**：
+    - 视口与软键盘避让：HTML 视口新增 `viewport-fit=cover, interactive-widget=resizes-content`，配合 `useMobileConsoleLayout.ts` 同步 `visualViewport` 动态高度 `--vvh` 与安全区域 `env(safe-area-inset-*)`，并使用 `matchMedia("(max-width: 700px)")` 同步抽屉无障碍语义（`role="dialog"`、`aria-modal="true"`、主画布 `<main inert>`）与 `100svh` 高度，支持左边缘右滑呼出与抽屉左滑关闭手势；
+    - 移动端原生底部抽屉（Bottom Sheet）：窄屏下将 `<Select>` 下拉菜单（超过 7 项自动展示实时筛选框）、`"在电脑上开始"` 模态框与二次确认框统一升级为全不透明底部抽屉，修复浅色模式背景透字与 `.remote-context-popover` 左溢出裁剪；
+    - 顶栏与跨设备感知：手机顶栏补齐一键 `"新建会话"`、单点复制会话 ID 与跨设备 `"要你处理"` 未读角标/置顶提醒条；设置页窄屏导航改为无滚轮胶囊流式换行，底部输入栏与平板分栏（`701px~1024px`）支持自适应换行，彻底消除 `320px` 小屏至 `768x1024` 平板竖屏的控件挤压与横向溢出；
+    - 触控热区扩展：在 `@media (pointer: coarse)` 下通过透明伪元素扩展小图标点击热区至 `44x44` CSS 像素，移除桌面悬停隐藏陷阱，并为 Markdown 宽表格与代码对比补齐独立横向惯性滚动。
+  - **PWA 安装与系统状态栏主题同步（`manifest.webmanifest`、`theme.ts`、`pwa-install.ts`、`sw.js`）**：
+    - 补齐 `maskable` 图标声明、`id: "/"`、`display: "standalone"` 与快捷入口，切换明暗主题时实时同步 `<meta name="theme-color">`（浅色 `#faf8f5` / 深色 `#161514`）；
+    - 新增 `pwa-install.ts` 统一支持标准 `navigator.install()`、Chromium `beforeinstallprompt` 单次消费防错与 iOS Safari 添加到主屏幕指引，并清洗 `sw.js` 推送通知引擎名称与正文。
+  - **原生 Android 客户端全协议对齐、平板自适应与巨石文件拆解（`apps/android` `v2.7.7` / `versionCode = 126`）**：
+    - 协议与安全对齐：补齐 `Antigravity`、`Gemini CLI`、`ACP` 及插件门控 `Grok` 引擎识别与独立模型目录，登录与刷新自动水合 `/v3/remote/runners/:runner/hello` 与 `/v3/remote/plugins`；修复 `mergeHostHello` 误清空 `hostGeneration` 导致会话状态永久冻结的缺陷，并在切换服务器源站时自动剥离跨源 Cookie 与 Bearer 令牌；
+    - 会话与交互补齐：同步 Web 端 Codex 原生 `userMessage` 双气泡去重、`turn/completed` 失败态保留、`sanitizeSessionTitle` XML 标签清洗、`___`/`ws-__-<hash>` 路径解码、执行中 `QueuedPromptBar` 消息排队、跨设备 `"要你处理"` 内联批准/拒绝、可接管会话一键恢复与断线重连、配对码生成与设备吊销、插件扩展开关及 `"跟随系统"` DayNight 冷启动防黑屏闪白；
+    - 平板分栏与架构治理：新增 `>= 720.dp` 宽屏 `SideNavigationRail` 侧边导航栏、`FlowRow` 筛选胶囊、高对比度深色气泡与代码块/表格横向滚动，将 3 个超限单体文件拆解为 17 个高内聚子模块并将 `apps/android` 正式纳入 `scripts/check-line-limits.py`（全仓 `300` 个 `.rs`/`.ts`/`.tsx`/`.kt` 源文件零超限，Android 45 项构建与 JUnit 单测全绿）。
 
-- **修复会话行元信息溢出与审计范围切换器排版拥挤（`apps/web/src/components/remote.css` / `apps/web/app/globals.css`）**：
-  - **会话行元信息溢出**：`.remote-session-pill-tag`（模型胶囊）作为 flex item 存在 min-content 下限，`min-width: 0` 缺失导致它拒绝收缩，把整行元信息挤出所在列——行高从 59px 跳到 76px 且文字被截断；补上 `min-width: 0` 并为状态文案加 `white-space: nowrap` 后，所有会话行恢复统一 59px 且无溢出；
-  - **审计范围切换器拥挤**：`.audit-scope-switch` 原用等宽 `1fr` 双列，“当前工作区”这一较长的标签在窄屏被裁掉（83px 文本挤进 63px 按钮）；改为按内容取宽（`minmax(max-content, auto)`），并修正移动端规则——`.settings-page-content .settings-section-heading`（特指度 0,2,0）的 `display: flex` 覆盖了 `.audit-section-heading`（0,1,0）的 grid 布局，导致网格定位完全失效，现提升特指度并在窄屏让切换器独占一行；同时为标题行补 14px 间距，消除描述文字与控件的贴边。
+## [2.7.6] - 2026-11-18
 
-- **Web 控制台侧边栏现代化重构（`apps/web/src/components/RemoteConsole.tsx` / `remote.css` / `session-tree.ts`）**：
-  - **顶部紧凑操作栏**：将原本占据大块纵向空间的“+ 新建会话”卡片与常驻搜索框重构为紧凑现代化的双操作按钮组，支持平滑展开/收起搜索框及快捷清空；
-  - **移除“全部 Agent”并支持横向滚动**：将 `antigravity` 正式提升为一等公民 `ProviderKind`，移除“全部 Agent”全量选项并默认选中主引擎；胶囊滑轨配置纤细可见滚动条与圆角指示轨道，消除由于设备宽度或条目增多导致的内容截断；
-  - **精简导航文本与新增独立设备选择器**：彻底移除“设备 / Agent / 工作区”冗余面包屑文案；新增独立设备下拉选择器（展示电脑名称与实时在线圆点），点击可快速切换目标电脑；
-  - **层级拍平（工作区 -> 会话）与无连线视觉分层**：会话列表拍平为直接的二级结构（Workspace -> Session）；彻底移除全链路的垂直发丝引导导轨（`border-left`），改用自然留白、悬停微底色、工作区快速 `+` 新建按钮与状态指示圆点（`.remote-session-bullet`：绿色运行、黄色等待、灰色空闲、圆环历史）表达层次。
+- **Web 远程控制台与本机面板全链路交互优化（`apps/web`、`services/api`、`crates/runner`）**：
+  - **模态框下拉层级、按键捕获与主按钮修复（`Select.tsx`、`RemoteLaunchModal.tsx`、`remote.css`、`remote-desktop.css`）**：
+    - 抬升 `.cds-select-menu` 层级至 `z-index: 1200`，彻底修复 `"在电脑上开始"` 模态框内电脑、工作区、引擎、模型与权限下拉菜单被背景层遮挡的问题；为展开态 `<Select>` 增加捕获阶段 `Escape` 拦截，按 `Escape` 仅收起下拉菜单而不误关父级模态框；
+    - 使用 `:where(...)` 收敛 `.remote-console` 兜底按钮选择器优先级并排除 `.remote-primary` 与 `.settings-page *`，修复 `"创建会话"` 主按钮灰底无强调色、设置页深色模式白底黑字对比度崩坏及 `"撤销"` 危险按钮样式失效问题；
+    - 拆出独立 `RemoteLaunchModal.tsx`，默认继承侧边栏当前电脑与引擎筛选、仅在 Codex 下展示文件沙箱选项、创建成功后同步侧边栏筛选与输入栏权限模式，并紧凑化模态框间距使桌面端无需内滚动即可一屏操作。
+  - **Codex 提问双气泡去重、执行中消息排队与输入防丢字（`remote.ts`、`remote-client.ts`、`QueuedPromptBar.tsx`、`RemoteConsole.tsx`）**：
+    - 拆出 `remote-client.ts`（`remote.ts` 由 `1653` 行压降至 `1306` 行），并在 `ConversationFold` 中记录 `promptedTurnIds` / `currentTurnId`，对已由 `turn/started` 渲染的本轮原生 `userMessage` 事件精准去重，同时保留跨轮重复文本提问与外部终端直接输入的真实气泡；
+    - 新增 `QueuedPromptBar.tsx` 与会话级待发队列：Agent 执行期间按 `Enter` 或点击 `"排队"` 可将后续指令排队暂存（支持编辑、取消、立即发送），待本轮正常结束后自动续发，若用户点击 `"停止"` 或本轮报错则安全保留草稿不自动下发；移除异步 `submit()` 返回后的冗余 `setText("")`，杜绝发送后 50ms 内快速连打被清空。
+  - **登录页、设置页、移动端抽屉、骨架屏与细节体验打磨（`AccountGate.tsx`、`SettingsPage.tsx`、`RemoteMessageCard.tsx`、`ConversationSkeleton.tsx`、`MarkdownView.tsx`、`session-tree.ts`、`globals.css`）**：
+    - 修复桌面端登录卡片左偏双列网格覆盖、输入框双重焦点环与懒加载过渡屏无样式闪烁，新增密码显隐切换按钮、去极客化中文说明文案，并消除登录成功时重复调用 `/v1/account/me`；
+    - 修复设置页 `.account-session-row` 网格列错位导致的 `"撤销"` 按钮横向拉满，按需懒加载设备、Web Push 公钥（记忆未启用网关免重复 `404`）、活跃会话与审计日志；Gateway 错误处理器对预期 `4xx` 响应停止打印 `level: 50` 堆栈噪音；
+    - 同步初始化移动端视口状态并仅在用户交互打开抽屉时挂载过渡动画，根除 `390x844` 首屏与缩放时的侧边栏残影遮挡及底部工具栏重叠；
+    - 侧边栏改为单列全宽选择器消除设备名截断，新增桌面端 `"收起侧边栏"`（`Ctrl+B`）、搜索快捷键（`Ctrl+K` / `Escape`）、会话标题内联 `<command-name>` XML 清洗、`___` 路径解码、会话 ID `"已复制"` 胶囊反馈、`"可接管"` 会话 `"恢复中…"` 状态与 `ConversationSkeleton` 骨架屏、AI 回复悬浮 `"复制"` 按钮，以及本地相对路径链接安全降级为代码标签。
+  - **本机原生控制台修复与减负（`crates/runner`）**：
+    - `collectors/capabilities/parsers.rs` 新增 `parse_toml_string_literal` 区分 TOML 单引号字面量与双引号转义串，修复 Windows 路径含 `\r` / `\n` / `\t`（如 `\resources\...\node_repl.exe`）被误转义为控制字符的问题；
+    - `resources/dashboard.{js,css}` 为不可删除会话行补齐对齐占位列、对工作区会话列表实施分页展开（首屏 `40` 条）、折叠 PowerShell `-EncodedCommand` 超长 Base64 载荷（复制仍保留原文），并为用量面板增加 `5s` 内存缓存短路。
+- **全仓文档无损瘦身与版本契约同步**：统一双语 `README`、`llms*.txt`、`AGENTS.md` 与 `docs/*` 至最新真实架构（Vite 8 + Nginx 静态 Web 前门、Gateway 索引裁剪、Remote v3 原生 Android、Antigravity `agy` 双向控制与 `UsageIndexDb` 冷热分层），100% 保留全部历史已发布版本节点。
 
-- **Runner 守护进程与服务端 WebSocket 连接稳定性与心跳保活优化（`crates/runner/src/remote_network.rs` / `services/api/src/remote-routes.ts`）**：
-  - **协议级 Ping/Pong 及时应答**：在客户端主读循环中针对 incoming `Message::Ping(payload)` 立即回复 `socket.send(Message::Pong(payload))`，杜绝因反向代理或网关缺失协议帧应答引起的无端断连；
-  - **容错文本帧反序列化**：替换直接 `?` 报错退出的脆弱解析逻辑，捕获非标准格式消息，避免偶发非 JSON 帧击穿长连接传输轮次；
-  - **通道扩容与快速恢复**：将 `events` 同步通道扩容至 1024，防止扫描发现耗时造成事件回压；缩短重连退避间隔至 1000ms；将服务端心跳看门狗超时放宽至 60 秒，避免多工作区扫描峰值引发误断连。
+## [2.7.5] - 2026-11-18
 
-- **支持个人资料用户头像设置与管理（`packages/contracts` / `services/api` / `apps/web`）**：
-  - **跨包契约与校验**：在 `@agent-pulse/contracts` 中建立 `UserAvatar` 校验模型，严格限制数据 URL 格式、允许的图片 MIME 类型与字节上限；
-  - **数据库存储与迁移**：新增 `0016_user_avatars.sql` 迁移，在 SQLite 与 PostgreSQL 存储层落地用户头像持久化；
-  - **控制台头像交互**：在前端设置页提供头像上传预览、实时压缩、头像清除与持久化展示。
+- **全栈代码审查硬化与性能优化（`services/api`、`apps/web`、`crates/runner`、`deploy`、`scripts`）**：
+  - **Gateway 存储与数据库负载治理（`services/api`）**：
+    - 拆解 `remote-store.ts` 协议校验与投影逻辑至 `remote-store-validation.ts`（`remote-store.ts` 由 `1460` 行压降至 `971` 行），引入 `StatementSync` 预编译语句缓存，并将 SQLite WAL 调优为 `synchronous=NORMAL` + `temp_store=MEMORY`；
+    - 新增覆盖索引 `remote_event_runner_id(runner, id)` 与内存事件计数，将 `receive()` 裁剪从每帧 `TEMP B-TREE` 全表排序（`O(N log N)`，实测 `16.67 ms`）降为正向索引单点裁剪（`O(log N)`，实测 `< 0.01 ms`）；
+    - 将 `resumePoint()` 拆分为 `hub=?` 与 `hub IS NULL` 双路 `remote_event_session` 倒序索引游标短路扫描（实测由 `23.44 ms` 降至 `0.033 ms`），并新增 `thinRunners()` 内存投影缓存消除 `/v3/remote/sessions` 每次轮询对百 KB 级 `hello` JSON 的重复拷贝与 `JSON.parse`；
+    - 新增可配置 `deviceRevalidateMs` / `streamAuthRevalidateMs`（生产默认 `2000 ms`）与设备/会话吊销即时通知钩子（`revokeRunner` / `invalidateStreamAuth`），并在 `/v3/remote/stream` 无新事件时短路空转唤醒，消除高频流式输出下的 PostgreSQL 查询风暴；补齐 `GET /healthz` 探针路由并修复 `admin-setup.test.ts` 测试库残留。
+  - **Web 控制台流式去噪、按需分包与渲染优化（`apps/web`）**：
+    - `lib/stream.ts` 新增 `streamBatchAffectsSnapshot` 与 `streamBatchAffectsSession`，过滤纯流式文本增量对全局 `/v3/remote/sessions` 的无效轮询及跨设备/跨会话详情唤醒；
+    - `PanelPage.tsx`、`RemotePage.tsx` 与 `RemoteConsole.tsx` 对 `RemoteConsole` 和 `SettingsPage` 实施 `React.lazy` 按需加载，配合 `vite.config.ts` 拆分 `vendor-react` / `vendor-markdown` 独立缓存块并移除 `<head>` 中 `281 KB` Base64 位图伪 SVG 图标引用，未登录首屏请求体积下降约 `70%`；
+    - 为 `RemoteToolGroup` 补齐按元素引用相等的 `React.memo` 比较器并缓存 `RemoteToolCard` Diff/提问解析结果，消除流式吐字期间历史工具卡片组的全量重渲染。
+  - **Runner 本机守护进程安全加固与 Outbox 批处理（`crates/runner`）**：
+    - `web_server/http_io.rs` 与 `server.rs` 新增有界请求行/Header 行读取（`8 KiB`）、Header 数量上限（`64`）、严格 `Content-Length` 校验上限（`16 MiB`，超限返回 `413` 防无界 `vec!` OOM 崩溃）及最大并发连接守卫（`32`）；
+    - `remote_journal/journal.rs` 高频查询切换至 `prepare_cached` 并新增 `mark_sent_through` 批量水位推进，配合 `remote_network` 单轮连续 `ack` 帧合并与主循环自适应空闲退避（活跃 `10 ms` / 空闲 `50 ms`），大幅降低流式期间磁盘事务次数与后台空转唤醒。
+  - **部署模板与架构行数门禁扩展（`deploy`、`scripts`）**：
+    - `deploy/nginx/agenthub-web.conf.template` 开启静态产物与 API JSON 的 `gzip` 压缩（排除 `text/event-stream`）；修正 `deploy/1panel/platform.example.com.conf.example` 的 ACME 跳转优先级与 `proxy_set_header` 继承配置；
+    - 扩展 `scripts/check-line-limits.py` 同步纳管 `packages/contracts`、`services/api` 与 `apps/web` 的 `.ts`/`.tsx` 源码行数棘轮门禁。
 
-- **设置齿轮按钮靠最右对齐与资源缓存穿透（`crates/runner/resources/dashboard.css` / `src/web_server.rs`）**：
-  - **根因分析**：顶栏 `.top` 原先采用 3 列 CSS Grid（`grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);`）。在侧边栏展开状态下（`body.side-nav`），中间槽位 `.top-slot` 被设为 `display: none;` 从文档流中移除，导致 CSS Grid 自动放置算法将 `.actions` 顺延填充至第 2 列居中偏左。同时，内嵌服务器此前对静态资源下发了 `immutable` 强缓存响应头，导致 Edge `--app` 模式在热重载或重启时继续使用本地磁盘上的旧版 CSS；
-  - **修复**：将 `.top` 改为坚固的 Flex 布局（`display: flex; justify-content: space-between; align-items: center;`），并将右侧操作区显式声明为 `.actions { margin-left: auto !important; flex: none; }`，无论中间槽位是否显示，齿轮均 100% 绝对贴靠在顶栏最右侧边缘；同时将资源版本参数递增为 `v=2.5.3.1`，缓存响应策略由 `immutable` 调整为 `no-cache, must-revalidate`，确保客户端加载最新编译的样式。
+## [2.7.4] - 2026-11-17
+- **Antigravity 实时模型发现 (`crates/runner`)**：针对前端仅展示 3 个硬编码占位模型的问题，新增 `collectors/antigravity/models.rs`（`discover_live_antigravity_models`）从本地 daemon `hub_*.json` + CSRF 头动态拉取真实目录，仅在无实时源时回落静态清单。
+- **离线闪断与风暴抑制 (`crates/runner`, `services/api`)**：WS `write_timeout` 放宽至 `15s` 并改用指数退避重连；`refresh.rs` 按结构指纹将纯 token/时间戳跳变的 `ready` 快照冷却至 `120s`，过滤无 `hub_session_id` 杂音；Gateway 新增 `offlineGraceMs`（默认 `6000ms`）且 `/v3/remote/stream` 遇写满改为等待 `drain` 不断连。
+- **消息吞没竞态与轻量流式态 (`apps/web`)**：`settledConversationItems` 按已落盘事件计数退避乐观气泡，补充 `inFlight` 期间的 SSE `again` 重拉标记，并以轻量 `.remote-turn-live` 状态条替代巨型闪烁骨架（Web/API/Contracts 96 项单测全绿）。
 
-- **解决会话加载初期误判为空白状态及加载动画缺失问题（`crates/runner/resources/dashboard.html` / `dashboard.js` / `src/web_server.rs`）**：
-  - **根因分析**：
-    1. Runner 启动初期后台 `NativeSessionHost` 正在进行全盘转录初次扫描（`control.ready` 为 `false`），调用 `Discover` 返回 `DaemonResponse::Error { code: "daemon_starting" }`；
-    2. `build_dashboard_summary` 原先无条件将首个 0 会话响应以 12 秒 TTL 写入 `dashboard_summary_cache()`，且未向上层返回 `ready` / `status` 状态；
-    3. 前端在收到 0 会话响应时将空状态打击计数 `consecutiveEmptyResponses` 累加，且 `dashboard.html` 静态标签初始写死为 `0 个历史会话`，造成在真实会话完成解析前过早闪烁“还没有可读取的会话”空白提示；
-  - **修复**：
-    - 后端（`web_server.rs`）：在返回结果中注入 `ready` 和 `status` 字段；当会话数为 0 且缓存中有先前有效会话时自动复用；针对非空缓存将 TTL 降为 4 秒，空/启动状态仅允许 500ms 重查，且未完成初始化时不污染有效缓存；
-    - 前端（`dashboard.html` & `dashboard.js`）：将初始徽标文本改为 `正在加载…`；初次启动提供 5 次（间隔 800ms）的主动重试；当后端报告 `ready: false` 或 `status: "starting"` 时，保留骨架屏加载动画（Shimmer Skeleton），不将未完成状态计入空状态打击，并在后台完成后无缝呈现真实会话。
+## [2.7.3] - 2026-11-16
+- **Antigravity (`agy`) 实时双向接管与审查硬化 (`crates/runner`, `apps/web`)**：新增 `AntigravityProcessSession` 持久化 `stream-json` 通道、多运行根/Subagent 发现与能力生态扫描；硬化 `antigravity_req_` 精确前缀匹配、缺失 `decision` 默认 fail-closed `"decline"`、`8192` 字节 UTF-8 安全 `stderr` 截断与提前异常子进程回收。
+- **SQLite 冷热分层与峰值内存治理 (`crates/runner`)**：引入 `BoundedLruCache`、流式 Typed Serde 解析与 `usage_ledger/index_db.rs`（`UsageIndexDb`，`>35` 天或超出单源 `256` 热文件自动溢出 SQLite，`PRAGMA auto_vacuum = INCREMENTAL`），Windows Release 热重启扫描峰值 Commit 降至 `57.41 MB`（`-80.5%`）、稳态 WorkingSet `2.61 MB`。
 
-- **支持会话子代理（Subagents）折叠与展开交互，且默认处于收起状态（`crates/runner/resources/dashboard.js` / `dashboard.css`）**：
-  - **交互设计**：
-    - 针对包含子代理的会话，默认处于折叠收起状态，避免大量子任务平铺冲淡主会话列表可读性；
-    - 将原本静态的 `<span>N 个子代理</span>` 升级为交互式按钮 `<button type="button" class="tag sub-count sm-toggle-subs">`，内置动态旋转指示箭头（SVG Chevron）；
-    - 支持两种便捷收起/展开方式：点击“N 个子代理”按钮，或直接点击会话行本身（自动规避复选框、删除按钮等操作区）；
-    - 展开状态下子代理列表清晰展示，收起状态下 `.subs.folded` 隐去列表，指示箭头平滑逆时针旋转 90 度呈收起状态；
-    - 展开偏好持久化：通过 `agenthub_expanded_subagents` 键在 `localStorage` 中记录用户主动展开的会话 ID，跨刷新与重绘保持记忆。
+## [2.7.2] - 2026-11-14
+- **隔离 WebView2 UI 子进程与纯 Win32 托盘升级 (`crates/runner`)**：剥离常驻浏览器进程，新增 `agenthub-runner ui` 按需子进程（`tray/webview_host.rs` + Job Object 连根回收，关窗或最小化失活后释放 `425 MB` WebView2 内存，主守护保持 `WebView2Children=0`）。
+- **零 WebView2 原生托盘卡片与模块拆解**：`tray_menu/win32/` 拆分为 7 个正交子模块，支持配置详情下钻、用量周期切换（`1d/7d/30d/All`）与全键盘 SDF 焦点环导航；全仓 174 个 Rust 文件零超限通过。
 
-- **修复设备绑定成功后 Web 控制台未显示设备的通讯链路缺陷（`crates/runner` / `services/api` / `apps/web`）**：
-  - **根因分析**：
-    1. **Runner 配对后未即时切换模式**：本机 Runner 接收 `/api/device/bind` 后仅写入 `~/.agenthub/binding.json`，未向正在运行的后台 `daemon` 调度 `DaemonRequest::SetRemoteEnabled { server_url: Some(gateway_url) }`，导致守护进程仍停留在 Local-only 模式，未建立到网关 `/v3/remote/ws` 的出站 WebSocket 连接；
-    2. **Runner 重启未继承持久化配置**：`main.rs` 在启动 `Command::Daemon` 和 `Command::Web` 时未解析持久化绑定文件，导致 Runner 重启后网关地址丢失；
-    3. **网关注册与会话映射割裂**：网关在收到设备注册后写入 `devices` 表，但 `/v3/remote/sessions` 仅单向查询 `remote.db` 中的 `content.runners(owner)`，在客户端完成首次 WebSocket Hello 握手前该设备在会话快照中不可见；
-    4. **Web 设置页缺乏配对感知轮询**：用户在 Web 控制台生成绑定码并在本地客户端配对成功后，Web 端未在绑定弹窗打开期间进行高频设备轮询，弹窗不会自动关闭且设备列表未实时刷新。
-  - **全链路修复**：
-    - **Runner 即时连网与解绑支持（`crates/runner/src/web_server.rs`）**：在 `/api/device/bind` 成功后立即触发 `handler.handle(DaemonRequest::SetRemoteEnabled { server_url: Some(gateway_url) })` 并清空看板缓存，同时补齐网关地址自动规范化（缺失前缀时默认补齐 `https://`）与 `POST /api/device/unbind` 解除绑定接口；
-    - **Runner 自启动持久化绑定恢复（`crates/runner/src/main.rs`）**：新增 `resolve_bound_gateway_server()` 解析 `~/.agenthub/binding.json`，在自启、托盘或无参数启动时自动继承已绑定的云端网关；
-    - **网关已注册设备投影（`services/api/src/remote-routes.ts`）**：`GET /v3/remote/sessions` 统一将已注册且未吊销的设备预先注册至 `content.register(owner, device_id)`，并将离线但已绑定的设备投影至 `runners` 返回结果，确保 Web 端立即呈现；
-    - **Web 端主动感知轮询（`apps/web/src/components/SettingsPage.tsx`）**：在绑定弹窗开启时以 2 秒间隔自动轮询设备列表，检测到新设备绑定成功后自动关闭弹窗并刷新设备列表；切换至设备标签页时自动刷新。
+## [2.7.1] - 2026-11-12
+- **Usage Ledger 历史日志内存暴降治理 (`crates/runner`)**：针对 6GB+ 本地 JSONL 历史导致 `224 万` 小字符串分配与全量 `clone` 占满 `566.8 MB` 内存的根因，落地 `Arc<str>` 全局字符串驻留池 `INTERNER`、就地缓存更新、冷文件索引释放与 `SetProcessWorkingSetSize` 修剪，稳态 WorkingSet 骤降至 `1.08~18.89 MB`（`-97%~99.8%`）。
+- **CI 容器代理契约加固 (`scripts/test-web-proxy.sh`)**：改用 `docker cp` 注入配置模板并直连容器 IP，消除 Docker-out-of-Docker 路径挂载与内嵌 DNS 污染失败。
 
-- **用量页的 Token 总量改为全机口径（`crates/runner/src/usage_ledger.rs`）**：
-  - **根因**：账本此前只读 Coding Assistant 的转录（实测 11.67B），而 magpie 的 25B 还含 ZCode 与 Codex，两个数字自然对不上；现按"对齐 magpie 全量"把本机其他智能体的用量并入同一账本，实测总量 **28.30B / 203,464 次请求 / $11,117.91**，其中 ZCode 14.27B、Claude Desktop 11.67B、Codex 2.37B、Coding Assistant 0.0002B；
-  - **ZCode**：`model_usage` 一行一次调用，字段已分好 prompt / cache / completion 与两端时间，直接取用；早于该表的会话退回读 assistant 消息自带的 `tokens` 块。两条路径的 `input` 语义相反——`model_usage.input_tokens` **不含**缓存，消息的 `input` **包含**缓存（其 `total` 即 `input + output`）——所以减法只在消息路径做，否则 `model_usage` 会被压掉 2.44B；
-  - **Codex**：每次会话一个 zstd 压缩的 rollout，末尾 `token_count` 的 `total_token_usage` 即累计值，只取最后一次以免把累计当增量重复相加；`input_tokens` 本就含 `cached_input_tokens`，故只记 input 与 output，不再加回缓存。早于 `provenance` 的 rollout 从最后一次 `turn_context.model` 取名（原先 1.19B 落在空模型名桶里），一分未花的 rollout 直接跳过，排名不再出现零值行；
-  - **轮询成本**：rollout 是整段压缩会话（本机 200 个共 525 MB），新增按（长度, 修改时间）记忆的 `LedgerCache.codex`，未变化的 rollout 不再解压；新增 `a_codex_rollout_is_read_once_and_reread_when_it_grows` 断言"读过的不重读、变长的会重读"。实测冷启动 12.5 s、账本 TTL 内 1.25 s；
-  - **语义**：失败（`error`/`rate_limit`）的调用计入总量但不进模型排行，与转录路径一致。
+## [2.7.0] - 2026-11-11
+- **Web 层静态化重构：Next.js 16 迁至 Vite 8 + Nginx 同源反代 (`apps/web`, `deploy/`)**：移除常驻 Node SSR，改为四入口静态 MPA + `nginx:1.29-alpine`（`agenthub-web.conf.template` 统一在 `server` 层收口 Cookie 白名单、服务端 Bearer 注入、API `no-store` 与协议透传），生产镜像由 `1.51 GB` 降至 `96.7 MB`（`-93.6%`）、常驻内存由 `64.93 MiB` 降至 `8.37 MiB`。
+- **自动化反代门禁**：CI 新增静态构建、`nginx -t` 与 `scripts/test-web-proxy.sh` 13 项容器级安全回声测试；补充 `agenthubd` 稳态 `13.47 MB` RSS 基准记录。
 
-- **托盘菜单改为紧凑的条目列表，右键不再转圈（`crates/runner/src/tray_menu.rs` / `tray.rs`）**：
-  - **根因（光标）**：弹窗窗口类注册时 `hCursor` 为 0，Windows 于是沿用线程当前光标；托盘线程刚处理完右键，带的还是"忙碌"光标，所以菜单一出现指针就转。现注册 `IDC_ARROW` 并在 `WM_SETCURSOR` 里无条件 `SetCursor`，指针一进菜单即恢复箭头；
-  - **版式**：卡宽 292→248、行高 43→36、圆角 17→10、投影留白 16→10，100% DPI 下条目区卡面 248×250、整窗 268×270（原为 292×320 / 324×352）；头部由"品牌标+标题+状态两行"压成单行 `● AgentHub（就绪） … v2.5.3`，去掉自绘六边形标记；条目字号 16→14px、标题 15.5→13.5px、行内左边距 45→14；
-  - **悬停**：高亮条此前按窗口坐标定位，左侧贴着边框、右侧短 16px；改为按卡片内缩 5px 对齐，圆角 7px，进出两行仍只重绘各自行带；
-  - 首项文案与托盘一致改为"显示协同控制台"。
+## [2.6.23] - 2026-11-11
+- **全工作区巨石清零里程碑 (`crates/runner`, `scripts/check-line-limits.py`)**：将 `collectors`（7,352 行）、`remote_host`（4,435 行）、`usage_ledger`（4,300 行）、`claude_gateway`（3,235 行）、`tray_menu`（2,796 行）、`web_server`（2,785 行）、`remote_network`、`conversation`、`remote_journal`、`auth`、`model_catalog` 等全部遗留巨石正交拆解为职责单一的子模块，`LEGACY_BASELINE_CAPS` 彻底归零（全仓单文件 `<=800` 行，329 项 Rust 测试全绿）。
+- **跨机 `"要你处理"` 置顶条视觉与对比度返工 (`apps/web`)**：新增高对比文字令牌 `--cds-clay-ink`（WCAG AA `>=4.7:1`），对齐 32px 审批按钮、16px 外框递减圆角与 `scrollbar-gutter: stable` 窄滚动条。
 
-- **全平台图标高清化与三维 AI 聚合魔方重构（`crates/runner` / `apps/web`）**：
-  - **视觉设计与品牌重构**：
-    - 全新引入三维等距（Isometric 3D）**AI 聚合立方魔方**（AI Aggregation Cube），取代先前的抽象几何棱镜：
-      - **顶立面（Top Face）**：深邃机甲哑光底板嵌 Claude Terracotta 赤陶太阳芒矢量徽记；
-      - **左立面（Left Face）**：银灰金属质感切面嵌 DeepSeek 彩虹浪涌动感徽记；
-      - **右立面（Right Face）**：玄武岩深灰切面嵌 OpenAI ChatGPT 经典六瓣花环徽记；
-      - **外骨骼机甲框架（Chassis）**：四角高精度倒角内凹机身与精密切削导角，象征 AgentHub 将 Claude、DeepSeek、OpenAI 等顶级 AI 智能体跨设备无缝协同汇聚。
-  - **极致纯净透明背景与射线轮廓追踪抠图（Radial Ray-Casting Silhouette Extraction）**：
-    - 针对原设计暗色背景与立方体左侧暗面凹槽微弱色差（暗槽灰度 ~25，外景 ~22），摒弃易泛洪漏渗的传统算法，采用自立方体几何中心 `(512, 512)` 呈 3600 根径向射线（0.1° 角分辨率）向外步进的反向轮廓扫描算法，精准锁定导角机甲外轮廓（灰度阈值 ≥38），完整保留机身卡槽与倒角细节；
-    - 结合 3×3 高斯亚像素边缘平滑（$\sigma = 0.5$）与外沿色溢消除算法，在纯白（`#ffffff`）、暗黑（`#181820`）及高饱和亮青（`#06b6d4`）背景下均无黑边（Zero Dark Halo）或背景杂色溢出，实现 100% 纯透明无边框坐落。
-  - **消除 Windows 11 高分屏缩放模糊与全链路高阶光栅化（任务栏图标发糊的真正根因）**：
-    - **根因定位（实测而非推断）**：本项目是 **Rust** 写的 `agenthub-runner`，它用 **Microsoft Edge 的 `--app` 模式**承载桌面控制台，并非 Electron/Tauri/Qt，因此 `icon:` 配置项、`npx @tauri-apps/cli icon`、`setWindowIcon` 等框架做法一概不适用。任务栏按钮图标最终由 **Windows 从 Chromium 上报的 favicon 位图**绘制，而 Chromium 的 `Favicons` SQLite 缓存**只会保存 16×16 与 32×32 两帧**（实测 `favicons` 表仅 1 行：`http://127.0.0.1:4200/icon-32.png`，`favicon_bitmaps` 表仅 16/32 两行），无论页面声明了多少尺寸。AgentHub 窗口实际落在 **1920×1080 @ 100% DPI** 主屏上（`GetDpiForWindow` = 96），任务栏槽位实测恰为 **24×24 物理像素**——于是系统只能把 32px 位图缩到 24px，插值把清晰的像素抹糊；
-    - **实测任务栏绘制规则**：用纯色探针图标（红/绿/蓝）分别写入 `WM_SETICON` 的 `ICON_BIG` 与 `ICON_SMALL` 槽位并 `PrintWindow` 抓取真实任务栏，确认任务栏**只读 `ICON_BIG`**（`WM_GETICON` wParam=1），完全忽略 `ICON_SMALL`；且 `ICON_BIG` 的槽位物理尺寸恒为 `24 × dpi / 96`（100% → 24、175% → 42）。进一步用 16/24/32/48px 探针复测：Windows **仅在图标自身像素尺寸恰好等于槽位尺寸时才 1:1 直绘**，其余尺寸一律重采样——这正是此前"多帧 ICO 仍然发糊"的原因，ICO 里多存几帧并不能让系统挑中它；
-    - **绕开 favicon，直接接管窗口图标（新增 `crates/runner/src/window_icon.rs`）**：Runner 在拉起 Edge 后启动一个看门狗线程，定位标题以 `AgentHub Runner` 开头的 `Chrome_WidgetWin_1` 窗口，按窗口当前所在显示器的 DPI 算出任务栏槽位尺寸（`24 * dpi / 96`），从自身内嵌 ICO 资源里 `LoadImageW` 出**与槽位等大的原生帧**（新增 24/30/36/42/48 五个槽位尺寸，分别对应 100%/125%/150%/175%/200% 缩放），再以 `WM_SETICON` 写回 `ICON_BIG`；看门狗每 400ms 比对窗口当前持有的句柄，一旦 Chromium 用自己的 favicon 抢回图标就再次覆写，因此不与 Chromium 抢写、也不会被其覆盖；
-    - **原生帧补齐（14 帧 ICO）**：ICO 扩充为 16、20、24、28、**30**、32、**36**、40、**42**、48、**56**、64、128、256 共 14 帧原生位图（32bpp BGRA DIB，256px 用 PNG 压缩），并新增同名 `icon-30.png` / `icon-36.png` 供浏览器按需点阵直取；`web_server.rs` 改为表驱动一次性下发全部尺寸路由；
-    - **Chromium 侧同样受益**：`dashboard.html` 显式声明 17 个 `<link rel="icon" sizes="…">`（含 28/30/36/42/56/72/96），Web App Manifest 与 `apps/web/app/layout.tsx` 的 `metadata.icons` 同步补齐全尺寸阶梯，浏览器按原生点阵网格取图，不再插值拉伸；
-    - **留白压缩与边缘去色溢**：旧版四周留白高达 9.4%（256px 下左右各 24px），魔方被压到画布 81%；现按内容包围盒重新裁切并只留 2.5% 透明边距，小尺寸下魔方占幅提升到 93%~100%，28px 档三个品牌徽记全部可辨；
-    - **边缘色溢消除（Zero Dark Halo）**：抠图残留的暗色源背景会在半透明边缘形成黑边。改用最近实心像素回填（distance-transform 最近邻）把前景本色扩散到边缘，且在**每一次重采样之后**再做一次回填——否则 Lanczos 振铃会把半透明像素的颜色压到 0（黑）而重新长出黑边。以「半透明像素与其最近不透明像素的颜色差 > 40」为判据，16/20/24/28/30/32/36/40/42/48/56/64/72/96/128/256/512 各档实测**色溢像素数均为 0**；
-    - **Lanczos 采样 + 微对比度非锐化掩模（Unsharp Masking）**：针对 ≤48px 的超小尺寸图标，在 RGB 通道施加微对比度锐化（`radius=0.8, percent=120, threshold=2`），确保缩到任务栏后三个品牌图形与导角机身依旧清晰；
-  - **启动层缓存主动淘汰与全链路更新**：`tray.rs` 启动 Edge 前主动清理 `Default/Favicons*` 与 `HubApps Icons*`，`web_server.rs` 注入 `no-cache, must-revalidate` 头与版本校验后缀 `v=2.5.7`。重新编译发布 `agenthub-runner.exe`（13,469,696 字节，内嵌 14 帧原生 ICO 资源）与 Windows 发行包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,743,543 字节，SHA-256: `9a8775191adc5aba11f54a22a54eb6e68ed76c1cb0c760c5854d5a934cc7d12c`）。实机验证：修复前 100% 主屏任务栏图标对 24px 原生帧的匹配 MAE 为 5.05~16.20（视候选源而定，整体明显发糊），修复后 `WM_GETICON(ICON_BIG)` 持有的位图经 `GetIconInfo` + `GetDIBits` 读回，与 `icon-24.png` 的 **RGB 与 alpha 通道 MAE 均为 0.0000**；`PrintWindow` 抓取真实任务栏像素与之比对 **MAE = 0.07**，切到 175% 副屏后 `ICON_BIG` 自动切换为 42×42 原生帧、该屏任务栏匹配 **MAE = 0.00**；连续 12 秒以 100ms 采样 `WM_GETICON`，句柄变更 0 次（无图标抖动回退）。
+## [2.6.22] - 2026-11-11
+- Web 侧栏顶部新增跨设备 `"要你处理"` 队列（`AttentionQueue.tsx` + `attentionEntries`），取 `execution_state` 与 `pending_approvals` 并集并校验 `control_connected`，支持不切换设备直接内联批准/拒绝。
 
-- **代码审查全量修复（删除、鉴权、缓存与重绘）**：
-  - **会话删除不会再半途而废（`collectors/mod.rs`）**：`file-history/<id>`、`session-env/<id>` 与会话目录 `<id>` 同名，原先统一平移到 `trash/<basename>`，第二次 `rename` 撞上已存在的目录（os error 145），跨卷回退又对目录调用 `remove_file`（os error 5），结果是转录已挪走、接口却报失败。现由 `trash_target()` 在重名时带上来源目录名（`file-history-<id>`、`session-env-<id>`），`move_into()` 按类型复制/删除并在删除失败时撤回副本；移动循环抽成 `move_all_into()`，任一项失败即把已移动的项按逆序移回原位，并在错误里说明"已移动 N 个文件后，某文件失败，已全部放回"。新增 `deleting_a_session_that_has_two_folders_named_after_it` 与 `a_delete_that_fails_part_way_puts_the_session_back` 两个测试；
-  - **防跨站驱动（`web_server.rs`）**：所有响应不再下发 `Access-Control-Allow-Origin: *` 与预检 `Max-Age`，新增 `origin_allowed()` 严格同源校验（`Origin` 必须等于 `http://{Host}`），在任何请求体被读取之前 403；无 `Origin` 的 CLI/托盘请求照常放行。`OPTIONS` 只回裸 `204`，不授予任何跨源权限。除 `only_the_consoles_own_origin_may_drive_the_daemon` 单测外，新增 `a_foreign_origin_cannot_post_to_the_daemon` 真正起服务并用 HTTP 断言：外来 `Origin` 与 `"null"` 均 403，控制台自身源与无 `Origin` 请求 200，且响应不含任何 CORS 授权头；
-  - **删除后缓存立即失效（`web_server.rs` / `usage_ledger.rs` / `collectors/mod.rs`）**：删除成功时清空 12 秒的 `dashboard_summary_cache`、`usage_ledger::forget_transcripts()` 清空账本缓存，并新增 `forget_subagents()` 丢弃子代理记忆，避免页面刷新后已删会话仍在、二次删除被告知"no such session"；
-  - **子代理读取加速（`collectors/mod.rs`）**：`read_claude_subagent_cached()` 以（文件长度, 最后写入）为键做进程内记忆，已完成的子代理转录不再每次轮询重读全部字节；超过 500 个时按修改时间保留**最新**的，而不是原先按路径字典序保留最早的。新增 `a_finished_subagent_is_read_once` 用固定 mtime 断言"未变化的文件不重读、变长的文件会重读"；
-  - **整轮下限的单测理由与门槛对齐（`usage_ledger.rs`）**：`a_transcript_tells_only_the_whole_turn` 里的 17k token / 77 ms 用例实际是被 1,000 ms 时长门槛挡下，原注释却称它证明了"首行不是首 token"。现改为显式断言该用例因时长被拒，并新增一条 17,145 token / 1.5 s（11,430 tok/s）用例真正触发 10,000 tok/s 上限，再用 14,000 token / 1.5 s（9,333 tok/s）证明上限之下照常给出下限；
-  - **写入守卫不再跟随链接（`collectors/mod.rs`）**：`written_within()` 改用 `symlink_metadata` 并加 16 层深度上限，指向上级目录的 junction 不会再把守护进程递归到爆栈；
-  - **用量账本不再解析巨型行（`usage_ledger.rs`）**：用户/tool-result 行只按字节扫描 `"timestamp":"…"` 取时刻，不再把数百 MB 的 base64 工具输出交给 JSON 解析器；
-  - **托盘菜单悬停只重绘一行（`tray_menu.rs`）**：卡片距离场、阴影、字型与 DIB 在菜单存活期间缓存（`Frame`），悬停切换只重算进入/离开的两条行带并只回传这些行；原先每次 `WM_MOUSEMOVE` 都重建整窗、逐像素求两次 SDF 并新建 DIB。新增三个单测覆盖"只动一行""离开即还原""换菜单才重绘"；
-  - **删除交互不再吞掉选择（`dashboard.js`）**：空列表渲染时清空已选并同步工具条；`POST /api/sessions/delete` 返回非 2xx 时提示 HTTP 状态、保留勾选与确认弹窗，不再静默关闭；
-  - **复制按钮补齐样式（`apps/web/src/components/remote.css`）**：`remote-copy-badge` / `remote-copy-action` / `remote-copied-badge` 此前无任何样式定义，图标与文字紧贴、已复制状态无颜色变化；现补齐 `inline-flex` 间距与翠绿加粗的已复制态。
+## [2.6.21] - 2026-11-11
+- Web 与 Android 统一将乐观提问确认改为绝对用户行数阈值（`neededUserRows`）与 1s 独立超龄清理循环；Android `AgentGateway.kt` 改为读到首行字节才判 SSE 存活，并拆出 `SessionSignals.kt` 保持单文件行数合规。
 
-- **修复能力发现单测在干净 CI 环境断言失败（`crates/runner/src/collectors/capabilities.rs`）**：
-  - 根因：`test_discover_capabilities_smoke` 此前硬编码断言 `caps.total_skills > 0 && caps.total_hooks > 0`，在未配置全局 `~/.claude` 或 `~/.agenthub` 的纯净 Linux/CI 容器中必定断言失败（`assertion failed: caps.total_skills > 0`）；
-  - 修复：将烟雾测试调整为验证总数与列表集合一致性，并新增独立单元测试 `test_discover_capabilities_in_workspace`，基于隔离的 `tempdir` 构造 Mock 工作区并验证 Skills 与 MCP 服务发现逻辑闭环。
+## [2.6.20] - 2026-11-10
+- 修复 Android 输入法遮挡与双重导航栏留白（`adjustResize` + `ime.union(navigationBars)`），按行数基线保留重复文本提问的乐观气泡与首响应等待提示，收拢双端冗余停止按钮与参数胶囊文案。
 
-- **Web 控制台 UI/UX 重构与交互精简（`/ui-design`）**：全站移除 Emoji，改用 2.2px 线宽内联 SVG 图标；拔除 `.remote-session-tree` 顶部渐变遮罩与 `.settings-page` 硬编码暗色变量，恢复浅/暗主题自然继承；输入框 42~~46px、按钮 38~~48px，补齐 GPU 加速微动效与 WCAG AA 对比度，统一 Claude Terracotta 品牌色；侧边栏外观主题切换收拢至设置页（外观与主题，带 SVG 矢量图标预览与卡片微动效），彻底移除侧栏页脚堆叠控件；顶部面包屑仅在进入子层级（`selectedSessionPath.length > 0`）时动态呈现，会话过滤胶囊行仅在存在多厂商（`availableProviders.size > 1`）时呈现，彻底根除根视图下"全部会话"与单厂商"全部"垂直堆叠的重复按钮问题。
-- **Remote 控台的转场与路由修复（`apps/web`）**：面包屑从侧栏移到主区头部并删除侧栏重复项；移除客户端路由段的多余导出，修复 Next.js 构建；会话切换、欢迎页、设置弹窗与标签分区、新建会话对话框、消息卡片与审批/提问卡片统一加入进场动画，欢迎页快捷胶囊补齐悬停抬升与点击反馈，全部在 `prefers-reduced-motion` 下自动降级。
-- **文档无损精简与事实对齐**：精简 `AGENTS.md`、`README*.md`、`llms*.txt` 与 `docs/*.md`（含验收记录、宣发模板与 `RELEASE_NOTES_*.md` 原位瘦身），`docs/CHANGELOG.md` 100% 保留全部历史版本头；统一 UTF-8 无 BOM 与纯 LF，清理过期测试计数、旧入口命令与相对时间词。
-- **输出速度只报整轮下限，不再出现 3,000+ tok/s 的假数字（`crates/runner/src/usage_ledger.rs`）**：
-  - 根因：Claude 转录里同一条消息的每个内容块都会重复写一次最终 usage，消息的"第一行"是第一个内容块而不是第一个 token；按首行→末行计时读到过 8,300 tok/s，属于把"整块落地"当成"逐 token 流式写出"；
-  - 对齐上游 magpie 的 `Row.Floor`：转录来源的调用**只**报整轮下限（从"被提问"到最后一行），要求输出 ≥1,000 token、时长 ≥1,000 ms、且不高于 10,000 tok/s，否则不计；
-  - `Timing` 删掉 `decode_*` 三个字段，`write_ms()`/`decode_window()` 移除，`LedgerRecord.t_start` 一并删除；线上实测从 1,170 tok/s 降到 **149.9 tok/s / 1,287 个整轮回复**；
-  - 前端 `ledSpeed()` 改为 `ledFloor()`，KPI、趋势图、排行、tooltip 一律显示 `≥N tok/s`，速度轴改为按"每个模型自己的下限刻度"绘制，不再把速度当成可叠加份额。
-- **用量趋势的指标/分组按钮全部生效（`resources/dashboard.js`）**：三组按钮原来只写 localStorage 与 `.on` 状态、不触发 `pickUsageSegs()` 重绘，现改为切换后立即重算分组与图表；实测 Token/费用/请求/速度与模型/模型·智能体/智能体六个按钮均会切 `.on` 并重绘。
-- **会话页对标 magpie：子代理展开 + 多选删除（`collectors/mod.rs` / `remote_host.rs` / `web_server.rs` / `dashboard.js`）**：
-  - 新增 `ClaudeSubagentEntry` 与 `collect_claude_subagents()`，读取 `<session>/subagents/agent-*.jsonl` 与 `workflows/<run>/agent-*.jsonl`，从 `.meta.json` 取 `agentType`、`description`、`spawnDepth`、`parentAgentId`，按 `message.id` 聚合请求数与 token；子代理缩进挂在父会话下方，显示类型、任务说明、模型、请求数与 Token；
-  - 新增 `POST /api/sessions/delete` 与 `delete_claude_session()`：把会话转录、子代理目录、`file-history/`、`session-env/`、`todos/` 一并移入 `~/.agenthub/trash/sessions/<时间戳>-<id>/`（跨卷时复制再删除），最近 60 秒内仍在写入的会话拒绝删除；
-  - 前端补复选框、全选（含 indeterminate）、`N 个已选`、行内悬停删除与二次确认弹窗；
-  - 顺带修复会话行读错 id 的缺陷：守护进程下发的是 `provider_session_id`，页面只读 `session_id || id`，导致每行 `data-id` 为空、勾选与删除实际作用在空字符串上。
-- **构建与发版**：Runner 可执行文件本次改动（设备名解析与重发布、WebSocket 保活），因此按"发版必自增版本"重新编译 `cargo build --release -p agenthub-runner` 并重新打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,774,943 字节，含 13,502,976 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`49e6dada…1f58e`）；产物目录只保留最新一版，旧包已按"打新包必删旧包"移除。验证：`cargo test --workspace` 287 项全绿，`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；`npm.cmd test`（contracts 22 / api 61 / web 74）、`npm.cmd run typecheck` 与 `npm.cmd run format:check` 均通过；浏览器端到端复核：设备名"书房主机"在控制台侧边栏与设置页设备列表均正确显示，"全部 Agent" 默认为选中且切换到 Codex 时正确隐藏 Claude 会话，头像上传后落库并在设置页回显，设备下拉具备 `role="menu"` 语义且 Escape 关闭后焦点回到触发按钮，深色主题下 `--cds-green` / `--cds-blue` 正确解析为 `#4ade80` / `#60a5fa`。
-- **能力生态页改回控制台统一行式排版（`dashboard.css` / `dashboard.js` / `dashboard.html`）**：删除 emoji 分区头、彩色徽章、悬停上浮、两行截断与 `word-break` 卡片体系，改为 `.cap-row` 平铺行（名称 + 标签 + 一行说明 + 省略号路径 + 右侧智能体图标与元信息）；实测 49 行无横向溢出、无内容超出组件，`@container` 窄屏自动换行。
-- **设置页标签行吸顶（`dashboard.css` / `dashboard.js`）**：`.set-head` 改为 `position: sticky; top: -16px` 并负边距铺满视图宽度、自带背景遮住滚动内容，滚动超过 2px 才淡入底部发丝线；实测滚动 900px 后标签行仍固定在页面顶端。
-- **构建与发版**：因上述修复晚于原 2.5.2 产物，按"发版必自增版本"升到 **2.5.3** 并重新编译 `cargo build --release -p agenthub-runner`，打包 `AgentHub-Runner-v2.5.3-windows-x64.zip`（5,736,204 字节，含 13,458,944 字节的可执行文件、`README.md`、`Connect-AgentHub.cmd`、`Connect-AgentHub.ps1`）与 `AgentHub-v2.5.3-SHA256.txt`（`745ceefa…1fea`）；同步提升 `Cargo.toml`、根 `package.json`、`apps/web`、`packages/contracts`、`services/api` 与托盘菜单测试夹具的版本号；2.5.2 的 zip 与校验清单已按"打新包必删旧包"移除，产物目录只保留最新一版。验证：`cargo test --workspace` 277 项全绿（217 库 + 60 集成），`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all --check` 均通过；并用隔离的 `CLAUDE_CONFIG_DIR` 起真实守护进程做端到端复核：外来 `Origin` 的 `POST /api/sessions/delete` 与 `OPTIONS` 均返回 403，同源与无 `Origin` 请求 200；造出同时含转录、会话目录、`file-history/`、`session-env/` 与 `todos/` 的会话后一次删除，六个文件全部落入 `~/.agenthub/trash/sessions/<stamp>-<id>/` 且各占独立名字，源目录清空，二次删除返回 `no such session` 而不是"删一半"。
+## [2.6.19] - 2026-11-10
+- Runner 路径脱敏改为局部替换 `[local_path_redacted]` 保留语句上下文；Web 上线即时乐观气泡与紧凑工具抽屉；Android 引入 `IncrementalTranscriptFold` 后台增量折叠消除主线程卡顿。
+
+## [2.6.18] - 2026-11-10
+- 修复 Android Material 3 默认亮色（Paper）配色层级并重构 `RemoteScreen` 对话卡片留白与视觉层次。
+
+## [2.6.17] - 2026-11-10
+- 修复 Runner 误将 Claude Desktop DPAPI 加密密文当作明文 Bearer 注入导致的远程调用 `401` 认证失败。
+
+## [2.6.16] - 2026-11-09
+- 补全 Codex 与 Antigravity 运行时网关成对环境注入，落地服务端插件能力门禁并将 Grok 解耦为可选插件，修复新旧字段兼容导致的重连循环。
+
+## [2.6.15] - 2026-11-09
+- Android 持久化记忆网关地址与登录邮箱，修复会话事件解析异常并补齐按需拉取 Runner `hello` 目录。
+
+## [2.6.14] - 2026-11-09
+- 修复网页端选择 `claude-*` 模型别名直连裸上游网关时的 `503` 路由失配，自动按上游真实可用模型目录映射。
+
+## [2.6.13] - 2026-11-09
+- 隔离 Runner 子进程继承的宿主环境冲突变量，修复网页端下发首轮提示词时的网关 `401` 鉴权污染。
+
+## [2.6.12] - 2026-11-08
+- Runner 向平台 `hello.models.agents.claude_code` 完整上报上游网关真实模型清单，解除仅显示少量本地别名的限制。
+
+## [2.6.11] - 2026-11-08
+- Runner 直连裸上游网关时保留客户端所选真实模型 ID，不再强制套用本地路由器专用的别名改写。
+
+## [2.6.10] - 2026-11-08
+- Android 自适应启动图标背景改为全透明图层以贴合系统桌面视觉，并统一 Prettier 代码格式门禁。
+
+## [2.6.10] Windows Runner 构建记录（2026-11-08）
+- 同步构建归档 Windows `agenthub-runner` `v2.6.10` Release 二进制，替换停留在旧版的桌面运行实例。
+
+## [2.6.9] - 2026-11-07
+- 统一 Android 启动图标、启动画面与单色主题层至与 Runner 托盘、Web 控制台同源的品牌图形资产。
+
+## [2.6.8] - 2026-11-07
+- **根治 `remote.db` 9GB 膨胀 (`services/api`)**：新增 `storableFrame()` 在 `ready` 帧入 `remote_events` 前剥离 440KB 级 `models`/`discovery` 大字段（保留 `pending_approvals` 锚点），设置每设备 `EVENT_RETENTION = 20_000` 窗口并对存量库重写 `VACUUM`（`8.46 GiB -> 114.8 MiB`，回收 `98.68%`）。
+
+## [2.6.7] - 2026-11-07
+- `GET /v3/remote/sessions` 瘦身为轻量设备头（单设备响应从 `583 KB` 降至 `1.8 KB`，`-99.7%`），完整目录拆至按需端点 `GET /v3/remote/runners/:runner/hello`；反转 Android 附件 UTF-8 嗅探默认策略并统一引擎枚举。
+
+## [2.6.6] - 2026-11-07
+- Android 附件增加 8KB UTF-8 多字节字符边界嗅探防 UTF-16/Latin-1 乱码，合并 `ProviderKind` 与 `engineOfSession` 分类器并复用 `OrcaFilterPill`。
+
+## [2.6.5] - 2026-11-07
+- Android 修复 `TurnSeed` 跨会话串味为单次消费，补齐 SAF 空输入流与异常文件名报错提示及浅色主题底部导航栏深色图标。
+
+## [2.6.4] - 2026-11-07
+- Android 独立识别 `claude_desktop` 与 `gemini_cli` 模型目录，补齐首条指令失败反馈、实时 `detailState` 轮询节律、`readCapped` 流式长度预判与 SAF 句柄关闭。
+
+## [2.6.3] - 2026-11-06
+- Android 对齐模型/推理强度/权限选择、SAF 多附件上传、上下文容量环与三套高对比主题（石墨/午夜/纸墨）；将会话详情打开期间的全局列表轮询放宽至 `15~20s` 消除大包抢占导致的请求取消。
+
+## [2.6.2] - 2026-11-06
+- 清理 Android `minSdk=26` 下不可达的旧密度位图，合并 `mipmap-anydpi` 并补齐 Android 13 单色主题图标层。
+
+## [2.6.1] - 2026-11-06
+- 完成 Android v2.6.0 审查 15 项修复：修复全新安装登录校验死锁、单例缓存 `AgentGateway`、`seedResume` 快照首帧偏移、`EventWindow` 容量封顶、屏幕旋转 `Application` 级保活及密码移出 `savedState`。
+
+## [2.6.0] - 2026-11-05
+- **原生 Android 客户端整体重写 (`apps/android/`)**：全面迁移至 `@agent-pulse/contracts/remote` Remote v3 协议，落地 Cookie 会话认证、`EventWindow` 快照保护、`CommandLedger` 幂等键、四级会话树与 Jetpack Compose 固定底栏 + 全屏详情架构。
+
+## [2.5.6] - 2026-11-05
+- Runner 支持孤儿网关配置自动回退；Web 侧栏按活跃时间降序排列，引入会话级游标 `sessionCursor()`、`resumePoint` 复合索引与 `foldWithCache()` 尾部增量折叠（4 万事件归约降至毫秒级）。
+
+## [2.5.5] - 2026-11-03
+- 修复普通浏览器访问同名标题网页时误关 Runner 本地应用窗口的缺陷（绑定 `APP_WINDOW_PID` 精确匹配）；Windows 托盘监听 `TaskbarCreated`（穿透 UIPI）并增加冷启动挂载重试与退出 `NIM_DELETE` 清理。
+
+## [2.5.4] - 2026-11-02
+- 移植 `magpie` 句柄级变更探测与全客户端模型用量解析，将本地与远端链路统一为单节拍扫描加事件推送，升级自绘托盘交互防抖、品牌多色图标、多维用量筛选与 CSV 导出。
 
 ## [2.5.3] - 2026-10-20
-
-- **会话删除不再"删一半"（`crates/runner/src/collectors/mod.rs`）**：`file-history/<id>`、`session-env/<id>` 与会话目录 `<id>` 同名，多个来源平移进同一个 `trash/<basename>` 时第二次 `rename` 撞上已存在的非空目录（os error 145），跨卷回退又对目录调用 `remove_file`（os error 5），导致转录已被挪走、接口却报失败。现按来源限定重名目标，移动循环抽成 `move_all_into()` 并在任一项失败时按逆序把已移动的项放回，成功后才丢弃子代理、账本与仪表盘缓存。
-- **防跨站驱动（`crates/runner/src/web_server.rs`）**：响应不再下发 `Access-Control-Allow-Origin: *`，`origin_allowed()` 在读取请求体之前要求 `Origin` 等于 `http://{Host}`，其余一律 403；无 `Origin` 的托盘与 CLI 请求照常放行，`OPTIONS` 只回裸 `204`。
-- **子代理读取按（长度, 修改时间）记忆（`crates/runner/src/collectors/mod.rs`）**：已完成的子代理转录不再每 5 秒轮询重读约 81 MB，超过 500 个时保留最新的一批。
-- **整轮下限单测与实现门槛对齐（`crates/runner/src/usage_ledger.rs`）**：修正 17k token / 77 ms 用例的断言理由（实为时长门槛所拒），并补一条真正触发 10,000 tok/s 上限的用例。
+- 修复多目录同名会话移入回收站时的覆盖冲突，`web_server.rs` 收紧 `Origin == http://{Host}` 同源校验，并为已完成子代理转录增加按长度与修改时间的缓存记忆。
 
 ## [2.5.2] - 2026-10-19
-
-- **托盘图标回到可辨识的浅色六边形（`crates/runner/resources/icon.svg`）**：撤回 2.4.98 的深蓝渐变底白线版本（16px 下糊成一团），恢复 `#f8fafc` 圆角白底 + `#0284c7` 六边形与辐条的原始构图，并另做 16/20/24px 加粗变体（线宽与节点放大一档）；`icon.ico` 重建为 16/20/24/32/40/48/64/128/256 九帧（135,162 字节），`icon.png`、`icon-192.png`、`icon-512.png` 与 `apps/web/public/` 下同名资源同步重渲染且 MD5 一一对应。
-- **右键菜单改为自绘亮色卡片（`crates/runner/src/tray_menu.rs`）**：
-  - 移除 `TrackPopupMenu` 原生菜单与 `SetPreferredAppMode(2)` 调用（ordinal 135 的 `2` 实为 ForceDark，正是菜单发暗的根因，原注释误标为 AllowDark）；
-  - 新增分层窗口菜单：`WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST` + `UpdateLayeredWindow` 预乘 BGRA，纯 Rust 圆角 SDF 抗锯齿与两遍盒式模糊投影，白卡 `#ffffff`、`#dcdce4` 细边框、`#eeeef2` 发丝分隔线；
-  - 按 "控制间距、字体更大更圆润" 重排版式：卡宽 292、行高 43、左右内边距 15、圆角 17、投影留白 16；菜单项 `Microsoft YaHei UI` 16px，标题 15.5px 半粗，版本/状态 12.5px，行距与分隔留白拉开后不再拥挤；
-  - 头部固定展示品牌标、版本、绿点运行状态与本机地址；五项动作分三组（打开协同控制台 / 查看演进拓扑（网关）/ 在系统浏览器中打开 ‖ 打开数据存储目录 ‖ 退出 AgentHub 红字），悬停按亮色 `#f2f2f7` 高亮；
-  - 关闭与焦点：托盘浮出层在按下图标后会抢前台，故设 400ms `SETTLE` 窗口忽略早期 `WA_INACTIVE`，并挂 120ms 线程定时器 `hide_if_clicked_away()` 按光标位置收起；`closed_within(250ms)` 让"点图标收起菜单"不会顺带弹出控制台窗口；
-  - 按 DPI 缩放（`GetDpiForMonitor`）并把卡片夹进光标所在显示器工作区，放不下时翻到光标下方。
-- **网关入口直达设置分区（`tray.rs` / `resources/dashboard.js`）**：菜单项改为打开 `#settings/gateway`；控制台新增 `applySettingsHash()` 与 `hashchange` 监听，取走 hash 后以 `replaceState` 清除，刷新仍回到读者上次停留的页面。
-- **开发工具与依赖**：新增 `crates/runner/examples/tray_menu_preview.rs`，`cargo run -p agenthub-runner --example tray_menu_preview` 直接在光标处画出菜单，便于脱离托盘单独验收版式；`windows-sys` 增开 `Win32_UI_Controls`、`Win32_UI_HiDpi`、`Win32_UI_Input_KeyboardAndMouse`。
-- **构建与发版**：全工作区版本递增至 `2.5.2`，归档 `AgentHub-Runner-v2.5.2-windows-x64.zip` 与 `AgentHub-v2.5.2-SHA256.txt`，按"打新包必删旧包"移除 2.5.1 的 zip 与校验清单。
+- 重建 9 帧高辨识度浅色六边形托盘图标（`16~256px`），将 Windows 托盘右键菜单升级为 `UpdateLayeredWindow` 自绘圆角亮色卡片并支持 `#settings/gateway` 哈希直达。
 
 ## [2.5.1] - 2026-10-19
-
-- **内嵌控制台主视图收敛（4 页 + 统一设置视图）**：删除 `#view-models` 与 `#view-gateway`（上游路由与拓扑统一交由 CPA 管理），主导航收敛为 **会话 / 智能体 / 用量 / 工作区**；原能力视图与设备配对分别并入设置页 **能力生态** 与 **设备与网关**（`setPage-gateway`）分区，移除页脚冗余端口显示。
-- **逐请求用量账本与对标 magpie 的用量页（`GET /api/usage/ledger`）**：在 `crates/runner/src/usage_ledger.rs` 按 `message.id` + `requestId` 聚合 Claude、Codex 与 ZCode 逐次调用，10 分钟窗口内自动配对失败后重试成功并计算输出速度（tokens/s）；前端提供概览/请求/会话/上下文四段标签、5 格 KPI、堆叠趋势图、53 周热力图与 UTF-8 BOM CSV 导出。
-- **magpie 厂商图标与五款官方智能体卡片**：从上游 `magpie/internal/gui/assets/icons/` 逐字节引入 19 个 SVG 与 1 个 PNG 至 `crates/runner/resources/icons/`（`/icons/<name>.<ext>`）；智能体卡片严格限定为 `claude_code`、`claude_desktop`、`codex`、`grok`、`gemini` 五款产品（258 项 Rust 测试全绿）。
+- 内嵌控制台收敛为 `会话 / 智能体 / 用量 / 工作区` 四主视图加统一设置页，上线 `GET /api/usage/ledger` 逐请求去重账本与 53 周热力图，并嵌入 20 枚 `magpie` 厂商图标。
 
 ## [2.5.0] - 2026-10-19
-
-- **设置弹窗重构为独立视图（`#view-settings`）**：对齐上游 magpie 页面模型，点击顶栏齿轮（`Ctrl+,` / `Esc`）原位切换 `.view-slot` 为五分区设置页（通用 / 外观 / 设备与配对 / 网关 / 关于），采用 `.list.prefs` + `.row.pref` 结构并支持跨分区关键词实时过滤，收拢顶栏裸露的刷新、主题与轮询控件。
-- **开发构建静态资源热重载（Debug Hot Reload）**：`cfg!(debug_assertions)` 下每次请求直接读取 `crates/runner/resources/` 磁盘文件并以文件 mtime 注入 `?v=2.5.0-<nanos>` 防缓存查询串，配合 `GET /api/dev/wait?since=<stamp>` 长轮询实现保存即刷新；Release 与测试仍走单文件内嵌资源。
-- **视图切换竞态与后台挂起修复**：为 `startViewTransition` 引入单调递增序号防止快速连点旧回调覆写新视图，并在隐藏窗口或 300ms 超时未就绪时直接完成 DOM 切换；修复 `AppLayout.storage` 缺失 `motion: agenthub_motion` 键与 `#refreshBtn` 旋转态问题。
+- 对标上游 `magpie` 将设置弹窗重构为五分区独立视图 `#view-settings`，新增 Debug 构建磁盘静态资源热重载（`GET /api/dev/wait`）与单调递增视图切换防竞态保护。
 
 ## [2.4.99] - 2026-10-19
-
-- **Runner 事件队列可重入死锁根治（`crates/runner/src/remote_host.rs`）**：修复 `events_queue.lock()` 持有期间二次加锁导致的守护进程挂起，确保高频流式输出与历史快照并发入队零阻塞。
-- **多智能体扩展生态纳管（`crates/runner/src/library.rs`）**：扫描纳管 Skills（`~/.claude/skills`、`.claude/skills`、Codex 技能目录及 YAML Frontmatter）、MCP Servers（`~/.claude.json`、`~/.codex/config.toml`、`.mcp.json`、`~/.agenthub/mcp.json`，内置零依赖 `parse_mcp_from_codex_toml`）与 Hooks（`PreToolUse`/`PostToolUse`/`SessionStart`/`PermissionRequest`），支持跨智能体去重、注册（`POST /api/capabilities/mcp`）与热重扫（`POST /api/capabilities/rescan`）。
-- **上下文容量环、多选问答与增量 Markdown 解析**：Runner 将 Claude `result`、Codex `thread/tokenUsage/updated` 与 ACP `usage_update` 归一化为 `{used, window}` 并在移动端渲染容量环；支持 `multi_select` 问答卡片数组提交（`string[]`）与流式增量 Markdown 尾部缓存。
+- 根除 `remote_host.rs` `events_queue` 可重入死锁，新增跨智能体 Skills/MCP/Hooks 联邦资料库（含零依赖 Codex TOML 解析）、上下文容量环与多选问答卡片。
 
 ## [2.4.98] - 2026-10-19
-
-- **内嵌控制台网关看板与顶栏设置入口**：网关视图重构为 4 组状态卡片、会话亲和缓存命中对比拓扑、快捷参数复制胶囊与 4 语言（Bash / PowerShell / Node.js / Python）接入代码切换器；顶栏关机键替换为设置齿轮（`Ctrl+,`）并新增 `/api/open-data-dir` 一键打开数据目录。
-- **Win32 多分辨率高清托盘与现代上下文菜单**：内置 16×16 至 256×256 共 9 帧 ICO 图标，使用 `LoadImageW` 按 `SM_CXSMICON` / `SM_CXICON` 1:1 像素加载，新增 PWA 高清图标（`icon-192.png`/`icon-512.png`）与原生 Win32 托盘菜单。
-- **移动端流式转录、历史快照与工具卡片归一化**：`history/snapshot` 的 `content` 在投影层归一化为 `text`，为 `item/started` 开放窄字段白名单；合并 `item/started` 与 `item/completed` 为可展开工具卡片并支持补丁着色、连续工具折叠与 `<think>` 思考过程手风琴。
+- 新增网关会话亲和卡片与 4 语言接入代码切换器、顶栏设置齿轮（`Ctrl+,`）、High-DPI Win32 托盘加载以及移动端可展开工具/思考手风琴卡片。
 
 ## [2.4.97] - 2026-10-19
-
-- **多智能体 Token 与缓存吞吐量对齐 magpie**：修复 ZCode SQLite `LIMIT 1` 子查询漏计缺陷，通过 `parent_map` 递归汇总 `sess_subagent_...` 子会话，并使用 `WHERE data LIKE '%"role":"assistant"%'` 与 5s 内存缓存将 9.8 万行聚合耗时从 5.13s 降至 0.39s；接入 `~/.cache/magpie/sessions.json` 与 `thread_history_1.sqlite` 补齐 Codex 缓存读取与调用次数。
-- **控制台骨架屏与粘性顶栏优化**：新增 5 行 Shimmer 骨架屏占位消除首屏空白闪烁，顶栏导航药丸增至 32px 高并固定 `position: sticky; top: 0; z-index: 20` 保证 `#sideToggle` 随时可达。
-- **Android Orca 视觉令牌与列表收敛**：统一 `OrcaSpace`/`OrcaRadius`/`OrcaSize`/`OrcaType` 石墨深色单主题令牌，使用 `OrcaRow`/`OrcaListGroup`/`OrcaStatStrip` 替代碎片化卡片栈并实现 60 FPS 生命周期感知轮询。
+- 修复 ZCode 子查询漏计与子代理汇总并将 9.8 万行聚合提速至 `0.39s`，补齐 Codex 缓存指标、5 行骨架屏与 Android `Orca` 视觉令牌统一。
 
 ## [2.4.96] - 2026-10-19
-
-- **审批卡片可折叠 Diff 预览与本机路径脱敏**：自动提取 Claude Code `Edit`/`Write`、Codex 与 ACP `item/fileChange/requestApproval` 的结构化代码变更，本机绝对路径脱敏为 `[local_path_redacted]` 并执行 64 KiB 帧上限，前端渲染 `+add -del` 统计徽章与双栏着色对比块。
-- **通用 ACP（Agent Client Protocol）stdio 适配器（`crates/runner/src/collectors/acp_app_server.rs`）**：实现标准 JSON-RPC 2.0 stdio 客户端（兼容 `claude-agent-acp`、`codex-acp`），通过 `ChildJob`（Windows Job Object `KILL_ON_JOB_CLOSE` / Unix 进程组）隔离进程树，异步桥接长耗时 `session/prompt` 与非阻塞 `turn/start`，并在 `MultiProviderTransport` 支持 `acp_` 前缀与 `agentType == "acp"` 动态路由。
+- 新增跨 Claude/Codex/ACP 的 `<=64 KiB` 路径脱敏审批 Diff 预览，落地通用 JSON-RPC 2.0 `acp_app_server.rs` 适配器与 `ChildJob` 进程树隔离。
 
 ## [2.4.95] - 2026-10-19
 

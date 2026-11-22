@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, type FormEvent } from "react";
 
 import {
@@ -20,6 +18,7 @@ export function AccountGate({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState("管理员");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -175,15 +174,59 @@ export function AccountGate({
 
             <label>
               <span>{needsSetup ? "设置密码（至少 10 位）" : "密码"}</span>
-              <input
-                autoComplete={needsSetup ? "new-password" : "current-password"}
-                minLength={10}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder={needsSetup ? "至少 10 个字符" : "••••••••••"}
-                required
-                type="password"
-                value={password}
-              />
+              <div className="account-password-wrap">
+                <input
+                  autoComplete={
+                    needsSetup ? "new-password" : "current-password"
+                  }
+                  minLength={10}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder={needsSetup ? "至少 10 个字符" : "••••••••••"}
+                  required
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                />
+                <button
+                  type="button"
+                  className="account-password-toggle"
+                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                  title={showPassword ? "隐藏密码" : "显示密码"}
+                  onClick={() => setShowPassword((prev) => !prev)}
+                >
+                  {showPassword ? (
+                    <svg
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                    </svg>
+                  ) : (
+                    <svg
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </label>
 
             {needsSetup && (
@@ -195,7 +238,7 @@ export function AccountGate({
                   onChange={(event) => setConfirmPassword(event.target.value)}
                   placeholder="再次输入相同密码"
                   required
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   value={confirmPassword}
                 />
               </label>
@@ -218,8 +261,8 @@ export function AccountGate({
 
           <p className="account-policy">
             {needsSetup
-              ? "自部署模式下管理员凭据加密储存在 SQLite 中。"
-              : "登录会话仅保存在安全 HttpOnly Cookie 中。"}
+              ? "管理员凭据将在服务端加密保存，创建后自动关闭公开初始化入口。"
+              : "登录状态仅保存在当前浏览器的加密会话中，公共设备使用后请及时退出。"}
           </p>
         </div>
       </section>

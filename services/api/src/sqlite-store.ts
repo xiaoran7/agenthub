@@ -1,36 +1,42 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type {
   ActivityStatus,
-  AgentType,
-  AuthSnapshot,
   AuthSyncBatch,
   DeviceHeartbeat,
-  Presence,
   SyncBatch,
+  SyncEvent,
 } from "@agent-pulse/contracts";
 import type { PushSubscription } from "./push.js";
-import type {
-  AuthFilters,
-  AuthIngestResult,
-  DeviceRegistrationResult,
-  DeviceView,
-  GatewayStore,
-  HeartbeatResult,
-  IngestResult,
-  RegisteredDevice,
-  SessionEventFilters,
-  SessionFilters,
-  StoredAuthSnapshot,
-  StoredSession,
+import {
+  SQLITE_GATEWAY_SCHEMA,
+  sessionStatusChange,
+  shouldReplaceSnapshot,
+} from "./store-schemas.js";
+import {
+  GatewayStoreError,
+  type AuthFilters,
+  type AuthIngestResult,
+  type DeviceRegistrationResult,
+  type DeviceView,
+  type GatewayStore,
+  type HeartbeatResult,
+  type IngestResult,
+  type RegisteredDevice,
+  type SessionEventFilters,
+  type SessionFilters,
+  type SessionStatusChange,
+  type StoredAuthSnapshot,
+  type StoredSession,
 } from "./store.js";
-import { GatewayStoreError } from "./store.js";
 import type { AccountStore } from "./accounts.js";
 
 export class SqliteGatewayStore implements GatewayStore {
   private db: DatabaseSync;
   private now: () => Date;
+  private closed = false;
 
   constructor(path: string, options: { now?: () => Date } = {}) {
     const dir = dirname(path);
@@ -42,35 +48,39 @@ export class SqliteGatewayStore implements GatewayStore {
     this.initTables();
   }
 
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.db.close();
+  }
+
+  private transaction<T>(work: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const res = work();
+      this.db.exec("COMMIT");
+      return res;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   private initTables(): void {
-    this.db.exec(`
-      PRAGMA journal_mode=WAL;
-      PRAGMA synchronous=NORMAL;
-      CREATE TABLE IF NOT EXISTS registered_devices (
-        device_id TEXT PRIMARY KEY,
-        public_key TEXT NOT NULL,
-        owner_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL,
-        revoked_at TEXT
+    this.db.exec(SQLITE_GATEWAY_SCHEMA);
+    const cols = this.db
+      .prepare("PRAGMA table_info(registered_devices)")
+      .all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "last_sequence")) {
+      this.db.exec(
+        "ALTER TABLE registered_devices ADD COLUMN last_sequence INTEGER NOT NULL DEFAULT 0",
       );
-      CREATE INDEX IF NOT EXISTS idx_devices_owner ON registered_devices(owner_id);
-
-      CREATE TABLE IF NOT EXISTS binding_codes (
-        code_digest TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        claimed_device_id TEXT,
-        issued_by TEXT
+    }
+    if (!cols.some((c) => c.name === "last_heartbeat_at")) {
+      this.db.exec(
+        "ALTER TABLE registered_devices ADD COLUMN last_heartbeat_at TEXT",
       );
-
-      CREATE TABLE IF NOT EXISTS push_subscriptions (
-        endpoint TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        payload TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_push_owner ON push_subscriptions(owner_id);
-    `);
+    }
   }
 
   setAuditRecorder?(_recorder: Pick<AccountStore, "recordAuditEvent">): void {}
@@ -291,6 +301,38 @@ export class SqliteGatewayStore implements GatewayStore {
     return row.count;
   }
 
+  async countPendingBindingCodes(
+    ownerId: string,
+    nowIso: string,
+  ): Promise<number> {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) as count FROM binding_codes WHERE owner_id = ? AND claimed_device_id IS NULL AND expires_at > ?",
+      )
+      .get(ownerId, nowIso) as { count: number };
+    return Number(row.count ?? 0);
+  }
+
+  async pruneExpiredData(nowIso: string, historyDays = 90): Promise<void> {
+    const cutoff = new Date(
+      Date.parse(nowIso) - historyDays * 86_400_000,
+    ).toISOString();
+    this.db
+      .prepare(
+        "DELETE FROM binding_codes WHERE expires_at <= ? AND claimed_device_id IS NULL",
+      )
+      .run(nowIso);
+    this.db
+      .prepare(
+        `DELETE FROM sync_events WHERE rowid IN (
+          SELECT e.rowid FROM sync_events e
+          JOIN registered_devices d ON d.device_id = e.device_id
+          WHERE e.sequence < d.last_sequence AND e.observed_at < ?
+        )`,
+      )
+      .run(cutoff);
+  }
+
   async registerDevice(
     ownerId: string,
     deviceId: string,
@@ -335,50 +377,295 @@ export class SqliteGatewayStore implements GatewayStore {
     return { device, created: true };
   }
 
-  async ingestBatch(_batch: SyncBatch): Promise<IngestResult> {
-    return {
-      accepted: 0,
-      owner_id: "default",
-      changes: [],
-    };
+  async ingestBatch(batch: SyncBatch): Promise<IngestResult> {
+    return this.transaction(() => {
+      const device = this.db
+        .prepare("SELECT * FROM registered_devices WHERE device_id = ?")
+        .get(batch.device_id) as
+        | {
+            device_id: string;
+            public_key: string;
+            owner_id: string;
+            revoked_at: string | null;
+            last_sequence: number;
+          }
+        | undefined;
+      if (!device) {
+        throw new GatewayStoreError(
+          "device_not_registered",
+          "device is not registered",
+        );
+      }
+      if (device.revoked_at !== null) {
+        throw new GatewayStoreError("device_revoked", "device is revoked");
+      }
+      if (device.public_key !== batch.public_key) {
+        throw new GatewayStoreError(
+          "device_key_mismatch",
+          "sync batch public key does not match registered device",
+        );
+      }
+      const newEvents: SyncEvent[] = [];
+      for (const event of batch.events) {
+        const byId = this.db
+          .prepare("SELECT event_data FROM sync_events WHERE event_id = ?")
+          .get(event.event_id) as { event_data: string } | undefined;
+        if (byId) {
+          if (!isDeepStrictEqual(JSON.parse(byId.event_data), event)) {
+            throw new GatewayStoreError(
+              "event_id_conflict",
+              "event_id was reused for different content",
+            );
+          }
+          continue;
+        }
+        const bySeq = this.db
+          .prepare(
+            "SELECT event_id FROM sync_events WHERE device_id = ? AND sequence = ?",
+          )
+          .get(event.device_id, event.sequence) as
+          { event_id: string } | undefined;
+        if (bySeq && bySeq.event_id !== event.event_id) {
+          throw new GatewayStoreError(
+            "sequence_conflict",
+            "device sequence was reused by another event",
+          );
+        }
+        newEvents.push(event);
+      }
+      if (
+        newEvents.length > 0 &&
+        newEvents[0]!.sequence !== device.last_sequence + 1
+      ) {
+        throw new GatewayStoreError(
+          "sequence_gap",
+          "new events do not continue the stored device sequence",
+        );
+      }
+      const before = new Map<string, ActivityStatus>();
+      for (const event of newEvents) {
+        const key = `${event.device_id}:${event.agent_type}:${event.agent_session_id}`;
+        if (before.has(key)) continue;
+        const row = this.db
+          .prepare(
+            "SELECT activity_status FROM sync_sessions WHERE device_id = ? AND agent_type = ? AND agent_session_id = ?",
+          )
+          .get(event.device_id, event.agent_type, event.agent_session_id) as
+          { activity_status: ActivityStatus } | undefined;
+        if (row) before.set(key, row.activity_status);
+      }
+      const receivedAt = this.now().toISOString();
+      const touched = new Map<string, StoredSession>();
+      const insertEvent = this.db.prepare(
+        "INSERT INTO sync_events (event_id, device_id, sequence, observed_at, received_at, event_data) VALUES (?, ?, ?, ?, ?, ?)",
+      );
+      const getSession = this.db.prepare(
+        "SELECT received_at, event_data FROM sync_sessions WHERE device_id = ? AND agent_type = ? AND agent_session_id = ?",
+      );
+      const upsertSession = this.db.prepare(
+        `INSERT INTO sync_sessions (device_id, agent_type, agent_session_id, observed_at, received_at, sequence, confidence, presence, activity_status, event_data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(device_id, agent_type, agent_session_id) DO UPDATE SET
+           observed_at = excluded.observed_at,
+           received_at = excluded.received_at,
+           sequence = excluded.sequence,
+           confidence = excluded.confidence,
+           presence = excluded.presence,
+           activity_status = excluded.activity_status,
+           event_data = excluded.event_data`,
+      );
+      let nextSeq = device.last_sequence;
+      for (const event of newEvents) {
+        const rawEvent = JSON.stringify(event);
+        insertEvent.run(
+          event.event_id,
+          event.device_id,
+          event.sequence,
+          event.observed_at,
+          receivedAt,
+          rawEvent,
+        );
+        nextSeq = Math.max(nextSeq, event.sequence);
+        const key = `${event.device_id}:${event.agent_type}:${event.agent_session_id}`;
+        const existingRow = getSession.get(
+          event.device_id,
+          event.agent_type,
+          event.agent_session_id,
+        ) as { received_at: string; event_data: string } | undefined;
+        const currentStored: StoredSession | undefined = existingRow
+          ? {
+              ...(JSON.parse(existingRow.event_data) as SyncEvent),
+              received_at: existingRow.received_at,
+            }
+          : undefined;
+        if (!currentStored || shouldReplaceSnapshot(currentStored, event)) {
+          const updated: StoredSession = { ...event, received_at: receivedAt };
+          upsertSession.run(
+            event.device_id,
+            event.agent_type,
+            event.agent_session_id,
+            event.observed_at,
+            receivedAt,
+            event.sequence,
+            event.confidence,
+            event.payload.state.presence,
+            event.payload.state.activity_status,
+            rawEvent,
+          );
+          touched.set(key, updated);
+        }
+      }
+      this.db
+        .prepare(
+          "UPDATE registered_devices SET last_seen_at = ?, last_sequence = ? WHERE device_id = ?",
+        )
+        .run(receivedAt, nextSeq, batch.device_id);
+      const changes: SessionStatusChange[] = [];
+      for (const [key, snapshot] of touched) {
+        const previous = before.get(key);
+        if (previous === snapshot.payload.state.activity_status) continue;
+        changes.push(sessionStatusChange(snapshot, previous));
+      }
+      return { accepted: newEvents.length, owner_id: device.owner_id, changes };
+    });
   }
 
-  async ingestAuthBatch(_batch: AuthSyncBatch): Promise<AuthIngestResult> {
-    return {
-      accepted: 0,
-      owner_id: "default",
-      snapshots: [],
-    };
+  async ingestAuthBatch(batch: AuthSyncBatch): Promise<AuthIngestResult> {
+    return this.transaction(() => {
+      const device = this.db
+        .prepare(
+          "SELECT owner_id, public_key, revoked_at FROM registered_devices WHERE device_id = ?",
+        )
+        .get(batch.device_id) as
+        | { owner_id: string; public_key: string; revoked_at: string | null }
+        | undefined;
+      if (!device) {
+        throw new GatewayStoreError(
+          "device_not_registered",
+          "device is not registered",
+        );
+      }
+      if (device.revoked_at !== null) {
+        throw new GatewayStoreError("device_revoked", "device is revoked");
+      }
+      if (device.public_key !== batch.public_key) {
+        throw new GatewayStoreError(
+          "device_key_mismatch",
+          "auth batch public key does not match registered device",
+        );
+      }
+      const receivedAt = this.now().toISOString();
+      const accepted: StoredAuthSnapshot[] = [];
+      let acceptedCount = 0;
+      const getSnap = this.db.prepare(
+        "SELECT checked_at, received_at, snapshot_data FROM auth_snapshots WHERE device_id = ? AND provider = ?",
+      );
+      const upsertSnap = this.db.prepare(
+        `INSERT INTO auth_snapshots (device_id, provider, checked_at, received_at, snapshot_data)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(device_id, provider) DO UPDATE SET
+           checked_at = excluded.checked_at,
+           received_at = excluded.received_at,
+           snapshot_data = excluded.snapshot_data`,
+      );
+      for (const snapshot of batch.snapshots) {
+        const existingRow = getSnap.get(batch.device_id, snapshot.provider) as
+          | { checked_at: string; received_at: string; snapshot_data: string }
+          | undefined;
+        if (existingRow) {
+          const parsedExisting = JSON.parse(existingRow.snapshot_data);
+          const existingChecked = Date.parse(existingRow.checked_at);
+          const incomingChecked = Date.parse(snapshot.checked_at);
+          if (
+            existingChecked > incomingChecked ||
+            (existingChecked === incomingChecked &&
+              isDeepStrictEqual(parsedExisting, snapshot))
+          ) {
+            accepted.push({
+              ...parsedExisting,
+              device_id: batch.device_id,
+              received_at: existingRow.received_at,
+            });
+            continue;
+          }
+        }
+        upsertSnap.run(
+          batch.device_id,
+          snapshot.provider,
+          snapshot.checked_at,
+          receivedAt,
+          JSON.stringify(snapshot),
+        );
+        accepted.push({
+          ...snapshot,
+          device_id: batch.device_id,
+          received_at: receivedAt,
+        });
+        acceptedCount += 1;
+      }
+      this.db
+        .prepare(
+          "UPDATE registered_devices SET last_seen_at = ? WHERE device_id = ?",
+        )
+        .run(receivedAt, batch.device_id);
+      return {
+        accepted: acceptedCount,
+        owner_id: device.owner_id,
+        snapshots: accepted,
+      };
+    });
   }
 
   async recordHeartbeat(
     heartbeat: DeviceHeartbeat,
-    _receivedAt: string,
+    receivedAt: string,
   ): Promise<HeartbeatResult> {
-    const device = await this.getRegisteredDevice(heartbeat.device_id);
-    if (!device || device.revoked_at !== undefined) {
+    const device = this.db
+      .prepare(
+        "SELECT owner_id, public_key, revoked_at, last_seen_at, last_heartbeat_at FROM registered_devices WHERE device_id = ?",
+      )
+      .get(heartbeat.device_id) as
+      | {
+          owner_id: string;
+          public_key: string;
+          revoked_at: string | null;
+          last_seen_at: string;
+          last_heartbeat_at: string | null;
+        }
+      | undefined;
+    if (!device) {
       throw new GatewayStoreError(
         "device_not_registered",
         "device is not registered",
       );
     }
-    const nowIso = this.now().toISOString();
-    this.db
-      .prepare(
-        "UPDATE registered_devices SET last_seen_at = ? WHERE device_id = ?",
-      )
-      .run(nowIso, heartbeat.device_id);
-    return {
-      accepted: true,
-      owner_id: device.owner_id,
-      last_seen_at: nowIso,
-    };
+    if (device.revoked_at !== null) {
+      throw new GatewayStoreError("device_revoked", "device is revoked");
+    }
+    if (device.public_key !== heartbeat.public_key) {
+      throw new GatewayStoreError(
+        "device_key_mismatch",
+        "heartbeat public key does not match registered device",
+      );
+    }
+    const accepted =
+      device.last_heartbeat_at === null ||
+      heartbeat.sent_at > device.last_heartbeat_at;
+    const seenAt = accepted ? receivedAt : device.last_seen_at;
+    if (accepted) {
+      this.db
+        .prepare(
+          "UPDATE registered_devices SET last_seen_at = ?, last_heartbeat_at = ? WHERE device_id = ?",
+        )
+        .run(receivedAt, heartbeat.sent_at, heartbeat.device_id);
+    }
+    return { accepted, owner_id: device.owner_id, last_seen_at: seenAt };
   }
 
   async listDevices(ownerId: string): Promise<DeviceView[]> {
     const rows = this.db
       .prepare(
-        "SELECT * FROM registered_devices WHERE owner_id = ? ORDER BY created_at DESC",
+        "SELECT device_id, created_at, last_seen_at, revoked_at FROM registered_devices WHERE owner_id = ? ORDER BY device_id ASC",
       )
       .all(ownerId) as Array<{
       device_id: string;
@@ -386,41 +673,105 @@ export class SqliteGatewayStore implements GatewayStore {
       last_seen_at: string;
       revoked_at: string | null;
     }>;
-    const nowMs = this.now().getTime();
+    const offlineBefore = this.now().getTime() - 45_000;
     return rows.map((r) => ({
       device_id: r.device_id,
       created_at: r.created_at,
       last_seen_at: r.last_seen_at,
-      online: nowMs - Date.parse(r.last_seen_at) < 300_000,
+      online:
+        r.revoked_at === null && Date.parse(r.last_seen_at) >= offlineBefore,
       revoked: r.revoked_at !== null,
     }));
   }
 
   async listSessions(
-    _ownerId: string,
-    _filters: SessionFilters,
+    ownerId: string,
+    filters: SessionFilters,
   ): Promise<StoredSession[]> {
-    return [];
+    const rows = this.db
+      .prepare(
+        `SELECT s.received_at, s.event_data
+         FROM sync_sessions s
+         JOIN registered_devices d ON d.device_id = s.device_id
+         WHERE d.owner_id = ?
+           AND (? IS NULL OR s.device_id = ?)
+           AND (? IS NULL OR s.agent_type = ?)
+           AND (? IS NULL OR s.activity_status = ?)
+           AND (? IS NULL OR s.presence = ?)
+         ORDER BY s.observed_at DESC, s.sequence DESC`,
+      )
+      .all(
+        ownerId,
+        filters.device_id ?? null,
+        filters.device_id ?? null,
+        filters.agent_type ?? null,
+        filters.agent_type ?? null,
+        filters.activity_status ?? null,
+        filters.activity_status ?? null,
+        filters.presence ?? null,
+        filters.presence ?? null,
+      ) as Array<{ received_at: string; event_data: string }>;
+    return rows.map((r) => ({
+      ...(JSON.parse(r.event_data) as SyncEvent),
+      received_at: r.received_at,
+    }));
   }
 
   async listSessionEvents(
-    _ownerId: string,
-    _filters: SessionEventFilters,
+    ownerId: string,
+    filters: SessionEventFilters,
   ): Promise<StoredSession[]> {
-    return [];
-  }
-
-  async listAuthSnapshots(
-    _ownerId: string,
-    _filters: AuthFilters,
-  ): Promise<StoredAuthSnapshot[]> {
-    return [];
+    const device = await this.getRegisteredDevice(filters.device_id);
+    if (!device || device.owner_id !== ownerId) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT received_at, event_data FROM sync_events
+         WHERE device_id = ?
+           AND json_extract(event_data, '$.agent_type') = ?
+           AND json_extract(event_data, '$.agent_session_id') = ?
+         ORDER BY sequence DESC LIMIT ?`,
+      )
+      .all(
+        filters.device_id,
+        filters.agent_type,
+        filters.agent_session_id,
+        filters.limit,
+      ) as Array<{
+      received_at: string;
+      event_data: string;
+    }>;
+    return rows.map((r) => ({
+      ...(JSON.parse(r.event_data) as SyncEvent),
+      received_at: r.received_at,
+    }));
   }
 
   async listAuth(
-    _ownerId: string,
-    _filters: AuthFilters,
+    ownerId: string,
+    filters: AuthFilters,
   ): Promise<StoredAuthSnapshot[]> {
-    return [];
+    const rows = this.db
+      .prepare(
+        `SELECT a.device_id, a.received_at, a.snapshot_data
+         FROM auth_snapshots a
+         JOIN registered_devices d ON d.device_id = a.device_id
+         WHERE d.owner_id = ?
+           AND (? IS NULL OR a.device_id = ?)
+         ORDER BY a.checked_at DESC, a.provider ASC`,
+      )
+      .all(
+        ownerId,
+        filters.device_id ?? null,
+        filters.device_id ?? null,
+      ) as Array<{
+      device_id: string;
+      received_at: string;
+      snapshot_data: string;
+    }>;
+    return rows.map((r) => ({
+      ...JSON.parse(r.snapshot_data),
+      device_id: r.device_id,
+      received_at: r.received_at,
+    }));
   }
 }

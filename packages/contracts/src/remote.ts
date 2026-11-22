@@ -1,5 +1,5 @@
 /** Native Remote v3; separate from the incomplete legacy v2 envelopes. */
-import { ContractError } from "./index.js";
+import { ContractError } from "./contract-error.js";
 
 export interface RemoteAttachment {
   name: string;
@@ -18,7 +18,7 @@ export interface RemoteCommand {
   command:
     | {
         action: "connect";
-        mode: "create" | "resume" | "attach";
+        mode: "create" | "resume" | "preview" | "take_control" | "attach";
         workspace_path: string;
         provider_session_id?: string;
         model?: string;
@@ -30,6 +30,7 @@ export interface RemoteCommand {
     | {
         action: "send_prompt";
         text: string;
+        acquire_control?: boolean;
         effort?: string;
         model?: string;
         permission_mode?: RemotePermissionMode;
@@ -41,6 +42,7 @@ export interface RemoteCommand {
         question_id: string;
         answer: string | string[];
       }
+    | { action: "release_control" }
     | { action: "interrupt" };
 }
 
@@ -96,6 +98,7 @@ export interface RemoteReady {
   sessions: RemoteBinding[];
   models?: unknown;
   discovery?: unknown;
+  plugins?: unknown;
   pending_approvals?: RemotePendingApproval[];
   pending_questions?: RemotePendingQuestion[];
   attach_running?: boolean;
@@ -126,6 +129,7 @@ export function parseRemoteReady(value: unknown): RemoteReady {
     "sessions",
     "models",
     "discovery",
+    "plugins",
     "pending_approvals",
     "pending_questions",
     "attach_running",
@@ -192,7 +196,13 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         "approval_policy",
         "permission_mode",
       ]);
-      member(command.mode, ["create", "resume", "attach"]);
+      member(command.mode, [
+        "create",
+        "resume",
+        "preview",
+        "take_control",
+        "attach",
+      ]);
       text(command.workspace_path, 256);
       if (!isRemoteWorkspaceId(command.workspace_path)) invalid();
       if (command.provider_session_id !== undefined)
@@ -225,11 +235,17 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
       only(command, [
         "action",
         "text",
+        "acquire_control",
         "effort",
         "model",
         "permission_mode",
         "attachments",
       ]);
+      if (
+        command.acquire_control !== undefined &&
+        typeof command.acquire_control !== "boolean"
+      )
+        invalid();
       // Per-turn reasoning effort, model override, and permission mode.
       // Desktop already sends effort; the Host accepts all three for every
       // provider and providers without the concept ignore them.
@@ -287,6 +303,7 @@ export function parseRemoteCommand(value: unknown): RemoteCommand {
         invalid();
       }
       break;
+    case "release_control":
     case "interrupt":
       only(command, ["action"]);
       break;
@@ -397,6 +414,7 @@ export function parseRemoteBinding(value: unknown): RemoteBinding {
     "running",
     "awaiting_permission",
     "awaiting_input",
+    "releasing_control",
     "error",
     "completed",
     "terminated",

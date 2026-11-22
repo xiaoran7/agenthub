@@ -47,9 +47,23 @@ test("session references from a notification are validated before use", () => {
   );
   assert.equal(parseSessionRef(undefined), undefined);
   assert.equal(parseSessionRef("codex"), undefined);
-  assert.equal(parseSessionRef({ ...ref, agent_type: "cursor" }), undefined);
+  assert.equal(parseSessionRef({ ...ref, agent_type: "BadSlug" }), undefined);
+  assert.equal(parseSessionRef({ ...ref, agent_type: "../etc" }), undefined);
   assert.equal(parseSessionRef({ ...ref, agent_session_id: "" }), undefined);
   assert.equal(parseSessionRef({ ...ref, device_id: 7 }), undefined);
+  // Desktop, DeepSeek Harness, and plugin agent slugs are valid for push handoff.
+  assert.deepEqual(parseSessionRef({ ...ref, agent_type: "claude_desktop" }), {
+    ...ref,
+    agent_type: "claude_desktop",
+  });
+  assert.deepEqual(parseSessionRef({ ...ref, agent_type: "gemini_cli" }), {
+    ...ref,
+    agent_type: "gemini_cli",
+  });
+  assert.deepEqual(parseSessionRef({ ...ref, agent_type: "my_acp_bot" }), {
+    ...ref,
+    agent_type: "my_acp_bot",
+  });
   // Prototype keys must not pass as data.
   assert.equal(parseSessionRef({ ...ref, agent_type: "toString" }), undefined);
 });

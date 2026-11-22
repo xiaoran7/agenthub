@@ -3,7 +3,7 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import {
   ContractError,
   activityStatuses,
-  agentTypes,
+  isValidAgentType,
   parseAuthSyncBatch,
   parseDeviceRegistration,
   parseDeviceHeartbeat,
@@ -20,7 +20,10 @@ import Fastify, {
 import fastifyRawBody from "fastify-raw-body";
 import fastifyWebsocket from "@fastify/websocket";
 import { registerRemoteRoutes } from "./remote-routes.js";
-import type { RemoteRouteOptions } from "./remote-routes.js";
+import type {
+  RemoteControlHooks,
+  RemoteRouteOptions,
+} from "./remote-routes.js";
 import { RunnerPresence } from "./presence.js";
 import type { RemoteContentStore } from "./remote-store.js";
 
@@ -61,7 +64,28 @@ import {
   type OwnerAuthenticator,
 } from "./auth.js";
 import { ChangeBroker } from "./events.js";
-import type { PushSender, PushSubscription } from "./push.js";
+import type { PushSender } from "./push.js";
+import {
+  assertFreshDeviceTimestamp,
+  dispatchWaitingPushNotifications,
+  inviteRole,
+  isOneOf,
+  issueEmailVerification,
+  mutationIdentity,
+  paidPlan,
+  registerV1StreamRoute,
+  requireAccountIdentity,
+  requireAccounts,
+  requireSessionIdentity,
+  requireVerifiedEmail,
+} from "./app-helpers.js";
+import {
+  enforceCookieCsrf,
+  expectBodyObject,
+  parseBindingTtlSeconds,
+  parsePushEndpoint,
+  parsePushSubscriptionPayload,
+} from "./security-guards.js";
 import {
   GatewayStoreError,
   InMemoryGatewayStore,
@@ -82,10 +106,7 @@ const STREAM_RETRY_MS = 5_000;
 const STREAM_HEARTBEAT_MS = 10_000;
 /** One panel opens one stream; the cap bounds a misbehaving or hostile client. */
 const MAX_STREAMS_PER_OWNER = 8;
-const MAX_PUSH_ENDPOINT_LENGTH = 2_048;
-const DEFAULT_BINDING_TTL_SECONDS = 600;
-const MIN_BINDING_TTL_SECONDS = 60;
-const MAX_BINDING_TTL_SECONDS = 3_600;
+const MAX_PUSH_SUBSCRIPTIONS_PER_OWNER = 16;
 const DEVICE_ID_PATTERN = /^dev_[0-9a-f]{32}$/;
 const MAX_DEVICE_CLOCK_SKEW_MS = 5 * 60_000;
 const EMAIL_VERIFICATION_BYTES = 32;
@@ -136,7 +157,8 @@ export interface GatewayAppOptions {
   presence?: RunnerPresence;
   remoteRoutes?: RemoteRouteOptions;
   loginRateLimitSecret?: Buffer;
-  trustProxy?: boolean;
+  allowedPushHosts?: readonly string[];
+  trustProxy?: boolean | string[];
   bindingCodeFactory?: () => string;
   now?: () => Date;
   logger?: boolean;
@@ -161,14 +183,22 @@ export function createGatewayApp(
     store.setAuditRecorder?.(options.accounts);
   }
   const openStreams = new Set<() => void>();
+  const streamAuthRevalidators = new Set<() => void>();
+  const secureCookies = options.secureCookies ?? false;
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: 1024 * 1024,
     trustProxy: options.trustProxy ?? false,
   });
+  app.addHook("preHandler", async (request) => {
+    enforceCookieCsrf(
+      request,
+      secureCookies,
+      options.emailVerification?.baseUrl,
+    );
+  });
 
   app.setErrorHandler((error, _request, reply) => {
-    app.log.error(error);
     if (error instanceof AccountError) {
       void reply.status(error.statusCode).send({ error: error.code });
       return;
@@ -222,6 +252,7 @@ export function createGatewayApp(
       });
       return;
     }
+    app.log.error(error);
     void reply.status(500).send({ error: "internal_error" });
   });
 
@@ -229,14 +260,25 @@ export function createGatewayApp(
   void app.register(fastifyWebsocket, {
     options: { maxPayload: 17 * 1024 * 1024 },
   });
+  let remoteHooks: RemoteControlHooks | undefined;
+  const invalidateAllStreamAuth = (): void => {
+    remoteHooks?.invalidateStreamAuth();
+    for (const check of streamAuthRevalidators) check();
+  };
   if (options.remoteContent) {
     const content = options.remoteContent;
+    const externalHooks = options.remoteRoutes?.onControlHooks;
     void app.register(async (remoteApp) =>
       registerRemoteRoutes(remoteApp, store, authenticator, content, {
         ...options.remoteRoutes,
         accounts: options.accounts,
+        secureCookies,
         now,
         presence,
+        onControlHooks: (hooks) => {
+          remoteHooks = hooks;
+          externalHooks?.(hooks);
+        },
       }),
     );
   }
@@ -285,6 +327,7 @@ export function createGatewayApp(
   const singleAdmin = options.singleAdmin ?? true;
 
   app.get("/health", async () => ({ status: "ok" }));
+  app.get("/healthz", async () => ({ status: "ok" }));
 
   app.get("/v1/auth/status", async () => {
     if (options.accounts?.hasAnyAdmin !== undefined) {
@@ -294,37 +337,67 @@ export function createGatewayApp(
     return { needs_setup: false };
   });
 
+  let setupLock: Promise<void> = Promise.resolve();
   const setupAdminHandler = async (
     request: FastifyRequest,
     reply: FastifyReply,
   ) => {
     const accounts = requireAccounts(options.accounts);
-    if (
-      singleAdmin &&
-      accounts.hasAnyAdmin !== undefined &&
-      (await accounts.hasAnyAdmin())
-    ) {
-      throw new AccountError(
-        "admin_already_exists",
-        "administrator is already configured",
-        409,
-      );
+    const setupIpScope = createHmac("sha256", loginRateLimitSecret)
+      .update(`setup_ip\n${request.ip}`, "utf8")
+      .digest("hex");
+    const setupIpLimit = await accounts.consumeLoginAttempt({
+      scopeDigest: setupIpScope,
+      now: now().toISOString(),
+      windowSeconds: LOGIN_WINDOW_SECONDS,
+      maximumAttempts: 20,
+      blockSeconds: LOGIN_BLOCK_SECONDS,
+    });
+    if (!setupIpLimit.allowed) {
+      reply.header("retry-after", String(setupIpLimit.retry_after_seconds));
+      throw new AccountError("login_rate_limited", "too many attempts", 429);
     }
     const body = accountBody(request.body);
     assertOnlyFields(body, ["email", "password", "display_name"]);
     const email = normalizeEmail(body.email);
     const password = validatePassword(body.password);
-    const account = await accounts.createAccount({
-      userId: newUserId(),
-      email,
-      displayName: normalizeDisplayName(body.display_name, email),
-      passwordHash: await hashPassword(password),
-    });
+    const passwordHash = await hashPassword(password);
+    const runCreate = async (): Promise<AccountView> => {
+      if (
+        singleAdmin &&
+        accounts.hasAnyAdmin !== undefined &&
+        (await accounts.hasAnyAdmin())
+      ) {
+        throw new AccountError(
+          "admin_already_exists",
+          "administrator is already configured",
+          409,
+        );
+      }
+      return await accounts.createAccount({
+        userId: newUserId(),
+        email,
+        displayName: normalizeDisplayName(body.display_name, email),
+        passwordHash,
+        singleAdmin,
+      });
+    };
+    let account: AccountView;
+    if (singleAdmin) {
+      const resultPromise = setupLock.then(runCreate);
+      setupLock = resultPromise.then(
+        () => undefined,
+        () => undefined,
+      );
+      account = await resultPromise;
+    } else {
+      account = await runCreate();
+    }
     await createLoginSession(
       accounts,
       account.user.user_id,
       reply,
-      options.secureCookies ?? false,
+      secureCookies,
       now(),
       "registration",
     );
@@ -358,18 +431,32 @@ export function createGatewayApp(
     assertOnlyFields(body, ["email", "password"]);
     const email = normalizeEmail(body.email);
     const password = validatePassword(body.password);
+    const currentNow = now().toISOString();
     const loginScope = createHmac("sha256", loginRateLimitSecret)
       .update(`${email}\n${request.ip}`, "utf8")
       .digest("hex");
+    const accountScope = createHmac("sha256", loginRateLimitSecret)
+      .update(`account\n${email}`, "utf8")
+      .digest("hex");
     const rateLimit = await accounts.consumeLoginAttempt({
       scopeDigest: loginScope,
-      now: now().toISOString(),
+      now: currentNow,
       windowSeconds: LOGIN_WINDOW_SECONDS,
       maximumAttempts: LOGIN_MAXIMUM_ATTEMPTS,
       blockSeconds: LOGIN_BLOCK_SECONDS,
     });
-    if (!rateLimit.allowed) {
-      reply.header("retry-after", String(rateLimit.retry_after_seconds));
+    const accountLimit = rateLimit.allowed
+      ? await accounts.consumeLoginAttempt({
+          scopeDigest: accountScope,
+          now: currentNow,
+          windowSeconds: LOGIN_WINDOW_SECONDS,
+          maximumAttempts: LOGIN_MAXIMUM_ATTEMPTS * 4,
+          blockSeconds: LOGIN_BLOCK_SECONDS,
+        })
+      : rateLimit;
+    const effectiveLimit = !rateLimit.allowed ? rateLimit : accountLimit;
+    if (!effectiveLimit.allowed) {
+      reply.header("retry-after", String(effectiveLimit.retry_after_seconds));
       throw new AccountError(
         "login_rate_limited",
         "too many login attempts",
@@ -389,11 +476,12 @@ export function createGatewayApp(
       throw new AccountError("account_unavailable", "account unavailable", 403);
     }
     await accounts.clearLoginAttempts(loginScope);
+    await accounts.clearLoginAttempts(accountScope);
     await createLoginSession(
       accounts,
       user.user_id,
       reply,
-      options.secureCookies ?? false,
+      secureCookies,
       now(),
       "login",
     );
@@ -402,12 +490,8 @@ export function createGatewayApp(
 
   app.post("/v1/auth/logout", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    await clearLoginSession(
-      accounts,
-      request,
-      reply,
-      options.secureCookies ?? false,
-    );
+    await clearLoginSession(accounts, request, reply, secureCookies);
+    invalidateAllStreamAuth();
     return reply.status(204).send();
   });
 
@@ -418,6 +502,7 @@ export function createGatewayApp(
       authenticator,
       request,
       now(),
+      secureCookies,
     );
     let account = accounts
       ? await accounts.accountView(identity.actor_user_id)
@@ -477,7 +562,12 @@ export function createGatewayApp(
 
   app.post("/v1/auth/email-verifications", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const account = await accounts.accountView(identity.actor_user_id);
     if (account === undefined) throw new AuthenticationError();
     const issued = await issueEmailVerification(
@@ -539,6 +629,20 @@ export function createGatewayApp(
         404,
       );
     }
+    const resetIpScope = createHmac("sha256", loginRateLimitSecret)
+      .update(`reset_ip\n${request.ip}`, "utf8")
+      .digest("hex");
+    const resetLimit = await accounts.consumeLoginAttempt({
+      scopeDigest: resetIpScope,
+      now: now().toISOString(),
+      windowSeconds: LOGIN_WINDOW_SECONDS,
+      maximumAttempts: 20,
+      blockSeconds: LOGIN_BLOCK_SECONDS,
+    });
+    if (!resetLimit.allowed) {
+      reply.header("retry-after", String(resetLimit.retry_after_seconds));
+      throw new AccountError("login_rate_limited", "too many attempts", 429);
+    }
     const body = accountBody(request.body);
     assertOnlyFields(body, ["email"]);
     const email = normalizeEmail(body.email);
@@ -555,19 +659,18 @@ export function createGatewayApp(
         expiresAt: expiresAt.toISOString(),
         minimumIntervalSeconds: PASSWORD_RESET_MIN_INTERVAL_SECONDS,
       });
-      if (issued.allowed) {
-        try {
-          await delivery.sender.sendPasswordReset({
-            user_id: user.user_id,
-            email: user.email,
-            display_name: user.display_name,
-            reset_url: passwordResetUrl(delivery.baseUrl, token),
-            expires_at: expiresAt.toISOString(),
-          });
-        } catch (error) {
+      if (issued.allowed && delivery.sender.sendPasswordReset !== undefined) {
+        const sendReset = delivery.sender.sendPasswordReset;
+        void sendReset({
+          user_id: user.user_id,
+          email: user.email,
+          display_name: user.display_name,
+          reset_url: passwordResetUrl(delivery.baseUrl, token),
+          expires_at: expiresAt.toISOString(),
+        }).catch(async (error: unknown) => {
           await accounts.deletePendingPasswordReset(digest);
           app.log.error(error, "password reset delivery failed");
-        }
+        });
       }
     }
     return reply.status(202).send({ accepted: true });
@@ -575,6 +678,20 @@ export function createGatewayApp(
 
   app.post("/v1/auth/password-resets/confirm", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
+    const confirmScope = createHmac("sha256", loginRateLimitSecret)
+      .update(`reset_confirm_ip\n${request.ip}`, "utf8")
+      .digest("hex");
+    const confirmLimit = await accounts.consumeLoginAttempt({
+      scopeDigest: confirmScope,
+      now: now().toISOString(),
+      windowSeconds: LOGIN_WINDOW_SECONDS,
+      maximumAttempts: 20,
+      blockSeconds: LOGIN_BLOCK_SECONDS,
+    });
+    if (!confirmLimit.allowed) {
+      reply.header("retry-after", String(confirmLimit.retry_after_seconds));
+      throw new AccountError("login_rate_limited", "too many attempts", 429);
+    }
     const body = accountBody(request.body);
     assertOnlyFields(body, ["token", "password"]);
     if (
@@ -600,20 +717,21 @@ export function createGatewayApp(
         400,
       );
     }
-    await clearLoginSession(
-      accounts,
-      request,
-      reply,
-      options.secureCookies ?? false,
-    );
+    await clearLoginSession(accounts, request, reply, secureCookies);
+    invalidateAllStreamAuth();
     return reply.send({ changed: true });
   });
 
   app.post("/v1/auth/password", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const userId = identity.actor_user_id;
-    const currentDigest = currentSessionDigest(request);
+    const currentDigest = currentSessionDigest(request, secureCookies);
     if (currentDigest === undefined) throw new AuthenticationError();
     const body = accountBody(request.body);
     assertOnlyFields(body, ["current_password", "new_password"]);
@@ -647,12 +765,18 @@ export function createGatewayApp(
       changedAt: now().toISOString(),
     });
     if (!result.updated) throw new AuthenticationError();
+    invalidateAllStreamAuth();
     return reply.send({ changed: true, revoked: result.revoked_sessions });
   });
 
   app.patch("/v1/auth/avatar", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const body = accountBody(request.body);
     assertOnlyFields(body, ["data_url"]);
     // `null` clears the picture; anything else has to be a real image.
@@ -671,8 +795,13 @@ export function createGatewayApp(
 
   app.get("/v1/auth/sessions", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
-    const digest = currentSessionDigest(request);
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
+    const digest = currentSessionDigest(request, secureCookies);
     if (digest === undefined) throw new AuthenticationError();
     return reply.send({
       sessions: await accounts.listWebSessions(
@@ -685,7 +814,12 @@ export function createGatewayApp(
 
   app.delete("/v1/auth/sessions/:sessionId", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const userId = identity.actor_user_id;
     const { sessionId } = request.params as { sessionId?: unknown };
     if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId)) {
@@ -695,7 +829,7 @@ export function createGatewayApp(
         400,
       );
     }
-    const digest = currentSessionDigest(request);
+    const digest = currentSessionDigest(request, secureCookies);
     if (digest === undefined) throw new AuthenticationError();
     const sessions = await accounts.listWebSessions(
       userId,
@@ -710,31 +844,38 @@ export function createGatewayApp(
       throw new AccountError("session_not_found", "session was not found", 404);
     }
     if (target.current) {
-      await clearLoginSession(
-        accounts,
-        request,
-        reply,
-        options.secureCookies ?? false,
-      );
+      await clearLoginSession(accounts, request, reply, secureCookies);
     }
+    invalidateAllStreamAuth();
     return reply.status(204).send();
   });
 
   app.delete("/v1/auth/sessions", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
-    const digest = currentSessionDigest(request);
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
+    const digest = currentSessionDigest(request, secureCookies);
     if (digest === undefined) throw new AuthenticationError();
     const revoked = await accounts.revokeOtherWebSessions(
       identity.actor_user_id,
       digest,
     );
+    if (revoked > 0) invalidateAllStreamAuth();
     return reply.send({ revoked });
   });
 
   app.get("/v1/audit", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const query = accountBody(request.query);
     assertOnlyFields(query, ["scope", "before", "limit"]);
     const scope = query.scope === undefined ? "account" : query.scope;
@@ -779,7 +920,12 @@ export function createGatewayApp(
 
   app.get("/v1/team", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const workspaceAccount = await accounts.accountView(
       identity.workspace_owner_id,
     );
@@ -796,7 +942,12 @@ export function createGatewayApp(
 
   app.post("/v1/team/invitations", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const workspaceAccount = await accounts.accountView(
       identity.workspace_owner_id,
     );
@@ -881,7 +1032,12 @@ export function createGatewayApp(
 
   app.post("/v1/team/invitations/accept", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const body = accountBody(request.body);
     assertOnlyFields(body, ["token"]);
     if (
@@ -911,7 +1067,12 @@ export function createGatewayApp(
 
   app.delete("/v1/team/invitations/:invitationId", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const { invitationId } = request.params as { invitationId?: unknown };
     if (
       typeof invitationId !== "string" ||
@@ -942,7 +1103,12 @@ export function createGatewayApp(
 
   app.patch("/v1/team/members/:userId", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const { userId } = request.params as { userId?: unknown };
     if (typeof userId !== "string" || !SESSION_ID_PATTERN.test(userId)) {
       throw new AccountError("invalid_team_member", "member is invalid", 400);
@@ -971,7 +1137,12 @@ export function createGatewayApp(
 
   app.delete("/v1/team/members/:userId", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const { userId } = request.params as { userId?: unknown };
     if (typeof userId !== "string" || !SESSION_ID_PATTERN.test(userId)) {
       throw new AccountError("invalid_team_member", "member is invalid", 400);
@@ -991,13 +1162,19 @@ export function createGatewayApp(
         403,
       );
     }
+    invalidateAllStreamAuth();
     return reply.status(204).send();
   });
 
   app.post("/v1/team/workspace", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
-    const digest = currentSessionDigest(request);
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
+    const digest = currentSessionDigest(request, secureCookies);
     if (digest === undefined) throw new AuthenticationError();
     const body = accountBody(request.body);
     assertOnlyFields(body, ["workspace_owner_id"]);
@@ -1016,6 +1193,7 @@ export function createGatewayApp(
     if (switched === undefined) {
       throw new AccountError("workspace_not_found", "workspace not found", 404);
     }
+    invalidateAllStreamAuth();
     return reply.send({
       switched: true,
       workspaces: await accounts.listWorkspaces(
@@ -1046,7 +1224,12 @@ export function createGatewayApp(
 
   app.get("/v1/billing", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const account = await accounts.accountView(identity.actor_user_id);
     if (account === undefined) throw new AuthenticationError();
     const provider = options.billingProvider;
@@ -1065,7 +1248,12 @@ export function createGatewayApp(
 
   app.post("/v1/billing/checkout", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const provider = options.billingProvider;
     if (provider === undefined) {
       throw new AccountError(
@@ -1106,7 +1294,12 @@ export function createGatewayApp(
 
   app.post("/v1/billing/portal", async (request, reply) => {
     const accounts = requireAccounts(options.accounts);
-    const identity = await requireSessionIdentity(accounts, request, now());
+    const identity = await requireSessionIdentity(
+      accounts,
+      request,
+      now(),
+      secureCookies,
+    );
     const provider = options.billingProvider;
     if (provider === undefined) {
       throw new AccountError(
@@ -1133,16 +1326,27 @@ export function createGatewayApp(
       authenticator,
       request,
       now(),
+      secureCookies,
     );
+    if (identity.role === "member") {
+      throw new AccountError(
+        "workspace_permission_denied",
+        "workspace role cannot bind devices",
+        403,
+      );
+    }
     const ownerId = identity.workspace_owner_id;
     if (options.accounts !== undefined) {
       const account = await options.accounts.accountView(ownerId);
       if (account === undefined) throw new AuthenticationError();
       requireVerifiedEmail(account, options.emailVerification !== undefined);
-      if (
-        (await store.countActiveDevices(ownerId)) >=
-        account.entitlements.max_devices
-      ) {
+      const activeCount = await store.countActiveDevices(ownerId);
+      const pendingCount =
+        (await store.countPendingBindingCodes?.(
+          ownerId,
+          now().toISOString(),
+        )) ?? 0;
+      if (activeCount + pendingCount >= account.entitlements.max_devices) {
         throw new AccountError(
           "device_limit_reached",
           "subscription device limit reached",
@@ -1150,7 +1354,7 @@ export function createGatewayApp(
         );
       }
     }
-    const expiresInSeconds = bindingTtlSeconds(request.body);
+    const expiresInSeconds = parseBindingTtlSeconds(request.body);
     const bindingCode = bindingCodeFactory();
     const expiresAt = new Date(
       now().getTime() + expiresInSeconds * 1_000,
@@ -1319,13 +1523,22 @@ export function createGatewayApp(
       authenticator,
       request,
       now(),
+      secureCookies,
     );
+    if (identity.role === "member") {
+      throw new AccountError(
+        "workspace_permission_denied",
+        "workspace role cannot revoke devices",
+        403,
+      );
+    }
     const ownerId = identity.workspace_owner_id;
     const { deviceId } = request.params as { deviceId?: unknown };
     if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) {
       throw new ContractError("invalid_device_id", "device ID is invalid");
     }
     await store.revokeDevice(ownerId, deviceId, identity.actor_user_id);
+    remoteHooks?.revokeRunner(deviceId);
     return reply.status(204).send();
   });
 
@@ -1349,10 +1562,7 @@ export function createGatewayApp(
       filters.device_id = query.device_id;
     }
     if (query.agent_type !== undefined) {
-      if (
-        typeof query.agent_type !== "string" ||
-        !isOneOf(agentTypes, query.agent_type)
-      ) {
+      if (!isValidAgentType(query.agent_type)) {
         throw new ContractError("invalid_query", "agent_type is invalid");
       }
       filters.agent_type = query.agent_type;
@@ -1392,10 +1602,7 @@ export function createGatewayApp(
     if (typeof query.device_id !== "string" || query.device_id.length === 0) {
       throw new ContractError("invalid_query", "device_id is required");
     }
-    if (
-      typeof query.agent_type !== "string" ||
-      !isOneOf(agentTypes, query.agent_type)
-    ) {
+    if (!isValidAgentType(query.agent_type)) {
       throw new ContractError("invalid_query", "agent_type is invalid");
     }
     if (
@@ -1439,18 +1646,35 @@ export function createGatewayApp(
     if (options.push === undefined) {
       return reply.status(404).send({ error: "push_disabled" });
     }
-    await store.savePushSubscription(ownerId, parseSubscription(request.body));
+    const subscription = parsePushSubscriptionPayload(
+      request.body,
+      options.allowedPushHosts,
+    );
+    const existing = await store.listPushSubscriptions(ownerId);
+    if (
+      existing.length >= MAX_PUSH_SUBSCRIPTIONS_PER_OWNER &&
+      !existing.some((item) => item.endpoint === subscription.endpoint)
+    ) {
+      throw new ContractError(
+        "push_subscription_limit",
+        "maximum push subscriptions reached",
+      );
+    }
+    await store.savePushSubscription(ownerId, subscription);
     return reply.status(204).send();
   });
 
   app.delete("/v1/push/subscriptions", async (request, reply) => {
     const ownerId = await authenticator.authenticate(request);
-    const body = expectObject(request.body);
+    const body = expectBodyObject(request.body);
     const unknownField = Object.keys(body).find((key) => key !== "endpoint");
     if (unknownField !== undefined) {
       throw new ContractError("unknown_field", "body field is invalid");
     }
-    await store.deletePushSubscription(ownerId, parseEndpoint(body.endpoint));
+    await store.deletePushSubscription(
+      ownerId,
+      parsePushEndpoint(body.endpoint, options.allowedPushHosts),
+    );
     return reply.status(204).send();
   });
 
@@ -1458,119 +1682,23 @@ export function createGatewayApp(
     ownerId: string,
     changes: readonly SessionStatusChange[],
   ): Promise<void> {
-    const push = options.push;
-    if (push === undefined) {
-      return;
-    }
-    const waiting = changes.filter((change) =>
-      NOTIFIED_STATUSES.has(change.activity_status),
+    await dispatchWaitingPushNotifications(
+      options.push,
+      store,
+      app,
+      ownerId,
+      changes,
     );
-    if (waiting.length === 0) {
-      return;
-    }
-    let live = await store.listPushSubscriptions(ownerId);
-    for (const change of waiting) {
-      if (live.length === 0) {
-        return;
-      }
-      // Only fields the panel already shows: no task text, no working
-      // directory, no raw agent status detail.
-      const payload = JSON.stringify({
-        device_id: change.device_id,
-        agent_type: change.agent_type,
-        agent_session_id: change.agent_session_id,
-        project: change.project_display_name,
-        activity_status: change.activity_status,
-        waiting_reason: change.waiting_reason ?? "unknown",
-        observed_at: change.observed_at,
-      });
-      const outcomes = await Promise.all(
-        live.map(async (subscription) => ({
-          subscription,
-          outcome: await push.sender.send(subscription, payload),
-        })),
-      );
-      const deliveryCounts = {
-        delivered: outcomes.filter((entry) => entry.outcome === "delivered")
-          .length,
-        gone: outcomes.filter((entry) => entry.outcome === "gone").length,
-        failed: outcomes.filter((entry) => entry.outcome === "failed").length,
-      };
-      // Keep production diagnosis possible without logging an endpoint, owner,
-      // session identifier or notification payload.
-      app.log.info(
-        { push_delivery: deliveryCounts },
-        "push delivery completed",
-      );
-      for (const { subscription, outcome } of outcomes) {
-        if (outcome === "gone") {
-          // The browser dropped this subscription; keeping it would retry a
-          // dead endpoint on every future notification.
-          await store.deletePushSubscription(ownerId, subscription.endpoint);
-        }
-      }
-      live = outcomes
-        .filter((entry) => entry.outcome !== "gone")
-        .map((entry) => entry.subscription);
-    }
   }
 
-  // Server-sent events rather than WebSocket: the read-only phase only pushes
-  // gateway -> panel, and the panel reaches the gateway through a same-origin
-  // HTTP proxy. Adding WebSocket would require a separately authenticated
-  // upgrade proxy, which is deferred until the product has a bidirectional
-  // use case.
-  app.get("/v1/stream", async (request, reply) => {
-    const ownerId = await authenticator.authenticate(request);
-    if (broker.subscriberCount(ownerId) >= MAX_STREAMS_PER_OWNER) {
-      void reply.status(429).send({ error: "too_many_streams" });
-      return;
-    }
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-store",
-      connection: "keep-alive",
-      // Ask reverse proxies not to buffer; buffering turns the stream into a
-      // hung request that only flushes when the connection closes.
-      "x-accel-buffering": "no",
-    });
-    request.raw.socket.setNoDelay(true);
-    request.raw.socket.setTimeout(0);
-
-    const write = (chunk: string): void => {
-      if (!raw.writableEnded) {
-        raw.write(chunk);
-      }
-    };
-    write(`retry: ${STREAM_RETRY_MS}\n\n`);
-    write("event: ready\ndata: {}\n\n");
-
-    const unsubscribe = broker.subscribe(ownerId, (message) => {
-      write(`event: sessions\ndata: ${JSON.stringify(message)}\n\n`);
-    });
-    const heartbeat = setInterval(
-      () => write(": keepalive\n\n"),
-      STREAM_HEARTBEAT_MS,
-    );
-    heartbeat.unref();
-
-    let closed = false;
-    const close = (): void => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      clearInterval(heartbeat);
-      unsubscribe();
-      openStreams.delete(close);
-      raw.end();
-    };
-    openStreams.add(close);
-    raw.on("close", close);
-    raw.on("error", close);
-  });
+  registerV1StreamRoute(
+    app,
+    authenticator,
+    broker,
+    openStreams,
+    streamAuthRevalidators,
+    options.remoteRoutes?.streamAuthRevalidateMs ?? 10_000,
+  );
 
   app.addHook("onClose", async () => {
     for (const close of [...openStreams]) {
@@ -1578,267 +1706,10 @@ export function createGatewayApp(
     }
     await broker.close();
     await store.close?.();
+    if (options.accounts && !Object.is(options.accounts, store)) {
+      await options.accounts.close?.();
+    }
   });
 
   return app;
-}
-
-function expectObject(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ContractError("invalid_body", "request body must be an object");
-  }
-  return value as Record<string, unknown>;
-}
-
-function bindingTtlSeconds(value: unknown): number {
-  if (value === undefined || value === null) {
-    return DEFAULT_BINDING_TTL_SECONDS;
-  }
-  const body = expectObject(value);
-  const unknownField = Object.keys(body).find(
-    (key) => key !== "expires_in_seconds",
-  );
-  if (unknownField !== undefined) {
-    throw new ContractError("unknown_field", "body field is invalid");
-  }
-  if (body.expires_in_seconds === undefined) {
-    return DEFAULT_BINDING_TTL_SECONDS;
-  }
-  if (
-    typeof body.expires_in_seconds !== "number" ||
-    !Number.isSafeInteger(body.expires_in_seconds) ||
-    body.expires_in_seconds < MIN_BINDING_TTL_SECONDS ||
-    body.expires_in_seconds > MAX_BINDING_TTL_SECONDS
-  ) {
-    throw new ContractError(
-      "invalid_binding_ttl",
-      "binding lifetime is invalid",
-    );
-  }
-  return body.expires_in_seconds;
-}
-
-/**
- * Accepts the shape `PushSubscription.toJSON()` produces in the browser, and
- * nothing else: unknown fields are rejected rather than stored, matching how
- * sync events are parsed.
- */
-function parseSubscription(value: unknown): PushSubscription {
-  const body = expectObject(value);
-  const unknownField = Object.keys(body).find(
-    (key) => !["endpoint", "keys", "expirationTime"].includes(key),
-  );
-  if (unknownField !== undefined) {
-    throw new ContractError("unknown_field", "body field is invalid");
-  }
-  const keys = expectObject(body.keys);
-  const unknownKey = Object.keys(keys).find(
-    (key) => !["p256dh", "auth"].includes(key),
-  );
-  if (unknownKey !== undefined) {
-    throw new ContractError("unknown_field", "keys field is invalid");
-  }
-  return {
-    endpoint: parseEndpoint(body.endpoint),
-    p256dh: parseKeyMaterial(keys.p256dh, "p256dh", 65),
-    auth: parseKeyMaterial(keys.auth, "auth", 16),
-  };
-}
-
-function parseEndpoint(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > MAX_PUSH_ENDPOINT_LENGTH
-  ) {
-    throw new ContractError("invalid_endpoint", "endpoint is invalid");
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new ContractError("invalid_endpoint", "endpoint is not a URL");
-  }
-  // Push services are always HTTPS. Requiring it also keeps a subscription
-  // from steering the gateway at a plaintext internal address.
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.hash !== ""
-  ) {
-    throw new ContractError("invalid_endpoint", "endpoint is not allowed");
-  }
-  return url.toString();
-}
-
-function parseKeyMaterial(
-  value: unknown,
-  field: string,
-  expectedBytes: number,
-): string {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(value)) {
-    throw new ContractError("invalid_subscription", `${field} is invalid`);
-  }
-  const decoded = Buffer.from(value, "base64url");
-  if (decoded.length !== expectedBytes) {
-    throw new ContractError("invalid_subscription", `${field} is invalid`);
-  }
-  if (field === "p256dh" && decoded[0] !== 0x04) {
-    throw new ContractError("invalid_subscription", `${field} is invalid`);
-  }
-  return value;
-}
-
-function isOneOf<const T extends readonly string[]>(
-  values: T,
-  value: string,
-): value is T[number] {
-  return (values as readonly string[]).includes(value);
-}
-
-function assertFreshDeviceTimestamp(value: string, now: Date): void {
-  if (Math.abs(Date.parse(value) - now.getTime()) > MAX_DEVICE_CLOCK_SKEW_MS) {
-    throw new ContractError(
-      "stale_device_request",
-      "device timestamp is stale",
-    );
-  }
-}
-
-function requireAccounts(accounts: AccountStore | undefined): AccountStore {
-  if (accounts === undefined) {
-    throw new AccountError(
-      "accounts_unavailable",
-      "account service is not configured",
-      503,
-    );
-  }
-  return accounts;
-}
-
-async function requireSessionIdentity(
-  accounts: AccountStore,
-  request: Parameters<typeof currentSessionIdentity>[1],
-  at: Date,
-) {
-  const identity = await currentSessionIdentity(accounts, request, at);
-  if (identity === undefined) throw new AuthenticationError();
-  return identity;
-}
-
-async function requireAccountIdentity(
-  accounts: AccountStore | undefined,
-  authenticator: OwnerAuthenticator,
-  request: Parameters<typeof currentSessionIdentity>[1],
-  at: Date,
-) {
-  if (accounts !== undefined) {
-    const sessionIdentity = await currentSessionIdentity(accounts, request, at);
-    if (sessionIdentity !== undefined) return sessionIdentity;
-  }
-  const ownerId = await authenticator.authenticate(request);
-  return {
-    actor_user_id: ownerId,
-    workspace_owner_id: ownerId,
-    role: "owner" as const,
-  };
-}
-
-async function mutationIdentity(
-  accounts: AccountStore | undefined,
-  authenticator: OwnerAuthenticator,
-  request: Parameters<typeof currentSessionIdentity>[1],
-  at: Date,
-): Promise<{
-  workspace_owner_id: string;
-  actor_user_id?: string;
-}> {
-  if (accounts !== undefined) {
-    const identity = await currentSessionIdentity(accounts, request, at);
-    if (identity !== undefined) {
-      return {
-        workspace_owner_id: identity.workspace_owner_id,
-        actor_user_id: identity.actor_user_id,
-      };
-    }
-  }
-  return {
-    workspace_owner_id: await authenticator.authenticate(request),
-  };
-}
-
-function inviteRole(value: unknown): InviteRole {
-  if (value !== "admin" && value !== "member") {
-    throw new AccountError("invalid_team_role", "team role is invalid", 400);
-  }
-  return value;
-}
-
-function paidPlan(value: unknown): PaidSubscriptionPlan {
-  if (value !== "pro" && value !== "team") {
-    throw new AccountError(
-      "invalid_billing_plan",
-      "billing plan is invalid",
-      400,
-    );
-  }
-  return value;
-}
-
-async function issueEmailVerification(
-  accounts: AccountStore,
-  account: AccountView,
-  delivery: { baseUrl: string; sender: EmailVerificationSender } | undefined,
-  issuedAt: Date,
-  app: FastifyInstance,
-): Promise<LoginAttemptResult> {
-  if (account.user.email_verified_at !== undefined) {
-    return { allowed: false, retry_after_seconds: 0 };
-  }
-  if (delivery === undefined) {
-    throw new AccountError(
-      "email_delivery_unavailable",
-      "email verification delivery is unavailable",
-      503,
-    );
-  }
-  const token = randomBytes(EMAIL_VERIFICATION_BYTES).toString("base64url");
-  const expiresAt = new Date(issuedAt.getTime() + EMAIL_VERIFICATION_TTL_MS);
-  const result = await accounts.issueEmailVerification({
-    digest: tokenDigest(token),
-    userId: account.user.user_id,
-    createdAt: issuedAt.toISOString(),
-    expiresAt: expiresAt.toISOString(),
-    minimumIntervalSeconds: EMAIL_VERIFICATION_MIN_INTERVAL_SECONDS,
-  });
-  if (!result.allowed) return result;
-  try {
-    await delivery.sender.sendVerification({
-      user_id: account.user.user_id,
-      email: account.user.email,
-      display_name: account.user.display_name,
-      verification_url: verificationUrl(delivery.baseUrl, token),
-      expires_at: expiresAt.toISOString(),
-    });
-  } catch (error) {
-    await accounts.deletePendingEmailVerification(tokenDigest(token));
-    app.log.error({ error_code: "email_verification_delivery_failed" });
-    throw new AccountError(
-      "email_delivery_failed",
-      "verification email could not be delivered",
-      503,
-    );
-  }
-  return result;
-}
-
-function requireVerifiedEmail(account: AccountView, required: boolean): void {
-  if (required && account.user.email_verified_at === undefined) {
-    throw new AccountError(
-      "email_verification_required",
-      "email verification is required",
-      403,
-    );
-  }
 }

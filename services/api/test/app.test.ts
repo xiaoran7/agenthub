@@ -650,7 +650,7 @@ test("waiting sessions notify the owner's subscriptions and prune dead ones", as
   assert.equal(key.json().public_key, "test-application-server-key");
 
   const subscription = {
-    endpoint: "https://push.example/subscription/abc",
+    endpoint: "https://fcm.googleapis.com/fcm/send/abc",
     expirationTime: null,
     keys: {
       p256dh: Buffer.concat([
@@ -748,7 +748,7 @@ test("push subscriptions are validated and disabled without VAPID keys", async (
     url: "/v1/push/subscriptions",
     headers: { "x-user-id": "user-1" },
     payload: {
-      endpoint: "https://push.example/abc",
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
       keys: {
         p256dh: Buffer.concat([
           Buffer.from([0x04]),
@@ -786,27 +786,30 @@ test("push subscriptions are validated and disabled without VAPID keys", async (
     return response.json().error;
   };
 
-  assert.equal(
-    await rejected({ endpoint: "http://push.example/abc", keys: validKeys }),
-    "invalid_endpoint",
-  );
+  for (const badEndpoint of [
+    "http://fcm.googleapis.com/fcm/send/abc",
+    "https://user:pass@fcm.googleapis.com/fcm/send/abc",
+    "https://127.0.0.1/abc",
+    "https://100.64.0.1/abc",
+    "https://evil.example/abc",
+    "https://fcm.googleapis.com:8443/fcm/send/abc",
+  ]) {
+    assert.equal(
+      await rejected({ endpoint: badEndpoint, keys: validKeys }),
+      "invalid_endpoint",
+      badEndpoint,
+    );
+  }
   assert.equal(
     await rejected({
-      endpoint: "https://user:pass@push.example/abc",
-      keys: validKeys,
-    }),
-    "invalid_endpoint",
-  );
-  assert.equal(
-    await rejected({
-      endpoint: "https://push.example/abc",
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
       keys: { ...validKeys, auth: Buffer.alloc(8, 3).toString("base64url") },
     }),
     "invalid_subscription",
   );
   assert.equal(
     await rejected({
-      endpoint: "https://push.example/abc",
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
       keys: {
         ...validKeys,
         p256dh: Buffer.alloc(65, 7).toString("base64url"),
@@ -816,7 +819,7 @@ test("push subscriptions are validated and disabled without VAPID keys", async (
   );
   assert.equal(
     await rejected({
-      endpoint: "https://push.example/abc",
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
       keys: validKeys,
       transcript: "private",
     }),
@@ -827,7 +830,10 @@ test("push subscriptions are validated and disabled without VAPID keys", async (
   const anonymous = await app.inject({
     method: "POST",
     url: "/v1/push/subscriptions",
-    payload: { endpoint: "https://push.example/abc", keys: validKeys },
+    payload: {
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
+      keys: validKeys,
+    },
   });
   assert.equal(anonymous.statusCode, 401);
 
@@ -835,13 +841,16 @@ test("push subscriptions are validated and disabled without VAPID keys", async (
     method: "POST",
     url: "/v1/push/subscriptions",
     headers: { "x-user-id": "user-1" },
-    payload: { endpoint: "https://push.example/abc", keys: validKeys },
+    payload: {
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
+      keys: validKeys,
+    },
   });
   const foreignDelete = await app.inject({
     method: "DELETE",
     url: "/v1/push/subscriptions",
     headers: { "x-user-id": "user-2" },
-    payload: { endpoint: "https://push.example/abc" },
+    payload: { endpoint: "https://fcm.googleapis.com/fcm/send/abc" },
   });
   assert.equal(foreignDelete.statusCode, 204);
   assert.equal(
@@ -854,7 +863,7 @@ test("push subscriptions are validated and disabled without VAPID keys", async (
     method: "DELETE",
     url: "/v1/push/subscriptions",
     headers: { "x-user-id": "user-1" },
-    payload: { endpoint: "https://push.example/abc" },
+    payload: { endpoint: "https://fcm.googleapis.com/fcm/send/abc" },
   });
   assert.equal(removed.statusCode, 204);
   assert.equal((await store.listPushSubscriptions("user-1")).length, 0);

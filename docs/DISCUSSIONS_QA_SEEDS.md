@@ -1,29 +1,13 @@
-# GitHub Discussions 种子问答库 (Discussions Q&A Seeds)
+# GitHub Discussions 种子问答库
 
-> 在 GitHub `Settings -> Features` 开启 `Discussions`，于 `Q&A` 分类发布以下话题并将解答标记为 **Mark as answer**。
+## 1. 离开工位后如何用手机继续 Claude Code / Codex / Antigravity 会话？
+- **Q**: `How can I monitor and continue CLI agent sessions from my phone without painful mobile SSH?`
+- **A**: Run `agenthub-runner daemon` on your workstation and open your self-hosted AgentHub Web PWA (or Android client). You get live streaming transcripts, touch-friendly diff approvals, multi-select prompt cards, and one-tap turn interrupts.
 
-## 1. 手机远程接管与离开工位监控
+## 2. 为什么采用主动出站 TLS/WSS 而非本地开端口或内网穿透？
+- **Q**: `Why does AgentHub use outbound-only connections instead of opening workstation ports?`
+- **A**: `agenthub-runner` initiates standard outbound WSS connections to your Gateway—working seamlessly behind NAT/corporate firewalls with zero inbound ports, while keeping LLM API keys on-host and redacting paths into `ws-*` IDs.
 
-- **Title**: `How can I monitor and continue my Claude Code or OpenAI Codex sessions from my phone or tablet?`
-- **Question**: Long CLI agent tasks require staying near the desk or using painful mobile SSH. Is there a clean way to monitor live progress and continue conversations from a mobile browser or PWA?
-- **Accepted Answer**:
-  1. Run `agenthub-runner daemon` on your workstation.
-  2. Open your self-hosted Gateway + Web URL on your phone or tablet browser (supports home-screen PWA install).
-  3. View live streaming transcripts, send follow-up turns, approve permissions, or trigger an interrupt directly from your phone.
-
-## 2. 主动出站与零公网端口暴露
-
-- **Title**: `Why does AgentHub use outbound-only connections instead of opening a local port or using ngrok?`
-- **Question**: How does AgentHub handle network connectivity without port forwarding, DDNS, or tunneling services, and is it safe for corporate laptops?
-- **Accepted Answer**:
-  1. **No Inbound Ports**: `agenthub-runner` only initiates outbound TLS/WSS connections to your self-hosted Gateway.
-  2. **NAT & Firewall Friendly**: Standard outbound HTTPS/WSS works behind corporate NATs and VPNs without router setup.
-  3. **Credential & Path Isolation**: LLM API keys and private keys never leave the host; local paths are hashed into `ws-*` IDs and redacted by allowlists.
-
-## 3. 远程工具审批与防挂起
-
-- **Title**: `How does AgentHub handle terminal confirmation prompts and tool approval when I'm away?`
-- **Question**: Claude Code and Codex pause on bash or file-edit confirmation prompts. Can AgentHub surface these approval prompts remotely?
-- **Accepted Answer**:
-  - `agenthub-runner` captures native permission requests (`session/request_permission` / `item/fileChange/requestApproval`) and forwards a redacted approval descriptor with diff preview to your Gateway.
-  - The Web/PWA client displays a touch-friendly approval banner; tapping **Approve** or **Reject** sends an idempotent signed receipt back to the runner to resume or abort the native turn.
+## 3. 远程权限审批与防重复执行如何保证安全？
+- **Q**: `How are terminal permission prompts and network retries handled safely?`
+- **A**: Native approval requests are projected with `<=64 KiB` path-redacted diffs and bound to `session + turn + host_generation + approval_id`. Every remote action carries an idempotent `client_cmd_id` so retries never double-execute commands.

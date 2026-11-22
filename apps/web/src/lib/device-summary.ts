@@ -3,12 +3,12 @@ import type { AgentType } from "@agent-pulse/contracts";
 import { matchesTab } from "./classify";
 import type { DeviceRecord, SessionRecord } from "./types";
 
-const AGENT_ORDER: readonly AgentType[] = [
+const CORE_AGENT_ORDER: readonly AgentType[] = [
   "claude_code",
+  "claude_desktop",
   "codex",
-  "zcode",
   "antigravity",
-  "grok_build",
+  "deepseek_harness",
 ];
 
 export interface DeviceSummary {
@@ -30,9 +30,13 @@ export function summarizeDevices(
     const observedAgents = new Set(
       deviceSessions.map((session) => session.agent_type),
     );
+    const core = CORE_AGENT_ORDER.filter((agent) => observedAgents.has(agent));
+    const extras = [...observedAgents]
+      .filter((agent) => !CORE_AGENT_ORDER.includes(agent))
+      .sort();
     return {
       device,
-      agents: AGENT_ORDER.filter((agent) => observedAgents.has(agent)),
+      agents: [...core, ...extras],
       totalSessions: deviceSessions.length,
       liveSessions: deviceSessions.filter((session) =>
         matchesTab(session, "live"),

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
@@ -8,25 +10,23 @@ import { SessionAuthenticator } from "../src/accounts.js";
 import { SqliteAccountStore } from "../src/sqlite-account-store.js";
 import { InMemoryGatewayStore } from "../src/store.js";
 
-const TEST_DB = "./data/test-admin-setup.db";
-
 test("admin first-run setup lifecycle and rejection of subsequent registrations", async (t) => {
-  try {
-    rmSync(TEST_DB, { force: true });
-  } catch {}
+  const tempDir = mkdtempSync(join(tmpdir(), "agenthub-admin-setup-"));
+  const testDb = join(tempDir, "test-admin-setup.db");
 
-  const accounts = new SqliteAccountStore(TEST_DB);
+  const accounts = new SqliteAccountStore(testDb);
   const store = new InMemoryGatewayStore();
   const app = createGatewayApp({
     accounts,
     store,
     authenticator: new SessionAuthenticator(accounts),
   });
+  let restartedAccounts: SqliteAccountStore | undefined;
 
-  t.after(() => {
-    try {
-      rmSync(TEST_DB, { force: true });
-    } catch {}
+  t.after(async () => {
+    restartedAccounts?.close();
+    await app.close();
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   // 1. Initial status: needs_setup must be true
@@ -101,7 +101,7 @@ test("admin first-run setup lifecycle and rejection of subsequent registrations"
   assert.ok(loginResp.headers["set-cookie"]);
 
   // 7. Restart simulation: Open same SQLite DB with new SqliteAccountStore instance
-  const restartedAccounts = new SqliteAccountStore(TEST_DB);
+  restartedAccounts = new SqliteAccountStore(testDb);
   assert.equal(await restartedAccounts.hasAnyAdmin(), true);
   const adminUser = await restartedAccounts.findAccountByEmail(
     "admin@selfhosted.local",
@@ -111,12 +111,9 @@ test("admin first-run setup lifecycle and rejection of subsequent registrations"
 });
 
 test("a database written before avatars existed gains the column on open", async (t) => {
-  const legacy = "./data/test-legacy-avatar.db";
-  try {
-    rmSync(legacy, { force: true });
-  } catch {}
+  const tempDir = mkdtempSync(join(tmpdir(), "agenthub-legacy-avatar-"));
+  const legacy = join(tempDir, "test-legacy-avatar.db");
 
-  // A store from the previous release: the users table has no avatar column.
   const legacyDb = new DatabaseSync(legacy);
   legacyDb.exec(`
     CREATE TABLE agent_pulse_users (
@@ -137,9 +134,8 @@ test("a database written before avatars existed gains the column on open", async
 
   const accounts = new SqliteAccountStore(legacy);
   t.after(() => {
-    try {
-      rmSync(legacy, { force: true });
-    } catch {}
+    accounts.close();
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   const user = await accounts.findAccountByEmail("legacy@example.com");

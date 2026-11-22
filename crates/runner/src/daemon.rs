@@ -131,14 +131,19 @@ pub fn run(config: DaemonConfig) -> Result<()> {
     let signal = control.clone();
     let ipc_signal = ipc_stopped.clone();
     ctrlc::set_handler(move || {
-        signal.stopped.store(true, Ordering::Relaxed);
-        ipc_signal.store(true, Ordering::Relaxed);
+        signal.stopped.store(true, Ordering::Release);
+        ipc_signal.store(true, Ordering::Release);
     })?;
 
     let (client, channel) = create_local_host_channel();
     // Warm up local transcript scanning immediately in the background so
     // sessions across Claude, Codex, Grok, etc. are ready concurrently.
     crate::remote_host::warm_up_local_store_scan();
+    // One tick drives every scan from here on. The console is notified when a
+    // pass finds a change, so nothing has to poll the daemon to make it look.
+    // It shares the IPC stop flag: both are cleared together when the
+    // remote loop returns.
+    crate::live::start(ipc_stopped.clone());
     let ipc_control = ipc_stopped.clone();
     let ipc_handler: Arc<dyn DaemonRequestHandler> = Arc::new(LocalHandler {
         client,
@@ -158,12 +163,12 @@ pub fn run(config: DaemonConfig) -> Result<()> {
     match ready_rx.recv_timeout(Duration::from_secs(5)) {
         Ok(Ok(())) => {}
         Ok(Err(code)) => {
-            ipc_stopped.store(true, Ordering::Relaxed);
+            ipc_stopped.store(true, Ordering::Release);
             let _ = ipc_thread.join();
             return Err(anyhow::anyhow!(code));
         }
         Err(_) => {
-            ipc_stopped.store(true, Ordering::Relaxed);
+            ipc_stopped.store(true, Ordering::Release);
             return Err(anyhow::anyhow!("ipc_start_timeout"));
         }
     }
@@ -187,8 +192,8 @@ pub fn run(config: DaemonConfig) -> Result<()> {
         Some(channel),
         &config.device_name,
     );
-    control.stopped.store(true, Ordering::Relaxed);
-    ipc_stopped.store(true, Ordering::Relaxed);
+    control.stopped.store(true, Ordering::Release);
+    ipc_stopped.store(true, Ordering::Release);
     crate::tray::cleanup_desktop_window();
     #[cfg(windows)]
     let _ = daemon_ipc::request(

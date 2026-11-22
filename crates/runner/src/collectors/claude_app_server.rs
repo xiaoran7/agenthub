@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, ChildStdin, Stdio},
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, TryRecvError},
@@ -59,7 +59,7 @@ impl ClaudeProcessSession {
         let program = binary_path.display().to_string();
         let cwd_path = cwd.as_ref().to_path_buf();
 
-        let mut command = Command::new(binary_path);
+        let mut command = super::command_for_binary(binary_path);
         command.current_dir(&cwd_path);
 
         let mut base_args = vec![
@@ -73,10 +73,10 @@ impl ClaudeProcessSession {
         ];
 
         if let Some(id) = resume_session_id
-            && !id.is_empty()
+            && super::validate_safe_session_id(id)
         {
             base_args.push("--resume".to_string());
-            base_args.push(id.to_string());
+            base_args.push(id.trim().to_string());
         }
 
         command.args(&base_args);
@@ -85,7 +85,7 @@ impl ClaudeProcessSession {
         let mut effective_model = options
             .model
             .map(str::trim)
-            .filter(|s| !s.is_empty())
+            .filter(|s| super::is_safe_model_id(s))
             .map(str::to_string);
         if let Some(gateway) =
             crate::claude_gateway::discover_claude_gateway_for_client(options.claude_desktop)
@@ -98,21 +98,18 @@ impl ClaudeProcessSession {
         }
 
         // Apply CLI flags
-        if let Some(ref model) = effective_model {
-            command.args(["--model", model]);
+        if let Some(ref model) = effective_model
+            && super::is_safe_model_id(model)
+        {
+            command.args(["--model", model.trim()]);
         }
         if let Some(mode) = options
             .permission_mode
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
+            .and_then(super::sanitize_permission_mode)
         {
             command.args(["--permission-mode", mode]);
         }
-        if let Some(effort) = options
-            .reasoning_effort
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(effort) = options.reasoning_effort.and_then(super::sanitize_effort) {
             command.args(["--effort", effort]);
         }
 
@@ -492,9 +489,10 @@ impl ClaudeProcessSession {
         }
     }
 
-    /// Gracefully interrupts or kills the process.
+    /// Gracefully interrupts or kills the process and its attached child job tree.
     pub fn interrupt(&mut self) -> Result<(), CollectorError> {
         let _ = self.child.kill();
+        let _ = self.job.take();
         self.is_turn_in_progress = false;
         Ok(())
     }

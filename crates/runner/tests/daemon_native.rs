@@ -266,6 +266,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
         hub_session_id: hub_session_id.into(),
         host_generation: Some(generation.clone()),
         command: RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "Do not use tools. Reply exactly AGENTHUB_DAEMON_OK.".into(),
             effort: None,
             model: None,
@@ -283,6 +284,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
         hub_session_id: hub_session_id.into(),
         host_generation: Some(generation),
         command: RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "Without tools, repeat the exact marker from the previous turn.".into(),
             effort: None,
             model: None,
@@ -340,7 +342,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
         hub_session_id: hub_session_id.into(),
         host_generation: Some(restarted_generation.clone()),
         command: RemoteAction::Connect {
-            mode: ConnectMode::Resume,
+            mode: ConnectMode::TakeControl,
             workspace_path: workspace_id_for_path(&workspace.to_string_lossy()).into(),
             provider_session_id: Some(binding.provider_session_id.clone()),
             model: None,
@@ -366,6 +368,7 @@ fn daemon_ipc_resumes_same_native_session_after_restart_and_three_turns() {
         hub_session_id: hub_session_id.into(),
         host_generation: Some(restarted_generation),
         command: RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "Without tools, reply exactly AGENTHUB_RESTART_OK.".into(),
             effort: None,
             model: None,

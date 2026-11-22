@@ -11,21 +11,21 @@ body:
     id: version
     attributes:
       label: AgentHub Version
-      description: What version of AgentHub are you using? (e.g., 2.4.93)
-      placeholder: "2.4.93"
+      description: What version of AgentHub are you using? (e.g., 2.7.7)
+      placeholder: "2.7.7"
     validations:
       required: true
   - type: dropdown
     id: os
     attributes:
       label: Operating System
-      description: What operating system are you running agenthub-runner on?
+      description: What operating system are you running agenthub-runner or client on?
       options:
         - Windows 11 / 10
         - Linux (Ubuntu/Debian)
         - Linux (Arch/Fedora)
         - macOS
-        - Android (Companion PWA)
+        - Android (Remote v3 Client / Mobile PWA)
     validations:
       required: true
   - type: dropdown
@@ -36,7 +36,9 @@ body:
       options:
         - Claude Code CLI
         - OpenAI Codex CLI
-        - Both / Other
+        - Google Antigravity CLI (agy)
+        - ACP-Compatible Agent
+        - Multiple / Other
     validations:
       required: true
   - type: textarea

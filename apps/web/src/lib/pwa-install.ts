@@ -16,14 +16,90 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+interface NavigatorWithWebInstall extends Navigator {
+  standalone?: boolean;
+  install?: () => Promise<void>;
+}
+
 export function installFallbackState(
   userAgent: string,
   standalone: boolean,
+  supportsWebInstall = false,
 ): PwaInstallState {
   if (standalone) {
     return "installed";
   }
+  if (supportsWebInstall) {
+    return "available";
+  }
   return /iPad|iPhone|iPod/i.test(userAgent) ? "manual" : "unavailable";
+}
+
+type InstallSnapshot = {
+  state: PwaInstallState;
+  prompt: BeforeInstallPromptEvent | undefined;
+};
+
+let monitorInitialized = false;
+let currentSnapshot: InstallSnapshot = {
+  state: "checking",
+  prompt: undefined,
+};
+const listeners = new Set<(snap: InstallSnapshot) => void>();
+
+function notifyListeners(): void {
+  for (const listener of listeners) {
+    listener(currentSnapshot);
+  }
+}
+
+/**
+ * Attach app-wide `beforeinstallprompt` / `appinstalled` / serviceWorker
+ * listeners at boot so opening Settings later never misses an early prompt event.
+ */
+export function initPwaInstallMonitor(): void {
+  if (monitorInitialized || typeof window === "undefined") return;
+  monitorInitialized = true;
+
+  const nav = navigator as NavigatorWithWebInstall;
+  const standalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    nav.standalone === true;
+  const isIpadDesktopMode =
+    /Macintosh/i.test(nav.userAgent) && nav.maxTouchPoints > 1;
+  const supportsWebInstall = typeof nav.install === "function";
+
+  currentSnapshot = {
+    state: installFallbackState(
+      isIpadDesktopMode ? "iPad" : nav.userAgent,
+      standalone,
+      supportsWebInstall,
+    ),
+    prompt: undefined,
+  };
+
+  window.addEventListener("beforeinstallprompt", (rawEvent: Event) => {
+    const event = rawEvent as BeforeInstallPromptEvent;
+    event.preventDefault();
+    currentSnapshot = {
+      state: supportsWebInstall ? currentSnapshot.state : "available",
+      prompt: event,
+    };
+    notifyListeners();
+  });
+
+  window.addEventListener("appinstalled", () => {
+    currentSnapshot = { state: "installed", prompt: undefined };
+    notifyListeners();
+  });
+
+  // Registration does not request notification permission and sw.js has no
+  // fetch handler or offline cache. It only establishes the PWA/push worker.
+  if (window.isSecureContext && "serviceWorker" in navigator) {
+    void navigator.serviceWorker
+      .register(SERVICE_WORKER_URL)
+      .catch(() => undefined);
+  }
 }
 
 export function usePwaInstall(): {
@@ -31,52 +107,67 @@ export function usePwaInstall(): {
   install: () => Promise<void>;
 } {
   const promptRef = useRef<BeforeInstallPromptEvent | undefined>(undefined);
-  const [state, setState] = useState<PwaInstallState>("checking");
+  const [state, setState] = useState<PwaInstallState>(() => {
+    initPwaInstallMonitor();
+    promptRef.current = currentSnapshot.prompt;
+    return currentSnapshot.state;
+  });
 
   useEffect(() => {
-    const navigatorWithStandalone = navigator as Navigator & {
-      standalone?: boolean;
+    initPwaInstallMonitor();
+    promptRef.current = currentSnapshot.prompt;
+    setState(currentSnapshot.state);
+    const listener = (snap: InstallSnapshot) => {
+      promptRef.current = snap.prompt;
+      setState(snap.state);
     };
-    const standalone =
-      window.matchMedia("(display-mode: standalone)").matches ||
-      navigatorWithStandalone.standalone === true;
-    setState(installFallbackState(navigator.userAgent, standalone));
-
-    const onBeforeInstall = (rawEvent: Event) => {
-      const event = rawEvent as BeforeInstallPromptEvent;
-      event.preventDefault();
-      promptRef.current = event;
-      setState("available");
-    };
-    const onInstalled = () => {
-      promptRef.current = undefined;
-      setState("installed");
-    };
-    window.addEventListener("beforeinstallprompt", onBeforeInstall);
-    window.addEventListener("appinstalled", onInstalled);
-    // Registration does not request notification permission and sw.js has no
-    // fetch handler or offline cache. It only establishes the PWA/push worker.
-    if (window.isSecureContext && "serviceWorker" in navigator) {
-      void navigator.serviceWorker
-        .register(SERVICE_WORKER_URL)
-        .catch(() => undefined);
-    }
+    listeners.add(listener);
     return () => {
-      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
-      window.removeEventListener("appinstalled", onInstalled);
+      listeners.delete(listener);
     };
   }, []);
 
   const install = useCallback(async () => {
-    const prompt = promptRef.current;
+    const nav = navigator as NavigatorWithWebInstall;
+    if (typeof nav.install === "function") {
+      setState("installing");
+      try {
+        // Call directly from user click activation per Web Install API spec.
+        await nav.install();
+        currentSnapshot = { ...currentSnapshot, state: "installed" };
+        notifyListeners();
+      } catch (error) {
+        if ((error as { name?: string })?.name === "AbortError") {
+          currentSnapshot = { ...currentSnapshot, state: "available" };
+          notifyListeners();
+          return;
+        }
+        currentSnapshot = { ...currentSnapshot, state: "unavailable" };
+        notifyListeners();
+      }
+      return;
+    }
+
+    const prompt = promptRef.current ?? currentSnapshot.prompt;
     if (prompt === undefined) {
       return;
     }
-    setState("installing");
+    // Single-use event: clear ref before awaiting user choice.
+    promptRef.current = undefined;
+    currentSnapshot = { state: "installing", prompt: undefined };
+    notifyListeners();
     await prompt.prompt();
     const choice = await prompt.userChoice;
-    promptRef.current = undefined;
-    setState(choice.outcome === "accepted" ? "submitted" : "unavailable");
+    currentSnapshot = {
+      ...currentSnapshot,
+      state:
+        choice.outcome === "accepted"
+          ? "submitted"
+          : currentSnapshot.prompt !== undefined
+            ? "available"
+            : "unavailable",
+    };
+    notifyListeners();
   }, []);
 
   return { state, install };

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// An aggregated workspace discovered from agent session histories.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscoveredWorkspace {
-    /// Canonical normalized physical directory path (e.g. `D:\Claudespace\Project\agenthub`).
+    /// Canonical normalized physical directory path (e.g. `C:\Projects\workspace\agenthub`).
     pub path: String,
     /// Friendly human-readable folder name (e.g. `agenthub`).
     pub name: String,
@@ -43,9 +43,16 @@ pub struct DiscoveredWorkspace {
     pub is_git: bool,
 }
 
-fn normalized_path_cache() -> &'static RwLock<HashMap<String, Option<String>>> {
-    static CACHE: OnceLock<RwLock<HashMap<String, Option<String>>>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+fn normalized_path_cache()
+-> &'static RwLock<super::lru_cache::BoundedLruCache<String, Option<String>>> {
+    static CACHE: OnceLock<RwLock<super::lru_cache::BoundedLruCache<String, Option<String>>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| {
+        RwLock::new(super::lru_cache::BoundedLruCache::with_ttl(
+            4_000,
+            Duration::from_secs(600),
+        ))
+    })
 }
 
 /// Normalizes raw directory paths from various session formats into a clean, canonical Windows path.
@@ -90,9 +97,6 @@ pub fn normalize_workspace_path(raw: &str) -> Option<String> {
 
     let res = Some(normalized);
     if let Ok(mut guard) = normalized_path_cache().write() {
-        if guard.len() > 4_000 {
-            guard.clear();
-        }
         guard.insert(trimmed.to_string(), res.clone());
     }
     res
@@ -171,17 +175,14 @@ pub fn discover_all_workspaces() -> Vec<DiscoveredWorkspace> {
     // 1. Scan Claude Code projects
     scan_claude_workspaces(&mut map);
 
-    // 2. Scan ZCode SQLite database
-    scan_zcode_workspaces(&mut map);
-
-    // 3. Scan Codex local state database
+    // 2. Scan Codex local state database
     scan_codex_workspaces(&mut map);
 
-    // 4. Scan Antigravity sessions
+    // 3. Scan Antigravity sessions
     scan_antigravity_workspaces(&mut map);
 
-    // 5. Scan Grok Build sessions
-    scan_grok_workspaces(&mut map);
+    // 4. Scan installed and enabled ACP plugins
+    scan_plugin_workspaces(&mut map);
 
     // Convert accumulated map to sorted list
     let mut results: Vec<DiscoveredWorkspace> = map
@@ -251,10 +252,12 @@ fn add_workspace_record(
     entry.agents.insert(agent_name.to_string());
 }
 
-fn claude_project_cwd_cache() -> &'static RwLock<HashMap<PathBuf, (PathBuf, i64, Option<String>)>> {
-    static CACHE: OnceLock<RwLock<HashMap<PathBuf, (PathBuf, i64, Option<String>)>>> =
-        OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+fn claude_project_cwd_cache()
+-> &'static RwLock<super::lru_cache::BoundedLruCache<PathBuf, (PathBuf, i64, Option<String>)>> {
+    static CACHE: OnceLock<
+        RwLock<super::lru_cache::BoundedLruCache<PathBuf, (PathBuf, i64, Option<String>)>>,
+    > = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(super::lru_cache::BoundedLruCache::new(2_000)))
 }
 
 fn extract_claude_project_cwd_cached(
@@ -294,9 +297,6 @@ fn extract_claude_project_cwd_cached(
     }
 
     if let Ok(mut guard) = claude_project_cwd_cache().write() {
-        if guard.len() > 2_000 {
-            guard.clear();
-        }
         guard.insert(
             project_dir.to_path_buf(),
             (
@@ -389,44 +389,28 @@ fn scan_claude_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
     }
 }
 
-fn scan_zcode_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
-    let Some(home) = super::home_dir() else {
-        return;
-    };
-    let db_path = home.join(".zcode").join("cli").join("db").join("db.sqlite");
-    if !db_path.is_file() {
-        return;
-    }
-
-    let Ok(conn) = rusqlite::Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
-        return;
-    };
-
-    // Query session table for directory distribution
-    let mut stmt = match conn.prepare(
-        "SELECT directory, count(*), max(time_updated) FROM session \
-         WHERE directory IS NOT NULL AND directory != '' \
-         GROUP BY directory",
-    ) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-
-    let rows = stmt.query_map([], |row| {
-        let dir: String = row.get(0)?;
-        let count: i64 = row.get(1)?;
-        let max_time: Option<i64> = row.get(2)?;
-        Ok((dir, count as usize, max_time.unwrap_or(0)))
-    });
-
-    if let Ok(rows) = rows {
-        for row in rows.flatten() {
-            let (dir, count, updated_at) = row;
-            add_workspace_record(map, &dir, count, updated_at, "ZCode");
-        }
+fn scan_plugin_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
+    for item in crate::plugins::discover_all_plugin_sessions() {
+        let Some(cwd) = item
+            .get("cwd")
+            .or_else(|| item.get("workspace_path"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let label = item
+            .get("provider")
+            .or_else(|| item.get("agent_name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("plugin");
+        let mtime = item
+            .get("last_activity_at_ms")
+            .or_else(|| item.get("time_updated"))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        add_workspace_record(map, cwd, 1, mtime, label);
     }
 }
 
@@ -489,16 +473,6 @@ fn scan_antigravity_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) 
         for (_, cwd, _, mtime) in entries {
             if !cwd.trim().is_empty() {
                 add_workspace_record(map, &cwd, 1, mtime, "Antigravity");
-            }
-        }
-    }
-}
-
-fn scan_grok_workspaces(map: &mut HashMap<String, WorkspaceAccumulator>) {
-    if let Ok(entries) = super::collect_grok_sessions_for_remote() {
-        for (_, cwd, _, _, mtime) in entries {
-            if !cwd.trim().is_empty() {
-                add_workspace_record(map, &cwd, 1, mtime, "Grok Build");
             }
         }
     }

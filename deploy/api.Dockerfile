@@ -2,17 +2,21 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
-# Install from the lockfile before copying source so Docker can reuse the
-# dependency layer when only application code changes.
+# Install only production dependencies needed by @agent-pulse/api and its
+# workspace contract package; tsx is a runtime dependency because contracts
+# ships raw TypeScript entrypoints.
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY services/api/package.json services/api/package.json
 COPY apps/web/package.json apps/web/package.json
-RUN npm ci
+RUN npm ci --omit=dev --workspace @agent-pulse/api --workspace @agent-pulse/contracts --include-workspace-root \
+ && mkdir -p /app/data /opt/data \
+ && chown -R node:node /app /opt/data
 
-COPY packages/contracts packages/contracts
-COPY services/api services/api
+COPY --chown=node:node packages/contracts packages/contracts
+COPY --chown=node:node services/api services/api
 
 ENV NODE_ENV=production
+USER node
 
-CMD ["sh", "-lc", "if [ -n \"$AGENT_PLATFORM_DATABASE_URL\" ]; then npm run migrate --workspace @agent-pulse/api; fi && npm start --workspace @agent-pulse/api"]
+CMD ["sh", "-c", "cd /app/services/api && if [ -n \"$AGENT_PLATFORM_DATABASE_URL\" ]; then ../../node_modules/.bin/tsx src/migrate.ts; fi && exec ../../node_modules/.bin/tsx src/server.ts"]

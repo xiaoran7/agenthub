@@ -20,6 +20,9 @@ _local/
 deploy/docker.env
 *.exe
 *.msi
+Deliverables/
+*.apk
+*.zip
 
 # ==============================================================================
 # AI Tooling & Local Cognition (纯本地辅助，严禁提交远端)
@@ -46,3 +49,4 @@ apps/android/orca_screen_*.png
 .mcp.json.backup.*
 .claude/settings.json
 .claude/settings.json.backup.*
+pnpm-workspace.yaml

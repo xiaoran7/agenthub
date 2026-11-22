@@ -22,9 +22,11 @@ import {
   type WorkspaceSummary,
   entitlementsFor,
 } from "./accounts.js";
+import { SQLITE_ACCOUNT_SCHEMA } from "./store-schemas.js";
 
 export class SqliteAccountStore implements AccountStore {
   readonly #db: DatabaseSync;
+  #closed = false;
   readonly #now: () => Date;
 
   constructor(
@@ -44,41 +46,14 @@ export class SqliteAccountStore implements AccountStore {
     this.#initTables();
   }
 
+  close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#db.close();
+  }
+
   #initTables(): void {
-    this.#db.exec(`
-      PRAGMA journal_mode=WAL;
-      PRAGMA synchronous=NORMAL;
-
-      CREATE TABLE IF NOT EXISTS agent_pulse_users (
-        user_id TEXT PRIMARY KEY,
-        email TEXT NOT NULL UNIQUE,
-        display_name TEXT NOT NULL,
-        password_hash TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        email_verified_at TEXT,
-        avatar_data_url TEXT,
-        created_at TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_users_email ON agent_pulse_users(email);
-
-      CREATE TABLE IF NOT EXISTS agent_pulse_web_sessions (
-        digest TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        workspace_owner_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_sessions_user ON agent_pulse_web_sessions(user_id);
-
-      CREATE TABLE IF NOT EXISTS agent_pulse_login_attempts (
-        scope_digest TEXT PRIMARY KEY,
-        attempt_count INTEGER NOT NULL,
-        window_started_at TEXT NOT NULL,
-        blocked_until TEXT
-      );
-    `);
+    this.#db.exec(SQLITE_ACCOUNT_SCHEMA);
     this.#migrateAvatarColumn();
   }
 
@@ -117,22 +92,58 @@ export class SqliteAccountStore implements AccountStore {
     email: string;
     displayName: string;
     passwordHash: string;
+    singleAdmin?: boolean;
   }): Promise<AccountView> {
     const createdAt = this.#now().toISOString();
-    this.#db
-      .prepare(
-        `INSERT INTO agent_pulse_users (
-          user_id, email, display_name, password_hash, status, email_verified_at, created_at
-        ) VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-      )
-      .run(
-        input.userId,
-        input.email,
-        input.displayName,
-        input.passwordHash,
-        createdAt,
-        createdAt,
-      );
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      if (input.singleAdmin && (await this.hasAnyAdmin())) {
+        throw new AccountError(
+          "admin_already_exists",
+          "administrator is already configured",
+          409,
+        );
+      }
+      this.#db
+        .prepare(
+          `INSERT INTO agent_pulse_users (
+            user_id, email, display_name, password_hash, status, email_verified_at, created_at
+          ) VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+        )
+        .run(
+          input.userId,
+          input.email,
+          input.displayName,
+          input.passwordHash,
+          createdAt,
+          createdAt,
+        );
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {
+        // already rolled back
+      }
+      if (
+        error instanceof Error &&
+        (error.message.includes("UNIQUE constraint") ||
+          (error as { code?: string }).code === "ERR_SQLITE_ERROR")
+      ) {
+        if (error instanceof AccountError) throw error;
+        if (
+          error.message.includes("agent_pulse_users.email") ||
+          error.message.includes("UNIQUE")
+        ) {
+          throw new AccountError(
+            "email_already_registered",
+            "email exists",
+            409,
+          );
+        }
+      }
+      throw error;
+    }
 
     const view = await this.accountView(input.userId);
     if (!view) {
@@ -509,57 +520,138 @@ export class SqliteAccountStore implements AccountStore {
     };
   }
 
-  async issueEmailVerification(_input: {
+  async issueEmailVerification(input: {
     digest: string;
     userId: string;
     createdAt: string;
     expiresAt: string;
     minimumIntervalSeconds: number;
   }): Promise<LoginAttemptResult> {
+    const latest = this.#db
+      .prepare(
+        "SELECT created_at FROM agent_pulse_email_verifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(input.userId) as { created_at: string } | undefined;
+    if (latest) {
+      const waitSec = Math.ceil(
+        (Date.parse(latest.created_at) +
+          input.minimumIntervalSeconds * 1_000 -
+          Date.parse(input.createdAt)) /
+          1_000,
+      );
+      if (waitSec > 0) return { allowed: false, retry_after_seconds: waitSec };
+    }
+    this.#db
+      .prepare(
+        "INSERT INTO agent_pulse_email_verifications (digest, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(input.digest, input.userId, input.createdAt, input.expiresAt);
     return { allowed: true, retry_after_seconds: 0 };
   }
 
   async consumeEmailVerification(
-    _digest: string,
-    _now: string,
+    digest: string,
+    now: string,
   ): Promise<AccountView | undefined> {
-    return undefined;
+    const row = this.#db
+      .prepare(
+        "SELECT user_id, expires_at, consumed_at FROM agent_pulse_email_verifications WHERE digest = ?",
+      )
+      .get(digest) as
+      | { user_id: string; expires_at: string; consumed_at: string | null }
+      | undefined;
+    if (!row || row.consumed_at !== null || row.expires_at <= now)
+      return undefined;
+    this.#db
+      .prepare(
+        "UPDATE agent_pulse_email_verifications SET consumed_at = ? WHERE digest = ?",
+      )
+      .run(now, digest);
+    this.#db
+      .prepare(
+        "UPDATE agent_pulse_users SET email_verified_at = COALESCE(email_verified_at, ?) WHERE user_id = ?",
+      )
+      .run(now, row.user_id);
+    return this.accountView(row.user_id);
   }
 
-  async deletePendingEmailVerification(_digest: string): Promise<void> {}
+  async deletePendingEmailVerification(digest: string): Promise<void> {
+    this.#db
+      .prepare(
+        "DELETE FROM agent_pulse_email_verifications WHERE digest = ? AND consumed_at IS NULL",
+      )
+      .run(digest);
+  }
 
-  async issuePasswordReset(_input: {
+  async issuePasswordReset(input: {
     digest: string;
     userId: string;
     createdAt: string;
     expiresAt: string;
     minimumIntervalSeconds: number;
   }): Promise<LoginAttemptResult> {
+    const latest = this.#db
+      .prepare(
+        "SELECT created_at FROM agent_pulse_password_resets WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(input.userId) as { created_at: string } | undefined;
+    if (latest) {
+      const waitSec = Math.ceil(
+        (Date.parse(latest.created_at) +
+          input.minimumIntervalSeconds * 1_000 -
+          Date.parse(input.createdAt)) /
+          1_000,
+      );
+      if (waitSec > 0) return { allowed: false, retry_after_seconds: waitSec };
+    }
+    this.#db
+      .prepare(
+        "INSERT INTO agent_pulse_password_resets (digest, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(input.digest, input.userId, input.createdAt, input.expiresAt);
     return { allowed: true, retry_after_seconds: 0 };
   }
 
-  async consumePasswordReset(_input: {
+  async consumePasswordReset(input: {
     digest: string;
     passwordHash: string;
     now: string;
   }): Promise<PasswordChangeResult> {
-    return { updated: false, revoked_sessions: 0 };
+    const row = this.#db
+      .prepare(
+        "SELECT user_id, expires_at, consumed_at FROM agent_pulse_password_resets WHERE digest = ?",
+      )
+      .get(input.digest) as
+      | { user_id: string; expires_at: string; consumed_at: string | null }
+      | undefined;
+    if (!row || row.consumed_at !== null || row.expires_at <= input.now) {
+      return { updated: false, revoked_sessions: 0 };
+    }
+    this.#db
+      .prepare(
+        "UPDATE agent_pulse_password_resets SET consumed_at = ? WHERE digest = ?",
+      )
+      .run(input.now, input.digest);
+    this.#db
+      .prepare(
+        "UPDATE agent_pulse_users SET password_hash = ? WHERE user_id = ?",
+      )
+      .run(input.passwordHash, row.user_id);
+    const info = this.#db
+      .prepare("DELETE FROM agent_pulse_web_sessions WHERE user_id = ?")
+      .run(row.user_id);
+    return { updated: true, revoked_sessions: Number(info.changes ?? 0) };
   }
 
-  async deletePendingPasswordReset(_digest: string): Promise<void> {}
+  async deletePendingPasswordReset(digest: string): Promise<void> {
+    this.#db
+      .prepare(
+        "DELETE FROM agent_pulse_password_resets WHERE digest = ? AND consumed_at IS NULL",
+      )
+      .run(digest);
+  }
 
-  async issueTeamInvitation(_input: {
-    invitationId: string;
-    digest: string;
-    workspaceOwnerId: string;
-    invitedUserId: string;
-    invitedEmail: string;
-    role: InviteRole;
-    invitedBy: string;
-    createdAt: string;
-    expiresAt: string;
-    memberLimit: number;
-  }): Promise<void> {
+  async issueTeamInvitation(_input: Record<string, unknown>): Promise<void> {
     throw new AccountError(
       "not_supported",
       "team invitations not supported in self-hosted single-admin mode",
@@ -625,11 +717,37 @@ export class SqliteAccountStore implements AccountStore {
     workspaceOwnerId: string;
     switchedAt?: string;
   }): Promise<SessionIdentity | undefined> {
+    if (input.workspaceOwnerId !== input.actorUserId) return undefined;
+    const row = this.#db
+      .prepare(
+        "SELECT user_id FROM agent_pulse_web_sessions WHERE digest = ? AND user_id = ?",
+      )
+      .get(input.digest, input.actorUserId);
+    if (!row) return undefined;
     return {
       actor_user_id: input.actorUserId,
-      workspace_owner_id: input.workspaceOwnerId,
+      workspace_owner_id: input.actorUserId,
       role: "owner",
     };
+  }
+
+  async pruneExpiredData(nowIso: string): Promise<void> {
+    this.#db
+      .prepare("DELETE FROM agent_pulse_web_sessions WHERE expires_at <= ?")
+      .run(nowIso);
+    this.#db
+      .prepare(
+        "DELETE FROM agent_pulse_email_verifications WHERE expires_at <= ?",
+      )
+      .run(nowIso);
+    this.#db
+      .prepare("DELETE FROM agent_pulse_password_resets WHERE expires_at <= ?")
+      .run(nowIso);
+    this.#db
+      .prepare(
+        "DELETE FROM agent_pulse_login_attempts WHERE blocked_until IS NOT NULL AND blocked_until <= ?",
+      )
+      .run(nowIso);
   }
 
   async applySubscriptionEvent(

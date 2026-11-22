@@ -1,33 +1,18 @@
-# Milestone 4 安全与稳定性验收
+# Milestone 4 安全与稳定性验收基线
 
-> 记录 M4 的自动化基线、本机实测证据与待真实环境验收边界；严格区分 Fixture、回环模拟与生产环境结论。
+严格区分自动化契约测试、本机回环实测与公网生产验收。
 
-## 1. 2026-09-08 v2.3.2 原生 Remote 闭环验收
+## 1. 自动化安全与可靠性矩阵
 
-- **原生链路（Runner 2.3.1 + Codex 0.153.4）**：`remote-native.test.ts` 跑通真实签名连接、两轮同原生 ID 续聊、重复命令幂等拦截、Gateway 停止 6 秒后 SQLite 水位回放（约 33s）及 `remote_embedded` 原生中断（1.30s）。
-- **安装包与移动端**：Windows NSIS 安装包覆盖安装与登录页窄窗口校验通过；Android Debug APK 续聊、审批、中断与 Host 重启恢复见 [ANDROID_VALIDATION.md](ANDROID_VALIDATION.md)。
+| 验收维度 | 自动化验证证据 | 状态 |
+| :--- | :--- | :--- |
+| **隐私与白名单脱敏** | 含物理路径与敏感字段的 Claude/Codex/ACP 载荷经 Outbox/DTO 过滤，敏感键与绝对路径零泄漏 | 通过 |
+| **断网重放与水位幂等** | SQLite Outbox 跨进程重启保留序列，恢复连接获连续 ACK 后归零；`storableFrame` 重放不误报冲突 | 通过 |
+| **多设备与 PG 并发隔离** | 12 台 Ed25519 设备并发写入 3000 会话（PostgreSQL 18.4），双 owner 严格隔离、软撤销后返 `403` | 通过 |
+| **同源反代与凭据隔离** | `scripts/test-web-proxy.sh`（13 项容器实测）：伪造 Bearer 被覆盖、非白名单 Cookie 被剥离、API 强制 `no-store` | 通过 |
+| **TLS 与私有 CA 校验** | rustls 自签根证书握手：未配 CA 严格拒连并保留 Outbox，配 `AGENT_PLATFORM_GATEWAY_CA_CERT` 后通过 | 通过 |
 
-## 2. 自动化安全与稳定性矩阵
+## 2. 真实 Runtime 端到端实测摘要
 
-| 验收项                | 自动化证据摘要                                                                                                     | 结论                     |
-| :-------------------- | :----------------------------------------------------------------------------------------------------------------- | :----------------------- |
-| **字段泄漏防护**      | Claude/Codex 含路径与敏感标记 Fixture 经 Adapter -> Outbox -> 签名批次，断言敏感标记与非白名单键零泄漏             | 通过                     |
-| **断网重放与积压**    | 磁盘 SQLite Outbox 上传失败后跨进程重开保留序列 `1..2`；退避报告携带 `pending_events`，连接恢复并获合法 ACK 后清零 | 通过                     |
-| **Agent 升级兼容**    | 混合已知/未知状态的 Fixture 降级为 `UNKNOWN + inferred`，未知内容字段不进入同步事件                                | 通过（Fixture）          |
-| **Hook 降级防护**     | 无 Hook 轮询源保持健康；未知 Hook 降级为 `UNKNOWN + inferred`；缺失 Session ID 的 Hook 直接拒绝                    | 通过                     |
-| **多设备与 PG 并发**  | 12 台 Ed25519 设备并发写入 3000 Session（PostgreSQL 18.4 随机 Schema + 4 连接），验证双 owner 隔离与重放幂等       | 内存与 PostgreSQL 均通过 |
-| **面板访问认证**      | 缺失/伪造令牌或仅伪造 `x-user-id` 均返回 401；Web 同源代理丢弃客户端 Cookie 并仅由服务端注入 Bearer 令牌           | 通过                     |
-| **设备生命周期**      | 绑定码仅存 SHA-256 摘要，覆盖 TTL、幂等重试、双设备抢码与软撤销（撤销后历史保留、新上传返回 403）                  | 内存与 PostgreSQL 均通过 |
-| **TLS 与私有 CA**     | 本机 rustls 自签根证书握手：未配 CA 时拒绝且保留 Outbox，配置 `AGENT_PLATFORM_GATEWAY_CA_CERT` 后完成严格校验与 ACK | 通过（本机 TLS）         |
-
-## 3. 2026-07-28 ~ 07-29 本机现场实测摘要
-
-- **Codex CLI 与后台同步**：`codex-cli 0.144.2` 执行 `collect-once codex` 真实采集并白名单化 35 个 Session；预置磁盘 Outbox 事件后启动 `run codex` 自动上传并归零。
-- **Web Push 链路**：Chrome 授予通知权限并登记 VAPID 订阅，`WAITING_PERMISSION` 触发后 Gateway 记录 `delivered=1, gone=0, failed=0`，Service Worker 回传解密与 `showNotification()` 时间戳（注：未观测到 Windows 系统级 Toast 弹窗）。
-- **Chrome 移动 PWA 与无障碍**：在 `390×844`、`320×568`、`844×390` 视口验证 `scrollWidth === innerWidth`、44px 触控目标、`dialog`/`aria-modal` 焦点圈定、断网提示与 `getInstallabilityErrors() === []`。
-
-## 4. 仍需真实环境验收
-
-1. 真实 Claude Code 与 Codex CLI 跨版本升级前后的完整状态矩阵；
-2. 公网生产环境证书轮换/过期故障与长时离线恢复；
-3. Windows / 移动操作系统级的原生通知弹窗呈现。
+- **多引擎原生闭环**：Runner 配合真实 Codex、Claude Code、Antigravity（`agy`）与 ACP 跑通创建、恢复、连续多轮、Diff 审批、多选问答、中断及 Gateway 重启后水位回放。
+- **移动端与 PWA 视口**：在 `390x844`、`320x568` 视口验证零横向溢出、`44px` 触控热区、模态焦点圈定与 PWA 可安装性检查。

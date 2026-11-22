@@ -1,0 +1,91 @@
+# 1Panel OpenResty site configuration for platform.example.com.
+# Replace the domain and certificate paths with deployment values before enabling.
+#
+# 2.7.0 起 Web 层是 nginx（静态托管 + 同源反代），不再有 Next.js 运行时：
+#   1. 所有 proxy_set_header 统一收口在 server 层，子 location 内严禁再写任何
+#      proxy_set_header，防止触发 nginx header 继承丢失导致 Cookie 白名单失效；
+#   2. /v1 与 /v3/remote/stream 均交给 127.0.0.1:3100（Web 前门）执行会话 Cookie
+#      清洗，仅 Runner 签名握手的 /v3/remote/ws 与 /health 直通网关；
+#   3. 外层不在 location / 覆盖 Cache-Control，保留 /assets/* 的 immutable 强缓存；
+#   4. 任何包含 add_header 的子 location 都重复携带 HSTS，防止 nginx 继承丢失。
+
+map $http_upgrade $agenthub_outer_connection {
+    default upgrade;
+    ""      "";
+}
+
+map "$scheme:$uri" $agenthub_https_redirect {
+    default 0;
+    "~^http:(?!/.well-known/acme-challenge/)" 1;
+}
+
+server {
+    listen 80;
+    listen 8443 ssl;
+    server_name platform.example.com;
+
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root /usr/share/nginx/html;
+    }
+
+    if ($agenthub_https_redirect) {
+        return 301 https://$host$request_uri;
+    }
+
+    ssl_certificate /etc/letsencrypt/live/platform.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/platform.example.com/privkey.pem;
+    ssl_protocols TLSv1.3 TLSv1.2;
+    http2 on;
+    error_page 497 https://$host$request_uri;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $agenthub_outer_connection;
+
+    location = /health {
+        proxy_pass http://127.0.0.1:3101/health;
+    }
+
+    location = /healthz {
+        proxy_pass http://127.0.0.1:3101/healthz;
+    }
+
+    location = /v3/remote/ws {
+        proxy_pass http://127.0.0.1:3101;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    location = /v1/stream {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Accel-Buffering no always;
+    }
+
+    location = /v3/remote/stream {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Accel-Buffering no always;
+    }
+
+    # 其余路径交给 Web 前门：/assets/* 静态产物长期缓存，API 由前门同源反代。
+    location / {
+        proxy_pass http://127.0.0.1:3100;
+    }
+}

@@ -1,4 +1,5 @@
 import {
+  ApiError,
   deletePushSubscription,
   fetchPushKey,
   savePushSubscription,
@@ -70,6 +71,8 @@ export function decodeApplicationServerKey(
   return bytes;
 }
 
+const disabledPushGateways = new Set<string>();
+
 export async function readNotificationState(
   config: PanelConfig,
   identity: GatewayIdentity,
@@ -80,9 +83,19 @@ export async function readNotificationState(
   if (Notification.permission === "denied") {
     return "denied";
   }
+  const cacheKey = config.gatewayBase || "__same_origin__";
+  if (disabledPushGateways.has(cacheKey)) {
+    return "disabled";
+  }
   try {
     await fetchPushKey(config, identity);
-  } catch {
+  } catch (error) {
+    if (
+      error instanceof ApiError &&
+      (error.status === 404 || error.status === 501)
+    ) {
+      disabledPushGateways.add(cacheKey);
+    }
     return "disabled";
   }
   const registration =

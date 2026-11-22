@@ -1,21 +1,12 @@
-# 原生 Android 验收记录
+# 原生 Android 客户端验收记录
 
-> 原生 `apps/android` 当前处于冻结基线（v2.5.0），移动端主力由 Web PWA 承接；本文件保留历史模拟器实测与自动化验收记录。
+`apps/android` 自 v2.6.0 起重写为对齐 `@agent-pulse/contracts/remote` 的 Kotlin + Jetpack Compose 原生 Remote v3 客户端（Keystore AES-256-GCM 凭据存储、增量转录折叠、三主题切换）。
 
-## 1. 2026-09-08 v2.3.2 原生 Remote APK 验收
+## 关键验收基线
 
-- **环境**：Windows 本机 Gateway（SQLite 内容库）+ `adb reverse` 回环；`Medium_Phone` 模拟器（1080×2400）；Runner 2.3.1 + Codex 0.153.4；APK 2.3.2（versionCode 5，Debug 签名）。
-- **续聊与审批**：创建只读目录会话并完成两轮同 `provider_session_id` 续聊；触发真实 Shell 审批（`awaiting_permission` -> 允许 -> `running`），点击停止任务后原生 `turn/completed` 返回 `interrupted`。
-- **重启恢复**：停止 Host 后历史可读且输入禁用；重启 Host 并点击恢复会话后 `host_generation` 递增、`provider_session_id` 保持不变，上下文核对一致。
-- **自动化**：`testDebugUnitTest`、`lintDebug`、`assembleDebug` 全部通过。
-
-## 2. 2026-07-29 首版基线与 Compose 动效验收
-
-- **自动化门禁**：`.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleRelease` 全部通过；动效测试锁定 45ms stagger 与 270ms 上限。
-- **模拟器实测（`Medium_Phone_API_36.1` 1080×2400）**：
-  - 临时 Runner 身份完成 Ed25519 签名批次上传（Gateway ACK 2、Runner pending 0）；
-  - 验证首页指标卡、相邻会话切换、系统 Back 导航、Keystore 加密配置重启恢复及 Animator `10x`/`0x` 无残影切换。
-
-## 3. 未覆盖边界
-
-- 实体 Android 手机与厂商 ROM 矩阵、正式商店签名发布包、原生系统级后台推送与公网 HTTPS 现场连接。
+- **v2.6.0 ~ v2.6.21 Remote v3 原生重写与硬化（2026-11）**：
+  - 跑通 `testDebugUnitTest`（189 项单测全绿）、`lintDebug`（0 error）与 `assembleDebug`；
+  - 覆盖 Cookie 会话认证、`EventWindow` 快照锚点裁剪、`CommandLedger` 幂等键、四级会话树、SAF 附件 UTF-8 字符边界嗅探、绝对行数阈值乐观气泡、SSE 首行验活与 `SessionSignals.kt` 独立归约。
+- **v2.3.2 & v2.0 早期模拟器实测（2026-07 ~ 2026-09）**：
+  - `Medium_Phone`（API 36，1080x2400）通过 `adb reverse` 完成真实 Runner + Codex 多轮续聊、Diff 审批、`interrupted` 急停、Host 换代 `resume` 及 Animator `0x`/`10x` 无残影校验。
+- **待独立验收项**：多品牌真机 ROM 后台保活差异与正式应用商店签名包（模拟器须用 `x86_64`/universal ABI，真机用 `arm64-v8a`）。

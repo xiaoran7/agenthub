@@ -1,5 +1,9 @@
 # 将域名和证书路径替换为真实值后启用。
-# API 不对公网暴露，所有浏览器请求都经过 Web 同源代理。
+#
+# 外层反代只做一件事：把流量交给 Web 前门（127.0.0.1:3000 上的 nginx）。
+# 同源 API 代理、会话 Cookie 白名单与服务端令牌注入全部由 Web 前门内部完成
+# （deploy/nginx/agenthub-web.conf.template），外层不要重复实现，
+# 否则两层凭据语义会漂移。
 
 server {
     listen 443 ssl;
@@ -8,7 +12,37 @@ server {
     ssl_certificate     /etc/letsencrypt/live/agent.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/agent.example.com/privkey.pem;
 
+    # 网关变更流（SSE）：整条链路上不能有缓冲层。
     location /v1/stream {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 远程会话 WebSocket：保留长连接与协议升级
+    location ^~ /v3/remote/ws {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 远程会话流（SSE）
+    location ^~ /v3/remote/stream {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_buffering off;
@@ -24,6 +58,8 @@ server {
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $http_connection;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

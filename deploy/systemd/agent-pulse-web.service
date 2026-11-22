@@ -1,5 +1,5 @@
 [Unit]
-Description=AgentPulse Web Panel
+Description=AgentPulse Web Panel (nginx 静态托管 + 同源反代)
 After=network-online.target agent-pulse-api.service
 Wants=network-online.target
 
@@ -7,9 +7,14 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/agent-pulse
 EnvironmentFile=/etc/agent-pulse/agent-pulse.env
-Environment=HOSTNAME=127.0.0.1
-Environment=PORT=3000
-ExecStart=/usr/bin/npm start --workspace @agent-pulse/web
+Environment=WEB_PORT=3000
+Environment=WEB_ROOT=/opt/agent-pulse/web
+Environment=GATEWAY_ORIGIN=http://127.0.0.1:3001
+Environment=GATEWAY_ACCESS_TOKEN=
+# 渲染只替换这几个占位符，nginx 运行期变量（$host 等）保持原样。
+Environment="RENDER_VARS=${GATEWAY_ORIGIN} ${GATEWAY_ACCESS_TOKEN} ${WEB_PORT} ${WEB_ROOT}"
+ExecStartPre=/bin/sh -c 'mkdir -p /etc/agent-pulse && envsubst "$RENDER_VARS" < /opt/agent-pulse/deploy/nginx/agenthub-web.conf.template > /etc/agent-pulse/web.conf.d'
+ExecStart=/usr/sbin/nginx -c /etc/agent-pulse/nginx.conf -g "daemon off;"
 Restart=on-failure
 RestartSec=5
 PrivateTmp=true

@@ -4,12 +4,23 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "noEmit": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
-    "plugins": [{ "name": "next" }]
+    "paths": {
+      "@agent-pulse/contracts": ["../../packages/contracts/src/index.ts"],
+      "@agent-pulse/contracts/remote": [
+        "../../packages/contracts/src/remote.ts"
+      ],
+      "@agent-pulse/contracts/account": [
+        "../../packages/contracts/src/account.ts"
+      ],
+      "@agent-pulse/contracts/avatar-rules": [
+        "../../packages/contracts/src/avatar-rules.ts"
+      ]
+    }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", ".next"]
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules", "dist"]
 }

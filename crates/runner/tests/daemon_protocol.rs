@@ -15,6 +15,7 @@ fn command() -> RemoteCommand {
         hub_session_id: "hub-1".into(),
         host_generation: Some("generation-1".into()),
         command: RemoteAction::SendPrompt {
+            acquire_control: false,
             text: "continue".into(),
             effort: None,
             model: None,

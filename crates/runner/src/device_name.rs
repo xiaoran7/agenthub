@@ -83,8 +83,9 @@ fn system_hostname() -> Option<String> {
     if ok == 0 {
         return None;
     }
-    // `size` includes the terminator, so the name is the prefix before it.
-    let name = String::from_utf16_lossy(&buffer[..size.saturating_sub(1) as usize]);
+    // `GetComputerNameExW` reports characters written excluding the NUL terminator on success.
+    let len = (size as usize).min(buffer.len());
+    let name = String::from_utf16_lossy(&buffer[..len]);
     let name = name.trim();
     if name.is_empty() {
         None

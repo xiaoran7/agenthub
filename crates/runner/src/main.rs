@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 
 use std::{
-    env, fs,
+    fs,
     io::{self, Read},
     path::PathBuf,
     sync::{
@@ -12,483 +12,23 @@ use std::{
 };
 
 use agenthub_runner::{
-    adapters::{
-        claude,
-        codex::{self, CodexThreadContext},
-        grok,
-        zcode::{self, ZCodeSessionEntry},
-    },
-    auth::{AuthManager, AuthProvider},
+    adapters::{claude, codex},
     auth_worker::AuthWorker,
-    collectors::{
-        CodexAppServer, collect_antigravity_sessions, collect_claude_transcripts,
-        collect_codex_local_threads, collect_grok_sessions, collect_zcode_sessions,
-    },
     device::DeviceIdentity,
-    domain::{AgentType, ObservationMeta, SessionObservation},
-    gateway::{GatewayClient, push_outbox},
+    domain::ObservationMeta,
     outbox::Outbox,
-    privacy::ProjectRedactor,
     runtime::{
-        AntigravitySessionSource, ClaudeSessionSource, CodexSessionSource, GrokSessionSource,
-        PollPolicy, RunnerRuntime, SessionSource, ZCodeSessionSource,
+        AntigravitySessionSource, ClaudeSessionSource, CodexSessionSource, PollPolicy,
+        RunnerRuntime, SessionSource,
     },
-    sync::{MAX_SYNC_BATCH_EVENTS, SyncAck, SyncBatch, apply_sync_ack, prepare_sync_batch},
+    sync::MAX_SYNC_BATCH_EVENTS,
     sync_worker::{SyncPolicy, SyncWorker},
 };
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
-use serde_json::json;
+use clap::Parser;
 
-#[derive(Debug, Parser)]
-#[command(name = "agenthub-runner")]
-#[command(about = "AgentHub native session host and metadata collector")]
-struct Cli {
-    #[arg(long, env = "AGENT_PLATFORM_DEVICE_ID", default_value = "local-dev")]
-    device_id: String,
-
-    #[arg(
-        long,
-        env = "AGENT_PLATFORM_IDENTITY",
-        help = "Use a persisted device identity for the device ID and project fingerprint key"
-    )]
-    identity: Option<PathBuf>,
-
-    #[arg(
-        long,
-        default_value = "AGENT_PLATFORM_FINGERPRINT_KEY",
-        help = "Environment variable containing the project fingerprint key"
-    )]
-    fingerprint_key_env: String,
-
-    #[arg(
-        long,
-        env = "AGENT_PLATFORM_ALLOW_CREDENTIAL_ACCESS",
-        help = "Allow the Runner to read provider auth files, keyrings and credential environment variables"
-    )]
-    allow_credential_access: bool,
-
-    #[arg(
-        long,
-        env = "AGENTHUB_DEVICE_NAME",
-        help = "Name for this computer shown in the console; defaults to the system computer name"
-    )]
-    device_name: Option<String>,
-
-    #[arg(
-        long,
-        env = "AGENT_PLATFORM_AUTH_CACHE",
-        help = "Encrypted local credential cache path"
-    )]
-    auth_cache: Option<PathBuf>,
-
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Run the local agenthubd control plane without requiring Gateway connectivity.
-    Daemon {
-        #[arg(long)]
-        codex_binary: PathBuf,
-        #[arg(long, required = true)]
-        workspace: Vec<PathBuf>,
-        #[arg(long, help = "Database path (defaults to ~/.agenthub/agenthub.db)")]
-        db: Option<PathBuf>,
-        #[arg(long, help = "Override the per-device named pipe or Unix socket")]
-        ipc_endpoint: Option<String>,
-        #[arg(long, default_value_t = true, help = "Enable embedded CDS web console")]
-        web: bool,
-        #[arg(long, default_value_t = 4200, help = "Embedded web console port")]
-        web_port: u16,
-        #[arg(
-            long,
-            default_value_t = false,
-            action = clap::ArgAction::Set,
-            help = "Auto open desktop console window"
-        )]
-        open_browser: bool,
-    },
-    /// Launch the native runtime with an embedded CDS web console and auto-open browser.
-    Web {
-        #[arg(long, default_value = "codex")]
-        codex_binary: PathBuf,
-        #[arg(long, default_value = ".")]
-        workspace: Vec<PathBuf>,
-        #[arg(long, help = "Database path (defaults to ~/.agenthub/agenthub.db)")]
-        db: Option<PathBuf>,
-        #[arg(long, default_value_t = 4200)]
-        port: u16,
-        #[arg(
-            long,
-            default_value_t = true,
-            action = clap::ArgAction::Set,
-            help = "Auto open desktop console window"
-        )]
-        open_browser: bool,
-        #[arg(
-            long,
-            default_value_t = true,
-            action = clap::ArgAction::Set,
-            help = "Hide Windows console window (run in background with system tray)"
-        )]
-        hide_console: bool,
-    },
-    /// Connect the local agenthubd control plane to the authenticated v3 Gateway.
-    RemoteRun {
-        #[arg(long)]
-        codex_binary: PathBuf,
-        #[arg(long, required = true)]
-        workspace: Vec<PathBuf>,
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long)]
-        server: String,
-        #[arg(long, help = "Override the per-device named pipe or Unix socket")]
-        ipc_endpoint: Option<String>,
-        #[arg(long, default_value_t = true, help = "Enable embedded CDS web console")]
-        web: bool,
-        #[arg(long, default_value_t = 4200, help = "Embedded web console port")]
-        web_port: u16,
-        #[arg(
-            long,
-            default_value_t = false,
-            action = clap::ArgAction::Set,
-            help = "Auto open web console in default browser"
-        )]
-        open_browser: bool,
-    },
-    /// Local JSONL control channel for a persistent Codex app-server Host.
-    /// This is not yet the authenticated Gateway transport.
-    RemoteHost {
-        #[arg(long)]
-        codex_binary: PathBuf,
-        #[arg(
-            long,
-            required = true,
-            help = "Authorize an exact working directory; repeat for multiple projects"
-        )]
-        workspace: Vec<PathBuf>,
-    },
-    Normalize {
-        #[arg(value_enum)]
-        format: InputFormat,
-        #[arg(long)]
-        input: PathBuf,
-    },
-    IngestHook {
-        #[arg(value_enum)]
-        agent: Agent,
-        #[arg(long)]
-        db: PathBuf,
-    },
-    CollectOnce {
-        #[arg(value_enum)]
-        agent: Agent,
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long, help = "Override the Codex or Grok executable path")]
-        binary: Option<PathBuf>,
-        #[arg(long, help = "Scan up to 1000 Claude history sessions instead of 100")]
-        include_completed: bool,
-        #[arg(long, default_value_t = 100, help = "Maximum Codex threads to request")]
-        limit: u32,
-        #[arg(long, default_value_t = 15)]
-        timeout_seconds: u64,
-    },
-    Run {
-        #[arg(value_enum, default_value_t = AgentSelection::All)]
-        agent: AgentSelection,
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long, help = "Override the Claude executable path")]
-        claude_binary: Option<PathBuf>,
-        #[arg(long, help = "Override the Codex executable path")]
-        codex_binary: Option<PathBuf>,
-        #[arg(long, help = "Override the Grok Build executable path")]
-        grok_binary: Option<PathBuf>,
-        #[arg(long, help = "Scan up to 1000 Claude history sessions instead of 100")]
-        include_completed: bool,
-        #[arg(long, default_value_t = 100)]
-        codex_limit: u32,
-        #[arg(long, default_value_t = 2)]
-        active_interval_seconds: u64,
-        #[arg(long, default_value_t = 10)]
-        idle_interval_seconds: u64,
-        #[arg(long, default_value_t = 2)]
-        failure_initial_seconds: u64,
-        #[arg(long, default_value_t = 60)]
-        failure_max_seconds: u64,
-        #[arg(long, default_value_t = 15)]
-        collector_timeout_seconds: u64,
-        #[arg(
-            long,
-            env = "AGENT_PLATFORM_GATEWAY_URL",
-            help = "Continuously drain the Outbox to this Gateway; remote URLs require HTTPS"
-        )]
-        sync_server: Option<String>,
-        #[arg(
-            long,
-            env = "AGENT_PLATFORM_GATEWAY_CA_CERT",
-            value_name = "PEM",
-            help = "Trust this private CA certificate for Gateway HTTPS"
-        )]
-        gateway_ca_cert: Option<PathBuf>,
-        #[arg(long, default_value_t = 5)]
-        sync_interval_seconds: u64,
-        #[arg(long, default_value_t = 15)]
-        heartbeat_interval_seconds: u64,
-        #[arg(long, default_value_t = 60)]
-        auth_interval_seconds: u64,
-        #[arg(long, default_value_t = 2)]
-        sync_failure_initial_seconds: u64,
-        #[arg(long, default_value_t = 60)]
-        sync_failure_max_seconds: u64,
-        #[arg(long, default_value_t = 100)]
-        sync_limit: usize,
-        #[arg(long, default_value_t = 10)]
-        sync_max_batches: usize,
-        #[arg(long, default_value_t = 15)]
-        sync_timeout_seconds: u64,
-        #[arg(
-            long,
-            help = "Stop after this many adapter attempts; intended for diagnostics and tests"
-        )]
-        max_attempts: Option<u64>,
-    },
-    Outbox {
-        #[command(subcommand)]
-        command: OutboxCommand,
-    },
-    Device {
-        #[command(subcommand)]
-        command: DeviceCommand,
-    },
-    Sync {
-        #[command(subcommand)]
-        command: SyncCommand,
-    },
-    Auth {
-        #[arg(
-            long,
-            default_value = "claude",
-            help = "Override the Claude executable path"
-        )]
-        claude_binary: PathBuf,
-        #[arg(
-            long,
-            default_value = "codex",
-            help = "Override the Codex executable path"
-        )]
-        codex_binary: PathBuf,
-        #[command(subcommand)]
-        command: AuthCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum AuthCommand {
-    Status {
-        #[arg(value_enum, default_value_t = AgentSelection::All)]
-        agent: AgentSelection,
-    },
-    Refresh {
-        #[arg(value_enum, default_value_t = AgentSelection::All)]
-        agent: AgentSelection,
-    },
-    Login {
-        #[arg(value_enum)]
-        agent: Agent,
-    },
-    Logout {
-        #[arg(value_enum)]
-        agent: Agent,
-    },
-    Quota {
-        #[arg(value_enum, default_value_t = AgentSelection::All)]
-        agent: AgentSelection,
-    },
-    ResetCodex {
-        #[arg(long)]
-        credit_id: Option<String>,
-    },
-    Token {
-        #[arg(value_enum)]
-        agent: Agent,
-        #[arg(
-            long,
-            help = "Required acknowledgement before printing raw token material"
-        )]
-        reveal: bool,
-    },
-    ClearCache {
-        #[arg(value_enum, default_value_t = AgentSelection::All)]
-        agent: AgentSelection,
-    },
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum InputFormat {
-    ClaudeAgents,
-    ClaudeHook,
-    CodexMessage,
-    CodexThreadList,
-    CodexHook,
-    AntigravityBrain,
-    AntigravityHook,
-    GrokSessions,
-    GrokHook,
-    #[value(name = "zcode-sessions")]
-    ZCodeSessions,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum Agent {
-    Claude,
-    Codex,
-    Antigravity,
-    Grok,
-    #[value(name = "zcode")]
-    ZCode,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum AgentSelection {
-    All,
-    Claude,
-    Codex,
-    Antigravity,
-    Grok,
-    #[value(name = "zcode")]
-    ZCode,
-}
-
-impl std::fmt::Display for AgentSelection {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::All => "all",
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-            Self::Antigravity => "antigravity",
-            Self::Grok => "grok",
-            Self::ZCode => "zcode",
-        })
-    }
-}
-
-#[derive(Debug, Subcommand)]
-enum OutboxCommand {
-    Stats {
-        #[arg(long)]
-        db: PathBuf,
-    },
-    Pending {
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long)]
-        device_id: String,
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Ack {
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long)]
-        device_id: String,
-        #[arg(long)]
-        through: i64,
-    },
-    Health {
-        #[arg(long)]
-        db: PathBuf,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum DeviceCommand {
-    Init {
-        #[arg(long)]
-        identity: PathBuf,
-    },
-    Show {
-        #[arg(long)]
-        identity: PathBuf,
-    },
-    /// Name this computer the way it should appear in the console.
-    Name {
-        #[arg(long)]
-        identity: PathBuf,
-        /// The name to show; pass an empty string to fall back to the system name.
-        name: String,
-    },
-    Bind {
-        #[arg(long)]
-        identity: PathBuf,
-        #[arg(long, env = "AGENT_PLATFORM_GATEWAY_URL")]
-        server: String,
-        #[arg(
-            long,
-            env = "AGENT_PLATFORM_BINDING_CODE",
-            help = "One-time binding code; prefer AGENT_PLATFORM_BINDING_CODE to avoid shell history"
-        )]
-        binding_code: String,
-        #[arg(long, default_value_t = 15)]
-        timeout_seconds: u64,
-        #[arg(
-            long,
-            env = "AGENT_PLATFORM_GATEWAY_CA_CERT",
-            value_name = "PEM",
-            help = "Trust this private CA certificate for Gateway HTTPS"
-        )]
-        gateway_ca_cert: Option<PathBuf>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum SyncCommand {
-    Prepare {
-        #[arg(long)]
-        identity: PathBuf,
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Verify {
-        #[arg(long)]
-        batch: PathBuf,
-    },
-    Ack {
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long)]
-        batch: PathBuf,
-        #[arg(long)]
-        acknowledgement: PathBuf,
-    },
-    Push {
-        #[arg(long)]
-        identity: PathBuf,
-        #[arg(long)]
-        db: PathBuf,
-        #[arg(long, env = "AGENT_PLATFORM_GATEWAY_URL")]
-        server: String,
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-        #[arg(long, default_value_t = 1)]
-        max_batches: usize,
-        #[arg(long, default_value_t = 15)]
-        timeout_seconds: u64,
-        #[arg(
-            long,
-            env = "AGENT_PLATFORM_GATEWAY_CA_CERT",
-            value_name = "PEM",
-            help = "Trust this private CA certificate for Gateway HTTPS"
-        )]
-        gateway_ca_cert: Option<PathBuf>,
-    },
-}
+mod runner_cli;
+use runner_cli::*;
 
 fn main() -> Result<()> {
     #[cfg(target_os = "windows")]
@@ -501,6 +41,14 @@ fn main() -> Result<()> {
     }
 
     let cli = Cli::parse();
+    if let Some(Command::Ui {
+        url,
+        idle_seconds,
+        title,
+    }) = cli.command
+    {
+        return agenthub_runner::tray::run_ui_window(&url, idle_seconds, &title);
+    }
     let identity_path = cli.identity.clone();
     let runtime_identity = cli
         .identity
@@ -625,6 +173,7 @@ fn main() -> Result<()> {
         } => {
             agenthub_runner::remote_ipc::run(codex_binary, workspace)?;
         }
+        Command::Ui { .. } => unreachable!("handled early before loading identity"),
         Command::Normalize { format, input } => {
             let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
             let meta = ObservationMeta::now(&device_id);
@@ -644,10 +193,6 @@ fn main() -> Result<()> {
                 Agent::Antigravity => agenthub_runner::adapters::antigravity::normalize_hook(
                     &input, &meta, &redactor,
                 )?,
-                Agent::Grok => grok::normalize_hook(&input, &meta, &redactor)?,
-                Agent::ZCode => {
-                    bail!("ingest-hook is not supported for ZCode (use SQLite database discovery)")
-                }
             };
             let mut outbox = Outbox::open(db)?;
             let sequence = outbox.enqueue(&observation)?;
@@ -671,104 +216,15 @@ fn main() -> Result<()> {
             let redactor = load_redactor(&fingerprint_key_env, runtime_identity.as_ref())?;
             let meta = ObservationMeta::now(&device_id);
             let timeout = nonzero_duration("collector timeout", timeout_seconds)?;
-            let observations = match agent {
-                Agent::Claude => {
-                    let _ = binary;
-                    let payload = collect_claude_transcripts(include_completed)?;
-                    claude::normalize_agents_json(&payload, &meta, &redactor)?
-                }
-                Agent::Codex => {
-                    let binary = binary.unwrap_or_else(|| PathBuf::from("codex"));
-                    let (result, local) = match CodexAppServer::start_with_timeout(binary, timeout)
-                        .and_then(|mut server| server.list_threads(limit))
-                    {
-                        Ok(result) => (result, false),
-                        Err(_) => (collect_codex_local_threads(limit)?, true),
-                    };
-                    let payload = serde_json::to_string(&result)?;
-                    let mut context = CodexThreadContext::default();
-                    if local {
-                        codex::normalize_local_thread_list_result(
-                            &payload,
-                            &meta,
-                            &redactor,
-                            &mut context,
-                        )?
-                    } else {
-                        codex::normalize_thread_list_result(
-                            &payload,
-                            &meta,
-                            &redactor,
-                            &mut context,
-                        )?
-                    }
-                }
-                Agent::Antigravity => {
-                    let _ = binary;
-                    let payload = collect_antigravity_sessions(include_completed)?;
-                    let sessions: Vec<serde_json::Value> = serde_json::from_str(&payload)?;
-                    let mut observations = Vec::new();
-                    for session in sessions {
-                        let session_id = session
-                            .get("sessionId")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_owned();
-                        let cwd = session
-                            .get("cwd")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_owned();
-                        let started_at = session
-                            .get("startedAt")
-                            .and_then(|v| v.as_i64())
-                            .and_then(chrono::DateTime::from_timestamp_millis);
-                        let last_activity_at = session
-                            .get("lastActivityAt")
-                            .and_then(|v| v.as_i64())
-                            .and_then(chrono::DateTime::from_timestamp_millis);
-                        let steps_val = session
-                            .get("steps")
-                            .cloned()
-                            .unwrap_or(serde_json::json!([]));
-                        let steps: Vec<agenthub_runner::adapters::antigravity::AntigravityStep> =
-                            serde_json::from_value(steps_val).unwrap_or_default();
-                        let session_meta =
-                            agenthub_runner::adapters::antigravity::AntigravitySessionMetadata {
-                                session_id,
-                                cwd,
-                                is_process_alive: true,
-                                started_at,
-                                last_activity_at,
-                            };
-                        if let Some(obs) =
-                            agenthub_runner::adapters::antigravity::normalize_transcript_steps(
-                                &steps,
-                                &session_meta,
-                                &meta,
-                                &redactor,
-                            )
-                        {
-                            observations.push(obs);
-                        }
-                    }
-                    observations
-                }
-                Agent::Grok => {
-                    let _ = binary;
-                    let payload = collect_grok_sessions(include_completed)?;
-                    grok::normalize_sessions_json(&payload, &meta, &redactor)?
-                }
-                Agent::ZCode => {
-                    let _ = binary;
-                    let payload = collect_zcode_sessions(include_completed)?;
-                    let entries: Vec<ZCodeSessionEntry> = serde_json::from_str(&payload)?;
-                    entries
-                        .iter()
-                        .filter_map(|entry| zcode::normalize_zcode_session(entry, &meta, &redactor))
-                        .collect()
-                }
-            };
+            let observations = collect_once_observations(
+                agent,
+                binary,
+                include_completed,
+                limit,
+                timeout,
+                &meta,
+                &redactor,
+            )?;
             let mut outbox = Outbox::open(db)?;
             let sequences = enqueue_all(&mut outbox, &observations)?;
             println!(
@@ -785,7 +241,6 @@ fn main() -> Result<()> {
             db,
             claude_binary,
             codex_binary,
-            grok_binary,
             include_completed,
             codex_limit,
             active_interval_seconds,
@@ -855,7 +310,6 @@ fn main() -> Result<()> {
 
             let claude_binary = claude_binary.unwrap_or_else(|| PathBuf::from("claude"));
             let codex_binary = codex_binary.unwrap_or_else(|| PathBuf::from("codex"));
-            let _grok_binary = grok_binary.unwrap_or_else(|| PathBuf::from("grok"));
 
             let mut sources: Vec<Box<dyn SessionSource>> = Vec::new();
             if matches!(agent, AgentSelection::All | AgentSelection::Claude) {
@@ -870,12 +324,6 @@ fn main() -> Result<()> {
             }
             if matches!(agent, AgentSelection::All | AgentSelection::Antigravity) {
                 sources.push(Box::new(AntigravitySessionSource::new(include_completed)));
-            }
-            if matches!(agent, AgentSelection::All | AgentSelection::Grok) {
-                sources.push(Box::new(GrokSessionSource::new(include_completed)));
-            }
-            if matches!(agent, AgentSelection::All | AgentSelection::ZCode) {
-                sources.push(Box::new(ZCodeSessionSource::new(include_completed)));
             }
 
             let stop = Arc::new(AtomicBool::new(false));
@@ -948,493 +396,23 @@ fn main() -> Result<()> {
             sync_result.map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
             auth_result.map_err(|error| anyhow::anyhow!("auth_thread_failed: {error}"))?;
         }
-        Command::Outbox { command } => match command {
-            OutboxCommand::Stats { db } => {
-                let outbox = Outbox::open(db)?;
-                println!("{}", serde_json::to_string_pretty(&outbox.stats()?)?);
-            }
-            OutboxCommand::Pending {
-                db,
-                device_id,
-                limit,
-            } => {
-                let outbox = Outbox::open(db)?;
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&outbox.pending(&device_id, limit)?)?
-                );
-            }
-            OutboxCommand::Ack {
-                db,
-                device_id,
-                through,
-            } => {
-                let mut outbox = Outbox::open(db)?;
-                let removed = outbox.acknowledge_through(&device_id, through)?;
-                println!("{}", serde_json::json!({ "acknowledged": removed }));
-            }
-            OutboxCommand::Health { db } => {
-                let outbox = Outbox::open(db)?;
-                let mut health = Vec::new();
-                for agent_type in [
-                    AgentType::ClaudeCode,
-                    AgentType::Codex,
-                    AgentType::GrokBuild,
-                ] {
-                    if let Some(adapter_health) = outbox.adapter_health(agent_type)? {
-                        health.push(adapter_health);
-                    }
-                }
-                println!("{}", serde_json::to_string_pretty(&health)?);
-            }
-        },
-        Command::Device { command } => match command {
-            DeviceCommand::Init { identity } => {
-                let device_identity = DeviceIdentity::generate();
-                device_identity
-                    .save_new(&identity)
-                    .with_context(|| format!("failed to create {}", identity.display()))?;
-                println!("{}", serde_json::to_string_pretty(&device_identity.info())?);
-            }
-            DeviceCommand::Show { identity } => {
-                let device_identity = DeviceIdentity::load(&identity)
-                    .with_context(|| format!("failed to load {}", identity.display()))?;
-                println!("{}", serde_json::to_string_pretty(&device_identity.info())?);
-            }
-            DeviceCommand::Name { identity, name } => {
-                let name = name.trim();
-                agenthub_runner::device_name::write_configured_name(&identity, name).with_context(
-                    || {
-                        format!(
-                            "failed to write the device name beside {}",
-                            identity.display()
-                        )
-                    },
-                )?;
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "device_name": agenthub_runner::device_name::resolve(
-                            if name.is_empty() { None } else { Some(name) },
-                            Some(&identity),
-                        ),
-                    }))?
-                );
-            }
-            DeviceCommand::Bind {
-                identity,
-                server,
-                binding_code,
-                timeout_seconds,
-                gateway_ca_cert,
-            } => {
-                let device_identity = DeviceIdentity::load(&identity)
-                    .with_context(|| format!("failed to load {}", identity.display()))?;
-                let client = gateway_client(
-                    &server,
-                    nonzero_duration("gateway timeout", timeout_seconds)?,
-                    gateway_ca_cert.as_deref(),
-                )?;
-                let dev_name = agenthub_runner::device_name::resolve(None, Some(&identity));
-                let binding = client
-                    .bind(&device_identity, &binding_code, Some(&dev_name))
-                    .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-                println!("{}", serde_json::to_string_pretty(&binding)?);
-            }
-        },
-        Command::Sync { command } => match command {
-            SyncCommand::Prepare {
-                identity,
-                db,
-                limit,
-            } => {
-                let device_identity = DeviceIdentity::load(&identity)
-                    .with_context(|| format!("failed to load {}", identity.display()))?;
-                let outbox = Outbox::open(db)?;
-                if let Some(batch) = prepare_sync_batch(&outbox, &device_identity, limit)? {
-                    println!("{}", serde_json::to_string_pretty(&batch)?);
-                } else {
-                    println!("{}", serde_json::json!({ "pending": 0 }));
-                }
-            }
-            SyncCommand::Verify { batch } => {
-                let batch: SyncBatch = read_json_file(&batch)?;
-                batch.verify()?;
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "valid": true,
-                        "device_id": batch.device_id,
-                        "batch_id": batch.batch_id,
-                        "first_sequence": batch.first_sequence,
-                        "last_sequence": batch.last_sequence
-                    })
-                );
-            }
-            SyncCommand::Ack {
-                db,
-                batch,
-                acknowledgement,
-            } => {
-                let batch: SyncBatch = read_json_file(&batch)?;
-                let acknowledgement: SyncAck = read_json_file(&acknowledgement)?;
-                let mut outbox = Outbox::open(db)?;
-                let removed = apply_sync_ack(&mut outbox, &batch, &acknowledgement)?;
-                println!("{}", serde_json::json!({ "acknowledged": removed }));
-            }
-            SyncCommand::Push {
-                identity,
-                db,
-                server,
-                limit,
-                max_batches,
-                timeout_seconds,
-                gateway_ca_cert,
-            } => {
-                let device_identity = DeviceIdentity::load(&identity)
-                    .with_context(|| format!("failed to load {}", identity.display()))?;
-                let client = gateway_client(
-                    &server,
-                    nonzero_duration("gateway timeout", timeout_seconds)?,
-                    gateway_ca_cert.as_deref(),
-                )?;
-                let mut outbox = Outbox::open(db)?;
-                let summary =
-                    push_outbox(&client, &mut outbox, &device_identity, limit, max_batches)
-                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-                if summary.batches_sent == 0 && summary.pending_events > 0 {
-                    eprintln!(
-                        "warning: {} pending events belong to a different device ID; \
-                         they were likely collected without --identity",
-                        summary.pending_events
-                    );
-                }
-                println!("{}", serde_json::to_string_pretty(&summary)?);
-            }
-        },
+        Command::Outbox { command } => handle_outbox(command)?,
+        Command::Device { command } => handle_device(command, identity_path.as_ref())?,
+        Command::Sync { command } => handle_sync(command, &device_id, runtime_identity.as_ref())?,
         Command::Auth {
             claude_binary,
             codex_binary,
             command,
-        } => {
-            let mut manager = AuthManager::from_identity(
-                runtime_identity.as_ref(),
-                auth_cache,
-                allow_credential_access,
-                claude_binary,
-                codex_binary,
-                Duration::from_secs(15),
-            )
-            .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-            match command {
-                AuthCommand::Status { agent } => {
-                    print_auth_snapshots(&mut manager, agent, false)?;
-                }
-                AuthCommand::Refresh { agent } => {
-                    print_auth_snapshots(&mut manager, agent, true)?;
-                }
-                AuthCommand::Login { agent } => {
-                    let result = manager
-                        .login(auth_provider(agent)?)
-                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                AuthCommand::Logout { agent } => {
-                    let result = manager
-                        .logout(auth_provider(agent)?)
-                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                AuthCommand::Quota { agent } => {
-                    print_auth_snapshots(&mut manager, agent, false)?;
-                }
-                AuthCommand::ResetCodex { credit_id } => {
-                    let result = manager
-                        .consume_codex_reset(credit_id.as_deref())
-                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                AuthCommand::Token { agent, reveal } => {
-                    if !reveal {
-                        bail!("raw token output requires --reveal and --allow-credential-access");
-                    }
-                    let result = manager
-                        .tokens(auth_provider(agent)?)
-                        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-                    println!("{}", serde_json::to_string_pretty(&result)?);
-                }
-                AuthCommand::ClearCache { agent } => {
-                    for provider in auth_providers(agent)? {
-                        manager
-                            .clear_cache(provider)
-                            .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-                    }
-                    println!("{}", serde_json::json!({ "cleared": true }));
-                }
-            }
-        }
+        } => handle_auth(
+            runtime_identity.as_ref(),
+            auth_cache,
+            allow_credential_access,
+            claude_binary,
+            codex_binary,
+            command,
+        )?,
+        Command::Plugin { command } => handle_plugin(command)?,
     }
 
     Ok(())
-}
-
-fn auth_provider(agent: Agent) -> Result<AuthProvider> {
-    match agent {
-        Agent::Claude => Ok(AuthProvider::ClaudeCode),
-        Agent::Codex => Ok(AuthProvider::Codex),
-        Agent::Antigravity => Ok(AuthProvider::Antigravity),
-        Agent::Grok => Ok(AuthProvider::GrokBuild),
-        Agent::ZCode => bail!("auth management is not applicable for ZCode"),
-    }
-}
-
-fn auth_providers(selection: AgentSelection) -> Result<Vec<AuthProvider>> {
-    match selection {
-        AgentSelection::All => Ok(vec![
-            AuthProvider::ClaudeCode,
-            AuthProvider::Codex,
-            AuthProvider::Antigravity,
-            AuthProvider::GrokBuild,
-        ]),
-        AgentSelection::Claude => Ok(vec![AuthProvider::ClaudeCode]),
-        AgentSelection::Codex => Ok(vec![AuthProvider::Codex]),
-        AgentSelection::Antigravity => Ok(vec![AuthProvider::Antigravity]),
-        AgentSelection::Grok => Ok(vec![AuthProvider::GrokBuild]),
-        AgentSelection::ZCode => Ok(Vec::new()),
-    }
-}
-
-fn print_auth_snapshots(
-    manager: &mut AuthManager,
-    selection: AgentSelection,
-    refresh: bool,
-) -> Result<()> {
-    let mut snapshots = Vec::new();
-    for provider in auth_providers(selection)? {
-        let snapshot = if refresh {
-            manager.refresh(provider)
-        } else {
-            manager.status(provider)
-        }
-        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))?;
-        snapshots.push(snapshot);
-    }
-    println!("{}", serde_json::to_string_pretty(&snapshots)?);
-    Ok(())
-}
-
-fn gateway_client(
-    server: &str,
-    timeout: Duration,
-    ca_certificate_path: Option<&std::path::Path>,
-) -> Result<GatewayClient> {
-    let ca_certificate = ca_certificate_path
-        .map(fs::read)
-        .transpose()
-        .map_err(|_| anyhow::anyhow!("gateway_ca_cert_unreadable"))?;
-    GatewayClient::new_with_ca_certificate(server, timeout, ca_certificate.as_deref())
-        .map_err(|error| anyhow::anyhow!("{}: {error}", error.code()))
-}
-
-fn read_json_file<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T> {
-    let contents =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&contents).with_context(|| format!("invalid JSON in {}", path.display()))
-}
-
-fn nonzero_duration(name: &str, seconds: u64) -> Result<Duration> {
-    if seconds == 0 {
-        bail!("{name} must be greater than zero");
-    }
-    Ok(Duration::from_secs(seconds))
-}
-
-fn load_redactor(
-    environment_variable: &str,
-    identity: Option<&DeviceIdentity>,
-) -> Result<ProjectRedactor> {
-    if let Some(identity) = identity {
-        return Ok(ProjectRedactor::new(identity.fingerprint_key())?);
-    }
-    let key = env::var(environment_variable).with_context(|| {
-        format!("missing fingerprint key environment variable {environment_variable}")
-    })?;
-    Ok(ProjectRedactor::new(key.as_bytes())?)
-}
-
-fn enqueue_all(outbox: &mut Outbox, observations: &[SessionObservation]) -> Result<Vec<i64>> {
-    observations
-        .iter()
-        .map(|observation| outbox.enqueue(observation).map_err(Into::into))
-        .collect()
-}
-
-fn normalize(
-    format: InputFormat,
-    input: &str,
-    meta: &ObservationMeta,
-    redactor: &ProjectRedactor,
-) -> Result<Vec<SessionObservation>> {
-    match format {
-        InputFormat::ClaudeAgents => Ok(claude::normalize_agents_json(input, meta, redactor)?),
-        InputFormat::ClaudeHook => Ok(vec![claude::normalize_hook(input, meta, redactor)?]),
-        InputFormat::CodexMessage => {
-            let mut context = CodexThreadContext::default();
-            Ok(
-                codex::normalize_app_server_message(input, meta, redactor, &mut context)?
-                    .into_iter()
-                    .collect(),
-            )
-        }
-        InputFormat::CodexThreadList => {
-            let mut context = CodexThreadContext::default();
-            Ok(codex::normalize_thread_list_result(
-                input,
-                meta,
-                redactor,
-                &mut context,
-            )?)
-        }
-        InputFormat::CodexHook => Ok(vec![codex::normalize_hook(input, meta, redactor)?]),
-        InputFormat::AntigravityBrain => {
-            let steps = agenthub_runner::adapters::antigravity::parse_transcript_lines(input)?;
-            let meta_session = agenthub_runner::adapters::antigravity::AntigravitySessionMetadata {
-                session_id: "preview-session".into(),
-                cwd: ".".into(),
-                is_process_alive: true,
-                started_at: None,
-                last_activity_at: None,
-            };
-            Ok(
-                agenthub_runner::adapters::antigravity::normalize_transcript_steps(
-                    &steps,
-                    &meta_session,
-                    meta,
-                    redactor,
-                )
-                .into_iter()
-                .collect(),
-            )
-        }
-        InputFormat::AntigravityHook => Ok(vec![
-            agenthub_runner::adapters::antigravity::normalize_hook(input, meta, redactor)?,
-        ]),
-        InputFormat::GrokSessions => Ok(grok::normalize_sessions_json(input, meta, redactor)?),
-        InputFormat::GrokHook => Ok(vec![grok::normalize_hook(input, meta, redactor)?]),
-        InputFormat::ZCodeSessions => {
-            let entries: Vec<ZCodeSessionEntry> = serde_json::from_str(input)?;
-            Ok(entries
-                .iter()
-                .filter_map(|entry| zcode::normalize_zcode_session(entry, meta, redactor))
-                .collect())
-        }
-    }
-    .and_then(|observations| {
-        if observations.is_empty() {
-            bail!("input produced no session observations");
-        }
-        Ok(observations)
-    })
-}
-
-fn resolve_bound_gateway_server() -> Option<String> {
-    let home_dir = env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)?;
-    let binding_path = home_dir.join(".agenthub").join("binding.json");
-    if !binding_path.exists() {
-        return None;
-    }
-    let content = fs::read_to_string(&binding_path).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let registered = val
-        .get("registered")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !registered {
-        return None;
-    }
-    let gateway = val.get("gateway").and_then(|v| v.as_str())?.trim();
-    if gateway.is_empty() {
-        None
-    } else {
-        Some(gateway.to_string())
-    }
-}
-
-fn resolve_or_create_default_identity() -> DeviceIdentity {
-    let identity_path = default_identity_path();
-    let agenthub_dir = identity_path
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    if identity_path.exists() {
-        if let Ok(identity) = DeviceIdentity::load(&identity_path) {
-            return identity;
-        }
-    }
-
-    let identity = DeviceIdentity::generate();
-    if fs::create_dir_all(&agenthub_dir).is_ok() {
-        let _ = identity.save_new(&identity_path);
-    }
-    identity
-}
-
-/// The identity file the Runner uses when no path is given on the command line.
-fn default_identity_path() -> PathBuf {
-    let home_dir = env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home_dir.join(".agenthub").join("identity.json")
-}
-
-fn resolve_default_db_path() -> PathBuf {
-    let home_dir = env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let agenthub_dir = home_dir.join(".agenthub");
-    let _ = fs::create_dir_all(&agenthub_dir);
-    let target_db = agenthub_dir.join("agenthub.db");
-
-    // 平滑迁移与自动清理：如果当前工作目录存在历史遗留的 agenthub.db，且 ~/.agenthub/ 下尚无数据库
-    // 则完整将本地的 db 及 wal/shm 复制到 ~/.agenthub/ 并安全清除本地文件，保证桌面绝对干净
-    let local_db = PathBuf::from("agenthub.db");
-    if local_db.is_file() {
-        if !target_db.exists() {
-            if fs::copy(&local_db, &target_db).is_ok() {
-                let _ = fs::remove_file(&local_db);
-                let local_wal = PathBuf::from("agenthub.db-wal");
-                let target_wal = agenthub_dir.join("agenthub.db-wal");
-                if local_wal.is_file() {
-                    let _ = fs::copy(&local_wal, &target_wal);
-                    let _ = fs::remove_file(&local_wal);
-                }
-                let local_shm = PathBuf::from("agenthub.db-shm");
-                let target_shm = agenthub_dir.join("agenthub.db-shm");
-                if local_shm.is_file() {
-                    let _ = fs::copy(&local_shm, &target_shm);
-                    let _ = fs::remove_file(&local_shm);
-                }
-            }
-        }
-    }
-
-    target_db
-}
-
-fn hide_windows_console() {
-    #[cfg(target_os = "windows")]
-    unsafe {
-        use windows_sys::Win32::System::Console::GetConsoleWindow;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
-
-        let hwnd = GetConsoleWindow();
-        if hwnd != 0 as _ {
-            ShowWindow(hwnd, SW_HIDE);
-        }
-    }
 }

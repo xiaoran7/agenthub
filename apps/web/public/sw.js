@@ -13,7 +13,12 @@ const WAITING_TITLES = {
 
 const AGENT_LABELS = {
   claude_code: "Claude Code",
+  claude_desktop: "Claude Desktop",
   codex: "Codex",
+  antigravity: "Antigravity",
+  zcode: "ZCode",
+  gemini_cli: "Gemini CLI",
+  grok_build: "Grok",
 };
 
 self.addEventListener("install", () => {
@@ -42,6 +47,8 @@ self.addEventListener("push", (event) => {
 async function showWaitingNotification(title, project, agent, payload) {
   await self.registration.showNotification(title, {
     body: agent ? `${project} · ${agent}` : project,
+    icon: "/icon-192.png",
+    badge: "/icon-96.png",
     // One notification per session: a session that keeps re-entering the
     // waiting state replaces its own notification instead of stacking.
     tag: `${payload.device_id}:${payload.agent_type}:${payload.agent_session_id}`,
@@ -69,9 +76,26 @@ async function showWaitingNotification(title, project, agent, payload) {
   }
 }
 
+let pendingClickSession = null;
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(openPanel(event.notification.data));
+});
+
+self.addEventListener("message", (event) => {
+  if (
+    event.data &&
+    typeof event.data === "object" &&
+    event.data.type === "consume-pending-session" &&
+    pendingClickSession !== null
+  ) {
+    const session = pendingClickSession;
+    pendingClickSession = null;
+    if (event.source && typeof event.source.postMessage === "function") {
+      event.source.postMessage({ type: "select-session", session });
+    }
+  }
 });
 
 async function openPanel(session) {
@@ -79,15 +103,25 @@ async function openPanel(session) {
     type: "window",
     includeUncontrolled: true,
   });
-  for (const client of clients) {
-    if (new URL(client.url).origin !== self.location.origin) {
-      continue;
+  const sameOrigin = clients.filter(
+    (client) => new URL(client.url).origin === self.location.origin,
+  );
+  const preferred =
+    sameOrigin.find((c) => c.focused) ??
+    sameOrigin.find((c) => c.visibilityState === "visible") ??
+    sameOrigin[0];
+  if (preferred) {
+    if (typeof preferred.focus === "function") {
+      await preferred.focus();
     }
-    await client.focus();
     // Hand the session over in a message rather than a URL: session and device
     // identifiers must not end up in history or a shared link.
-    client.postMessage({ type: "select-session", session });
+    preferred.postMessage({ type: "select-session", session });
     return;
   }
-  await self.clients.openWindow("/");
+  pendingClickSession = session ?? null;
+  const opened = await self.clients.openWindow("/remote/");
+  if (opened && session) {
+    opened.postMessage({ type: "select-session", session });
+  }
 }

@@ -116,6 +116,7 @@ export function vapidAuthorization(
   endpoint: string,
   keys: VapidKeys,
   now: Date = new Date(),
+  signingKey?: ReturnType<typeof createPrivateKey>,
 ): string {
   const audience = new URL(endpoint).origin;
   const header = encodeBase64Url(
@@ -136,7 +137,7 @@ export function vapidAuthorization(
     "sha256",
     Buffer.from(signingInput, "utf8"),
     // ES256 signatures are raw R||S, not the DER encoding node emits by default.
-    { key: vapidPrivateKey(keys), dsaEncoding: "ieee-p1363" },
+    { key: signingKey ?? vapidPrivateKey(keys), dsaEncoding: "ieee-p1363" },
   );
   return `vapid t=${signingInput}.${encodeBase64Url(signature)}, k=${keys.publicKey}`;
 }
@@ -145,12 +146,16 @@ export interface PushSender {
   send(subscription: PushSubscription, payload: string): Promise<PushOutcome>;
 }
 
+const PUSH_REQUEST_TIMEOUT_MS = 10_000;
+
 export class WebPushSender implements PushSender {
   readonly #keys: VapidKeys;
+  readonly #signingKey: ReturnType<typeof createPrivateKey>;
   readonly #fetch: typeof fetch;
 
   constructor(keys: VapidKeys, fetchImplementation: typeof fetch = fetch) {
     this.#keys = keys;
+    this.#signingKey = vapidPrivateKey(keys);
     this.#fetch = fetchImplementation;
   }
 
@@ -170,8 +175,15 @@ export class WebPushSender implements PushSender {
     try {
       response = await this.#fetch(subscription.endpoint, {
         method: "POST",
+        redirect: "error",
+        signal: AbortSignal.timeout(PUSH_REQUEST_TIMEOUT_MS),
         headers: {
-          authorization: vapidAuthorization(subscription.endpoint, this.#keys),
+          authorization: vapidAuthorization(
+            subscription.endpoint,
+            this.#keys,
+            new Date(),
+            this.#signingKey,
+          ),
           "content-encoding": "aes128gcm",
           "content-type": "application/octet-stream",
           ttl: String(PUSH_TTL_SECONDS),

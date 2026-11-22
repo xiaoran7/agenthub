@@ -1,35 +1,31 @@
 # AgentHub Full Specification (llms-full.txt)
-# Version: 2.5.2 | License: MIT (Copyright 2026 WANGUI TANG)
+# Version: 2.7.7 | License: MIT (Copyright 2026 Tanner)
 # Repository: https://github.com/xiaoran7/agenthub
 
 ## 1. Architecture & Component Roles
 
-1. `agenthub-runner` (`agenthubd`, Rust 2024):
-   - Authoritative local session control plane managing official runtimes (Codex `app-server`, Claude Code CLI, generic ACP stdio agents).
-   - Single-writer ownership per native session, durable SQLite command ledger, and local IPC v2 (Windows Named Pipe with current-user ACL / Unix `0600` socket).
-   - Embedded local Web Console (`http://127.0.0.1:4200`): 4 main views (Sessions, Agents, Per-request Usage Ledger, Workspaces) + Settings view (General, Appearance, Device & Gateway, Federated Capabilities Library, About).
-   - Outbound-only TLS/WSS client to self-hosted Gateway; zero public inbound ports.
+1. `agenthub-runner` (`agenthubd`, Rust 2024, `crates/runner/`):
+   - Authoritative workstation control plane managing official CLI runtimes: OpenAI Codex (`app-server`), Claude Code CLI, Google Antigravity (`agy` persistent `stream-json` + live daemon model catalog), and generic ACP stdio agents (`acp_app_server/`).
+   - Enforces single-writer ownership per native session, durable SQLite command/event journal (`remote_journal/` with `auto_vacuum = INCREMENTAL`), and local IPC v2 (Windows Named Pipe ACL / Unix `0600` socket).
+   - Embedded Web Console (`http://127.0.0.1:4200`): 4 main views (`Sessions`, `Agents`, `Usage`, `Workspaces`) + 5-section `Settings` view (`General`, `Appearance`, `Device & Gateway`, `Capabilities`, `About`), plus on-demand isolated WebView2 child (`agenthub-runner ui`) and pure Win32 GDI tray card (`tray_menu/`).
+   - Cold/Hot Usage Ledger (`usage_ledger/`): `Arc<str>` string interning + `UsageIndexDb` spilling cold transcripts (>35d or >256 hot files/source) to SQLite while keeping steady WorkingSet to single-digit MiB.
 
-2. `Gateway` (`@agent-pulse/api`, Fastify / TypeScript):
-   - Tenant auth, Ed25519 device challenge/verification, command routing, durable SQLite v3 remote content store, and PostgreSQL metadata store.
-   - Never executes agent code or holds LLM provider tokens.
+2. `Gateway` (`@agent-pulse/api`, Fastify / TypeScript, `services/api/`):
+   - Handles account auth, Ed25519 device binding/fencing, configurable disconnect grace (`AGENTHUB_RUNNER_OFFLINE_GRACE_MS`), durable SQLite Remote v3 event store (`storableFrame()` strips `models`/`discovery` from `ready` log rows; `EVENT_RETENTION = 20_000` per runner; on-demand `GET /v3/remote/runners/:runner/hello`), and optional PostgreSQL account metadata (`AGENT_PLATFORM_DATABASE_URL`).
+   - Never executes agent code or holds LLM provider API keys.
 
-3. `Web Client` (`@agent-pulse/web`, Next.js / React 19 PWA):
-   - Workspace-first remote console for desktop and mobile browsers: live streaming transcripts, collapsible diff approval cards, multi-select question cards, context capacity gauge, and turn interrupt.
+3. `Remote Clients` (`apps/web` & `apps/android`, backed by `@agent-pulse/contracts`):
+   - `apps/web`: Vite 8 static MPA (`/`, `/remote`, `/verify-email`, `/reset-password`) served by `nginx:1.29-alpine` (`deploy/nginx/agenthub-web.conf.template`) enforcing session-cookie allowlisting, server-side Bearer token injection, `no-store` API headers, and unbuffered SSE/WSS proxying.
+   - `apps/android`: Kotlin + Jetpack Compose native Remote v3 client (`EventWindow`, `CommandLedger`, `AttentionQueue`, Keystore AES-256-GCM config store, 3 themes, incremental transcript fold).
 
 ## 2. Protocol & Security Contracts
 
-- **Session Semantics**:
-  - `create`: Spawn a new official runtime session and bind once `provider_session_id` is returned.
-  - `resume`: Rebind an existing native session ID to a new host control channel.
-  - `discover`: Read-only metadata candidate; never implies writable ownership.
-- **Command State Machine**:
-  `queued -> dispatched -> accepted -> completed | rejected | failed | indeterminate`
-  Commands carry `client_cmd_id` (scoped to `owner + daemon`). Timed-out side-effecting commands are never auto-replayed; they reconcile against the host ledger or surface `indeterminate`.
-- **Privacy & Allowlist Projection**:
-  Workstation paths are mapped to `ws-{display}-{hash16}` IDs. Approval diffs are capped at 64 KiB with absolute paths redacted. Raw provider JSON-RPC frames, unredacted paths, and credentials never enter the Gateway.
+- **Session Semantics**: `create` (spawn & bind native `provider_session_id`), `resume` (rebind existing native ID under new `host_generation`), `discover` (read-only candidate metadata; never implies writable ownership), `attach` (verified live takeover where supported).
+- **Command Lifecycle**: `queued -> dispatched -> accepted -> completed | rejected | failed | indeterminate` keyed by `client_cmd_id` (`owner + daemon`). Side-effecting timeouts never auto-replay blindly.
+- **Privacy & Allowlists**: Workstation paths become `ws-{display}-{hash16}`; approval diffs cap at `64 KiB` with `[local_path_redacted]`; raw provider payloads and credentials never leave the workstation.
+- **Architecture Ratchet**: `python3 scripts/check-line-limits.py` enforces `<=800` lines across all Rust files (zero legacy monoliths) and anti-bloat ratchet caps across TypeScript/TSX workspaces.
 
 ## 3. Upstream Attribution
 
-- `yetone/magpie` (MIT License, Copyright (c) 2026 yetone): Embedded Web Console design system (`dashboard.{html,css,js}`), vendor icon marks (`crates/runner/resources/icons/`), per-request usage ledger layout, and federated Multi-Agent Library model.
-- `stablyai/orca` (Apache 2.0 / MIT): Mobile companion layout philosophy (`apps/android`).
+- `yetone/magpie` (MIT, Copyright (c) 2026 yetone): Embedded Web Console design tokens/layout (`dashboard.{html,css,js}`), vendor icons (`crates/runner/resources/icons/`), per-request usage ledger view, and federated Multi-Agent Library model.
+- `stablyai/orca` (Apache 2.0 / MIT): Mobile companion layout philosophy and terminal accessory row (`apps/android`).

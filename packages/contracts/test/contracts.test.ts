@@ -5,7 +5,9 @@ import test from "node:test";
 
 import {
   ContractError,
+  coreAgentTypes,
   deviceIdForPublicKey,
+  isValidAgentType,
   parseAuthSyncBatch,
   parseDeviceHeartbeat,
   parseDeviceRegistration,
@@ -457,6 +459,7 @@ test("the ready frame accepts a named device and rejects anything outside the co
     ],
     pending_approvals: [],
     pending_questions: [],
+    plugins: [{ id: "zcode", name: "ZCode", installed: true, enabled: true }],
     attach_running: false,
   };
   assert.deepEqual(parseRemoteReady(ready), ready);
@@ -518,5 +521,74 @@ test("send_prompt accepts per-turn model override and validated attachments", ()
       }),
     (error: unknown) =>
       error instanceof ContractError && error.code === "invalid_field",
+  );
+});
+
+test("core agent types keep five native slots while plugin slugs remain extensible", () => {
+  assert.deepEqual(coreAgentTypes, [
+    "antigravity",
+    "codex",
+    "claude_desktop",
+    "claude_code",
+    "deepseek_harness",
+  ]);
+  assert.equal(isValidAgentType("zcode"), true);
+  assert.equal(isValidAgentType("my-acp-bot_2"), true);
+  assert.equal(isValidAgentType("BadSlug"), false);
+  assert.equal(isValidAgentType("a"), false);
+});
+
+test("Codex preview and control handoff preserve explicit command intent", () => {
+  const envelope = {
+    client_cmd_id: "request",
+    hub_session_id: "session",
+    host_generation: "generation",
+  };
+  const workspace = "ws-repo-0000000000000000";
+  for (const mode of ["preview", "take_control"]) {
+    const command = {
+      ...envelope,
+      command: {
+        action: "connect",
+        mode,
+        provider_session_id: "01a10000-1111-4222-8333-555555555555",
+        workspace_path: workspace,
+      },
+    };
+    assert.deepEqual(parseRemoteCommand(command), command);
+  }
+  const send = {
+    action: "send_prompt",
+    text: "continue",
+    acquire_control: true,
+  };
+  assert.deepEqual(
+    parseRemoteCommand({ ...envelope, command: send }).command,
+    send,
+  );
+  assert.throws(
+    () =>
+      parseRemoteCommand({
+        ...envelope,
+        command: { ...send, acquire_control: "true" },
+      }),
+    ContractError,
+  );
+  const release = { action: "release_control" };
+  assert.deepEqual(
+    parseRemoteCommand({ ...envelope, command: release }).command,
+    release,
+  );
+  assert.equal(
+    parseRemoteBinding({
+      hub_session_id: "session",
+      provider_session_id: "native",
+      workspace_path: workspace,
+      host_generation: "generation",
+      control_connected: false,
+      current_turn_id: null,
+      execution_state: "releasing_control",
+    }).execution_state,
+    "releasing_control",
   );
 });

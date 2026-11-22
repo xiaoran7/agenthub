@@ -1,3 +1,3 @@
-// TypeScript 7 does not pick up Next.js' bundled `*.css` module declaration
-// through next-env.d.ts, so declare the side-effect import shape locally.
+// TypeScript does not resolve the side-effect CSS import shape on its own,
+// so declare it locally for the bundler-facing entries.
 declare module "*.css";

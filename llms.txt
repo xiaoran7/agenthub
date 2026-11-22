@@ -1,20 +1,20 @@
 # AgentHub (llms.txt)
 
-> The unified remote continuation & control plane for official AI agent runtimes (Claude Code, OpenAI Codex & ACP).
+> Unified remote continuation & control plane for official AI coding agent runtimes (Claude Code, OpenAI Codex, Google Antigravity & ACP).
+> Full technical specification: [llms-full.txt](llms-full.txt)
 
-## Summary
-AgentHub bridges local terminal AI coding agents (Claude Code, OpenAI Codex, ACP agents) to remote web browsers and mobile devices without reinventing an inference loop. A single-binary Rust daemon (`agenthub-runner`) embeds a local web console (`http://127.0.0.1:4200`) and connects via outbound-only TLS/WebSockets to a self-hosted Gateway, enabling live output streaming, diff-backed permission approvals, multi-turn continuation, and emergency stops from any browser or mobile PWA without opening inbound ports.
+AgentHub connects local CLI coding agents to remote browsers, mobile PWAs, and Android devices without reinventing an inference loop. `agenthub-runner` (single Rust binary) owns native sessions locally, serves an embedded console at `http://127.0.0.1:4200`, and initiates outbound-only TLS/WSS connections to a self-hosted Gateway for live streaming, redacted diff approvals, multi-select questions, and turn interrupts.
 
 ## Quick Start
-1. Local embedded console: `agenthub-runner web` (`http://127.0.0.1:4200`) or `agenthub-runner daemon`
-2. Self-hosted Gateway + Web:
+1. Local Runner: `agenthub-runner web` (`http://127.0.0.1:4200`) or `agenthub-runner daemon`
+2. Full Stack from Source:
    - `npm ci`
-   - `npm start --workspace @agent-pulse/api` (Gateway on `:3001`)
-   - `npm run dev --workspace @agent-pulse/web` (Web UI on `:3000`)
+   - `npm start --workspace @agent-pulse/api` (Gateway API on `:3001`)
+   - `npm run dev --workspace @agent-pulse/web` (Vite Web UI on `:5173`)
 
 ## Key Technical Facts
-- Version: 2.5.2 | License: MIT (Copyright 2026 WANGUI TANG) | Repo: https://github.com/xiaoran7/agenthub
-- Pure Rust 2024 runner (`agenthub-runner`) with embedded zero-dependency Web Console, per-request usage ledger, and federated Skill/MCP/Hook library.
-- Outbound-only TLS/WSS: zero public inbound ports on workstation; local paths redacted to `ws-*` workspace IDs; provider credentials never leave the host.
-- Native `create`, `resume`, and read-only `discover` semantics with single-writer session ownership and durable command idempotency (`client_cmd_id`).
-- Full specification: `llms-full.txt` and `docs/README.md`.
+- Version: 2.7.9 | License: MIT (Copyright 2026 Tanner) | Repo: https://github.com/xiaoran7/agenthub
+- Pure Rust 2024 runner (`~13.5 MB` steady RSS) with on-demand isolated WebView2 UI child (`agenthub-runner ui`), native Win32 tray, `UsageIndexDb` cold/hot SQLite usage ledger, and federated Skill/MCP/Hook library.
+- Static Web front-door: Vite 8 MPA + `nginx:1.29-alpine` same-origin proxy (`~8.4 MiB` RAM), paired with a Kotlin + Jetpack Compose Remote v3 Android client (`apps/android`).
+- Security: Outbound-only WSS, Ed25519 device auth, `ws-*` path redaction, 64 KiB diff cap, single-writer `host_generation` fencing, and `client_cmd_id` idempotency.
+- Primary docs: [docs/README.md](docs/README.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md), [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

@@ -155,7 +155,7 @@ pub fn probe_version(binary: &Path, timeout: Duration) -> Option<AgentCliVersion
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::null());
     // A version probe must never flash a console window on Windows.
     #[cfg(windows)]
     {
@@ -163,23 +163,37 @@ pub fn probe_version(binary: &Path, timeout: Duration) -> Option<AgentCliVersion
         command.creation_flags(0x0800_0000);
     }
     let mut child = command.spawn().ok()?;
+    let stdout_pipe = child.stdout.take()?;
+    let stdout_reader = thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::with_capacity(4096);
+        let _ = stdout_pipe.take(64 * 1024).read_to_end(&mut buf);
+        buf
+    });
     let deadline = Instant::now() + timeout;
-    let stdout = loop {
+    let exited_ok = loop {
         match child.try_wait() {
-            Ok(Some(_status)) => break child.wait_with_output().ok().map(|out| out.stdout),
+            Ok(Some(_status)) => break true,
             Ok(None) => {}
             Err(_) => {
                 let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
                 return None;
             }
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = stdout_reader.join();
             return None;
         }
         thread::sleep(Duration::from_millis(20));
-    }?;
+    };
+    if !exited_ok {
+        return None;
+    }
+    let stdout = stdout_reader.join().ok()?;
     AgentCliVersion::parse(&String::from_utf8_lossy(&stdout))
 }
 
@@ -327,10 +341,13 @@ impl CandidateSet {
 #[cfg(windows)]
 pub fn managed_claude_install_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(local) = env_local_app_data() {
+    if let Some(local) =
+        env_local_app_data().or_else(|| env_home().map(|home| home.join("AppData").join("Local")))
+    {
         roots.push(local.join("Claude-3p"));
         roots.push(local.join("Claude"));
         roots.push(local.join("Programs").join("Claude"));
+        roots.extend(crate::claude_gateway::windows_msix_claude_roots_in(&local));
     }
     roots
 }

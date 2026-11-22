@@ -138,6 +138,8 @@ export interface GatewayStore {
   deletePushSubscription(ownerId: string, endpoint: string): Promise<void>;
   listPushSubscriptions(ownerId: string): Promise<PushSubscription[]>;
   countActiveDevices(ownerId: string): Promise<number>;
+  countPendingBindingCodes?(ownerId: string, nowIso: string): Promise<number>;
+  pruneExpiredData?(nowIso: string, historyDays?: number): Promise<void> | void;
   registerDevice(
     ownerId: string,
     deviceId: string,
@@ -164,7 +166,7 @@ export interface GatewayStore {
     ownerId: string,
     filters: AuthFilters,
   ): Promise<StoredAuthSnapshot[]>;
-  close?(): Promise<void>;
+  close?(): Promise<void> | void;
 }
 
 export class GatewayStoreError extends Error {
@@ -259,6 +261,24 @@ export class InMemoryGatewayStore implements GatewayStore {
       (device) =>
         device.owner_id === ownerId && device.revoked_at === undefined,
     ).length;
+  }
+
+  async countPendingBindingCodes(
+    ownerId: string,
+    nowIso: string,
+  ): Promise<number> {
+    const cutoff = Date.parse(nowIso);
+    let count = 0;
+    for (const binding of this.#bindingCodes.values()) {
+      if (
+        binding.ownerId === ownerId &&
+        binding.claimedDeviceId === undefined &&
+        Date.parse(binding.expiresAt) > cutoff
+      ) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   async createBindingCode(
@@ -766,57 +786,9 @@ export class InMemoryGatewayStore implements GatewayStore {
   }
 }
 
-export function bindingCodeDigest(code: string): string {
-  return createHash("sha256").update(code, "utf8").digest("hex");
-}
-
-function sessionKey(event: SyncEvent): string {
-  return `${event.device_id}:${event.agent_type}:${event.agent_session_id}`;
-}
-
-export function sessionStatusChange(
-  event: SyncEvent,
-  previousActivityStatus: ActivityStatus | undefined,
-): SessionStatusChange {
-  const change: SessionStatusChange = {
-    device_id: event.device_id,
-    agent_type: event.agent_type,
-    agent_session_id: event.agent_session_id,
-    project_display_name: event.payload.project.display_name,
-    presence: event.payload.state.presence,
-    activity_status: event.payload.state.activity_status,
-    observed_at: event.observed_at,
-  };
-  if (event.payload.state.waiting_reason !== undefined) {
-    change.waiting_reason = event.payload.state.waiting_reason;
-  }
-  if (previousActivityStatus !== undefined) {
-    change.previous_activity_status = previousActivityStatus;
-  }
-  return change;
-}
-
-function shouldReplaceSnapshot(
-  current: StoredSession,
-  incoming: SyncEvent,
-): boolean {
-  const currentTime = Date.parse(current.observed_at);
-  const incomingTime = Date.parse(incoming.observed_at);
-  if (incomingTime !== currentTime) {
-    return incomingTime > currentTime;
-  }
-  const confidenceRank: Record<SyncEvent["confidence"], number> = {
-    unknown: 0,
-    inferred: 1,
-    observed: 2,
-    authoritative: 3,
-  };
-  if (
-    confidenceRank[incoming.confidence] !== confidenceRank[current.confidence]
-  ) {
-    return (
-      confidenceRank[incoming.confidence] > confidenceRank[current.confidence]
-    );
-  }
-  return incoming.sequence > current.sequence;
-}
+export { bindingCodeDigest, sessionStatusChange } from "./store-schemas.js";
+import {
+  sessionKey,
+  sessionStatusChange,
+  shouldReplaceSnapshot,
+} from "./store-schemas.js";

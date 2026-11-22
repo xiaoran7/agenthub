@@ -373,3 +373,27 @@ async function accountError(response: Response): Promise<AccountApiError> {
   }
   return new AccountApiError(response.status, code);
 }
+
+let cachedHashTokenPath: string | undefined;
+let cachedHashTokenValue: string | undefined;
+
+/**
+ * Extracts `#token=...` once per page navigation and scrubs it from browser
+ * history immediately, while staying idempotent across React StrictMode
+ * double-invocations.
+ */
+export function consumeUrlHashToken(): string {
+  if (typeof window === "undefined") return "";
+  const rawHash = window.location.hash;
+  if (rawHash.length > 1) {
+    const extracted = new URLSearchParams(rawHash.slice(1)).get("token") ?? "";
+    cachedHashTokenPath = window.location.pathname;
+    cachedHashTokenValue = extracted;
+    window.history.replaceState(null, "", window.location.pathname);
+    return extracted;
+  }
+  if (cachedHashTokenPath === window.location.pathname) {
+    return cachedHashTokenValue ?? "";
+  }
+  return "";
+}

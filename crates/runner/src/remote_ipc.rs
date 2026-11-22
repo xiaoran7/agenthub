@@ -28,7 +28,7 @@ pub fn run(binary: PathBuf, workspaces: Vec<PathBuf>) -> Result<()> {
         NativeSessionHost::new(server, workspaces).map_err(|error| anyhow::anyhow!(error.code))?;
     let stopped = Arc::new(AtomicBool::new(false));
     let stop_signal = stopped.clone();
-    ctrlc::set_handler(move || stop_signal.store(true, Ordering::Relaxed))?;
+    ctrlc::set_handler(move || stop_signal.store(true, Ordering::Release))?;
     let (sender, receiver) = mpsc::sync_channel(32);
     thread::spawn(move || {
         let stdin = io::stdin();
@@ -76,7 +76,7 @@ pub fn run(binary: PathBuf, workspaces: Vec<PathBuf>) -> Result<()> {
             json!({"type": "capability_error", "code": error.code}),
         )?,
     }
-    while !stopped.load(Ordering::Relaxed) {
+    while !stopped.load(Ordering::Acquire) {
         // Consume native completions before accepting the next input command.
         match host.poll() {
             Ok(events) => {

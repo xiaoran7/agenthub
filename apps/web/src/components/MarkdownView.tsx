@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -102,6 +100,47 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   );
 }
 
+const RASTER_DATA_IMAGE_RE =
+  /^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/iu;
+
+export function isSafeRasterDataUrl(value: string): boolean {
+  return RASTER_DATA_IMAGE_RE.test(value.trim());
+}
+
+export function safeMarkdownUrlTransform(url: string): string {
+  const trimmed = url.trim();
+  if (/^(?:https?:|mailto:)/iu.test(trimmed) || isSafeRasterDataUrl(trimmed)) {
+    return trimmed;
+  }
+  return "";
+}
+
+function ExternalImageGate({ src, alt }: { src: string; alt: string }) {
+  const [loaded, setLoaded] = useState(false);
+  if (loaded) {
+    return (
+      <img src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" />
+    );
+  }
+  let host = "";
+  try {
+    host = new URL(src).host;
+  } catch {
+    host = src;
+  }
+  const label = alt.trim() ? `${alt.trim()} (${host})` : host;
+  return (
+    <button
+      type="button"
+      className="remote-md-ext-img-btn"
+      onClick={() => setLoaded(true)}
+      title={`点击加载外部图片：${src}`}
+    >
+      <span>外链图片 · {label}（点击加载）</span>
+    </button>
+  );
+}
+
 const REMARK_PLUGINS = [remarkGfm];
 
 /** Renders the caret inline, so the streaming state never reflows the block. */
@@ -125,6 +164,15 @@ const MARKDOWN_COMPONENTS: React.ComponentProps<
     return <CodeBlock language={language} value={value} />;
   },
   a({ children, href }) {
+    const safeExternal =
+      typeof href === "string" && /^(?:https?:|mailto:)/iu.test(href.trim());
+    if (!safeExternal) {
+      return (
+        <code className="remote-md-file-ref" title={href}>
+          {children}
+        </code>
+      );
+    }
     return (
       <a
         className="remote-md-link"
@@ -136,9 +184,32 @@ const MARKDOWN_COMPONENTS: React.ComponentProps<
       </a>
     );
   },
+  img({ alt, src }) {
+    const trimmed = typeof src === "string" ? src.trim() : "";
+    if (isSafeRasterDataUrl(trimmed)) {
+      return (
+        <img
+          src={trimmed}
+          alt={alt ?? ""}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+        />
+      );
+    }
+    if (/^https?:\/\//iu.test(trimmed)) {
+      return <ExternalImageGate src={trimmed} alt={alt ?? ""} />;
+    }
+    const label = (alt && alt.trim()) || trimmed;
+    return label ? <code className="remote-md-file-ref">{label}</code> : null;
+  },
   table({ children }) {
     return (
-      <div className="remote-md-table-wrapper">
+      <div
+        className="remote-md-table-wrapper"
+        role="region"
+        aria-label="数据表格"
+        tabIndex={0}
+      >
         <table className="remote-md-table">{children}</table>
       </div>
     );
@@ -155,7 +226,7 @@ const MARKDOWN_COMPONENTS: React.ComponentProps<
  * injected into the AST, which keeps the streamed text byte-identical to what
  * the Provider sent.
  */
-export function MarkdownView({
+export const MarkdownView = React.memo(function MarkdownView({
   content,
   streaming = false,
   className = "",
@@ -192,10 +263,11 @@ export function MarkdownView({
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
         components={MARKDOWN_COMPONENTS}
+        urlTransform={safeMarkdownUrlTransform}
       >
         {content}
       </ReactMarkdown>
       {showCaret && <Caret />}
     </div>
   );
-}
+});

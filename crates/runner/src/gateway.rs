@@ -363,6 +363,10 @@ fn validate_base_url(value: &str) -> Result<String, GatewayError> {
     if url.host().is_none() {
         return Err(GatewayError::InvalidUrl);
     }
+    if url.scheme() == "http" && !crate::remote_network::is_loopback_or_private_host(url.host_str())
+    {
+        return Err(GatewayError::InsecureUrl);
+    }
 
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
@@ -447,10 +451,10 @@ mod tests {
                 Err(GatewayError::InvalidUrl)
             ));
         }
-    }
-
-    #[test]
-    fn error_codes_are_stable_and_do_not_include_transport_details() {
+        assert!(matches!(
+            validate_base_url("http://gateway.example"),
+            Err(GatewayError::InsecureUrl)
+        ));
         assert_eq!(GatewayError::Timeout.code(), "gateway_timeout");
         assert_eq!(
             GatewayError::Rejected {

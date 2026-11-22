@@ -1,8 +1,6 @@
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
-pub mod grok;
-pub mod zcode;
 
 use std::collections::BTreeMap;
 
@@ -26,7 +24,9 @@ pub(crate) fn safe_tool_category(tool_name: Option<&str>) -> Option<String> {
         | "search_replace"
         | "write"
         | "write_to_file"
-        | "replace_file_content" => "file_change",
+        | "edit_file"
+        | "replace_file_content"
+        | "multi_replace_file_content" => "file_change",
         "Read" | "Glob" | "Grep" | "read_file" | "list_dir" | "grep" | "view_file"
         | "grep_search" | "find_by_name" => "file_read",
         "AskUserQuestion" | "request_user_input" | "ask_user_question" | "ask_question" => {

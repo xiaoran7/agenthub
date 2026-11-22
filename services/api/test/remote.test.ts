@@ -95,6 +95,7 @@ async function connectRunner(
   address: string,
   privateKey: KeyObject,
   hostGeneration: string,
+  capabilities: string[] = [],
 ): Promise<{
   ws: WebSocket;
   next: (type: string) => Promise<Record<string, unknown>>;
@@ -123,6 +124,7 @@ async function connectRunner(
       host_generation: hostGeneration,
       received_command_seq: 0,
       signature: sign(null, signed, privateKey).toString("hex"),
+      capabilities,
     }),
   );
   assert.equal((await next("hello_ack")).version, 3);
@@ -943,6 +945,24 @@ test("connect commands require the current ready generation and workspace author
     assert.equal(beforeReady.json().error, "runner_not_ready");
     ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
     assert.equal((await next("ack")).seq, 1);
+    const preview = {
+      ...create,
+      client_cmd_id: "preview-legacy",
+      command: {
+        action: "connect",
+        mode: "preview",
+        workspace_path: binding.workspace_path,
+        provider_session_id: "01a10000-1111-4222-8333-555555555555",
+      },
+    } satisfies RemoteCommand;
+    const legacy = await app.inject({
+      method: "POST",
+      url: `/v3/remote/runners/${runner}/commands`,
+      headers: { "x-user-id": "owner" },
+      payload: preview,
+    });
+    assert.equal(legacy.json().error, "runner_upgrade_required");
+    assert.equal(content.watermarks(runner).command_seq, 0);
     const unauthorized = await app.inject({
       method: "POST",
       url: `/v3/remote/runners/${runner}/commands`,
@@ -964,6 +984,28 @@ test("connect commands require the current ready generation and workspace author
       payload: create,
     });
     assert.equal(accepted.statusCode, 202);
+    const upgraded = await connectRunner(address, keys.privateKey, "host-one", [
+      "codex_session_control",
+    ]);
+    try {
+      const snapshot = await app.inject({
+        method: "GET",
+        url: "/v3/remote/sessions",
+        headers: { "x-user-id": "owner" },
+      });
+      assert.equal(snapshot.json().runners[0].codex_session_control, true);
+      const allowed = await app.inject({
+        method: "POST",
+        url: `/v3/remote/runners/${runner}/commands`,
+        headers: { "x-user-id": "owner" },
+        payload: preview,
+      });
+      assert.equal(allowed.statusCode, 202);
+      assert.deepEqual((await upgraded.next("command")).command, create);
+      assert.deepEqual((await upgraded.next("command")).command, preview);
+    } finally {
+      upgraded.ws.terminate();
+    }
   } finally {
     ws.terminate();
     await app.close();
@@ -1209,6 +1251,340 @@ test("an expired session cookie is not answered from the deployment owner", asyn
     });
     assert.equal(withStaleCookie.statusCode, 401);
   } finally {
+    await app.close();
+  }
+});
+
+test("the remote content stream delivers a Runner frame without waiting for its fallback timer", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  const devices = new InMemoryGatewayStore();
+  await devices.registerDevice("owner", runner, publicKey);
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const { ws, next } = await connectRunner(
+    address,
+    keys.privateKey,
+    "host-one",
+  );
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`${address}/v3/remote/stream?after=0`, {
+      headers: { "x-user-id": "owner", accept: "text/event-stream" },
+      signal: controller.signal,
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/event-stream");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    const readFrame = async (needle: string): Promise<string> => {
+      const deadline = Date.now() + 2_000;
+      while (Date.now() < deadline) {
+        const boundary = buffered.indexOf("\n\n");
+        if (boundary >= 0) {
+          const frame = buffered.slice(0, boundary);
+          buffered = buffered.slice(boundary + 2);
+          if (frame.includes(needle)) return frame;
+          continue;
+        }
+        const chunk = await reader.read();
+        if (chunk.done) assert.fail("the stream closed before the frame");
+        buffered += decoder.decode(chunk.value, { stream: true });
+      }
+      assert.fail(`the stream never carried ${needle}`);
+    };
+    // A stored frame is pushed by the store's own notice. The route's
+    // safety-net timer measures ten seconds, so a frame that arrives well
+    // inside that window can only have come from the notice.
+    ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
+    assert.equal((await next("ack")).seq, 1);
+    const frame = await readFrame("event: remote");
+    assert.match(frame, /^id: \d+/m);
+  } finally {
+    controller.abort();
+    ws.terminate();
+    await app.close();
+  }
+});
+
+test("resume point locates the snapshot without dropping an outstanding approval", () => {
+  const store = new RemoteContentStore(":memory:");
+  const owner = "owner-snapshot-test";
+  const runner = "runner-1";
+  const hub = "hub-snap";
+  const approval = {
+    approval_id: `approval-${"a".repeat(64)}`,
+    hub_session_id: hub,
+    host_generation: "host-one",
+    turn_id: "t1",
+    can_approve: true,
+    can_decline: true,
+  };
+
+  assert.deepEqual(store.resumePoint(owner, runner, hub), {
+    transcript: null,
+    approvals: null,
+  });
+
+  store.register(owner, runner);
+  // The approval is published by the runner-level `ready` frame, before the
+  // session's own snapshot.
+  store.receive(owner, runner, 1, {
+    ...ready([]),
+    pending_approvals: [approval],
+  });
+  store.receive(owner, runner, 2, {
+    type: "event",
+    event: hostEvent("item/agentMessage/delta", {
+      hub_session_id: hub,
+      raw: { params: { itemId: "m1", delta: "stale" } },
+    }),
+  });
+  store.receive(owner, runner, 3, {
+    type: "event",
+    event: hostEvent("history/snapshot", {
+      hub_session_id: hub,
+      raw: { params: { items: [{ role: "user", text: "hello" }] } },
+    }),
+  });
+
+  const first = store.resumePoint(owner, runner, hub);
+  assert.ok(first.approvals !== null && first.transcript !== null);
+  // Starting after the snapshot would hide the approval raised before it.
+  assert.ok(first.approvals < first.transcript);
+
+  store.receive(owner, runner, 4, {
+    type: "event",
+    event: hostEvent("history/snapshot", {
+      hub_session_id: hub,
+      raw: {
+        params: {
+          items: [
+            { role: "user", text: "hello" },
+            { role: "assistant", text: "hi" },
+          ],
+        },
+      },
+    }),
+  });
+  const second = store.resumePoint(owner, runner, hub);
+  assert.ok(
+    second.transcript !== null &&
+      first.transcript !== null &&
+      second.transcript > first.transcript,
+  );
+
+  assert.equal(store.events(owner, 0, runner, hub).length, 4);
+  assert.equal(store.events(owner, 0, runner, hub, 2).length, 2);
+  assert.equal(store.events(owner, 0, runner, hub, 100_000).length, 4);
+
+  // A session cursor only moves for this session, and this runner's
+  // runner-level frames — not for another runner's traffic.
+  const before = store.sessionCursor(owner, runner, hub);
+  store.register(owner, "runner-2");
+  store.receive(owner, "runner-2", 1, ready([]));
+  assert.equal(store.sessionCursor(owner, runner, hub), before);
+  const resumed = store.events(owner, second.approvals! - 1, runner, hub);
+  assert.ok(resumed.length > 0);
+  assert.ok(
+    resumed.some((item) => item.payload.type === "ready"),
+    "the approval-bearing ready frame is inside the resumed window",
+  );
+});
+
+test("offlineGraceMs prevents transient reconnect drops from marking runner offline", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  let now = new Date("2026-07-28T00:00:00Z");
+  const devices = new InMemoryGatewayStore(() => now);
+  await devices.registerDevice("owner", runner, publicKey);
+  now = new Date("2026-07-28T00:05:00Z");
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    now: () => now,
+    remoteContent: content,
+    remoteRoutes: { offlineGraceMs: 200 },
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const first = await connectRunner(address, keys.privateKey, "host-one");
+  let second: { ws: WebSocket } | undefined;
+  try {
+    first.ws.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const midRes = await app.inject({
+      method: "GET",
+      url: "/v1/devices",
+      headers: { "x-user-id": "owner" },
+    });
+    assert.equal(midRes.json().devices[0].online, true);
+
+    second = await connectRunner(address, keys.privateKey, "host-one");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const reconnectedRes = await app.inject({
+      method: "GET",
+      url: "/v1/devices",
+      headers: { "x-user-id": "owner" },
+    });
+    assert.equal(reconnectedRes.json().devices[0].online, true);
+
+    second.ws.terminate();
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      const poll = await app.inject({
+        method: "GET",
+        url: "/v1/devices",
+        headers: { "x-user-id": "owner" },
+      });
+      if (!poll.json().devices[0].online) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const finalRes = await app.inject({
+      method: "GET",
+      url: "/v1/devices",
+      headers: { "x-user-id": "owner" },
+    });
+    assert.equal(finalRes.json().devices[0].online, false);
+  } finally {
+    first.ws.terminate();
+    second?.ws.terminate();
+    await app.close();
+  }
+});
+
+test("/v3/remote/stream omits historical replay when after is not specified", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  const devices = new InMemoryGatewayStore();
+  await devices.registerDevice("owner", runner, publicKey);
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: devices,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const { ws, next } = await connectRunner(
+    address,
+    keys.privateKey,
+    "host-one",
+  );
+  const controller = new AbortController();
+  try {
+    ws.send(JSON.stringify({ type: "data", seq: 1, payload: ready([]) }));
+    assert.equal((await next("ack")).seq, 1);
+
+    const response = await fetch(`${address}/v3/remote/stream`, {
+      headers: { "x-user-id": "owner", accept: "text/event-stream" },
+      signal: controller.signal,
+    });
+    assert.equal(response.status, 200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+
+    ws.send(JSON.stringify({ type: "data", seq: 2, payload: ready([]) }));
+    assert.equal((await next("ack")).seq, 2);
+
+    const deadline = Date.now() + 2_000;
+    let firstEventId: string | null = null;
+    while (Date.now() < deadline && firstEventId === null) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffered += decoder.decode(chunk.value, { stream: true });
+      const match = /^id:\s*(\d+)/m.exec(buffered);
+      if (match) firstEventId = match[1]!;
+    }
+    assert.equal(firstEventId, "2");
+  } finally {
+    controller.abort();
+    ws.terminate();
+    await app.close();
+  }
+});
+
+test("deviceRevalidateMs coalesces per-frame checks while DELETE /v1/devices evicts immediately", async () => {
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey
+    .export({ format: "der", type: "spki" })
+    .subarray(-32)
+    .toString("hex");
+  let lookupCalls = 0;
+  const baseStore = new InMemoryGatewayStore();
+  await baseStore.registerDevice("owner", runner, publicKey);
+  const countingStore = new Proxy(baseStore, {
+    get(target, prop, receiver) {
+      if (prop === "getRegisteredDevice") {
+        return async (deviceId: string) => {
+          lookupCalls += 1;
+          return target.getRegisteredDevice(deviceId);
+        };
+      }
+      const val = Reflect.get(target, prop, receiver);
+      return typeof val === "function" ? val.bind(target) : val;
+    },
+  });
+  const content = new RemoteContentStore(":memory:");
+  const app = createGatewayApp({
+    store: countingStore,
+    authenticator: new DevelopmentIdentityAuthenticator(),
+    remoteContent: content,
+    remoteRoutes: {
+      deviceRevalidateMs: 60_000,
+      streamAuthRevalidateMs: 60_000,
+    },
+  });
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const { ws, next } = await connectRunner(
+    address,
+    keys.privateKey,
+    "host-one",
+  );
+  try {
+    const healthz = await app.inject({ method: "GET", url: "/healthz" });
+    assert.equal(healthz.statusCode, 200);
+    assert.deepEqual(healthz.json(), { status: "ok" });
+
+    const baselineLookups = lookupCalls;
+    for (let seq = 1; seq <= 5; seq += 1) {
+      ws.send(JSON.stringify({ type: "data", seq, payload: ready([]) }));
+      assert.equal((await next("ack")).seq, seq);
+    }
+    assert.equal(
+      lookupCalls,
+      baselineLookups,
+      "frames inside deviceRevalidateMs must not hit getRegisteredDevice on every token",
+    );
+
+    const closed = new Promise<number>((resolve) => {
+      ws.once("close", (code) => resolve(code));
+    });
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/v1/devices/${runner}`,
+      headers: { "x-user-id": "owner" },
+    });
+    assert.equal(del.statusCode, 204);
+    assert.equal(await closed, 1008);
+  } finally {
+    ws.terminate();
+    content.close();
     await app.close();
   }
 });

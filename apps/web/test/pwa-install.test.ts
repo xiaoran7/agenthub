@@ -22,4 +22,12 @@ test("other browsers wait for beforeinstallprompt", () => {
     installFallbackState("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", false),
     "unavailable",
   );
+  assert.equal(
+    installFallbackState(
+      "Mozilla/5.0 (Linux; Android 15; Pixel 9)",
+      false,
+      true,
+    ),
+    "available",
+  );
 });

@@ -23,13 +23,13 @@ services:
     container_name: agent-pulse-web
     restart: unless-stopped
     network_mode: host
-    env_file:
-      - ./docker.env
     environment:
-      NODE_ENV: production
-      HOSTNAME: 127.0.0.1
-      PORT: 3100
+      # 生产形态用 Cookie 会话鉴权，不配置网关访问令牌。
+      # 变量必须显式存在（哪怕为空），否则模板里的 ${GATEWAY_ACCESS_TOKEN}
+      # 不会被 envsubst 替换，nginx 会因未知变量直接启动失败。
+      GATEWAY_ACCESS_TOKEN: ""
       GATEWAY_ORIGIN: http://127.0.0.1:3101
+      WEB_PORT: 3100
     depends_on:
       api:
         condition: service_started
